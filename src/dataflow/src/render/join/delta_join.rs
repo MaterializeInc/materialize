@@ -14,21 +14,26 @@ use std::collections::HashSet;
 use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
-use expr::{JoinInputMapper, RelationExpr, ScalarExpr};
-use repr::{Datum, Row, RowArena, Timestamp};
+use expr::{JoinInputMapper, MapFilterProject, RelationExpr, ScalarExpr};
+use repr::{Datum, Row, RowArena, RowPacker, Timestamp};
 
-use super::context::{ArrangementFlavor, Context};
+use super::super::context::{ArrangementFlavor, Context};
 use crate::operator::CollectionExt;
+use crate::render::datum_vec::DatumVec;
+use crate::render::join::{JoinBuildState, JoinClosure};
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
     /// Renders `RelationExpr:Join` using dogs^3 delta query dataflows.
+    ///
+    /// The join is followed by the application of `map_filter_project`, whose
+    /// implementation will be pushed in to the join pipeline if at all possible.
     pub fn render_delta_join<F>(
         &mut self,
         relation_expr: &RelationExpr,
-        predicates: &[ScalarExpr],
+        map_filter_project: MapFilterProject,
         scope: &mut G,
         worker_index: usize,
         subtract: F,
@@ -159,18 +164,17 @@ where
                             }
                         }
 
-
                         // Collects error streams for the inner scope. Concats before leaving.
                         let mut inner_errs = Vec::with_capacity(inputs.len());
                         for relation in 0..inputs.len() {
 
-                            // We maintain a private copy of `equivalences`, which we will digest
-                            // as we produce the join.
-                            let mut equivalences = equivalences.clone();
-                            for equivalence in equivalences.iter_mut() {
-                                equivalence.sort();
-                                equivalence.dedup();
-                            }
+                            // Construct initial join build state.
+                            // This state will evolves as we build the join dataflow.
+                            let mut join_build_state = JoinBuildState::new(
+                                input_mapper.global_columns(relation),
+                                &equivalences,
+                                &map_filter_project,
+                            );
 
                             // This collection determines changes that result from updates inbound
                             // from `inputs[relation]` and reflects all strictly prior updates and
@@ -178,11 +182,24 @@ where
                             let name = format!("delta path {}", relation);
                             let delta_query = inner.clone().region_named(&name, |region| {
 
+                                // The plan is to move through each relation, starting from `relation` and in the order
+                                // indicated in `orders[relation]`. At each moment, we will have the columns from the
+                                // subset of relations encountered so far, and we will have applied as much as we can
+                                // of the filters in `equivalences` and the logic in `map_filter_project`, based on the
+                                // available columns.
+                                //
+                                // As we go, we will track the physical locations of each intended output column, as well
+                                // as the locations of intermediate results from partial application of `map_filter_project`.
+                                //
+                                // Just before we apply the `lookup` function to perform a join, we will first use our
+                                // available information to determine the filtering and logic that we can apply, and
+                                // introduce that in to the `lookup` logic to cause it to happen in that operator.
+
                                 // Collects error streams for the region scope. Concats before leaving.
                                 let mut region_errs = Vec::with_capacity(inputs.len());
 
                                 // Ensure this input is rendered, and extract its update stream.
-                                let update_stream =
+                                let mut update_stream =
                                 if let Some((_key, val)) = arrangements_alt.iter().find(|(key, _val)| key.0 == &inputs[relation]) {
                                     match val {
                                         Ok(local) => local.as_collection(|_k,v| v.clone()).enter_region(region),
@@ -194,23 +211,26 @@ where
                                         .expect("Failed to render update stream").0.enter(inner).enter_region(region)
                                 };
 
-                                // We track the sources of each column in our update stream.
-                                let mut source_columns = input_mapper.global_columns(relation)
-                                    .collect::<Vec<_>>();
+                                let initial_closure = join_build_state.extract_closure();
 
-                                let mut predicates = predicates.to_vec();
-                                let (mut update_stream, errs) = build_filter(
-                                    update_stream,
-                                    &source_columns,
-                                    &mut predicates,
-                                    &mut equivalences,
-                                );
-                                if let Some(errs) = errs {
-                                    region_errs.push(errs);
+                                // Apply what `closure` we are able to, and record any errors.
+                                if !initial_closure.is_identity() {
+
+                                    let (stream, errs) = update_stream.flat_map_fallible({
+                                        let mut datums = DatumVec::new();
+                                        let mut row_packer = RowPacker::new();
+                                        move |row| {
+                                            let temp_storage = RowArena::new();
+                                            let mut datums_local = datums.borrow_with(&row);
+                                            // TODO(mcsherry): re-use `row` allocation.
+                                            initial_closure.apply(&mut datums_local, &temp_storage, &mut row_packer).transpose()
+                                        }
+                                    });
+                                    update_stream = stream;
+                                    region_errs.push(errs.map(DataflowError::from));
                                 }
 
-                                // We track the input relations as they are
-                                // added to the join so we can figure out
+                                // We track the input relations as they are added to the join so we can figure out
                                 // which expressions have been bound.
                                 let mut bound_inputs = vec![relation];
                                 // We use the order specified by the implementation.
@@ -230,72 +250,59 @@ where
                                         .iter()
                                         .map(|expr| {
                                             let mut bound_expr = input_mapper
-                                                .find_bound_expr(expr, &bound_inputs, &equivalences)
+                                                .find_bound_expr(expr, &bound_inputs, &join_build_state.equivalences)
                                                 .expect("Expression in join plan is not bound at time of use");
-
-                                            bound_expr.visit_mut(&mut |e| if let ScalarExpr::Column(c) = e {
-                                                *c = source_columns.iter().position(|x| x == c).expect("Did not find bound column in source_columns");
-                                            });
+                                            // Rewrite column references to physical locations.
+                                            bound_expr.permute_map(&join_build_state.column_map);
                                             bound_expr
                                         })
                                         .collect::<Vec<_>>();
 
-                                    // We should extract each element of `next_keys` from `equivalences`,
-                                    // as each *should* now be a redundant constraint. We do this so that
-                                    // the demand analysis does not require these columns be produced.
-                                    for equivalence in equivalences.iter_mut() {
-                                        equivalence.retain(|expr| !next_key_rebased.contains(expr));
-                                    }
-                                    equivalences.retain(|e| e.len() > 1);
-
-                                    // TODO: Investigate demanded columns as in DifferentialLinear join.
+                                    // Introduce new columns and expressions they enable. Form a new closure.
+                                    let closure = join_build_state.add_columns(input_mapper.global_columns(*other), &next_key_rebased);
 
                                     // We require different logic based on the flavor of arrangement.
                                     // We may need to cache each of these if we want to re-use the same wrapped
                                     // arrangement, rather than re-wrap each time we use a thing.
                                     let (oks, errs) = if other > &relation {
                                         match arrangements_alt.get(&(&inputs[*other], &next_key[..])).unwrap() {
-                                            Ok(local) => build_lookup(update_stream, local.enter_region(region), prev_key),
-                                            Err(trace) => build_lookup(update_stream, trace.enter_region(region), prev_key),
+                                            Ok(local) => build_lookup(update_stream, local.enter_region(region), prev_key, closure),
+                                            Err(trace) => build_lookup(update_stream, trace.enter_region(region), prev_key, closure),
                                         }
                                     } else {
                                         match arrangements_neu.get(&(&inputs[*other], &next_key[..])).unwrap() {
-                                            Ok(local) => build_lookup(update_stream, local.enter_region(region), prev_key),
-                                            Err(trace) => build_lookup(update_stream, trace.enter_region(region), prev_key),
+                                            Ok(local) => build_lookup(update_stream, local.enter_region(region), prev_key, closure),
+                                            Err(trace) => build_lookup(update_stream, trace.enter_region(region), prev_key, closure),
                                         }
                                     };
                                     update_stream = oks;
                                     region_errs.push(errs);
 
-                                    // Update our map of the sources of each column in the update stream.
-                                    source_columns
-                                        .extend(input_mapper.global_columns(*other));
-
-                                    let (oks, errs) = build_filter(
-                                        update_stream,
-                                        &source_columns,
-                                        &mut predicates,
-                                        &mut equivalences,
-                                    );
-                                    update_stream = oks;
-                                    if let Some(errs) = errs {
-                                        region_errs.push(errs);
-                                    }
-
                                     bound_inputs.push(*other);
                                 }
 
-                                // We must now de-permute the results to return to the common order.
-                                // TODO: Non-demanded columns would need default values here.
-                                let permutation = (0 .. source_columns.len()).map(|c| {
-                                    source_columns.iter().position(|x| &c == x).expect("Did not find required column in output")
-                                }).collect::<Vec<_>>();
-                                update_stream = update_stream.map({
-                                    let mut row_packer = repr::RowPacker::new();
-                                    move |row| {
-                                        let datums = row.unpack();
-                                        row_packer.pack(permutation.iter().map(|c| datums[*c]))
-                                }});
+                                // We have completed the join building, but may have work remaining.
+                                // For example, we may have expressions not pushed down (e.g. literals)
+                                // and projections that could not be applied (e.g. column repetition).
+                                let closure = join_build_state.complete();
+                                if !closure.is_identity() {
+                                    let (updates, errors) = update_stream.flat_map_fallible({
+                                        // Reuseable allocation for unpacking.
+                                        let mut datums = DatumVec::new();
+                                        let mut row_packer = repr::RowPacker::new();
+                                        move |row| {
+                                            let temp_storage = RowArena::new();
+                                            let mut datums_local = datums.borrow_with(&row);
+                                            // TODO(mcsherry): re-use `row` allocation.
+                                            closure.apply(&mut datums_local, &temp_storage, &mut row_packer)
+                                                .map_err(DataflowError::from)
+                                                .transpose()
+                                        }
+                                    });
+
+                                    update_stream = updates;
+                                    region_errs.push(errors);
+                                }
 
                                 inner_errs.push(differential_dataflow::collection::concatenate(region, region_errs).leave());
                                 update_stream.leave()
@@ -333,6 +340,7 @@ fn build_lookup<G, Tr>(
     updates: Collection<G, Row>,
     trace: Arranged<G, Tr>,
     prev_key: Vec<ScalarExpr>,
+    closure: JoinClosure,
 ) -> (Collection<G, Row>, Collection<G, DataflowError>)
 where
     G: Scope,
@@ -341,29 +349,46 @@ where
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
 {
-    let (updates, errs) = updates.map_fallible(move |row| {
-        let datums = row.unpack();
-        let temp_storage = RowArena::new();
-        let row_key = Row::try_pack(prev_key.iter().map(|e| e.eval(&datums, &temp_storage)))?;
-        Ok((row, row_key))
+    let (updates, errs) = updates.map_fallible({
+        // Reuseable allocation for unpacking.
+        let mut datums = DatumVec::new();
+        let mut row_packer = RowPacker::new();
+        move |row| {
+            let temp_storage = RowArena::new();
+            let datums_local = datums.borrow_with(&row);
+            row_packer.clear();
+            row_packer.try_extend(
+                prev_key
+                    .iter()
+                    .map(|e| e.eval(&datums_local, &temp_storage)),
+            )?;
+            let row_key = row_packer.finish_and_reuse();
+            // Explicit drop to release borrow on `row` so that it can be returned.
+            drop(datums_local);
+            Ok((row, row_key))
+        }
     });
 
-    let oks = dogsdogsdogs::operators::lookup_map(
+    use differential_dataflow::AsCollection;
+    use timely::dataflow::operators::OkErr;
+
+    let mut datums = DatumVec::new();
+    let mut row_packer = RowPacker::new();
+    let (oks, errs2) = dogsdogsdogs::operators::lookup_map(
         &updates,
         trace,
         move |(_row, row_key), key| {
             // Prefix key selector must populate `key` with key from prefix `row`.
-            *key = row_key.clone();
+            key.clone_from(&row_key);
         },
+        // TODO(mcsherry): consider `RefOrMut` in `lookup` interface to allow re-use.
         move |(prev_row, _prev_row_key), diff1, next_row, diff2| {
-            // Output selector must produce (d_out, r_out) for each match.
-            // TODO: We can improve this.
-            let prev_datums = prev_row.unpack();
-            let next_datums = next_row.unpack();
-            // Append columns on to accumulated columns.
+            let temp_storage = RowArena::new();
+            let mut datums_local = datums.borrow();
+            datums_local.extend(prev_row.iter());
+            datums_local.extend(next_row.iter());
             (
-                // TODO: This is a Fn closure and so cannot re-use a RowPacker.
-                Row::pack(prev_datums.into_iter().chain(next_datums)),
+                closure.apply(&mut datums_local, &temp_storage, &mut row_packer),
                 diff1 * diff2,
             )
         },
@@ -371,116 +396,18 @@ where
         Row::pack::<_, Datum>(None),
         Row::pack::<_, Datum>(None),
         Row::pack::<_, Datum>(None),
-    );
-
-    (oks, errs)
-}
-
-/// Filters updates on some columns by predicates that are ready to go.
-///
-/// Both the `predicates` and `equivalences` arguments will have all applied
-/// predicates removed. Importantly, `equivalences` equates expressions with
-/// the `Datum::eq` method, not `BinaryFunc::eq` which does not equate `Null`.
-pub fn build_filter<G>(
-    updates: Collection<G, Row>,
-    source_columns: &[usize],
-    predicates: &mut Vec<ScalarExpr>,
-    equivalences: &mut Vec<Vec<ScalarExpr>>,
-) -> (Collection<G, Row>, Option<Collection<G, DataflowError>>)
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-{
-    let mut ready_to_go = Vec::new();
-
-    // Extract predicates fully supported by available columns.
-    predicates.retain(|p| {
-        if p.support().into_iter().all(|c| source_columns.contains(&c)) {
-            ready_to_go.push(p.clone());
-            false
-        } else {
-            true
+    )
+    .inner
+    .ok_err(|(x, t, d)| {
+        // TODO(mcsherry): consider `ok_err()` for `Collection`.
+        match x {
+            Ok(x) => Ok((x, t, d)),
+            Err(x) => Err((DataflowError::from(x), t, d)),
         }
     });
-    // Extract equivalences fully supported by available columns.
-    // This only happens if at least *two* expressions are fully supported.
-    // Importantly, we should *not* use `BinaryFunc::Eq` to compare these
-    // terms, as this would cause `Datum::Null` to not match.
-    let mut ready_equivalences = Vec::new();
-    for equivalence in equivalences.iter_mut() {
-        if let Some(pos) = equivalence
-            .iter()
-            .position(|e| e.support().into_iter().all(|c| source_columns.contains(&c)))
-        {
-            let mut should_equate = Vec::new();
-            let mut cursor = pos + 1;
-            while cursor < equivalence.len() {
-                if equivalence[cursor]
-                    .support()
-                    .into_iter()
-                    .all(|c| source_columns.contains(&c))
-                {
-                    // Remove expression and equate with the first bound expression.
-                    should_equate.push(equivalence.remove(cursor));
-                } else {
-                    cursor += 1;
-                }
-            }
-            if !should_equate.is_empty() {
-                should_equate.push(equivalence[pos].clone());
-                ready_equivalences.push(should_equate);
-            }
-        }
-    }
-    equivalences.retain(|e| e.len() > 1);
 
-    // Rewrite column references to their locations under `source_columns`.
-    for expr in ready_to_go.iter_mut() {
-        expr.visit_mut(&mut |e| {
-            if let ScalarExpr::Column(c) = e {
-                *c = source_columns
-                    .iter()
-                    .position(|x| x == c)
-                    .expect("Column not found in source_columns");
-            }
-        })
-    }
-    for exprs in ready_equivalences.iter_mut() {
-        for expr in exprs.iter_mut() {
-            expr.visit_mut(&mut |e| {
-                if let ScalarExpr::Column(c) = e {
-                    *c = source_columns
-                        .iter()
-                        .position(|x| x == c)
-                        .expect("Column not found in source_columns");
-                }
-            });
-        }
-    }
-
-    // Apply a filter if either list of constraints is non-empty.
-    if ready_to_go.is_empty() && ready_equivalences.is_empty() {
-        (updates, None)
-    } else {
-        let (ok_collection, err_collection) = updates.filter_fallible(move |input_row| {
-            let temp_storage = repr::RowArena::new();
-            let datums = input_row.unpack();
-            for p in &ready_to_go {
-                if p.eval(&datums, &temp_storage)? != Datum::True {
-                    return Ok(false);
-                }
-            }
-            for exprs in &ready_equivalences {
-                // Each list of expressions should be equal to the same value.
-                let val = exprs[0].eval(&datums, &temp_storage)?;
-                for expr in exprs[1..].iter() {
-                    if expr.eval(&datums, &temp_storage)? != val {
-                        return Ok(false);
-                    }
-                }
-            }
-            Ok::<_, DataflowError>(true)
-        });
-        (ok_collection, Some(err_collection))
-    }
+    (
+        oks.as_collection().flat_map(|x| x),
+        errs.concat(&errs2.as_collection()),
+    )
 }

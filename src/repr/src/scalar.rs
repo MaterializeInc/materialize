@@ -403,7 +403,7 @@ impl<'a> Datum<'a> {
                     (Datum::List(list), ScalarType::List { element_type, .. }) => list
                         .iter()
                         .all(|e| e.is_null() || is_instance_of_scalar(e, element_type)),
-                    (Datum::List(list), ScalarType::Record { fields }) => {
+                    (Datum::List(list), ScalarType::Record { fields, .. }) => {
                         list.iter().zip_eq(fields).all(|(e, (_, t))| {
                             (e.is_null() && t.nullable) || is_instance_of_scalar(e, &t.scalar_type)
                         })
@@ -708,6 +708,8 @@ pub enum ScalarType {
         /// The names and types of the fields of the record, in order from left
         /// to right.
         fields: Vec<(ColumnName, ColumnType)>,
+        custom_oid: Option<u32>,
+        custom_name: Option<String>,
     },
     /// A PostgreSQL object identifier.
     Oid,
@@ -856,7 +858,18 @@ impl PartialEq for ScalarType {
             ) => element_l.eq(element_r) && oid_l == oid_r,
 
             (Array(a), Array(b)) => a.eq(b),
-            (Record { fields: fields_a }, Record { fields: fields_b }) => fields_a.eq(fields_b),
+            (
+                Record {
+                    fields: fields_a,
+                    custom_oid: oid_a,
+                    custom_name: name_a,
+                },
+                Record {
+                    fields: fields_b,
+                    custom_oid: oid_b,
+                    custom_name: name_b,
+                },
+            ) => fields_a.eq(fields_b) && oid_a == oid_b && name_a == name_b,
             (
                 Map {
                     value_type: value_l,
@@ -927,9 +940,15 @@ impl Hash for ScalarType {
                 element_type.hash(state);
                 custom_oid.hash(state);
             }
-            Record { fields } => {
+            Record {
+                fields,
+                custom_oid,
+                custom_name,
+            } => {
                 state.write_u8(16);
                 fields.hash(state);
+                custom_oid.hash(state);
+                custom_name.hash(state);
             }
             Uuid => state.write_u8(16),
             Oid => state.write_u8(17),

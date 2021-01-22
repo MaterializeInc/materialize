@@ -18,6 +18,7 @@ use repr::{Datum, Row, RowArena};
 
 use crate::operator::CollectionExt;
 use crate::render::context::Context;
+use crate::render::datum_vec::DatumVec;
 
 impl<G, T> Context<G, RelationExpr, Row, T>
 where
@@ -54,17 +55,16 @@ where
             let (ok_collection, err_collection) = self.collection(input).unwrap();
             let (ok_collection, new_err_collection) =
                 ok_collection.explode_fallible({
+                    let mut datums = DatumVec::new();
                     let mut row_packer = repr::RowPacker::new();
                     move |input_row| {
-                        // Unpack datums and capture its length (to rewind MFP eval).
-                        let mut datums = input_row.unpack();
-                        let datums_len = datums.len();
-                        // Determine which columns will be replaced with Dummy values.
-                        let replace = replace.clone();
                         let temp_storage = RowArena::new();
+                        // Unpack datums and capture its length (to rewind MFP eval).
+                        let mut datums_local = datums.borrow_with(&input_row);
+                        let datums_len = datums_local.len();
                         let exprs = exprs
                             .iter()
-                            .map(|e| e.eval(&datums, &temp_storage))
+                            .map(|e| e.eval(&datums_local, &temp_storage))
                             .collect::<Result<Vec<_>, _>>();
                         let exprs = match exprs {
                             Ok(exprs) => exprs,
@@ -74,7 +74,7 @@ where
                         // Blank out entries in `datum` here, for simplicity later on.
                         for index in 0..datums_len {
                             if replace[index] {
-                                datums[index] = Datum::Dummy;
+                                datums_local[index] = Datum::Dummy;
                             }
                         }
                         // Declare borrows outside the closure so that appropriately lifetimed
@@ -82,27 +82,28 @@ where
                         let map_filter_project = &map_filter_project;
                         let row_packer = &mut row_packer;
                         let temp_storage = &temp_storage;
+                        let replace = &replace;
                         output_rows
                             .iter()
                             .filter_map(move |(output_row, r)| {
-                                if let Some(mfp) = &map_filter_project {
+                                if let Some(mfp) = map_filter_project {
                                     // Remove any additional columns added in prior evaluation.
-                                    datums.truncate(datums_len);
+                                    datums_local.truncate(datums_len);
                                     // Extend datums with additional columns, replace some with dummy values.
-                                    datums.extend(output_row.iter());
-                                    for index in datums_len..datums.len() {
+                                    datums_local.extend(output_row.iter());
+                                    for index in datums_len..datums_local.len() {
                                         if replace[index] {
-                                            datums[index] = Datum::Dummy;
+                                            datums_local[index] = Datum::Dummy;
                                         }
                                     }
-                                    mfp.evaluate(&mut datums, temp_storage, row_packer)
+                                    mfp.evaluate(&mut datums_local, temp_storage, row_packer)
                                         .transpose()
                                         .map(|x| (x.map_err(DataflowError::from), *r))
                                 } else {
                                     Some((
                                         Ok::<_, DataflowError>(
                                             row_packer.pack(
-                                                datums
+                                                datums_local
                                                     .iter()
                                                     .cloned()
                                                     .chain(output_row.iter())

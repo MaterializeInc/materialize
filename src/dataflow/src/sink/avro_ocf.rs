@@ -9,87 +9,75 @@
 
 use std::fs::OpenOptions;
 
-use differential_dataflow::hashable::Hashable;
+use differential_dataflow::Collection;
+
+use itertools::repeat_n;
 use log::error;
-use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::Operator;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Scope;
 
 use dataflow_types::AvroOcfSinkConnector;
 use expr::GlobalId;
-use interchange::avro::{DiffPair, Encoder};
-use repr::{Diff, RelationDesc, Row, Timestamp};
+use interchange::avro::{encode_datums_as_avro, Encoder};
+use mz_avro::{self};
+use repr::{RelationDesc, Row, Timestamp};
 
 pub fn avro_ocf<G>(
-    stream: &Stream<G, (Row, Timestamp, Diff)>,
+    collection: Collection<G, (Option<Row>, Option<Row>)>,
     id: GlobalId,
     connector: AvroOcfSinkConnector,
     desc: RelationDesc,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    let encoder = Encoder::new(desc, false, None);
-    let schema = encoder.writer_schema();
-    let sink_hash = id.hashed();
+    let collection = collection.map(|(k, v)| {
+        assert!(k.is_none(), "Avro OCF sinks must not have keys");
+        let v = v.expect("Avro OCF sinks must have values");
+        v
+    });
+    let (schema, columns) = {
+        let encoder = Encoder::new(None, desc, false);
+        let schema = encoder.value_writer_schema().clone();
+        let columns = encoder.value_columns().to_vec();
+        (schema, columns)
+    };
 
     let res = OpenOptions::new().append(true).open(&connector.path);
     let mut avro_writer = match res {
-        Ok(f) => Some(mz_avro::Writer::new(schema.clone(), f)),
+        Ok(f) => Some(mz_avro::Writer::new(schema, f)),
         Err(e) => {
             error!("creating avro ocf file writer for sink failed: {}", e);
             None
         }
     };
 
-    stream.sink(
-        Exchange::new(move |_| sink_hash),
-        &format!("avro-ocf-{}", id),
-        move |input| {
-            if avro_writer.is_none() {
-                return;
-            }
+    let mut vector = vec![];
 
-            let avro_writer = avro_writer.as_mut().expect("avro writer known to exist");
-
+    collection
+        .inner
+        .sink(Pipeline, &format!("avro-ocf-{}", id), move |input| {
+            let avro_writer = match avro_writer.as_mut() {
+                Some(avro_writer) => avro_writer,
+                None => return,
+            };
             input.for_each(|_, rows| {
-                for (row, time, diff) in rows.iter() {
-                    let should_emit = if connector.strict {
-                        connector.frontier.less_than(&time)
-                    } else {
-                        connector.frontier.less_equal(&time)
-                    };
-                    if !should_emit {
-                        continue;
-                    }
+                rows.swap(&mut vector);
 
-                    let diff_pair = if *diff < 0 {
-                        DiffPair {
-                            before: Some(row),
-                            after: None,
-                        }
-                    } else {
-                        DiffPair {
-                            before: None,
-                            after: Some(row),
-                        }
-                    };
-                    let (_key, value) = encoder.diff_pair_to_avro(diff_pair, None);
-                    for _ in 0..diff.abs() {
-                        let res = avro_writer.append(value.clone());
-
-                        match res {
-                            Ok(_) => (),
-                            Err(e) => error!("appending to avro ocf failed: {}", e),
-                        }
+                for (v, _time, diff) in vector.drain(..) {
+                    let value = encode_datums_as_avro(v.iter(), &columns);
+                    assert!(diff > 0, "can't sink negative multiplicities");
+                    for value in repeat_n(value, diff as usize) {
+                        if let Err(e) = avro_writer.append(value) {
+                            error!("appending to avro ocf failed: {}", e)
+                        };
                     }
                 }
-
                 let res = avro_writer.flush();
                 match res {
                     Ok(_) => (),
                     Err(e) => error!("flushing bytes to avro ocf failed: {}", e),
                 }
             })
-        },
-    )
+        })
 }

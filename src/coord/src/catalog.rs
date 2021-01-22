@@ -14,6 +14,7 @@ use std::time::SystemTime;
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
+use dataflow_types::SinkEnvelope;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
@@ -26,7 +27,7 @@ use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
 use expr::{ExprHumanizer, GlobalId, OptimizedRelationExpr, ScalarExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
-use sql::ast::Expr;
+use sql::ast::{Expr, Raw};
 use sql::catalog::{Catalog as SqlCatalog, CatalogError as SqlCatalogError};
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::{Params, Plan, PlanContext};
@@ -146,7 +147,7 @@ pub struct Table {
     pub plan_cx: PlanContext,
     pub desc: RelationDesc,
     #[serde(skip)]
-    pub defaults: Vec<Expr>,
+    pub defaults: Vec<Expr<Raw>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,6 +164,7 @@ pub struct Sink {
     pub plan_cx: PlanContext,
     pub from: GlobalId,
     pub connector: SinkConnectorState,
+    pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub as_of: Option<u64>,
 }
@@ -971,8 +973,9 @@ impl Catalog {
 
     pub fn drop_items_ops(&mut self, ids: &[GlobalId]) -> Vec<Op> {
         let mut ops = vec![];
+        let mut seen = HashSet::new();
         for &id in ids {
-            Self::drop_item_cascade(id, &self.by_id, &mut ops, &mut HashSet::new());
+            Self::drop_item_cascade(id, &self.by_id, &mut ops, &mut seen);
         }
         ops
     }
@@ -1527,6 +1530,7 @@ impl Catalog {
                 plan_cx: pcx,
                 from: sink.from,
                 connector: SinkConnectorState::Pending(sink.connector_builder),
+                envelope: sink.envelope,
                 with_snapshot,
                 as_of,
             }),
@@ -1809,7 +1813,7 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 self.humanize_scalar_type(&ScalarType::String),
                 self.humanize_scalar_type(value_type)
             ),
-            Record { fields } => format!(
+            Record { fields, .. } => format!(
                 "record({})",
                 fields
                     .iter()
@@ -2050,7 +2054,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn table_details(&self) -> Option<&[Expr]> {
+    fn table_details(&self) -> Option<&[Expr<Raw>]> {
         if let CatalogItem::Table(Table { defaults, .. }) = self.item() {
             Some(defaults)
         } else {

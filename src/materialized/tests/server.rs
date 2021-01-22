@@ -29,15 +29,19 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     {
         let (_server, mut client) = util::start_server(config.clone())?;
         client.batch_execute(&format!(
-            "CREATE SOURCE src FROM FILE '{}' FORMAT BYTES; \
-             CREATE VIEW constant AS SELECT 1; \
-             CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes; \
-             CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src; \
-             CREATE DATABASE d; \
-             CREATE SCHEMA d.s; \
-             CREATE VIEW d.s.v AS SELECT 1;",
-            source_file.path().display(),
+            "CREATE SOURCE src FROM FILE '{}' FORMAT BYTES",
+            source_file.path().display()
         ))?;
+        client.batch_execute("CREATE VIEW constant AS SELECT 1")?;
+        client.batch_execute(
+            "CREATE VIEW logging_derived AS SELECT * FROM mz_catalog.mz_arrangement_sizes",
+        )?;
+        client.batch_execute(
+            "CREATE MATERIALIZED VIEW mat AS SELECT 'a', data, 'c' AS c, data FROM src",
+        )?;
+        client.batch_execute("CREATE DATABASE d")?;
+        client.batch_execute("CREATE SCHEMA d.s")?;
+        client.batch_execute("CREATE VIEW d.s.v AS SELECT 1")?;
     }
 
     {

@@ -144,12 +144,13 @@ async fn build_kafka(
         value_schema_id,
         topic,
         addrs: builder.broker_addrs,
+        key_desc_and_indices: builder.key_desc_and_indices,
+        value_desc: builder.value_desc,
         consistency,
         fuel: builder.fuel,
         frontier,
         strict: !with_snapshot,
         config_options: builder.config_options,
-        key_indices: builder.key_indices,
     }))
 }
 
@@ -193,5 +194,6 @@ fn build_avro_ocf(
         path,
         frontier,
         strict: !with_snapshot,
+        value_desc: builder.value_desc,
     }))
 }

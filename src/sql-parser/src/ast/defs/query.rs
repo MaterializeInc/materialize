@@ -20,27 +20,41 @@
 
 use std::mem;
 
+use std::fmt::Debug;
+use std::hash::Hash;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{Expr, FunctionArgs, Ident, ObjectName, SqlOption};
+
+pub trait AstInfo: Clone {
+    type Table: AstDisplay + Clone + Hash + Debug + Eq;
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
+pub struct Raw;
+
+impl AstInfo for Raw {
+    type Table = ObjectName;
+}
 
 /// The most complete variant of a `SELECT` query expression, optionally
 /// including `WITH`, `UNION` / other set operations, and `ORDER BY`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Query {
+pub struct Query<T: AstInfo> {
     /// WITH (common table expressions, or CTEs)
-    pub ctes: Vec<Cte>,
+    pub ctes: Vec<Cte<T>>,
     /// SELECT or UNION / EXCEPT / INTECEPT
-    pub body: SetExpr,
+    pub body: SetExpr<T>,
     /// ORDER BY
-    pub order_by: Vec<OrderByExpr>,
+    pub order_by: Vec<OrderByExpr<T>>,
     /// `LIMIT { <N> | ALL }`
     /// `FETCH { FIRST | NEXT } <N> { ROW | ROWS } | { ONLY | WITH TIES }`
-    pub limit: Option<Limit>,
+    pub limit: Option<Limit<T>>,
     /// `OFFSET <N> { ROW | ROWS }`
-    pub offset: Option<Expr>,
+    pub offset: Option<Expr<T>>,
 }
 
-impl AstDisplay for Query {
+impl<T: AstInfo> AstDisplay for Query<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         if !self.ctes.is_empty() {
             f.write_str("WITH ");
@@ -76,10 +90,10 @@ impl AstDisplay for Query {
         }
     }
 }
-impl_display!(Query);
+impl_display_t!(Query);
 
-impl Query {
-    pub fn select(select: Select) -> Query {
+impl<T: AstInfo> Query<T> {
+    pub fn select(select: Select<T>) -> Query<T> {
         Query {
             ctes: vec![],
             body: SetExpr::Select(Box::new(select)),
@@ -89,10 +103,10 @@ impl Query {
         }
     }
 
-    pub fn take(&mut self) -> Query {
+    pub fn take(&mut self) -> Query<T> {
         mem::replace(
             self,
-            Query {
+            Query::<T> {
                 ctes: vec![],
                 order_by: vec![],
                 body: SetExpr::Values(Values(vec![])),
@@ -106,24 +120,24 @@ impl Query {
 /// A node in a tree, representing a "query body" expression, roughly:
 /// `SELECT ... [ {UNION|EXCEPT|INTERSECT} SELECT ...]`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SetExpr {
+pub enum SetExpr<T: AstInfo> {
     /// Restricted SELECT .. FROM .. HAVING (no ORDER BY or set operations)
-    Select(Box<Select>),
+    Select(Box<Select<T>>),
     /// Parenthesized SELECT subquery, which may include more set operations
     /// in its body and an optional ORDER BY / LIMIT.
-    Query(Box<Query>),
+    Query(Box<Query<T>>),
     /// UNION/EXCEPT/INTERSECT of two queries
     SetOperation {
         op: SetOperator,
         all: bool,
-        left: Box<SetExpr>,
-        right: Box<SetExpr>,
+        left: Box<SetExpr<T>>,
+        right: Box<SetExpr<T>>,
     },
-    Values(Values),
+    Values(Values<T>),
     // TODO: ANSI SQL supports `TABLE` here.
 }
 
-impl AstDisplay for SetExpr {
+impl<T: AstInfo> AstDisplay for SetExpr<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             SetExpr::Select(s) => f.write_node(s),
@@ -151,7 +165,7 @@ impl AstDisplay for SetExpr {
         }
     }
 }
-impl_display!(SetExpr);
+impl_display_t!(SetExpr);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SetOperator {
@@ -175,23 +189,23 @@ impl_display!(SetOperator);
 /// appear either as the only body item of an `SQLQuery`, or as an operand
 /// to a set operation like `UNION`.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
-pub struct Select {
-    pub distinct: Option<Distinct>,
+pub struct Select<T: AstInfo> {
+    pub distinct: Option<Distinct<T>>,
     /// projection expressions
-    pub projection: Vec<SelectItem>,
+    pub projection: Vec<SelectItem<T>>,
     /// FROM
-    pub from: Vec<TableWithJoins>,
+    pub from: Vec<TableWithJoins<T>>,
     /// WHERE
-    pub selection: Option<Expr>,
+    pub selection: Option<Expr<T>>,
     /// GROUP BY
-    pub group_by: Vec<Expr>,
+    pub group_by: Vec<Expr<T>>,
     /// HAVING
-    pub having: Option<Expr>,
+    pub having: Option<Expr<T>>,
     /// OPTION
     pub options: Vec<SqlOption>,
 }
 
-impl AstDisplay for Select {
+impl<T: AstInfo> AstDisplay for Select<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("SELECT");
         if let Some(distinct) = &self.distinct {
@@ -225,33 +239,33 @@ impl AstDisplay for Select {
         }
     }
 }
-impl_display!(Select);
+impl_display_t!(Select);
 
-impl Select {
-    pub fn from(mut self, twj: TableWithJoins) -> Select {
+impl<T: AstInfo> Select<T> {
+    pub fn from(mut self, twj: TableWithJoins<T>) -> Select<T> {
         self.from.push(twj);
         self
     }
 
-    pub fn project(mut self, select_item: SelectItem) -> Select {
+    pub fn project(mut self, select_item: SelectItem<T>) -> Select<T> {
         self.projection.push(select_item);
         self
     }
 
-    pub fn selection(mut self, selection: Option<Expr>) -> Select {
+    pub fn selection(mut self, selection: Option<Expr<T>>) -> Select<T> {
         self.selection = selection;
         self
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Distinct {
+pub enum Distinct<T: AstInfo> {
     EntireRow,
-    On(Vec<Expr>),
+    On(Vec<Expr<T>>),
 }
-impl_display!(Distinct);
+impl_display_t!(Distinct);
 
-impl AstDisplay for Distinct {
+impl<T: AstInfo> AstDisplay for Distinct<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Distinct::EntireRow => f.write_str("DISTINCT"),
@@ -269,12 +283,12 @@ impl AstDisplay for Distinct {
 /// of the columns returned by the query. The parser does not validate that the
 /// number of columns in the query matches the number of columns in the query.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Cte {
+pub struct Cte<T: AstInfo> {
     pub alias: TableAlias,
-    pub query: Query,
+    pub query: Query<T>,
 }
 
-impl AstDisplay for Cte {
+impl<T: AstInfo> AstDisplay for Cte<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_node(&self.alias);
         f.write_str(" AS (");
@@ -282,18 +296,18 @@ impl AstDisplay for Cte {
         f.write_str(")");
     }
 }
-impl_display!(Cte);
+impl_display_t!(Cte);
 
 /// One item of the comma-separated list following `SELECT`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SelectItem {
+pub enum SelectItem<T: AstInfo> {
     /// An expression, optionally followed by `[ AS ] alias`.
-    Expr { expr: Expr, alias: Option<Ident> },
+    Expr { expr: Expr<T>, alias: Option<Ident> },
     /// An unqualified `*`.
     Wildcard,
 }
 
-impl AstDisplay for SelectItem {
+impl<T: AstInfo> AstDisplay for SelectItem<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match &self {
             SelectItem::Expr { expr, alias } => {
@@ -307,15 +321,15 @@ impl AstDisplay for SelectItem {
         }
     }
 }
-impl_display!(SelectItem);
+impl_display_t!(SelectItem);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct TableWithJoins {
-    pub relation: TableFactor,
-    pub joins: Vec<Join>,
+pub struct TableWithJoins<T: AstInfo> {
+    pub relation: TableFactor<T>,
+    pub joins: Vec<Join<T>>,
 }
 
-impl AstDisplay for TableWithJoins {
+impl<T: AstInfo> AstDisplay for TableWithJoins<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_node(&self.relation);
         for join in &self.joins {
@@ -323,10 +337,10 @@ impl AstDisplay for TableWithJoins {
         }
     }
 }
-impl_display!(TableWithJoins);
+impl_display_t!(TableWithJoins);
 
-impl TableWithJoins {
-    pub fn subquery(query: Query, alias: TableAlias) -> TableWithJoins {
+impl<T: AstInfo> TableWithJoins<T> {
+    pub fn subquery(query: Query<T>, alias: TableAlias) -> TableWithJoins<T> {
         TableWithJoins {
             relation: TableFactor::Derived {
                 lateral: false,
@@ -340,19 +354,19 @@ impl TableWithJoins {
 
 /// A table name or a parenthesized subquery with an optional alias
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TableFactor {
+pub enum TableFactor<T: AstInfo> {
     Table {
-        name: ObjectName,
+        name: T::Table,
         alias: Option<TableAlias>,
     },
     Function {
         name: ObjectName,
-        args: FunctionArgs,
+        args: FunctionArgs<T>,
         alias: Option<TableAlias>,
     },
     Derived {
         lateral: bool,
-        subquery: Box<Query>,
+        subquery: Box<Query<T>>,
         alias: Option<TableAlias>,
     },
     /// Represents a parenthesized join expression, such as
@@ -360,12 +374,12 @@ pub enum TableFactor {
     /// The inner `TableWithJoins` can have no joins only if its
     /// `relation` is itself a `TableFactor::NestedJoin`.
     NestedJoin {
-        join: Box<TableWithJoins>,
+        join: Box<TableWithJoins<T>>,
         alias: Option<TableAlias>,
     },
 }
 
-impl AstDisplay for TableFactor {
+impl<T: AstInfo> AstDisplay for TableFactor<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             TableFactor::Table { name, alias } => {
@@ -413,7 +427,7 @@ impl AstDisplay for TableFactor {
         }
     }
 }
-impl_display!(TableFactor);
+impl_display_t!(TableFactor);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TableAlias {
@@ -440,22 +454,22 @@ impl AstDisplay for TableAlias {
 impl_display!(TableAlias);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Join {
-    pub relation: TableFactor,
-    pub join_operator: JoinOperator,
+pub struct Join<T: AstInfo> {
+    pub relation: TableFactor<T>,
+    pub join_operator: JoinOperator<T>,
 }
 
-impl AstDisplay for Join {
+impl<T: AstInfo> AstDisplay for Join<T> {
     fn fmt(&self, f: &mut AstFormatter) {
-        fn prefix(constraint: &JoinConstraint) -> &'static str {
+        fn prefix<T: AstInfo>(constraint: &JoinConstraint<T>) -> &'static str {
             match constraint {
                 JoinConstraint::Natural => "NATURAL ",
                 _ => "",
             }
         }
-        fn suffix<'a>(constraint: &'a JoinConstraint) -> impl AstDisplay + 'a {
-            struct Suffix<'a>(&'a JoinConstraint);
-            impl<'a> AstDisplay for Suffix<'a> {
+        fn suffix<'a, T: AstInfo>(constraint: &'a JoinConstraint<T>) -> impl AstDisplay + 'a {
+            struct Suffix<'a, T: AstInfo>(&'a JoinConstraint<T>);
+            impl<'a, T: AstInfo> AstDisplay for Suffix<'a, T> {
                 fn fmt(&self, f: &mut AstFormatter) {
                     match self.0 {
                         JoinConstraint::On(expr) => {
@@ -509,32 +523,32 @@ impl AstDisplay for Join {
         }
     }
 }
-impl_display!(Join);
+impl_display_t!(Join);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum JoinOperator {
-    Inner(JoinConstraint),
-    LeftOuter(JoinConstraint),
-    RightOuter(JoinConstraint),
-    FullOuter(JoinConstraint),
+pub enum JoinOperator<T: AstInfo> {
+    Inner(JoinConstraint<T>),
+    LeftOuter(JoinConstraint<T>),
+    RightOuter(JoinConstraint<T>),
+    FullOuter(JoinConstraint<T>),
     CrossJoin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum JoinConstraint {
-    On(Expr),
+pub enum JoinConstraint<T: AstInfo> {
+    On(Expr<T>),
     Using(Vec<Ident>),
     Natural,
 }
 
 /// SQL ORDER BY expression
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct OrderByExpr {
-    pub expr: Expr,
+pub struct OrderByExpr<T: AstInfo> {
+    pub expr: Expr<T>,
     pub asc: Option<bool>,
 }
 
-impl AstDisplay for OrderByExpr {
+impl<T: AstInfo> AstDisplay for OrderByExpr<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_node(&self.expr);
         match self.asc {
@@ -544,18 +558,18 @@ impl AstDisplay for OrderByExpr {
         }
     }
 }
-impl_display!(OrderByExpr);
+impl_display_t!(OrderByExpr);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Limit {
+pub struct Limit<T: AstInfo> {
     pub with_ties: bool,
-    pub quantity: Expr,
+    pub quantity: Expr<T>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Values(pub Vec<Vec<Expr>>);
+pub struct Values<T: AstInfo>(pub Vec<Vec<Expr<T>>>);
 
-impl AstDisplay for Values {
+impl<T: AstInfo> AstDisplay for Values<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("VALUES ");
         let mut delim = "";
@@ -568,4 +582,4 @@ impl AstDisplay for Values {
         }
     }
 }
-impl_display!(Values);
+impl_display_t!(Values);

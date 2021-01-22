@@ -711,9 +711,9 @@ dependencies = [
 
 [[package]]
 name = "datadriven"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d7337e53bfa2d8e547c582c1141882bc3b500904bab157fca7b4fa6b6a5ff5a"
+checksum = "3746c0c397dd30632405eef04cd5e92693e03279e8189d1922dbf227bcbe66a8"
 dependencies = [
  "anyhow",
 ]
@@ -1637,6 +1637,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "smallvec",
+ "timely",
  "url",
  "uuid",
 ]
@@ -3114,7 +3115,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.25.0-dev"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#2e168f4d2aea1c53d415f33a3b4d47f6dc6199ab"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#6ac37feb6931332422d604ed80a904caec1eabd7"
 dependencies = [
  "futures",
  "libc",
@@ -3130,7 +3131,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "2.1.1+1.5.3"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#2e168f4d2aea1c53d415f33a3b4d47f6dc6199ab"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#6ac37feb6931332422d604ed80a904caec1eabd7"
 dependencies = [
  "cmake",
  "libc",
@@ -3265,7 +3266,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "base64",
@@ -3289,7 +3290,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3306,7 +3307,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kinesis"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3319,7 +3320,7 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3331,18 +3332,19 @@ dependencies = [
 [[package]]
 name = "rusoto_signature"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "digest",
  "futures",
  "hex",
  "hmac",
  "http",
  "hyper",
  "log",
- "md5",
+ "md-5",
  "percent-encoding",
  "pin-project-lite",
  "rusoto_credential",
@@ -3355,7 +3357,7 @@ dependencies = [
 [[package]]
 name = "rusoto_sts"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#b94d7bebd8a5286e2f2b4e6a68062bfe5cc68943"
+source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
 dependencies = [
  "async-trait",
  "bytes",

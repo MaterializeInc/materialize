@@ -13,9 +13,9 @@ use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident, IfExistsBehavior,
-    ObjectName, Query, SqlOption, Statement, TableFactor, Value,
+    AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
+    IfExistsBehavior, ObjectName, Query, Raw, SqlOption, Statement, TableFactor, Value,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -88,7 +88,10 @@ pub fn unresolve(name: FullName) -> ObjectName {
 /// The goal is to construct a backwards-compatible description of the object.
 /// SQL is the most stable part of Materialize, so SQL is used to describe the
 /// objects that are persisted in the catalog.
-pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<String, PlanError> {
+pub fn create_statement(
+    scx: &StatementContext,
+    mut stmt: Statement<Raw>,
+) -> Result<String, PlanError> {
     let allocate_name = |name: &ObjectName| -> Result<_, PlanError> {
         Ok(unresolve(scx.allocate_name(object_name(name.clone())?)))
     };
@@ -120,8 +123,8 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
         }
     }
 
-    impl<'a, 'ast> VisitMut<'ast> for QueryNormalizer<'a> {
-        fn visit_query_mut(&mut self, query: &'ast mut Query) {
+    impl<'a, 'ast> VisitMut<'ast, Raw> for QueryNormalizer<'a> {
+        fn visit_query_mut(&mut self, query: &'ast mut Query<Raw>) {
             let n = self.ctes.len();
             for cte in &query.ctes {
                 self.ctes.push(cte.alias.name.clone());
@@ -130,7 +133,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
             self.ctes.truncate(n);
         }
 
-        fn visit_function_mut(&mut self, func: &'ast mut Function) {
+        fn visit_function_mut(&mut self, func: &'ast mut Function<Raw>) {
             // Don't visit the function name, because function names are not
             // (yet) object names we can resolve.
             match &mut func.args {
@@ -146,7 +149,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
             }
         }
 
-        fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor) {
+        fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Raw>) {
             match table_factor {
                 TableFactor::Table { name, alias } => {
                     self.visit_object_name_mut(name);
@@ -190,6 +193,10 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
                 Ok(full_name) => *object_name = unresolve(full_name.name().clone()),
                 Err(e) => self.err = Some(e),
             };
+        }
+
+        fn visit_table_mut(&mut self, table: &'ast mut <Raw as AstInfo>::Table) {
+            self.visit_object_name_mut(table);
         }
     }
 
@@ -243,6 +250,7 @@ pub fn create_statement(scx: &StatementContext, mut stmt: Statement) -> Result<S
             connector: _,
             with_options: _,
             format: _,
+            envelope: _,
             with_snapshot: _,
             as_of: _,
             if_not_exists,

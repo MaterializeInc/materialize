@@ -23,11 +23,6 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 - Numeric to float conversions are susceptible to floating point errors
   ([#1102](https://github.com/MaterializeInc/materialize/issues/1102))
 
-### Syntax & Semantics
-
-- Column names generated in returned column set are not available to `GROUP BY`
-  ([#1673](https://github.com/MaterializeInc/materialize/issues/1673))
-
 ### Performance
 
 - `ANY` and `ALL` queries generate suboptimal plans
@@ -94,21 +89,23 @@ specified version.
 
 Fixed in | Known limitation
 --------------|-----------------
-[v0.3.0] |  JSON-encoded streams are not supported ([#207](https://github.com/MaterializeInc/materialize/issues/207))
-[v0.3.0] |  Connecting Kafka sinks back in as sources is not supported ([#1665](https://github.com/MaterializeInc/materialize/issues/1665))
-[v0.3.0] |  Progress tracking for Kafka sinks is not supported ([#1442](https://github.com/MaterializeInc/materialize/issues/1442))
-[v0.3.0] | `date_trunc` for `timestamp with time zone` data ([#1814](https://github.com/MaterializeInc/materialize/issues/1814))
-[v0.3.0] | Special `date`, `time`, and `timestamp` values from PostgreSQL are not supported ([#1805](https://github.com/MaterializeInc/materialize/issues/1805))
-[v0.3.0] | Cannot cast from string to time-like types ([#1378](https://github.com/MaterializeInc/materialize/issues/1378))
-[v0.3.0] | Using a non-existent namespace does not result in an error ([#1684](https://github.com/MaterializeInc/materialize/issues/1684))
-[v0.3.0] | Connecting to Kafka brokers with SSL (client) authentication is not supported ([#1785](https://github.com/MaterializeInc/materialize/issues/1785))
-[v0.3.0] | Kafka sources with more than one partition are not supported ([#2169](https://github.com/MaterializeInc/materialize/issues/2169))
-[v0.3.0] | Formatting regular expression is not resurface-able through `SHOW CREATE SOURCE` ([#1762](https://github.com/MaterializeInc/materialize/issues/1762))
-[v0.3.0] |  `EXPLAIN DATAFLOW` does not include details about `ORDER BY` and `LIMIT` ([#477](https://github.com/MaterializeInc/materialize/issues/477))
-[v0.2.1] | Kinesis sources with more than one shard are not supported ([#2222](https://github.com/MaterializeInc/materialize/issues/2222))
-[v0.2.0] | CSV files with header rows are not supported ([#1982](https://github.com/MaterializeInc/materialize/issues/1982))
-[v0.1.3] | Intervals do not support addition or subtraction with other intervals ([#1682](https://github.com/MaterializeInc/materialize/issues/1682))
+[v0.4.0] | Column names generated in returned column set are not available to `GROUP BY` {% gh 1673 %}
+[v0.3.0] | JSON-encoded streams are not supported {% gh 207 %}
+[v0.3.0] | Connecting Kafka sinks back in as sources is not supported {% gh 1665 %}
+[v0.3.0] | Progress tracking for Kafka sinks is not supported {% gh 1442 %}
+[v0.3.0] | `date_trunc` for `timestamp with time zone` data {% gh 1814 %}
+[v0.3.0] | Special `date`, `time`, and `timestamp` values from PostgreSQL are not supported {% gh 1805 %}
+[v0.3.0] | Cannot cast from string to time-like types {% gh 1378 %}
+[v0.3.0] | Using a non-existent namespace does not result in an error {% gh 1684 %}
+[v0.3.0] | Connecting to Kafka brokers with SSL (client) authentication is not supported {% gh 1785 %}
+[v0.3.0] | Kafka sources with more than one partition are not supported {% gh 2169 %}
+[v0.3.0] | Formatting regular expression is not resurface-able through `SHOW CREATE SOURCE` {% gh 1762 %}
+[v0.3.0] |  `EXPLAIN DATAFLOW` does not include details about `ORDER BY` and `LIMIT` {% gh 477 %}
+[v0.2.1] | Kinesis sources with more than one shard are not supported {% gh 2222 %}
+[v0.2.0] | CSV files with header rows are not supported {% gh 1982 %}
+[v0.1.3] | Intervals do not support addition or subtraction with other intervals {% gh 1682 %}
 
+[v0.4.0]: /release-notes/#v0.4.0
 [v0.3.0]: /release-notes/#v0.3.0
 [v0.2.1]: /release-notes/#v0.2.1
 [v0.2.0]: /release-notes/#v0.2.0

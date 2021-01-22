@@ -136,12 +136,15 @@ $ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
 {"before": null, "after": {"row": {"a": 3, "b": 1}}}
 {"before": null, "after": {"row": {"a": 4, "b": 2}}}
+{"before": null, "after": {"row": {"a": 1, "b": 7}}}
 
 $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
 {"status":"END","id":"1","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-input-${testdrive.seed}"}]}}
 {"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
 {"status":"END","id":"2","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-input-${testdrive.seed}"}]}}
+{"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
+{"status":"END","id":"3","event_count":{"long": 1},"data_collections":{"array": [{"event_count": 1, "data_collection": "testdrive-input-${testdrive.seed}"}]}}
 
 > CREATE MATERIALIZED SOURCE input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
@@ -155,6 +158,7 @@ a  b
 2  2
 3  1
 4  2
+1  7
 
 > CREATE SINK input_sink FROM input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
@@ -173,7 +177,6 @@ $ kafka-verify format=avro sink=materialize.public.input_sink consistency=debezi
 {"id": "1", "status": "END", "event_count": {"long": 2}}
 {"id": "2", "status": "BEGIN", "event_count": null}
 {"id": "2", "status": "END", "event_count": {"long": 2}}
-
 ! CREATE SINK bad_sink FROM input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a, a)
   FORMAT AVRO

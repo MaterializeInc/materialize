@@ -79,6 +79,7 @@ impl MapFilterProject {
     /// occurs in the evaluation it is returned as an `Err` variant.
     /// As the evaluation exits early with failed predicates, it may
     /// miss some errors that would occur later in evaluation.
+    #[inline(always)]
     pub fn evaluate<'a>(
         &'a self,
         datums: &mut Vec<Datum<'a>>,
@@ -99,6 +100,7 @@ impl MapFilterProject {
     /// This version is used internally by `evaluate` and can be useful
     /// when one wants to capture the resulting datums without packing
     /// and then unpacking a row.
+    #[inline(always)]
     pub fn evaluate_iter<'b, 'a: 'b>(
         &'a self,
         datums: &'b mut Vec<Datum<'a>>,
@@ -372,7 +374,17 @@ impl MapFilterProject {
             available_expr[*index] = true;
         }
         for expr in self.expressions.into_iter() {
-            let is_available = expr.support().into_iter().all(|i| available_expr[i]);
+            // We treat an expression as available if its supporting columns are available,
+            // and if it is not a literal (we want to avoid pushing down literals). This
+            // choice is ad-hoc, but the intent is that we partition the operators so
+            // that we can reduce the row representation size and total computation.
+            // Pushing down literals harms the former and does nothing for the latter.
+            // In the future, we'll want to have a harder think about this trade-off, as
+            // we are certainly making sub-optimal decisions by pushing down all available
+            // work.
+            // TODO(mcsherry): establish better principles about what work to push down.
+            let is_available =
+                expr.support().into_iter().all(|i| available_expr[i]) && !expr.is_literal();
             if is_available {
                 before_expr.push(expr);
             } else {
@@ -491,6 +503,9 @@ impl MapFilterProject {
     /// `self.permute` this instance.
     pub fn demand(&self) -> HashSet<usize> {
         let mut demanded = HashSet::new();
+        for (_index, pred) in self.predicates.iter() {
+            demanded.extend(pred.support());
+        }
         demanded.extend(self.projection.iter().cloned());
         for index in (0..self.expressions.len()).rev() {
             if demanded.contains(&(self.input_arity + index)) {
@@ -506,8 +521,13 @@ impl MapFilterProject {
     /// The `shuffle` argument remaps expected column identifiers to new locations,
     /// with the expectation that `shuffle` describes all input columns, and so the
     /// intermediate results will be able to start at position `shuffle.len()`.
-    pub fn permute(self, mut shuffle: HashMap<usize, usize>) -> Self {
-        let new_input_arity = shuffle.len();
+    ///
+    /// The supplied `shuffle` may not list columns that are not "demanded" by the
+    /// instance, and so we should ensure that `self` is optimized to not reference
+    /// columns that are not demanded.
+    pub fn permute(&mut self, shuffle: &HashMap<usize, usize>, new_input_arity: usize) {
+        self.remove_undemanded();
+        let mut shuffle = shuffle.clone();
         let (mut map, mut filter, mut project) = self.as_map_filter_project();
         for index in 0..map.len() {
             // Intermediate columns are just shifted.
@@ -522,7 +542,7 @@ impl MapFilterProject {
         for proj in project.iter_mut() {
             *proj = shuffle[proj];
         }
-        Self::new(new_input_arity)
+        *self = Self::new(new_input_arity)
             .map(map)
             .filter(filter)
             .project(project)
@@ -532,5 +552,62 @@ impl MapFilterProject {
     pub fn optimize(&mut self) {
         // This should probably resemble existing scalar cse.
         unimplemented!()
+    }
+
+    /// Removes unused expressions from `self.expressions`.
+    ///
+    /// Expressions are "used" if they are relied upon by any output columns
+    /// or any predicates, even transitively. Any expressions that are not
+    /// relied upon in this way can be discarded.
+    pub fn remove_undemanded(&mut self) {
+        // Determine the demanded expressions to remove irrelevant ones.
+        let mut demand = std::collections::HashSet::new();
+        for (_index, pred) in self.predicates.iter() {
+            demand.extend(pred.support());
+        }
+        // Start from the output columns as presumed demanded.
+        // If this is not the case, the caller should project some away.
+        demand.extend(self.projection.iter().cloned());
+        // Proceed in *reverse* order, as expressions may depend on other
+        // expressions that precede them.
+        for index in (0..self.expressions.len()).rev() {
+            if demand.contains(&(self.input_arity + index)) {
+                demand.extend(self.expressions[index].support());
+            }
+        }
+
+        // Maintain a map from initial column identifiers to locations
+        // once we have removed undemanded expressions.
+        let mut remap = HashMap::new();
+        // This map only needs to map elements of `demand` to a new location,
+        // but the logic is easier if we include all input columns (as the
+        // new position is then determined by the size of the map).
+        for index in 0..self.input_arity {
+            remap.insert(index, index);
+        }
+        // Retain demanded expressions, and record their new locations.
+        let mut new_expressions = Vec::new();
+        for (index, expr) in self.expressions.drain(..).enumerate() {
+            if demand.contains(&(index + self.input_arity)) {
+                remap.insert(index + self.input_arity, remap.len());
+                new_expressions.push(expr);
+            }
+        }
+        self.expressions = new_expressions;
+
+        // Update column identifiers; rebuild `Self` to re-establish any invariants.
+        // We mirror `self.permute(&remap)` but we specifically want to remap columns
+        // that are produced by `self.expressions` after the input columns.
+        let (expressions, predicates, projection) = self.as_map_filter_project();
+        *self = Self::new(self.input_arity)
+            .map(expressions.into_iter().map(|mut e| {
+                e.permute_map(&remap);
+                e
+            }))
+            .filter(predicates.into_iter().map(|mut p| {
+                p.permute_map(&remap);
+                p
+            }))
+            .project(projection.into_iter().map(|c| remap[&c]));
     }
 }

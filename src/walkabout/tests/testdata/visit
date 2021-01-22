@@ -243,7 +243,6 @@ where
     }
 }
 
-
 visit
 enum Expr<T: Foo> {
     Function(Function<T>),
@@ -318,4 +317,29 @@ where
     if let Some(v) = &node.filter {
         visitor.visit_expr(v);
     }
+}
+
+visit
+struct Function<T: Foo> {
+    t: T::TableName,
+}
+----
+pub trait Visit<'ast, T: Foo> {
+    fn visit_function(&mut self, node: &'ast Function<T>) {
+        visit_function(self, node)
+    }
+    fn visit_table_name(&mut self, node: &'ast T::TableName) {
+        visit_table_name(self, node)
+    }
+}
+pub fn visit_function<'ast, V, T: Foo>(visitor: &mut V, node: &'ast Function<T>)
+where
+    V: Visit<'ast, T> + ?Sized,
+{
+    visitor.visit_table_name(&node.t);
+}
+pub fn visit_table_name<'ast, V, T: Foo>(visitor: &mut V, node: &'ast T::TableName)
+where
+    V: Visit<'ast, T> + ?Sized,
+{
 }

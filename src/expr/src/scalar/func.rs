@@ -3164,7 +3164,7 @@ impl UnaryFunc {
             JsonbPretty => ScalarType::String.nullable(in_nullable),
 
             RecordGet(i) => match input_type.scalar_type {
-                ScalarType::Record { mut fields } => fields.swap_remove(*i).1.nullable(true),
+                ScalarType::Record { mut fields, .. } => fields.swap_remove(*i).1.nullable(true),
                 _ => unreachable!("RecordGet specified nonexistent field"),
             },
 
@@ -3774,7 +3774,7 @@ where
         String => strconv::format_string(buf, d.unwrap_str()),
         Jsonb => strconv::format_jsonb(buf, JsonbRef::from_datum(d)),
         Uuid => strconv::format_uuid(buf, d.unwrap_uuid()),
-        Record { fields } => {
+        Record { fields, .. } => {
             let mut fields = fields.iter();
             strconv::format_record(buf, &d.unwrap_list(), |buf, d| {
                 let (_name, ty) = fields.next().unwrap();
@@ -4281,6 +4281,8 @@ impl VariadicFunc {
                     .into_iter()
                     .zip(input_types.into_iter())
                     .collect(),
+                custom_oid: None,
+                custom_name: None,
             }
             .nullable(true),
             SplitPart => ScalarType::String.nullable(true),

@@ -22,7 +22,7 @@ use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
 use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
-use sql_parser::ast::{Expr, ObjectName};
+use sql_parser::ast::{Expr, ObjectName, Raw};
 
 use super::expr::{
     AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
@@ -34,6 +34,7 @@ use super::typeconv::{self, rescale_decimal, CastContext};
 use super::StatementContext;
 use crate::catalog::CatalogItemType;
 use crate::names::PartialName;
+use crate::plan::transform_ast;
 
 /// A specifier for a function or an operator.
 #[derive(Clone, Copy, Debug)]
@@ -241,7 +242,7 @@ impl<R> Operation<R> {
 macro_rules! sql_op {
     ($l:literal) => {{
         lazy_static! {
-            static ref EXPR: Expr = sql_parser::parser::parse_expr($l.into())
+            static ref EXPR: Expr<Raw> = sql_parser::parser::parse_expr($l.into())
                 .expect("static function definition failed to parse");
         }
         Operation::variadic(move |ecx, args| {
@@ -264,8 +265,12 @@ macro_rules! sql_op {
                 allow_subqueries: true,
             };
 
+            // Desugar the expression
+            let mut expr = EXPR.clone();
+            transform_ast::transform_expr(&scx, &mut expr)?;
+
             // Plan the expression.
-            let mut expr = query::plan_expr(&ecx, &*EXPR)?.type_as_any(&ecx)?;
+            let mut expr = query::plan_expr(&ecx, &expr)?.type_as_any(&ecx)?;
 
             // Replace the parameters with the actual arguments.
             expr.splice_parameters(&args, 0);
@@ -331,7 +336,7 @@ impl From<AggregateFunc> for Operation<(ScalarExpr, AggregateFunc)> {
 /// Note that this is not exhaustive and will likely require additions.
 pub enum ParamList {
     Exact(Vec<ParamType>),
-    Repeat(Vec<ParamType>),
+    Variadic(ParamType),
 }
 
 impl ParamList {
@@ -363,16 +368,16 @@ impl ParamList {
     fn validate_arg_len(&self, input_len: usize) -> bool {
         match self {
             Self::Exact(p) => p.len() == input_len,
-            Self::Repeat(p) => input_len % p.len() == 0,
+            Self::Variadic(_) => true,
         }
     }
 
     /// Reports whether the parameter list contains any polymorphic parameters.
     fn has_polymorphic(&self) -> bool {
-        let p = match self {
-            ParamList::Exact(p) | ParamList::Repeat(p) => p,
-        };
-        p.iter().any(|p| p.is_polymorphic())
+        match self {
+            ParamList::Exact(p) => p.iter().any(|p| p.is_polymorphic()),
+            ParamList::Variadic(p) => p.is_polymorphic(),
+        }
     }
 
     /// Enforces polymorphic type consistency by finding the concrete type that
@@ -653,7 +658,7 @@ impl std::ops::Index<usize> for ParamList {
     fn index(&self, i: usize) -> &Self::Output {
         match self {
             Self::Exact(p) => &p[i],
-            Self::Repeat(p) => &p[i % p.len()],
+            Self::Variadic(p) => &p,
         }
     }
 }
@@ -1127,7 +1132,7 @@ fn coerce_args_to_types(
 
 /// Provides shorthand for converting `Vec<ScalarType>` into `Vec<ParamType>`.
 macro_rules! params {
-    (($($p:expr),*)...) => { ParamList::Repeat(vec![$($p.into(),)*]) };
+    ($p:ident...) => { ParamList::Variadic($p.into())};
     ($($p:expr),*)      => { ParamList::Exact(vec![$($p.into(),)*]) };
 }
 
@@ -1215,7 +1220,7 @@ lazy_static! {
                 params!(String) => UnaryFunc::CharLength
             },
             "concat" => Scalar {
-                 params!((Any)...) => Operation::variadic(|ecx, cexprs| {
+                 params!(Any...) => Operation::variadic(|ecx, cexprs| {
                     if cexprs.is_empty() {
                         bail!("No function matches the given name and argument types. \
                         You might need to add explicit type casts.")
@@ -1294,20 +1299,25 @@ lazy_static! {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength
             },
             "jsonb_build_array" => Scalar {
-                params!((Any)...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
+                params!(Any...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
                     func: VariadicFunc::JsonbBuildArray,
                     exprs: exprs.into_iter().map(|e| typeconv::to_jsonb(ecx, e)).collect(),
                 }))
             },
             "jsonb_build_object" => Scalar {
-                params!((Any, Any)...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
-                    func: VariadicFunc::JsonbBuildObject,
-                    exprs: exprs.into_iter().tuples().map(|(key, val)| {
-                        let key = typeconv::to_string(ecx, key);
-                        let val = typeconv::to_jsonb(ecx, val);
-                        vec![key, val]
-                    }).flatten().collect(),
-                }))
+                params!(Any...) => Operation::variadic(|ecx, exprs| {
+                    if exprs.len() % 2 != 0 {
+                        bail!("argument list must have even number of elements")
+                    }
+                    Ok(ScalarExpr::CallVariadic {
+                        func: VariadicFunc::JsonbBuildObject,
+                        exprs: exprs.into_iter().tuples().map(|(key, val)| {
+                            let key = typeconv::to_string(ecx, key);
+                            let val = typeconv::to_jsonb(ecx, val);
+                            vec![key, val]
+                        }).flatten().collect(),
+                    })
+                })
             },
             "jsonb_pretty" => Scalar {
                 params!(Jsonb) => UnaryFunc::JsonbPretty
@@ -1730,6 +1740,14 @@ lazy_static! {
                 })
             },
             "unnest" => Table {
+                vec![ArrayAny] => Operation::unary(move |ecx, e| {
+                    let el_typ =  ecx.scalar_type(&e).unwrap_array_element_type().clone();
+                    Ok(TableFuncPlan {
+                        func: TableFunc::UnnestArray{ el_typ },
+                        exprs: vec![e],
+                        column_names: vec![Some("unnest".into())],
+                    })
+                }),
                 vec![ListAny] => Operation::unary(move |ecx, e| {
                     let el_typ =  ecx.scalar_type(&e).unwrap_list_element_type().clone();
                     Ok(TableFuncPlan {

@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::hashable::Hashable;
+use differential_dataflow::Collection;
 use lazy_static::lazy_static;
 use log::error;
 use prometheus::{
@@ -24,15 +24,16 @@ use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::message::Message;
-use rdkafka::producer::{BaseRecord, DeliveryResult, Producer, ProducerContext, ThreadedProducer};
-use timely::dataflow::channels::pact::Exchange;
+use rdkafka::producer::Producer;
+use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::FrontieredInputHandle;
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Scope;
 
 use dataflow_types::KafkaSinkConnector;
 use expr::GlobalId;
-use interchange::avro::{self, DiffPair, Encoder};
+use interchange::avro::{self, Encoder};
 use repr::{Diff, RelationDesc, Row, Timestamp};
 
 /// Per-Kafka sink metrics.
@@ -225,20 +226,22 @@ enum SendState {
 #[derive(Debug)]
 struct EncodedRow {
     key: Option<Vec<u8>>,
-    value: Vec<u8>,
+    value: Option<Vec<u8>>,
     count: usize,
 }
 
 // TODO@jldlaughlin: What guarantees does this sink support? #1728
 pub fn kafka<G>(
-    stream: &Stream<G, (Row, Timestamp, Diff)>,
+    collection: Collection<G, (Option<Row>, Option<Row>)>,
     id: GlobalId,
-    mut connector: KafkaSinkConnector,
-    desc: RelationDesc,
+    connector: KafkaSinkConnector,
+    key_desc: Option<RelationDesc>,
+    value_desc: RelationDesc,
 ) -> Box<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let stream = &collection.inner;
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &connector.addrs.to_string());
 
@@ -279,11 +282,7 @@ where
             &stream.scope().index().to_string(),
         );
 
-        let encoder = Encoder::new(
-            desc,
-            connector.consistency.is_some(),
-            connector.key_indices.take(),
-        );
+        let encoder = Encoder::new(key_desc, value_desc, connector.consistency.is_some());
 
         let producer = config
             .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
@@ -312,7 +311,11 @@ where
     let mut state = SendState::Init;
     let mut vector = Vec::new();
 
-    let mut sink_logic = move |input: &mut FrontieredInputHandle<_, (Row, Timestamp, Diff), _>| {
+    let mut sink_logic = move |input: &mut FrontieredInputHandle<
+        _,
+        ((Option<Row>, Option<Row>), Timestamp, Diff),
+        _,
+    >| {
         if s.shutdown_flag.load(Ordering::SeqCst) {
             error!("shutdown requested for sink: {}", &s.name);
             return false;
@@ -321,7 +324,7 @@ where
         // Encode and queue all pending rows waiting to be sent to kafka
         input.for_each(|_, rows| {
             rows.swap(&mut vector);
-            for (row, time, diff) in vector.drain(..) {
+            for ((key, value), time, diff) in vector.drain(..) {
                 let should_emit = if connector.strict {
                     connector.frontier.less_than(&time)
                 } else {
@@ -333,44 +336,27 @@ where
                     continue;
                 }
 
+                assert!(diff >= 0, "can't sink negative multiplicities");
                 if diff == 0 {
                     // Explicitly refuse to send no-op records
                     continue;
                 };
+                let diff = diff as usize;
 
-                let diff_pair = if diff < 0 {
-                    DiffPair {
-                        before: Some(&row),
-                        after: None,
-                    }
-                } else {
-                    DiffPair {
-                        before: None,
-                        after: Some(&row),
-                    }
-                };
+                let key = key.map(|key| {
+                    s.encoder
+                        .encode_key_unchecked(connector.key_schema_id.unwrap(), key)
+                });
+                let value = value.map(|value| {
+                    s.encoder
+                        .encode_value_unchecked(connector.value_schema_id, value)
+                });
 
-                let transaction_id = match connector.consistency {
-                    Some(_) => Some(time.to_string()),
-                    None => None,
-                };
-
-                let (key, value) = s.encoder.encode_unchecked(
-                    connector.key_schema_id,
-                    connector.value_schema_id,
-                    diff_pair,
-                    transaction_id,
-                );
-
-                // For diffs other than +/- 1, we send repeated copies of the
-                // Avro record [diff] times. Since the format and envelope
-                // capture the "polarity" of the update, we need to remember
-                // how many times to send the data.
                 let rows = pending_rows.entry(time).or_default();
                 rows.push(EncodedRow {
                     key,
                     value,
-                    count: diff.abs() as usize,
+                    count: diff,
                 });
                 s.metrics.rows_queued.inc();
             }
@@ -444,7 +430,12 @@ where
                         mut total_sent,
                     } => {
                         let encoded_row = &rows[row_index];
-                        let record = BaseRecord::to(&connector.topic).payload(&encoded_row.value);
+                        let record = BaseRecord::to(&connector.topic);
+                        let record = if encoded_row.value.is_some() {
+                            record.payload(encoded_row.value.as_ref().unwrap())
+                        } else {
+                            record
+                        };
                         let record = if encoded_row.key.is_some() {
                             record.key(encoded_row.key.as_ref().unwrap())
                         } else {
@@ -522,7 +513,7 @@ where
                         s.shutdown_flag.store(false, Ordering::SeqCst);
                         break;
                     }
-                }
+                };
             } else {
                 break;
             }
@@ -549,11 +540,10 @@ where
         false
     };
 
-    // We want exactly one worker to send all the data to the sink topic. We
-    // achieve that by using an Exchange channel before the sink and mapping
-    // all records for the sink to the sink's hash, which has the neat property
-    // of also distributing sinks amongst workers
-    let mut input = builder.new_input(stream, Exchange::new(move |_| id.hashed()));
+    // We want exactly one worker to send all the data to the sink topic.
+    // This should already have been handled upstream (in render/mod.rs),
+    // so we can use `Pipeline` here.
+    let mut input = builder.new_input(stream, Pipeline);
     builder.build_reschedule(|_capabilities| {
         move |frontiers| {
             let mut input_handle = FrontieredInputHandle::new(&mut input, &frontiers[0]);

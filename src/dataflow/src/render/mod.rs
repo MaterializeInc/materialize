@@ -98,20 +98,22 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
-use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::iter;
 use std::rc::Rc;
 use std::rc::Weak;
+use std::{any::Any, cell::RefCell};
 
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::{Arrange, ArrangeByKey};
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
-use differential_dataflow::operators::consolidate::Consolidate;
+
+use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
 
+use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
+use repr::adt::decimal::Significand;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
@@ -119,6 +121,7 @@ use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 
 use timely::communication::Allocate;
+use timely::dataflow::operators::exchange::Exchange;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
@@ -128,7 +131,7 @@ use mz_avro::Schema;
 use ore::cast::CastFrom;
 use ore::collections::CollectionExt as _;
 use ore::iter::IteratorExt;
-use repr::{Datum, RelationType, Row, RowArena, Timestamp};
+use repr::{Datum, RelationType, Row, RowArena, RowPacker, Timestamp};
 
 use crate::decode::{decode_avro_values, decode_values};
 use crate::operator::{CollectionExt, StreamExt};
@@ -144,7 +147,6 @@ use crate::{
 
 mod arrange_by;
 mod context;
-mod delta_join;
 mod flat_map;
 mod join;
 mod reduce;
@@ -227,7 +229,7 @@ pub fn build_dataflow<A: Allocate>(
 
             // Export declared sinks.
             for (sink_id, sink) in &dataflow.sink_exports {
-                let imports = dataflow.get_imports(&sink.from.0);
+                let imports = dataflow.get_imports(&sink.from);
                 context.export_sink(render_state, imports, *sink_id, sink);
             }
         });
@@ -328,7 +330,7 @@ where
                     caching_tx,
                 };
 
-                let capability = if let Envelope::Upsert(key_encoding) = envelope {
+                let capability = if let SourceEnvelope::Upsert(key_encoding) = envelope {
                     match connector {
                         ExternalSourceConnector::Kafka(_) => {
                             let (source, capability) = source::create_source::<_, KafkaSourceInfo, _>(
@@ -456,8 +458,8 @@ where
                     };
 
                     let mut collection = match envelope {
-                        Envelope::None | Envelope::CdcV2 => stream.as_collection(),
-                        Envelope::Debezium(_) =>
+                        SourceEnvelope::None | SourceEnvelope::CdcV2 => stream.as_collection(),
+                        SourceEnvelope::Debezium(_) =>
                         // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
                         {
                             stream.as_collection().explode({
@@ -469,7 +471,7 @@ where
                                 }
                             })
                         }
-                        Envelope::Upsert(_) => unreachable!(),
+                        SourceEnvelope::Upsert(_) => unreachable!(),
                     };
 
                     // Implement source filtering and projection.
@@ -689,37 +691,134 @@ where
         }
         let (collection, _err_collection) = self
             .collection(&RelationExpr::global_get(
-                sink.from.0,
-                sink.from.1.typ().clone(),
+                sink.from,
+                sink.from_desc.typ().clone(),
             ))
             .expect("Sink source collection not loaded");
+
+        // Some connectors support keys - extract them.
+        let key_indices = sink
+            .connector
+            .get_key_indices()
+            .map(|key_indices| key_indices.to_vec());
+        let keyed = collection.map(move |row| {
+            let key = key_indices.as_ref().map(|key_indices| {
+                // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
+                // Does it matter?
+                let datums = row.unpack();
+                Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()))
+            });
+            (key, row)
+        });
+
+        // Each partition needs to be handled by its own worker, so that we can write messages in order.
+        // For now, we only support single-partition sinks.
+        let keyed = keyed
+            .inner
+            .exchange(move |_| sink_id.hashed())
+            .as_collection();
+
+        // Apply the envelope.
+        // * "Debezium" consolidates the stream, sorts it by time, and produces DiffPairs from it.
+        //   It then renders those as Avro.
+        // * Upsert" does the same, except at the last step, it renders the diff pair in upsert format.
+        //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
+        // * "Tail" writes some metadata.
+        let collection = match sink.envelope {
+            SinkEnvelope::Debezium => {
+                let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
+                // This has to be an `Rc<RefCell<...>>` because the inner closure (passed to `Iterator::map`) references it, and it might outlive the outer closure.
+                let rp = Rc::new(RefCell::new(RowPacker::new()));
+                let collection = combined.flat_map(move |(mut k, v)| {
+                    let max_idx = v.len() - 1;
+                    let rp = rp.clone();
+                    v.into_iter().enumerate().map(move |(idx, dp)| {
+                        let k = if idx == max_idx { k.take() } else { k.clone() };
+                        (k, Some(dbz_format(&mut *rp.borrow_mut(), dp)))
+                    })
+                });
+                collection
+            }
+            SinkEnvelope::Upsert => {
+                let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
+
+                let collection = combined.map(|(k, v)| {
+                    let v = upsert_format(v);
+                    (k, v)
+                });
+                collection
+            }
+            SinkEnvelope::Tail { emit_progress } => keyed
+                .inner
+                .map({
+                    let mut rp = RowPacker::new();
+                    move |((k, v), time, diff)| {
+                        rp.push(Datum::Decimal(Significand::new(i128::from(time))));
+                        if emit_progress {
+                            rp.push(Datum::False);
+                        }
+                        rp.push(Datum::Int64(i64::cast_from(diff)));
+                        rp.extend_by_row(&v);
+                        let v = rp.finish_and_reuse();
+                        ((k, Some(v)), time, 1)
+                    }
+                })
+                .as_collection(),
+        };
+
+        // Some sinks require that the timestamp be appended to the end of the value.
+        let append_timestamp = match &sink.connector {
+            SinkConnector::Kafka(c) => c.consistency.is_some(),
+            SinkConnector::Tail(_) => false,
+            SinkConnector::AvroOcf(_) => false,
+        };
+        let collection = if append_timestamp {
+            collection
+                .inner
+                .map(|((k, v), t, diff)| {
+                    let v = v.map(|v| {
+                        let mut rp = RowPacker::new();
+                        rp.extend_by_row(&v);
+                        let t = t.to_string();
+                        rp.push_list_with(|rp| {
+                            rp.push(Datum::String(&t));
+                        });
+                        rp.finish()
+                    });
+                    ((k, v), t, diff)
+                })
+                .as_collection()
+        } else {
+            collection
+        };
 
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
 
-        // TODO(frank): consolidation is only required for a collection,
-        // not for arrangements. We can perform a more complicated match
-        // here to determine which case we are in to avoid this call.
-        let collection = collection.consolidate();
-
         match sink.connector.clone() {
             SinkConnector::Kafka(c) => {
-                let token = sink::kafka(&collection.inner, sink_id, c, sink.from.1.clone());
+                let token = sink::kafka(
+                    collection,
+                    sink_id,
+                    c,
+                    sink.key_desc.clone(),
+                    sink.value_desc.clone(),
+                );
                 needed_sink_tokens.push(token);
             }
             SinkConnector::Tail(c) => {
-                // Map by sink_id is not needed for correctness, but will spread the work
-                // around when there are multiple TAILs running, and additionally will move a
-                // single TAIL's work to a single worker.
-                // Arranging will cause updates to be presented in time order.
-                let stream = collection
-                    .map(move |row| (sink_id, row))
+                let batches = collection
+                    .map(move |(k, v)| {
+                        assert!(k.is_none(), "tail does not support keys");
+                        let v = v.expect("tail must have values");
+                        (sink_id, v)
+                    })
                     .arrange_by_key()
                     .stream;
-                sink::tail(stream, sink_id, c);
+                sink::tail(batches, sink_id, c);
             }
             SinkConnector::AvroOcf(c) => {
-                sink::avro_ocf(&collection.inner, sink_id, c, sink.from.1.clone());
+                sink::avro_ocf(collection, sink_id, c, sink.value_desc.clone());
             }
         };
 
@@ -738,10 +837,11 @@ impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    /// Attempt to extract a chain of map/filter/project operators on top of a Get. Returns true if
-    /// it was successful and false otherwise. We still fall back to individual implementations for
-    /// the various operators so that ones like Filter, that special-case being on top of a join,
-    /// can still do so.
+    /// Attempt to render a chain of map/filter/project operators on top of another operator.
+    ///
+    /// Returns true if it was successful, and false otherwise. If this method returns false,
+    /// we should continue with the traditional individual render implementations of each
+    /// operator.
     fn try_render_map_filter_project(
         &mut self,
         relation_expr: &RelationExpr,
@@ -811,6 +911,33 @@ where
                 self.ensure_rendered(&input2, scope, worker_index);
                 let (oks, err) = self.render_flat_map(input, Some(mfp));
                 self.collections.insert(relation_expr.clone(), (oks, err));
+                true
+            }
+
+            RelationExpr::Join {
+                inputs,
+                implementation,
+                ..
+            } => {
+                for input in inputs {
+                    self.ensure_rendered(input, scope, worker_index);
+                }
+                match implementation {
+                    expr::JoinImplementation::Differential(_start, _order) => {
+                        let collection = self.render_join(input, mfp, scope);
+                        self.collections.insert(relation_expr.clone(), collection);
+                    }
+                    expr::JoinImplementation::DeltaQuery(_orders) => {
+                        let collection =
+                            self.render_delta_join(input, mfp, scope, worker_index, |t| {
+                                t.saturating_sub(1)
+                            });
+                        self.collections.insert(relation_expr.clone(), collection);
+                    }
+                    expr::JoinImplementation::Unimplemented => {
+                        panic!("Attempt to render unimplemented join");
+                    }
+                }
                 true
             }
             _ => false,
@@ -932,50 +1059,22 @@ where
 
                 RelationExpr::Filter { input, predicates } => {
                     if !self.try_render_map_filter_project(relation_expr, scope, worker_index) {
-                        let collections = if let RelationExpr::Join {
-                            inputs,
-                            implementation,
-                            ..
-                        } = &**input
-                        {
-                            for input in inputs {
-                                self.ensure_rendered(input, scope, worker_index);
-                            }
-                            let (ok_collection, err_collection) = match implementation {
-                                expr::JoinImplementation::Differential(_start, _order) => {
-                                    self.render_join(input, predicates, scope)
-                                }
-                                expr::JoinImplementation::DeltaQuery(_orders) => self
-                                    .render_delta_join(
-                                        input,
-                                        predicates,
-                                        scope,
-                                        worker_index,
-                                        |t| t.saturating_sub(1),
-                                    ),
-                                expr::JoinImplementation::Unimplemented => {
-                                    panic!("Attempt to render unimplemented join");
-                                }
-                            };
-                            (ok_collection, err_collection.map(Into::into))
-                        } else {
-                            self.ensure_rendered(input, scope, worker_index);
-                            let temp_storage = RowArena::new();
-                            let predicates = predicates.clone();
-                            let (ok_collection, err_collection) = self.collection(input).unwrap();
-                            let (ok_collection, new_err_collection) = ok_collection
-                                .filter_fallible(move |input_row| {
-                                    let datums = input_row.unpack();
-                                    for p in &predicates {
-                                        if p.eval(&datums, &temp_storage)? != Datum::True {
-                                            return Ok(false);
-                                        }
+                        self.ensure_rendered(input, scope, worker_index);
+                        let temp_storage = RowArena::new();
+                        let predicates = predicates.clone();
+                        let (ok_collection, err_collection) = self.collection(input).unwrap();
+                        let (ok_collection, new_err_collection) =
+                            ok_collection.filter_fallible(move |input_row| {
+                                let datums = input_row.unpack();
+                                for p in &predicates {
+                                    if p.eval(&datums, &temp_storage)? != Datum::True {
+                                        return Ok(false);
                                     }
-                                    Ok::<_, DataflowError>(true)
-                                });
-                            let err_collection = err_collection.concat(&new_err_collection);
-                            (ok_collection, err_collection)
-                        };
+                                }
+                                Ok::<_, DataflowError>(true)
+                            });
+                        let err_collection = err_collection.concat(&new_err_collection);
+                        let collections = (ok_collection, err_collection);
                         self.collections.insert(relation_expr.clone(), collections);
                     }
                 }
@@ -988,15 +1087,17 @@ where
                     for input in inputs {
                         self.ensure_rendered(input, scope, worker_index);
                     }
+                    let input_mapper = expr::JoinInputMapper::new(inputs);
+                    let mfp = MapFilterProject::new(input_mapper.total_columns());
                     match implementation {
                         expr::JoinImplementation::Differential(_start, _order) => {
-                            let collection = self.render_join(relation_expr, &[], scope);
+                            let collection = self.render_join(relation_expr, mfp, scope);
                             self.collections.insert(relation_expr.clone(), collection);
                         }
                         expr::JoinImplementation::DeltaQuery(_orders) => {
                             let collection = self.render_delta_join(
                                 relation_expr,
-                                &[],
+                                mfp,
                                 scope,
                                 worker_index,
                                 |t| t.saturating_sub(1),
@@ -1061,6 +1162,75 @@ where
                     self.render_arrangeby(relation_expr, None);
                 }
             };
+        }
+    }
+}
+
+/// A re-useable vector of `Datum` with varying lifetimes.
+///
+/// This type is meant to allow us to recycle an underlying allocation with
+/// a specific lifetime, under the condition that the vector is emptied before
+/// this happens (to prevent leaking of invalid references).
+///
+/// It uses `ore::vec::repurpose_allocation` to accomplish this, which contains
+/// unsafe code.
+pub mod datum_vec {
+
+    use repr::{Datum, Row};
+
+    /// A re-useable vector of `Datum` with no particular lifetime.
+    pub struct DatumVec {
+        outer: Vec<Datum<'static>>,
+    }
+
+    impl DatumVec {
+        /// Allocate a new instance.
+        pub fn new() -> Self {
+            Self { outer: Vec::new() }
+        }
+        /// Borrow an instance with a specific lifetime.
+        ///
+        /// When the result is dropped, its allocation will be returned to `self`.
+        pub fn borrow<'a>(&'a mut self) -> DatumVecBorrow<'a> {
+            let inner = std::mem::take(&mut self.outer);
+            DatumVecBorrow {
+                outer: &mut self.outer,
+                inner,
+            }
+        }
+        /// Borrow an instance with a specific lifetime, and pre-populate with a `Row`.
+        pub fn borrow_with<'a>(&'a mut self, row: &'a Row) -> DatumVecBorrow<'a> {
+            let mut borrow = self.borrow();
+            borrow.extend(row.iter());
+            borrow
+        }
+    }
+
+    /// A borrowed allocation of `Datum` with a specific lifetime.
+    ///
+    /// When an instance is dropped, its allocation is returned to the vector from
+    /// which it was extracted.
+    pub struct DatumVecBorrow<'outer> {
+        outer: &'outer mut Vec<Datum<'static>>,
+        inner: Vec<Datum<'outer>>,
+    }
+
+    impl<'outer> Drop for DatumVecBorrow<'outer> {
+        fn drop(&mut self) {
+            *self.outer = ore::vec::repurpose_allocation(std::mem::take(&mut self.inner));
+        }
+    }
+
+    impl<'outer> std::ops::Deref for DatumVecBorrow<'outer> {
+        type Target = Vec<Datum<'outer>>;
+        fn deref(&self) -> &Self::Target {
+            &self.inner
+        }
+    }
+
+    impl<'outer> std::ops::DerefMut for DatumVecBorrow<'outer> {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.inner
         }
     }
 }
