@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
-
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -28,7 +26,7 @@ use repr::{Datum, Row, RowArena, RowPacker};
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::datum_vec::DatumVec;
-use crate::render::delta_join::MyClosure;
+use crate::render::join::{JoinBuildState, JoinClosure};
 
 impl<G, T> Context<G, RelationExpr, Row, T>
 where
@@ -79,24 +77,13 @@ where
                 .filter(filter)
                 .project(project);
 
-            // Other than the stream of updates, our loop-carried state are these
-            // three variables: `column_map`, `equivalences`, and `mfp`, which
-            // record the current locations of extended output columns, and what
-            // work remains to be done on them (other than the joining itself).
-            let mut column_map = HashMap::new();
-            for column in input_mapper.global_columns(*start) {
-                column_map.insert(column, column_map.len());
-            }
-            // We maintain a private copy of `equivalences`, which we will digest
-            // as we produce the join.
-            let mut equivalences = equivalences.clone();
-            for equivalence in equivalences.iter_mut() {
-                equivalence.sort();
-                equivalence.dedup();
-            }
-            // We maintain a private copy of `map_filter_project`, which we will
-            // digest as we produce the join.
-            let mut mfp = map_filter_project;
+            // Construct initial join build state.
+            // This state will evolves as we build the join dataflow.
+            let mut join_build_state = JoinBuildState::new(
+                input_mapper.global_columns(*start),
+                &equivalences,
+                &map_filter_project,
+            );
 
             // This collection will evolve as we join in more inputs.
             // TODO(mcsherry): determine and apply closure here in `flat_map_ref` form.
@@ -113,27 +100,28 @@ where
                 // At this point we are able to construct a per-row closure that can be applied once
                 // we have the first wave of columns in place. We will not apply it quite yet, because
                 // we have three code paths that might produce data and it is complicated.
-                let closure = MyClosure::build(&mut column_map, &mut equivalences, &mut mfp);
-
-                // If there is no starting arrangement, then we can run filters
-                // directly on the starting collection.
-                // If there is only one input, we are done joining, so run filters
-                let (j, es) = joined.flat_map_fallible({
-                    // Reuseable allocation for unpacking.
-                    let mut datums = DatumVec::new();
-                    let mut row_packer = RowPacker::new();
-                    move |row| {
-                        let temp_storage = RowArena::new();
-                        let mut datums_local = datums.borrow_with(&row);
-                        // TODO(mcsherry): re-use `row` allocation.
-                        closure
-                            .apply(&mut datums_local, &temp_storage, &mut row_packer)
-                            .map_err(DataflowError::from)
-                            .transpose()
-                    }
-                });
-                joined = j;
-                errs.concat(&es);
+                let closure = join_build_state.extract_closure();
+                if !closure.is_identity() {
+                    // If there is no starting arrangement, then we can run filters
+                    // directly on the starting collection.
+                    // If there is only one input, we are done joining, so run filters
+                    let (j, es) = joined.flat_map_fallible({
+                        // Reuseable allocation for unpacking.
+                        let mut datums = DatumVec::new();
+                        let mut row_packer = RowPacker::new();
+                        move |row| {
+                            let temp_storage = RowArena::new();
+                            let mut datums_local = datums.borrow_with(&row);
+                            // TODO(mcsherry): re-use `row` allocation.
+                            closure
+                                .apply(&mut datums_local, &temp_storage, &mut row_packer)
+                                .map_err(DataflowError::from)
+                                .transpose()
+                        }
+                    });
+                    joined = j;
+                    errs.concat(&es);
+                }
             }
 
             // We track the input relations as they are
@@ -145,7 +133,6 @@ where
                     .iter()
                     .map(|k| input_mapper.map_expr_to_global(k.clone(), *input))
                     .collect::<Vec<_>>();
-
                 // Keys for the next input to be joined must be produced from
                 // ScalarExprs found in `equivalences`, re-written to bind the
                 // appropriate columns (as `joined` has permuted columns).
@@ -153,31 +140,17 @@ where
                     .iter()
                     .map(|expr| {
                         let mut bound_expr = input_mapper
-                            .find_bound_expr(expr, &bound_inputs, &equivalences)
+                            .find_bound_expr(expr, &bound_inputs, &join_build_state.equivalences)
                             .expect("Expression in join plan is not bound at time of use");
 
-                        bound_expr.permute_map(&column_map);
+                        bound_expr.permute_map(&join_build_state.column_map);
                         bound_expr
                     })
                     .collect::<Vec<_>>();
 
-                // We should extract each element of `next_keys` from `equivalences`,
-                // as each *should* now be a redundant constraint. We do this so that
-                // the demand analysis does not require these columns be produced.
-                for equivalence in equivalences.iter_mut() {
-                    equivalence.retain(|expr| !next_keys_rebased.contains(expr));
-                }
-                equivalences.retain(|e| e.len() > 1);
-
-                // Update our map of the sources of each column in the update stream.
-                for column in input_mapper.global_columns(*input) {
-                    column_map.insert(column, column_map.len());
-                }
-
-                // At this point we are able to construct a per-row closure that can be applied
-                // once we have added additional columns from `lookup`. We build it now so that
-                // it can be applied immediately in the `lookup` operator.
-                let closure = MyClosure::build(&mut column_map, &mut equivalences, &mut mfp);
+                // Introduce new columns and expressions they enable. Form a new closure.
+                let closure = join_build_state
+                    .add_columns(input_mapper.global_columns(*input), &next_keys_rebased);
 
                 // When joining the first input, check to see if we are meant to use an existing
                 // arrangement.
@@ -238,17 +211,11 @@ where
                 bound_inputs.push(*input);
             }
 
-            // We must now apply `mfp` as it *should* have sufficient support for
-            // full evaluation. Before we do this, we need to permute it to refer
-            // to the correct physical column locations.
-            mfp.permute(&column_map, column_map.len());
-            // The `mfp` has access to all columns at this point, and could
-            // plausibly be much simpler that a general `MapFilterProject`.
-            // As of this writing, the `mfp` will only contain literals and
-            // some projection to place them and potentially copy columns.
-            // These should not error (if the literals are non-errors) and
-            // could result in a simpler (non-erroring) operator.
-            if !mfp.is_identity() {
+            // We have completed the join building, but may have work remaining.
+            // For example, we may have expressions not pushed down (e.g. literals)
+            // and projections that could not be applied (e.g. column repetition).
+            let closure = join_build_state.complete();
+            if !closure.is_identity() {
                 let (updates, errors) = joined.flat_map_fallible({
                     // Reuseable allocation for unpacking.
                     let mut datums = DatumVec::new();
@@ -257,7 +224,8 @@ where
                         let temp_storage = RowArena::new();
                         let mut datums_local = datums.borrow_with(&row);
                         // TODO(mcsherry): re-use `row` allocation.
-                        mfp.evaluate(&mut datums_local, &temp_storage, &mut row_packer)
+                        closure
+                            .apply(&mut datums_local, &temp_storage, &mut row_packer)
                             .map_err(DataflowError::from)
                             .transpose()
                     }
@@ -281,7 +249,7 @@ where
         prev_keyed: J,
         next_input: &RelationExpr,
         next_keys: &[ScalarExpr],
-        closure: MyClosure,
+        closure: JoinClosure,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>)
     where
         J: JoinCore<G, Row, Row, repr::Diff>,
@@ -325,7 +293,7 @@ where
         &mut self,
         prev_keyed: J,
         next_input: Arranged<G, Tr2>,
-        closure: MyClosure,
+        closure: JoinClosure,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>)
     where
         J: JoinCore<G, Row, Row, repr::Diff>,

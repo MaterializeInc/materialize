@@ -10,16 +10,17 @@
 #![allow(clippy::op_ref)]
 use differential_dataflow::lattice::Lattice;
 use dogsdogsdogs::altneu::AltNeu;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
 use expr::{JoinInputMapper, MapFilterProject, RelationExpr, ScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker, Timestamp};
 
-use super::context::{ArrangementFlavor, Context};
+use super::super::context::{ArrangementFlavor, Context};
 use crate::operator::CollectionExt;
 use crate::render::datum_vec::DatumVec;
+use crate::render::join::{JoinBuildState, JoinClosure};
 
 impl<G> Context<G, RelationExpr, Row, Timestamp>
 where
@@ -167,24 +168,13 @@ where
                         let mut inner_errs = Vec::with_capacity(inputs.len());
                         for relation in 0..inputs.len() {
 
-                            // Other than the stream of updates, our loop-carried state are these
-                            // three variables: `column_map`, `equivalences`, and `mfp`, which
-                            // record the current locations of extended output columns, and what
-                            // work remains to be done on them (other than the joining itself).
-                            let mut column_map = HashMap::new();
-                            for column in input_mapper.global_columns(relation) {
-                                column_map.insert(column, column_map.len());
-                            }
-                            // We maintain a private copy of `equivalences`, which we will digest
-                            // as we produce the join.
-                            let mut equivalences = equivalences.clone();
-                            for equivalence in equivalences.iter_mut() {
-                                equivalence.sort();
-                                equivalence.dedup();
-                            }
-                            // We maintain a private copy of `map_filter_project`, which we will
-                            // digest as we produce the join.
-                            let mut mfp = map_filter_project.clone();
+                            // Construct initial join build state.
+                            // This state will evolves as we build the join dataflow.
+                            let mut join_build_state = JoinBuildState::new(
+                                input_mapper.global_columns(relation),
+                                &equivalences,
+                                &map_filter_project,
+                            );
 
                             // This collection determines changes that result from updates inbound
                             // from `inputs[relation]` and reflects all strictly prior updates and
@@ -208,14 +198,8 @@ where
                                 // Collects error streams for the region scope. Concats before leaving.
                                 let mut region_errs = Vec::with_capacity(inputs.len());
 
-                                // At this point we are able to construct a per-row closure that can be applied once
-                                // we have the first wave of columns in place. We will not apply it quite yet, because
-                                // we have three code paths that might produce data and it is complicated.
-                                // TODO(mcsherry): apply `closure` early, in `as_collection`.
-                                let closure = MyClosure::build(&mut column_map, &mut equivalences, &mut mfp);
-
                                 // Ensure this input is rendered, and extract its update stream.
-                                let update_stream =
+                                let mut update_stream =
                                 if let Some((_key, val)) = arrangements_alt.iter().find(|(key, _val)| key.0 == &inputs[relation]) {
                                     match val {
                                         Ok(local) => local.as_collection(|_k,v| v.clone()).enter_region(region),
@@ -227,18 +211,24 @@ where
                                         .expect("Failed to render update stream").0.enter(inner).enter_region(region)
                                 };
 
+                                let initial_closure = join_build_state.extract_closure();
+
                                 // Apply what `closure` we are able to, and record any errors.
-                                let (mut update_stream, errs) = update_stream.flat_map_fallible({
-                                    let mut datums = DatumVec::new();
-                                    let mut row_packer = RowPacker::new();
-                                    move |row| {
-                                        let temp_storage = RowArena::new();
-                                        let mut datums_local = datums.borrow_with(&row);
-                                        // TODO(mcsherry): re-use `row` allocation.
-                                        closure.apply(&mut datums_local, &temp_storage, &mut row_packer).transpose()
-                                    }
-                                });
-                                region_errs.push(errs.map(DataflowError::from));
+                                if !initial_closure.is_identity() {
+
+                                    let (stream, errs) = update_stream.flat_map_fallible({
+                                        let mut datums = DatumVec::new();
+                                        let mut row_packer = RowPacker::new();
+                                        move |row| {
+                                            let temp_storage = RowArena::new();
+                                            let mut datums_local = datums.borrow_with(&row);
+                                            // TODO(mcsherry): re-use `row` allocation.
+                                            initial_closure.apply(&mut datums_local, &temp_storage, &mut row_packer).transpose()
+                                        }
+                                    });
+                                    update_stream = stream;
+                                    region_errs.push(errs.map(DataflowError::from));
+                                }
 
                                 // We track the input relations as they are added to the join so we can figure out
                                 // which expressions have been bound.
@@ -260,31 +250,16 @@ where
                                         .iter()
                                         .map(|expr| {
                                             let mut bound_expr = input_mapper
-                                                .find_bound_expr(expr, &bound_inputs, &equivalences)
+                                                .find_bound_expr(expr, &bound_inputs, &join_build_state.equivalences)
                                                 .expect("Expression in join plan is not bound at time of use");
                                             // Rewrite column references to physical locations.
-                                            bound_expr.permute_map(&column_map);
+                                            bound_expr.permute_map(&join_build_state.column_map);
                                             bound_expr
                                         })
                                         .collect::<Vec<_>>();
 
-                                    // Remove each element of `next_keys` from `equivalences`, so that we
-                                    // avoid redundant predicate work. This removal also paves the way for
-                                    // more precise "demand" information going forward.
-                                    for equivalence in equivalences.iter_mut() {
-                                        equivalence.retain(|expr| !next_key_rebased.contains(expr));
-                                    }
-                                    equivalences.retain(|e| e.len() > 1);
-
-                                    // Update our map of the sources of each column in the update stream.
-                                    for column in input_mapper.global_columns(*other) {
-                                        column_map.insert(column, column_map.len());
-                                    }
-
-                                    // At this point we are able to construct a per-row closure that can be applied
-                                    // once we have added additional columns from `lookup`. We build it now so that
-                                    // it can be applied immediately in the `lookup` operator.
-                                    let closure = MyClosure::build(&mut column_map, &mut equivalences, &mut mfp);
+                                    // Introduce new columns and expressions they enable. Form a new closure.
+                                    let closure = join_build_state.add_columns(input_mapper.global_columns(*other), &next_key_rebased);
 
                                     // We require different logic based on the flavor of arrangement.
                                     // We may need to cache each of these if we want to re-use the same wrapped
@@ -306,17 +281,11 @@ where
                                     bound_inputs.push(*other);
                                 }
 
-                                // We must now apply `mfp` as it *should* have sufficient support for
-                                // full evaluation. Before we do this, we need to permute it to refer
-                                // to the correct physical column locations.
-                                mfp.permute(&column_map, column_map.len());
-                                // The `mfp` has access to all columns at this point, and could
-                                // plausibly be much simpler that a general `MapFilterProject`.
-                                // As of this writing, the `mfp` will only contain literals and
-                                // some projection to place them and potentially copy columns.
-                                // These should not error (if the literals are non-errors) and
-                                // could result in a simpler (non-erroring) operator.
-                                if !mfp.is_identity() {
+                                // We have completed the join building, but may have work remaining.
+                                // For example, we may have expressions not pushed down (e.g. literals)
+                                // and projections that could not be applied (e.g. column repetition).
+                                let closure = join_build_state.complete();
+                                if !closure.is_identity() {
                                     let (updates, errors) = update_stream.flat_map_fallible({
                                         // Reuseable allocation for unpacking.
                                         let mut datums = DatumVec::new();
@@ -325,7 +294,7 @@ where
                                             let temp_storage = RowArena::new();
                                             let mut datums_local = datums.borrow_with(&row);
                                             // TODO(mcsherry): re-use `row` allocation.
-                                            mfp.evaluate(&mut datums_local, &temp_storage, &mut row_packer)
+                                            closure.apply(&mut datums_local, &temp_storage, &mut row_packer)
                                                 .map_err(DataflowError::from)
                                                 .transpose()
                                         }
@@ -371,7 +340,7 @@ fn build_lookup<G, Tr>(
     updates: Collection<G, Row>,
     trace: Arranged<G, Tr>,
     prev_key: Vec<ScalarExpr>,
-    closure: MyClosure,
+    closure: JoinClosure,
 ) -> (Collection<G, Row>, Collection<G, DataflowError>)
 where
     G: Scope,
@@ -441,160 +410,4 @@ where
         oks.as_collection().flat_map(|x| x),
         errs.concat(&errs2.as_collection()),
     )
-}
-
-/// A manual closure implementation of filtering and logic application.
-///
-/// This manual implementation exists to express lifetime constraints clearly,
-/// as there is a relationship between the borrowed lifetime of the closed-over
-/// state and the arguments it takes when invoked. It was not clear how to do
-/// this with a Rust closure (glorious battle was waged, but ultimately lost).
-pub struct MyClosure {
-    ready_equivalences: Vec<Vec<ScalarExpr>>,
-    before: MapFilterProject,
-}
-
-impl MyClosure {
-    /// Applies per-row filtering and logic.
-    #[inline(always)]
-    pub fn apply<'a>(
-        &'a self,
-        datums: &mut Vec<Datum<'a>>,
-        temp_storage: &'a RowArena,
-        row_packer: &mut RowPacker,
-    ) -> Result<Option<Row>, expr::EvalError> {
-        for exprs in self.ready_equivalences.iter() {
-            // Each list of expressions should be equal to the same value.
-            let val = exprs[0].eval(&datums[..], &temp_storage)?;
-            for expr in exprs[1..].iter() {
-                if expr.eval(&datums, &temp_storage)? != val {
-                    return Ok(None);
-                }
-            }
-        }
-        self.before.evaluate(datums, &temp_storage, row_packer)
-    }
-
-    /// Construct an instance of the closure from available columns.
-    ///
-    /// This method updates the available columns, equivalences, and
-    /// the `MapFilterProject` instance. The columns are updated to
-    /// include reference to any columns added by the application of
-    /// this logic, which might result from partial application of
-    /// the `MapFilterProject` instance.
-    ///
-    /// If all columns are available for `mfp`, this method works
-    /// extra hard to ensure that the closure contains all the work,
-    /// and `mfp` is left as an identity transform (which can then
-    /// be ignored).
-    pub fn build(
-        columns: &mut HashMap<usize, usize>,
-        equivalences: &mut Vec<Vec<ScalarExpr>>,
-        mfp: &mut MapFilterProject,
-    ) -> Self {
-        // First, determine which columns should be compare due to `equivalences`.
-        let mut ready_equivalences = Vec::new();
-        for equivalence in equivalences.iter_mut() {
-            if let Some(pos) = equivalence
-                .iter()
-                .position(|e| e.support().into_iter().all(|c| columns.contains_key(&c)))
-            {
-                let mut should_equate = Vec::new();
-                let mut cursor = pos + 1;
-                while cursor < equivalence.len() {
-                    if equivalence[cursor]
-                        .support()
-                        .into_iter()
-                        .all(|c| columns.contains_key(&c))
-                    {
-                        // Remove expression and equate with the first bound expression.
-                        should_equate.push(equivalence.remove(cursor));
-                    } else {
-                        cursor += 1;
-                    }
-                }
-                if !should_equate.is_empty() {
-                    should_equate.push(equivalence[pos].clone());
-                    ready_equivalences.push(should_equate);
-                }
-            }
-        }
-        equivalences.retain(|e| e.len() > 1);
-
-        // Update ready_equivalences to reference correct column locations.
-        for exprs in ready_equivalences.iter_mut() {
-            for expr in exprs.iter_mut() {
-                expr.permute_map(&columns);
-            }
-        }
-
-        // Next, partition `mfp` into `before` and `after`, the former of which can be
-        // applied now.
-        let (mut before, after) = std::mem::replace(mfp, MapFilterProject::new(mfp.input_arity))
-            .partition(columns, columns.len());
-
-        // Add any newly created columns to `columns`. These columns may be referenced
-        // by `after`, and it will be important to track their locations.
-        let bonus_columns = before.projection.len() - before.input_arity;
-        for bonus_column in 0..bonus_columns {
-            columns.insert(mfp.input_arity + bonus_column, columns.len());
-        }
-
-        *mfp = after;
-
-        // Before constructing and returning the result, we can remove output columns of `before`
-        // that are not needed in further `equivalences` or by `after` (now `mfp`).
-        let mut demand = Vec::new();
-        demand.extend(mfp.demand());
-        for equivalence in equivalences.iter() {
-            for expr in equivalence.iter() {
-                demand.extend(expr.support());
-            }
-        }
-        demand.sort();
-        demand.dedup();
-        // We only want to remove columns that are presented as outputs (i.e. can be found as in
-        // `columns`). Other columns have yet to be introduced, and we shouldn't have any opinion
-        // about them yet.
-        demand.retain(|column| columns.contains_key(column));
-        // Project `before` output columns using current locations of demanded columns.
-        before = before.project(demand.iter().map(|column| columns[column]));
-        // Update `columns` to reflect location of retained columns.
-        columns.clear();
-        for (index, column) in demand.iter().enumerate() {
-            columns.insert(*column, index);
-        }
-
-        // If `mfp` is a permutation of the columns present in `columns`, then we can
-        // apply that permutation to `before` and `columns`, so that `mfp` becomes the
-        // identity operation.
-        if mfp.expressions.is_empty()
-            && mfp.predicates.is_empty()
-            && mfp.projection.len() == columns.len()
-            && mfp.projection.iter().all(|col| columns.contains_key(col))
-        {
-            // The projection we want to apply to `before`  comes to us from `mfp` in the
-            // extended output column reckoning.
-            let projection = mfp
-                .projection
-                .iter()
-                .map(|col| columns[col])
-                .collect::<Vec<_>>();
-            before = before.project(projection);
-            // Update the physical locations of each output column.
-            columns.clear();
-            for (index, column) in mfp.projection.iter().enumerate() {
-                columns.insert(*column, index);
-            }
-        }
-
-        // TODO(mcsherry): perform more optimizations here.
-        before.remove_undemanded();
-
-        // Cons up an instance of the closure with the closed-over state.
-        Self {
-            ready_equivalences,
-            before,
-        }
-    }
 }
