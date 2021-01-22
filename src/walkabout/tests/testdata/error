@@ -104,3 +104,17 @@ union Foo {
 }
 ----
 error: Unable to analyze union: Foo
+
+visit
+struct Generic<T: bad::Bound> {
+    ty: T::Item,
+}
+----
+error: Unable to analyze trait bound with more than one path segment: bad :: Bound
+
+visit
+struct Generic<T: 'ast> {
+    ty: T::Item,
+}
+----
+error: Unable to analyze non-trait bound: 'ast
