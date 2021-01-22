@@ -1,3 +1,12 @@
+-- Copyright Materialize, Inc. All rights reserved.
+--
+-- Use of this software is governed by the Business Source License
+-- included in the LICENSE file at the root of this repository.
+--
+-- As of the Change Date specified in that file, in accordance with
+-- the Business Source License, use of this software will be governed
+-- by the Apache License, Version 2.0.
+
 {% macro materialize__load_csv_rows(model, agate_table) -%}
   {% set cols_sql %}
     {% for column in agate_table.column_names %}
@@ -17,13 +26,13 @@
     -- {{ bindings | length }}
     create materialized view {{ this.render() }} AS (
       select {{ cols_sql }} from (VALUES
-      {% for chunk in agate_table.rows | batch(1)  -%} 
+      {% for chunk in agate_table.rows | batch(1)  -%}
         ({%- for column in agate_table.column_names -%}
             %s
             {%- if not loop.last%},{%- endif %}
         {%- endfor -%})
         {%- if not loop.last%},{%- endif %}
-      {%- endfor %}         
+      {%- endfor %}
       ) AS tbl
     )
   {% endset %}

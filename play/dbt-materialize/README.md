@@ -1,6 +1,6 @@
 ## dbt-materialize
 
-[dbt](https://www.getdbt.com/) adapter for [Materialize](http://materialize.io). 
+[dbt](https://www.getdbt.com/) adapter for [Materialize](http://materialize.io).
 
 Note, this plugin is a work in progress, and not yet suitable for production.
 
@@ -58,5 +58,4 @@ Not tested.
 
 ### Snapshots
 
-Not supported, will likely not be supported in the near term.  
-
+Not supported, will likely not be supported in the near term.
