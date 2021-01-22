@@ -16,10 +16,11 @@
 use anyhow::bail;
 use uuid::Uuid;
 
+use sql_parser::ast::fold::Fold;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    Expr, Function, FunctionArgs, Ident, ObjectName, Query, Raw, Select, SelectItem, TableAlias,
-    TableFactor, TableWithJoins, Value,
+    AstInfo, Expr, Function, FunctionArgs, Ident, ObjectName, Query, Raw, Select, SelectItem,
+    TableAlias, TableFactor, TableWithJoins, Value,
 };
 
 use crate::normalize;
@@ -510,5 +511,36 @@ impl Desugarer {
 
         visit_mut::visit_expr_mut(self, expr);
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct SillyAstInfo;
+
+impl AstInfo for SillyAstInfo {
+    type Table = Ident;
+}
+
+struct SillyPass;
+
+impl Fold<Raw, SillyAstInfo> for SillyPass {
+    fn fold_table(&mut self, mut table: ObjectName) -> Ident {
+        table.0.remove(0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_silly() {
+        let stmt = crate::parse::parse("SELECT * FROM a.b.c")
+            .unwrap()
+            .remove(0);
+        println!("before: {}", stmt);
+        let stmt = SillyPass.fold_statement(stmt);
+        println!("after: {}", stmt);
+        assert_eq!(stmt.to_string(), "SELECT * FROM a");
     }
 }
