@@ -18,15 +18,12 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 
 ### Types
 
-- Numeric precision is not always equivalent to PostgreSQL
-  ([#1824](https://github.com/MaterializeInc/materialize/issues/1824))
-- Numeric to float conversions are susceptible to floating point errors
-  ([#1102](https://github.com/MaterializeInc/materialize/issues/1102))
+- Numeric precision is not always equivalent to PostgreSQL {{% gh 1824 %}}
+- Numeric to float conversions are susceptible to floating point errors {{% gh 1102 %}}
 
 ### Performance
 
-- `ANY` and `ALL` queries generate suboptimal plans
-  ([#744](https://github.com/MaterializeInc/materialize/issues/744))
+- `ANY` and `ALL` queries generate suboptimal plans {{% gh 744 %}}
 
 ### Common table expressions (CTEs)
 
@@ -34,27 +31,21 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 - Materialize inlines the CTE where it's referenced, which could cause
   unexpected performance characteristics for especially complex expressions. {{%
   gh 4867 %}}
-- `WTIH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
+- `WITH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
 
 ## Sources & Sinks
 
 ### Kafka
 
-- Protobuf data for Kafka sinks is not supported
-  ([#1541](https://github.com/MaterializeInc/materialize/issues/1541))
-- JSON-encoded data for Kafka sinks is not supported
-  ([#1540](https://github.com/MaterializeInc/materialize/issues/1540))
+- Protobuf data for Kafka sinks is not supported {{% gh 1541 %}}
+- JSON-encoded data for Kafka sinks is not supported {{% gh 1540 %}}
 
 ### Kinesis
 
-- Consistent Kinesis sources are not supported
-  ([#2191](https://github.com/MaterializeInc/materialize/issues/2191))
-- Enhanced fan-out Kinesis consumers are not supported
-  ([#2192](https://github.com/MaterializeInc/materialize/issues/2192))
-- Reading from a Kinesis stream as of a sequence number or timestamp is not supported
-  ([#2294](https://github.com/MaterializeInc/materialize/issues/2294))
-- Kinesis sinks are not supported
-  ([#2372](https://github.com/MaterializeInc/materialize/issues/2372))
+- Consistent Kinesis sources are not supported {{% gh 2191 %}}
+- Enhanced fan-out Kinesis consumers are not supported {{% gh 2192 %}}
+- Reading from a Kinesis stream as of a sequence number or timestamp is not supported {{% gh 2294 %}}
+- Kinesis sinks are not supported {{% gh 2372 %}}
 
 ### File sources
 
@@ -62,25 +53,21 @@ None right now!
 
 ### Regex formatting
 
-- Regex columns cannot be set as nullable
-  ([#1685](https://github.com/MaterializeInc/materialize/issues/1685))
+- Regex columns cannot be set as nullable {{% gh 1685 %}}
 
 ## Deployment
 
 ### Performance
 
-- Slow queries can impact other, unrelated queries
-  ([#1956](https://github.com/MaterializeInc/materialize/issues/1956))
+- Slow queries can impact other, unrelated queries {{% gh 1956 %}}
 
 ### Networking
 
-- Hostnames that resolve to multiple addresses are not supported
-  ([#502](https://github.com/MaterializeInc/materialize/issues/502))
+- Hostnames that resolve to multiple addresses are not supported {{% gh 502 %}}
 
 ### Monitoring & Debugging
 
-- No report exists to show memory usage for indexes
-  ([#1532](https://github.com/MaterializeInc/materialize/issues/1532))
+- No report exists to show memory usage for indexes {{% gh 1532 %}}
 
 ## Closed known limitations
 
@@ -89,21 +76,21 @@ specified version.
 
 Fixed in | Known limitation
 --------------|-----------------
-[v0.4.0] | Column names generated in returned column set are not available to `GROUP BY` {% gh 1673 %}
-[v0.3.0] | JSON-encoded streams are not supported {% gh 207 %}
-[v0.3.0] | Connecting Kafka sinks back in as sources is not supported {% gh 1665 %}
-[v0.3.0] | Progress tracking for Kafka sinks is not supported {% gh 1442 %}
-[v0.3.0] | `date_trunc` for `timestamp with time zone` data {% gh 1814 %}
-[v0.3.0] | Special `date`, `time`, and `timestamp` values from PostgreSQL are not supported {% gh 1805 %}
-[v0.3.0] | Cannot cast from string to time-like types {% gh 1378 %}
-[v0.3.0] | Using a non-existent namespace does not result in an error {% gh 1684 %}
-[v0.3.0] | Connecting to Kafka brokers with SSL (client) authentication is not supported {% gh 1785 %}
-[v0.3.0] | Kafka sources with more than one partition are not supported {% gh 2169 %}
-[v0.3.0] | Formatting regular expression is not resurface-able through `SHOW CREATE SOURCE` {% gh 1762 %}
-[v0.3.0] |  `EXPLAIN DATAFLOW` does not include details about `ORDER BY` and `LIMIT` {% gh 477 %}
-[v0.2.1] | Kinesis sources with more than one shard are not supported {% gh 2222 %}
-[v0.2.0] | CSV files with header rows are not supported {% gh 1982 %}
-[v0.1.3] | Intervals do not support addition or subtraction with other intervals {% gh 1682 %}
+[v0.4.0] | Column names generated in returned column set are not available to `GROUP BY` {{% gh 1673 %}}
+[v0.3.0] | JSON-encoded streams are not supported {{% gh 207 %}}
+[v0.3.0] | Connecting Kafka sinks back in as sources is not supported {{% gh 1665 %}}
+[v0.3.0] | Progress tracking for Kafka sinks is not supported {{% gh 1442 %}}
+[v0.3.0] | `date_trunc` for `timestamp with time zone` data {{% gh 1814 %}}
+[v0.3.0] | Special `date`, `time`, and `timestamp` values from PostgreSQL are not supported {{% gh 1805 %}}
+[v0.3.0] | Cannot cast from string to time-like types {{% gh 1378 %}}
+[v0.3.0] | Using a non-existent namespace does not result in an error {{% gh 1684 %}}
+[v0.3.0] | Connecting to Kafka brokers with SSL (client) authentication is not supported {{% gh 1785 %}}
+[v0.3.0] | Kafka sources with more than one partition are not supported {{% gh 2169 %}}
+[v0.3.0] | Formatting regular expression is not resurface-able through `SHOW CREATE SOURCE` {{% gh 1762 %}}
+[v0.3.0] |  `EXPLAIN DATAFLOW` does not include details about `ORDER BY` and `LIMIT` {{% gh 477 %}}
+[v0.2.1] | Kinesis sources with more than one shard are not supported {{% gh 2222 %}}
+[v0.2.0] | CSV files with header rows are not supported {{% gh 1982 %}}
+[v0.1.3] | Intervals do not support addition or subtraction with other intervals {{% gh 1682 %}}
 
 [v0.4.0]: /release-notes/#v0.4.0
 [v0.3.0]: /release-notes/#v0.3.0
