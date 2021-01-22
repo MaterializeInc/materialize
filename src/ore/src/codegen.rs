@@ -37,6 +37,14 @@ impl CodegenBuf {
         self.inner
     }
 
+    /// Writes a string into the buffer directly.
+    pub fn write<S>(&mut self, s: S)
+    where
+        S: AsRef<str>,
+    {
+        self.inner.push_str(s.as_ref());
+    }
+
     /// Writes a line into the buffer at the current indentation level.
     ///
     /// Specifically, the method writes (4 * indentation level) spaces into the
@@ -45,9 +53,26 @@ impl CodegenBuf {
     where
         S: AsRef<str>,
     {
-        self.write_indent();
-        self.inner.push_str(s.as_ref());
-        self.inner.push('\n');
+        self.start_line();
+        self.write(s);
+        self.end_line();
+    }
+
+    /// Starts a new line.
+    ///
+    /// Specifically, the method writes (4 * indentation level) spaces into
+    /// the buffer.
+    pub fn start_line(&mut self) {
+        for _ in 0..self.level {
+            self.write("    ");
+        }
+    }
+
+    /// Ends the current line.
+    ///
+    /// Specifically, the method writes a newline character into the buffer.
+    pub fn end_line(&mut self) {
+        self.write("\n");
     }
 
     /// Starts a new indented block.
@@ -59,12 +84,12 @@ impl CodegenBuf {
     where
         S: AsRef<str>,
     {
-        self.write_indent();
-        self.inner.push_str(s.as_ref());
+        self.start_line();
+        self.write(s.as_ref());
         if !s.as_ref().is_empty() {
             self.inner.push(' ');
         }
-        self.inner.push_str("{\n");
+        self.write("{\n");
         self.level += 1;
     }
 
@@ -82,10 +107,10 @@ impl CodegenBuf {
         S: AsRef<str>,
     {
         self.level -= 1;
-        self.write_indent();
-        self.inner.push_str("} ");
-        self.inner.push_str(s.as_ref());
-        self.inner.push_str(" {\n");
+        self.start_line();
+        self.write("} ");
+        self.write(s.as_ref());
+        self.write(" {\n");
         self.level += 1;
     }
 
@@ -100,11 +125,5 @@ impl CodegenBuf {
     pub fn end_block(&mut self) {
         self.level -= 1;
         self.writeln("}");
-    }
-
-    fn write_indent(&mut self) {
-        for _ in 0..self.level {
-            self.inner.push_str("    ");
-        }
     }
 }

@@ -41,6 +41,7 @@ mod parse;
 
 pub mod ir;
 
+pub use gen::gen_fold;
 pub use gen::gen_visit;
 pub use gen::gen_visit_mut;
 

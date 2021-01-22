@@ -1,0 +1,120 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+fold
+enum Expr {
+    Function(Function),
+    BinOp {
+        lhs: Box<Expr>,
+        op: BinOp,
+        rhs: Box<Expr>,
+    }
+}
+enum BinOp {
+    Add,
+    Sub,
+}
+struct Function {
+    name: String,
+    args: Vec<Expr>,
+    filter: Option<Expr>,
+}
+----
+pub trait Fold<> {
+    fn fold_bin_op(&mut self, node: BinOp) -> BinOp {
+        fold_bin_op(self, node)
+    }
+    fn fold_expr(&mut self, node: Expr) -> Expr {
+        fold_expr(self, node)
+    }
+    fn fold_function(&mut self, node: Function) -> Function {
+        fold_function(self, node)
+    }
+}
+pub fn fold_bin_op<F, >(folder: &mut F, node: BinOp) -> BinOp
+where
+    F: Fold<> + ?Sized,
+{
+    match node {
+        BinOp::Add {
+        } => {
+            BinOp::Add {
+            }
+        }
+        BinOp::Sub {
+        } => {
+            BinOp::Sub {
+            }
+        }
+    }
+}
+pub fn fold_expr<F, >(folder: &mut F, node: Expr) -> Expr
+where
+    F: Fold<> + ?Sized,
+{
+    match node {
+        Expr::Function {
+            0: binding0,
+        } => {
+            Expr::Function {
+                0: folder.fold_function(binding0),
+            }
+        }
+        Expr::BinOp {
+            lhs: binding0,
+            op: binding1,
+            rhs: binding2,
+        } => {
+            Expr::BinOp {
+                lhs: Box::new(folder.fold_expr(*binding0)),
+                op: folder.fold_bin_op(binding1),
+                rhs: Box::new(folder.fold_expr(*binding2)),
+            }
+        }
+    }
+}
+pub fn fold_function<F, >(folder: &mut F, node: Function) -> Function
+where
+    F: Fold<> + ?Sized,
+{
+    Function {
+        name: node.name,
+        args: node.args.into_iter().map(|v| folder.fold_expr(v)).collect(),
+        filter: node.filter.map(|v| folder.fold_expr(v)),
+    }
+}
+
+fold
+struct Function<T: Foo, U: Bar> {
+    t: T::TableName,
+    u: U::ObjectName,
+}
+----
+pub trait Fold<T: Foo, T2: Foo, U: Bar, U2: Bar, > {
+    fn fold_function(&mut self, node: Function<T, U>) -> Function<T2, U2> {
+        fold_function(self, node)
+    }
+    fn fold_table_name(&mut self, node: T::TableName) -> T2::TableName;
+    fn fold_object_name(&mut self, node: U::ObjectName) -> U2::ObjectName;
+}
+pub fn fold_function<F, T: Foo, T2: Foo, U: Bar, U2: Bar, >(folder: &mut F, node: Function<T, U>) -> Function<T2, U2>
+where
+    F: Fold<T, T2, U, U2, > + ?Sized,
+{
+    Function {
+        t: folder.fold_table_name(node.t),
+        u: folder.fold_object_name(node.u),
+    }
+}

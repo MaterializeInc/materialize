@@ -85,8 +85,10 @@ fn main() -> Result<()> {
     // Generate AST visitors.
     {
         let ir = walkabout::load(AST_DEFS_MOD)?;
+        let fold = walkabout::gen_fold(&ir);
         let visit = walkabout::gen_visit(&ir);
         let visit_mut = walkabout::gen_visit_mut(&ir);
+        fs::write(out_dir.join("fold.rs"), fold)?;
         fs::write(out_dir.join("visit.rs"), visit)?;
         fs::write(out_dir.join("visit_mut.rs"), visit_mut)?;
     }
