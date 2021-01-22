@@ -26,7 +26,7 @@ use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::ObjectName;
 
 #[derive(Debug)]
-pub struct ValueError(String);
+pub struct ValueError(pub(crate) String);
 
 impl std::error::Error for ValueError {}
 

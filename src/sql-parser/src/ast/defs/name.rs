@@ -23,7 +23,7 @@ use crate::keywords::Keyword;
 
 /// An identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Ident(String);
+pub struct Ident(pub(crate) String);
 
 impl Ident {
     /// Create a new identifier with the given value.

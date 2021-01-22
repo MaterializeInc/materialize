@@ -118,3 +118,11 @@ struct Generic<T: 'ast> {
 }
 ----
 error: Unable to analyze non-trait bound: 'ast
+
+fold
+struct Generic<T, T2> {
+    t: T::A,
+    t2: T2::B,
+}
+----
+error: Generic parameters whose name ends in '2' conflict with folder's naming scheme: T2

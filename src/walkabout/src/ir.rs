@@ -223,11 +223,14 @@ fn analyze_generics(generics: &syn::Generics) -> Result<Vec<ItemGeneric>> {
     for g in generics.params.iter() {
         match g {
             syn::GenericParam::Type(syn::TypeParam { ident, bounds, .. }) => {
+                let name = ident.to_string();
                 let bounds = analyze_generic_bounds(bounds)?;
-                out.push(ItemGeneric {
-                    name: ident.to_string(),
-                    bounds,
-                });
+                // Generic parameter names that end in '2' conflict with the
+                // folder's name generation.
+                if name.ends_with('2') {
+                    bail!("Generic parameters whose name ends in '2' conflict with folder's naming scheme: {}", name);
+                }
+                out.push(ItemGeneric { name, bounds });
             }
             _ => {
                 bail!(
