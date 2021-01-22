@@ -9,7 +9,7 @@ menu:
     parent: 'sql'
 ---
 
-{{< version-added v0.5.0 >}}
+{{< version-added v0.5.0 />}}
 
 Materialize exposes a system catalog that contains metadata about the running
 Materialize instance.

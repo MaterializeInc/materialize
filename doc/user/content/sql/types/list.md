@@ -6,7 +6,7 @@ menu:
     parent: sql-types
 ---
 
-{{< version-added v0.5.1 >}}
+{{< version-added v0.5.1 />}}
 
 Lists are ordered sequences of homogenously typed elements. Lists' elements can
 be other lists, known as "layered lists."
@@ -272,7 +272,7 @@ SELECT LIST[['a', 'white space'], [NULL, ''], ['escape"m\e', 'nUlL']];
 
 ### `text` to `list` casts
 
-{{< version-added v0.5.2 >}}
+{{< version-added v0.5.2 />}}
 
 To cast `text` to a `list`, you must format the text similar to list's [output
 format](#output-format).

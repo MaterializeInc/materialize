@@ -6,7 +6,7 @@ menu:
     parent: 'sql'
 ---
 
-{{< version-added v0.4.0 >}}
+{{< version-added v0.4.0 />}}
 
 `ALTER ... RENAME` renames an item, albeit with some [limitations](#details).
 

@@ -6,7 +6,7 @@ menu:
     parent: 'sql'
 ---
 
-{{< version-added v0.5.0 >}}
+{{< version-added v0.5.0 />}}
 
 `INSERT` inserts values into a table.
 

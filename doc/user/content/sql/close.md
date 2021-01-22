@@ -6,7 +6,7 @@ menu:
     parent: "sql"
 ---
 
-{{< version-added v0.5.3 >}}
+{{< version-added v0.5.3 />}}
 
 `CLOSE` closes a cursor previously opened with [`DECLARE`](/sql/declare).
 
