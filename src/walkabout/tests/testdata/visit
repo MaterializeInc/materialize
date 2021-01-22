@@ -32,7 +32,7 @@ struct Function {
     filter: Option<Expr>,
 }
 ----
-pub trait Visit<'ast> {
+pub trait Visit<'ast, > {
     fn visit_bin_op(&mut self, node: &'ast BinOp) {
         visit_bin_op(self, node)
     }
@@ -43,9 +43,9 @@ pub trait Visit<'ast> {
         visit_function(self, node)
     }
 }
-pub fn visit_bin_op<'ast, V>(visitor: &mut V, node: &'ast BinOp)
+pub fn visit_bin_op<'ast, V, >(visitor: &mut V, node: &'ast BinOp)
 where
-    V: Visit<'ast> + ?Sized,
+    V: Visit<'ast, > + ?Sized,
 {
     match node {
         BinOp::Add {
@@ -56,9 +56,9 @@ where
         }
     }
 }
-pub fn visit_expr<'ast, V>(visitor: &mut V, node: &'ast Expr)
+pub fn visit_expr<'ast, V, >(visitor: &mut V, node: &'ast Expr)
 where
-    V: Visit<'ast> + ?Sized,
+    V: Visit<'ast, > + ?Sized,
 {
     match node {
         Expr::Function {
@@ -77,9 +77,9 @@ where
         }
     }
 }
-pub fn visit_function<'ast, V>(visitor: &mut V, node: &'ast Function)
+pub fn visit_function<'ast, V, >(visitor: &mut V, node: &'ast Function)
 where
-    V: Visit<'ast> + ?Sized,
+    V: Visit<'ast, > + ?Sized,
 {
     for v in &node.args {
         visitor.visit_expr(v);
@@ -108,7 +108,7 @@ struct Function {
     filter: Option<Expr>,
 }
 ----
-pub trait VisitMut<'ast> {
+pub trait VisitMut<'ast, > {
     fn visit_bin_op_mut(&mut self, node: &'ast mut BinOp) {
         visit_bin_op_mut(self, node)
     }
@@ -119,9 +119,9 @@ pub trait VisitMut<'ast> {
         visit_function_mut(self, node)
     }
 }
-pub fn visit_bin_op_mut<'ast, V>(visitor: &mut V, node: &'ast mut BinOp)
+pub fn visit_bin_op_mut<'ast, V, >(visitor: &mut V, node: &'ast mut BinOp)
 where
-    V: VisitMut<'ast> + ?Sized,
+    V: VisitMut<'ast, > + ?Sized,
 {
     match node {
         BinOp::Add {
@@ -132,9 +132,9 @@ where
         }
     }
 }
-pub fn visit_expr_mut<'ast, V>(visitor: &mut V, node: &'ast mut Expr)
+pub fn visit_expr_mut<'ast, V, >(visitor: &mut V, node: &'ast mut Expr)
 where
-    V: VisitMut<'ast> + ?Sized,
+    V: VisitMut<'ast, > + ?Sized,
 {
     match node {
         Expr::Function {
@@ -153,9 +153,9 @@ where
         }
     }
 }
-pub fn visit_function_mut<'ast, V>(visitor: &mut V, node: &'ast mut Function)
+pub fn visit_function_mut<'ast, V, >(visitor: &mut V, node: &'ast mut Function)
 where
-    V: VisitMut<'ast> + ?Sized,
+    V: VisitMut<'ast, > + ?Sized,
 {
     for v in &mut node.args {
         visitor.visit_expr_mut(v);
@@ -186,7 +186,7 @@ struct Function<T> {
     filter: Option<Expr<T>>,
 }
 ----
-pub trait Visit<'ast, T> {
+pub trait Visit<'ast, T, > {
     fn visit_bin_op(&mut self, node: &'ast BinOp) {
         visit_bin_op(self, node)
     }
@@ -197,9 +197,9 @@ pub trait Visit<'ast, T> {
         visit_function(self, node)
     }
 }
-pub fn visit_bin_op<'ast, V, T>(visitor: &mut V, node: &'ast BinOp)
+pub fn visit_bin_op<'ast, V, T, >(visitor: &mut V, node: &'ast BinOp)
 where
-    V: Visit<'ast, T> + ?Sized,
+    V: Visit<'ast, T, > + ?Sized,
 {
     match node {
         BinOp::Add {
@@ -210,9 +210,9 @@ where
         }
     }
 }
-pub fn visit_expr<'ast, V, T>(visitor: &mut V, node: &'ast Expr<T>)
+pub fn visit_expr<'ast, V, T, >(visitor: &mut V, node: &'ast Expr<T>)
 where
-    V: Visit<'ast, T> + ?Sized,
+    V: Visit<'ast, T, > + ?Sized,
 {
     match node {
         Expr::Function {
@@ -231,9 +231,9 @@ where
         }
     }
 }
-pub fn visit_function<'ast, V, T>(visitor: &mut V, node: &'ast Function<T>)
+pub fn visit_function<'ast, V, T, >(visitor: &mut V, node: &'ast Function<T>)
 where
-    V: Visit<'ast, T> + ?Sized,
+    V: Visit<'ast, T, > + ?Sized,
 {
     for v in &node.args {
         visitor.visit_expr(v);
@@ -262,7 +262,7 @@ struct Function<T: Foo> {
     filter: Option<Expr<T>>,
 }
 ----
-pub trait Visit<'ast, T: Foo> {
+pub trait Visit<'ast, T: Foo, > {
     fn visit_bin_op(&mut self, node: &'ast BinOp) {
         visit_bin_op(self, node)
     }
@@ -273,9 +273,9 @@ pub trait Visit<'ast, T: Foo> {
         visit_function(self, node)
     }
 }
-pub fn visit_bin_op<'ast, V, T: Foo>(visitor: &mut V, node: &'ast BinOp)
+pub fn visit_bin_op<'ast, V, T: Foo, >(visitor: &mut V, node: &'ast BinOp)
 where
-    V: Visit<'ast, T> + ?Sized,
+    V: Visit<'ast, T, > + ?Sized,
 {
     match node {
         BinOp::Add {
@@ -286,9 +286,9 @@ where
         }
     }
 }
-pub fn visit_expr<'ast, V, T: Foo>(visitor: &mut V, node: &'ast Expr<T>)
+pub fn visit_expr<'ast, V, T: Foo, >(visitor: &mut V, node: &'ast Expr<T>)
 where
-    V: Visit<'ast, T> + ?Sized,
+    V: Visit<'ast, T, > + ?Sized,
 {
     match node {
         Expr::Function {
@@ -307,9 +307,9 @@ where
         }
     }
 }
-pub fn visit_function<'ast, V, T: Foo>(visitor: &mut V, node: &'ast Function<T>)
+pub fn visit_function<'ast, V, T: Foo, >(visitor: &mut V, node: &'ast Function<T>)
 where
-    V: Visit<'ast, T> + ?Sized,
+    V: Visit<'ast, T, > + ?Sized,
 {
     for v in &node.args {
         visitor.visit_expr(v);
@@ -324,7 +324,7 @@ struct Function<T: Foo> {
     t: T::TableName,
 }
 ----
-pub trait Visit<'ast, T: Foo> {
+pub trait Visit<'ast, T: Foo, > {
     fn visit_function(&mut self, node: &'ast Function<T>) {
         visit_function(self, node)
     }
@@ -332,14 +332,14 @@ pub trait Visit<'ast, T: Foo> {
         visit_table_name(self, node)
     }
 }
-pub fn visit_function<'ast, V, T: Foo>(visitor: &mut V, node: &'ast Function<T>)
+pub fn visit_function<'ast, V, T: Foo, >(visitor: &mut V, node: &'ast Function<T>)
 where
-    V: Visit<'ast, T> + ?Sized,
+    V: Visit<'ast, T, > + ?Sized,
 {
     visitor.visit_table_name(&node.t);
 }
-pub fn visit_table_name<'ast, V, T: Foo>(visitor: &mut V, node: &'ast T::TableName)
+pub fn visit_table_name<'ast, V, T: Foo, >(visitor: &mut V, node: &'ast T::TableName)
 where
-    V: Visit<'ast, T> + ?Sized,
+    V: Visit<'ast, T, > + ?Sized,
 {
 }

@@ -12,6 +12,8 @@
 //! This module processes the IR to generate the `visit` and `visit_mut`
 //! modules.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use fstrings::{f, format_args_f};
 use itertools::Itertools;
 
@@ -24,7 +26,7 @@ use crate::ir::{Ir, Item, Type};
 /// Returns a string of Rust code that should be compiled alongside the module
 /// from which it was generated.
 pub fn gen_visit(ir: &Ir) -> String {
-    gen_root(&Config { mutable: false }, ir)
+    gen_visit_root(&VisitConfig { mutable: false }, ir)
 }
 
 /// Generates a visitor for a mutable AST.
@@ -32,57 +34,26 @@ pub fn gen_visit(ir: &Ir) -> String {
 /// Returns a string of Rust code that should be compiled alongside the module
 /// from which it was generated.
 pub fn gen_visit_mut(ir: &Ir) -> String {
-    gen_root(&Config { mutable: true }, ir)
+    gen_visit_root(&VisitConfig { mutable: true }, ir)
 }
 
-struct Config {
+struct VisitConfig {
     mutable: bool,
 }
 
-fn generics_string_for_item(item: &Item) -> String {
-    if item.generics().is_empty() {
-        "".into()
-    } else {
-        format!("<{}>", item.generics().iter().map(|g| &g.name).join(", "))
-    }
-}
-
-fn gen_root(c: &Config, ir: &Ir) -> String {
+fn gen_visit_root(c: &VisitConfig, ir: &Ir) -> String {
     let trait_name = if c.mutable { "VisitMut" } else { "Visit" };
     let muta = if c.mutable { "mut " } else { "" };
-
-    let all_generics_with_bounds_str = ir
-        .generics
-        .iter()
-        .map(|(ident, bounds)| {
-            if bounds.len() == 0 {
-                format!(", {}", ident.to_string())
-            } else {
-                let b = bounds
-                    .iter()
-                    .map(|b| b.to_string())
-                    .collect::<Vec<String>>()
-                    .join("+");
-                format!(", {}: {}", ident, b)
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("");
-
-    let all_generics_no_bounds_str = ir
-        .generics
-        .keys()
-        .map(|ident| format!(", {}", ident.to_string()))
-        .collect::<Vec<String>>()
-        .join("");
+    let trait_generics = trait_generics(&ir.generics);
+    let trait_generics_and_bounds = trait_generics_and_bounds(&ir.generics);
 
     let mut buf = CodegenBuf::new();
 
     buf.start_block(f!(
-        "pub trait {trait_name}<'ast{all_generics_with_bounds_str}>"
+        "pub trait {trait_name}<'ast, {trait_generics_and_bounds}>"
     ));
     for (name, item) in &ir.items {
-        let generics = generics_string_for_item(item);
+        let generics = item_generics(item);
         let fn_name = visit_fn_name(c, name);
         buf.start_block(f!(
             "fn {fn_name}(&mut self, node: &'ast {muta}{name}{generics})"
@@ -93,15 +64,13 @@ fn gen_root(c: &Config, ir: &Ir) -> String {
     buf.end_block();
 
     for (name, item) in &ir.items {
-        let generics = generics_string_for_item(item);
+        let generics = item_generics(item);
         let fn_name = visit_fn_name(c, name);
         buf.writeln(f!(
-            "pub fn {fn_name}<'ast, V{all_generics_with_bounds_str}>(visitor: &mut V, node: &'ast {muta}{name}{generics})"
+            "pub fn {fn_name}<'ast, V, {trait_generics_and_bounds}>(visitor: &mut V, node: &'ast {muta}{name}{generics})"
         ));
         buf.writeln(f!("where"));
-        buf.writeln(f!(
-            "    V: {trait_name}<'ast{all_generics_no_bounds_str}> + ?Sized,"
-        ));
+        buf.writeln(f!("    V: {trait_name}<'ast, {trait_generics}> + ?Sized,"));
         buf.start_block("");
         match item {
             Item::Struct(s) => {
@@ -110,7 +79,7 @@ fn gen_root(c: &Config, ir: &Ir) -> String {
                         Some(name) => f!("&{muta}node.{name}"),
                         None => f!("&{muta}node.{i}"),
                     };
-                    gen_element(c, &mut buf, &binding, &f.ty);
+                    gen_visit_element(c, &mut buf, &binding, &f.ty);
                 }
             }
             Item::Enum(e) => {
@@ -125,7 +94,7 @@ fn gen_root(c: &Config, ir: &Ir) -> String {
                     buf.restart_block("=>");
                     for (i, f) in v.fields.iter().enumerate() {
                         let binding = format!("binding{}", i);
-                        gen_element(c, &mut buf, &binding, &f.ty);
+                        gen_visit_element(c, &mut buf, &binding, &f.ty);
                     }
                     buf.end_block();
                 }
@@ -139,7 +108,7 @@ fn gen_root(c: &Config, ir: &Ir) -> String {
     buf.into_string()
 }
 
-fn gen_element(c: &Config, buf: &mut CodegenBuf, binding: &str, ty: &Type) {
+fn gen_visit_element(c: &VisitConfig, buf: &mut CodegenBuf, binding: &str, ty: &Type) {
     match ty {
         Type::Primitive => (),
         Type::Abstract(ty) => {
@@ -148,12 +117,12 @@ fn gen_element(c: &Config, buf: &mut CodegenBuf, binding: &str, ty: &Type) {
         }
         Type::Option(ty) => {
             buf.start_block(f!("if let Some(v) = {binding}"));
-            gen_element(c, buf, "v", ty);
+            gen_visit_element(c, buf, "v", ty);
             buf.end_block();
         }
         Type::Vec(ty) => {
             buf.start_block(f!("for v in {binding}"));
-            gen_element(c, buf, "v", ty);
+            gen_visit_element(c, buf, "v", ty);
             buf.end_block();
         }
         Type::Box(ty) => {
@@ -161,7 +130,7 @@ fn gen_element(c: &Config, buf: &mut CodegenBuf, binding: &str, ty: &Type) {
                 true => format!("&mut *{}", binding),
                 false => format!("&*{}", binding),
             };
-            gen_element(c, buf, &binding, ty);
+            gen_visit_element(c, buf, &binding, ty);
         }
         Type::Local(s) => {
             let fn_name = visit_fn_name(c, s);
@@ -170,8 +139,16 @@ fn gen_element(c: &Config, buf: &mut CodegenBuf, binding: &str, ty: &Type) {
     }
 }
 
-fn visit_fn_name(c: &Config, s: &str) -> String {
+fn visit_fn_name(c: &VisitConfig, s: &str) -> String {
     let mut out = String::from("visit");
+    write_fn_name(&mut out, s);
+    if c.mutable {
+        out.push_str("_mut");
+    }
+    out
+}
+
+fn write_fn_name(out: &mut String, s: &str) {
     // Simplify associated type names so that e.g. `T::FooBar` becomes
     // `visit_foo_bar`.
     let s = s.splitn(2, "::").last().unwrap();
@@ -183,8 +160,29 @@ fn visit_fn_name(c: &Config, s: &str) -> String {
             out.push(c);
         }
     }
-    if c.mutable {
-        out.push_str("_mut");
+}
+
+fn trait_generics(generics: &BTreeMap<String, BTreeSet<String>>) -> String {
+    generics.keys().map(|id| format!("{}, ", id)).join("")
+}
+
+fn trait_generics_and_bounds(generics: &BTreeMap<String, BTreeSet<String>>) -> String {
+    generics
+        .iter()
+        .map(|(ident, bounds)| {
+            if bounds.len() == 0 {
+                format!("{}, ", ident.to_string())
+            } else {
+                format!("{}: {}, ", ident, bounds.iter().join("+"))
+            }
+        })
+        .join("")
+}
+
+fn item_generics(item: &Item) -> String {
+    if item.generics().is_empty() {
+        "".into()
+    } else {
+        format!("<{}>", item.generics().iter().map(|g| &g.name).join(", "))
     }
-    out
 }
