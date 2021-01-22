@@ -47,13 +47,15 @@ impl Action for VerifyAction {
     async fn redo(&self, state: &mut State) -> Result<(), String> {
         let stream_name = format!("testdrive-{}-{}", self.stream_prefix, state.seed);
 
-        let mut shard_iterators = get_shard_iterators(&state.kinesis_client, &stream_name).await?;
+        let mut shard_iterators =
+            get_shard_iterators(state.kinesis_client.as_ref()?, &stream_name).await?;
         let timer = Instant::now();
         let mut records: HashSet<String> = HashSet::new();
         while let Some(iterator) = shard_iterators.pop_front() {
             if let Some(iterator) = &iterator {
                 let output = state
                     .kinesis_client
+                    .as_ref()?
                     .get_records(GetRecordsInput {
                         limit: None,
                         shard_iterator: iterator.clone(),

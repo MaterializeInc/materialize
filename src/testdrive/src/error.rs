@@ -34,6 +34,7 @@ use std::error::Error as StdError;
 use std::fmt::{self, Write as FmtWrite};
 use std::io::{self, Write};
 use std::iter::IntoIterator;
+use std::sync::Mutex;
 
 use atty::Stream;
 use termcolor::{Color, ColorChoice, ColorSpec, StandardStream, WriteColor};
@@ -166,6 +167,64 @@ impl Error {
 impl From<InputError> for Error {
     fn from(err: InputError) -> Error {
         Error::Input { err, details: None }
+    }
+}
+
+// Some of our old APIs use String instead of a useful error type
+impl From<&Error> for String {
+    fn from(other: &Error) -> String {
+        other.to_string()
+    }
+}
+/// An error that can only fire once
+///
+/// Used for caching errors that should cause the process to fail, but only if
+/// you try to use their results, since we need to put AWS clients (and
+/// creating them may fail) in [`State`](crate::action::State).
+#[derive(Debug)]
+pub struct OnceError {
+    inner: Box<Mutex<OnceErrorInner>>,
+}
+
+impl From<Error> for OnceError {
+    fn from(err: Error) -> OnceError {
+        OnceError {
+            inner: Box::new(Mutex::new(OnceErrorInner::Full(err))),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum OnceErrorInner {
+    Used,
+    Full(Error),
+}
+
+impl std::error::Error for OnceError {}
+impl fmt::Display for OnceError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &*self.inner.lock().unwrap() {
+            OnceErrorInner::Used => f.write_str("OnceError has been used, this should not happen"),
+            OnceErrorInner::Full(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl From<&OnceError> for Error {
+    fn from(err: &OnceError) -> Error {
+        let err = std::mem::replace(&mut *err.inner.lock().unwrap(), OnceErrorInner::Used);
+        match err {
+            OnceErrorInner::Used => {
+                panic!("Tried to re-use a OnceError");
+            }
+            OnceErrorInner::Full(e) => e,
+        }
+    }
+}
+
+impl From<&OnceError> for String {
+    fn from(err: &OnceError) -> String {
+        err.to_string()
     }
 }
 

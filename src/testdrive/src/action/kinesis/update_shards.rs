@@ -49,6 +49,7 @@ impl Action for UpdateShardCountAction {
 
         state
             .kinesis_client
+            .as_ref()?
             .update_shard_count(UpdateShardCountInput {
                 scaling_type: "UNIFORM_SCALING".to_owned(),
                 stream_name: stream_name.clone(),
@@ -62,6 +63,7 @@ impl Action for UpdateShardCountAction {
             // Wait for shards to stop updating.
             let description = state
                 .kinesis_client
+                .as_ref()?
                 .describe_stream(DescribeStreamInput {
                     exclusive_start_shard_id: None,
                     limit: None,

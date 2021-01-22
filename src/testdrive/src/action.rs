@@ -28,7 +28,7 @@ use url::Url;
 use aws_util::aws;
 use repr::strconv;
 
-use crate::error::{DynError, Error, InputError, ResultExt};
+use crate::error::{DynError, Error, InputError, OnceError, ResultExt};
 use crate::parser::{Command, PosCommand, SqlOutput};
 use crate::util;
 
@@ -94,9 +94,9 @@ pub struct State {
     aws_region: rusoto_core::Region,
     aws_account: String,
     aws_credentials: AwsCredentials,
-    kinesis_client: KinesisClient,
+    kinesis_client: Result<KinesisClient, OnceError>, // clients aren't used in many cases, so fail lazily
     kinesis_stream_names: Vec<String>,
-    s3_client: S3Client,
+    s3_client: Result<S3Client, OnceError>, // clients aren't used in many cases, so fail lazily
     s3_buckets_created: BTreeSet<String>,
 }
 
@@ -134,6 +134,7 @@ impl State {
         );
         for stream_name in &self.kinesis_stream_names {
             self.kinesis_client
+                .as_ref()?
                 .delete_stream(DeleteStreamInput {
                     enforce_consumer_deletion: Some(true),
                     stream_name: stream_name.clone(),
@@ -154,6 +155,7 @@ impl State {
 
             let res = self
                 .s3_client
+                .as_ref()?
                 .delete_bucket(DeleteBucketRequest {
                     bucket: bucket.into(),
                     expected_bucket_owner: None,
@@ -183,6 +185,7 @@ impl State {
             loop {
                 let response = self
                     .s3_client
+                    .as_ref()?
                     .list_objects_v2(ListObjectsV2Request {
                         bucket: bucket.clone(),
                         continuation_token: continuation_token.take(),
@@ -194,6 +197,7 @@ impl State {
                 if let Some(objects) = response.contents {
                     for obj in objects {
                         self.s3_client
+                            .as_ref()?
                             .delete_object(DeleteObjectRequest {
                                 bucket: bucket.clone(),
                                 key: obj.key.clone().unwrap(),
@@ -551,15 +555,21 @@ pub async fn create_state(
     )
     .expect("both parts of AWS Credentials are present");
 
-    let kinesis_client = aws_util::kinesis::client(aws_info.clone()).await.err_hint(
-        "creating Kinesis client",
-        &[format!("region: {}", aws_info.region.name())],
-    )?;
+    let kinesis_client = aws_util::kinesis::client(aws_info.clone())
+        .await
+        .err_hint(
+            "creating Kinesis client",
+            &[format!("region: {}", aws_info.region.name())],
+        )
+        .map_err(OnceError::from);
 
-    let s3_client = aws_util::s3::client(aws_info.clone()).await.err_hint(
-        "creating S3 client",
-        &[format!("region: {}", aws_info.region.name(),)],
-    )?;
+    let s3_client = aws_util::s3::client(aws_info.clone())
+        .await
+        .err_hint(
+            "creating S3 client",
+            &[format!("region: {}", aws_info.region.name(),)],
+        )
+        .map_err(OnceError::from);
 
     let state = State {
         seed,

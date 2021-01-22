@@ -39,6 +39,7 @@ impl Action for CreateBucketAction {
 
         match state
             .s3_client
+            .as_ref()?
             .create_bucket(CreateBucketRequest {
                 bucket: self.bucket.clone(),
                 create_bucket_configuration: Some(CreateBucketConfiguration {
@@ -82,6 +83,7 @@ impl Action for PutObjectAction {
 
         state
             .s3_client
+            .as_ref()?
             .put_object(PutObjectRequest {
                 bucket: self.bucket.clone(),
                 body: Some(self.contents.clone().into_bytes().into()),

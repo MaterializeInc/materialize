@@ -40,8 +40,9 @@ impl Action for CreateStreamAction {
         let stream_name = format!("{}-{}", self.stream_name, state.seed);
         println!("Creating Kinesis stream {}", stream_name);
 
-        state
-            .kinesis_client
+        let kclient = state.kinesis_client.as_ref()?;
+
+        kclient
             .create_stream(CreateStreamInput {
                 shard_count: self.shard_count,
                 stream_name: stream_name.clone(),
@@ -50,7 +51,6 @@ impl Action for CreateStreamAction {
             .map_err(|e| format!("creating stream: {}", e))?;
         state.kinesis_stream_names.push(stream_name.clone());
 
-        util::kinesis::wait_for_stream_shards(&state.kinesis_client, stream_name, self.shard_count)
-            .await
+        util::kinesis::wait_for_stream_shards(kclient, stream_name, self.shard_count).await
     }
 }
