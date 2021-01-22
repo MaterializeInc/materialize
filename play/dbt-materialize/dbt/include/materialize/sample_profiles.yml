@@ -1,0 +1,24 @@
+default:
+  outputs:
+
+    dev:
+      type: materialize
+      threads: [1 or more]
+      host: [host - default is localhost]
+      port: [port - default is 6875]
+      user: [dev_username - any value]
+      pass: [dev_password - any value]
+      dbname: [dbname - default is materialize]
+      schema: [dev_schema - default is public]
+
+    prod:
+      type: materialize
+      threads: [1 or more]
+      host: [host - default is localhost]
+      port: [port - default is 6875]
+      user: [prod_username - any value]
+      pass: [prod_password - any value]
+      dbname: [dbname - default is materialize]
+      schema: [prod_schema - default is public]
+
+  target: dev
