@@ -6,7 +6,7 @@ menu:
     parent: sql-types
 ---
 
-{{< version-added v0.4.0 >}}
+{{< version-added v0.4.0 />}}
 
 A `record` is a tuple that can contain an arbitrary number of elements of any
 type.

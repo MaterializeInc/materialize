@@ -6,7 +6,7 @@ menu:
     parent: 'sql'
 ---
 
-{{< version-added v0.6.1 >}}
+{{< version-added v0.6.1 />}}
 
 `CREATE TYPE` defines a new data type.
 
