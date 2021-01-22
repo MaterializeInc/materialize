@@ -135,3 +135,20 @@ SELECT 1; SELECT 2
 COMPLETE 1
 2
 COMPLETE 1
+
+# Verify that `SHOW` queries work in transactions.
+
+simple
+BEGIN
+----
+COMPLETE 0
+
+query T rowsort
+SHOW TABLES
+----
+t
+
+simple
+COMMIT
+----
+COMPLETE 0

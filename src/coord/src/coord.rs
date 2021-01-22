@@ -655,6 +655,15 @@ where
                                 | Statement::Rollback(_)
                                 | Statement::Select(_)
                                 | Statement::SetTransaction(_)
+                                | Statement::ShowColumns(_)
+                                | Statement::ShowCreateIndex(_)
+                                | Statement::ShowCreateSink(_)
+                                | Statement::ShowCreateSource(_)
+                                | Statement::ShowCreateTable(_)
+                                | Statement::ShowCreateView(_)
+                                | Statement::ShowDatabases(_)
+                                | Statement::ShowIndexes(_)
+                                | Statement::ShowObjects(_)
                                 | Statement::ShowVariable(_)
                                 | Statement::StartTransaction(_)
                                 | Statement::Tail(_) => {}
@@ -674,15 +683,6 @@ where
                                 | Statement::DropObjects(_)
                                 | Statement::Insert(_)
                                 | Statement::SetVariable(_)
-                                | Statement::ShowColumns(_)
-                                | Statement::ShowCreateIndex(_)
-                                | Statement::ShowCreateSink(_)
-                                | Statement::ShowCreateSource(_)
-                                | Statement::ShowCreateTable(_)
-                                | Statement::ShowCreateView(_)
-                                | Statement::ShowDatabases(_)
-                                | Statement::ShowIndexes(_)
-                                | Statement::ShowObjects(_)
                                 | Statement::Update(_) => {
                                     let _ = tx.send(Response {
                                         result: Ok(ExecuteResponse::PgError {
