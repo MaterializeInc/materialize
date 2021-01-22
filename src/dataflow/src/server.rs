@@ -976,9 +976,16 @@ impl PendingPeek {
                         ));
                     }
 
-                    // TODO: In an ORDER BY .. LIMIT .. setting, once we have a full output
-                    // we could compare each of these to the "least" current output, and
-                    // avoid stashing the result and growing results.
+                    // When we have a LIMIT we can restrict the number of copies we make.
+                    // This protects us when we have many copies of the same records, as
+                    // the DD representation uses a binary count and may not exhaust our
+                    // memory in situtations where this copying might.
+                    if let Some(limit) = max_results {
+                        let limit = std::convert::TryInto::<isize>::try_into(limit);
+                        if let Ok(limit) = limit {
+                            copies = std::cmp::min(copies, limit);
+                        }
+                    }
                     for _ in 0..copies {
                         results.push(result.clone());
                     }
