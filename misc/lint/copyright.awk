@@ -27,7 +27,7 @@ function done()
     exit 0
 }
 
-/^#![ \t\n]*\//          { next }
-/^(\/\/|#)?.*Copyright/  { copyright=$0; copyright_line=NR }
-/^[ \t\n]*$/             { next }
-!/^(<!--|<\?xml|\/\/|#)/ { done() }
+/^#![ \t\n]*\//             { next }
+/^(\/\/|#|--)?.*Copyright/  { copyright=$0; copyright_line=NR }
+/^[ \t\n]*$/                { next }
+!/^(<!--|<\?xml|\/\/|#|--)/ { done() }
