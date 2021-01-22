@@ -10,17 +10,17 @@
 $ kinesis-create-stream stream=test shards=1
 
 $ kinesis-ingest format=bytes stream=test
-here's a test string
+here is a test string
 
 $ kinesis-verify stream=test
-here's a test string
+here is a test string
 
 $ kinesis-ingest format=bytes stream=test
-here's a second test string
+here is a second test string
 
 $ kinesis-verify stream=test
-here's a test string
-here's a second test string
+here is a test string
+here is a second test string
 
 ! CREATE SOURCE custom_source
   FROM KINESIS ARN 'arn:aws:kinesis:custom-region::stream/fake-stream'
@@ -41,5 +41,5 @@ If providing a custom region, an `endpoint` option must also be provided
   AS SELECT CONVERT_FROM(data, 'utf8') FROM f
 
 > SELECT * FROM f_view
-"here's a test string"
-"here's a second test string"
+"here is a test string"
+"here is a second test string"
