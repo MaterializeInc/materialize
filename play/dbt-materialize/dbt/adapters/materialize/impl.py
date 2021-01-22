@@ -2,11 +2,12 @@ from dbt.adapters.postgres import PostgresAdapter
 from dbt.adapters.postgres import PostgresColumn
 from dbt.adapters.materialize import MaterializeConnectionManager
 
-MATERIALIZE_GET_COLUMNS_MACRO_NAME = 'materialize_get_columns'
-MATERIALIZE_CONVERT_COLUMNS_MACRO_NAME = 'sql_convert_columns_in_relation'
-MATERIALIZE_GET_SCHEMAS_MACRO_NAME = 'materialize_get_schemas'
-MATERIALIZE_GET_FULL_VIEWS_MACRO_NAME = 'materialize_get_full_views'
-MATERIALIZE_SHOW_VIEW_MACRO_NAME = 'materialize_show_view'
+MATERIALIZE_GET_COLUMNS_MACRO_NAME = "materialize_get_columns"
+MATERIALIZE_CONVERT_COLUMNS_MACRO_NAME = "sql_convert_columns_in_relation"
+MATERIALIZE_GET_SCHEMAS_MACRO_NAME = "materialize_get_schemas"
+MATERIALIZE_GET_FULL_VIEWS_MACRO_NAME = "materialize_get_full_views"
+MATERIALIZE_SHOW_VIEW_MACRO_NAME = "materialize_show_view"
+
 
 class MaterializeAdapter(PostgresAdapter):
     ConnectionManager = MaterializeConnectionManager
@@ -14,7 +15,7 @@ class MaterializeAdapter(PostgresAdapter):
 
     @classmethod
     def date_function(cls):
-        return 'now()'
+        return "now()"
 
     @classmethod
     def is_cancelable(cls):
@@ -22,17 +23,15 @@ class MaterializeAdapter(PostgresAdapter):
 
     def get_columns_in_relation(self, relation):
         columns = self.execute_macro(
-            MATERIALIZE_GET_COLUMNS_MACRO_NAME,
-            kwargs={'relation': relation}
+            MATERIALIZE_GET_COLUMNS_MACRO_NAME, kwargs={"relation": relation}
         )
 
         table = []
         for _field, _nullable, _type in columns:
-           table.append((_field, _type))
- 
+            table.append((_field, _type))
+
         return self.execute_macro(
-            MATERIALIZE_CONVERT_COLUMNS_MACRO_NAME,
-            kwargs={'table': table}
+            MATERIALIZE_CONVERT_COLUMNS_MACRO_NAME, kwargs={"table": table}
         )
 
     def list_relations_without_caching(self, schema_relation):
@@ -45,24 +44,22 @@ class MaterializeAdapter(PostgresAdapter):
 
         full_views = self.execute_macro(
             MATERIALIZE_GET_FULL_VIEWS_MACRO_NAME,
-            kwargs={'schema': schema_relation.schema}
+            kwargs={"schema": schema_relation.schema},
         )
 
         relations = []
-        quote_policy = {
-            'database': True,
-            'schema': True,
-            'identifier': True
-        }
+        quote_policy = {"database": True, "schema": True, "identifier": True}
         for _view, _type, _materialized in full_views.rows:
-            dbt_type = 'table' if _materialized else 'view'
-            relations.append(self.Relation.create(
-                  database=schema_relation.database,
-                  schema=schema_relation.schema,
-                  identifier=_view,
-                  quote_policy=quote_policy,
-                  type=dbt_type
-            ))
+            dbt_type = "table" if _materialized else "view"
+            relations.append(
+                self.Relation.create(
+                    database=schema_relation.database,
+                    schema=schema_relation.schema,
+                    identifier=_view,
+                    quote_policy=quote_policy,
+                    type=dbt_type,
+                )
+            )
         return relations
 
     def check_schema_exists(self, database, schema):

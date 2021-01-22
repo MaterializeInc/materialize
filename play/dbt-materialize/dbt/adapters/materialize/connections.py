@@ -6,14 +6,16 @@ from dataclasses import dataclass
 from dbt import flags
 from dbt.logger import GLOBAL_LOGGER as logger
 
+
 @dataclass
 class MaterializeCredentials(PostgresCredentials):
     @property
     def type(self):
-        return 'materialize'
+        return "materialize"
+
 
 class MaterializeConnectionManager(PostgresConnectionManager):
-    TYPE = 'materialize'
+    TYPE = "materialize"
 
     @classmethod
     def open(cls, connection):
@@ -23,13 +25,12 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         connection.handle.autocommit = True
         return connection
 
-
     def commit(self):
         connection = self.get_thread_connection()
         if flags.STRICT_MODE:
             if not isinstance(connection, Connection):
                 raise dbt.exceptions.CompilerException(
-                    f'In commit, got {connection} - not a Connection!'
+                    f"In commit, got {connection} - not a Connection!"
                 )
 
         # Instead of throwing an error, quietly log if something tries to commit
@@ -38,9 +39,13 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         # but Materialize can't handle all of the required transactions.
         # https://github.com/fishtown-analytics/dbt/blob/42a85ac39f34b058678fd0c03ff8e8d2835d2808/test/integration/base.py#L681
         if connection.transaction_open is False:
-            logger.debug('Tried to commit without a transaction on connection "{}"'.format(connection.name))
+            logger.debug(
+                'Tried to commit without a transaction on connection "{}"'.format(
+                    connection.name
+                )
+            )
 
-        logger.debug('On {}: COMMIT'.format(connection.name))
+        logger.debug("On {}: COMMIT".format(connection.name))
         self.add_commit_query()
 
         connection.transaction_open = False

@@ -8,4 +8,5 @@ from dbt.include import materialize
 Plugin = AdapterPlugin(
     adapter=MaterializeAdapter,
     credentials=MaterializeCredentials,
-    include_path=materialize.PACKAGE_PATH)
+    include_path=materialize.PACKAGE_PATH,
+)
