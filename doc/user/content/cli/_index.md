@@ -192,7 +192,7 @@ Acquire a certificate from a proper certificate authority (CA) instead.
 
 ### Experimental mode
 
-{{< version-added v0.4.0 >}}
+{{< version-added v0.4.0 />}}
 
 {{< warning >}}
 

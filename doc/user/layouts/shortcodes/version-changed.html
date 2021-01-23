@@ -1,8 +1,17 @@
 <p>
-  {{if in (apply $.Site.Params.versions "index" "." "name") (.Get 0)}}
-    <em>Changed in {{.Get 0}}:</em> {{.Inner|$.Page.RenderString}}
+  {{if .Inner}}
+    {{if in (apply $.Site.Params.versions "index" "." "name") (.Get 0)}}
+      <em>Changed in {{.Get 0}}:</em>
+      {{.Inner|$.Page.RenderString}}
+    {{else}}
+      <em>Changed in <a href="{{"/versions/#unstable-builds"|relURL}}">unstable builds</a>:</em>
+      {{.Inner|$.Page.RenderString}}
+    {{end}}
   {{else}}
-    <em>Changed in <a href="{{"/versions/#unstable-builds"|relURL}}">unstable builds</a>:</em>
-    {{.Inner|$.Page.RenderString}}
+    {{if in (apply $.Site.Params.versions "index" "." "name") (.Get 0)}}
+      <em>Changed in {{.Get 0}}.</em>
+    {{else}}
+      <em>Changed in <a href="{{"/versions/#unstable-builds"|relURL}}">unstable builds</a>.</em>
+    {{end}}
   {{end}}
 </p>
