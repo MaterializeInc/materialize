@@ -58,20 +58,19 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.6.1 %}}
 
-- Validate `WITH` clauses in [`CREATE SOURCE`](/sql/create-source) and [`CREATE
-  SINK`](/sql/create-sink) statements. Previously Materialize would ignore any
-  invalid options in these statement's `WITH` clauses.
+- **Backwards-incompatible change.** Validate `WITH` clauses in [`CREATE
+  SOURCE`](/sql/create-source) and [`CREATE SINK`](/sql/create-sink) statements.
+  Previously Materialize would ignore any invalid options in these statement's
+  `WITH` clauses.
 
   Upgrading to v0.6.1 will therefore fail if any of the sources or sinks within
   have invalid `WITH` options. If this occurs, drop these invalid sources or
   sinks using v0.6.0 and recreate them with valid `WITH` options.
 
-  **Backwards-incompatible change.**
-
-- Change the default value of the `timeout` option to [`FETCH`](/sql/fetch)
-  from `0s` to `None`. The old default caused `FETCH` to return immediately
-  even if no rows were available. The new default causes `FETCH` to wait for
-  at least one row to be available.
+- **Backwards-incompatible change.** Change the default value of the `timeout`
+  option to [`FETCH`](/sql/fetch) from `0s` to `None`. The old default caused
+  `FETCH` to return immediately even if no rows were available. The new default
+  causes `FETCH` to wait for at least one row to be available.
 
   To maintain the old behavior, explicitly set the timeout to `0s`, as in:
 
@@ -79,29 +78,23 @@ Wrap your release notes at the 80 character mark.
   FETCH ... WITH (timeout = '0s')
   ```
 
-  **Backwards-incompatible change.**
-
-- Consider the following keywords to be fully reserved in SQL statements:
-  `WITH`, `SELECT`, `WHERE`, `GROUP`, `HAVING`, `ORDER`, `LIMIT`, `OFFSET`,
-  `FETCH`, `OPTION`, `UNION`, `EXCEPT`, `INTERSECT`. Previously only the `FROM`
-  keyword was considered fully reserved.
+- **Backwards-incompatible change.** Consider the following keywords to be fully
+  reserved in SQL statements: `WITH`, `SELECT`, `WHERE`, `GROUP`, `HAVING`,
+  `ORDER`, `LIMIT`, `OFFSET`, `FETCH`, `OPTION`, `UNION`, `EXCEPT`, `INTERSECT`.
+  Previously only the `FROM` keyword was considered fully reserved.
 
   You can no longer use these keywords as bare identifiers anywhere in a SQL
   statement, except following an `AS` keyword in a table or column alias. They
   can continue to be used as identifiers if escaped. See the [Keyword
   collision](/sql/identifiers#keyword-collision) documentation for details.
 
-  **Backwards-incompatible change.**
-
-- Change the return type of [`sum`](/sql/functions/#aggregate-func) over
-  [`bigint`](/sql/types/integer)s from `bigint` to
-  [`numeric`](/sql/types/numeric). This avoids the possibility of overflow when
-  summing many large numbers {{% gh 5218 %}}.
+- **Backwards-incompatible change.** Change the return type of
+  [`sum`](/sql/functions/#aggregate-func) over [`bigint`](/sql/types/integer)s
+  from `bigint` to [`numeric`](/sql/types/numeric). This avoids the possibility
+  of overflow when summing many large numbers {{% gh 5218 %}}.
 
   We expect the breakage from this change to be minimal, as the semantics
   of `bigint` and `numeric` are nearly identical.
-
-  **Backwards-incompatible change**
 
 - Speed up parsing of [`real`](/sql/types/float) and
   [`numeric`](/sql/types/numeric) values by approximately 2x and 100x,
@@ -267,13 +260,12 @@ Document new timezone stuff and add a release note about it.
 
   - Support timestamp progress with the `PROGRESSED` option.
 
-  - Use Materialize's standard `WITH` option syntax, meaning:
+  - **Backwards-incompatible change.** Use Materialize's standard `WITH` option
+    syntax, meaning:
 
     - `WITH SNAPSHOT` is now `WITH (SNAPSHOT)`.
 
     - `WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
-
-    **Backwards-incompatible change.**
 
 - Report an error without crashing when a query contains unexpected UTF-8
   characters, e.g., `SELECT ’1’`. {{% gh 4755 %}}
@@ -305,12 +297,12 @@ Document new timezone stuff and add a release note about it.
   or let you choose which protocol to use. If you are using one of these
   clients, you can safely issue `COPY TO` statements in v0.5.1.
 
-- Send the rows returned by the [`TAIL`](/sql/tail) statement to the client
-  normally (i.e., as if the rows were returned by a [`SELECT`](/sql/select)
-  statement) rather than via the PostgreSQL [`COPY` protocol][pg-copy]. The new
-  format additionally moves the timestamp and diff information to dedicated
-  `timestamp` and `diff` columns at the beginning of each row.
-  **Backwards-incompatible change.**
+- **Backwards-incompatible change.** Send the rows returned by the
+  [`TAIL`](/sql/tail) statement to the client normally (i.e., as if the rows
+  were returned by a [`SELECT`](/sql/select) statement) rather than via the
+  PostgreSQL [`COPY` protocol][pg-copy]. The new format additionally moves the
+  timestamp and diff information to dedicated `timestamp` and `diff` columns at
+  the beginning of each row.
 
   To replicate the old behavior of sending `TAIL` results via the `COPY`
   protocol, explicitly wrap the `TAIL` statement in a [`COPY TO`](/sql/copy-to)
