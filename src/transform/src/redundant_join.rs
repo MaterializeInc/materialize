@@ -211,9 +211,14 @@ impl RedundantJoin {
             RelationExpr::Union { base, inputs } => {
                 let mut prov = self.action(base, lets);
                 for input in inputs {
+                    let input_prov = self.action(input, lets);
+                    // To merge a new list of provenances, we look at the cross
+                    // produce of things we might know about each source.
+                    // TODO(mcsherry): this can be optimized to use datastructures
+                    // keyed by the source identifier.
                     let mut new_prov = Vec::new();
                     for l in prov {
-                        new_prov.extend(self.action(input, lets).iter().flat_map(|r| l.meet(r)))
+                        new_prov.extend(input_prov.iter().flat_map(|r| l.meet(r)))
                     }
                     prov = new_prov;
                 }
