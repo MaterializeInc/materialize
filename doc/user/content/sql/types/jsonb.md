@@ -19,7 +19,7 @@ Detail | Info
 **OID** | 3802
 
 Materialize does not yet support a type more similar to PostgreSQL's
-impplementation of `json`.
+implementation of `json`.
 
 ## Syntax
 
@@ -27,7 +27,7 @@ impplementation of `json`.
 
 Field | Use
 ------|-----
-_json&lowbar;string_ | A well-formed [JSON object](https://www.w3schools.com/js/js_json_syntax.asp).
+_json&lowbar;string_ | A well-formed [JSON object](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/JSON).
 
 ## JSONB functions + operators
 
