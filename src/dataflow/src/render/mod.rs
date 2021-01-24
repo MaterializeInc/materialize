@@ -104,33 +104,31 @@ use std::rc::Rc;
 use std::rc::Weak;
 use std::{any::Any, cell::RefCell};
 
+use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::{Arrange, ArrangeByKey};
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
-
-use differential_dataflow::hashable::Hashable;
+use differential_dataflow::operators::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
-
-use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
-use repr::adt::decimal::Significand;
+use timely::communication::Allocate;
+use timely::dataflow::operators::exchange::Exchange;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
-
-use timely::communication::Allocate;
-use timely::dataflow::operators::exchange::Exchange;
 use timely::worker::Worker as TimelyWorker;
 
 use dataflow_types::*;
 use expr::{GlobalId, Id, MapFilterProject, RelationExpr, ScalarExpr, SourceInstanceId};
+use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_avro::types::Value;
 use mz_avro::Schema;
 use ore::cast::CastFrom;
 use ore::collections::CollectionExt as _;
 use ore::iter::IteratorExt;
+use repr::adt::decimal::Significand;
 use repr::{Datum, RelationType, Row, RowArena, RowPacker, Timestamp};
 
 use crate::decode::{decode_avro_values, decode_values};
