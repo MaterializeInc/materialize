@@ -4510,6 +4510,7 @@ dependencies = [
  "anyhow",
  "datadriven",
  "fstrings",
+ "itertools",
  "ore",
  "quote",
  "syn",

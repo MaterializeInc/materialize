@@ -9,13 +9,24 @@
 
 //! Intermediate representation (IR) for codegen.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::iter;
 
 use anyhow::{bail, Result};
+use itertools::Itertools;
 use quote::ToTokens;
 
 /// The intermediate representation.
-pub type Ir = BTreeMap<String, Item>;
+pub struct Ir {
+    /// The items in the IR.
+    pub items: BTreeMap<String, Item>,
+    /// The generic parameters that appear throughout the IR.
+    ///
+    /// Walkabout assumes that generic parameters are named consistently
+    /// throughout the types in the IR. This field maps each generic parameter
+    /// to the union of all trait bounds required of that parameter.
+    pub generics: BTreeMap<String, BTreeSet<String>>,
+}
 
 /// An item in the IR.
 #[derive(Debug)]
@@ -24,13 +35,24 @@ pub enum Item {
     Struct(Struct),
     /// An enum item.
     Enum(Enum),
+    /// An abstract item, introduced via a generic parameter.
+    Abstract,
 }
 
 impl Item {
-    pub fn generics(&self) -> &syn::Generics {
+    pub fn fields<'a>(&'a self) -> Box<dyn Iterator<Item = &Field> + 'a> {
+        match self {
+            Item::Struct(s) => Box::new(s.fields.iter()),
+            Item::Enum(e) => Box::new(e.variants.iter().flat_map(|v| &v.fields)),
+            Item::Abstract => Box::new(iter::empty()),
+        }
+    }
+
+    pub fn generics(&self) -> &[ItemGeneric] {
         match self {
             Item::Struct(s) => &s.generics,
             Item::Enum(e) => &e.generics,
+            Item::Abstract => &[],
         }
     }
 }
@@ -40,8 +62,8 @@ impl Item {
 pub struct Struct {
     /// The fields of the struct.
     pub fields: Vec<Field>,
-    /// The generics on the struct.
-    pub generics: syn::Generics,
+    /// The generic parameters on the struct.
+    pub generics: Vec<ItemGeneric>,
 }
 
 /// An enum in the IRs.
@@ -49,8 +71,8 @@ pub struct Struct {
 pub struct Enum {
     /// The variants of the enum.
     pub variants: Vec<Variant>,
-    /// The generics on the enum.
-    pub generics: syn::Generics,
+    /// The generic parameters on the enum.
+    pub generics: Vec<ItemGeneric>,
 }
 
 /// A variant of an [`Enum`].
@@ -73,6 +95,15 @@ pub struct Field {
     pub ty: Type,
 }
 
+/// A generic parameter of an [`Item`].
+#[derive(Debug)]
+pub struct ItemGeneric {
+    /// The name of the generic parameter.
+    pub name: String,
+    /// The trait bounds on the generic parameter.
+    pub bounds: Vec<String>,
+}
+
 /// The type of a [`Field`].
 #[derive(Debug)]
 pub enum Type {
@@ -82,8 +113,9 @@ pub enum Type {
     Primitive,
     /// Abstract type.
     ///
-    /// Abstract types are required to implement `visit`.
-    Abstract(Vec<String>),
+    /// Abstract types are visited, but their default visit function does
+    /// nothing.
+    Abstract(String),
     /// An [`Option`] type..
     ///
     /// The value inside the option will need to be visited if the option is
@@ -109,50 +141,57 @@ pub enum Type {
 /// This is a very, very lightweight semantic analysis phase for Rust code. Our
 /// main goal is to determine the type of each field of a struct or enum
 /// variant, so we know how to visit it. See [`Type`] for details.
-pub(crate) fn analyze(items: &[syn::DeriveInput]) -> Result<Ir> {
-    let ir = items
-        .iter()
-        .map(|item| {
-            let name = item.ident.to_string();
-            let item = match &item.data {
-                syn::Data::Struct(s) => Item::Struct(Struct {
-                    fields: analyze_fields(&s.fields)?,
-                    generics: item.generics.clone(),
-                }),
-                syn::Data::Enum(e) => {
-                    let mut variants = vec![];
-                    for v in &e.variants {
-                        variants.push(Variant {
-                            name: v.ident.to_string(),
-                            fields: analyze_fields(&v.fields)?,
-                        });
-                    }
-                    Item::Enum(Enum {
-                        variants,
-                        generics: item.generics.clone(),
-                    })
-                }
-                syn::Data::Union(_) => bail!("Unable to analyze union: {}", item.ident),
-            };
-            Ok((name, item))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
-
-    for item in ir.values() {
-        match item {
-            Item::Struct(s) => validate_fields(&ir, &s.fields)?,
-            Item::Enum(e) => {
+pub(crate) fn analyze(syn_items: &[syn::DeriveInput]) -> Result<Ir> {
+    let mut items = BTreeMap::new();
+    for syn_item in syn_items {
+        let name = syn_item.ident.to_string();
+        let generics = analyze_generics(&syn_item.generics)?;
+        let item = match &syn_item.data {
+            syn::Data::Struct(s) => Item::Struct(Struct {
+                fields: analyze_fields(&s.fields)?,
+                generics,
+            }),
+            syn::Data::Enum(e) => {
+                let mut variants = vec![];
                 for v in &e.variants {
-                    validate_fields(&ir, &v.fields)?;
+                    variants.push(Variant {
+                        name: v.ident.to_string(),
+                        fields: analyze_fields(&v.fields)?,
+                    });
                 }
+                Item::Enum(Enum { variants, generics })
             }
+            syn::Data::Union(_) => bail!("Unable to analyze union: {}", syn_item.ident),
+        };
+        for field in item.fields() {
+            if let Type::Abstract(ty) = &field.ty {
+                items.insert(ty.clone(), Item::Abstract);
+            }
+        }
+        items.insert(name, item);
+    }
+
+    let mut generics = BTreeMap::<_, BTreeSet<String>>::new();
+    for item in items.values() {
+        for ig in item.generics() {
+            generics
+                .entry(ig.name.clone())
+                .or_default()
+                .extend(ig.bounds.clone());
         }
     }
 
-    Ok(ir)
+    for item in items.values() {
+        validate_fields(&items, item.fields())?
+    }
+
+    Ok(Ir { items, generics })
 }
 
-fn validate_fields(items: &BTreeMap<String, Item>, fields: &[Field]) -> Result<()> {
+fn validate_fields<'a, I>(items: &BTreeMap<String, Item>, fields: I) -> Result<()>
+where
+    I: IntoIterator<Item = &'a Field>,
+{
     for f in fields {
         match &f.ty {
             Type::Local(s) if !items.contains_key(s) => {
@@ -179,16 +218,59 @@ fn analyze_fields(fields: &syn::Fields) -> Result<Vec<Field>> {
         .collect()
 }
 
+fn analyze_generics(generics: &syn::Generics) -> Result<Vec<ItemGeneric>> {
+    let mut out = vec![];
+    for g in generics.params.iter() {
+        match g {
+            syn::GenericParam::Type(syn::TypeParam { ident, bounds, .. }) => {
+                let name = ident.to_string();
+                let bounds = analyze_generic_bounds(bounds)?;
+                // Generic parameter names that end in '2' conflict with the
+                // folder's name generation.
+                if name.ends_with('2') {
+                    bail!("Generic parameters whose name ends in '2' conflict with folder's naming scheme: {}", name);
+                }
+                out.push(ItemGeneric { name, bounds });
+            }
+            _ => {
+                bail!(
+                    "Unable to analyze non-type generic parameter: {}",
+                    g.to_token_stream()
+                )
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn analyze_generic_bounds<'a, I>(bounds: I) -> Result<Vec<String>>
+where
+    I: IntoIterator<Item = &'a syn::TypeParamBound>,
+{
+    let mut out = vec![];
+    for b in bounds {
+        match b {
+            syn::TypeParamBound::Trait(t) if t.path.segments.len() != 1 => {
+                bail!(
+                    "Unable to analyze trait bound with more than one path segment: {}",
+                    b.to_token_stream()
+                )
+            }
+            syn::TypeParamBound::Trait(t) => out.push(t.path.segments[0].ident.to_string()),
+            _ => bail!("Unable to analyze non-trait bound: {}", b.to_token_stream()),
+        }
+    }
+    Ok(out)
+}
+
 fn analyze_type(ty: &syn::Type) -> Result<Type> {
     match ty {
         syn::Type::Path(syn::TypePath { qself: None, path }) => {
             match path.segments.len() {
-                2 => Ok(Type::Abstract(
-                    path.segments
-                        .iter()
-                        .map(|s| s.ident.to_string())
-                        .collect::<Vec<String>>(),
-                )),
+                2 => {
+                    let name = path.segments.iter().map(|s| s.ident.to_string()).join("::");
+                    Ok(Type::Abstract(name))
+                }
                 1 => {
                     let segment = path.segments.last().unwrap();
                     let segment_name = segment.ident.to_string();
