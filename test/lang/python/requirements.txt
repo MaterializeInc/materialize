@@ -1,3 +1,3 @@
 psycopg2==2.8.6
-git+https://github.com/psycopg/psycopg3.git@76f81436f27adf6cd2a13e4e0d39e31ec7e0a037#subdirectory=psycopg3
+git+https://github.com/psycopg/psycopg3.git@4f053f14901454a7c7895b527ddeb9d8ab57d7fe#subdirectory=psycopg3
 SQLAlchemy==1.3.20

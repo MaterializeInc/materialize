@@ -58,19 +58,19 @@ class SmokeTest(unittest.TestCase):
                 self.assertEqual(b, "b")
                 self.assertEqual(cur.fetchone(), None)
 
-    def test_psycopg3_tail(self):
+    def test_psycopg3_tail_copy(self):
         """Test tail with psycopg3 via its new binary COPY decoding support."""
         with psycopg3.connect(MATERIALIZED_URL) as conn:
             conn.autocommit = True
             with conn.cursor() as cur:
                 # Create a table with one row of data.
-                cur.execute("CREATE TABLE psycopg3_tail (a int, b text)")
-                cur.execute("INSERT INTO psycopg3_tail VALUES (1, 'a')")
+                cur.execute("CREATE TABLE psycopg3_tail_copy (a int, b text)")
+                cur.execute("INSERT INTO psycopg3_tail_copy VALUES (1, 'a')")
                 conn.autocommit = False
 
                 # Start a tail using the binary copy protocol.
                 with cur.copy(
-                    "COPY (TAIL psycopg3_tail) TO STDOUT (FORMAT BINARY)"
+                    "COPY (TAIL psycopg3_tail_copy) TO STDOUT (FORMAT BINARY)"
                 ) as copy:
                     copy.set_types(
                         [
@@ -92,7 +92,9 @@ class SmokeTest(unittest.TestCase):
                     with psycopg3.connect(MATERIALIZED_URL) as conn2:
                         conn2.autocommit = True
                         with conn2.cursor() as cur2:
-                            cur2.execute("INSERT INTO psycopg3_tail VALUES (2, 'b')")
+                            cur2.execute(
+                                "INSERT INTO psycopg3_tail_copy VALUES (2, 'b')"
+                            )
 
                     # Validate the new row, again ignoring the timestamp column.
                     (ts, diff, a, b) = copy.read_row()
@@ -103,3 +105,39 @@ class SmokeTest(unittest.TestCase):
                     # The tail won't end until we send a cancel request.
                     conn.cancel()
                     self.assertEqual(copy.read_row(), None)
+
+    def test_psycopg3_tail_stream(self):
+        """Test tail with psycopg3 via its new streaming query support."""
+        with psycopg3.connect(MATERIALIZED_URL) as conn:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                # Create a table with one row of data.
+                cur.execute("CREATE TABLE psycopg3_tail_stream (a int, b text)")
+                cur.execute("INSERT INTO psycopg3_tail_stream VALUES (1, 'a')")
+                conn.autocommit = False
+
+                # Start a tail using the streaming query API.
+                stream = cur.stream("TAIL psycopg3_tail_stream")
+
+                # Validate the first row, but ignore the timestamp column.
+                (ts, diff, a, b) = next(stream)
+                self.assertEqual(diff, 1)
+                self.assertEqual(a, 1)
+                self.assertEqual(b, "a")
+
+                # Insert another row from another connection to simulate an
+                # update arriving.
+                with psycopg3.connect(MATERIALIZED_URL) as conn2:
+                    conn2.autocommit = True
+                    with conn2.cursor() as cur2:
+                        cur2.execute("INSERT INTO psycopg3_tail_stream VALUES (2, 'b')")
+
+                # Validate the new row, again ignoring the timestamp column.
+                (ts, diff, a, b) = next(stream)
+                self.assertEqual(diff, 1)
+                self.assertEqual(a, 2)
+                self.assertEqual(b, "b")
+
+                # The tail won't end until we send a cancel request.
+                conn.cancel()
+                self.assertEqual(next(stream, None), None)
