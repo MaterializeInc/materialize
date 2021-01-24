@@ -749,6 +749,7 @@ where
                 collection
             }
             SinkEnvelope::Tail { emit_progress } => keyed
+                .consolidate()
                 .inner
                 .map({
                     let mut rp = RowPacker::new();

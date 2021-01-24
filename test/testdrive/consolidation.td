@@ -113,6 +113,17 @@ $ kafka-ingest format=avro topic=tx schema=${tx-schema}
 $ kafka-verify format=avro sink=materialize.public.nums_sink
 {"before": null, "after": {"row": {"num": 5}}}
 
+# Validate that `TAIL` is similarly consolidated.
+# This protects against regression of #5421.
+
+> BEGIN
+> DECLARE cur CURSOR FOR TAIL nums AS OF 3
+> FETCH ALL cur
+timestamp  diff  num
+--------------------
+3          1     5
+> COMMIT
+
 # ==> Test compaction.
 
 # Each transaction that has been updated so far should be separately visible
