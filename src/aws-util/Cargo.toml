@@ -13,5 +13,5 @@ rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_sts = { git = "https://github.com/rusoto/rusoto.git" }
-serde = { version = "1.0.0", features = ["derive"] }
+serde = { version = "1.0.122", features = ["derive"] }
 tokio = "1.1.0"
