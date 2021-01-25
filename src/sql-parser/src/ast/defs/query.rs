@@ -26,8 +26,13 @@ use std::hash::Hash;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{Expr, FunctionArgs, Ident, ObjectName, SqlOption};
 
+// This represents the metadata that lives next to an AST, as we take it through
+// various stages in the planning process.
 pub trait AstInfo: Clone {
+    // The type used for table references.
     type Table: AstDisplay + Clone + Hash + Debug + Eq;
+    // The type stored next to CTEs for their assigned ID.
+    type Id: Clone + Hash + Debug + Eq;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
@@ -35,6 +40,7 @@ pub struct Raw;
 
 impl AstInfo for Raw {
     type Table = ObjectName;
+    type Id = ();
 }
 
 /// The most complete variant of a `SELECT` query expression, optionally
@@ -285,6 +291,7 @@ impl<T: AstInfo> AstDisplay for Distinct<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Cte<T: AstInfo> {
     pub alias: TableAlias,
+    pub id: T::Id,
     pub query: Query<T>,
 }
 

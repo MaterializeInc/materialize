@@ -255,7 +255,14 @@ macro_rules! sql_op {
                     .map(|(i, e)| (i + 1, ecx.scalar_type(e)))
                     .collect(),
             ));
-            let qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
+            let mut qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
+
+            // Desugar the expression
+            let mut expr = EXPR.clone();
+            transform_ast::transform_expr(&scx, &mut expr)?;
+
+            let expr = query::resolve_names_expr(&mut qcx, expr)?;
+
             let ecx = ExprContext {
                 qcx: &qcx,
                 name: "static function definition",
@@ -264,10 +271,6 @@ macro_rules! sql_op {
                 allow_aggregates: false,
                 allow_subqueries: true,
             };
-
-            // Desugar the expression
-            let mut expr = EXPR.clone();
-            transform_ast::transform_expr(&scx, &mut expr)?;
 
             // Plan the expression.
             let mut expr = query::plan_expr(&ecx, &expr)?.type_as_any(&ecx)?;
