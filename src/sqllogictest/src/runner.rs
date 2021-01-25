@@ -25,6 +25,7 @@
 //!       compare to expected results
 //!       if wrong, record the error
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -48,7 +49,7 @@ use tokio::runtime::Runtime;
 use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
-use tokio_postgres::{connect, NoTls, Row, SimpleQueryMessage};
+use tokio_postgres::{NoTls, Row, SimpleQueryMessage};
 use uuid::Uuid;
 
 use pgrepr::{Interval, Jsonb, Numeric, Value};
@@ -272,7 +273,8 @@ impl Outcomes {
 pub(crate) struct Runner {
     // Drop order matters for these fields.
     client: tokio_postgres::Client,
-    _server: materialized::Server,
+    clients: HashMap<String, tokio_postgres::Client>,
+    server: materialized::Server,
     _temp_dir: TempDir,
 }
 
@@ -516,23 +518,13 @@ impl Runner {
             telemetry_url: None,
         };
         let server = materialized::serve(mz_config, config.runtime.clone()).await?;
-        let addr = server.local_addr();
-        let (client, connection) = connect(
-            &format!("host={} port={} user=root", addr.ip(), addr.port()),
-            NoTls,
-        )
-        .await?;
-
-        tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
+        let client = connect(&server).await;
 
         Ok(Runner {
-            _server: server,
+            server,
             _temp_dir: temp_dir,
             client,
+            clients: HashMap::new(),
         })
     }
 
@@ -573,11 +565,12 @@ impl Runner {
                 location,
             } => self.run_query(sql, output, location.clone()).await,
             Record::Simple {
+                conn,
                 sql,
                 output,
                 location,
                 ..
-            } => self.run_simple(sql, output, location.clone()).await,
+            } => self.run_simple(*conn, sql, output, location.clone()).await,
             _ => Ok(Outcome::Success),
         }
     }
@@ -801,13 +794,28 @@ impl Runner {
         Ok(Outcome::Success)
     }
 
+    async fn get_conn(&mut self, name: Option<&str>) -> &tokio_postgres::Client {
+        match name {
+            None => &self.client,
+            Some(name) => {
+                if !self.clients.contains_key(name) {
+                    let client = connect(&self.server).await;
+                    self.clients.insert(name.into(), client);
+                }
+                self.clients.get(name).unwrap()
+            }
+        }
+    }
+
     async fn run_simple<'a>(
         &mut self,
+        conn: Option<&'a str>,
         sql: &'a str,
         output: &'a Output,
         location: Location,
     ) -> Result<Outcome<'a>, anyhow::Error> {
-        let actual = Output::Values(match self.client.simple_query(sql).await {
+        let client = self.get_conn(conn).await;
+        let actual = Output::Values(match client.simple_query(sql).await {
             Ok(result) => result
                 .into_iter()
                 .map(|m| match m {
@@ -835,6 +843,23 @@ impl Runner {
             Ok(Outcome::Success)
         }
     }
+}
+
+async fn connect(server: &materialized::Server) -> tokio_postgres::Client {
+    let addr = server.local_addr();
+    let (client, connection) = tokio_postgres::connect(
+        &format!("host={} port={} user=root", addr.ip(), addr.port()),
+        NoTls,
+    )
+    .await
+    .unwrap();
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("connection error: {}", e);
+        }
+    });
+    client
 }
 
 pub trait WriteFmt {

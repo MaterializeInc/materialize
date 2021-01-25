@@ -15,7 +15,7 @@ use sql::plan::Params;
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
-use crate::session::Session;
+use crate::session::{EndTransactionAction, Session};
 
 /// A client for a [`Coordinator`](crate::Coordinator).
 ///
@@ -138,6 +138,18 @@ impl SessionClient {
     pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, anyhow::Error> {
         self.send(|tx, session| Command::Execute {
             portal_name,
+            session,
+            tx,
+        })
+        .await
+    }
+
+    pub async fn end_transaction(
+        &mut self,
+        action: EndTransactionAction,
+    ) -> Result<ExecuteResponse, anyhow::Error> {
+        self.send(|tx, session| Command::Commit {
+            action,
             session,
             tx,
         })

@@ -79,6 +79,11 @@ these lines as a simple query over pgwire. This is needed because the
 other directives use the extended protocol, and we needed a way to test
 multi-statement queries and implicit transactions.
 
+An optional `conn=<name>` can be added to execute the message on a
+named connection. It will be created on first use. This can be used to
+test transaction isolation or otherwise do things that require multiple
+connections.
+
 The output is one line per row, one "COMPLETE X" (where X is the
 number of affected rows) per statement, or an error message.
 
