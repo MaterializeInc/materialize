@@ -29,5 +29,5 @@ rand = "0.8.2"
 repr = { path = "../repr" }
 sql = { path = "../sql" }
 tokio = "1.1.0"
-tokio-openssl = "0.6.0"
+tokio-openssl = "0.6.1"
 tokio-util = { version = "0.6.0", features = ["codec"] }
