@@ -42,18 +42,14 @@ pub fn tail<G>(
                     while cursor.val_valid(&batch) {
                         let row = cursor.val(&batch);
                         cursor.map_times(&batch, |time, diff| {
-                            assert!(*diff >= 0, "negative multiplicities sinked in tail");
-                            let diff = *diff as usize;
+                            assert!(*diff == 1, "non-unary diff sinked in tail");
                             let should_emit = if connector.strict {
                                 connector.frontier.less_than(time)
                             } else {
                                 connector.frontier.less_equal(time)
                             };
                             if should_emit {
-                                for _ in 0..diff {
-                                    // Add the unpacked timestamp so we can sort by them later.
-                                    results.push((*time, row.clone()));
-                                }
+                                results.push(row.clone());
                             }
                         });
                         cursor.step_val(&batch);
@@ -62,11 +58,11 @@ pub fn tail<G>(
                 }
             }
 
-            // Sort results by time and convert to Vec<Row>. We use stable sort here even
-            // though it is slower because it will produce deterministic results since the
-            // cursor will always produce rows in the same order.
-            results.sort_by_key(|(time, _)| *time);
-            let mut results: Vec<Row> = results.into_iter().map(|(_, row)| row).collect();
+            // Sort results by time, which is the first column in the row. We
+            // use stable sort here even though it is slower because it will
+            // produce deterministic results since the cursor will always
+            // produce rows in the same order.
+            results.sort_by(|row1, row2| row1.unpack_first().cmp(&row2.unpack_first()));
 
             if connector.emit_progress {
                 if let Some(upper) = batch_upper(batches.last()) {
