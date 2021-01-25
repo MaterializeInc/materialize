@@ -26,6 +26,8 @@ skip = [
     { name = "num-bigint", version = "0.2.6" }
 ]
 deny = [
+    # We've standardized on clap/structopt instead of getopts.
+    { name = "getopts" },
     # Strum has suspect code quality and includes many unneeded features. Use
     # more targeted enum macro crates, e.g. `enum-kinds`.
     { name = "strum" },
