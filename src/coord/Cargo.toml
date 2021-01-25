@@ -39,6 +39,7 @@ rusqlite = { version = "0.24.0", features = ["bundled", "unlock_notify"] }
 serde = "1.0.123"
 serde_json = "1.0.60"
 sql = { path = "../sql" }
+sql-parser = { path = "../sql-parser" }
 symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.1.0"
@@ -50,3 +51,4 @@ uuid = { version = "0.8.2", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3.2.0"
+datadriven = "0.5.0"

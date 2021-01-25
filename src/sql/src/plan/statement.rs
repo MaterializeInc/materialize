@@ -17,6 +17,7 @@ use std::rc::Rc;
 
 use anyhow::bail;
 
+use expr::GlobalId;
 use ore::collections::CollectionExt;
 use repr::{ColumnType, RelationDesc, ScalarType};
 
@@ -326,6 +327,10 @@ impl<'a> StatementContext<'a> {
     pub fn resolve_function(&self, name: ObjectName) -> Result<&dyn CatalogItem, PlanError> {
         let name = normalize::object_name(name)?;
         Ok(self.catalog.resolve_function(&name)?)
+    }
+
+    pub fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
+        self.catalog.get_item_by_id(id)
     }
 
     pub fn experimental_mode(&self) -> bool {
