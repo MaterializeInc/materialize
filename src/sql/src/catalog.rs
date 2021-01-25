@@ -249,7 +249,12 @@ pub enum CatalogError {
     /// Unknown item.
     UnknownItem(String),
     /// Invalid attempt to depend on a non-dependable item.
-    InvalidDependency(String, &'static str),
+    InvalidDependency {
+        /// The invalid item's name.
+        name: String,
+        /// The invalid item's type.
+        typ: CatalogItemType,
+    },
 }
 
 impl fmt::Display for CatalogError {
@@ -258,10 +263,16 @@ impl fmt::Display for CatalogError {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
-            Self::InvalidDependency(name, type_string) => write!(
+            Self::InvalidDependency { name, typ } => write!(
                 f,
-                "catalog item '{}' is a {} and so cannot be depended upon",
-                name, type_string,
+                "catalog item '{}' is {} {} and so cannot be depended upon",
+                name,
+                if matches!(typ, CatalogItemType::Index) {
+                    "an"
+                } else {
+                    "a"
+                },
+                typ,
             ),
         }
     }
