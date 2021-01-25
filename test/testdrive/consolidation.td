@@ -7,42 +7,19 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set trxschemakey={
-      "name": "io.debezium.connector.common.TransactionMetadataKey",
-      "type": "record",
-      "fields": [
-          {
-              "name": "id",
-              "type": "string"
-          }
-      ]
-  }
+# Test consolidation and compaction behavior.
+#
+# The various tests in this file use the following Debezium-formatted Kafka
+# topics. The first topic, `nums`, is a basic data topic that contains one
+# bigint field. The second topic, `tx`, mimics a Debezium transactional
+# metadata topic that groups updates from `nums` into transactions.
+#
+# Using a transactional metadata topic like this allows us to tightly control
+# the timestamp at which data is ingested into Materialize. Data from the first
+# transaction is assigned timestamp 1, data from the second is assigned
+# timestamp 2, and so on.
 
-$ set trxschema={
-    "type":"record", "name":"TransactionMetadataValue", "namespace":"io.debezium.connector.common",
-    "fields":[
-    {"name":"status","type":"string"},
-    {"name":"id","type": "string"},
-    {"name": "event_count",
-    "type": ["null", "long"],
-    "default": null
-    },
-    {"name":"data_collections","type":["null",{"type":"array",
-    "items": {"type":"record",
-    "name":"ConnectDefault",
-    "namespace":"io.confluent.connect.Avro",
-    "fields": [ {
-    "name": "data_collection",
-    "type": "string"
-    },
-    {
-    "name": "event_count",
-    "type": "long" }]}}],
-    "default": null}],
-    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
-    }
-
-$ set names-schema={
+$ set nums-schema={
     "type": "record",
     "name": "envelope",
     "fields": [
@@ -52,10 +29,7 @@ $ set names-schema={
           {
             "name": "row",
             "type": "record",
-            "fields": [
-              {"name": "num", "type": "long"},
-              {"name": "name", "type": "string"}
-            ]
+            "fields": [{"name": "num", "type": "long"}]
           },
           "null"
         ]
@@ -64,87 +38,149 @@ $ set names-schema={
     ]
   }
 
-$ kafka-create-topic topic=data-consistency
+$ set tx-schema={
+    "type": "record",
+    "name": "TransactionMetadataValue",
+    "namespace": "io.debezium.connector.common",
+    "fields": [
+      {"name": "status", "type": "string"},
+      {"name": "id", "type": "string"},
+      {
+        "name": "event_count",
+        "type": ["null", "long"],
+        "default": null
+      },
+      {
+        "name": "data_collections",
+        "type": [
+          "null",
+          {
+            "type": "array",
+            "items": {
+              "type": "record",
+              "name": "ConnectDefault",
+              "namespace": "io.confluent.connect.Avro",
+              "fields": [
+                {"name": "data_collection", "type": "string"},
+                {"name": "event_count", "type": "long"}
+              ]
+            }
+          }
+        ],
+        "default": null
+      }
+    ],
+    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
+  }
 
-$ kafka-create-topic topic=names
+$ kafka-create-topic topic=nums
+$ kafka-create-topic topic=tx
 
-$ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=1
-{"before": null, "after": {"row": {"num": 1, "name": "one"}}}
-{"before": {"row": {"num": 1, "name": "one"}}, "after": {"row": {"num": 2, "name": "two"}}}
-{"before": {"row": {"num": 2, "name": "two"}}, "after": {"row": {"num": 3, "name": "three"}}}
-
-$ kafka-ingest format=avro topic=data-consistency timestamp=1 schema=${trxschemakey}
-{"id": "1"}
-
-$ kafka-ingest format=avro topic=data-consistency timestamp=1 schema=${trxschema}
-{"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
-{"status":"END","id":"1","event_count":{"long": 3},"data_collections":{"array": [{"event_count": 3, "data_collection": "testdrive-names-${testdrive.seed}"}]}}
-
-> CREATE MATERIALIZED SOURCE names
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-names-${testdrive.seed}'
-  with (consistency='testdrive-data-consistency-${testdrive.seed}')
-  FORMAT AVRO USING SCHEMA '${names-schema}'
+> CREATE MATERIALIZED SOURCE nums
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nums-${testdrive.seed}'
+  WITH (consistency = 'testdrive-tx-${testdrive.seed}')
+  FORMAT AVRO USING SCHEMA '${nums-schema}'
   ENVELOPE DEBEZIUM
 
-> CREATE SINK snk1 FROM names
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk1'
+# ==> Test consolidation.
+
+# Ingest several updates that consolidate. Some of these updates are in one
+# transaction, and some of them are in their own transactinos.
+
+$ kafka-ingest format=avro topic=nums schema=${nums-schema}
+{"before": null, "after": {"row": {"num": 1}}}
+{"before": {"row": {"num": 1}}, "after": {"row": {"num": 2}}}
+{"before": {"row": {"num": 2}}, "after": {"row": {"num": 3}}}
+{"before": {"row": {"num": 3}}, "after": {"row": {"num": 4}}}
+{"before": {"row": {"num": 4}}, "after": {"row": {"num": 5}}}
+
+$ kafka-ingest format=avro topic=tx schema=${tx-schema}
+{"status": "BEGIN", "id": "1", "event_count": null, "data_collections": null}
+{"status": "END", "id": "1", "event_count": {"long": 3}, "data_collections": {"array": [{"event_count": 3, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
+{"status": "BEGIN", "id": "2", "event_count": null, "data_collections": null}
+{"status": "END", "id": "2", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
+{"status": "BEGIN", "id": "3", "event_count": null, "data_collections": null}
+{"status": "END", "id": "3", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
+
+# Test that a Debezium sink created `AS OF 3` (the latest completed timestamp)
+# is fully consolidated.
+
+> CREATE SINK nums_sink FROM nums
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'nums-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  AS OF 3
 
-$ kafka-verify format=avro sink=materialize.public.snk1
-{"before": null, "after": {"row": {"num": 3, "name": "three"}}}
+$ kafka-verify format=avro sink=materialize.public.nums_sink
+{"before": null, "after": {"row": {"num": 5}}}
 
-$ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=2
-{"before": {"row": {"num": 3, "name": "three"}}, "after": {"row": {"num": 4, "name": "four"}}}
-{"before": {"row": {"num": 4, "name": "four"}}, "after": {"row": {"num": 5, "name": "five"}}}
+# Validate that `TAIL` is similarly consolidated.
+# This protects against regression of #5421.
 
-$ kafka-ingest format=avro topic=data-consistency timestamp=2 schema=${trxschemakey}
-{"id": "2"}
-{"id": "3"}
+> BEGIN
+> DECLARE cur CURSOR FOR TAIL nums AS OF 3
+> FETCH ALL cur
+timestamp  diff  num
+--------------------
+3          1     5
+> COMMIT
 
-$ kafka-ingest format=avro topic=data-consistency timestamp=2 schema=${trxschema}
-{"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
-{"status":"END","id":"2","event_count":{"long": 1},"data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}}
-{"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
-{"status":"END","id":"3","event_count":{"long": 1},"data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}}
+# ==> Test compaction.
 
-> SELECT * FROM names AS OF 2;
-num name
----------
-4 "four"
+# Each transaction that has been updated so far should be separately visible
+# (i.e., not compacted away).
 
-> ALTER INDEX materialize.public.names_primary_idx SET(logical_compaction_window='1ms')
+> SELECT * FROM nums AS OF 1
+3
+> SELECT * FROM nums AS OF 2
+4
+> SELECT * FROM nums AS OF 3
+5
 
-$ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=3
-{"before": {"row": {"num": 5, "name": "five"}}, "after": {"row": {"num": 6, "name": "six"}}}
+# Decrease the compaction window to 1ms and ingest some new data in transaction
+# 4.
 
-$ kafka-ingest format=avro topic=data-consistency timestamp=3 schema=${trxschemakey}
-{"id": "4"}
+> ALTER INDEX materialize.public.nums_primary_idx
+  SET (logical_compaction_window = '1ms')
 
-$ kafka-ingest format=avro topic=data-consistency timestamp=3 schema=${trxschema}
-{"status":"BEGIN","id":"4","event_count":null,"data_collections":null}
-{"status":"END","id":"4","event_count":{"long": 1},"data_collections":{"array": [{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}}
+$ kafka-ingest format=avro topic=nums schema=${nums-schema}
+{"before": {"row": {"num": 5}}, "after": {"row": {"num": 6}}}
 
-! SELECT * FROM names AS OF 2;
+$ kafka-ingest format=avro topic=tx schema=${tx-schema}
+{"status": "BEGIN", "id": "4", "event_count": null, "data_collections": null}
+{"status": "END", "id": "4", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
+
+# Data from older transactions should be immediately compacted to the timestamp
+# of the latest transaction (i.e., 4).
+
+! SELECT * FROM nums AS OF 2
 Timestamp (2) is not valid for all inputs
+! SELECT * FROM nums AS OF 3
+Timestamp (3) is not valid for all inputs
+> SELECT * FROM nums AS OF 4
+6
 
-# Reset the compaction window back to default (currently 60,000)
-> ALTER INDEX materialize.public.names_primary_idx RESET(logical_compaction_window)
+# Reset the compaction window back to default (currently 60s) and advance the
+# number in transactions 5 and 6.
 
-$ kafka-ingest format=avro topic=names schema=${names-schema} timestamp=4
-{"before": {"row": {"num": 6, "name": "six"}}, "after": {"row": {"num": 7, "name": "seven"}}}
-{"before": {"row": {"num": 7, "name": "seven"}}, "after": {"row": {"num": 8, "name": "eight"}}}
+> ALTER INDEX materialize.public.nums_primary_idx
+  RESET (logical_compaction_window)
 
-$ kafka-ingest format=avro topic=data-consistency timestamp=4 schema=${trxschemakey}
-{"id": "5"}
-{"id": "6"}
+$ kafka-ingest format=avro topic=nums schema=${nums-schema}
+{"before": {"row": {"num": 6}}, "after": {"row": {"num": 7}}}
+{"before": {"row": {"num": 7}}, "after": {"row": {"num": 8}}}
 
-$ kafka-ingest format=avro topic=data-consistency timestamp=4 schema=${trxschema}
-{"status":"BEGIN","id":"5","event_count":null,"data_collections":null}
-{"status":"END","id":"5","event_count":{"long": 1},"data_collections":{"array": [{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}}
-{"status":"BEGIN","id":"6","event_count":null,"data_collections":null}
-{"status":"END","id":"6","event_count":{"long": 1},"data_collections":{"array": [{"event_count": 1, "data_collection": "testdrive-names-${testdrive.seed}"}]}}
+$ kafka-ingest format=avro topic=tx schema=${tx-schema}
+{"status": "BEGIN", "id": "5", "event_count": null, "data_collections": null}
+{"status": "END", "id": "5", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
+{"status": "BEGIN", "id": "6", "event_count": null, "data_collections": null}
+{"status": "END", "id": "6", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
 
-> SELECT * FROM names AS OF 4;
-num name
----------
-6 "six"
+# Timestamps 4, 5, and 6 should all be available due to the longer compaction
+# window.
+
+> SELECT * FROM nums AS OF 4
+6
+> SELECT * FROM nums AS OF 5
+7
+> SELECT * FROM nums AS OF 6
+8

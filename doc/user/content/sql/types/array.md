@@ -6,7 +6,7 @@ menu:
     parent: sql-types
 ---
 
-{{< version-added v0.5.0 >}}
+{{< version-added v0.5.0 />}}
 
 Arrays are a multidimensional sequence of any non-array type.
 
