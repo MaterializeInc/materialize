@@ -60,7 +60,7 @@ create_source ::=
 create_source_csv_file ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
   ('DELIMITED BY' char)?
 create_source_csv_kafka ::=
@@ -103,7 +103,7 @@ create_source_protobuf_kinesis ::=
 create_source_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
-  'FROM' 'FILE' path ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' (
     'REGEX' regex |
     'TEXT' |
