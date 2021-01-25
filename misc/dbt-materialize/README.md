@@ -5,16 +5,19 @@
 Note, this plugin is a work in progress, and not yet suitable for production.
 
 ### Installation
-This plugin can be installed via pip:
-```
-$ pip install dbt-materialize
+
+Once this repo is cloned locally, it can be installed via pip:
+```nofmt
+git clone https://github.com/MaterializeInc/materialize
+pip install materialize/dbt-materialize
 ```
 
 ### Configuring your profile
 
 [Materialize](http://materialize.io) is based on the Postgres database protocols, so use the
 [dbt postgres settings](https://docs.getdbt.com/docs/profile-postgres) in your connection profile,
-only substitute `type: materialize` for `type: postgres`.
+only substituting `type: materialize` for `type: postgres`. Sample profiles can be found in
+[sample_profiles.yml](dbt/include/materialize/sample_profiles.yml).
 
 ## Supported Features
 
@@ -36,7 +39,7 @@ For more information, check out [our documentation](https://materialize.com/docs
 ### Seeds
 
 [`dbt seed`](https://docs.getdbt.com/reference/commands/seed/) will create a static materialized
-view from a csv file. You will not be able to add to or update this view after it has been created.
+view from a CSV file. You will not be able to add to or update this view after it has been created.
 
 ### Hooks
 

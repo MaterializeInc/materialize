@@ -65,13 +65,13 @@ class MaterializeAdapter(PostgresAdapter):
 
         relations = []
         quote_policy = {"database": True, "schema": True, "identifier": True}
-        for _view, _type, _materialized in full_views.rows:
-            dbt_type = "table" if _materialized else "view"
+        for view, type, materialized in full_views.rows:
+            dbt_type = "table" if materialized else "view"
             relations.append(
                 self.Relation.create(
                     database=schema_relation.database,
                     schema=schema_relation.schema,
-                    identifier=_view,
+                    identifier=view,
                     quote_policy=quote_policy,
                     type=dbt_type,
                 )

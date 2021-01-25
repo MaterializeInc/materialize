@@ -54,14 +54,13 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         # This is needed because the dbt-adapter-tests commit after executing SQL,
         # but Materialize can't handle all of the required transactions.
         # https://github.com/fishtown-analytics/dbt/blob/42a85ac39f34b058678fd0c03ff8e8d2835d2808/test/integration/base.py#L681
-        if connection.transaction_open is False:
+        if not connection.transaction_open:
             logger.debug(
-                'Tried to commit without a transaction on connection "{}"'.format(
-                    connection.name
-                )
+                'Tried to commit without a transaction on connection "%s"',
+                connection.name,
             )
 
-        logger.debug("On {}: COMMIT".format(connection.name))
+        logger.debug("On %s: COMMIT", connection.name)
         self.add_commit_query()
 
         connection.transaction_open = False
