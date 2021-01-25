@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from dbt.adapters.materialize.connections import MaterializeConnectionManager
 from dbt.adapters.materialize.connections import MaterializeCredentials
 from dbt.adapters.materialize.impl import MaterializeAdapter
 
