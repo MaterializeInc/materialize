@@ -99,9 +99,25 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
             let redo = a.action.redo(&mut state);
             redo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
         }
-        state.reset_kinesis().await?;
+        let mut errors = Vec::new();
+        if let Err(e) = state.reset_s3().await {
+            errors.push(e);
+        }
+        if let Err(e) = state.reset_kinesis().await {
+            errors.push(e);
+        }
         drop(state);
-        state_cleanup.await?;
+        if let Err(e) = state_cleanup.await {
+            errors.push(e);
+        }
+
+        if !errors.is_empty() {
+            return Err(Error::General {
+                ctx: "Failed to clean up state at shut down".into(),
+                causes: errors.into_iter().map(Into::into).collect(),
+                hints: Vec::new(),
+            });
+        }
     }
     Ok(())
 }

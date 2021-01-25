@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::future::Future;
 use std::net::ToSocketAddrs;
@@ -22,12 +22,13 @@ use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use rusoto_credential::AwsCredentials;
 use rusoto_kinesis::{DeleteStreamInput, Kinesis, KinesisClient};
+use rusoto_s3::{DeleteBucketRequest, DeleteObjectRequest, ListObjectsV2Request, S3Client, S3};
 use url::Url;
 
 use aws_util::aws;
 use repr::strconv;
 
-use crate::error::{Error, InputError, ResultExt};
+use crate::error::{DynError, Error, InputError, ResultExt};
 use crate::parser::{Command, PosCommand, SqlOutput};
 use crate::util;
 
@@ -35,6 +36,7 @@ mod avro_ocf;
 mod file;
 mod kafka;
 mod kinesis;
+mod s3;
 mod sleep;
 mod sql;
 
@@ -75,6 +77,7 @@ pub struct Config {
 }
 
 pub struct State {
+    /// A random number to distinguish each TestDrive run
     seed: u32,
     temp_dir: tempfile::TempDir,
     materialized_catalog_path: Option<PathBuf>,
@@ -93,6 +96,8 @@ pub struct State {
     aws_credentials: AwsCredentials,
     kinesis_client: KinesisClient,
     kinesis_stream_names: Vec<String>,
+    s3_client: S3Client,
+    s3_buckets_created: BTreeSet<String>,
 }
 
 impl State {
@@ -137,6 +142,77 @@ impl State {
                 .err_ctx(format!("deleting Kinesis stream: {}", stream_name))?;
         }
         Ok(())
+    }
+
+    /// Delete S3 buckets that were created in this run
+    pub async fn reset_s3(&mut self) -> Result<(), Error> {
+        let mut errors: Vec<DynError> = Vec::new();
+        for bucket in &self.s3_buckets_created {
+            if let Err(e) = self.delete_bucket_objects(bucket.clone()).await {
+                errors.push(e.into());
+            }
+
+            let res = self
+                .s3_client
+                .delete_bucket(DeleteBucketRequest {
+                    bucket: bucket.into(),
+                    expected_bucket_owner: None,
+                })
+                .await;
+
+            if let Err(e) = res {
+                errors.push(e.into());
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::General {
+                ctx: format!("deleting S3 buckets: {} errors", errors.len()),
+                causes: errors,
+                hints: Vec::new(),
+            })
+        }
+    }
+
+    async fn delete_bucket_objects(&self, bucket: String) -> Result<(), Error> {
+        ore::retry::retry_for(Duration::from_secs(5), |_| async {
+            // loop until error or response has no continuation token
+            let mut continuation_token = None;
+            loop {
+                let response = self
+                    .s3_client
+                    .list_objects_v2(ListObjectsV2Request {
+                        bucket: bucket.clone(),
+                        continuation_token: continuation_token.take(),
+                        ..Default::default()
+                    })
+                    .await
+                    .with_err_ctx(|| format!("listing objects for bucket {}", bucket))?;
+
+                if let Some(objects) = response.contents {
+                    for obj in objects {
+                        self.s3_client
+                            .delete_object(DeleteObjectRequest {
+                                bucket: bucket.clone(),
+                                key: obj.key.clone().unwrap(),
+                                ..Default::default()
+                            })
+                            .await
+                            .with_err_ctx(|| {
+                                format!("deleting object {}/{}", bucket, obj.key.unwrap())
+                            })?;
+                    }
+                }
+
+                if response.next_continuation_token.is_none() {
+                    return Ok(());
+                }
+                continuation_token = response.next_continuation_token;
+            }
+        })
+        .await
     }
 }
 
@@ -274,6 +350,10 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     }
                     "kinesis-ingest" => Box::new(kinesis::build_ingest(builtin).map_err(wrap_err)?),
                     "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),
+                    "s3-create-bucket" => {
+                        Box::new(s3::build_create_bucket(builtin).map_err(wrap_err)?)
+                    }
+                    "s3-put-object" => Box::new(s3::build_put_object(builtin).map_err(wrap_err)?),
                     "set-sql-timeout" => {
                         let duration = builtin.args.string("duration").map_err(wrap_err)?;
                         if duration.to_lowercase() == "default" {
@@ -476,6 +556,11 @@ pub async fn create_state(
         &[format!("region: {}", aws_info.region.name())],
     )?;
 
+    let s3_client = aws_util::s3::client(aws_info.clone()).await.err_hint(
+        "creating S3 client",
+        &[format!("region: {}", aws_info.region.name(),)],
+    )?;
+
     let state = State {
         seed,
         temp_dir,
@@ -490,11 +575,16 @@ pub async fn create_state(
         kafka_config,
         kafka_producer,
         kafka_topics,
-        aws_region: config.aws_region.clone(),
+        aws_region: aws_info.region,
         aws_account: config.aws_account.clone(),
-        aws_credentials: config.aws_credentials.clone(),
+        aws_credentials: aws_info
+            .credentials
+            .expect("provided credentials at construction")
+            .into(),
         kinesis_client,
         kinesis_stream_names: Vec::new(),
+        s3_client,
+        s3_buckets_created: BTreeSet::new(),
     };
     Ok((state, pgconn_task))
 }
