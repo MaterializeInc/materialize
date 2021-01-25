@@ -11,7 +11,7 @@ backtrace = "0.3.0"
 jemalloc-ctl = { version = "0.3.0", features = ["use_std"], optional = true }
 lazy_static = "1.4.0"
 pprof = "0.4.0"
-tempfile = "3.1.0"
+tempfile = "3.2.0"
 tokio = { version = "1.1.0", features = ["time"] }
 
 [features]
