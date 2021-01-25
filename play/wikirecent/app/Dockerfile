@@ -10,13 +10,7 @@
 # TODO: Use slim once we can pip-install
 FROM python:3.9
 
-# Install the Pure Python version of psycopg3 from source
-# No effort was spent trying to optimize these steps
 WORKDIR /tmp
-RUN git clone https://github.com/psycopg/psycopg3.git
-WORKDIR /tmp/psycopg3/psycopg3
-RUN python setup.py install
-
 COPY requirements.txt /tmp
 RUN pip install -r /tmp/requirements.txt
 
