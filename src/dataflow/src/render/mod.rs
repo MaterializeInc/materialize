@@ -108,7 +108,6 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::{Arrange, ArrangeByKey};
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
-use differential_dataflow::operators::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
 use timely::communication::Allocate;
@@ -128,7 +127,6 @@ use mz_avro::Schema;
 use ore::cast::CastFrom;
 use ore::collections::CollectionExt as _;
 use ore::iter::IteratorExt;
-use repr::adt::decimal::Significand;
 use repr::{Datum, RelationType, Row, RowArena, RowPacker, Timestamp};
 
 use crate::decode::{decode_avro_values, decode_values};
@@ -746,23 +744,7 @@ where
                 });
                 collection
             }
-            SinkEnvelope::Tail { emit_progress } => keyed
-                .consolidate()
-                .inner
-                .map({
-                    let mut rp = RowPacker::new();
-                    move |((k, v), time, diff)| {
-                        rp.push(Datum::Decimal(Significand::new(i128::from(time))));
-                        if emit_progress {
-                            rp.push(Datum::False);
-                        }
-                        rp.push(Datum::Int64(i64::cast_from(diff)));
-                        rp.extend_by_row(&v);
-                        let v = rp.finish_and_reuse();
-                        ((k, Some(v)), time, 1)
-                    }
-                })
-                .as_collection(),
+            SinkEnvelope::None => keyed.map(|(k, v)| (k, Some(v))),
         };
 
         // Some sinks require that the timestamp be appended to the end of the value.

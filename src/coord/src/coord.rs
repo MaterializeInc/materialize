@@ -2305,7 +2305,7 @@ where
                 object_columns,
                 value_desc: desc,
             }),
-            SinkEnvelope::Tail { emit_progress },
+            SinkEnvelope::None,
         ))
         .await?;
 

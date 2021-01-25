@@ -474,9 +474,9 @@ pub struct SinkDesc {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkEnvelope {
+    None,
     Debezium,
     Upsert,
-    Tail { emit_progress: bool },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

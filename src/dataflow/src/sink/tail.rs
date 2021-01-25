@@ -21,6 +21,7 @@ use futures::sink::SinkExt;
 
 use dataflow_types::TailSinkConnector;
 use expr::GlobalId;
+use ore::cast::CastFrom;
 use repr::adt::decimal::Significand;
 use repr::{Datum, Diff, Row, RowPacker, Timestamp};
 
@@ -42,18 +43,17 @@ pub fn tail<G>(
                     while cursor.val_valid(&batch) {
                         let row = cursor.val(&batch);
                         cursor.map_times(&batch, |time, diff| {
-                            assert!(*diff >= 0, "negative multiplicities sinked in tail");
-                            let diff = *diff as usize;
-                            let should_emit = if connector.strict {
-                                connector.frontier.less_than(time)
-                            } else {
-                                connector.frontier.less_equal(time)
-                            };
-                            if should_emit {
-                                for _ in 0..diff {
-                                    // Add the unpacked timestamp so we can sort by them later.
-                                    results.push((*time, row.clone()));
+                            if (connector.strict && connector.frontier.less_than(time))
+                                || connector.frontier.less_equal(time)
+                            {
+                                packer.push(Datum::Decimal(Significand::new(i128::from(*time))));
+                                if connector.emit_progress {
+                                    packer.push(Datum::False);
                                 }
+                                packer.push(Datum::Int64(i64::cast_from(*diff)));
+                                packer.extend_by_row(&row);
+                                // Add the unpacked timestamp so we can sort by them later.
+                                results.push((*time, packer.finish_and_reuse()));
                             }
                         });
                         cursor.step_val(&batch);
