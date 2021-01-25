@@ -5,3 +5,12 @@
 ```sql
 CREATE SOURCE server_source FROM FILE '/Users/sean/server.log'...
 ```
+
+#### Compression
+
+When `COMPRESSION` is omitted no decompression attempt is made and the behavior
+is identical to `COMPRESSION NONE`.
+
+When using the `GZIP` compression option the file is expected to be a normal
+gzipped file (e.g as one produced by gzip) or a concatenation of multiple gzip
+member streams.
