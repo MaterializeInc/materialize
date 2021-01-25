@@ -97,7 +97,7 @@ macro_rules! with_options {
 
 pub(crate) fn aws_connect_info(
     options: &mut BTreeMap<String, Value>,
-    region: Option<Region>,
+    region: Option<String>,
 ) -> anyhow::Result<aws::ConnectInfo> {
     // todo@jldlaughlin: We should support all (?) variants of AWS authentication.
     // https://github.com/materializeinc/materialize/issues/1991
@@ -108,10 +108,32 @@ pub(crate) fn aws_connect_info(
     };
     let region = match region {
         Some(region) => region,
-        None => extract("region")?
-            .map(|r| r.parse())
-            .transpose()?
-            .ok_or_else(|| anyhow::anyhow!("region is required"))?,
+        None => extract("region")?.ok_or_else(|| anyhow::anyhow!("region is required"))?,
+    };
+    let region = match region.parse() {
+        Ok(region) => {
+            // Ignore the endpoint option if we're pointing at a valid,
+            // non-custom AWS region.
+            extract("endpoint")?;
+            region
+        }
+        Err(e) => {
+            // Region's FromStr implementation doesn't support parsing custom
+            // regions. If a Kinesis stream's ARN indicates it exists in a
+            // custom region, support it iff a valid endpoint for the stream is
+            // also provided.
+            match extract("endpoint")? {
+                Some(endpoint) => Region::Custom {
+                    name: region,
+                    endpoint,
+                },
+                _ => bail!(
+                    "Unable to parse AWS region: {}. If providing a custom \
+                     region, an `endpoint` option must also be provided",
+                    e
+                ),
+            }
+        }
     };
     aws::ConnectInfo::new(
         region,

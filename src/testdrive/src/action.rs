@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::future::Future;
 use std::net::ToSocketAddrs;
@@ -16,12 +16,14 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::future::FutureExt;
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use rand::Rng;
 use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use rusoto_credential::AwsCredentials;
 use rusoto_kinesis::{DeleteStreamInput, Kinesis, KinesisClient};
+use rusoto_s3::{DeleteBucketRequest, DeleteObjectRequest, ListObjectsV2Request, S3Client, S3};
 use url::Url;
 
 use aws_util::aws;
@@ -35,6 +37,7 @@ mod avro_ocf;
 mod file;
 mod kafka;
 mod kinesis;
+mod s3;
 mod sleep;
 mod sql;
 
@@ -92,7 +95,9 @@ pub struct State {
     aws_account: String,
     aws_credentials: AwsCredentials,
     kinesis_client: KinesisClient,
-    kinesis_stream_names: Vec<String>,
+    kinesis_stream_names: BTreeSet<String>,
+    s3_client: S3Client,
+    s3_bucket_names: BTreeSet<String>,
 }
 
 impl State {
@@ -123,7 +128,7 @@ impl State {
         if !self.kinesis_stream_names.is_empty() {
             println!(
                 "Deleting Kinesis streams {}",
-                self.kinesis_stream_names.join(", ")
+                self.kinesis_stream_names.iter().join(", ")
             );
             for stream_name in &self.kinesis_stream_names {
                 self.kinesis_client
@@ -141,6 +146,60 @@ impl State {
         }
 
         Ok(())
+    }
+
+    /// Delete S3 buckets that were created in this run
+    pub async fn reset_s3(&mut self) -> Result<(), Error> {
+        for bucket in &self.s3_bucket_names {
+            self.delete_bucket_objects(bucket.clone())
+                .await
+                .err_ctx(format!("deleting objects in S3 bucket {}", bucket))?;
+            self.s3_client
+                .delete_bucket(DeleteBucketRequest {
+                    bucket: bucket.into(),
+                    expected_bucket_owner: None,
+                })
+                .await
+                .err_ctx(format!("deleting S3 bucket {}", bucket))?;
+        }
+        Ok(())
+    }
+
+    async fn delete_bucket_objects(&self, bucket: String) -> Result<(), Error> {
+        let mut continuation_token = None;
+        loop {
+            let response = self
+                .s3_client
+                .list_objects_v2(ListObjectsV2Request {
+                    bucket: bucket.clone(),
+                    continuation_token: continuation_token.take(),
+                    ..Default::default()
+                })
+                .await
+                .err_ctx(format!("listing objects for S3 bucket {}", bucket))?;
+
+            if let Some(objects) = response.contents {
+                for obj in objects {
+                    self.s3_client
+                        .delete_object(DeleteObjectRequest {
+                            bucket: bucket.clone(),
+                            key: obj.key.clone().unwrap(),
+                            ..Default::default()
+                        })
+                        .await
+                        .err_ctx(format!(
+                            "deleting S3 object {}/{}",
+                            bucket,
+                            obj.key.unwrap()
+                        ))?;
+                }
+            }
+
+            if response.next_continuation_token.is_none() {
+                return Ok(());
+            }
+            continuation_token = response.next_continuation_token;
+        }
     }
 }
 
@@ -279,6 +338,10 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     }
                     "kinesis-ingest" => Box::new(kinesis::build_ingest(builtin).map_err(wrap_err)?),
                     "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),
+                    "s3-create-bucket" => {
+                        Box::new(s3::build_create_bucket(builtin).map_err(wrap_err)?)
+                    }
+                    "s3-put-object" => Box::new(s3::build_put_object(builtin).map_err(wrap_err)?),
                     "set-sql-timeout" => {
                         let duration = builtin.args.string("duration").map_err(wrap_err)?;
                         if duration.to_lowercase() == "default" {
@@ -489,28 +552,44 @@ pub async fn create_state(
         )
     };
 
-    let (aws_region, aws_account, aws_credentials, kinesis_client, kinesis_stream_names) = {
-        let kinesis_client = aws_util::kinesis::client(
-            aws::ConnectInfo::new(
-                config.aws_region.clone(),
-                Some(config.aws_credentials.aws_access_key_id().to_owned()),
-                Some(config.aws_credentials.aws_secret_access_key().to_owned()),
-                config.aws_credentials.token().clone(),
-            )
-            .unwrap(),
+    let (
+        aws_region,
+        aws_account,
+        aws_credentials,
+        kinesis_client,
+        kinesis_stream_names,
+        s3_client,
+        s3_bucket_names,
+    ) = {
+        let connect_info = aws::ConnectInfo::new(
+            config.aws_region.clone(),
+            Some(config.aws_credentials.aws_access_key_id().to_owned()),
+            Some(config.aws_credentials.aws_secret_access_key().to_owned()),
+            config.aws_credentials.token().clone(),
         )
-        .await
-        .map_err(|e| Error::General {
-            ctx: "creating Kinesis client".into(),
-            cause: Some(e.into()),
-            hints: vec![format!("region: {}", config.aws_region.name())],
-        })?;
+        .unwrap();
+        let kinesis_client = aws_util::kinesis::client(connect_info.clone())
+            .await
+            .map_err(|e| Error::General {
+                ctx: "creating Kinesis client".into(),
+                cause: Some(e.into()),
+                hints: vec![format!("region: {}", config.aws_region.name())],
+            })?;
+        let s3_client = aws_util::s3::client(connect_info)
+            .await
+            .map_err(|e| Error::General {
+                ctx: "creating S3 client".into(),
+                cause: Some(e.into()),
+                hints: vec![format!("region: {}", config.aws_region.name())],
+            })?;
         (
             config.aws_region.clone(),
             config.aws_account.clone(),
             config.aws_credentials.clone(),
             kinesis_client,
-            Vec::new(),
+            BTreeSet::new(),
+            s3_client,
+            BTreeSet::new(),
         )
     };
 
@@ -533,6 +612,8 @@ pub async fn create_state(
         aws_credentials,
         kinesis_client,
         kinesis_stream_names,
+        s3_client,
+        s3_bucket_names,
     };
     Ok((state, pgconn_task))
 }

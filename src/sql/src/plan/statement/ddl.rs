@@ -21,7 +21,6 @@ use aws_arn::{Resource, ARN};
 use globset::GlobBuilder;
 use itertools::Itertools;
 use reqwest::Url;
-use rusoto_core::Region;
 
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
@@ -404,38 +403,13 @@ pub fn plan_create_source(
                 _ => unsupported!(format!("AWS Resource type: {:#?}", arn.resource)),
             };
 
-            let region: Region = match arn.region {
-                Some(region) => match region.parse() {
-                    Ok(region) => {
-                        // ignore the endpoint option if we're pointing at a
-                        // valid, non-custom AWS region
-                        with_options.remove("endpoint");
-                        region
-                    }
-                    Err(e) => {
-                        // Region's fromstr doesn't support parsing custom regions.
-                        // If a Kinesis stream's ARN indicates it exists in a custom
-                        // region, support it iff a valid endpoint for the stream
-                        // is also provided.
-                        match with_options.remove("endpoint") {
-                            Some(Value::String(endpoint)) => Region::Custom {
-                                name: region,
-                                endpoint,
-                            },
-                            _ => bail!(
-                                "Unable to parse AWS region: {}. If providing a custom \
-                                        region, an `endpoint` option must also be provided",
-                                e
-                            ),
-                        }
-                    }
-                },
-                None => bail!("Provided ARN does not include an AWS region"),
+            if arn.region.is_none() {
+                bail!("Provided ARN does not include an AWS region");
             };
 
             let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                 stream_name,
-                aws_info: aws_connect_info(&mut with_options, Some(region))?,
+                aws_info: aws_connect_info(&mut with_options, arn.region)?,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)

@@ -100,6 +100,7 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
             redo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
         }
         state.reset_kinesis().await?;
+        state.reset_s3().await?;
         drop(state);
         state_cleanup.await?;
     }
