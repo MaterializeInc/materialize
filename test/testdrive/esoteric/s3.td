@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set bucket=materialize-ci-testdrive-${testdrive.seed}
+$ set bucket=materialize-ci
 
 $ s3-create-bucket bucket=${bucket}
 

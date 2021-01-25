@@ -57,7 +57,7 @@ mzworkflows:
         workflow: start-deps
       - step: run
         service: testdrive
-        command: --ci-output *.td esoteric/*.td
+        command: --ci-output esoteric/*.td
 
   start-deps:
     steps:
