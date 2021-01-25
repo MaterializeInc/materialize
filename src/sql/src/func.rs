@@ -1166,6 +1166,7 @@ pub struct TableFuncPlan {
     pub exprs: Vec<HirScalarExpr>,
     pub column_names: Vec<Option<ColumnName>>,
 }
+
 #[derive(Debug)]
 pub enum Func {
     Scalar(Vec<FuncImpl<HirScalarExpr>>),
