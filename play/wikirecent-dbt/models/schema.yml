@@ -1,0 +1,60 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+version: 2
+
+models:
+  - name: recentchanges
+    description: "Streaming Wikimedia event data"
+    columns:
+      - name: r_schema
+      - name: bot
+      - name: comment
+      - name: id
+      - name: length_new
+      - name: length_old
+      - name: meta_uri,
+      - name: meta_id
+      - name: minor
+      - name: namespace
+      - name: parsedcomment
+      - name: revision_new
+      - name: revision_old
+      - name: server_name
+      - name: server_script_path
+      - name: server_url
+      - name: r_ts
+      - name: title
+      - name: type
+      - name: user
+      - name: wiki
+  - name: useredits
+    description: "Edit counts per user"
+    columns:
+      - name: user
+        description: "The user"
+        tests:
+          - not_null
+      - name: changes
+        description: "The number of edits made by the user"
+  - name: top10
+    description: "Top 10 Wikipedia editors since the stream started"
+    columns:
+      - name: user
+        description: "The user"
+        tests:
+          - not_null
+      - name: changes
+        description: "The number of edits made by the user"
