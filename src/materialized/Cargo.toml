@@ -40,7 +40,7 @@ coord = { path = "../coord" }
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.9"
+futures = "0.3.12"
 getopts = "0.2.0"
 hex = "0.4.0"
 hyper = { version = "0.14.0", features = ["http1", "server"] }
