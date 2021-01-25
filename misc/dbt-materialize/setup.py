@@ -32,8 +32,8 @@ setup(
     description=description,
     long_description=long_description,
     long_description_content_type="text/markdown",
-    author="Josh Wills",
-    author_email="joshwills+dbt@gmail.com",
+    author="Materialize, Inc.",
+    author_email="support@materialize.io",
     url="https://github.com/MaterializeInc/dbt-materialize",
     packages=find_packages(),
     package_data={

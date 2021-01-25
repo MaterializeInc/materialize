@@ -62,3 +62,7 @@ Not tested.
 ### Snapshots
 
 Not supported, will likely not be supported in the near term.
+
+## Contributors
+
+A huge thank you to [Josh Wills](https://github.com/jwills), who originally created this adapter.
