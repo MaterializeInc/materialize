@@ -7,22 +7,20 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set bucket=materialize-ci
 
-$ s3-create-bucket bucket=${bucket}
-
-$ s3-put-object bucket=${bucket} key=short/a
+$ s3-put-object key=${testdrive.seed}/short/a
 a1
 a2
 a3
 
-$ s3-put-object bucket=${bucket} key=short/b
+$ s3-put-object key=${testdrive.seed}/short/b
 b1
 b2
 b3
 
 > CREATE MATERIALIZED SOURCE s3_all
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN
+  FROM S3 BUCKET '${testdrive.bucket}' OBJECTS FROM SCAN
+  MATCHING '${testdrive.seed}/**'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -41,7 +39,7 @@ b2 5
 b3 6
 
 > CREATE MATERIALIZED SOURCE s3_glob_a
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN MATCHING '**/a'
+  FROM S3 BUCKET '${testdrive.bucket}' OBJECTS FROM SCAN MATCHING '${testdrive.seed}/**/a'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -57,7 +55,7 @@ a2 2
 a3 3
 
 > CREATE MATERIALIZED SOURCE s3_just_a
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN MATCHING 'short/a'
+  FROM S3 BUCKET '${testdrive.bucket}' OBJECTS FROM SCAN MATCHING '${testdrive.seed}/short/a'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',

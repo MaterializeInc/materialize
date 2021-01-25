@@ -22,7 +22,7 @@ use rdkafka::ClientConfig;
 use regex::{Captures, Regex};
 use rusoto_credential::AwsCredentials;
 use rusoto_kinesis::{DeleteStreamInput, Kinesis, KinesisClient};
-use rusoto_s3::{DeleteBucketRequest, DeleteObjectRequest, ListObjectsV2Request, S3Client, S3};
+use rusoto_s3::{DeleteObjectRequest, S3Client, S3};
 use url::Url;
 
 use aws_util::aws;
@@ -41,6 +41,7 @@ mod sleep;
 mod sql;
 
 const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
+const CI_S3_BUCKET: &str = "materialize-ci";
 
 /// User-settable configuration parameters.
 #[derive(Debug)]
@@ -97,7 +98,7 @@ pub struct State {
     kinesis_client: Result<KinesisClient, OnceError>, // clients aren't used in many cases, so fail lazily
     kinesis_stream_names: Vec<String>,
     s3_client: Result<S3Client, OnceError>, // clients aren't used in many cases, so fail lazily
-    s3_buckets_created: BTreeSet<String>,
+    s3_objects_created: BTreeSet<String>,
 }
 
 impl State {
@@ -148,21 +149,18 @@ impl State {
     /// Delete S3 buckets that were created in this run
     pub async fn reset_s3(&mut self) -> Result<(), Error> {
         let mut errors: Vec<DynError> = Vec::new();
-        for bucket in &self.s3_buckets_created {
-            if let Err(e) = self.delete_bucket_objects(bucket.clone()).await {
-                errors.push(e.into());
-            }
-
-            let res = self
+        for obj in &self.s3_objects_created {
+            if let Err(e) = self
                 .s3_client
                 .as_ref()?
-                .delete_bucket(DeleteBucketRequest {
-                    bucket: bucket.into(),
-                    expected_bucket_owner: None,
+                .delete_object(DeleteObjectRequest {
+                    bucket: CI_S3_BUCKET.to_string(),
+                    key: obj.clone(),
+                    ..Default::default()
                 })
-                .await;
-
-            if let Err(e) = res {
+                .await
+                .with_err_ctx(|| format!("deleting object {}/{}", CI_S3_BUCKET, obj))
+            {
                 errors.push(e.into());
             }
         }
@@ -176,47 +174,6 @@ impl State {
                 hints: Vec::new(),
             })
         }
-    }
-
-    async fn delete_bucket_objects(&self, bucket: String) -> Result<(), Error> {
-        ore::retry::retry_for(Duration::from_secs(5), |_| async {
-            // loop until error or response has no continuation token
-            let mut continuation_token = None;
-            loop {
-                let response = self
-                    .s3_client
-                    .as_ref()?
-                    .list_objects_v2(ListObjectsV2Request {
-                        bucket: bucket.clone(),
-                        continuation_token: continuation_token.take(),
-                        ..Default::default()
-                    })
-                    .await
-                    .with_err_ctx(|| format!("listing objects for bucket {}", bucket))?;
-
-                if let Some(objects) = response.contents {
-                    for obj in objects {
-                        self.s3_client
-                            .as_ref()?
-                            .delete_object(DeleteObjectRequest {
-                                bucket: bucket.clone(),
-                                key: obj.key.clone().unwrap(),
-                                ..Default::default()
-                            })
-                            .await
-                            .with_err_ctx(|| {
-                                format!("deleting object {}/{}", bucket, obj.key.unwrap())
-                            })?;
-                    }
-                }
-
-                if response.next_continuation_token.is_none() {
-                    return Ok(());
-                }
-                continuation_token = response.next_continuation_token;
-            }
-        })
-        .await
     }
 }
 
@@ -316,6 +273,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
             _ => "".into(),
         },
     );
+    vars.insert("testdrive.bucket".into(), CI_S3_BUCKET.to_string());
     for cmd in cmds {
         let pos = cmd.pos;
         let wrap_err = |e| InputError { msg: e, pos };
@@ -354,9 +312,6 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     }
                     "kinesis-ingest" => Box::new(kinesis::build_ingest(builtin).map_err(wrap_err)?),
                     "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),
-                    "s3-create-bucket" => {
-                        Box::new(s3::build_create_bucket(builtin).map_err(wrap_err)?)
-                    }
                     "s3-put-object" => Box::new(s3::build_put_object(builtin).map_err(wrap_err)?),
                     "set-sql-timeout" => {
                         let duration = builtin.args.string("duration").map_err(wrap_err)?;
@@ -594,7 +549,7 @@ pub async fn create_state(
         kinesis_client,
         kinesis_stream_names: Vec::new(),
         s3_client,
-        s3_buckets_created: BTreeSet::new(),
+        s3_objects_created: BTreeSet::new(),
     };
     Ok((state, pgconn_task))
 }
