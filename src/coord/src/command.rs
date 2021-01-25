@@ -18,7 +18,7 @@ use sql::ast::{FetchDirection, ObjectType, Raw, Statement};
 use sql::plan::ExecuteTimeout;
 use tokio_postgres::error::SqlState;
 
-use crate::session::Session;
+use crate::session::{EndTransactionAction, Session};
 
 #[derive(Debug)]
 pub enum Command {
@@ -46,6 +46,12 @@ pub enum Command {
 
     Execute {
         portal_name: String,
+        session: Session,
+        tx: futures::channel::oneshot::Sender<Response<ExecuteResponse>>,
+    },
+
+    Commit {
+        action: EndTransactionAction,
         session: Session,
         tx: futures::channel::oneshot::Sender<Response<ExecuteResponse>>,
     },
@@ -97,7 +103,7 @@ pub enum ExecuteResponse {
     /// The active transaction was exited.
     TransactionExited {
         was_implicit: bool,
-        tag: String,
+        tag: &'static str,
     },
     // The requested object was altered.
     AlteredObject(ObjectType),

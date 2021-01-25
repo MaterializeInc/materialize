@@ -67,44 +67,55 @@ SELECT * FROM t
 statement ok
 ROLLBACK
 
-# Multiple INSERTs not allowed.
+# Multiple INSERTs.
 simple
 INSERT INTO t VALUES (2);
 INSERT INTO t VALUES (3);
 ----
-db error: ERROR: INSERT INTO t VALUES (2) cannot be run inside a transaction block
+COMPLETE 1
+COMPLETE 1
 
-# INSERT in explicit transactions not allowed.
+# INSERT in explicit transactions.
 statement ok
 BEGIN
 
 simple
 INSERT INTO t VALUES (4);
 ----
-db error: ERROR: INSERT INTO t VALUES (4) cannot be run inside a transaction block
+COMPLETE 1
 
+# Verify ROLLBACK works by not expecting 4 below.
 statement ok
 ROLLBACK
 
-# INSERT rolled up from implicit txn into explicit is not allowed.
+# INSERT rolled up from implicit txn into explicit not ok because mixed
+# with a read.
 simple
 INSERT INTO t VALUES (5);
 BEGIN;
 SELECT 1;
 ----
-db error: ERROR: INSERT INTO t VALUES (5) cannot be run inside a transaction block
+db error: ERROR: transaction in write-only mode
 
+# This COMMIT should be ignored due to the failure above.
 statement ok
-ROLLBACK
+COMMIT
 
-# INSERT not allowed in explicit transactions.
+# INSERT allowed in explicit transactions.
 simple
 BEGIN; INSERT INTO t VALUES (6);
 ----
-db error: ERROR: INSERT INTO t VALUES (6) cannot be run inside a transaction block
+COMPLETE 0
+COMPLETE 1
+
+# Verify that the to-be-inserted data is not readable by another connection.
+simple conn=read
+SELECT * FROM t WHERE a=6
+----
+COMPLETE 0
 
 statement ok
-ROLLBACK
+COMMIT
 
 simple
 INSERT INTO t VALUES (7), (8)
@@ -116,6 +127,9 @@ query I
 SELECT * FROM t ORDER BY a
 ----
 1
+2
+3
+6
 7
 8
 

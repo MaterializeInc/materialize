@@ -88,7 +88,7 @@ impl<'a> Parser<'a> {
 
             "query" => self.parse_query(words, first_line),
 
-            "simple" => self.parse_simple(),
+            "simple" => self.parse_simple(words),
 
             "hash-threshold" => {
                 let threshold = words
@@ -319,9 +319,21 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_simple(&mut self) -> Result<Record<'a>, anyhow::Error> {
+    fn parse_simple(
+        &mut self,
+        mut words: std::iter::Peekable<impl Iterator<Item = &'a str>>,
+    ) -> Result<Record<'a>, anyhow::Error> {
         let location = self.location();
-
+        let mut conn = None;
+        if let Some(options) = words.next() {
+            for option in options.split(',') {
+                if let Some(value) = option.strip_prefix("conn=") {
+                    conn = Some(value);
+                } else {
+                    bail!("Unrecognized option {:?} in {:?}", option, options);
+                }
+            }
+        }
         lazy_static! {
             static ref QUERY_OUTPUT_REGEX: Regex = Regex::new(r"\r?\n----").unwrap();
             static ref DOUBLE_LINE_REGEX: Regex = Regex::new(r"(\n|\r\n|$)(\n|\r\n|$)").unwrap();
@@ -331,6 +343,7 @@ impl<'a> Parser<'a> {
         let output = Output::Values(output_str.lines().map(String::from).collect());
         Ok(Record::Simple {
             location,
+            conn,
             sql,
             output,
             output_str,

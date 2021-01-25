@@ -239,22 +239,16 @@ pub enum TransactionStatus {
     Failed,
 }
 
-impl From<CoordTransactionStatus> for TransactionStatus {
-    /// Convert from the Session's version
-    fn from(status: CoordTransactionStatus) -> TransactionStatus {
-        match status {
-            CoordTransactionStatus::Idle => TransactionStatus::Idle,
-            CoordTransactionStatus::InTransaction => TransactionStatus::InTransaction,
-            CoordTransactionStatus::InTransactionImplicit => TransactionStatus::InTransaction,
-            CoordTransactionStatus::Failed => TransactionStatus::Failed,
-        }
-    }
-}
-
 impl From<&CoordTransactionStatus> for TransactionStatus {
     /// Convert from the Session's version
     fn from(status: &CoordTransactionStatus) -> TransactionStatus {
-        TransactionStatus::from(*status)
+        match status {
+            CoordTransactionStatus::Default => TransactionStatus::Idle,
+            CoordTransactionStatus::Started(_) => TransactionStatus::InTransaction,
+            CoordTransactionStatus::InTransaction(_) => TransactionStatus::InTransaction,
+            CoordTransactionStatus::InTransactionImplicit(_) => TransactionStatus::InTransaction,
+            CoordTransactionStatus::Failed => TransactionStatus::Failed,
+        }
     }
 }
 

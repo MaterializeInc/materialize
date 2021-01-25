@@ -24,7 +24,9 @@ use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{AsyncRead, AsyncWrite, Interest};
 use tokio::time::{self, Duration, Instant};
 
-use coord::session::{Portal, PortalState, RowBatchStream, TransactionStatus};
+use coord::session::{
+    EndTransactionAction, Portal, PortalState, RowBatchStream, TransactionStatus,
+};
 use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
@@ -347,15 +349,7 @@ where
             }
         };
 
-        // Start an implicit transaction if we aren't in any transaction and there's
-        // more than one statement. This mirrors the `use_implicit_block` variable in
-        // postgres.
-        if stmts.len() > 1 {
-            let session = self.coord_client.session();
-            if let TransactionStatus::Idle = session.transaction() {
-                session.start_transaction_implicit();
-            }
-        }
+        let num_stmts = stmts.len();
 
         // Compare with postgres' backend/tcop/postgres.c exec_simple_query.
         for stmt in stmts {
@@ -364,6 +358,17 @@ where
                 self.aborted_txn_error().await?;
                 break;
             }
+
+            // Start an implicit transaction if we aren't in any transaction and there's
+            // more than one statement. This mirrors the `use_implicit_block` variable in
+            // postgres.
+            //
+            // This needs to be done in the loop instead of once at the top because
+            // a COMMIT/ROLLBACK statement needs to start a new transaction on next
+            // statement.
+            self.coord_client
+                .session()
+                .start_transaction_implicit(num_stmts);
 
             match self.one_query(stmt).await? {
                 State::Ready => (),
@@ -374,9 +379,12 @@ where
 
         // Implicit transactions are closed at the end of a Query message.
         {
-            let session = self.coord_client.session();
-            if let TransactionStatus::InTransactionImplicit = session.transaction() {
-                session.end_transaction();
+            let implicit = matches!(
+                self.coord_client.session().transaction(),
+                TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_)
+            );
+            if implicit {
+                self.commit_transaction().await;
             }
         }
         self.ready().await
@@ -439,6 +447,16 @@ where
                 .await
             }
         }
+    }
+
+    /// Commits and clears the current transaction.
+    async fn commit_transaction(&mut self) {
+        // We ignore the ExecuteResponse or error here because there's nothing to tell
+        // the user in either of those cases.
+        let _ = self
+            .coord_client
+            .end_transaction(EndTransactionAction::Commit)
+            .await;
     }
 
     async fn bind(
@@ -568,6 +586,12 @@ where
 
             match &mut portal.state {
                 PortalState::NotStarted => {
+                    // Start a transaction if we aren't in one. Postgres does this both here and
+                    // in bind. We don't do it in bind because I'm not sure what purpose it would
+                    // serve us (i.e., I'm not aware of a pgtest that would differ between us and
+                    // Postgres).
+                    self.coord_client.session().start_transaction_implicit(1);
+
                     match self.coord_client.execute(portal_name.clone()).await {
                         Ok(response) => {
                             self.send_execute_response(
@@ -767,9 +791,12 @@ where
 
     async fn sync(&mut self) -> Result<State, comm::Error> {
         // Close the current transaction if we are not in an explicit transaction.
-        let session = self.coord_client.session();
-        if let TransactionStatus::Idle = session.transaction() {
-            session.end_transaction();
+        let started = matches!(
+            self.coord_client.session().transaction(),
+            TransactionStatus::Started(_)
+        );
+        if started {
+            self.commit_transaction().await;
         }
         return self.ready().await;
     }
@@ -1271,17 +1298,21 @@ where
         self.conn.send(BackendMessage::ErrorResponse(err)).await?;
         let session = self.coord_client.session();
         match session.transaction() {
-            // In Idle (i.e., a single statement), nothing changes since the state is
-            // always reset back to idle even during failure.
-            TransactionStatus::Idle => session.end_transaction(),
+            // Error can be called from describe and parse and so might not be in an active
+            // transaction.
+            TransactionStatus::Default | TransactionStatus::Failed => {}
+            // In Started (i.e., a single statement), cleanup ourselves.
+            TransactionStatus::Started(_) => {
+                session.clear_transaction();
+            }
             // Implicit transactions also clear themselves.
-            // TODO(mjibson): once we care about it, this will need to ensure we ROLLBACK
-            // the transaction.
-            TransactionStatus::InTransactionImplicit => session.end_transaction(),
+            TransactionStatus::InTransactionImplicit(_) => {
+                session.clear_transaction();
+            }
             // Explicit transactions move to failed.
-            TransactionStatus::InTransaction => session.fail_transaction(),
-            // We should never attempt to execute any failable SQL while in Failed.
-            TransactionStatus::Failed => unreachable!(),
+            TransactionStatus::InTransaction(_) => {
+                session.fail_transaction();
+            }
         };
         if is_fatal {
             Ok(State::Done)
