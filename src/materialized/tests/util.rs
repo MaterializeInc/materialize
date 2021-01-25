@@ -32,7 +32,7 @@ pub struct Config {
     logging_granularity: Option<Duration>,
     tls: Option<materialized::TlsConfig>,
     experimental_mode: bool,
-    threads: usize,
+    workers: usize,
 }
 
 impl Default for Config {
@@ -42,7 +42,7 @@ impl Default for Config {
             logging_granularity: Some(Duration::from_millis(10)),
             tls: None,
             experimental_mode: false,
-            threads: 1,
+            workers: 1,
         }
     }
 }
@@ -75,8 +75,8 @@ impl Config {
         self
     }
 
-    pub fn threads(mut self, threads: usize) -> Self {
-        self.threads = threads;
+    pub fn workers(mut self, workers: usize) -> Self {
+        self.workers = workers;
         self
     }
 }
@@ -105,7 +105,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
             timestamp_frequency: Duration::from_millis(10),
             cache: None,
             logical_compaction_window: None,
-            threads: config.threads,
+            workers: config.workers,
             process: 0,
             addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
             timely_worker: timely::WorkerConfig::default(),

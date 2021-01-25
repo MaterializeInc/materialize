@@ -126,7 +126,7 @@ where
 {
     pub switchboard: comm::Switchboard<C>,
     pub cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>,
-    pub num_timely_workers: usize,
+    pub total_workers: usize,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
@@ -144,7 +144,7 @@ where
 {
     switchboard: comm::Switchboard<C>,
     broadcast_tx: comm::broadcast::Sender<SequencedCommand>,
-    num_timely_workers: usize,
+    total_workers: usize,
     optimizer: Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
@@ -264,7 +264,7 @@ where
                         // Should it not be the same logical compaction window
                         // that everything else uses?
                         self.indexes
-                            .insert(*id, Frontiers::new(self.num_timely_workers, Some(1_000)));
+                            .insert(*id, Frontiers::new(self.total_workers, Some(1_000)));
                     } else {
                         self.ship_dataflow(self.dataflow_builder().build_index_dataflow(*id))
                             .await?;
@@ -2154,7 +2154,7 @@ where
             // Choose a timestamp for all workers to use in the peek.
             // We minimize over all participating views, to ensure that the query will not
             // need to block on the arrival of further input data.
-            let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
+            let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.total_workers);
 
             // Extract any surrounding linear operators to determine if we can simply read
             // out the contents from an existing arrangement.
@@ -2293,7 +2293,7 @@ where
         );
         let sink_id = self.catalog.allocate_id()?;
         self.active_tails.insert(session.conn_id(), sink_id);
-        let (tx, rx) = self.switchboard.mpsc_limited(self.num_timely_workers);
+        let (tx, rx) = self.switchboard.mpsc_limited(self.total_workers);
 
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
             sink_name,
@@ -3038,7 +3038,7 @@ where
         // a compaction frontier of at least `since`.
         for (global_id, _description, _typ) in dataflow.index_exports.iter() {
             let mut frontiers =
-                Frontiers::new(self.num_timely_workers, self.logical_compaction_window_ms);
+                Frontiers::new(self.total_workers, self.logical_compaction_window_ms);
             frontiers.advance_since(&since);
             self.indexes.insert(*global_id, frontiers);
         }
@@ -3146,7 +3146,7 @@ pub async fn serve<C>(
     Config {
         switchboard,
         cmd_rx,
-        num_timely_workers,
+        total_workers,
         symbiosis_url,
         logging,
         data_directory,
@@ -3169,7 +3169,7 @@ where
     // First, configure the dataflow workers as directed by our configuration.
     // These operations must all be infallible.
 
-    let (feedback_tx, feedback_rx) = switchboard.mpsc_limited(num_timely_workers);
+    let (feedback_tx, feedback_rx) = switchboard.mpsc_limited(total_workers);
     broadcast(
         &mut broadcast_tx,
         SequencedCommand::EnableFeedback(feedback_tx),
@@ -3233,7 +3233,7 @@ where
         let mut coord = Coordinator {
             broadcast_tx: switchboard.broadcast_tx(dataflow::BroadcastToken),
             switchboard: switchboard.clone(),
-            num_timely_workers,
+            total_workers,
             optimizer: Default::default(),
             catalog,
             symbiosis,

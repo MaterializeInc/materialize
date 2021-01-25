@@ -504,7 +504,7 @@ impl Runner {
             timestamp_frequency: Duration::from_millis(10),
             cache: None,
             logical_compaction_window: None,
-            threads: config.workers,
+            workers: config.workers,
             process: 0,
             addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
             timely_worker: timely::WorkerConfig::default(),
