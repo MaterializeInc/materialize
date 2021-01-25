@@ -14,7 +14,7 @@ skip = [
     { name = "pin-project", version = "0.4.27" },
     { name = "pin-project-internal", version = "0.4.22" },
 
-    # Waiting on at least tempfile, phf, and uuid to upgrade to rand v0.8.
+    # Waiting on phf and uuid to upgrade to rand v0.8.
     { name = "getrandom", version = "0.1" },
     { name = "rand", version = "0.7.3" },
     { name = "rand_chacha", version = "0.2.2" },
@@ -23,7 +23,12 @@ skip = [
     { name = "wasi", version = "0.10.0+wasi-snapshot-preview1" },
 
     # Waiting on parse_duration.
-    { name = "num-bigint", version = "0.2.6" }
+    { name = "num-bigint", version = "0.2.6" },
+
+    # Waiting on:
+    #   - https://github.com/Amanieu/parking_lot/pull/275
+    #   - https://github.com/alexcrichton/tar-rs/pull/240
+    { name = "redox_syscall", version = "0.1.56" },
 ]
 deny = [
     # Strum has suspect code quality and includes many unneeded features. Use
