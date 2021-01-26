@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
 use std::io::{self, BufRead, Read};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -33,7 +32,7 @@ use crate::source::{
 use crate::{
     logging::materialized::Logger,
     server::{
-        TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
+        TimestampDataRecords, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
         TimestampMetadataUpdates,
     },
 };
@@ -212,7 +211,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
             let prev = if let Consistency::BringYourOwn(_) = consistency {
                 timestamp_data_updates.borrow_mut().insert(
                     id.clone(),
-                    TimestampDataUpdate::BringYourOwn(HashMap::new()),
+                    TimestampDataUpdate::BringYourOwn(TimestampDataRecords::new()),
                 )
             } else {
                 timestamp_data_updates

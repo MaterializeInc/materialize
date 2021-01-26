@@ -563,14 +563,16 @@ impl ConsistencyInfo {
             // in next_partition_ts
             if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
                 match entries {
-                    TimestampDataUpdate::BringYourOwn(entries) => {
+                    TimestampDataUpdate::BringYourOwn(history) => {
                         // Iterate over each partition that we know about
-                        for (pid, entries) in entries {
+                        // TODO(rkhaitan): need a better abstraction here
+                        for (pid, partition_history) in history.partition_histories.iter_mut() {
                             source.ensure_has_partition(self, pid.clone());
 
                             // Check whether timestamps can be closed on this partition
-                            while let Some(record) = entries.front() {
+                            while let Some(record) = partition_history.front() {
                                 let partition_start_offset = self.get_partition_start_offset(pid);
+                                // TODO: this assert does not need to run every time
                                 assert!(
                                     record.end_offset >= partition_start_offset,
                                     "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
@@ -595,7 +597,8 @@ impl ConsistencyInfo {
                                     // We can close the timestamp (on this partition) and remove the associated metadata
                                     self.partition_metadata.get_mut(&pid).unwrap().ts =
                                         record.timestamp;
-                                    entries.pop_front();
+                                    // TODO: get rid of this state management
+                                    partition_history.pop_front();
                                     changed = true;
                                 } else {
                                     // Offset isn't at a timestamp boundary, we take no action
@@ -668,17 +671,9 @@ impl ConsistencyInfo {
             // The source is a BYO source. Must check the list of timestamp updates for the given partition
             match timestamp_histories.borrow().get(id) {
                 None => None,
-                Some(TimestampDataUpdate::BringYourOwn(entries)) => match entries.get(partition) {
-                    Some(entries) => {
-                        for record in entries {
-                            if offset >= record.start_offset && offset < record.end_offset {
-                                return Some(record.timestamp);
-                            }
-                        }
-                        None
-                    }
-                    None => None,
-                },
+                Some(TimestampDataUpdate::BringYourOwn(entries)) => {
+                    entries.get_timestamp(partition, offset)
+                }
                 _ => panic!("Unexpected entry format in TimestampDataUpdates for BYO source"),
             }
         }

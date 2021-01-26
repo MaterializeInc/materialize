@@ -299,6 +299,81 @@ impl TimestampDataRecord {
     }
 }
 
+/// Type that defines timestamp history for a given source and all of its
+/// partitions
+pub struct TimestampDataRecords {
+    pub partition_count: usize,
+    pub partition_histories: HashMap<PartitionId, VecDeque<TimestampDataRecord>>,
+}
+
+impl TimestampDataRecords {
+    pub fn new() -> Self {
+        Self {
+            partition_count: 0,
+            partition_histories: HashMap::new(),
+        }
+    }
+
+    fn add_timestamp_record(
+        &mut self,
+        partition_id: PartitionId,
+        new_partition_count: usize,
+        end_offset: MzOffset,
+        timestamp: Timestamp,
+    ) {
+        let partition_history = self
+            .partition_histories
+            .entry(partition_id)
+            .or_insert_with(VecDeque::new);
+        self.partition_count = new_partition_count;
+        let last_offset = partition_history
+            .back()
+            .map(|last_entry| {
+                assert!(
+                    end_offset >= last_entry.end_offset,
+                    "offset should not go backwards, but {} < {}",
+                    end_offset,
+                    last_entry.end_offset
+                );
+
+                assert!(
+                    timestamp > last_entry.timestamp,
+                    "timestamp should move forwards, but {} <= {}",
+                    timestamp,
+                    last_entry.timestamp
+                );
+
+                last_entry.end_offset
+            })
+            .unwrap_or(MzOffset { offset: 0 });
+        // TODO: whats the best way to do int casts
+        partition_history.push_back(TimestampDataRecord::new(
+            self.partition_count as usize,
+            timestamp,
+            last_offset,
+            end_offset + 1,
+        ));
+        assert!(self.partition_count >= self.partition_histories.len());
+    }
+
+    // Do a stabbing query to find the timestamp st start_offset <= offset < end_offset
+    pub fn get_timestamp(&self, partition_id: &PartitionId, offset: MzOffset) -> Option<Timestamp> {
+        let partition_history = self.partition_histories.get(partition_id);
+
+        match partition_history {
+            None => None,
+            Some(history) => {
+                for record in history.iter() {
+                    if record.start_offset <= offset && record.end_offset > offset {
+                        return Some(record.timestamp);
+                    }
+                }
+                None
+            }
+        }
+    }
+}
+
 /// A type wrapper for a timestamp update
 /// For real-time sources, it consists of a PartitionCount
 /// For BYO sources, it consists of a mapping from PartitionId to a vector of
@@ -307,7 +382,7 @@ pub enum TimestampDataUpdate {
     /// RT sources see a current estimate of the number of partitions for the soruce
     RealTime(PartitionCount),
     /// BYO sources see a list of (PartitionCount, Timestamp, MzOffset) timestamp updates
-    BringYourOwn(HashMap<PartitionId, VecDeque<TimestampDataRecord>>),
+    BringYourOwn(TimestampDataRecords),
 }
 /// Map of source ID to timestamp data updates (RT or BYO).
 pub type TimestampDataUpdates = Rc<RefCell<HashMap<SourceInstanceId, TimestampDataUpdate>>>;
@@ -783,7 +858,7 @@ where
                 let mut timestamps = self.render_state.ts_histories.borrow_mut();
                 if let Some(ts_entries) = timestamps.get_mut(&id) {
                     match ts_entries {
-                        TimestampDataUpdate::BringYourOwn(entries) => {
+                        TimestampDataUpdate::BringYourOwn(history) => {
                             if let TimestampSourceUpdate::BringYourOwn(
                                 partition_count,
                                 pid,
@@ -791,34 +866,12 @@ where
                                 offset,
                             ) = update
                             {
-                                let partition_entries =
-                                    entries.entry(pid).or_insert_with(VecDeque::new);
-                                let last_offset = partition_entries
-                                    .back()
-                                    .map(|last_entry| {
-                                        assert!(
-                                            offset >= last_entry.end_offset,
-                                            "offset should not go backwards, but {} < {}",
-                                            offset,
-                                            last_entry.end_offset
-                                        );
-                                        assert!(
-                                            timestamp > last_entry.timestamp,
-                                            "timestamp should move forwards, but {} <= {}",
-                                            timestamp,
-                                            last_entry.timestamp
-                                        );
-
-                                        last_entry.end_offset
-                                    })
-                                    .unwrap_or(MzOffset { offset: 0 });
-                                // TODO: whats the best way to do int casts
-                                partition_entries.push_back(TimestampDataRecord::new(
+                                history.add_timestamp_record(
+                                    pid,
                                     partition_count as usize,
+                                    offset,
                                     timestamp,
-                                    last_offset,
-                                    offset + 1,
-                                ));
+                                );
                             } else {
                                 panic!("Unexpected message type. Expected BYO update.")
                             }

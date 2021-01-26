@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::fs;
 use std::path::PathBuf;
@@ -41,8 +41,8 @@ use crate::source::{
 use crate::{
     logging::materialized::Logger,
     server::{
-        CacheMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-        TimestampMetadataUpdates,
+        CacheMessage, TimestampDataRecords, TimestampDataUpdate, TimestampDataUpdates,
+        TimestampMetadataUpdate, TimestampMetadataUpdates,
     },
 };
 
@@ -112,7 +112,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         let prev = if let Consistency::BringYourOwn(_) = consistency {
             timestamp_data_updates.borrow_mut().insert(
                 id.clone(),
-                TimestampDataUpdate::BringYourOwn(HashMap::new()),
+                TimestampDataUpdate::BringYourOwn(TimestampDataRecords::new()),
             )
         } else {
             timestamp_data_updates
