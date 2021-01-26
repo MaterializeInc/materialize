@@ -216,6 +216,7 @@ name = "aws-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "hyper-tls",
  "log",
  "rusoto_core",
  "rusoto_credential",

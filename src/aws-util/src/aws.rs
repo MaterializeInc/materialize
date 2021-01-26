@@ -10,6 +10,7 @@
 //! Utility functions for AWS.
 
 use anyhow::{anyhow, Context};
+use hyper_tls::HttpsConnector;
 use rusoto_core::{HttpClient, Region};
 use rusoto_credential::{
     AutoRefreshingProvider, AwsCredentials, ChainProvider, ProvideAwsCredentials, StaticProvider,
@@ -73,6 +74,11 @@ impl ConnectInfo {
     }
 }
 
+/// Construct a new TLS-secured rusoto client
+pub fn https_client() -> HttpClient {
+    HttpClient::from_connector(HttpsConnector::new())
+}
+
 /// Fetches the AWS account number of the caller via AWS Security Token Service.
 ///
 /// For details about STS, see AWS documentation, because the endpoint used by
@@ -85,8 +91,7 @@ pub async fn account(
     region: Region,
     timeout: Duration,
 ) -> Result<String, anyhow::Error> {
-    let dispatcher = HttpClient::new().context("creating HTTP for AWS STS Account verification")?;
-    let sts_client = StsClient::new_with(dispatcher, provider, region);
+    let sts_client = StsClient::new_with(https_client(), provider, region);
     let get_identity = sts_client.get_caller_identity(GetCallerIdentityRequest {});
     let account = time::timeout(timeout, get_identity)
         .await

@@ -13,11 +13,10 @@ use std::time::Duration;
 
 use anyhow::Context;
 use log::info;
-use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, AwsCredentials, ChainProvider, StaticProvider};
 use rusoto_s3::S3Client;
 
-use crate::aws::{ConnectInfo, DEFAULT_AWS_TIMEOUT};
+use crate::aws::{https_client, ConnectInfo, DEFAULT_AWS_TIMEOUT};
 
 /// Construct an S3Client
 ///
@@ -28,7 +27,6 @@ use crate::aws::{ConnectInfo, DEFAULT_AWS_TIMEOUT};
 /// The [`AutoRefreshingProvider`] caches the underlying provider's AWS credentials,
 /// automatically fetching updated credentials if they've expired.
 pub async fn client(conn_info: ConnectInfo) -> Result<S3Client, anyhow::Error> {
-    let request_dispatcher = HttpClient::new().context("creating HTTP client for S3 client")?;
     let s3_client = if let Some(creds) = conn_info.credentials {
         info!("Creating a new S3 client from provided access_key and secret_access_key");
         let provider = StaticProvider::from(AwsCredentials::from(creds));
@@ -39,7 +37,7 @@ pub async fn client(conn_info: ConnectInfo) -> Result<S3Client, anyhow::Error> {
         )
         .await?;
 
-        S3Client::new_with(request_dispatcher, provider, conn_info.region)
+        S3Client::new_with(https_client(), provider, conn_info.region)
     } else {
         info!(
             "AWS access_key_id and secret_access_key not provided, \
@@ -56,7 +54,7 @@ pub async fn client(conn_info: ConnectInfo) -> Result<S3Client, anyhow::Error> {
         )
         .await?;
 
-        S3Client::new_with(request_dispatcher, provider, conn_info.region)
+        S3Client::new_with(https_client(), provider, conn_info.region)
     };
     Ok(s3_client)
 }
