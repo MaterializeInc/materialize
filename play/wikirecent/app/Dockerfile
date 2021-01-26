@@ -7,16 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# TODO: Use slim once we can pip-install
+# TODO: Use slim once we can pip-install without requiring git
 FROM python:3.9
 
-# Install the Pure Python version of psycopg3 from source
-# No effort was spent trying to optimize these steps
 WORKDIR /tmp
-RUN git clone https://github.com/psycopg/psycopg3.git
-WORKDIR /tmp/psycopg3/psycopg3
-RUN python setup.py install
-
 COPY requirements.txt /tmp
 RUN pip install -r /tmp/requirements.txt
 

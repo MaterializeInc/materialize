@@ -99,9 +99,18 @@ main() {
     env > "${snapshot}/snapshot.env"
 
     "$project"/mzcompose run generate-snapshot
+    "$project"/mzcompose down
+
+    # Compress directories to reduce bytes transferred
+    cd "${snapshot_dir}"
+    tar --create \
+        --file "${snapshot_id}.tgz" \
+        --use-compress-progoram pigz \
+        "${snapshot_id}" \
+        ;
 
     if [[ "${cleanup}" = "yes" ]]; then
-        "$project"/mzcompose down
+        "$project"/mzcompose down -v
     fi
 }
 
