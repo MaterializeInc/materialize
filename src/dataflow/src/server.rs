@@ -269,6 +269,36 @@ where
 /// A type wrapper for the number of partitions associated with a source.
 pub type PartitionCount = i32;
 
+/// A half open interval of [`start_offset`, `end_offset`), and the corresponding `timestamp`
+/// assigned to those offsets
+/// TODO: I don't understand why the BYO logic mandates a `partition_count` here.
+#[derive(Debug)]
+pub struct TimestampDataRecord {
+    pub partition_count: usize,
+    pub timestamp: Timestamp,
+    pub start_offset: MzOffset,
+    pub end_offset: MzOffset,
+}
+
+impl TimestampDataRecord {
+    fn new(
+        partition_count: usize,
+        timestamp: Timestamp,
+        start_offset: MzOffset,
+        end_offset: MzOffset,
+    ) -> Self {
+        assert!(partition_count > 0);
+        assert!(end_offset >= start_offset);
+        assert!(timestamp > 0);
+        Self {
+            partition_count,
+            timestamp,
+            start_offset,
+            end_offset,
+        }
+    }
+}
+
 /// A type wrapper for a timestamp update
 /// For real-time sources, it consists of a PartitionCount
 /// For BYO sources, it consists of a mapping from PartitionId to a vector of
@@ -277,7 +307,7 @@ pub enum TimestampDataUpdate {
     /// RT sources see a current estimate of the number of partitions for the soruce
     RealTime(PartitionCount),
     /// BYO sources see a list of (PartitionCount, Timestamp, MzOffset) timestamp updates
-    BringYourOwn(HashMap<PartitionId, VecDeque<(PartitionCount, Timestamp, MzOffset)>>),
+    BringYourOwn(HashMap<PartitionId, VecDeque<TimestampDataRecord>>),
 }
 /// Map of source ID to timestamp data updates (RT or BYO).
 pub type TimestampDataUpdates = Rc<RefCell<HashMap<SourceInstanceId, TimestampDataUpdate>>>;
@@ -763,22 +793,32 @@ where
                             {
                                 let partition_entries =
                                     entries.entry(pid).or_insert_with(VecDeque::new);
-                                let (_, last_ts, last_offset) = partition_entries
+                                let last_offset = partition_entries
                                     .back()
-                                    .unwrap_or(&(0, 0, MzOffset { offset: 0 }));
-                                assert!(
-                                    offset >= *last_offset,
-                                    "offset should not go backwards, but {} < {}",
-                                    offset,
-                                    last_offset
-                                );
-                                assert!(
-                                    timestamp > *last_ts,
-                                    "timestamp should move forwards, but {} <= {}",
+                                    .map(|last_entry| {
+                                        assert!(
+                                            offset >= last_entry.end_offset,
+                                            "offset should not go backwards, but {} < {}",
+                                            offset,
+                                            last_entry.end_offset
+                                        );
+                                        assert!(
+                                            timestamp > last_entry.timestamp,
+                                            "timestamp should move forwards, but {} <= {}",
+                                            timestamp,
+                                            last_entry.timestamp
+                                        );
+
+                                        last_entry.end_offset
+                                    })
+                                    .unwrap_or(MzOffset { offset: 0 });
+                                // TODO: whats the best way to do int casts
+                                partition_entries.push_back(TimestampDataRecord::new(
+                                    partition_count as usize,
                                     timestamp,
-                                    last_ts
-                                );
-                                partition_entries.push_back((partition_count, timestamp, offset));
+                                    last_offset,
+                                    offset,
+                                ));
                             } else {
                                 panic!("Unexpected message type. Expected BYO update.")
                             }

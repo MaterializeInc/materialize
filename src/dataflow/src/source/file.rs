@@ -270,7 +270,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
     fn update_partition_count(
         &mut self,
         consistency_info: &mut ConsistencyInfo,
-        partition_count: i32,
+        partition_count: usize,
     ) {
         if partition_count > 1 {
             error!("Files cannot have multiple partitions");

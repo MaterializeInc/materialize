@@ -328,7 +328,7 @@ pub(crate) trait SourceInfo<Out> {
     fn update_partition_count(
         &mut self,
         consistency_info: &mut ConsistencyInfo,
-        partition_count: i32,
+        partition_count: usize,
     );
 
     /// Returns the next message read from the source
@@ -569,22 +569,17 @@ impl ConsistencyInfo {
                             source.ensure_has_partition(self, pid.clone());
 
                             // Check whether timestamps can be closed on this partition
-                            while let Some((partition_count, ts, offset)) = entries.front() {
+                            while let Some(record) = entries.front() {
                                 let partition_start_offset = self.get_partition_start_offset(pid);
                                 assert!(
-                                    *offset >= partition_start_offset,
+                                    record.end_offset >= partition_start_offset,
                                     "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
-                                    offset, partition_start_offset
-                                );
-
-                                assert!(
-                                    *ts > 0,
-                                    "Internal error! Received a zero-timestamp. Materialize will crash now."
+                                    record.start_offset, partition_start_offset
                                 );
 
                                 // This timestamp update was done with the expectation that there were more partitions
                                 // than we know about.
-                                source.update_partition_count(self, *partition_count);
+                                source.update_partition_count(self, record.partition_count);
 
                                 if let Some(pmetrics) = self.partition_metrics.get_mut(pid) {
                                     pmetrics
@@ -592,13 +587,14 @@ impl ConsistencyInfo {
                                         .set(self.partition_metadata.get(pid).unwrap().ts);
                                 }
 
-                                if source.can_close_timestamp(&self, pid, *offset) {
+                                if source.can_close_timestamp(&self, pid, record.end_offset) {
                                     // We have either 1) seen all messages corresponding to this timestamp for this
                                     // partition 2) do not own this partition 3) the consumer has forwarded past the
                                     // timestamped offset. Either way, we have the guarantee tha we will never see a message with a < timestamp
                                     // again
                                     // We can close the timestamp (on this partition) and remove the associated metadata
-                                    self.partition_metadata.get_mut(&pid).unwrap().ts = *ts;
+                                    self.partition_metadata.get_mut(&pid).unwrap().ts =
+                                        record.timestamp;
                                     entries.pop_front();
                                     changed = true;
                                 } else {
@@ -633,7 +629,7 @@ impl ConsistencyInfo {
             if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
                 match entries {
                     TimestampDataUpdate::RealTime(partition_count) => {
-                        source.update_partition_count(self, *partition_count)
+                        source.update_partition_count(self, *partition_count as usize)
                     }
                     _ => panic!("Unexpected timestamp message. Expected RT update."),
                 }
@@ -674,9 +670,9 @@ impl ConsistencyInfo {
                 None => None,
                 Some(TimestampDataUpdate::BringYourOwn(entries)) => match entries.get(partition) {
                     Some(entries) => {
-                        for (_, ts, max_offset) in entries {
-                            if offset <= *max_offset {
-                                return Some(ts.clone());
+                        for record in entries {
+                            if offset >= record.start_offset && offset < record.end_offset {
+                                return Some(record.timestamp);
                             }
                         }
                         None

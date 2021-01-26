@@ -235,7 +235,7 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
     fn update_partition_count(
         &mut self,
         _consistency_info: &mut ConsistencyInfo,
-        _partition_count: i32,
+        _partition_count: usize,
     ) {
         //TODO(natacha): do nothing for now as do not currently use timestamper
     }

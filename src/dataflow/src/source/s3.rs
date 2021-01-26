@@ -357,7 +357,7 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
     fn update_partition_count(
         &mut self,
         consistency_info: &mut ConsistencyInfo,
-        partition_count: i32,
+        partition_count: usize,
     ) {
         log::debug!(
             "ignoring partition count update type={:?} partition_count={}",

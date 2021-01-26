@@ -259,9 +259,12 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     fn update_partition_count(
         &mut self,
         consistency_info: &mut ConsistencyInfo,
-        partition_count: i32,
+        partition_count: usize,
     ) {
-        self.ensure_has_partition(consistency_info, PartitionId::Kafka(partition_count - 1));
+        self.ensure_has_partition(
+            consistency_info,
+            PartitionId::Kafka((partition_count as i32) - 1),
+        );
     }
 
     /// This function checks whether any messages have been buffered. If yes, returns the buffered
