@@ -633,6 +633,11 @@ mzworkflows:
 
   bring-up-mysql-kafka:
     steps:
+    - step: create-directories
+      directories:
+        - ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/kafka-data
+        - ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/zookeeper-data
+        - ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/zookeeper-logs
     - step: start-services
       services: [mysql]
     - step: wait-for-mysql
@@ -685,6 +690,11 @@ mzworkflows:
 
   bring-up-postgres-kafka:
     steps:
+    - step: create-directories
+      directories:
+        - ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/kafka-data
+        - ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/zookeeper-data
+        - ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/zookeeper-logs
     - step: start-services
       services: [postgres]
     - step: wait-for-postgres

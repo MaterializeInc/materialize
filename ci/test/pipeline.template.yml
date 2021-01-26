@@ -154,25 +154,9 @@ steps:
           composition: perf-upsert
           run: ci
 
-  - id: chbench-make-kafka-dir
-    label: "create cbench kafka-data directory"
-    command: mkdir -p /tmp/chbench/kafka-data
-
-  - id: chbench-make-zookeeper-data-dir
-    label: "create cbench zookeeper-data directory"
-    command: mkdir -p /tmp/chbench/zookeeper-data
-
-  - id: chbench-make-zookeeper-logs-dir
-    label: "create cbench zookeeper-logs directory"
-    command: mkdir -p /tmp/chbench/zookeeper-logs
-
   - id: chbench-demo
     label: "chbench sanity check"
-    depends_on:
-      - build
-      - chbench-make-kafka-dir
-      - chbench-make-zookeeper-data-dir
-      - chbench-make-zookeeper-logs-dir
+    depends_on: build
     plugins:
       - ./ci/plugins/mzcompose:
           composition: chbench

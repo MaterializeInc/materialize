@@ -34,6 +34,7 @@ from typing import (
 )
 from typing_extensions import Literal
 import os
+import pathlib
 import shlex
 import json
 import subprocess
@@ -813,6 +814,16 @@ class WaitForTcpStep(WorkflowStep):
                 ui.progress(" success!", finish=True)
                 return
         raise errors.Failed(f"Unable to connect to {self._host}:{self._port}")
+
+
+@Steps.register("create-directories")
+class CreateDirectories(WorkflowStep):
+    def __init__(self, *, directories: List[str]) -> None:
+        self._directories = [pathlib.Path(d) for d in directories]
+
+    def run(self, workflow: Workflow) -> None:
+        for directory in self._directories:
+            directory.mkdir(parents=True)
 
 
 @Steps.register("drop-kafka-topics")

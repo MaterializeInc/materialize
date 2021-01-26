@@ -89,11 +89,6 @@ main() {
     # Ensure the directory exists so that Docker can mount it
     mkdir -p "${snapshot}"
 
-    # Ensure that the Kafka data directory exists
-    mkdir -p "${snapshot}/kafka-data"
-    mkdir -p "${snapshot}/zookeeper-data"
-    mkdir -p "${snapshot}/zookeeper-logs"
-
     export MZ_WORKERS="${workers}"
     export MZ_CHBENCH_SNAPSHOT="${snapshot}"
     export NUM_WAREHOUSES="${warehouses}"
