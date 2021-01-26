@@ -672,6 +672,7 @@ where
                                 | Statement::AlterObjectRename(_)
                                 | Statement::CreateDatabase(_)
                                 | Statement::CreateIndex(_)
+                                | Statement::CreateRole(_)
                                 | Statement::CreateSchema(_)
                                 | Statement::CreateSink(_)
                                 | Statement::CreateSource(_)
@@ -2066,6 +2067,7 @@ where
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
             ObjectType::Type => ExecuteResponse::DroppedType,
+            ObjectType::Role => unreachable!("DROP ROLE not supported"),
             ObjectType::Object => unreachable!("generic OBJECT cannot be dropped"),
         })
     }
