@@ -260,7 +260,7 @@ where
                     .insert(src_id, LocalInput { handle, capability });
                 let err_collection = Collection::empty(scope);
                 self.collections.insert(
-                    RelationExpr::global_get(src_id, src.optimized_expr.0.typ()),
+                    RelationExpr::global_get(src_id, src.bare_desc.typ().clone()),
                     (stream.as_collection(), err_collection),
                 );
             }
