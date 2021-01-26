@@ -63,7 +63,20 @@ impl<'a> DataflowBuilder<'a> {
         } else {
             match self.catalog.get_by_id(id).item() {
                 CatalogItem::Table(table) => {
-                    dataflow.add_source_import(*id, SourceConnector::Local, table.desc.clone());
+                    // [BTV] dedupe this
+                    let optimized_expr = OptimizedRelationExpr::declare_optimized(
+                        sql::plan::RelationExpr::Get {
+                            id: Id::BareSource(*id),
+                            typ: table.desc.typ().clone(),
+                        }
+                        .decorrelate(),
+                    );
+                    dataflow.add_source_import(
+                        *id,
+                        SourceConnector::Local,
+                        table.desc.clone(),
+                        optimized_expr,
+                    );
                 }
                 CatalogItem::Source(source) => {
                     // If Materialize has caching enabled, check to see if the source has any
@@ -96,7 +109,12 @@ impl<'a> DataflowBuilder<'a> {
                     // Default back to the regular connector if we didn't get a augmented one.
                     let connector = connector.unwrap_or_else(|| source.connector.clone());
 
-                    dataflow.add_source_import(*id, connector, source.desc.clone());
+                    dataflow.add_source_import(
+                        *id,
+                        connector,
+                        source.bare_desc.clone(),
+                        source.optimized_expr.clone(),
+                    );
                 }
                 CatalogItem::View(view) => {
                     self.import_view_into_dataflow(id, &view.optimized_expr, dataflow);

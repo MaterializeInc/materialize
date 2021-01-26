@@ -15,6 +15,7 @@ use std::time::SystemTime;
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
 use dataflow_types::SinkEnvelope;
+use expr::Id;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
@@ -30,6 +31,7 @@ use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
 use sql::catalog::{Catalog as SqlCatalog, CatalogError as SqlCatalogError};
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
+use sql::plan::RelationExpr;
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
 
@@ -154,8 +156,10 @@ pub struct Table {
 pub struct Source {
     pub create_sql: String,
     pub plan_cx: PlanContext,
+    pub optimized_expr: OptimizedRelationExpr,
     pub connector: SourceConnector,
-    pub desc: RelationDesc,
+    pub bare_desc: RelationDesc,
+    pub transformed_desc: RelationDesc, // [btv] rename this
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,7 +243,7 @@ impl CatalogItem {
     pub fn desc(&self, name: &FullName) -> Result<&RelationDesc, SqlCatalogError> {
         match &self {
             CatalogItem::Table(tbl) => Ok(&tbl.desc),
-            CatalogItem::Source(src) => Ok(&src.desc),
+            CatalogItem::Source(src) => Ok(&src.transformed_desc),
             CatalogItem::Sink(_) => Err(SqlCatalogError::InvalidSinkDependency(name.to_string())),
             CatalogItem::View(view) => Ok(&view.desc),
             CatalogItem::Index(_) => Err(SqlCatalogError::InvalidIndexDependency(name.to_string())),
@@ -474,6 +478,13 @@ impl Catalog {
                 Builtin::Log(log) if config.enable_logging => {
                     let index_name = format!("{}_primary_idx", log.name);
                     let oid = catalog.allocate_oid()?;
+                    // [TODO] - dedupe this code
+                    let expr = RelationExpr::Get {
+                        id: Id::BareSource(log.id),
+                        typ: log.variant.desc().typ().clone(),
+                    }
+                    .decorrelate();
+                    let optimized_expr = OptimizedRelationExpr::declare_optimized(expr);
                     events.push(catalog.insert_item(
                         log.id,
                         oid,
@@ -481,8 +492,10 @@ impl Catalog {
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
                             plan_cx: PlanContext::default(),
+                            optimized_expr,
                             connector: dataflow_types::SourceConnector::Local,
-                            desc: log.variant.desc(),
+                            bare_desc: log.variant.desc(),
+                            transformed_desc: log.variant.desc(),
                         }),
                     ));
                     let oid = catalog.allocate_oid()?;
@@ -1496,12 +1509,20 @@ impl Catalog {
                 desc: table.desc,
                 defaults: table.defaults,
             }),
-            Plan::CreateSource { source, .. } => CatalogItem::Source(Source {
-                create_sql: source.create_sql,
-                plan_cx: pcx,
-                connector: source.connector,
-                desc: source.desc,
-            }),
+            Plan::CreateSource { source, .. } => {
+                let mut optimizer = Optimizer::default();
+                let optimized_expr = optimizer.optimize(source.expr, self.indexes())?;
+                let transformed_desc =
+                    RelationDesc::new(optimized_expr.as_ref().typ(), source.column_names);
+                CatalogItem::Source(Source {
+                    create_sql: source.create_sql,
+                    plan_cx: pcx,
+                    optimized_expr,
+                    connector: source.connector,
+                    bare_desc: source.bare_desc,
+                    transformed_desc,
+                })
+            }
             Plan::CreateView { view, .. } => {
                 let mut optimizer = Optimizer::default();
                 let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;

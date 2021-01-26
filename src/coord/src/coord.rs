@@ -1767,11 +1767,18 @@ where
         if_not_exists: bool,
         materialized: bool,
     ) -> Result<ExecuteResponse, anyhow::Error> {
+        println!("Source: {:#?}", source);
+        let optimized_expr = self
+            .optimizer
+            .optimize(source.expr, self.catalog.indexes())?;
+        let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
         let source = catalog::Source {
             create_sql: source.create_sql,
             plan_cx: pcx,
+            optimized_expr,
             connector: source.connector,
-            desc: source.desc,
+            bare_desc: source.bare_desc,
+            transformed_desc,
         };
         let source_id = self.catalog.allocate_id()?;
         let source_oid = self.catalog.allocate_oid()?;
@@ -1784,8 +1791,12 @@ where
         let index_id = if materialized {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
-            let index =
-                auto_generate_primary_idx(index_name.item.clone(), name, source_id, &source.desc);
+            let index = auto_generate_primary_idx(
+                index_name.item.clone(),
+                name,
+                source_id,
+                &source.transformed_desc,
+            );
             let index_id = self.catalog.allocate_id()?;
             let index_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {

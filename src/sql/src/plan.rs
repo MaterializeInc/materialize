@@ -192,7 +192,9 @@ pub struct Table {
 pub struct Source {
     pub create_sql: String,
     pub connector: SourceConnector,
-    pub desc: RelationDesc,
+    pub bare_desc: RelationDesc,
+    pub expr: ::expr::RelationExpr,
+    pub column_names: Vec<Option<ColumnName>>, // [btv] for the transformed source, i.e. the expr
 }
 
 #[derive(Clone, Debug)]

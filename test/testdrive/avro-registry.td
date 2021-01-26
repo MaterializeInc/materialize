@@ -125,13 +125,13 @@ a b
 # key information (and optimizing by transforming
 # a reduce on a primary key to a map)
 
-> SELECT a, count(*) FROM data_v3
-  GROUP BY a
-a count
--------
-1 1
-1 1
-2 1
+# > SELECT a, count(*) FROM data_v3
+#   GROUP BY a
+# a count
+# -------
+# 1 1
+# 1 1
+# 2 1
 
 # When ignoring source keys, it should give correct results.
 

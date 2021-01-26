@@ -1,4 +1,4 @@
-// Copyright Materialize, Inc. All rights reserved.
+// Copyright Materialize, Inc. All rights reserve level: (), column: () level: (), column: ()d.
 //
 // Use of this software is governed by the Business Source License
 // included in the LICENSE file.
@@ -13,13 +13,19 @@
 //! `ALTER`, `CREATE`, and `DROP`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::iter;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
+use std::u64;
 
 use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
+use expr::TableFunc;
 use globset::GlobBuilder;
 use itertools::Itertools;
+use repr::ColumnType;
+use repr::Datum;
+use repr::Row;
 use reqwest::Url;
 use rusoto_core::Region;
 
@@ -51,9 +57,13 @@ use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
+use crate::plan::expr::ColumnRef;
+use crate::plan::expr::JoinKind;
+use crate::plan::expr::ScalarExpr;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::with_options::aws_connect_info;
 use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::RelationExpr;
 use crate::plan::{
     self, plan_utils, query, AlterIndexLogicalCompactionWindow, Index, LogicalCompactionWindow,
     Params, Plan, Sink, Source, Table, Type, TypeInner, View,
@@ -657,6 +667,62 @@ pub fn plan_create_source(
     let name = scx.allocate_name(normalize::object_name(name.clone())?);
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
+    // [btv] Fix this, the encoding.desc should be returning the bare desc which we should then remove when creating the derived expression, not the other way around.
+    let bare_desc = if let SourceEnvelope::Debezium(_) = &envelope {
+        desc.clone().with_column(
+            "diff",
+            ColumnType {
+                nullable: false,
+                scalar_type: ScalarType::Int64,
+            },
+        )
+    } else {
+        desc.clone()
+    };
+    let get_expr = RelationExpr::Get {
+        id: expr::Id::LocalBareSource,
+        typ: bare_desc.typ().clone(),
+    };
+    let expr = if let SourceEnvelope::Debezium(_) = &envelope {
+        // Debezium sources produce a diff in their last column.
+        // Thus we need to select all rows but the last, which we repeat by.
+        // I.e., for a source with four columns, we do
+        // SELECT a.column1, a.column2, a.column3 FROM a, repeat(a.column4)
+        //
+        // [btv] - Maybe it would be better to write these in actual SQL and call into the planner, rather than writing out the expr by hand?
+        // Then we would get some nice things; for example, automatic tracking of column names.
+        //
+        // For this simple case, it probably doesn't matter
+        let diff_col = get_expr.arity() - 1;
+        let expr = RelationExpr::Join {
+            left: Box::new(get_expr),
+            right: Box::new(RelationExpr::CallTable {
+                func: TableFunc::Repeat,
+                exprs: vec![ScalarExpr::Column(ColumnRef {
+                    level: 1,
+                    column: diff_col,
+                })],
+            }),
+            on: ScalarExpr::Literal(
+                Row::pack(iter::once(Datum::True)),
+                ColumnType {
+                    nullable: false,
+                    scalar_type: ScalarType::Bool,
+                },
+            ),
+            kind: JoinKind::Inner { lateral: true },
+        }
+        .project((0..diff_col).collect());
+        expr
+    } else {
+        get_expr
+    };
+    let expr = expr.decorrelate();
+    println!(
+        "Creating source with bare desc: {:?},\nreal desc: {:?}",
+        bare_desc, desc
+    );
+
     let source = Source {
         create_sql,
         connector: SourceConnector::External {
@@ -666,7 +732,9 @@ pub fn plan_create_source(
             consistency,
             ts_frequency,
         },
-        desc,
+        expr,
+        bare_desc,
+        column_names: desc.iter_names().map(|cn| cn.cloned()).collect(),
     };
 
     if !with_options.is_empty() {

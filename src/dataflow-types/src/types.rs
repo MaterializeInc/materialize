@@ -128,12 +128,14 @@ impl DataflowDesc {
         &mut self,
         id: GlobalId,
         connector: SourceConnector,
-        desc: RelationDesc,
+        bare_desc: RelationDesc,
+        optimized_expr: OptimizedRelationExpr,
     ) {
         let source_description = SourceDesc {
             connector,
             operators: None,
-            desc,
+            bare_desc,
+            optimized_expr,
         };
         self.source_imports.insert(id, source_description);
     }
@@ -272,7 +274,7 @@ impl DataflowDesc {
     pub fn arity_of(&self, id: &GlobalId) -> usize {
         for (source_id, desc) in self.source_imports.iter() {
             if source_id == id {
-                return desc.desc.typ().arity();
+                return desc.arity();
             }
         }
         for (_index_id, (desc, typ)) in self.index_imports.iter() {
@@ -451,13 +453,14 @@ pub struct SourceDesc {
     /// Optionally, filtering and projection that may optimistically be applied
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
-    pub desc: RelationDesc,
+    pub bare_desc: RelationDesc,
+    pub optimized_expr: OptimizedRelationExpr,
 }
 
 impl SourceDesc {
     /// Computes the arity of this source.
     pub fn arity(&self) -> usize {
-        self.desc.arity()
+        self.optimized_expr.0.arity()
     }
 }
 

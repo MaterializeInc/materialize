@@ -260,7 +260,7 @@ where
                     .insert(src_id, LocalInput { handle, capability });
                 let err_collection = Collection::empty(scope);
                 self.collections.insert(
-                    RelationExpr::global_get(src_id, src.desc.typ().clone()),
+                    RelationExpr::global_get(src_id, src.optimized_expr.0.typ()),
                     (stream.as_collection(), err_collection),
                 );
             }
@@ -273,8 +273,6 @@ where
                 ts_frequency,
             } => {
                 // TODO(benesch): this match arm is hard to follow. Refactor.
-
-                let get_expr = RelationExpr::global_get(src_id, src.desc.typ().clone());
 
                 // This uid must be unique across all different instantiations of a source
                 let uid = SourceInstanceId {
@@ -345,7 +343,7 @@ where
                                     scope.index(),
                                     self.as_of_frontier.clone(),
                                     &mut src.operators,
-                                    src.desc.typ(),
+                                    src.bare_desc.typ(),
                                 );
 
                             let arranged = arrange_from_upsert(
@@ -359,10 +357,12 @@ where
                                     .as_collection(),
                             );
 
-                            let keys = src.desc.typ().keys[0]
+                            let keys = src.bare_desc.typ().keys[0]
                                 .iter()
                                 .map(|k| ScalarExpr::Column(*k))
                                 .collect::<Vec<_>>();
+                            let get_expr =
+                                RelationExpr::global_get(src_id, src.bare_desc.typ().clone());
                             self.set_local(&get_expr, &keys, (arranged, err_collection.arrange()));
                             capability
                         }
@@ -456,19 +456,9 @@ where
                     };
 
                     let mut collection = match envelope {
-                        SourceEnvelope::None | SourceEnvelope::CdcV2 => stream.as_collection(),
-                        SourceEnvelope::Debezium(_) =>
-                        // TODO(btv) -- this should just be a RelationExpr::Explode (name TBD)
-                        {
-                            stream.as_collection().explode({
-                                let mut row_packer = repr::RowPacker::new();
-                                move |row| {
-                                    let mut datums = row.unpack();
-                                    let diff = datums.pop().unwrap().unwrap_int64() as isize;
-                                    Some((row_packer.pack(datums.into_iter()), diff))
-                                }
-                            })
-                        }
+                        SourceEnvelope::None
+                        | SourceEnvelope::CdcV2
+                        | SourceEnvelope::Debezium(_) => stream.as_collection(),
                         SourceEnvelope::Upsert(_) => unreachable!(),
                     };
 
@@ -476,8 +466,9 @@ where
                     // At the moment this is strictly optional, but we perform it anyhow
                     // to demonstrate the intended use.
                     if let Some(operators) = src.operators.clone() {
+                        println!("operators: {:?}", operators);
                         // Determine replacement values for unused columns.
-                        let source_type = src.desc.typ();
+                        let source_type = src.bare_desc.typ();
                         let position_or = (0..source_type.arity())
                             .map(|col| {
                                 if operators.projection.contains(&col) {
@@ -533,11 +524,32 @@ where
                         .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier2.borrow()))
                         .as_collection();
 
+                    let get = RelationExpr::Get {
+                        id: Id::BareSource(src_id),
+                        typ: src.bare_desc.typ().clone(),
+                    };
                     // Introduce the stream by name, as an unarranged collection.
-                    self.collections.insert(
-                        RelationExpr::global_get(src_id, src.desc.typ().clone()),
-                        (collection, err_collection),
+                    self.collections
+                        .insert(get.clone(), (collection, err_collection));
+
+                    let mut expr = src.optimized_expr.0;
+                    expr.visit_mut(&mut |node| match node {
+                        RelationExpr::Get {
+                            id: Id::LocalBareSource,
+                            ..
+                        } => *node = get.clone(),
+                        _ => (),
+                    });
+
+                    // [btv] Now do the processing ...
+                    self.ensure_rendered(&expr, scope, scope.index());
+                    let new_get = RelationExpr::global_get(src_id, expr.typ().clone());
+                    println!(
+                        "about to run clone_from_to from expr {:?} to {:?}",
+                        expr, new_get
                     );
+                    self.clone_from_to(&expr, &new_get);
+
                     capability
                 };
                 let token = Rc::new(capability);
@@ -962,6 +974,7 @@ where
             // Each of the `RelationExpr` variants have logic to render themselves to either
             // a collection or an arrangement. In either case, we associate the result with
             // the `relation_expr` argument in the context.
+            println!("in ensure_rendered for expr {:?}", relation_expr);
             match relation_expr {
                 // The constant collection is instantiated only on worker zero.
                 RelationExpr::Constant { rows, .. } => {
@@ -984,10 +997,10 @@ where
 
                 // A get should have been loaded into the context, and it is surprising to
                 // reach this point given the `has_collection()` guard at the top of the method.
-                RelationExpr::Get { id, typ: _ } => {
+                RelationExpr::Get { id, typ } => {
                     // TODO: something more tasteful.
                     // perhaps load an empty collection, warn?
-                    panic!("Collection {} not pre-loaded", id);
+                    panic!("Collection {} (typ: {:?}) not pre-loaded", id, typ);
                 }
 
                 RelationExpr::Let { id, value, body } => {

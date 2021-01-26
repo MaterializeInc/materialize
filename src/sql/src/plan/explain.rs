@@ -242,10 +242,23 @@ impl<'a> Explanation<'a> {
                 writeln!(f)?;
             }
             Get { id, .. } => match id {
-                Id::Local(_) => unreachable!("SQL expressions do not support Lets yet"),
+                Id::Local(_) => {
+                    unreachable!("SQL expressions do not support Lets yet")
+                }
+                Id::LocalBareSource => {
+                    unreachable!("(this can't happen [btv])")
+                }
                 Id::Global(id) => writeln!(
                     f,
                     "| Get {} ({})",
+                    self.expr_humanizer
+                        .humanize_id(*id)
+                        .unwrap_or_else(|| "?".to_owned()),
+                    id,
+                )?,
+                Id::BareSource(id) => writeln!(
+                    f,
+                    "| Get Bare Source for {} ({})",
                     self.expr_humanizer
                         .humanize_id(*id)
                         .unwrap_or_else(|| "?".to_owned()),

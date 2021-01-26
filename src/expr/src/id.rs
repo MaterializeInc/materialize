@@ -21,6 +21,9 @@ pub enum Id {
     Local(LocalId),
     /// An identifier that refers to a global dataflow.
     Global(GlobalId),
+    /// [btv] document this
+    BareSource(GlobalId),
+    LocalBareSource,
 }
 
 impl fmt::Display for Id {
@@ -28,6 +31,8 @@ impl fmt::Display for Id {
         match self {
             Id::Local(id) => id.fmt(f),
             Id::Global(id) => id.fmt(f),
+            Id::BareSource(id) => write!(f, "{}(bare)", id),
+            Id::LocalBareSource => write!(f, "(bare source for this source"),
         }
     }
 }
