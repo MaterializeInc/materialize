@@ -824,7 +824,7 @@ class CreateDirectories(WorkflowStep):
     def run(self, workflow: Workflow) -> None:
         for directory in self._directories:
             directory.mkdir(parents=True)
-            print(f"created directory {directory}")
+            print(f"created directory {directory.absolute()}")
 
 
 @Steps.register("drop-kafka-topics")
