@@ -274,6 +274,10 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
         },
     );
     vars.insert("testdrive.bucket".into(), CI_S3_BUCKET.to_string());
+    println!(
+        "AWS_ACCESS_KEY_ID={}",
+        vars.get("testdrive.aws-access-key-id").unwrap()
+    );
     for cmd in cmds {
         let pos = cmd.pos;
         let wrap_err = |e| InputError { msg: e, pos };

@@ -34,13 +34,19 @@ impl Action for PutObjectAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
+        println!(
+            "Putting S3 object: {}/{} ({} bytes)",
+            CI_S3_BUCKET,
+            self.key,
+            self.contents.len()
+        );
         state
             .s3_client
             .as_ref()?
             .put_object(PutObjectRequest {
                 bucket: CI_S3_BUCKET.to_string(),
-                body: Some(self.contents.clone().into_bytes().into()),
                 key: self.key.clone(),
+                body: Some(self.contents.clone().into_bytes().into()),
                 ..Default::default()
             })
             .await
