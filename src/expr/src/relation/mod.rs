@@ -316,13 +316,27 @@ impl MirRelationExpr {
             MirRelationExpr::FlatMap {
                 input,
                 func,
-                exprs: _,
+                exprs,
                 demand: _,
             } => {
-                let mut typ = input.typ();
-                typ.column_types.extend(func.output_type().column_types);
+                let mut input_typ = input.typ();
+                input_typ
+                    .column_types
+                    .extend(func.output_type().column_types);
                 // FlatMap can add duplicate rows, so input keys are no longer valid
-                RelationType::new(typ.column_types)
+                let mut typ = RelationType::new(input_typ.column_types);
+                // But we might know that repeat'ing by a column causes another column to be a key:
+                // in particular, this is true for Debezium sources. Account for that possibility here.
+                if let TableFunc::Repeat = func {
+                    if let MirScalarExpr::Column(col) = &exprs[0] {
+                        for (group_indices, sum_column) in input_typ.group_sum_keys.iter() {
+                            if sum_column == col {
+                                typ = typ.with_key(group_indices.clone());
+                            }
+                        }
+                    }
+                }
+                typ
             }
             MirRelationExpr::Filter { input, .. } => input.typ(),
             MirRelationExpr::Join {
@@ -354,8 +368,46 @@ impl MirRelationExpr {
                     equivalences,
                 );
 
+                let mut group_sum_keys = vec![];
+                for (input_index, input_typ) in input_types.iter().enumerate() {
+                    for (group_indices, column_index) in input_typ.group_sum_keys.iter() {
+                        // If the group key refines a key for every other input, it is a group key for the join.
+                        let group_indices_global = group_indices
+                            .iter()
+                            .map(|&group_index| {
+                                input_mapper.map_column_to_global(group_index, input_index)
+                            })
+                            .collect::<Vec<_>>();
+                        if input_types
+                            .iter()
+                            .enumerate()
+                            .all(|(input2_index, input2_typ)| {
+                                input_index == input2_index
+                                    || input2_typ.keys.iter().any(|input2_key| {
+                                        input2_key.iter().all(|&input2_key_index| {
+                                            group_indices_global.contains(
+                                                &input_mapper.map_column_to_global(
+                                                    input2_key_index,
+                                                    input2_index,
+                                                ),
+                                            )
+                                        })
+                                    })
+                            })
+                        {
+                            let column_index_global =
+                                input_mapper.map_column_to_global(*column_index, input_index);
+                            group_sum_keys.push((group_indices_global, column_index_global));
+                        }
+                    }
+                }
+
                 for keys in global_keys {
                     typ = typ.with_key(keys.clone());
+                }
+                for group_sum_key in group_sum_keys {
+                    let (group_indices, sum_column) = group_sum_key;
+                    typ = typ.with_group_sum_key(group_indices, sum_column);
                 }
                 typ
             }
