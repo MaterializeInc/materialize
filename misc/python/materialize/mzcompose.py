@@ -816,17 +816,6 @@ class WaitForTcpStep(WorkflowStep):
         raise errors.Failed(f"Unable to connect to {self._host}:{self._port}")
 
 
-@Steps.register("create-directories")
-class CreateDirectories(WorkflowStep):
-    def __init__(self, *, directories: List[str]) -> None:
-        self._directories = [pathlib.Path(d) for d in directories]
-
-    def run(self, workflow: Workflow) -> None:
-        for directory in self._directories:
-            directory.mkdir(parents=True)
-            print(f"created directory {directory.absolute()}")
-
-
 @Steps.register("drop-kafka-topics")
 class DropKafkaTopicsStep(WorkflowStep):
     def __init__(self, *, kafka_container: str, topic_pattern: str) -> None:

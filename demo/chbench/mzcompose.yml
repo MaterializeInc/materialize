@@ -34,9 +34,7 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
     volumes:
-      - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT}
-        target: /snapshot
+      - ${MZ_CHBENCH_SNAPSHOT}:/snapshot
   materialized:
     mzbuild: materialized
     ports:
@@ -100,12 +98,8 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
     volumes:
-      - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-data
-        target: /var/lib/zookeeper/data
-      - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-logs
-        target: /var/lib/zookeeper/log
+      - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-data:/var/lib/zookeeper/data
+      - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-logs:/var/lib/zookeeper/logs
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.3
     ports:
@@ -128,9 +122,7 @@ services:
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
     volumes:
-      - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
-        target: /var/lib/kafka/data
+      - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data:/var/lib/kafka/data
   connect:
     image: debezium/connect:1.4
     environment:
@@ -204,15 +196,11 @@ services:
   mzutil:
     mzbuild: mzutil
     volumes:
-      - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT}
-        target: /snapshot
+      - ${MZ_CHBENCH_SNAPSHOT}:/snapshot
   kafka-util:
     mzbuild: kafka-util
     volumes:
-      - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT}
-        target: /snapshot
+      - ${MZ_CHBENCH_SNAPSHOT}:/snapshot
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -275,9 +263,7 @@ services:
     command: ${PEEKER_CMD:---queries q01,q02,q17}
     volumes:
       - ./peeker-config:/etc/peeker
-      - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT:-/tmp}
-        target: /snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-/tmp}:/snapshot
   test-correctness:
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: test-correctness
@@ -633,11 +619,6 @@ mzworkflows:
 
   bring-up-mysql-kafka:
     steps:
-    - step: create-directories
-      directories:
-        - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
-        - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-data
-        - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-logs
     - step: start-services
       services: [mysql]
     - step: wait-for-mysql
@@ -690,11 +671,6 @@ mzworkflows:
 
   bring-up-postgres-kafka:
     steps:
-    - step: create-directories
-      directories:
-        - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
-        - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-data
-        - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-logs
     - step: start-services
       services: [postgres]
     - step: wait-for-postgres
