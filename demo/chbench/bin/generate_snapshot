@@ -105,7 +105,7 @@ main() {
     cd "${snapshot_dir}"
     tar --create \
         --file "${snapshot_id}.tgz" \
-        --use-compress-progoram pigz \
+        --use-compress-program pigz \
         "${snapshot_id}" \
         ;
 
