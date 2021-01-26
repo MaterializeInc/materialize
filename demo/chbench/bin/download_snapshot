@@ -20,9 +20,6 @@ usage() {
 
 Download a chbench Kafka topic snapshot from S3, to the desired data directory.
 
-Uses s3 sync, so it should be safe to run multiple times and should reduce bandwidth required on
-subsequent invocations.
-
 Help:
 
     -h|--help      Print this help message and exit
@@ -64,12 +61,26 @@ main() {
 
     local snapshot
     snapshot="${snapshot_dir}/${snapshot_id}"
-    mkdir -p "${snapshot}"
 
     export MZ_CHBENCH_SNAP_ID="${snapshot_id}"
     export MZ_CHBENCH_SNAPSHOT="${snapshot}"
 
-    "$project"/mzcompose run download-snapshot
+    if [ -d "${snapshot}" ]; then
+        echo "Snapshot already downloaded; nothing to do!"
+        exit 0
+    fi
+
+    if [ ! -f "${snapshot}.tgz" ]; then
+        "$project"/mzcompose run download-snapshot
+    else
+        echo "Snapshot archive already downloaded; skipping download"
+    fi
+
+    tar --extract \
+        --directory "${snapshot_dir}" \
+        --file "${snapshot}.tgz" \
+        --use-compress-program pigz \
+        ;
 }
 
 main "$@"

@@ -18,18 +18,16 @@ snapshot_dir="${HOME:-/tmp}/materialize/benchmark_data/chbench"
 num_measurements=6
 peeker_queries="count-sources"
 setup="no"
-topic_filter="debezium.tpcch.*"
 workers=24
 
 usage() {
-    echo -n "usage: $0 [-d SNAPSHOT_DIRECTORY] [-q QUERIES] [-t TOPIC_FILTER]
-                       [-w WORKERS] SNAPSHOT_ID
+    echo -n "usage: $0 [-d SNAPSHOT_DIRECTORY] [-q QUERIES] [-w WORKERS] SNAPSHOT_ID
 
 Start a benchmark that measures Materialize performance when ingesting VIEWS configured by
-Peeker (using the QUERIES variable). This benchmark works by starting a Kafka cluster and
-populating topics using the snapshot information (and TOPIC_FILTER) contained with the snapshot
-directory. The benchmark then starts Materialized a set number of times, measuring how long it
-takes for Materialized to achieve the desired final view state.
+Peeker (using the QUERIES variable). This benchmark works by starting a Kafka cluster restored
+from a kafka data snapshot contained with the snapshot directory. The benchmark then starts
+Materialized a set number of times, measuring how long it takes for Materialized to achieve the
+desired final view state.
 
 Help:
 
@@ -40,8 +38,7 @@ Options:
     -c|--cleanup                Shutdown services and remove volumes at the end of the test
     -d|--snapshot-directory     Directory that contains the chbench state snapshot
     -q|--queries                Peeker queries to configure (individual query or group name)
-    -s|--setup                  Intialize the Kafka cluster with snapshot from topic snapshots
-    -t|--topic-filter           Only restore topics that match the supplied filter (GLOB syntax)
+    -s|--setup                  Intialize the Kafka cluster from a snapshot
     -w|--workers                Number of Materialize worker threads to configure
 "
     exit "$1"
@@ -68,9 +65,6 @@ parse_args() {
             -s|--setup)
                 setup="yes"
                 ;;
-            -t|--topic-filter)
-                topic_filter="${1:?--topic-filter requires an argument}" && shift
-                ;;
             -w|--workers)
                 workers="${1:?--workers requires an argument}" && shift
                 ;;
@@ -94,7 +88,6 @@ main() {
         exit 1
     fi
 
-    export KAFKA_TOPIC_FILTER="${topic_filter}"
     export MZ_WORKERS="${workers}"
     export MZ_CHBENCH_SNAPSHOT="${snapshot}"
     export PEEKER_QUERIES="${peeker_queries}"

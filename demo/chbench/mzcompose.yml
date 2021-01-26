@@ -34,9 +34,7 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
     volumes:
-      - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT}
-        target: /snapshot
+      - ${MZ_CHBENCH_SNAPSHOT}:/snapshot
   materialized:
     mzbuild: materialized
     ports:
@@ -99,6 +97,9 @@ services:
     image: confluentinc/cp-zookeeper:5.5.3
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+    volumes:
+      - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-data:/var/lib/zookeeper/data
+      - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-logs:/var/lib/zookeeper/logs
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.3
     ports:
@@ -120,6 +121,8 @@ services:
       # To avoid race condition with control-center
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
+    volumes:
+      - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data:/var/lib/kafka/data
   connect:
     image: debezium/connect:1.4
     environment:
@@ -193,15 +196,11 @@ services:
   mzutil:
     mzbuild: mzutil
     volumes:
-      - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT}
-        target: /snapshot
+      - ${MZ_CHBENCH_SNAPSHOT}:/snapshot
   kafka-util:
     mzbuild: kafka-util
     volumes:
-      - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT}
-        target: /snapshot
+      - ${MZ_CHBENCH_SNAPSHOT}:/snapshot
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -264,9 +263,7 @@ services:
     command: ${PEEKER_CMD:---queries q01,q02,q17}
     volumes:
       - ./peeker-config:/etc/peeker
-      - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT:-/tmp}
-        target: /snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-/tmp}:/snapshot
   test-correctness:
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: test-correctness
@@ -405,9 +402,6 @@ mzworkflows:
       command: --write-config /snapshot/config.toml
     - step: workflow
       workflow: setup-ingest-benchmark
-    - step: run
-      service: kafka-util
-      command: archive_topics.py
 
   # Run a test that populates Kafka with data from topic snapshots
   # Then run Materialize and measure time until it catches up to snapshotted view state
@@ -425,9 +419,6 @@ mzworkflows:
     - step: wait-for-tcp
       host: kafka
       port: 9092
-    - step: run
-      service: kafka-util
-      command: restore_topics.py --topic-filter ${KAFKA_TOPIC_FILTER:-debezium.tpcch.*}
     - step: start-services
       services: [materialized]
     - step: run
@@ -441,7 +432,7 @@ mzworkflows:
     steps:
       - step: run
         service: aws-cli
-        command: s3 sync ${MZ_CHBENCH_BUCKET:-s3://mzi-dev-benchmark-data/chbench}/${MZ_CHBENCH_SNAP_ID} /snapshot
+        command: s3 cp ${MZ_CHBENCH_BUCKET:-s3://mzi-dev-benchmark-data/chbench}/${MZ_CHBENCH_SNAP_ID}.tgz /snapshot/
 
   load-test-mysql:
     steps:
