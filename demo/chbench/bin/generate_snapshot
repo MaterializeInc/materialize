@@ -89,6 +89,11 @@ main() {
     # Ensure the directory exists so that Docker can mount it
     mkdir -p "${snapshot}"
 
+    # Ensure that the Kafka data directory exists
+    mkdir -p "${snapshot}/kafka-data"
+    mkdir -p "${snapshot}/zookeeper-data"
+    mkdir -p "${snapshot}/zookeeper-logs"
+
     export MZ_WORKERS="${workers}"
     export MZ_CHBENCH_SNAPSHOT="${snapshot}"
     export NUM_WAREHOUSES="${warehouses}"
@@ -99,10 +104,11 @@ main() {
     env > "${snapshot}/snapshot.env"
 
     "$project"/mzcompose run generate-snapshot
+    "$project"/mzcompose down
 
-    if [[ "${cleanup}" = "yes" ]]; then
-        "$project"/mzcompose down
-    fi
+    # Compress directories to reduce bytes transferred
+    cd "${snapshot_dir}"
+    tar -I pigz -cf "${snapshot_id}.tgz" "${snapshot_id}"
 }
 
 main "$@"
