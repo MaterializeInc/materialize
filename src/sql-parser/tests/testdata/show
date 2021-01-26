@@ -33,6 +33,20 @@ SHOW DATABASES LIKE 'blah'
 ShowDatabases(ShowDatabasesStatement { filter: Some(Like("blah")) })
 
 parse-statement
+SHOW ROLES
+----
+SHOW ROLES
+=>
+ShowObjects(ShowObjectsStatement { object_type: Role, from: None, extended: false, full: false, materialized: false, filter: None })
+
+parse-statement
+SHOW USERS
+----
+SHOW ROLES
+=>
+ShowObjects(ShowObjectsStatement { object_type: Role, from: None, extended: false, full: false, materialized: false, filter: None })
+
+parse-statement
 SHOW SCHEMAS
 ----
 SHOW SCHEMAS

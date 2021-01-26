@@ -1353,12 +1353,15 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(INDEX) {
             self.prev_token();
             self.parse_create_index()
+        } else if self.parse_keyword(ROLE) || self.parse_keyword(USER) {
+            self.prev_token();
+            self.parse_create_role()
         } else if self.parse_keyword(TYPE) {
             self.parse_create_type()
         } else {
             self.expected(
                 self.peek_pos(),
-                "DATABASE, SCHEMA, [MATERIALIZED] VIEW, SOURCE, SINK, or INDEX after CREATE",
+                "DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TYPE, USER, or [MATERIALIZED] VIEW after CREATE",
                 self.peek_token(),
             )
         }
@@ -1721,6 +1724,32 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_create_role(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let is_user = match self.expect_one_of_keywords(&[ROLE, USER])? {
+            ROLE => false,
+            USER => true,
+            _ => unreachable!(),
+        };
+        let name = self.parse_identifier()?;
+        let _ = self.parse_keyword(WITH);
+        let mut options = vec![];
+        loop {
+            match self.parse_one_of_keywords(&[SUPERUSER, NOSUPERUSER, LOGIN, NOLOGIN]) {
+                None => break,
+                Some(SUPERUSER) => options.push(CreateRoleOption::SuperUser),
+                Some(NOSUPERUSER) => options.push(CreateRoleOption::NoSuperUser),
+                Some(LOGIN) => options.push(CreateRoleOption::Login),
+                Some(NOLOGIN) => options.push(CreateRoleOption::NoLogin),
+                Some(_) => unreachable!(),
+            }
+        }
+        Ok(Statement::CreateRole(CreateRoleStatement {
+            is_user,
+            name,
+            options,
+        }))
+    }
+
     fn parse_create_type(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_object_name()?;
         self.expect_keyword(AS)?;
@@ -1780,29 +1809,28 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = match self
-            .parse_one_of_keywords(&[DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, INDEX, TYPE])
-        {
+        let object_type = match self.parse_one_of_keywords(&[
+            DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, VIEW,
+        ]) {
             Some(DATABASE) => {
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
                     if_exists: self.parse_if_exists()?,
                     name: self.parse_identifier()?,
                 }));
             }
-            Some(SCHEMA) => ObjectType::Schema,
-            Some(TABLE) => ObjectType::Table,
-            Some(VIEW) => ObjectType::View,
-            Some(SOURCE) => ObjectType::Source,
-            Some(SINK) => ObjectType::Sink,
             Some(INDEX) => ObjectType::Index,
+            Some(ROLE) | Some(USER) => ObjectType::Role,
+            Some(SCHEMA) => ObjectType::Schema,
+            Some(SINK) => ObjectType::Sink,
+            Some(SOURCE) => ObjectType::Source,
+            Some(TABLE) => ObjectType::Table,
             Some(TYPE) => ObjectType::Type,
-            _ => {
-                return self.expected(
-                    self.peek_pos(),
-                    "DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, INDEX, or TYPE after DROP",
-                    self.peek_token(),
-                )
-            }
+            Some(VIEW) => ObjectType::View,
+            _ => return self.expected(
+                self.peek_pos(),
+                "DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW after DROP",
+                self.peek_token(),
+            ),
         };
 
         let if_exists = self.parse_if_exists()?;
@@ -2935,7 +2963,7 @@ impl<'a> Parser<'a> {
         let extended = self.parse_keyword(EXTENDED);
         if extended {
             self.expect_one_of_keywords(&[
-                SCHEMAS, INDEX, INDEXES, KEYS, TABLES, TYPES, COLUMNS, OBJECTS, FULL,
+                COLUMNS, FULL, INDEX, INDEXES, KEYS, OBJECTS, SCHEMAS, TABLES, TYPES,
             ])?;
             self.prev_token();
         }
@@ -2943,18 +2971,19 @@ impl<'a> Parser<'a> {
         let full = self.parse_keyword(FULL);
         if full {
             if extended {
-                self.expect_one_of_keywords(&[SCHEMAS, COLUMNS, TABLES, TYPES, OBJECTS])?;
+                self.expect_one_of_keywords(&[COLUMNS, OBJECTS, SCHEMAS, TABLES, TYPES])?;
             } else {
                 self.expect_one_of_keywords(&[
-                    SCHEMAS,
                     COLUMNS,
+                    MATERIALIZED,
+                    OBJECTS,
+                    ROLES,
+                    SCHEMAS,
+                    SINKS,
+                    SOURCES,
                     TABLES,
                     TYPES,
                     VIEWS,
-                    SINKS,
-                    SOURCES,
-                    OBJECTS,
-                    MATERIALIZED,
                 ])?;
             }
             self.prev_token();
@@ -2968,18 +2997,19 @@ impl<'a> Parser<'a> {
 
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
             self.parse_show_columns(extended, full)
-        } else if let Some(object_type) =
-            self.parse_one_of_keywords(&[SCHEMAS, SOURCES, VIEWS, SINKS, TABLES, TYPES, OBJECTS])
-        {
+        } else if let Some(object_type) = self.parse_one_of_keywords(&[
+            OBJECTS, ROLES, SCHEMAS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS,
+        ]) {
             Ok(Statement::ShowObjects(ShowObjectsStatement {
                 object_type: match object_type {
+                    OBJECTS => ObjectType::Object,
+                    ROLES | USERS => ObjectType::Role,
                     SCHEMAS => ObjectType::Schema,
-                    SOURCES => ObjectType::Source,
-                    VIEWS => ObjectType::View,
                     SINKS => ObjectType::Sink,
+                    SOURCES => ObjectType::Source,
                     TABLES => ObjectType::Table,
                     TYPES => ObjectType::Type,
-                    OBJECTS => ObjectType::Object,
+                    VIEWS => ObjectType::View,
                     val => panic!(
                         "`parse_one_of_keywords` returned an impossible value: {}",
                         val

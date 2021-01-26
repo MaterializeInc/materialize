@@ -41,6 +41,7 @@ pub enum Statement<T: AstInfo> {
     CreateTable(CreateTableStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
     CreateType(CreateTypeStatement),
+    CreateRole(CreateRoleStatement),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndexOptions(AlterIndexOptionsStatement),
     Discard(DiscardStatement),
@@ -90,6 +91,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
+            Statement::CreateRole(stmt) => f.write_node(stmt),
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::AlterObjectRename(stmt) => f.write_node(stmt),
             Statement::AlterIndexOptions(stmt) => f.write_node(stmt),
@@ -568,6 +570,59 @@ impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
 }
 impl_display_t!(CreateIndexStatement);
 
+/// A `CREATE ROLE` statement.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateRoleStatement {
+    /// Whether this was actually a `CREATE USER` statement.
+    pub is_user: bool,
+    /// The specified role.
+    pub name: Ident,
+    /// Any options that were attached, in the order they were presented.
+    pub options: Vec<CreateRoleOption>,
+}
+
+impl AstDisplay for CreateRoleStatement {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE ");
+        if self.is_user {
+            f.write_str("USER ");
+        } else {
+            f.write_str("ROLE ");
+        }
+        f.write_node(&self.name);
+        for option in &self.options {
+            f.write_str(" ");
+            option.fmt(f)
+        }
+    }
+}
+impl_display!(CreateRoleStatement);
+
+/// Options that can be attached to [`CreateRoleStatement`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateRoleOption {
+    /// The `SUPERUSER` option.
+    SuperUser,
+    /// The `NOSUPERUSER` option.
+    NoSuperUser,
+    /// The `LOGIN` option.
+    Login,
+    /// The `NOLOGIN` option.
+    NoLogin,
+}
+
+impl AstDisplay for CreateRoleOption {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            CreateRoleOption::SuperUser => f.write_str("SUPERUSER"),
+            CreateRoleOption::NoSuperUser => f.write_str("NOSUPERUSER"),
+            CreateRoleOption::Login => f.write_str("LOGIN"),
+            CreateRoleOption::NoLogin => f.write_str("NOLOGIN"),
+        }
+    }
+}
+impl_display!(CreateRoleOption);
+
 /// `CREATE TYPE ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateTypeStatement {
@@ -850,6 +905,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ObjectType::Source => "SOURCES",
             ObjectType::Sink => "SINKS",
             ObjectType::Type => "TYPES",
+            ObjectType::Role => "ROLES",
             ObjectType::Object => "OBJECTS",
             ObjectType::Index => unreachable!(),
         });
@@ -1126,6 +1182,7 @@ pub enum ObjectType {
     Sink,
     Index,
     Type,
+    Role,
     Object,
 }
 
@@ -1139,6 +1196,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Sink => "SINK",
             ObjectType::Index => "INDEX",
             ObjectType::Type => "TYPE",
+            ObjectType::Role => "ROLE",
             ObjectType::Object => "OBJECT",
         })
     }

@@ -186,6 +186,7 @@ pub fn show_objects<'a>(
         ObjectType::Sink => show_sinks(scx, full, from, filter),
         ObjectType::Type => show_types(scx, extended, full, from, filter),
         ObjectType::Object => show_all_objects(scx, extended, full, from, filter),
+        ObjectType::Role => unsupported!("SHOW ROLES"),
         ObjectType::Index => unreachable!("SHOW INDEX handled separately"),
     }
 }

@@ -41,9 +41,9 @@ use sql_parser::ast::Envelope;
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
-    ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement,
-    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, DataType, DropDatabaseStatement,
+    ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateRoleStatement,
+    CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
+    CreateTypeAs, CreateTypeStatement, CreateViewStatement, DataType, DropDatabaseStatement,
     DropObjectsStatement, Expr, Format, Ident, IfExistsBehavior, ObjectName, ObjectType, Raw,
     SqlOption, Statement, Value,
 };
@@ -1240,6 +1240,20 @@ fn extract_timestamp_frequency_option(
     }
 }
 
+pub fn describe_create_role(
+    _: &StatementContext,
+    _: CreateRoleStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_role(
+    _: &StatementContext,
+    _: CreateRoleStatement,
+) -> Result<Plan, anyhow::Error> {
+    unsupported!("CREATE ROLE")
+}
+
 pub fn describe_drop_database(
     _: &StatementContext,
     _: DropDatabaseStatement,
@@ -1290,6 +1304,7 @@ pub fn plan_drop_objects(
         | ObjectType::Index
         | ObjectType::Sink
         | ObjectType::Type => plan_drop_items(scx, object_type, if_exists, names, cascade),
+        ObjectType::Role => unsupported!("DROP ROLE"),
         ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
     }
 }
