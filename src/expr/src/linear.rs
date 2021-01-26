@@ -553,7 +553,6 @@ impl MapFilterProject {
 
 // Optimization routines.
 impl MapFilterProject {
-
     /// Optimize the internal expression evaluation order.
     pub fn optimize(&mut self) {
         // Optimization memoizes individual `ScalarExpr` expressions that
@@ -669,6 +668,80 @@ impl MapFilterProject {
             new_expressions.push(self.expressions[expression].clone());
             expression += 1;
         }
+
+        self.expressions = new_expressions;
+        for proj in self.projection.iter_mut() {
+            *proj = remaps[proj];
+        }
+    }
+
+    /// This method inlines expressions with a single use.
+    ///
+    /// This method only inlines expressions; it does not delete expressions
+    /// that are no longer referenced. The `remove_undemanded()` method should
+    /// be used to do that.
+    fn inline_expressions(&mut self) {
+        // Local copy of input_arity to avoid borrowing `self` in closures.
+        let input_arity = self.input_arity;
+        // Reference counts track the number of places that a reference occurs.
+        let mut reference_count = vec![0; input_arity + self.expressions.len()];
+        // Increment reference counts for each use
+        for expr in self.expressions.iter() {
+            for col in expr.support().into_iter() {
+                reference_count[col] += 1;
+            }
+        }
+        for (_, pred) in self.predicates.iter() {
+            for col in pred.support().into_iter() {
+                reference_count[col] += 1;
+            }
+        }
+        for proj in self.projection.iter() {
+            reference_count[*proj] += 1;
+        }
+
+        // Inline only those columns that 1. are expressions not inputs, and
+        // 2a. are column references or literals or 2b. have a refcount of 1.
+        let should_inline = (0..reference_count.len())
+            .map(|i| {
+                if i < input_arity {
+                    false
+                } else {
+                    match self.expressions[i - input_arity] {
+                        ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => true,
+                        _ => reference_count[i] == 1,
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // Inline expressions that are single uses, or reference columns, or literals.
+        for index in 0..self.expressions.len() {
+            let (prior, expr) = self.expressions.split_at_mut(index);
+            expr[0].visit_mut(&mut |e| {
+                if let ScalarExpr::Column(i) = e {
+                    if should_inline[*i] {
+                        *e = prior[*i - input_arity].clone();
+                    }
+                }
+            });
+        }
+        for (_index, pred) in self.predicates.iter_mut() {
+            let expressions = &self.expressions;
+            pred.visit_mut(&mut |e| {
+                if let ScalarExpr::Column(i) = e {
+                    if should_inline[*i] {
+                        *e = expressions[*i - input_arity].clone();
+                    }
+                }
+            });
+        }
+        // We can only inline column references in `self.projection`, but we should.
+        for proj in self.projection.iter_mut() {
+            if let ScalarExpr::Column(i) = self.expressions[*proj - self.input_arity] {
+                *proj = i;
+            }
+        }
     }
 
     /// Removes unused expressions from `self.expressions`.
@@ -726,68 +799,5 @@ impl MapFilterProject {
                 p
             }))
             .project(projection.into_iter().map(|c| remap[&c]));
-    }
-
-    /// This method inlines expressions with a single use.
-    ///
-    /// This method only inlines expressions; it does not delete expressions
-    /// that are no longer referenced. The `remove_undemanded()` method should
-    /// be used to do that.
-    fn inline_expressions(&mut self) {
-        // Local copy of input_arity to avoid borrowing `self` in closures.
-        let input_arity = self.input_arity;
-        // Reference counts track the number of places that a reference occurs.
-        let mut reference_count = vec![0; input_arity + self.expressions.len()];
-        // Increment reference counts for each use
-        for expr in self.expressions.iter() {
-            for col in expr.support().into_iter() {
-                reference_count[col] += 1;
-            }
-        }
-        for (_, pred) in self.predicates.iter() {
-            for col in pred.support().into_iter() {
-                reference_count[col] += 1;
-            }
-        }
-        for proj in self.projection.iter() {
-            reference_count[*proj] += 1;
-        }
-
-        // Inline only those columns that 1. are expressions not inputs, and
-        // 2a. are column references or literals or 2b. have a refcount of 1.
-        let should_inline = (0..input_arity + self.expressions.len())
-            .map(|i| {
-                if i < input_arity {
-                    false
-                } else {
-                    match self.expressions[i - input_arity] {
-                        ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => true,
-                        _ => reference_count[i] == 1,
-                    }
-                }
-            })
-            .collect::<Vec<_>>();
-
-        // Inline expressions that are single uses, or reference columns, or literals.
-        for index in 0..self.expressions.len() {
-            let (prior, expr) = self.expressions.split_at_mut(index);
-            expr[0].visit_mut(&mut |e| {
-                if let ScalarExpr::Column(i) = e {
-                    if should_inline[*i] {
-                        *e = prior[*i - input_arity].clone();
-                    }
-                }
-            });
-        }
-        for (_index, pred) in self.predicates.iter_mut() {
-            let expressions = &self.expressions;
-            pred.visit_mut(&mut |e| {
-                if let ScalarExpr::Column(i) = e {
-                    if should_inline[*i] {
-                        *e = expressions[*i - input_arity].clone();
-                    }
-                }
-            });
-        }
     }
 }
