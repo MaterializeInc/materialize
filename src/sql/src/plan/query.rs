@@ -1465,6 +1465,7 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Raw>) -> Option<ScopeItemNa
             }
         }
         Expr::Coalesce { .. } => Some("coalesce".into()),
+        Expr::NullIf { .. } => Some("nullif".into()),
         Expr::Array { .. } => Some("array".into()),
         Expr::List { .. } => Some("list".into()),
         Expr::Cast { expr, .. } => return invent_column_name(ecx, expr),
@@ -1973,6 +1974,14 @@ pub fn plan_expr<'a>(
             };
             expr.into()
         }
+        Expr::NullIf { l_expr, r_expr } => plan_case(
+            ecx,
+            &None,
+            &[l_expr.clone().equals(*r_expr.clone())],
+            &[Expr::null()],
+            &Some(Box::new(*l_expr.clone())),
+        )?
+        .into(),
         Expr::FieldAccess { expr, field } => {
             let field = normalize::column_name(field.clone());
             let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
