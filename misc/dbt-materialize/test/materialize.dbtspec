@@ -16,7 +16,7 @@
 
 target:
   type: materialize
-  host: localhost
+  host: materialized
   user: root
   pass: password
   database: materialize
