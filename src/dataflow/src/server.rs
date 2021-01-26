@@ -817,7 +817,7 @@ where
                                     partition_count as usize,
                                     timestamp,
                                     last_offset,
-                                    offset,
+                                    offset + 1,
                                 ));
                             } else {
                                 panic!("Unexpected message type. Expected BYO update.")
