@@ -171,7 +171,11 @@ END $$;
                     column_types.push(ty.nullable(nullable));
                     defaults.push(default);
                 }
-                let mut typ = RelationType { column_types, keys };
+                let mut typ = RelationType {
+                    column_types,
+                    keys,
+                    group_sum_keys: vec![],
+                };
 
                 // Handle table-level UNIQUE and PRIMARY KEY constraints.
                 // PRIMARY KEY implies UNIQUE and NOT NULL.

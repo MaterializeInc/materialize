@@ -15,6 +15,7 @@ use std::time::SystemTime;
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
 use dataflow_types::SinkEnvelope;
+use expr::Id;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
@@ -33,6 +34,7 @@ use sql::catalog::{
     CatalogItemType as SqlCatalogItemType,
 };
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
+use sql::plan::HirRelationExpr;
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
 
@@ -171,7 +173,9 @@ pub struct Table {
 pub struct Source {
     pub create_sql: String,
     pub plan_cx: PlanContext,
+    pub optimized_expr: OptimizedMirRelationExpr,
     pub connector: SourceConnector,
+    pub bare_desc: RelationDesc,
     pub desc: RelationDesc,
 }
 
@@ -538,6 +542,12 @@ impl Catalog {
                 Builtin::Log(log) if config.enable_logging => {
                     let index_name = format!("{}_primary_idx", log.name);
                     let oid = catalog.allocate_oid()?;
+                    let expr = HirRelationExpr::Get {
+                        id: Id::BareSource(log.id),
+                        typ: log.variant.desc().typ().clone(),
+                    }
+                    .lower();
+                    let optimized_expr = OptimizedMirRelationExpr::declare_optimized(expr);
                     events.push(catalog.insert_item(
                         log.id,
                         oid,
@@ -545,7 +555,9 @@ impl Catalog {
                         CatalogItem::Source(Source {
                             create_sql: "TODO".to_string(),
                             plan_cx: PlanContext::default(),
+                            optimized_expr,
                             connector: dataflow_types::SourceConnector::Local,
+                            bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
                         }),
                     ));
@@ -1706,12 +1718,20 @@ impl Catalog {
                 defaults: table.defaults,
                 conn_id: None,
             }),
-            Plan::CreateSource { source, .. } => CatalogItem::Source(Source {
-                create_sql: source.create_sql,
-                plan_cx: pcx,
-                connector: source.connector,
-                desc: source.desc,
-            }),
+            Plan::CreateSource { source, .. } => {
+                let mut optimizer = Optimizer::default();
+                let optimized_expr = optimizer.optimize(source.expr, self.indexes())?;
+                let transformed_desc =
+                    RelationDesc::new(optimized_expr.as_ref().typ(), source.column_names);
+                CatalogItem::Source(Source {
+                    create_sql: source.create_sql,
+                    plan_cx: pcx,
+                    optimized_expr,
+                    connector: source.connector,
+                    bare_desc: source.bare_desc,
+                    desc: transformed_desc,
+                })
+            }
             Plan::CreateView { view, .. } => {
                 let mut optimizer = Optimizer::default();
                 let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;

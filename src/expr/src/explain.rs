@@ -121,6 +121,7 @@ impl<'a> Explanation<'a> {
             // traversal.
             match expr {
                 // Leaf expressions. Nothing more to visit.
+                // TODO [btv] Explain complex sources.
                 Constant { .. } | Get { .. } => (),
                 // Single-input expressions continue the chain.
                 Project { input, .. }
@@ -247,6 +248,15 @@ impl<'a> Explanation<'a> {
                         .unwrap_or_else(|| "?".to_owned()),
                     id,
                 )?,
+                Id::BareSource(id) => writeln!(
+                    f,
+                    "| Get Bare Source for {} ({})",
+                    self.expr_humanizer
+                        .humanize_id(*id)
+                        .unwrap_or_else(|| "?".to_owned()),
+                    id
+                )?,
+                Id::LocalBareSource => writeln!(f, "| Get Bare Source for This Source")?,
             },
             // Lets are annotated on the chain ID that they correspond to.
             Let { .. } => (),
@@ -367,7 +377,12 @@ impl<'a> Explanation<'a> {
             )?,
         }
 
-        if let Some(RelationType { column_types, keys }) = &node.typ {
+        if let Some(RelationType {
+            column_types,
+            keys,
+            group_sum_keys: _, /*  These are a bit hard to describe, so don't bother trying to explain them */
+        }) = &node.typ
+        {
             let column_types: Vec<_> = column_types
                 .iter()
                 .map(|c| self.expr_humanizer.humanize_column_type(c))

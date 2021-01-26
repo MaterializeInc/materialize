@@ -69,6 +69,13 @@ pub struct RelationType {
     /// A collection can contain multiple sets of keys, although it is common to
     /// have either zero or one sets of key indices.
     pub keys: Vec<Vec<usize>>,
+    /// Sets of (group, sum_column) indices, such that the following property holds:
+    /// `SELECT sum(sum_column) FROM relation GROUP BY <group>` is always 0 or 1.
+    /// This may sound like a niche property, but it amounts to saying "exploding by `sum_column` turns `group` into a key",
+    /// which is necessary for propagating Debezium key information.
+    // TODO [btv] - If in the future we start needing an unweildy amount of metadata to propagate Debezium key information,
+    // maybe we can do it in a hackier way (i.e., just have a `pre_debezium_keys` field here).
+    pub group_sum_keys: Vec<(Vec<usize>, usize)>,
 }
 
 impl RelationType {
@@ -85,6 +92,7 @@ impl RelationType {
         RelationType {
             column_types,
             keys: Vec::new(),
+            group_sum_keys: Vec::new(),
         }
     }
 
@@ -93,6 +101,15 @@ impl RelationType {
         indices.sort_unstable();
         if !self.keys.contains(&indices) {
             self.keys.push(indices);
+        }
+        self
+    }
+
+    pub fn with_group_sum_key(mut self, mut group_indices: Vec<usize>, sum_column: usize) -> Self {
+        group_indices.sort_unstable();
+        let entry = (group_indices, sum_column);
+        if !self.group_sum_keys.contains(&entry) {
+            self.group_sum_keys.push(entry);
         }
         self
     }
@@ -232,6 +249,14 @@ impl RelationDesc {
             let k = k.into_iter().map(|idx| idx + self_len).collect();
             self = self.with_key(k);
         }
+        for (group_indices, sum_column) in other.typ.group_sum_keys {
+            let group_indices = group_indices
+                .into_iter()
+                .map(|idx| idx + self_len)
+                .collect();
+            let sum_column = sum_column + self_len;
+            self = self.with_group_sum_key(group_indices, sum_column);
+        }
         self
     }
 
@@ -254,6 +279,18 @@ impl RelationDesc {
     /// Drops all existing keys.
     pub fn without_keys(mut self) -> Self {
         self.typ.keys.clear();
+        self
+    }
+
+    /// Drop all existing group sum keys.
+    pub fn without_group_sum_keys(mut self) -> Self {
+        self.typ.group_sum_keys.clear();
+        self
+    }
+
+    /// Add a new group sum key to this `RelationDesc`.
+    pub fn with_group_sum_key(mut self, group_indices: Vec<usize>, sum_column: usize) -> Self {
+        self.typ = self.typ.with_group_sum_key(group_indices, sum_column);
         self
     }
 

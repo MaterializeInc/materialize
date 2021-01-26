@@ -250,10 +250,23 @@ impl<'a> Explanation<'a> {
                 writeln!(f)?;
             }
             Get { id, .. } => match id {
-                Id::Local(_) => unreachable!("SQL expressions do not support Lets yet"),
+                Id::Local(_) => {
+                    unreachable!("SQL expressions do not support Lets yet")
+                }
+                Id::LocalBareSource => {
+                    unreachable!("We do not yet support explaining complex sources")
+                }
                 Id::Global(id) => writeln!(
                     f,
                     "| Get {} ({})",
+                    self.expr_humanizer
+                        .humanize_id(*id)
+                        .unwrap_or_else(|| "?".to_owned()),
+                    id,
+                )?,
+                Id::BareSource(id) => writeln!(
+                    f,
+                    "| Get Bare Source for {} ({})",
                     self.expr_humanizer
                         .humanize_id(*id)
                         .unwrap_or_else(|| "?".to_owned()),
@@ -355,7 +368,12 @@ impl<'a> Explanation<'a> {
             )?,
         }
 
-        if let Some(RelationType { column_types, keys }) = &node.typ {
+        if let Some(RelationType {
+            column_types,
+            keys,
+            group_sum_keys: _, /* It's hard to describe what these do, so don't explain them. TODO[btv]: come up with something? */
+        }) = &node.typ
+        {
             let column_types: Vec<_> = column_types
                 .iter()
                 .map(|c| self.expr_humanizer.humanize_column_type(c))
