@@ -84,9 +84,15 @@ impl<'a> FuncRewriter<'a> {
         }
     }
 
-    // Divides `lhs` by `rhs` but replaces division-by-zero errors with NULL.
+    // Divides `lhs` by `rhs` but replaces division-by-zero errors with NULL;
+    // note that this is semantically equivalent to `NULLIF(rhs, 0)`.
     fn plan_divide(lhs: Expr<Raw>, rhs: Expr<Raw>) -> Expr<Raw> {
-        lhs.divide(Self::plan_null_if(rhs, Expr::number("0")))
+        lhs.divide(Expr::Case {
+            operand: None,
+            conditions: vec![rhs.clone().equals(Expr::number("0"))],
+            results: vec![Expr::null()],
+            else_result: Some(Box::new(rhs)),
+        })
     }
 
     fn plan_agg(
@@ -181,15 +187,6 @@ impl<'a> FuncRewriter<'a> {
         Self::plan_variance(expr, filter, distinct, sample).call_unary(vec!["sqrt"])
     }
 
-    fn plan_null_if(left: Expr<Raw>, right: Expr<Raw>) -> Expr<Raw> {
-        Expr::Case {
-            operand: None,
-            conditions: vec![left.clone().equals(right)],
-            results: vec![Expr::null()],
-            else_result: Some(Box::new(left)),
-        }
-    }
-
     fn rewrite_expr(&mut self, expr: &Expr<Raw>) -> Option<(Ident, Expr<Raw>)> {
         match expr {
             Expr::Function(Function {
@@ -227,7 +224,6 @@ impl<'a> FuncRewriter<'a> {
                     let (lhs, rhs) = (args[0].clone(), args[1].clone());
                     match name.item.as_str() {
                         "mod" => lhs.modulo(rhs),
-                        "nullif" => Self::plan_null_if(lhs, rhs),
                         _ => return None,
                     }
                 } else {
