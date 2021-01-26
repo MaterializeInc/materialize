@@ -601,9 +601,6 @@ impl MapFilterProject {
                     // Column references need to be rewritten, but do not need to be memoized.
                     *index = projection[index];
                 }
-                ScalarExpr::Literal(_, _) => {
-                    // Literals do not need to be memoized.
-                }
                 _ => {
                     // We should not eagerly memoize `if` branches that might not be taken.
                     // TODO: Memoize expressions in the intersection of `then` and `els`.
@@ -707,9 +704,10 @@ impl MapFilterProject {
                 if i < input_arity {
                     false
                 } else {
-                    match self.expressions[i - input_arity] {
-                        ScalarExpr::Column(_) | ScalarExpr::Literal(_, _) => true,
-                        _ => reference_count[i] == 1,
+                    if let ScalarExpr::Column(_) = self.expressions[i - input_arity] {
+                        true
+                    } else {
+                        reference_count[i] == 1
                     }
                 }
             })

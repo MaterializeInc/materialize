@@ -116,12 +116,10 @@ where
             val_mfp.permute(&demand_map, demand_map.len());
             val_mfp.optimize();
 
-            println!("KEY MFP: {:?}", key_mfp);
-            println!("VAL MFP: {:?}", val_mfp);
-
             // transform `demand` into "skips" we'll do on an iterator.
             for index in (1..demand.len()).rev() {
                 demand[index] -= demand[index - 1];
+                demand[index] -= 1;
             }
 
             let mut row_packer = RowPacker::new();
@@ -140,7 +138,7 @@ where
                         let mut datums_local = datums.borrow();
                         let mut row_iter = row.iter();
                         for skip in demand.iter() {
-                            datums_local.push((&mut row_iter).skip(*skip).next().unwrap());
+                            datums_local.push((&mut row_iter).nth(*skip).unwrap());
                         }
 
                         // Evaluate the key expressions.
@@ -155,6 +153,7 @@ where
                             _ => panic!("Row expected as no predicate was used"),
                         };
                         // Evaluate the value expressions.
+                        datums_local.truncate(demand.len());
                         let val = match val_mfp.evaluate_iter(&mut datums_local, &temp_storage) {
                             Err(e) => return Some(Err(DataflowError::from(e))),
                             Ok(Some(val)) => val,
