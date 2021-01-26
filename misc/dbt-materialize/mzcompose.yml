@@ -18,7 +18,7 @@ services:
     ports:
       - *materialized
     init: true
-  dbt-materialize:
+  dbt-test:
     mzbuild: dbt-materialize
 
 mzworkflows:
@@ -31,3 +31,5 @@ mzworkflows:
       - step: wait-for-tcp
         host: materialized
         port: 6875
+      - step: run
+        service: dbt-test
