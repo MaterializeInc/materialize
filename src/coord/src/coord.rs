@@ -1893,8 +1893,10 @@ where
         let source = catalog::Source {
             create_sql: source.create_sql,
             plan_cx: pcx,
+            optimized_expr,
             connector: source.connector,
-            desc: source.desc,
+            bare_desc: source.bare_desc,
+            desc: transformed_desc,
         };
         let source_id = self.catalog.allocate_id()?;
         let source_oid = self.catalog.allocate_oid()?;

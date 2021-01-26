@@ -607,6 +607,7 @@ fn plan_hypothetical_cast(
             scalar_type: from.clone(),
         }],
         keys: vec![vec![0]],
+        group_sum_keys: vec![],
     };
     let ecx = ExprContext {
         qcx: &qcx,
