@@ -101,10 +101,10 @@ services:
       ZOOKEEPER_CLIENT_PORT: 2181
     volumes:
       - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/zookeeper-data
+        source: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-data
         target: /var/lib/zookeeper/data
       - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/zookeeper-logs
+        source: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-logs
         target: /var/lib/zookeeper/log
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.3
@@ -129,7 +129,7 @@ services:
       KAFKA_JMX_PORT: 9991
     volumes:
       - type: bind
-        source: ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/kafka-data
+        source: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
         target: /var/lib/kafka/data
   connect:
     image: debezium/connect:1.4
@@ -635,9 +635,9 @@ mzworkflows:
     steps:
     - step: create-directories
       directories:
-        - ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/kafka-data
-        - ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/zookeeper-data
-        - ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/zookeeper-logs
+        - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
+        - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-data
+        - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-logs
     - step: start-services
       services: [mysql]
     - step: wait-for-mysql
@@ -692,9 +692,9 @@ mzworkflows:
     steps:
     - step: create-directories
       directories:
-        - ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/kafka-data
-        - ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/zookeeper-data
-        - ${MZ_CHBENCH_SNAPSHOT:-/tmp/chbench}/zookeeper-logs
+        - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
+        - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-data
+        - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-logs
     - step: start-services
       services: [postgres]
     - step: wait-for-postgres
