@@ -1177,6 +1177,18 @@ pub enum Func {
     Table(Vec<FuncImpl<TableFuncPlan>>),
 }
 
+/// Functions using this macro should be transformed/planned away before
+/// reaching function selection code, but still need to be present in the
+/// catalog during planning.
+macro_rules! catalog_name_only {
+    ($name:expr) => {
+        panic!(
+            "{} should be planned away before reaching function selection",
+            $name
+        )
+    };
+}
+
 lazy_static! {
     /// Correlates a built-in function name to its implementations.
     static ref PG_CATALOG_BUILTINS: HashMap<&'static str, Func> = {
@@ -1217,6 +1229,14 @@ lazy_static! {
             },
             "ascii" => Scalar {
                 params!(String) => UnaryFunc::Ascii, 1620;
+            },
+            "avg" => Scalar {
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2100;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2101;
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2103;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2104;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2105;
+                params!(Interval) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2105;
             },
             "bit_length" => Scalar {
                 params!(Bytes) => UnaryFunc::BitLengthBytes, 1810;
@@ -1364,6 +1384,11 @@ lazy_static! {
             "make_timestamp" => Scalar {
                 params!(Int64, Int64, Int64, Int64, Int64, Float64) => VariadicFunc::MakeTimestamp, 3461;
             },
+            "mod" => Scalar {
+                params!(DecimalAny, DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 1728;
+                params!(Int32, Int32) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 941;
+                params!(Int64, Int64) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 947;
+            },
             "now" => Scalar {
                 params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "now")), 1299;
             },
@@ -1440,6 +1465,27 @@ lazy_static! {
             "split_part" => Scalar {
                 params!(String, String, Int64) => VariadicFunc::SplitPart, 2088;
             },
+            "stddev" => Scalar {
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2159;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2157;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2158;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2155;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2154;
+            },
+            "stddev_pop" => Scalar {
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2729;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2727;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2728;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2725;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2724;
+            },
+            "stddev_samp" => Scalar {
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2717;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2715;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2716;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2713;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2712;
+            },
             "substr" => Scalar {
                 params!(String, Int64) => VariadicFunc::Substr, 883;
                 params!(String, Int64, Int64) => VariadicFunc::Substr, 877;
@@ -1488,6 +1534,27 @@ lazy_static! {
             },
             "upper" => Scalar {
                 params!(String) => UnaryFunc::Upper, 871;
+            },
+            "variance" => Scalar {
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2153;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2151;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2152;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2149;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2148;
+            },
+            "var_pop" => Scalar {
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2723;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2721;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2722;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2719;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2718;
+            },
+            "var_samp" => Scalar {
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2646;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2644;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2645;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2642;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2641;
             },
             "version" => Scalar {
                 params!() => Operation::nullary(|ecx| {
