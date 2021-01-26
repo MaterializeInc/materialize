@@ -736,8 +736,10 @@ impl MapFilterProject {
         }
         // We can only inline column references in `self.projection`, but we should.
         for proj in self.projection.iter_mut() {
-            if let ScalarExpr::Column(i) = self.expressions[*proj - self.input_arity] {
-                *proj = i;
+            if *proj >= self.input_arity {
+                if let ScalarExpr::Column(i) = self.expressions[*proj - self.input_arity] {
+                    *proj = i;
+                }
             }
         }
     }

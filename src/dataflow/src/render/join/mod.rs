@@ -180,8 +180,8 @@ impl JoinClosure {
             }
         }
 
-        // TODO(mcsherry): perform more optimizations here.
-        before.remove_undemanded();
+        // `before` should not be modified after this point.
+        before.optimize();
 
         // Cons up an instance of the closure with the closed-over state.
         Self {
@@ -294,6 +294,7 @@ impl JoinBuildState {
             }
         }
         mfp.permute(&column_map, column_map.len());
+        mfp.optimize();
 
         JoinClosure {
             ready_equivalences: equivalences,
