@@ -76,8 +76,11 @@ main() {
         echo "Snapshot archive already downloaded; skipping download"
     fi
 
-    cd "${snapshot_dir}"
-    tar -I pigz -xf "${snapshot_id}.tgz"
+    tar --extract \
+        --directory "${snapshot_dir}" \
+        --file "${snapshot}.tgz" \
+        --use-compress-program pigz \
+        ;
 }
 
 main "$@"

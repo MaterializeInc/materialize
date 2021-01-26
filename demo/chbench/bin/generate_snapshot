@@ -108,7 +108,11 @@ main() {
 
     # Compress directories to reduce bytes transferred
     cd "${snapshot_dir}"
-    tar -I pigz -cf "${snapshot_id}.tgz" "${snapshot_id}"
+    tar --create \
+        --file "${snapshot_id}.tgz" \
+        --use-compress-progoram pigz \
+        "${snapshot_id}" \
+        ;
 
     if [[ "${cleanup}" = "yes" ]]; then
         "$project"/mzcompose down -v
