@@ -12,13 +12,18 @@
 #![forbid(missing_docs)]
 
 use std::collections::HashMap;
+use std::mem;
 
 use derivative::Derivative;
 use futures::Stream;
+use tokio_postgres::error::SqlState;
 
+use expr::GlobalId;
 use repr::{Datum, Row, ScalarType};
 use sql::ast::{Raw, Statement};
 use sql::plan::{Params, StatementDesc};
+
+use crate::ExecuteResponse;
 
 mod vars;
 
@@ -54,7 +59,7 @@ impl Session {
     fn new_internal(conn_id: u32) -> Session {
         Session {
             conn_id,
-            transaction: TransactionStatus::Idle,
+            transaction: TransactionStatus::Default,
             prepared_statements: HashMap::new(),
             portals: HashMap::new(),
             vars: Vars::default(),
@@ -66,25 +71,49 @@ impl Session {
         self.conn_id
     }
 
-    /// Starts a transaction.
-    pub fn start_transaction(&mut self) {
-        self.transaction = TransactionStatus::InTransaction;
+    /// Starts a transaction. This needs to consume and return self because an
+    /// implicit transaction can be bumped up to an explicit transaction, and we
+    /// want to keep around the inner ops. In order to do this in Rust we have to
+    /// take ownership instead of borrow.
+    pub fn start_transaction(mut self) -> Self {
+        self.transaction = match self.transaction {
+            TransactionStatus::Default | TransactionStatus::Started(_) => {
+                TransactionStatus::InTransaction(TransactionOps::None)
+            }
+            TransactionStatus::InTransaction(ops)
+            | TransactionStatus::InTransactionImplicit(ops) => {
+                TransactionStatus::InTransaction(ops)
+            }
+            TransactionStatus::Failed => unreachable!(),
+        };
+        self
     }
 
     /// Starts an implicit transaction.
-    pub fn start_transaction_implicit(&mut self) {
-        self.transaction = TransactionStatus::InTransactionImplicit;
+    pub fn start_transaction_implicit(&mut self, stmts: usize) {
+        if let TransactionStatus::Default = self.transaction {
+            match stmts {
+                1 => self.transaction = TransactionStatus::Started(TransactionOps::None),
+                n if n > 1 => {
+                    self.transaction =
+                        TransactionStatus::InTransactionImplicit(TransactionOps::None)
+                }
+                _ => {}
+            }
+        }
     }
 
-    /// Ends a transaction, setting its state to Idle and destroying all portals.
+    /// Clears a transaction, setting its state to Default and destroying all
+    /// portals. The cleared transaction is returned so its operations can be
+    /// handled.
     ///
     /// The [Postgres protocol docs](https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY) specify:
     /// > a named portal object lasts till the end of the current transaction
     /// and
     /// > An unnamed portal is destroyed at the end of the transaction
-    pub fn end_transaction(&mut self) {
-        self.transaction = TransactionStatus::Idle;
+    pub fn clear_transaction(&mut self) -> TransactionStatus {
         self.portals.clear();
+        mem::replace(&mut self.transaction, TransactionStatus::Default)
     }
 
     /// Marks the current transaction as failed.
@@ -95,6 +124,45 @@ impl Session {
     /// Returns the current transaction status.
     pub fn transaction(&self) -> &TransactionStatus {
         &self.transaction
+    }
+
+    /// Adds operations to the current transaction. An error is produced if they
+    /// cannot be merged (i.e., a read cannot be merged to an insert).
+    pub fn add_transaction_ops(&mut self, add_ops: TransactionOps) -> Result<(), ExecuteResponse> {
+        match &mut self.transaction {
+            TransactionStatus::Started(txn_ops)
+            | TransactionStatus::InTransaction(txn_ops)
+            | TransactionStatus::InTransactionImplicit(txn_ops) => match txn_ops {
+                TransactionOps::None => *txn_ops = add_ops,
+                TransactionOps::Reads => match add_ops {
+                    TransactionOps::Reads => {}
+                    _ => {
+                        return Err(ExecuteResponse::PgError {
+                            code: SqlState::READ_ONLY_SQL_TRANSACTION,
+                            message: "transaction in read-only mode".to_string(),
+                        })
+                    }
+                },
+                TransactionOps::Writes(txn_writes) => match add_ops {
+                    TransactionOps::Writes(mut add_writes) => {
+                        txn_writes.append(&mut add_writes);
+                    }
+                    _ => {
+                        return Err(ExecuteResponse::PgError {
+                            // It's not immediately clear which error code to use here because a
+                            // "write-only transaction" is not a thing in Postgres. This error code is the
+                            // generic "bad txn thing" code, so it's probably the best choice.
+                            code: SqlState::INVALID_TRANSACTION_STATE,
+                            message: "transaction in write-only mode".to_string(),
+                        });
+                    }
+                },
+            },
+            TransactionStatus::Default | TransactionStatus::Failed => {
+                unreachable!()
+            }
+        }
+        Ok(())
     }
 
     /// Registers the prepared statement under `name`.
@@ -169,7 +237,7 @@ impl Session {
 
     /// Resets the session to its initial state.
     pub fn reset(&mut self) {
-        self.end_transaction();
+        self.transaction = TransactionStatus::Default;
         self.prepared_statements.clear();
         self.portals.clear();
         self.vars = Vars::default();
@@ -245,21 +313,64 @@ pub enum PortalState {
 pub type RowBatchStream = Box<dyn Stream<Item = Result<Vec<Row>, comm::Error>> + Send + Unpin>;
 
 /// The transaction status of a session. Postgres' transaction states are in
-/// backend/access/transam/xact.c. The states here don't cleanly match to all
-/// of those, but we try to have lots of tests that make sure our behavior is
-/// identical.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// backend/access/transam/xact.c.
+#[derive(Debug, Clone, PartialEq)]
 pub enum TransactionStatus {
-    /// Not in an explicit or implicit transaction. May execute a single
-    /// statement in this state. Matches both TBLOCK_DEFAULT and TBLOCK_STARTED.
-    Idle,
+    /// Idle. Matches TBLOCK_DEFAULT.
+    Default,
+    /// Running a single-query transaction. Matches TBLOCK_STARTED.
+    Started(TransactionOps),
     /// Currently in a transaction issued from a BEGIN. Matches TBLOCK_INPROGRESS.
-    InTransaction,
+    InTransaction(TransactionOps),
     /// Currently in an implicit transaction started from a multi-statement query
     /// with more than 1 statements. Matches TBLOCK_IMPLICIT_INPROGRESS.
-    InTransactionImplicit,
+    InTransactionImplicit(TransactionOps),
     /// In a failed transaction that was started explicitly (i.e., previously
     /// InTransaction). We do not use Failed for implicit transactions because
     /// those cleanup after themselves. Matches TBLOCK_ABORT.
     Failed,
+}
+
+/// The type of operation being performed by the transaction. This is
+/// needed because we currently do not allow mixing reads and writes in a
+/// transaction. Use this to record what we have done, and what may need to
+/// happen at commit.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransactionOps {
+    /// The transaction has been initiated, but no statement has yet been executed
+    /// in it.
+    None,
+    /// This transaction has had a read (SELECT, TAIL) and must only do other reads.
+    Reads,
+    /// This transaction has had a write (INSERT, UPDATE, DELETE) and must only do
+    /// other writes.
+    Writes(Vec<WriteOp>),
+}
+
+/// An INSERT waiting to be committed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WriteOp {
+    /// The target table.
+    pub id: GlobalId,
+    /// The data rows.
+    pub rows: Vec<(Row, isize)>,
+}
+
+/// The action to take during end_transaction.
+#[derive(Debug)]
+pub enum EndTransactionAction {
+    /// Commit the transaction.
+    Commit,
+    /// Rollback the transaction.
+    Rollback,
+}
+
+impl EndTransactionAction {
+    /// Returns the pgwire tag for this action.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            EndTransactionAction::Commit => "COMMIT",
+            EndTransactionAction::Rollback => "ROLLBACK",
+        }
+    }
 }

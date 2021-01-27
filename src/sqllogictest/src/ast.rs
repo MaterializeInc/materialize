@@ -127,6 +127,7 @@ pub enum Record<'a> {
     /// A `simple` directive.
     Simple {
         location: Location,
+        conn: Option<&'a str>,
         sql: &'a str,
         output: Output,
         output_str: &'a str,

@@ -77,7 +77,9 @@ use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
-use crate::session::{PreparedStatement, Session, TransactionStatus};
+use crate::session::{
+    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
+};
 use crate::sink_connector;
 use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
@@ -593,7 +595,7 @@ where
 
             Command::Execute {
                 portal_name,
-                session,
+                mut session,
                 tx,
             } => {
                 let result = session
@@ -609,15 +611,20 @@ where
                         return;
                     }
                 };
-                match &portal.stmt {
+                let stmt = portal.stmt.clone();
+                let params = portal.parameters.clone();
+                match stmt {
                     Some(stmt) => {
                         // Verify that this statetement type can be executed in the current
                         // transaction state.
                         match session.transaction() {
-                            // Idle is almost always safe (idle means there's a single statement being
-                            // executed). Failed transactions have already been checked in pgwire for a
-                            // safe statement (COMMIT, ROLLBACK, etc.) and can also proceed.
-                            &TransactionStatus::Idle | &TransactionStatus::Failed => {
+                            // By this point we should be in a running transaction.
+                            &TransactionStatus::Default => unreachable!(),
+
+                            // Started is almost always safe (started means there's a single statement
+                            // being executed). Failed transactions have already been checked in pgwire for
+                            // a safe statement (COMMIT, ROLLBACK, etc.) and can also proceed.
+                            &TransactionStatus::Started(_) | &TransactionStatus::Failed => {
                                 if let Statement::Declare(_) = stmt {
                                     // Declare is an exception. Although it's not against any spec to execute
                                     // it, it will always result in nothing happening, since all portals will be
@@ -634,7 +641,7 @@ where
                                 }
                             }
 
-                            // Implicit or explicit transactions only allow reads for now.
+                            // Implicit or explicit transactions.
                             //
                             // Implicit transactions happen when a multi-statement query is executed
                             // (a "simple query"). However if a "BEGIN" appears somewhere in there,
@@ -643,17 +650,17 @@ where
                             // transactions can do unless there's some additional checking to make sure
                             // something disallowed in explicit transactions did not previously take place
                             // in the implicit portion.
-                            &TransactionStatus::InTransactionImplicit
-                            | &TransactionStatus::InTransaction => match stmt {
+                            &TransactionStatus::InTransactionImplicit(_)
+                            | &TransactionStatus::InTransaction(_) => match stmt {
+                                // Statements that are safe in a transaction. We still need to verify that we
+                                // don't interleave reads and writes since we can't perform those serializably.
                                 Statement::Close(_)
                                 | Statement::Commit(_)
-                                | Statement::Copy(_)
                                 | Statement::Declare(_)
                                 | Statement::Discard(_)
                                 | Statement::Explain(_)
                                 | Statement::Fetch(_)
                                 | Statement::Rollback(_)
-                                | Statement::Select(_)
                                 | Statement::SetTransaction(_)
                                 | Statement::ShowColumns(_)
                                 | Statement::ShowCreateIndex(_)
@@ -665,9 +672,37 @@ where
                                 | Statement::ShowIndexes(_)
                                 | Statement::ShowObjects(_)
                                 | Statement::ShowVariable(_)
-                                | Statement::StartTransaction(_)
-                                | Statement::Tail(_) => {}
+                                | Statement::StartTransaction(_) => {
+                                    // Always safe.
+                                }
 
+                                Statement::Copy(_) | Statement::Select(_) | Statement::Tail(_) => {
+                                    if let Err(response) =
+                                        session.add_transaction_ops(TransactionOps::Reads)
+                                    {
+                                        let _ = tx.send(Response {
+                                            result: Ok(response),
+                                            session,
+                                        });
+                                        return;
+                                    }
+                                }
+
+                                Statement::Insert(_) => {
+                                    // Insert will add the actual operations later. We can still do a check to
+                                    // early exit here before processing it.
+                                    if let Err(response) =
+                                        session.add_transaction_ops(TransactionOps::Writes(vec![]))
+                                    {
+                                        let _ = tx.send(Response {
+                                            result: Ok(response),
+                                            session,
+                                        });
+                                        return;
+                                    }
+                                }
+
+                                // Statements below must by run singly (in Started).
                                 Statement::AlterIndexOptions(_)
                                 | Statement::AlterObjectRename(_)
                                 | Statement::CreateDatabase(_)
@@ -682,7 +717,6 @@ where
                                 | Statement::Delete(_)
                                 | Statement::DropDatabase(_)
                                 | Statement::DropObjects(_)
-                                | Statement::Insert(_)
                                 | Statement::SetVariable(_)
                                 | Statement::Update(_) => {
                                     let _ = tx.send(Response {
@@ -701,8 +735,6 @@ where
                         }
 
                         let mut internal_cmd_tx = internal_cmd_tx.clone();
-                        let stmt = stmt.clone();
-                        let params = portal.parameters.clone();
                         tokio::spawn(async move {
                             let result = sql::pure::purify(stmt).await;
                             internal_cmd_tx
@@ -796,6 +828,15 @@ where
 
             Command::Terminate { mut session } => {
                 self.handle_terminate(&mut session).await;
+            }
+
+            Command::Commit {
+                action,
+                mut session,
+                tx,
+            } => {
+                let result = self.sequence_end_transaction(&mut session, action).await;
+                let _ = tx.send(Response { result, session });
             }
         }
     }
@@ -1505,24 +1546,18 @@ where
             ),
 
             Plan::StartTransaction => {
-                session.start_transaction();
+                let session = session.start_transaction();
                 tx.send(Ok(ExecuteResponse::StartedTransaction), session)
             }
 
             Plan::CommitTransaction | Plan::AbortTransaction => {
-                let was_implicit = matches!(
-                    session.transaction(),
-                    TransactionStatus::InTransactionImplicit
-                );
-                let tag = match plan {
-                    Plan::CommitTransaction => "COMMIT",
-                    Plan::AbortTransaction => "ROLLBACK",
+                let action = match plan {
+                    Plan::CommitTransaction => EndTransactionAction::Commit,
+                    Plan::AbortTransaction => EndTransactionAction::Rollback,
                     _ => unreachable!(),
-                }
-                .to_string();
-                session.end_transaction();
+                };
                 tx.send(
-                    Ok(ExecuteResponse::TransactionExited { tag, was_implicit }),
+                    self.sequence_end_transaction(&mut session, action).await,
                     session,
                 )
             }
@@ -1587,12 +1622,15 @@ where
                 affected_rows,
                 kind,
             } => tx.send(
-                self.sequence_send_diffs(id, updates, affected_rows, kind)
+                self.sequence_send_diffs(&mut session, id, updates, affected_rows, kind)
                     .await,
                 session,
             ),
 
-            Plan::Insert { id, values } => tx.send(self.sequence_insert(id, values).await, session),
+            Plan::Insert { id, values } => tx.send(
+                self.sequence_insert(&mut session, id, values).await,
+                session,
+            ),
 
             Plan::AlterItemRename {
                 id,
@@ -1615,15 +1653,15 @@ where
             }
 
             Plan::DiscardAll => {
-                let ret = if session.transaction() != &TransactionStatus::Idle {
+                let ret = if let TransactionStatus::Started(_) = session.transaction() {
+                    self.drop_temp_items(session.conn_id()).await;
+                    session.reset();
+                    ExecuteResponse::DiscardedAll
+                } else {
                     ExecuteResponse::PgError {
                         code: SqlState::ACTIVE_SQL_TRANSACTION,
                         message: "DISCARD ALL cannot run inside a transaction block".to_string(),
                     }
-                } else {
-                    self.drop_temp_items(session.conn_id()).await;
-                    session.reset();
-                    ExecuteResponse::DiscardedAll
                 };
                 tx.send(Ok(ret), session);
             }
@@ -2112,6 +2150,53 @@ where
         Ok(ExecuteResponse::SetVariable { name })
     }
 
+    async fn sequence_end_transaction(
+        &mut self,
+        session: &mut Session,
+        action: EndTransactionAction,
+    ) -> Result<ExecuteResponse, anyhow::Error> {
+        let was_implicit = matches!(
+            session.transaction(),
+            TransactionStatus::InTransactionImplicit(_)
+        );
+
+        let txn = session.clear_transaction();
+
+        if let EndTransactionAction::Commit = action {
+            match txn {
+                TransactionStatus::Default | TransactionStatus::Failed => {}
+                TransactionStatus::Started(ops)
+                | TransactionStatus::InTransaction(ops)
+                | TransactionStatus::InTransactionImplicit(ops) => {
+                    if let TransactionOps::Writes(inserts) = ops {
+                        let timestamp = self.get_write_ts();
+                        for WriteOp { id, rows } in inserts {
+                            let updates = rows
+                                .into_iter()
+                                .map(|(row, diff)| Update {
+                                    row,
+                                    diff,
+                                    timestamp,
+                                })
+                                .collect();
+
+                            broadcast(
+                                &mut self.broadcast_tx,
+                                SequencedCommand::Insert { id, updates },
+                            )
+                            .await;
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(ExecuteResponse::TransactionExited {
+            tag: action.tag(),
+            was_implicit,
+        })
+    }
+
     async fn sequence_peek(
         &mut self,
         conn_id: u32,
@@ -2537,36 +2622,28 @@ where
 
     async fn sequence_send_diffs(
         &mut self,
+        session: &mut Session,
         id: GlobalId,
-        updates: Vec<(Row, isize)>,
+        rows: Vec<(Row, isize)>,
         affected_rows: usize,
         kind: MutationKind,
     ) -> Result<ExecuteResponse, anyhow::Error> {
-        let timestamp = self.get_write_ts();
-        let updates = updates
-            .into_iter()
-            .map(|(row, diff)| Update {
-                row,
-                diff,
-                timestamp,
+        if let Err(response) =
+            session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp { id, rows }]))
+        {
+            Ok(response)
+        } else {
+            Ok(match kind {
+                MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
+                MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
+                MutationKind::Update => ExecuteResponse::Updated(affected_rows),
             })
-            .collect();
-
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::Insert { id, updates },
-        )
-        .await;
-
-        Ok(match kind {
-            MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
-            MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
-            MutationKind::Update => ExecuteResponse::Updated(affected_rows),
-        })
+        }
     }
 
     async fn sequence_insert(
         &mut self,
+        session: &mut Session,
         id: GlobalId,
         values: RelationExpr,
     ) -> Result<ExecuteResponse, anyhow::Error> {
@@ -2586,9 +2663,8 @@ where
                         }
                     }
                 }
-
                 let affected_rows = rows.len();
-                self.sequence_send_diffs(id, rows, affected_rows, MutationKind::Insert)
+                self.sequence_send_diffs(session, id, rows, affected_rows, MutationKind::Insert)
                     .await
             }
             // If we couldn't optimize the INSERT statement to a constant, it
