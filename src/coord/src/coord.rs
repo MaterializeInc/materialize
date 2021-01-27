@@ -3417,7 +3417,6 @@ pub fn index_sql(
                 .collect(),
         ),
         if_not_exists: false,
-        temporary: false,
     }
     .to_ast_string_stable()
 }
