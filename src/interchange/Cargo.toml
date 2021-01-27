@@ -21,7 +21,7 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 futures = "0.3.12"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 hex = "0.4.0"
-itertools = "0.9.0"
+itertools = "0.10.0"
 lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }

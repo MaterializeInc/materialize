@@ -17,7 +17,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }
 futures = "0.3.12"
 interchange = { path = "../interchange" }
-itertools = "0.9.0"
+itertools = "0.10.0"
 kafka-util = { path = "../kafka-util" }
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"

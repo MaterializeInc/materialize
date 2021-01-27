@@ -45,7 +45,7 @@ futures = "0.3.12"
 hex = "0.4.0"
 hyper = { version = "0.14.0", features = ["http1", "server"] }
 include_dir = "0.6.0"
-itertools = "0.9.0"
+itertools = "0.10.0"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
 log = "0.4.13"
@@ -97,7 +97,7 @@ assert_cmd = "1.0.2"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 datadriven = "0.5.0"
 fallible-iterator = "0.2.0"
-itertools = "0.9.0"
+itertools = "0.10.0"
 pgrepr = { path = "../pgrepr" }
 pgtest = { path = "../pgtest" }
 postgres = { version = "0.19.0", features = ["with-chrono-0_4"] }
