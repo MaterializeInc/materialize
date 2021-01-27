@@ -576,6 +576,15 @@ impl KafkaSourceInfo {
             .assign(&partition_list)
             .expect("assignment known to be valid");
 
+        // Since librdkafka v1.6.0, we need to recreate all partition queues
+        // after every call to `self.consumer.assign`.
+        for pc in &mut self.partition_consumers {
+            pc.partition_queue = self
+                .consumer
+                .split_partition_queue(&self.topic_name, pc.pid)
+                .expect("partition known to be valid");
+        }
+
         let partition_queue = self
             .consumer
             .split_partition_queue(&self.topic_name, partition_id)
