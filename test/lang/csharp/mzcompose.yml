@@ -13,7 +13,7 @@ services:
     mzbuild: materialized
     command: -w1 --disable-telemetry
   csharp:
-    image: mcr.microsoft.com/dotnet/sdk:5.0
+    image: mcr.microsoft.com/dotnet/sdk:5.0-focal
     command: /workdir/test/lang/csharp/test.sh
     volumes:
       - ../../../:/workdir
