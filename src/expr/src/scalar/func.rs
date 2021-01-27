@@ -41,7 +41,7 @@ use repr::adt::regex::Regex;
 use repr::{strconv, ColumnName, ColumnType, Datum, RowArena, RowPacker, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
-use crate::{like_pattern, EvalError, ScalarExpr};
+use crate::{like_pattern, EvalError, MirScalarExpr};
 
 mod format;
 
@@ -69,8 +69,8 @@ impl fmt::Display for NullaryFunc {
 pub fn and<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    a_expr: &'a ScalarExpr,
-    b_expr: &'a ScalarExpr,
+    a_expr: &'a MirScalarExpr,
+    b_expr: &'a MirScalarExpr,
 ) -> Result<Datum<'a>, EvalError> {
     match a_expr.eval(datums, temp_storage)? {
         Datum::False => Ok(Datum::False),
@@ -86,8 +86,8 @@ pub fn and<'a>(
 pub fn or<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    a_expr: &'a ScalarExpr,
-    b_expr: &'a ScalarExpr,
+    a_expr: &'a MirScalarExpr,
+    b_expr: &'a MirScalarExpr,
 ) -> Result<Datum<'a>, EvalError> {
     match a_expr.eval(datums, temp_storage)? {
         Datum::True => Ok(Datum::True),
@@ -376,7 +376,7 @@ fn cast_string_to_date<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 fn cast_string_to_list<'a>(
     a: Datum<'a>,
     list_typ: &ScalarType,
-    cast_expr: &'a ScalarExpr,
+    cast_expr: &'a MirScalarExpr,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     let parsed_datums = strconv::parse_list(
@@ -398,7 +398,7 @@ fn cast_string_to_list<'a>(
 fn cast_string_to_map<'a>(
     a: Datum<'a>,
     map_typ: &ScalarType,
-    cast_expr: &'a ScalarExpr,
+    cast_expr: &'a MirScalarExpr,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     let parsed_map = strconv::parse_map(
@@ -623,7 +623,7 @@ fn cast_uuid_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a
 /// `cast_expr` and collecting the results into a new list ("list2").
 fn cast_list1_to_list2<'a>(
     a: Datum,
-    cast_expr: &'a ScalarExpr,
+    cast_expr: &'a MirScalarExpr,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     let mut cast_datums = Vec::new();
@@ -2108,8 +2108,8 @@ impl BinaryFunc {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a_expr: &'a ScalarExpr,
-        b_expr: &'a ScalarExpr,
+        a_expr: &'a MirScalarExpr,
+        b_expr: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         macro_rules! eager {
             ($func:expr $(, $args:expr)*) => {{
@@ -2770,14 +2770,14 @@ pub enum UnaryFunc {
         return_ty: ScalarType,
         // The expression to cast the discovered list elements to the list's
         // elements' type
-        cast_expr: Box<ScalarExpr>,
+        cast_expr: Box<MirScalarExpr>,
     },
     CastStringToMap {
         // Target map's value type
         return_ty: ScalarType,
         // The expression used to cast the discovered values to the map's
         // values' type
-        cast_expr: Box<ScalarExpr>,
+        cast_expr: Box<MirScalarExpr>,
     },
     CastStringToTime,
     CastStringToTimestamp,
@@ -2818,7 +2818,7 @@ pub enum UnaryFunc {
         // List2's type
         return_ty: ScalarType,
         // The expression to cast List1's elements to List2's elements' type
-        cast_expr: Box<ScalarExpr>,
+        cast_expr: Box<MirScalarExpr>,
     },
     CastMapToString {
         ty: ScalarType,
@@ -2870,7 +2870,7 @@ impl UnaryFunc {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        a: &'a ScalarExpr,
+        a: &'a MirScalarExpr,
     ) -> Result<Datum<'a>, EvalError> {
         let a = a.eval(datums, temp_storage)?;
         if self.propagates_nulls() && a.is_null() {
@@ -3344,7 +3344,7 @@ impl fmt::Display for UnaryFunc {
 fn coalesce<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-    exprs: &'a [ScalarExpr],
+    exprs: &'a [MirScalarExpr],
 ) -> Result<Datum<'a>, EvalError> {
     for e in exprs {
         let d = e.eval(datums, temp_storage)?;
@@ -4191,7 +4191,7 @@ impl VariadicFunc {
         &'a self,
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
-        exprs: &'a [ScalarExpr],
+        exprs: &'a [MirScalarExpr],
     ) -> Result<Datum<'a>, EvalError> {
         macro_rules! eager {
             ($func:ident $(, $args:expr)*) => {{

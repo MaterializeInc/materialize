@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
-use expr::{JoinInputMapper, MapFilterProject, RelationExpr, ScalarExpr};
+use expr::{JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker, Timestamp};
 
 use super::super::context::{ArrangementFlavor, Context};
@@ -22,17 +22,17 @@ use crate::operator::CollectionExt;
 use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
 
-impl<G> Context<G, RelationExpr, Row, Timestamp>
+impl<G> Context<G, MirRelationExpr, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    /// Renders `RelationExpr:Join` using dogs^3 delta query dataflows.
+    /// Renders `MirRelationExpr:Join` using dogs^3 delta query dataflows.
     ///
     /// The join is followed by the application of `map_filter_project`, whose
     /// implementation will be pushed in to the join pipeline if at all possible.
     pub fn render_delta_join<F>(
         &mut self,
-        relation_expr: &RelationExpr,
+        relation_expr: &MirRelationExpr,
         map_filter_project: MapFilterProject,
         scope: &mut G,
         worker_index: usize,
@@ -41,7 +41,7 @@ where
     where
         F: Fn(&G::Timestamp) -> G::Timestamp + Clone + 'static,
     {
-        if let RelationExpr::Join {
+        if let MirRelationExpr::Join {
             inputs,
             equivalences,
             demand: _,
@@ -339,7 +339,7 @@ use differential_dataflow::Collection;
 fn build_lookup<G, Tr>(
     updates: Collection<G, Row>,
     trace: Arranged<G, Tr>,
-    prev_key: Vec<ScalarExpr>,
+    prev_key: Vec<MirScalarExpr>,
     closure: JoinClosure,
 ) -> (Collection<G, Row>, Collection<G, DataflowError>)
 where

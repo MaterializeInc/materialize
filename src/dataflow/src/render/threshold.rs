@@ -14,19 +14,19 @@ use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
-use expr::RelationExpr;
+use expr::MirRelationExpr;
 use repr::Row;
 
 use crate::render::context::{ArrangementFlavor, Context};
 
-impl<G, T> Context<G, RelationExpr, Row, T>
+impl<G, T> Context<G, MirRelationExpr, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    pub fn render_threshold(&mut self, relation_expr: &RelationExpr) {
-        if let RelationExpr::Threshold { input } = relation_expr {
+    pub fn render_threshold(&mut self, relation_expr: &MirRelationExpr) {
+        if let MirRelationExpr::Threshold { input } = relation_expr {
             // TODO: re-use and publish arrangement here.
             let arity = input.arity();
             let keys = (0..arity).collect::<Vec<_>>();

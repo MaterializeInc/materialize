@@ -13,9 +13,10 @@
 //! a collection act as the identity operator on collections. Once removed,
 //! we may find joins with zero or one input, which can be further simplified.
 
+use expr::MirRelationExpr;
 use repr::RelationType;
 
-use crate::{RelationExpr, TransformArgs};
+use crate::TransformArgs;
 
 /// Removes unit collections from joins, and joins with fewer than two inputs.
 #[derive(Debug)]
@@ -24,7 +25,7 @@ pub struct JoinElision;
 impl crate::Transform for JoinElision {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |e| {
@@ -36,15 +37,15 @@ impl crate::Transform for JoinElision {
 
 impl JoinElision {
     /// Removes unit collections from joins, and joins with fewer than two inputs.
-    pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Join {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
+        if let MirRelationExpr::Join {
             inputs,
             equivalences,
             ..
         } = relation
         {
             inputs.retain(|input| {
-                if let RelationExpr::Constant { rows, typ } = &input {
+                if let MirRelationExpr::Constant { rows, typ } = &input {
                     !(rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1)
                 } else {
                     true
@@ -56,7 +57,7 @@ impl JoinElision {
             match inputs.len() {
                 0 => {
                     // The identity for join is the collection containing a single 0-ary row.
-                    *relation = RelationExpr::constant(vec![vec![]], RelationType::empty());
+                    *relation = MirRelationExpr::constant(vec![vec![]], RelationType::empty());
                 }
                 1 => {
                     // if there are constraints, they probably should have

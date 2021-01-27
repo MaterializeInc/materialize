@@ -14,7 +14,7 @@ use anyhow::{anyhow, Error};
 use serde::{Deserialize, Serialize};
 
 /// An opaque identifier for a dataflow component. In other words, identifies
-/// the target of a [`RelationExpr::Get`](crate::RelationExpr::Get).
+/// the target of a [`MirRelationExpr::Get`](crate::MirRelationExpr::Get).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum Id {
     /// An identifier that refers to a local component of a dataflow.

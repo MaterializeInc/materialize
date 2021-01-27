@@ -13,14 +13,14 @@ use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::*;
-use expr::RelationExpr;
+use expr::MirRelationExpr;
 use repr::{Datum, Row, RowArena};
 
 use crate::operator::CollectionExt;
 use crate::render::context::Context;
 use crate::render::datum_vec::DatumVec;
 
-impl<G, T> Context<G, RelationExpr, Row, T>
+impl<G, T> Context<G, MirRelationExpr, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
@@ -29,10 +29,10 @@ where
     /// Renders `relation_expr` followed by `map_filter_project` if provided.
     pub fn render_flat_map(
         &mut self,
-        relation_expr: &RelationExpr,
+        relation_expr: &MirRelationExpr,
         map_filter_project: Option<expr::MapFilterProject>,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>) {
-        if let RelationExpr::FlatMap {
+        if let MirRelationExpr::FlatMap {
             input,
             func,
             exprs,

@@ -13,29 +13,29 @@
 //! filters reduce the volume of data before they arrive at more expensive operators.
 //!
 //! ```rust
-//! use expr::{BinaryFunc, IdGen, RelationExpr, ScalarExpr};
+//! use expr::{BinaryFunc, IdGen, MirRelationExpr, MirScalarExpr};
 //! use repr::{ColumnType, Datum, RelationType, ScalarType};
 //!
 //! use transform::predicate_pushdown::PredicatePushdown;
 //!
-//! let input1 = RelationExpr::constant(vec![], RelationType::new(vec![
+//! let input1 = MirRelationExpr::constant(vec![], RelationType::new(vec![
 //!     ScalarType::Bool.nullable(false),
 //! ]));
-//! let input2 = RelationExpr::constant(vec![], RelationType::new(vec![
+//! let input2 = MirRelationExpr::constant(vec![], RelationType::new(vec![
 //!     ScalarType::Bool.nullable(false),
 //! ]));
-//! let input3 = RelationExpr::constant(vec![], RelationType::new(vec![
+//! let input3 = MirRelationExpr::constant(vec![], RelationType::new(vec![
 //!     ScalarType::Bool.nullable(false),
 //! ]));
-//! let join = RelationExpr::join(
+//! let join = MirRelationExpr::join(
 //!     vec![input1.clone(), input2.clone(), input3.clone()],
 //!     vec![vec![(0, 0), (2, 0)].into_iter().collect()],
 //! );
 //!
-//! let predicate0 = ScalarExpr::column(0);
-//! let predicate1 = ScalarExpr::column(1);
-//! let predicate01 = ScalarExpr::column(0).call_binary(ScalarExpr::column(2), BinaryFunc::AddInt64);
-//! let predicate012 = ScalarExpr::literal_ok(Datum::False, ScalarType::Bool.nullable(false));
+//! let predicate0 = MirScalarExpr::column(0);
+//! let predicate1 = MirScalarExpr::column(1);
+//! let predicate01 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(2), BinaryFunc::AddInt64);
+//! let predicate012 = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool.nullable(false));
 //!
 //! let mut expr = join.filter(
 //!    vec![
@@ -55,7 +55,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{AggregateFunc, Id, RelationExpr, ScalarExpr};
+use expr::{AggregateFunc, Id, MirRelationExpr, MirScalarExpr};
 use repr::{Datum, ScalarType};
 
 /// Pushes predicates down through other operators.
@@ -65,7 +65,7 @@ pub struct PredicatePushdown;
 impl crate::Transform for PredicatePushdown {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let mut empty = HashMap::new();
@@ -79,8 +79,8 @@ impl PredicatePushdown {
     /// The ones that should be pushed down to the next dataflow object
     pub fn dataflow_transform(
         &self,
-        relation: &mut RelationExpr,
-        get_predicates: &mut HashMap<Id, HashSet<ScalarExpr>>,
+        relation: &mut MirRelationExpr,
+        get_predicates: &mut HashMap<Id, HashSet<MirScalarExpr>>,
     ) {
         // TODO(#2592): we want to replace everything inside the braces
         // with the single line below
@@ -91,8 +91,8 @@ impl PredicatePushdown {
         // Before this replacement can be done, we need to figure out
         // replanning joins after the new predicates are pushed down.
         match relation {
-            RelationExpr::Filter { input, predicates } => {
-                if let RelationExpr::Get { id, .. } = **input {
+            MirRelationExpr::Filter { input, predicates } => {
+                if let MirRelationExpr::Get { id, .. } = **input {
                     // We can report the predicates upward in `get_predicates`,
                     // but we are not yet able to delete them from the `Filter`.
                     get_predicates
@@ -103,7 +103,7 @@ impl PredicatePushdown {
                     self.dataflow_transform(input, get_predicates);
                 }
             }
-            RelationExpr::Get { id, .. } => {
+            MirRelationExpr::Get { id, .. } => {
                 // If we encounter a `Get` that is not wrapped by a `Filter`,
                 // we should purge all predicates associated with the id.
                 // This is because it is as if there is an empty `Filter`
@@ -116,7 +116,7 @@ impl PredicatePushdown {
             x => {
                 x.visit1_mut(|e| self.dataflow_transform(e, get_predicates));
                 // Prevent local predicate lists from escaping.
-                if let RelationExpr::Let { id, .. } = x {
+                if let MirRelationExpr::Let { id, .. } = x {
                     get_predicates.remove(&Id::Local(*id));
                 }
             }
@@ -135,17 +135,17 @@ impl PredicatePushdown {
     /// source of the data if the `Get` binds to another view.
     fn action(
         &self,
-        relation: &mut RelationExpr,
-        get_predicates: &mut HashMap<Id, HashSet<ScalarExpr>>,
+        relation: &mut MirRelationExpr,
+        get_predicates: &mut HashMap<Id, HashSet<MirScalarExpr>>,
     ) {
         // In the case of Filter or Get we have specific work to do;
         // otherwise we should recursively descend.
         match relation {
-            RelationExpr::Filter { input, predicates } => {
+            MirRelationExpr::Filter { input, predicates } => {
                 // Depending on the type of `input` we have different
                 // logic to apply to consider pushing `predicates` down.
                 match &mut **input {
-                    RelationExpr::Let { id, value, body } => {
+                    MirRelationExpr::Let { id, value, body } => {
                         // Push all predicates to the body.
                         **body = body
                             .take_dangerous()
@@ -166,7 +166,7 @@ impl PredicatePushdown {
                         // Continue recursively on the value.
                         self.action(value, get_predicates);
                     }
-                    RelationExpr::Get { id, .. } => {
+                    MirRelationExpr::Get { id, .. } => {
                         // We can report the predicates upward in `get_predicates`,
                         // but we are not yet able to delete them from the `Filter`.
                         get_predicates
@@ -174,7 +174,7 @@ impl PredicatePushdown {
                             .or_insert_with(|| predicates.iter().cloned().collect())
                             .retain(|p| predicates.contains(p));
                     }
-                    RelationExpr::Join {
+                    MirRelationExpr::Join {
                         inputs,
                         equivalences,
                         ..
@@ -194,7 +194,7 @@ impl PredicatePushdown {
                             let mut pushed = false;
                             // Attempt to push down each predicate to each input.
                             for (index, push_down) in push_downs.iter_mut().enumerate() {
-                                if let RelationExpr::ArrangeBy { .. } = inputs[index] {
+                                if let MirRelationExpr::ArrangeBy { .. } = inputs[index] {
                                     // do nothing. We do not want to push down a filter and block
                                     // usage of an index
                                 } else if let Some(localized) = input_mapper
@@ -213,7 +213,7 @@ impl PredicatePushdown {
                             if !pushed {
                                 use expr::BinaryFunc;
                                 use expr::UnaryFunc;
-                                if let ScalarExpr::CallBinary {
+                                if let MirScalarExpr::CallBinary {
                                     func: BinaryFunc::Eq,
                                     expr1,
                                     expr2,
@@ -264,7 +264,7 @@ impl PredicatePushdown {
                                         input_mapper.map_expr_to_local(equivalence[pos2].clone());
                                     use expr::BinaryFunc;
                                     push_downs[support.into_iter().next().unwrap()].push(
-                                        ScalarExpr::CallBinary {
+                                        MirScalarExpr::CallBinary {
                                             func: BinaryFunc::Eq,
                                             expr1: Box::new(expr1),
                                             expr2: Box::new(expr2),
@@ -303,7 +303,7 @@ impl PredicatePushdown {
                             *predicates = retain;
                         }
                     }
-                    RelationExpr::Reduce {
+                    MirRelationExpr::Reduce {
                         input: inner,
                         group_key,
                         aggregates,
@@ -316,7 +316,7 @@ impl PredicatePushdown {
                             let mut supported = true;
                             let mut new_predicate = predicate.clone();
                             new_predicate.visit_mut(&mut |e| {
-                                if let ScalarExpr::Column(c) = e {
+                                if let MirScalarExpr::Column(c) = e {
                                     if *c >= group_key.len() {
                                         supported = false;
                                     }
@@ -324,18 +324,18 @@ impl PredicatePushdown {
                             });
                             if supported {
                                 new_predicate.visit_mut(&mut |e| {
-                                    if let ScalarExpr::Column(i) = e {
+                                    if let MirScalarExpr::Column(i) = e {
                                         *e = group_key[*i].clone();
                                     }
                                 });
                                 push_down.push(new_predicate);
-                            } else if let ScalarExpr::Column(col) = &predicate {
+                            } else if let MirScalarExpr::Column(col) = &predicate {
                                 if *col == group_key.len()
                                     && aggregates.len() == 1
                                     && aggregates[0].func == AggregateFunc::Any
                                 {
                                     push_down.push(aggregates[0].expr.clone());
-                                    aggregates[0].expr = ScalarExpr::literal_ok(
+                                    aggregates[0].expr = MirScalarExpr::literal_ok(
                                         Datum::True,
                                         ScalarType::Bool.nullable(false),
                                     );
@@ -358,10 +358,10 @@ impl PredicatePushdown {
                             *relation = input.take_dangerous();
                         }
                     }
-                    RelationExpr::Project { input, outputs } => {
+                    MirRelationExpr::Project { input, outputs } => {
                         let predicates = predicates.drain(..).map(|mut predicate| {
                             predicate.visit_mut(&mut |e| {
-                                if let ScalarExpr::Column(i) = e {
+                                if let MirScalarExpr::Column(i) = e {
                                     *i = outputs[*i];
                                 }
                             });
@@ -374,7 +374,7 @@ impl PredicatePushdown {
 
                         self.action(relation, get_predicates);
                     }
-                    RelationExpr::Filter {
+                    MirRelationExpr::Filter {
                         input,
                         predicates: predicates2,
                     } => {
@@ -386,7 +386,7 @@ impl PredicatePushdown {
                         );
                         self.action(relation, get_predicates);
                     }
-                    RelationExpr::Map { input, scalars } => {
+                    MirRelationExpr::Map { input, scalars } => {
                         // In the case of a Filter { Map {...} }, we can always push down the Filter
                         // by inlining expressions from the Map. We don't want to do this in general,
                         // however, since general inlining can result in exponential blowup in the size
@@ -409,7 +409,7 @@ impl PredicatePushdown {
                                     )
                             }) {
                                 predicate.visit_mut(&mut |e| {
-                                    if let ScalarExpr::Column(c) = e {
+                                    if let MirScalarExpr::Column(c) = e {
                                         // NB: this inlining would be invalid if can_inline did not
                                         // verify that scalars[*c - input_arity] referenced only
                                         // expressions from the input and not any newly-constructed
@@ -436,14 +436,14 @@ impl PredicatePushdown {
                         }
                         *relation = result;
                     }
-                    RelationExpr::Union { base, inputs } => {
+                    MirRelationExpr::Union { base, inputs } => {
                         *base = Box::new(base.take_dangerous().filter(predicates.clone()));
                         for input in inputs {
                             *input = input.take_dangerous().filter(predicates.clone());
                             self.action(input, get_predicates);
                         }
                     }
-                    RelationExpr::Negate { input: inner } => {
+                    MirRelationExpr::Negate { input: inner } => {
                         let predicates = std::mem::replace(predicates, Vec::new());
                         *relation = inner.take_dangerous().filter(predicates).negate();
                         self.action(relation, get_predicates);
@@ -453,7 +453,7 @@ impl PredicatePushdown {
                     }
                 }
             }
-            RelationExpr::Get { id, .. } => {
+            MirRelationExpr::Get { id, .. } => {
                 // Purge all predicates associated with the id.
                 get_predicates
                     .entry(*id)
@@ -470,11 +470,11 @@ impl PredicatePushdown {
     /// Defines a criteria for inlining scalar expressions.
     // TODO(justin): create a list of which functions are acceptable to inline. We shouldn't
     // inline ones that are "expensive."
-    fn can_inline(s: &ScalarExpr, input_arity: usize) -> bool {
+    fn can_inline(s: &MirScalarExpr, input_arity: usize) -> bool {
         Self::is_safe_leaf(s, input_arity)
             || match s {
-                ScalarExpr::CallUnary { func: _, expr } => Self::can_inline(expr, input_arity),
-                ScalarExpr::CallBinary {
+                MirScalarExpr::CallUnary { func: _, expr } => Self::can_inline(expr, input_arity),
+                MirScalarExpr::CallBinary {
                     func: _,
                     expr1,
                     expr2,
@@ -486,10 +486,10 @@ impl PredicatePushdown {
             }
     }
 
-    fn is_safe_leaf(s: &ScalarExpr, input_arity: usize) -> bool {
+    fn is_safe_leaf(s: &MirScalarExpr, input_arity: usize) -> bool {
         match s {
-            ScalarExpr::Column(c) => *c < input_arity,
-            ScalarExpr::Literal(_, _) => true,
+            MirScalarExpr::Column(c) => *c < input_arity,
+            MirScalarExpr::Literal(_, _) => true,
             _ => false,
         }
     }

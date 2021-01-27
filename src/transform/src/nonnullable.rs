@@ -15,7 +15,7 @@
 // TODO(frank): evaluate for redundancy with `column_knowledge`, or vice-versa.
 
 use crate::TransformArgs;
-use expr::{AggregateExpr, AggregateFunc, RelationExpr, ScalarExpr, UnaryFunc};
+use expr::{AggregateExpr, AggregateFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use repr::{Datum, RelationType, ScalarType};
 
 /// Harvests information about non-nullability of columns from sources.
@@ -25,7 +25,7 @@ pub struct NonNullable;
 impl crate::Transform for NonNullable {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
@@ -37,9 +37,9 @@ impl crate::Transform for NonNullable {
 
 impl NonNullable {
     /// Harvests information about non-nullability of columns from sources.
-    pub fn action(&self, relation: &mut RelationExpr) {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
         match relation {
-            RelationExpr::Map { input, scalars } => {
+            MirRelationExpr::Map { input, scalars } => {
                 if scalars.iter().any(|s| scalar_contains_isnull(s)) {
                     let mut metadata = input.typ();
                     for scalar in scalars.iter_mut() {
@@ -49,7 +49,7 @@ impl NonNullable {
                     }
                 }
             }
-            RelationExpr::Filter { input, predicates } => {
+            MirRelationExpr::Filter { input, predicates } => {
                 if predicates.iter().any(|s| scalar_contains_isnull(s)) {
                     let metadata = input.typ();
                     for predicate in predicates.iter_mut() {
@@ -57,7 +57,7 @@ impl NonNullable {
                     }
                 }
             }
-            RelationExpr::Reduce {
+            MirRelationExpr::Reduce {
                 input,
                 group_key: _,
                 aggregates,
@@ -80,10 +80,10 @@ impl NonNullable {
 }
 
 /// True if the expression contains a "is null" test.
-fn scalar_contains_isnull(expr: &ScalarExpr) -> bool {
+fn scalar_contains_isnull(expr: &MirScalarExpr) -> bool {
     let mut result = false;
     expr.visit(&mut |e| {
-        if let ScalarExpr::CallUnary {
+        if let MirScalarExpr::CallUnary {
             func: UnaryFunc::IsNull,
             ..
         } = e
@@ -95,17 +95,17 @@ fn scalar_contains_isnull(expr: &ScalarExpr) -> bool {
 }
 
 /// Transformations to scalar functions, based on nonnullability of columns.
-fn scalar_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
+fn scalar_nonnullable(expr: &mut MirScalarExpr, metadata: &RelationType) {
     // Tests for null can be replaced by "false" for non-nullable columns.
     expr.visit_mut(&mut |e| {
-        if let ScalarExpr::CallUnary {
+        if let MirScalarExpr::CallUnary {
             func: UnaryFunc::IsNull,
             expr,
         } = e
         {
-            if let ScalarExpr::Column(c) = &**expr {
+            if let MirScalarExpr::Column(c) = &**expr {
                 if !metadata.column_types[*c].nullable {
-                    *e = ScalarExpr::literal_ok(Datum::False, ScalarType::Bool.nullable(false));
+                    *e = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool.nullable(false));
                 }
             }
         }
@@ -116,9 +116,9 @@ fn scalar_nonnullable(expr: &mut ScalarExpr, metadata: &RelationType) {
 fn aggregate_nonnullable(expr: &mut AggregateExpr, metadata: &RelationType) {
     // An aggregate that is a count of non-nullable data can be replaced by
     // count(true).
-    if let (AggregateFunc::Count, ScalarExpr::Column(c)) = (&expr.func, &expr.expr) {
+    if let (AggregateFunc::Count, MirScalarExpr::Column(c)) = (&expr.func, &expr.expr) {
         if !metadata.column_types[*c].nullable && !expr.distinct {
-            expr.expr = ScalarExpr::literal_ok(Datum::True, ScalarType::Bool.nullable(false));
+            expr.expr = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool.nullable(false));
         }
     }
 }

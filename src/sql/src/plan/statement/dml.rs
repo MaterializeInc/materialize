@@ -210,13 +210,13 @@ pub fn plan_explain(
 }
 
 /// Plans and decorrelates a `Query`. Like `query::plan_root_query`, but returns
-/// an `::expr::RelationExpr`, which cannot include correlated expressions.
+/// an `::expr::MirRelationExpr`, which cannot include correlated expressions.
 pub fn plan_query(
     scx: &StatementContext,
     query: Query<Raw>,
     params: &Params,
     lifetime: QueryLifetime,
-) -> Result<(::expr::RelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
+) -> Result<(::expr::MirRelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
     let (mut expr, desc, finishing) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params)?;
     Ok((expr.decorrelate(), desc, finishing))

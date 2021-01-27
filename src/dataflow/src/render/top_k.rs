@@ -13,18 +13,18 @@ use differential_dataflow::operators::Consolidate;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
-use expr::RelationExpr;
+use expr::MirRelationExpr;
 use repr::{Diff, Row};
 
 use crate::render::context::Context;
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<G> Context<G, RelationExpr, Row, repr::Timestamp>
+impl<G> Context<G, MirRelationExpr, Row, repr::Timestamp>
 where
     G: Scope<Timestamp = repr::Timestamp>,
 {
-    pub fn render_topk(&mut self, relation_expr: &RelationExpr) {
-        if let RelationExpr::TopK {
+    pub fn render_topk(&mut self, relation_expr: &MirRelationExpr) {
+        if let MirRelationExpr::TopK {
             input,
             group_key,
             order_key,

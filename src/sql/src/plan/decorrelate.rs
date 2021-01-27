@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Decorrelation is the process of transforming a `sql::expr::RelationExpr`
-//! into a `expr::RelationExpr`, importantly replacing instances of
-//! `ScalarExpr` that may contain subqueries (e.g. `SELECT` or `EXISTS`)
-//! with scalar expressions that contain none of these.
+//! Decorrelation is the process of transforming a `sql::expr::HirRelationExpr`
+//! into a `expr::MirRelationExpr`, importantly replacing instances of
+//! `HirScalarExpr` that may contain subqueries (e.g. `SELECT` or `EXISTS`)
+//! with instances of `MirScalarExpr` that contain none of these.
 //!
 //! Informally, a subquery should be viewed as a query that is executed in
 //! the context of some outer relation, for each row of that relation. The
@@ -43,8 +43,8 @@ use ore::collections::CollectionExt;
 use repr::RelationType;
 use repr::*;
 
-use crate::plan::expr::RelationExpr;
-use crate::plan::expr::ScalarExpr;
+use crate::plan::expr::HirRelationExpr;
+use crate::plan::expr::HirScalarExpr;
 use crate::plan::expr::{AggregateExpr, ColumnOrder, ColumnRef, JoinKind};
 use crate::plan::transform_expr;
 
@@ -109,20 +109,20 @@ impl ColumnMap {
     }
 }
 
-impl RelationExpr {
-    /// Rewrite `self` into a `expr::RelationExpr`.
-    /// This requires rewriting all correlated subqueries (nested `RelationExpr`s) into flat queries
-    pub fn decorrelate(mut self) -> expr::RelationExpr {
+impl HirRelationExpr {
+    /// Rewrite `self` into a `expr::MirRelationExpr`.
+    /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
+    pub fn decorrelate(mut self) -> expr::MirRelationExpr {
         let mut id_gen = expr::IdGen::default();
         transform_expr::split_subquery_predicates(&mut self);
         transform_expr::try_simplify_quantified_comparisons(&mut self);
-        expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
+        expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
             .let_in(&mut id_gen, |id_gen, get_outer| {
                 self.applied_to(id_gen, get_outer, &ColumnMap::empty())
             })
     }
 
-    /// Return a `expr::RelationExpr` which evaluates `self` once for each row of `get_outer`.
+    /// Return a `expr::MirRelationExpr` which evaluates `self` once for each row of `get_outer`.
     ///
     /// For uncorrelated `self`, this should be the cross-product between `get_outer` and `self`.
     /// When `self` references columns of `get_outer`, much more work needs to occur.
@@ -137,15 +137,15 @@ impl RelationExpr {
     fn applied_to(
         self,
         id_gen: &mut expr::IdGen,
-        get_outer: expr::RelationExpr,
+        get_outer: expr::MirRelationExpr,
         col_map: &ColumnMap,
-    ) -> expr::RelationExpr {
-        use self::RelationExpr::*;
-        use expr::RelationExpr as SR;
-        if let expr::RelationExpr::Get { .. } = &get_outer {
+    ) -> expr::MirRelationExpr {
+        use self::HirRelationExpr::*;
+        use expr::MirRelationExpr as SR;
+        if let expr::MirRelationExpr::Get { .. } = &get_outer {
         } else {
             panic!(
-                "get_outer: expected a RelationExpr::Get, found {:?}",
+                "get_outer: expected a MirRelationExpr::Get, found {:?}",
                 get_outer
             );
         }
@@ -480,7 +480,7 @@ impl RelationExpr {
     }
 }
 
-impl ScalarExpr {
+impl HirScalarExpr {
     /// Rewrite `self` into a `expr::ScalarExpr` which can be applied to the modified `inner`.
     ///
     /// This method is responsible for decorrelating subqueries in `self` by introducing further columns
@@ -495,10 +495,10 @@ impl ScalarExpr {
         self,
         id_gen: &mut expr::IdGen,
         col_map: &ColumnMap,
-        inner: &mut expr::RelationExpr,
-    ) -> expr::ScalarExpr {
-        use self::ScalarExpr::*;
-        use expr::ScalarExpr as SS;
+        inner: &mut expr::MirRelationExpr,
+    ) -> expr::MirScalarExpr {
+        use self::HirScalarExpr::*;
+        use expr::MirScalarExpr as SS;
 
         match self {
             Column(col_ref) => SS::Column(col_map.get(&col_ref)),
@@ -566,7 +566,7 @@ impl ScalarExpr {
                     // If columns were added, we need a more careful approch, as
                     // described above. First, we need to de-correlate each of
                     // the two expressions independently, and apply their cases
-                    // as `RelationExpr::Map` operations.
+                    // as `MirRelationExpr::Map` operations.
 
                     *inner = inner_clone.let_in(id_gen, |id_gen, get_inner| {
                         // Restrict to records satisfying `cond_expr` and apply `then` as a map.
@@ -635,7 +635,7 @@ impl ScalarExpr {
                             // `.map(vec![Datum::True])`, but using a join allows
                             // for potential predicate pushdown and elision in the
                             // optimizer.
-                            .product(expr::RelationExpr::constant(
+                            .product(expr::MirRelationExpr::constant(
                                 vec![vec![Datum::True]],
                                 RelationType::new(vec![ScalarType::Bool.nullable(false)]),
                             ));
@@ -668,9 +668,9 @@ impl ScalarExpr {
     }
 
     /// Rewrites `self` into a `expr::ScalarExpr`.
-    pub fn lower_uncorrelated(self) -> Result<expr::ScalarExpr, anyhow::Error> {
-        use self::ScalarExpr::*;
-        use expr::ScalarExpr as SS;
+    pub fn lower_uncorrelated(self) -> Result<expr::MirScalarExpr, anyhow::Error> {
+        use self::HirScalarExpr::*;
+        use expr::MirScalarExpr as SS;
 
         Ok(match self {
             Column(ColumnRef { level: 0, column }) => SS::Column(column),
@@ -715,13 +715,18 @@ impl ScalarExpr {
 /// `inner` to `outer`.
 fn branch<F>(
     id_gen: &mut expr::IdGen,
-    outer: expr::RelationExpr,
+    outer: expr::MirRelationExpr,
     col_map: &ColumnMap,
-    mut inner: RelationExpr,
+    mut inner: HirRelationExpr,
     apply: F,
-) -> expr::RelationExpr
+) -> expr::MirRelationExpr
 where
-    F: FnOnce(&mut expr::IdGen, RelationExpr, expr::RelationExpr, &ColumnMap) -> expr::RelationExpr,
+    F: FnOnce(
+        &mut expr::IdGen,
+        HirRelationExpr,
+        expr::MirRelationExpr,
+        &ColumnMap,
+    ) -> expr::MirRelationExpr,
 {
     // TODO: It would be nice to have a version of this code w/o optimizations,
     // at the least for purposes of understanding. It was difficult for one reader
@@ -772,11 +777,11 @@ where
     // hard.
     let mut is_simple = true;
     inner.visit(&mut |expr| match expr {
-        RelationExpr::Constant { .. }
-        | RelationExpr::Project { .. }
-        | RelationExpr::Map { .. }
-        | RelationExpr::Filter { .. }
-        | RelationExpr::CallTable { .. } => (),
+        HirRelationExpr::Constant { .. }
+        | HirRelationExpr::Project { .. }
+        | HirRelationExpr::Map { .. }
+        | HirRelationExpr::Filter { .. }
+        | HirRelationExpr::CallTable { .. } => (),
         _ => is_simple = false,
     });
     if is_simple {
@@ -823,7 +828,7 @@ where
             // rows, whereas if it had been correlated it would not (and *could*
             // not) have been computed if outer had no rows, but the callers of
             // this function don't mind these somewhat-weird semantics.
-            expr::RelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
+            expr::MirRelationExpr::constant(vec![vec![]], RelationType::new(vec![]))
         } else {
             get_outer.clone().distinct_by(key.clone())
         };
@@ -831,7 +836,7 @@ where
             let oa = get_outer.arity();
             let branch = apply(id_gen, inner, get_keyed_outer, &new_col_map);
             let ba = branch.arity();
-            let joined = expr::RelationExpr::join(
+            let joined = expr::MirRelationExpr::join(
                 vec![get_outer.clone(), branch],
                 key.iter()
                     .enumerate()
@@ -850,7 +855,7 @@ impl AggregateExpr {
         self,
         id_gen: &mut expr::IdGen,
         col_map: &ColumnMap,
-        inner: &mut expr::RelationExpr,
+        inner: &mut expr::MirRelationExpr,
     ) -> expr::AggregateExpr {
         let AggregateExpr {
             func,
@@ -868,13 +873,13 @@ impl AggregateExpr {
 
 /// Attempts an efficient outer join, if `on` has equijoin structure.
 fn attempt_outer_join(
-    left: expr::RelationExpr,
-    right: expr::RelationExpr,
-    on: expr::ScalarExpr,
+    left: expr::MirRelationExpr,
+    right: expr::MirRelationExpr,
+    on: expr::MirScalarExpr,
     kind: JoinKind,
     oa: usize,
     id_gen: &mut expr::IdGen,
-) -> Option<expr::RelationExpr> {
+) -> Option<expr::MirRelationExpr> {
     use expr::BinaryFunc;
 
     // Both `left` and `right` are decorrelated inputs, whose first `oa` calumns
@@ -891,7 +896,7 @@ fn attempt_outer_join(
     let mut predicates = Vec::new();
     let mut todo = vec![on.clone()];
     while let Some(next) = todo.pop() {
-        if let expr::ScalarExpr::CallBinary {
+        if let expr::MirScalarExpr::CallBinary {
             expr1,
             expr2,
             func: BinaryFunc::And,
@@ -908,13 +913,13 @@ fn attempt_outer_join(
     let mut l_keys = Vec::new();
     let mut r_keys = Vec::new();
     for predicate in predicates.iter_mut() {
-        if let expr::ScalarExpr::CallBinary {
+        if let expr::MirScalarExpr::CallBinary {
             expr1,
             expr2,
             func: BinaryFunc::Eq,
         } = predicate
         {
-            if let (expr::ScalarExpr::Column(c1), expr::ScalarExpr::Column(c2)) =
+            if let (expr::MirScalarExpr::Column(c1), expr::MirScalarExpr::Column(c2)) =
                 (&mut **expr1, &mut **expr2)
             {
                 if *c1 > *c2 {
@@ -942,7 +947,7 @@ fn attempt_outer_join(
             // and optimizer run and see what happens.
 
             // We'll want the inner join (minus repeated columns)
-            let join = expr::RelationExpr::join(
+            let join = expr::MirRelationExpr::join(
                 vec![get_left.clone(), get_right.clone()],
                 (0..oa).map(|i| vec![(0, i), (1, i)]).collect(),
             )
@@ -971,7 +976,7 @@ fn attempt_outer_join(
                 both_keys.let_in(id_gen, |_id_gen, get_both| {
                     if let JoinKind::LeftOuter { .. } | JoinKind::FullOuter = kind {
                         // Rows in `left` that are matched in the inner equijoin.
-                        let left_present = expr::RelationExpr::join(
+                        let left_present = expr::MirRelationExpr::join(
                             vec![get_left.clone(), get_both.clone()],
                             (0..oa)
                                 .chain(l_keys.clone())
@@ -986,7 +991,7 @@ fn attempt_outer_join(
                             .column_types
                             .into_iter()
                             .skip(oa)
-                            .map(|typ| expr::ScalarExpr::literal_null(typ.nullable(true)))
+                            .map(|typ| expr::MirScalarExpr::literal_null(typ.nullable(true)))
                             .collect();
 
                         // Add to `result` absent elements, filled with typed nulls.
@@ -999,7 +1004,7 @@ fn attempt_outer_join(
 
                     if let JoinKind::RightOuter | JoinKind::FullOuter = kind {
                         // Rows in `right` that are matched in the inner equijoin.
-                        let right_present = expr::RelationExpr::join(
+                        let right_present = expr::MirRelationExpr::join(
                             vec![get_right.clone(), get_both],
                             (0..oa)
                                 .chain(r_keys.clone())
@@ -1014,7 +1019,7 @@ fn attempt_outer_join(
                             .column_types
                             .into_iter()
                             .skip(oa)
-                            .map(|typ| expr::ScalarExpr::literal_null(typ.nullable(true)))
+                            .map(|typ| expr::MirScalarExpr::literal_null(typ.nullable(true)))
                             .collect();
 
                         // Add to `result` absent elemetns, prepended with typed nulls.
