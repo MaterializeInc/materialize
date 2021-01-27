@@ -346,7 +346,7 @@ pub struct AggregateExpr {
 /// here than in `expr`, as these aggregates may be applied over empty
 /// result sets and should be null in those cases, whereas `expr` variants
 /// only return null values when supplied nulls as input.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum AggregateFunc {
     MaxInt32,
     MaxInt64,
@@ -391,7 +391,7 @@ pub enum AggregateFunc {
 
 impl AggregateFunc {
     /// Converts the `sql::AggregateFunc` to a corresponding `expr::AggregateFunc`.
-    pub fn into_expr(&self) -> expr::AggregateFunc {
+    pub fn into_expr(self) -> expr::AggregateFunc {
         match self {
             AggregateFunc::MaxInt64 => expr::AggregateFunc::MaxInt64,
             AggregateFunc::MaxInt32 => expr::AggregateFunc::MaxInt32,
