@@ -203,23 +203,23 @@ EXPLAIN TYPED DECORRELATED PLAN FOR VIEW foo
 %0 = Let l0 =
 | Constant ()
 | | types = ()
-| | keys = ()
+| | keys = (())
 
 %1 =
 | Constant ()
 | | types = ()
-| | keys = ()
+| | keys = (())
 
 %2 =
 | Join %0 %1
 | | implementation = Unimplemented
 | | types = ()
-| | keys = ()
+| | keys = (())
 | Map 1
 | | types = (integer)
-| | keys = ()
+| | keys = (())
 | | types = (integer)
-| | keys = ()
+| | keys = (())
 
 EOF
 

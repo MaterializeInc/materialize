@@ -1,0 +1,120 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test that the test runner can properly construct sources with keys
+# and report on key information in plans
+
+cat
+(defsource x [int32 int64 int32] [[0] [1]])
+----
+ok
+
+build format=types
+(map (get x) [4145])
+----
+%0 =
+| Get x (u0)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+| Map 4145
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: false, scalar_type: Int64 })
+| | keys = ((#0), (#1))
+
+# Run tests where a transform occuring depends on the input keys.
+
+## Joins of the same input to itself on the key of the input can be converted
+## into a project
+
+opt format=types
+(join [(get x) (get x)] [[#0 #3]])
+----
+%0 =
+| Get x (u0)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+| Project (#0..#2, #0..#2)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+
+steps format=types
+(join [(get x) (get x)] [[#0 #3] [#2 #5]])
+----
+----
+%0 =
+| Get x (u0)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+
+%1 =
+| Get x (u0)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+
+%2 =
+| Join %0 %1 (= #0 #3) (= #2 #5)
+| | implementation = Unimplemented
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+
+====
+No change: JoinElision, InlineLet, FoldConstants, SplitPredicates, Filter, Map, ProjectionExtraction, Project, Join, JoinElision, EmptyMap, JoinElision, FoldConstants, Filter, Map, FoldConstants, DeMorgans, UndistributeAnd, SplitPredicates
+====
+Applied Fixpoint { transforms: [NonNullable, FoldConstants, PredicatePushdown, Join, Filter, Project, Map, Union, EmptyMap, JoinElision, ReduceElision, InlineLet, UpdateLet, ProjectionExtraction, ProjectionLifting, LiteralLifting, NonNullRequirements, ColumnKnowledge, ReductionPushdown, RedundantJoin, TopKElision, NegatePredicate, Demand], limit: 100 }:
+%0 =
+| Get x (u0)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+| Project (#0..#2, #0..#2)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+
+====
+No change: FoldConstants, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, Filter, Demand, LiteralLifting], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants
+====
+Final:
+%0 =
+| Get x (u0)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+| Project (#0..#2, #0..#2)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+
+====
+----
+----
+
+opt format=types
+(join [(get x) (get x)] [[#2 #5]])
+----
+----
+%0 =
+| Get x (u0)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+| ArrangeBy (#2)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+
+%1 =
+| Get x (u0)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+
+%2 =
+| Join %0 %1 (= #2 #5)
+| | implementation = Differential %1 %0.(#2)
+| | demand = (#0..#4)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ()
+| Project (#0..#4, #2)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ()
+----
+----
