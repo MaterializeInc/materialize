@@ -471,18 +471,50 @@ mod tests {
         Ok(RelationType::new(col_types))
     }
 
+    fn parse_key_list(s: Sexp) -> Result<Vec<Vec<usize>>, Error> {
+        let keys = try_list(s)?
+            .into_iter()
+            .map(|s2| {
+                let result = try_list_of_atoms(&s2)?
+                    .into_iter()
+                    .map(|e| Ok(e.parse::<usize>()?))
+                    .collect::<Result<Vec<usize>, Error>>();
+                result
+            })
+            .collect::<Result<Vec<Vec<usize>>, Error>>()?;
+
+        Ok(keys)
+    }
+
     fn handle_cat(s: Sexp, cat: &mut TestCatalog) -> Result<(), Error> {
         match try_atom(&nth(&s, 0)?)?.as_str() {
             "defsource" => {
                 let name = try_atom(&nth(&s, 1)?)?;
 
-                let typ = parse_type_list(nth(&s, 2)?)?;
+                let mut typ = parse_type_list(nth(&s, 2)?)?;
 
+                if let Ok(sexp) = nth(&s, 3) {
+                    typ.keys = parse_key_list(sexp)?;
+                }
                 cat.insert(&name, typ);
                 Ok(())
             }
             s => Err(anyhow!("not a valid catalog command: {}", s)),
         }
+    }
+
+    fn generate_explanation(
+        rel: &RelationExpr,
+        cat: &TestCatalog,
+        format: Option<&Vec<String>>,
+    ) -> String {
+        let mut explanation = Explanation::new(rel, cat);
+        if let Some(format) = format {
+            if format.contains(&"types".to_string()) {
+                explanation.explain_types();
+            }
+        }
+        explanation.to_string()
     }
 
     fn run_testcase(
@@ -514,9 +546,9 @@ mod tests {
                 let mut opt: Optimizer = Default::default();
                 rel = opt.optimize(rel, &HashMap::new()).unwrap().into_inner();
 
-                Ok(Explanation::new(&rel, cat).to_string())
+                Ok(generate_explanation(&rel, &cat, args.get("format")))
             }
-            TestType::Build => Ok(Explanation::new(&rel, cat).to_string()),
+            TestType::Build => Ok(generate_explanation(&rel, &cat, args.get("format"))),
             TestType::Steps => {
                 // TODO(justin): this thing does not currently peek into fixpoints, so it's not
                 // that helpful for optimizations that involve those (which is most of them).
@@ -525,7 +557,11 @@ mod tests {
                 // Buffer of the names of the transformations that have been applied with no changes.
                 let mut no_change: Vec<String> = Vec::new();
 
-                writeln!(out, "{}", Explanation::new(&rel, cat).to_string())?;
+                writeln!(
+                    out,
+                    "{}",
+                    generate_explanation(&rel, &cat, args.get("format"))
+                )?;
                 writeln!(out, "====")?;
 
                 for transform in opt.transforms.iter() {
@@ -551,7 +587,11 @@ mod tests {
                         no_change = vec![];
 
                         write!(out, "Applied {:?}:", transform)?;
-                        writeln!(out, "\n{}", Explanation::new(&rel, cat).to_string())?;
+                        writeln!(
+                            out,
+                            "\n{}",
+                            generate_explanation(&rel, &cat, args.get("format"))
+                        )?;
                         writeln!(out, "====")?;
                     } else {
                         no_change.push(format!("{:?}", transform));
@@ -569,7 +609,11 @@ mod tests {
                 }
 
                 writeln!(out, "Final:")?;
-                writeln!(out, "{}", Explanation::new(&rel, cat).to_string())?;
+                writeln!(
+                    out,
+                    "{}",
+                    generate_explanation(&rel, &cat, args.get("format"))
+                )?;
                 writeln!(out, "====")?;
 
                 Ok(out)
