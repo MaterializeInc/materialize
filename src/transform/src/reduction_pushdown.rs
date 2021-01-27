@@ -462,7 +462,7 @@ impl<'a> ReductionPusher<'a> {
                     .map(|c| self.old_join_mapper.map_column_to_local(*c))
                     .collect::<Vec<_>>();
                 if !support.is_empty() && support.iter().all(|(_, src)| *src == idx) {
-                    vec![gk.clone()]
+                    vec![self.old_join_mapper.map_expr_to_local(gk.clone())]
                 } else {
                     support
                         .iter()
