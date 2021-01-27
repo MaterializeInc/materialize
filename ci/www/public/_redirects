@@ -21,4 +21,4 @@ http://materialize.com/* https://materialize.com/:splat 301!
 /s/non-materialized-error https://materialize.com/docs/sql/create-view/#querying-non-materialized-views
 
 # The Slack invitation URL expires every 30 days, so we give it a stable alias.
-/s/chat https://join.slack.com/t/materializecommunity/shared_invite/zt-kn66colt-N8IB2s9T_62u2q8FoN1TdQ
+/s/chat https://join.slack.com/t/materializecommunity/shared_invite/zt-ljdufufo-PTwVPmgzlZtI7RIQLDrAiA
