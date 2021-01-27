@@ -139,6 +139,7 @@ Like
 Limit
 List
 Local
+Login
 Map
 Matching
 Materialize
@@ -151,7 +152,9 @@ Months
 Natural
 Next
 No
+Nologin
 None
+Nosuperuser
 Not
 Null
 Objects
@@ -187,6 +190,8 @@ Replace
 Reset
 Restrict
 Right
+Role
+Roles
 Rollback
 Row
 Rows
@@ -213,6 +218,7 @@ Start
 Stdin
 Stdout
 String
+Superuser
 Table
 Tables
 Tail
@@ -238,6 +244,8 @@ Union
 Unique
 Update
 Upsert
+User
+Users
 Using
 Value
 Values

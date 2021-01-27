@@ -186,7 +186,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-Expected DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, INDEX, or TYPE after DROP, found identifier
+Expected DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW after DROP, found identifier
 
 > SHOW FULL OBJECTS
 name            type

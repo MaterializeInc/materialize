@@ -96,3 +96,73 @@ CREATE TYPE numeric_list AS LIST (element_type=numeric(100,100,100))
 CREATE TYPE numeric_list AS LIST ( element_type = numeric(100, 100, 100) )
 =>
 CreateType(CreateTypeStatement { name: ObjectName([Ident("numeric_list")]), as_type: List, with_options: [DataType { name: Ident("element_type"), data_type: Other { name: ObjectName([Ident("numeric")]), typ_mod: [100, 100, 100] } }] })
+
+parse-statement
+CREATE ROLE arjun
+----
+CREATE ROLE arjun
+=>
+CreateRole(CreateRoleStatement { is_user: false, name: Ident("arjun"), options: [] })
+
+parse-statement
+CREATE USER arjun
+----
+CREATE USER arjun
+=>
+CreateRole(CreateRoleStatement { is_user: true, name: Ident("arjun"), options: [] })
+
+parse-statement
+CREATE ROLE frank SUPERUSER
+----
+CREATE ROLE frank SUPERUSER
+=>
+CreateRole(CreateRoleStatement { is_user: false, name: Ident("frank"), options: [SuperUser] })
+
+parse-statement
+CREATE ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN
+----
+CREATE ROLE other_usr LOGIN NOSUPERUSER SUPERUSER NOLOGIN
+=>
+CreateRole(CreateRoleStatement { is_user: false, name: Ident("other_usr"), options: [Login, NoSuperUser, SuperUser, NoLogin] })
+
+parse-statement
+CREATE ROLE bad.qualification
+----
+error: Expected end of statement, found dot
+CREATE ROLE bad.qualification
+               ^
+
+parse-statement
+CREATE ROLE usr WITH LOGIN
+----
+CREATE ROLE usr LOGIN
+=>
+CreateRole(CreateRoleStatement { is_user: false, name: Ident("usr"), options: [Login] })
+
+parse-statement
+CREATE ROLE usr WITH badopt
+----
+error: Expected end of statement, found identifier
+CREATE ROLE usr WITH badopt
+                     ^
+
+parse-statement
+DROP ROLE IF EXISTS usr
+----
+DROP ROLE IF EXISTS usr
+=>
+DropObjects(DropObjectsStatement { object_type: Role, if_exists: true, names: [ObjectName([Ident("usr")])], cascade: false })
+
+parse-statement
+DROP ROLE a, b, c
+----
+DROP ROLE a, b, c
+=>
+DropObjects(DropObjectsStatement { object_type: Role, if_exists: false, names: [ObjectName([Ident("a")]), ObjectName([Ident("b")]), ObjectName([Ident("c")])], cascade: false })
+
+parse-statement
+DROP USER usr
+----
+error: Expected DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW after DROP, found USER
+DROP USER usr
+     ^
