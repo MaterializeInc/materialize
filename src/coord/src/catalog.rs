@@ -190,6 +190,7 @@ pub struct Index {
     pub plan_cx: PlanContext,
     pub on: GlobalId,
     pub keys: Vec<ScalarExpr>,
+    pub conn_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -286,6 +287,7 @@ impl CatalogItem {
     pub fn conn_id(&self) -> Option<u32> {
         match self {
             CatalogItem::View(view) => view.conn_id,
+            CatalogItem::Index(index) => index.conn_id,
             _ => None,
         }
     }
@@ -510,6 +512,7 @@ impl Catalog {
                                     &log.variant.index_by(),
                                 ),
                                 plan_cx: PlanContext::default(),
+                                conn_id: Some(SYSTEM_CONN_ID),
                             }),
                         ),
                     );
@@ -554,6 +557,7 @@ impl Catalog {
                                     .collect(),
                                 create_sql: index_sql,
                                 plan_cx: PlanContext::default(),
+                                conn_id: None,
                             }),
                         ),
                     );
@@ -1519,6 +1523,7 @@ impl Catalog {
                 plan_cx: pcx,
                 on: index.on,
                 keys: index.keys,
+                conn_id: None,
             }),
             Plan::CreateSink {
                 sink,

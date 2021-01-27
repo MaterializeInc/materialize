@@ -49,11 +49,27 @@ catalog item 'double_temp_v' already exists
 2 "bar"
 3 "foo"
 
-! CREATE TEMPORARY INDEX temp_idx ON temp_v(text)
-CREATE TEMPORARY INDEX not yet supported
+> CREATE TEMPORARY INDEX temp_text_idx ON temp_v(text)
 
-! CREATE TEMP INDEX temp_idx ON temp_v(num)
-CREATE TEMPORARY INDEX not yet supported
+> CREATE TEMP INDEX temp_num_idx ON temp_v(num)
+
+> SHOW INDEXES FROM temp_v
+ on_name    key_name      seq_in_index  column_name  expression  nullable
+-------------------------------------------------------------------------
+ temp_v     temp_num_idx  1              num         <null>      false
+ temp_v     temp_text_idx 1              text        <null>      false
+
+> CREATE VIEW non_temp_v (num, text) AS VALUES (1, 'foo'), (2, 'bar'), (3, 'foo'), (1, 'bar')
+
+> CREATE TEMPORARY INDEX non_temp_text_idx ON non_temp_v(text)
+
+> CREATE TEMP INDEX non_temp_num_idx ON non_temp_v(num)
+
+> SHOW INDEXES FROM non_temp_v
+ on_name        key_name          seq_in_index  column_name  expression  nullable
+------------------------------------------------------------------------------
+ non_temp_v     non_temp_num_idx  1              num         <null>      false
+ non_temp_v     non_temp_text_idx 1              text        <null>      false
 
 #####################################################################
 # Test things we shouldn't be able to make temporary.
@@ -93,13 +109,21 @@ cannot drop mz_temp.temp_v: still depended upon by catalog item 'mz_temp.double_
 
 > DROP VIEW double_temp_v
 
+> DROP VIEW temp_v
+
 ! SELECT * FROM double_temp_v
 unknown catalog item 'double_temp_v'
 
 > DISCARD TEMP
 
+> SHOW INDEXES FROM non_temp_v
+
 ! SELECT * FROM temp_v
 unknown catalog item 'temp_v'
+
+> SELECT * FROM mz_indexes WHERE name = 'temp_num_idx'
+
+> SELECT * FROM mz_indexes WHERE name = 'temp_text_idx'
 
 ! CREATE TEMP VIEW mz_foo.a AS SELECT 1
 cannot create temporary item in non-temporary schema

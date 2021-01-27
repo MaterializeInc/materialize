@@ -993,9 +993,6 @@ pub fn plan_create_index(
         if_not_exists,
         temporary,
     } = &mut stmt;
-    if *temporary {
-        unsupported!("CREATE TEMPORARY INDEX")
-    }
     let on = scx.resolve_item(on_name.clone())?;
 
     if CatalogItemType::View != on.item_type()
@@ -1030,10 +1027,22 @@ pub fn plan_create_index(
     };
     let keys = query::plan_index_exprs(scx, on_desc, filled_key_parts.clone())?;
 
-    let index_name = if let Some(name) = name {
-        FullName {
+    let schema = if *temporary {
+        SchemaName {
+            database: DatabaseSpecifier::Ambient,
+            schema: "mz_temp".to_owned(),
+        }
+    } else {
+        SchemaName {
             database: on.name().database.clone(),
             schema: on.name().schema.clone(),
+        }
+    };
+
+    let index_name = if let Some(name) = name {
+        FullName {
+            database: schema.database,
+            schema: schema.schema,
             item: normalize::ident(name.clone()),
         }
     } else {
@@ -1061,12 +1070,7 @@ pub fn plan_create_index(
         let mut index_name = idx_name_base.clone();
         let mut i = 0;
 
-        let schema = SchemaName {
-            database: on.name().database.clone(),
-            schema: on.name().schema.clone(),
-        };
         let mut cat_schema_iter = scx.catalog.list_items(&schema);
-
         // Search for an unused version of the name unless `if_not_exists`.
         while cat_schema_iter.any(|i| *i.name() == index_name) && !*if_not_exists {
             i += 1;
@@ -1081,6 +1085,7 @@ pub fn plan_create_index(
     // Normalize `stmt`.
     *name = Some(Ident::new(index_name.item.clone()));
     *key_parts = Some(filled_key_parts);
+    let temporary = *temporary;
     let if_not_exists = *if_not_exists;
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
 
@@ -1090,6 +1095,7 @@ pub fn plan_create_index(
             create_sql,
             on: on.id(),
             keys,
+            temporary,
         },
         if_not_exists,
     })

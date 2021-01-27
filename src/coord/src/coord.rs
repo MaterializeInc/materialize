@@ -1511,7 +1511,7 @@ where
                 index,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_index(pcx, name, index, if_not_exists)
+                self.sequence_create_index(pcx, name, index, session.conn_id(), if_not_exists)
                     .await,
                 session,
             ),
@@ -2007,6 +2007,7 @@ where
         pcx: PlanContext,
         name: FullName,
         mut index: sql::plan::Index,
+        conn_id: u32,
         if_not_exists: bool,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         for key in &mut index.keys {
@@ -2017,6 +2018,7 @@ where
             plan_cx: pcx,
             keys: index.keys,
             on: index.on,
+            conn_id: if index.temporary { Some(conn_id) } else { None },
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -3392,6 +3394,7 @@ fn auto_generate_primary_idx(
         plan_cx: PlanContext::default(),
         on: on_id,
         keys: default_key.iter().map(|k| ScalarExpr::Column(*k)).collect(),
+        conn_id: None,
     }
 }
 

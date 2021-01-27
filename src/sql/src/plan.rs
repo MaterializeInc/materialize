@@ -216,6 +216,7 @@ pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
     pub keys: Vec<::expr::ScalarExpr>,
+    pub temporary: bool,
 }
 
 #[derive(Clone, Debug)]

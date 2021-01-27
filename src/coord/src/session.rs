@@ -158,9 +158,7 @@ impl Session {
                     }
                 },
             },
-            TransactionStatus::Default | TransactionStatus::Failed => {
-                unreachable!()
-            }
+            TransactionStatus::Default | TransactionStatus::Failed => unreachable!(),
         }
         Ok(())
     }
