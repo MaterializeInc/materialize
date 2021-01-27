@@ -426,18 +426,6 @@ impl AggregateFunc {
         }
     }
 
-    /// Returns the output of the aggregation function when applied on an empty
-    /// input relation.
-    pub fn default(&self) -> Datum<'static> {
-        match self {
-            AggregateFunc::Count => Datum::Int64(0),
-            AggregateFunc::Any => Datum::False,
-            AggregateFunc::All => Datum::True,
-            AggregateFunc::Dummy => Datum::Dummy,
-            _ => Datum::Null,
-        }
-    }
-
     /// Returns a datum whose inclusion in the aggregation will not change its
     /// result.
     pub fn identity_datum(&self) -> Datum<'static> {
