@@ -130,7 +130,7 @@ pub enum SequencedCommand {
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
         /// The ID of the timestamped source
-        id: SourceInstanceId,
+        id: GlobalId,
         /// The associated update (RT or BYO)
         update: TimestampSourceUpdate,
     },
@@ -358,6 +358,8 @@ impl TimestampDataRecords {
     }
 
     // Do a stabbing query to find the timestamp st start_offset <= offset < end_offset
+    // TODO(rkhaitan): note that a linear scan like this without compaction will quickly get
+    // expensive.
     pub fn get_timestamp(&self, partition_id: &PartitionId, offset: MzOffset) -> Option<Timestamp> {
         let partition_history = self.partition_histories.get(partition_id);
 
@@ -1000,7 +1002,7 @@ where
                     ) => {
                         add_timestamp_record(
                             &self.render_state.ts_histories,
-                            id.source_id,
+                            id,
                             pid,
                             partition_count as usize,
                             offset,
@@ -1010,15 +1012,19 @@ where
                     TimestampSourceUpdate::RealTime(partition_count) => {
                         update_partition_count(
                             &self.render_state.ts_histories,
-                            id.source_id,
+                            id,
                             partition_count as usize,
                         );
                     }
                 };
-                if let Some(source) = self.render_state.ts_source_mapping.get(&id) {
-                    if let Some(source) = source.upgrade() {
-                        if let Some(token) = &*source {
-                            token.activate();
+
+                // TODO: clean this up to not do so much extra work each time
+                for (source_instance_id, source) in self.render_state.ts_source_mapping.iter_mut() {
+                    if source_instance_id.source_id == id {
+                        if let Some(source) = source.upgrade() {
+                            if let Some(token) = &*source {
+                                token.activate();
+                            }
                         }
                     }
                 }

@@ -47,7 +47,7 @@ use dataflow_types::{
 };
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
-    OptimizedMirRelationExpr, RowSetFinishing, SourceInstanceId,
+    OptimizedMirRelationExpr, RowSetFinishing,
 };
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
@@ -98,7 +98,7 @@ pub enum Message {
 }
 
 pub struct AdvanceSourceTimestamp {
-    pub id: SourceInstanceId,
+    pub id: GlobalId,
     pub update: TimestampSourceUpdate,
 }
 
