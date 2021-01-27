@@ -16,7 +16,7 @@ use rusoto_credential::AwsCredentials;
 use structopt::StructOpt;
 use url::Url;
 
-use testdrive::{Config, Error};
+use testdrive::{Config, Error, ResultExt};
 
 /// Integration test driver for Materialize.
 #[derive(StructOpt)]
@@ -94,18 +94,12 @@ async fn run(args: Args) -> Result<(), Error> {
                 // Standard AWS region without a custom endpoint. Try to find actual AWS
                 // credentials.
                 let timeout = Duration::from_secs(5);
-                let account = aws::account(timeout).await.map_err(|e| Error::General {
-                    ctx: "getting AWS account details".into(),
-                    cause: Some(e.into()),
-                    hints: vec![],
-                })?;
+                let account = aws::account(timeout)
+                    .await
+                    .err_ctx("getting AWS account details")?;
                 let credentials = aws::credentials(timeout)
                     .await
-                    .map_err(|e| Error::General {
-                        ctx: "getting AWS account credentials".into(),
-                        cause: Some(e.into()),
-                        hints: vec![],
-                    })?;
+                    .err_ctx("getting AWS account credentials")?;
                 (region, account, credentials)
             }
             (_, aws_endpoint) => {

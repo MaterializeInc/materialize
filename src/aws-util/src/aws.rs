@@ -25,12 +25,12 @@ pub struct ConnectInfo {
     /// The AWS Region to connect to
     pub region: Region,
     /// Credentials, if missing will be obtained from environment
-    pub(crate) credentials: Option<Credentials>,
+    pub credentials: Option<Credentials>,
 }
 
 /// A thin dupe of [`AwsCredentials`] so we can impl Serialize
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Credentials {
+pub struct Credentials {
     key: String,
     secret: String,
     token: Option<String>,
