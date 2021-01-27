@@ -14,13 +14,14 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
 use anyhow::{Context, Error};
+use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
 use inotify::{Inotify, WatchMask};
 use log::error;
 use timely::scheduling::{Activator, SyncActivator};
 
 use dataflow_types::{
-    AvroOcfEncoding, Consistency, DataEncoding, ExternalSourceConnector, MzOffset,
+    AvroOcfEncoding, Compression, Consistency, DataEncoding, ExternalSourceConnector, MzOffset,
 };
 use expr::{PartitionId, SourceInstanceId};
 use mz_avro::types::Value;
@@ -105,7 +106,14 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
                 };
                 let (tx, rx) = std::sync::mpsc::sync_channel(10000 as usize);
                 std::thread::spawn(move || {
-                    read_file_task(oc.path, tx, Some(consumer_activator), tail, ctor);
+                    read_file_task(
+                        oc.path,
+                        tx,
+                        Some(consumer_activator),
+                        tail,
+                        oc.compression,
+                        ctor,
+                    );
                 });
                 rx
             }
@@ -154,7 +162,14 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
                     FileReadStyle::ReadOnce
                 };
                 std::thread::spawn(move || {
-                    read_file_task(fc.path, tx, Some(consumer_activator), tail, ctor);
+                    read_file_task(
+                        fc.path,
+                        tx,
+                        Some(consumer_activator),
+                        tail,
+                        fc.compression,
+                        ctor,
+                    );
                 });
                 rx
             }
@@ -304,6 +319,7 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     tx: std::sync::mpsc::SyncSender<Result<Out, anyhow::Error>>,
     activator: Option<SyncActivator>,
     read_style: FileReadStyle,
+    compression: Compression,
     iter_ctor: Ctor,
 ) where
     I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
@@ -324,8 +340,8 @@ pub fn read_file_task<Ctor, I, Out, Err>(
         }
     };
 
-    let iter = match read_style {
-        FileReadStyle::ReadOnce => iter_ctor(Box::new(file)),
+    let file: Box<dyn AvroRead + Send> = match read_style {
+        FileReadStyle::ReadOnce => Box::new(file),
         FileReadStyle::TailFollowFd => {
             let (notice_tx, notice_rx) = mpsc::channel();
 
@@ -391,14 +407,19 @@ pub fn read_file_task<Ctor, I, Out, Err>(
                 });
             };
 
-            let file = ForeverTailedFile {
+            Box::new(ForeverTailedFile {
                 rx: notice_rx,
                 inner: file,
-            };
-
-            iter_ctor(Box::new(file))
+            })
         }
     };
+
+    let file: Box<dyn AvroRead + Send> = match compression {
+        Compression::Gzip => Box::new(MultiGzDecoder::new(file)),
+        Compression::None => Box::new(file),
+    };
+
+    let iter = iter_ctor(file);
 
     match iter.map_err(Into::into).with_context(|| {
         format!(

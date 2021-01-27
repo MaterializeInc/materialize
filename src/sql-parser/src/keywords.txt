@@ -55,6 +55,7 @@ Collate
 Columns
 Commit
 Committed
+Compression
 Confluent
 Constraint
 Copy
@@ -104,6 +105,7 @@ From
 Full
 Group
 Groups
+Gzip
 Having
 Header
 Headers

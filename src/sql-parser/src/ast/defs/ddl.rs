@@ -215,9 +215,41 @@ impl AstDisplay for Format {
 impl_display!(Format);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Compression {
+    Gzip,
+    None,
+}
+
+impl Default for Compression {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl AstDisplay for Compression {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            Self::Gzip => f.write_str("GZIP"),
+            Self::None => f.write_str("NONE"),
+        }
+    }
+}
+impl_display!(Compression);
+
+impl From<Compression> for dataflow_types::Compression {
+    fn from(c: Compression) -> Self {
+        match c {
+            Compression::Gzip => Self::Gzip,
+            Compression::None => Self::None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Connector {
     File {
         path: String,
+        compression: Compression,
     },
     Kafka {
         broker: String,
@@ -241,10 +273,14 @@ pub enum Connector {
 impl AstDisplay for Connector {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Connector::File { path } => {
+            Connector::File { path, compression } => {
                 f.write_str("FILE '");
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
+                if compression != &Default::default() {
+                    f.write_str(" COMPRESSION ");
+                    f.write_node(compression);
+                }
             }
             Connector::Kafka { broker, topic, key } => {
                 f.write_str("KAFKA BROKER '");

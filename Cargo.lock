@@ -144,6 +144,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-compression"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b72c1f1154e234325b50864a349b9c8e56939e266a4c307c0f159812df2f9537"
+dependencies = [
+ "flate2",
+ "futures-core",
+ "memchr",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -734,6 +747,7 @@ dependencies = [
  "differential-dataflow",
  "dogsdogsdogs",
  "expr",
+ "flate2",
  "futures",
  "globset",
  "inotify",
@@ -3745,6 +3759,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "datadriven",
+ "dataflow-types",
  "itertools",
  "lazy_static",
  "log",
@@ -4040,6 +4055,7 @@ name = "testdrive"
 version = "0.0.0"
 dependencies = [
  "assert_cmd",
+ "async-compression",
  "async-trait",
  "atty",
  "aws-util",
