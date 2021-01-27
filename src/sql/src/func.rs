@@ -287,21 +287,21 @@ pub struct FuncImpl<R> {
     op: Operation<R>,
 }
 
-pub trait FuncImplCatalogDetails {
-    fn oid(&self) -> u32;
-    fn arg_oids(&self) -> Vec<u32>;
-    fn variadic_oid(&self) -> Option<u32>;
+/// Describes how each implementation should be represented in the catalog.
+#[derive(Debug)]
+pub struct FuncImplCatalogDetails {
+    pub oid: u32,
+    pub arg_oids: Vec<u32>,
+    pub variadic_oid: Option<u32>,
 }
 
-impl<R> FuncImplCatalogDetails for &FuncImpl<R> {
-    fn oid(&self) -> u32 {
-        self.oid
-    }
-    fn arg_oids(&self) -> Vec<u32> {
-        self.params.arg_oids()
-    }
-    fn variadic_oid(&self) -> Option<u32> {
-        self.params.variadic_oid()
+impl<R> FuncImpl<R> {
+    fn details(&self) -> FuncImplCatalogDetails {
+        FuncImplCatalogDetails {
+            oid: self.oid,
+            arg_oids: self.params.arg_oids(),
+            variadic_oid: self.params.variadic_oid(),
+        }
     }
 }
 
@@ -1235,20 +1235,11 @@ pub enum Func {
 }
 
 impl Func {
-    pub fn func_impls(&self) -> Vec<Box<dyn FuncImplCatalogDetails + '_>> {
+    pub fn func_impls(&self) -> Vec<FuncImplCatalogDetails> {
         match self {
-            Func::Scalar(impls) => impls
-                .iter()
-                .map(|f| Box::new(f) as Box<dyn FuncImplCatalogDetails>)
-                .collect::<Vec<_>>(),
-            Func::Aggregate(impls) => impls
-                .iter()
-                .map(|f| Box::new(f) as Box<dyn FuncImplCatalogDetails>)
-                .collect::<Vec<_>>(),
-            Func::Table(impls) => impls
-                .iter()
-                .map(|f| Box::new(f) as Box<dyn FuncImplCatalogDetails>)
-                .collect::<Vec<_>>(),
+            Func::Scalar(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
+            Func::Aggregate(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
+            Func::Table(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
         }
     }
 }

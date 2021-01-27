@@ -1430,9 +1430,9 @@ where
         func: &Func,
         diff: isize,
     ) {
-        for func_impl in func.inner.func_impls() {
-            let arg_ids = func_impl
-                .arg_oids()
+        for func_impl_details in func.inner.func_impls() {
+            let arg_ids = func_impl_details
+                .arg_oids
                 .iter()
                 .map(|oid| self.catalog.get_by_oid(oid).id().to_string())
                 .collect::<Vec<_>>();
@@ -1449,7 +1449,7 @@ where
             let row = packer.finish();
             let arg_ids = row.unpack_first();
 
-            let variadic_id = match func_impl.variadic_oid() {
+            let variadic_id = match func_impl_details.variadic_oid {
                 Some(oid) => Some(self.catalog.get_by_oid(&oid).id().to_string()),
                 None => None,
             };
@@ -1459,7 +1459,7 @@ where
                 iter::once((
                     Row::pack_slice(&[
                         Datum::String(&id.to_string()),
-                        Datum::Int32(func_impl.oid() as i32),
+                        Datum::Int32(func_impl_details.oid as i32),
                         Datum::Int64(schema_id),
                         Datum::String(name),
                         arg_ids,
