@@ -54,11 +54,11 @@ impl Server {
         tls: Option<SslContext>,
         coord_client: coord::Client,
         start_time: Instant,
-        worker_count: &str,
+        worker_count: usize,
     ) -> Server {
         // just set this so it shows up in metrics
         metrics::WORKER_COUNT
-            .with_label_values(&[worker_count])
+            .with_label_values(&[&worker_count.to_string()])
             .set(1);
         Server {
             tls,

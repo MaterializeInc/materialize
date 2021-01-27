@@ -104,7 +104,7 @@ fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let config = util::Config::default().threads(2);
+    let config = util::Config::default().workers(2);
     let (server, mut client_writes) = util::start_server(config)?;
     let mut client_reads = server.connect()?;
 
@@ -199,7 +199,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let config = util::Config::default().threads(2);
+    let config = util::Config::default().workers(2);
     let (server, mut client_writes) = util::start_server(config)?;
     let mut client_reads = server.connect()?;
 
@@ -237,7 +237,7 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
 fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let config = util::Config::default().threads(2);
+    let config = util::Config::default().workers(2);
     let (_server, mut client) = util::start_server(config)?;
 
     client.batch_execute("CREATE TABLE t (i INT8)")?;
@@ -303,7 +303,7 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
 fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let config = util::Config::default().threads(2);
+    let config = util::Config::default().workers(2);
     let (_server, mut client) = util::start_server(config)?;
 
     client.batch_execute("CREATE TABLE t (i INT8)")?;

@@ -26,19 +26,18 @@ fn cmd() -> Command {
 fn test_threads() {
     let assert_fail = |cmd: &mut Command| {
         cmd.assert().failure().stderr(predicate::str::starts_with(
-            "materialized: '--workers' must be greater than 0",
+            "error: Invalid value for '--workers <N>': must be greater than zero",
         ))
     };
     assert_fail(cmd().arg("-w0"));
     assert_fail(cmd().env("MZ_WORKERS", "0"));
 
     cmd()
-        .arg("-w")
-        .arg("-1")
+        .arg("--workers=-1")
         .assert()
         .failure()
         .stderr(predicate::str::starts_with(
-            "materialized: invalid digit found in string",
+            "error: Invalid value for '--workers <N>': invalid digit found in string",
         ));
 
     cmd()
@@ -46,7 +45,7 @@ fn test_threads() {
         .assert()
         .failure()
         .stderr(predicate::str::starts_with(
-            "materialized: non-unicode character found in MZ_WORKERS",
+            "error: Invalid value for '--workers <N>': invalid digit found in string",
         ));
 
     // NOTE: we don't test the successful case, where `MZ_WORKERS` or `-w` is

@@ -34,6 +34,7 @@ async-trait = "0.1.42"
 backtrace = "0.3.55"
 build-info = { path = "../build-info" }
 cfg-if = "1.0.0"
+clap = "2.33.0"
 comm = { path = "../comm" }
 compile-time-run = "0.2.11"
 coord = { path = "../coord" }
@@ -41,7 +42,6 @@ dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.12"
-getopts = "0.2.0"
 hex = "0.4.0"
 hyper = { version = "0.14.0", features = ["http1", "server"] }
 include_dir = "0.6.0"
@@ -69,6 +69,7 @@ serde_json = "1.0.0"
 shell-words = "1.0.0"
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
+structopt = "0.3.21"
 sysctl = "0.4.0"
 # v0.15.4+ fail to cross compile on macOS.
 # See: https://github.com/GuillaumeGomez/sysinfo/pull/404

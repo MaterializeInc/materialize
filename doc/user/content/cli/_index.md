@@ -11,13 +11,13 @@ The `materialized` binary supports the following command line flags:
 
 Flag | Default | Modifies
 -----|---------|----------
-[`--address-file`](#horizontally-scaled-clusters) | N/A |  Address of all coordinating Materialize nodes
+[`--address-file`](#horizontally-scaled-clusters) | N/A |  Text file containing addresses of all coordinating Materialize nodes
 [`--cache-max-pending-records`](#source-cache) | 1000000 | Maximum number of input records buffered before flushing immediately to disk.
 [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted
 [`--differential-idle-merge-effort`](#dataflow-tuning) | N/A | *Advanced.* Amount of compaction to perform when idle.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
 [`--disable-telemetry`](#telemetry) | N/A | Disables telemetry reporting.
-[`--experimental`](#experimental-mode) | Disabled | Get more details [here](#experimental-mode)
+[`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
 [`--process`](#horizontally-scaled-clusters) | 0 | This node's ID when coordinating with other Materialize nodes
@@ -29,6 +29,24 @@ Flag | Default | Modifies
 [`-w`](#worker-threads) | REQ |  Dataflow worker threads
 `-v` | N/A | Print version and exit
 `-vv` | N/A | Print version and additional build information, and exit
+
+If a command line flag takes an argument, you can alternatively set that flag
+via an environment variable named after the flag. If both the environment
+variable and command line flag are specified, the command line flag takes
+precedence.
+
+The process for converting a flag name to an environment variable name is as
+follows:
+
+  1. Convert all characters to uppercase
+  2. Replace all hyphens with underscores
+  3. add an `MZ_` prefix.
+
+For example, the `--data-directory` command line flag corresponds to the
+`MZ_DATA_DIRECTORY` environment variable.
+
+Note that command line flags that do not take arguments, like `--experimental`
+and `--disable-telemetry`, do not yet have corresponding environment variables.
 
 ### Data directory
 
