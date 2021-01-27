@@ -209,18 +209,17 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         timestamp_metadata_channel: TimestampMetadataUpdates,
     ) -> Option<TimestampMetadataUpdates> {
         if active {
-            let prev = if let Consistency::BringYourOwn(_) = consistency {
-                timestamp_data_updates.borrow_mut().insert(
-                    id.clone(),
-                    TimestampDataUpdate::BringYourOwn(HashMap::new()),
-                )
+            if let Consistency::BringYourOwn(_) = consistency {
+                timestamp_data_updates
+                    .borrow_mut()
+                    .entry(id.source_id.clone())
+                    .or_insert(TimestampDataUpdate::BringYourOwn(HashMap::new()));
             } else {
                 timestamp_data_updates
                     .borrow_mut()
-                    .insert(id.clone(), TimestampDataUpdate::RealTime(1))
-            };
-            // Check that this is the first time this source id is registered
-            assert!(prev.is_none());
+                    .entry(id.source_id.clone())
+                    .or_insert(TimestampDataUpdate::RealTime(1));
+            }
             timestamp_metadata_channel
                 .as_ref()
                 .borrow_mut()

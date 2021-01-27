@@ -561,7 +561,7 @@ impl ConsistencyInfo {
             // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
             // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
             // in next_partition_ts
-            if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
+            if let Some(entries) = timestamp_histories.borrow().get(&id.source_id) {
                 match entries {
                     TimestampDataUpdate::BringYourOwn(entries) => {
                         // Iterate over each partition that we know about
@@ -599,7 +599,6 @@ impl ConsistencyInfo {
                                     // again
                                     // We can close the timestamp (on this partition) and remove the associated metadata
                                     self.partition_metadata.get_mut(&pid).unwrap().ts = *ts;
-                                    entries.pop_front();
                                     changed = true;
                                 } else {
                                     // Offset isn't at a timestamp boundary, we take no action
@@ -630,7 +629,7 @@ impl ConsistencyInfo {
         } else {
             // This a RT source. It is always possible to close the timestamp and downgrade the
             // capability
-            if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
+            if let Some(entries) = timestamp_histories.borrow().get(&id.source_id) {
                 match entries {
                     TimestampDataUpdate::RealTime(partition_count) => {
                         source.update_partition_count(self, *partition_count)
@@ -670,7 +669,7 @@ impl ConsistencyInfo {
             Some(self.find_matching_rt_timestamp())
         } else {
             // The source is a BYO source. Must check the list of timestamp updates for the given partition
-            match timestamp_histories.borrow().get(id) {
+            match timestamp_histories.borrow().get(&id.source_id) {
                 None => None,
                 Some(TimestampDataUpdate::BringYourOwn(entries)) => match entries.get(partition) {
                     Some(entries) => {
