@@ -185,9 +185,11 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
             error!("Kinesis sources do not currently support BYO consistency");
             None
         } else {
-            timestamp_data_updates
-                .borrow_mut()
-                .insert(id.clone(), TimestampDataUpdate::RealTime(1));
+            crate::server::maybe_add_source(
+                &timestamp_data_updates,
+                id.source_id.clone(),
+                TimestampDataUpdate::RealTime(1),
+            );
             timestamp_metadata_channel
                 .as_ref()
                 .borrow_mut()

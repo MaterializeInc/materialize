@@ -109,18 +109,18 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         timestamp_data_updates: TimestampDataUpdates,
         timestamp_metadata_channel: TimestampMetadataUpdates,
     ) -> Option<TimestampMetadataUpdates> {
-        let prev = if let Consistency::BringYourOwn(_) = consistency {
-            timestamp_data_updates.borrow_mut().insert(
-                id.clone(),
-                TimestampDataUpdate::BringYourOwn(TimestampDataRecords::new()),
-            )
-        } else {
-            timestamp_data_updates
-                .borrow_mut()
-                .insert(id.clone(), TimestampDataUpdate::RealTime(1))
+        let empty_timestamp_history = match consistency {
+            Consistency::BringYourOwn(_) => {
+                TimestampDataUpdate::BringYourOwn(TimestampDataRecords::new())
+            }
+            Consistency::RealTime => TimestampDataUpdate::RealTime(1),
         };
-        // Check that this is the first time this source id is registered
-        assert!(prev.is_none());
+
+        crate::server::maybe_add_source(
+            &timestamp_data_updates,
+            id.source_id.clone(),
+            empty_timestamp_history,
+        );
         timestamp_metadata_channel
             .as_ref()
             .borrow_mut()

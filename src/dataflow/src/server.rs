@@ -267,7 +267,7 @@ where
 }
 
 /// A type wrapper for the number of partitions associated with a source.
-pub type PartitionCount = i32;
+pub type PartitionCount = usize;
 
 /// A half open interval of [`start_offset`, `end_offset`), and the corresponding `timestamp`
 /// assigned to those offsets
@@ -301,6 +301,7 @@ impl TimestampDataRecord {
 
 /// Type that defines timestamp history for a given source and all of its
 /// partitions
+#[derive(Debug)]
 pub struct TimestampDataRecords {
     pub partition_count: usize,
     pub partition_histories: HashMap<PartitionId, VecDeque<TimestampDataRecord>>,
@@ -378,14 +379,150 @@ impl TimestampDataRecords {
 /// For real-time sources, it consists of a PartitionCount
 /// For BYO sources, it consists of a mapping from PartitionId to a vector of
 /// (PartitionCount, Timestamp, MzOffset) tuple.
+#[derive(Debug)]
 pub enum TimestampDataUpdate {
     /// RT sources see a current estimate of the number of partitions for the soruce
     RealTime(PartitionCount),
     /// BYO sources see a list of (PartitionCount, Timestamp, MzOffset) timestamp updates
     BringYourOwn(TimestampDataRecords),
 }
+
+#[derive(Debug, Default)]
+pub struct WorkerTimestampRecords {
+    pub sources: HashMap<GlobalId, TimestampDataUpdate>,
+}
+
+impl WorkerTimestampRecords {
+    // TODO: better interface
+    fn maybe_add_source(&mut self, source_id: GlobalId, history: TimestampDataUpdate) {
+        self.sources.entry(source_id).or_insert(history);
+    }
+
+    fn add_timestamp_record(
+        &mut self,
+        source_id: GlobalId,
+        partition_id: PartitionId,
+        new_partition_count: usize,
+        offset: MzOffset,
+        timestamp: Timestamp,
+    ) {
+        if !self.sources.contains_key(&source_id) {
+            return;
+        }
+
+        match self
+            .sources
+            .get_mut(&source_id)
+            .expect("source known to exist")
+        {
+            TimestampDataUpdate::BringYourOwn(history) => {
+                history.add_timestamp_record(partition_id, new_partition_count, offset, timestamp)
+            }
+            TimestampDataUpdate::RealTime(_) => {
+                panic!("Updating timestamp histories not supported for RT source")
+            }
+        }
+    }
+
+    fn update_partition_count(&mut self, source_id: GlobalId, new_partition_count: usize) {
+        if !self.sources.contains_key(&source_id) {
+            return;
+        }
+
+        match self
+            .sources
+            .get_mut(&source_id)
+            .expect("source known to exist")
+        {
+            TimestampDataUpdate::BringYourOwn(_) => {
+                panic!("Updating partition counts not supported for BYO source")
+            }
+            TimestampDataUpdate::RealTime(partition_count) => {
+                assert!(
+                    *partition_count <= new_partition_count,
+                    "The number of partitions for source {} decreased from {} to {}",
+                    source_id,
+                    partition_count,
+                    new_partition_count
+                );
+                *partition_count = new_partition_count;
+            }
+        }
+    }
+
+    fn get_timestamp(
+        &self,
+        source_id: GlobalId,
+        partition_id: &PartitionId,
+        offset: MzOffset,
+    ) -> Option<Timestamp> {
+        if !self.sources.contains_key(&source_id) {
+            return None;
+        }
+
+        match self.sources.get(&source_id).expect("source known to exist") {
+            TimestampDataUpdate::BringYourOwn(history) => {
+                history.get_timestamp(partition_id, offset)
+            }
+            TimestampDataUpdate::RealTime(_) => {
+                panic!("searching timestamp history on RT sources not supported")
+            }
+        }
+    }
+}
+
 /// Map of source ID to timestamp data updates (RT or BYO).
-pub type TimestampDataUpdates = Rc<RefCell<HashMap<SourceInstanceId, TimestampDataUpdate>>>;
+pub type TimestampDataUpdates = Rc<RefCell<WorkerTimestampRecords>>;
+
+// Eventual public interface for timestamping code
+pub fn maybe_add_source(
+    timestamp_histories: &TimestampDataUpdates,
+    source_id: GlobalId,
+    history: TimestampDataUpdate,
+) {
+    timestamp_histories
+        .borrow_mut()
+        .maybe_add_source(source_id, history);
+}
+
+// TODO: fewer args
+pub fn add_timestamp_record(
+    timestamp_histories: &TimestampDataUpdates,
+    source_id: GlobalId,
+    partition_id: PartitionId,
+    new_partition_count: usize,
+    offset: MzOffset,
+    timestamp: Timestamp,
+) {
+    timestamp_histories.borrow_mut().add_timestamp_record(
+        source_id,
+        partition_id,
+        new_partition_count,
+        offset,
+        timestamp,
+    );
+}
+
+pub fn update_partition_count(
+    timestamp_histories: &TimestampDataUpdates,
+    source_id: GlobalId,
+    new_partition_count: usize,
+) {
+    timestamp_histories
+        .borrow_mut()
+        .update_partition_count(source_id, new_partition_count);
+}
+
+pub fn get_timestamp(
+    timestamp_histories: &TimestampDataUpdates,
+    source_id: GlobalId,
+    partition_id: &PartitionId,
+    offset: MzOffset,
+) -> Option<Timestamp> {
+    timestamp_histories
+        .borrow_mut()
+        .get_timestamp(source_id, partition_id, offset)
+}
 
 /// List of sources that need to start being timestamped or have been dropped and no longer require
 /// timestamping.
@@ -621,7 +758,6 @@ where
             match source_update {
                 TimestampMetadataUpdate::StopTimestamping(id) => {
                     // A source was deleted
-                    self.render_state.ts_histories.borrow_mut().remove(id);
                     self.render_state.ts_source_mapping.remove(id);
                     let connector = self.feedback_tx.as_mut().unwrap();
                     block_on(connector.send(WorkerFeedbackWithMeta {
@@ -855,48 +991,31 @@ where
                 self.shutdown_logging();
             }
             SequencedCommand::AdvanceSourceTimestamp { id, update } => {
-                let mut timestamps = self.render_state.ts_histories.borrow_mut();
-                if let Some(ts_entries) = timestamps.get_mut(&id) {
-                    match ts_entries {
-                        TimestampDataUpdate::BringYourOwn(history) => {
-                            if let TimestampSourceUpdate::BringYourOwn(
-                                partition_count,
-                                pid,
-                                timestamp,
-                                offset,
-                            ) = update
-                            {
-                                history.add_timestamp_record(
-                                    pid,
-                                    partition_count as usize,
-                                    offset,
-                                    timestamp,
-                                );
-                            } else {
-                                panic!("Unexpected message type. Expected BYO update.")
-                            }
-                        }
-                        TimestampDataUpdate::RealTime(current_partition_count) => {
-                            if let TimestampSourceUpdate::RealTime(partition_count) = update {
-                                assert!(
-                                    *current_partition_count <= partition_count,
-                                    "The number of partitions \
-                                     for source {} decreased from {} to {}",
-                                    id,
-                                    partition_count,
-                                    current_partition_count
-                                );
-                                *current_partition_count = partition_count;
-                            } else {
-                                panic!("Expected message type. Expected RT update.");
-                            }
-                        }
+                match update {
+                    TimestampSourceUpdate::BringYourOwn(
+                        partition_count,
+                        pid,
+                        timestamp,
+                        offset,
+                    ) => {
+                        add_timestamp_record(
+                            &self.render_state.ts_histories,
+                            id.source_id,
+                            pid,
+                            partition_count as usize,
+                            offset,
+                            timestamp,
+                        );
                     }
-                    let source = self
-                        .render_state
-                        .ts_source_mapping
-                        .get(&id)
-                        .expect("Id should be present");
+                    TimestampSourceUpdate::RealTime(partition_count) => {
+                        update_partition_count(
+                            &self.render_state.ts_histories,
+                            id.source_id,
+                            partition_count as usize,
+                        );
+                    }
+                };
+                if let Some(source) = self.render_state.ts_source_mapping.get(&id) {
                     if let Some(source) = source.upgrade() {
                         if let Some(token) = &*source {
                             token.activate();

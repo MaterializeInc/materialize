@@ -561,7 +561,12 @@ impl ConsistencyInfo {
             // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
             // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
             // in next_partition_ts
-            if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
+            // TODO(rkhaitan): need better abstraction here
+            if let Some(entries) = timestamp_histories
+                .borrow_mut()
+                .sources
+                .get_mut(&id.source_id)
+            {
                 match entries {
                     TimestampDataUpdate::BringYourOwn(history) => {
                         // Iterate over each partition that we know about
@@ -629,10 +634,15 @@ impl ConsistencyInfo {
         } else {
             // This a RT source. It is always possible to close the timestamp and downgrade the
             // capability
-            if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
+            // TODO(rkhaitan): need better abstraction here
+            if let Some(entries) = timestamp_histories
+                .borrow_mut()
+                .sources
+                .get_mut(&id.source_id)
+            {
                 match entries {
                     TimestampDataUpdate::RealTime(partition_count) => {
-                        source.update_partition_count(self, *partition_count as usize)
+                        source.update_partition_count(self, *partition_count)
                     }
                     _ => panic!("Unexpected timestamp message. Expected RT update."),
                 }
@@ -669,13 +679,7 @@ impl ConsistencyInfo {
             Some(self.find_matching_rt_timestamp())
         } else {
             // The source is a BYO source. Must check the list of timestamp updates for the given partition
-            match timestamp_histories.borrow().get(id) {
-                None => None,
-                Some(TimestampDataUpdate::BringYourOwn(entries)) => {
-                    entries.get_timestamp(partition, offset)
-                }
-                _ => panic!("Unexpected entry format in TimestampDataUpdates for BYO source"),
-            }
+            crate::server::get_timestamp(timestamp_histories, id.source_id, partition, offset)
         }
     }
 
