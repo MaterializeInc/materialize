@@ -543,6 +543,7 @@ pub struct CreateIndexStatement<T: AstInfo> {
     /// key_parts will be inferred from the named object.
     pub key_parts: Option<Vec<Expr<T>>>,
     pub if_not_exists: bool,
+    pub temporary: bool,
 }
 
 impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {

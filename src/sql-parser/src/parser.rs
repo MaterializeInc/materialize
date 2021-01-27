@@ -1317,10 +1317,14 @@ impl<'a> Parser<'a> {
                 self.prev_token();
                 self.prev_token();
                 self.parse_create_view()
+            } else if self.parse_keyword(INDEX) {
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_index()
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "VIEW after CREATE TEMPORARY",
+                    "VIEW or INDEX after CREATE TEMPORARY",
                     self.peek_token(),
                 )
             }
@@ -1698,6 +1702,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_index(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
         let default_index = self.parse_keyword(DEFAULT);
         self.expect_keyword(INDEX)?;
 
@@ -1737,6 +1742,7 @@ impl<'a> Parser<'a> {
             on_name,
             key_parts,
             if_not_exists,
+            temporary,
         }))
     }
 

@@ -991,7 +991,11 @@ pub fn plan_create_index(
         on_name,
         key_parts,
         if_not_exists,
+        temporary,
     } = &mut stmt;
+    if *temporary {
+        unsupported!("CREATE TEMPORARY INDEX")
+    }
     let on = scx.resolve_item(on_name.clone())?;
 
     if CatalogItemType::View != on.item_type()
