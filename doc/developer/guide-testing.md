@@ -86,7 +86,7 @@ they test, or in a `tests/` subdirectory of the crate they test, respectively.
 
 ### Datadriven
 
-[Datadriven](ttps://github.com/justinj/datadriven) is a tool for writing
+[Datadriven](https://github.com/justinj/datadriven) is a tool for writing
 [table-driven tests](https://github.com/golang/go/wiki/TableDrivenTests) in
 Rust, with rewrite support. datadriven tests plug into `cargo test` as unit
 or integration tests, but store test data in separate files from the Rust code.
@@ -102,6 +102,9 @@ $ REWRITE=1 cargo test
 
 When using `REWRITE` it's important to inspect the diff carefully to ensure
 that nothing changed unexpectedly.
+
+For an example of what datadriven tests look like, check out
+[`src/transform/tests`](/src/transform/tests).
 
 ## System tests
 
