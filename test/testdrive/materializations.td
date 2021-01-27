@@ -70,7 +70,7 @@ b  sum
 name nullable type
 -------------------
 b     false   bigint
-sum   true    numeric
+sum   false   numeric
 
 > SHOW VIEWS LIKE '%data%'
 data_view

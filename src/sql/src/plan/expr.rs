@@ -28,9 +28,7 @@ use crate::plan::typeconv::{self, CastContext};
 use crate::plan::Params;
 
 // these happen to be unchanged at the moment, but there might be additions later
-pub use expr::{
-    AggregateFunc, BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc,
-};
+pub use expr::{BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc};
 use repr::adt::array::ArrayDimension;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -339,6 +337,127 @@ pub struct AggregateExpr {
     pub func: AggregateFunc,
     pub expr: Box<ScalarExpr>,
     pub distinct: bool,
+}
+
+/// Aggregate functions analogous to `expr::AggregateFunc`, but whose
+/// types may be different.
+///
+/// Specifically, the nullability of the aggregate columns is more common
+/// here than in `expr`, as these aggregates may be applied over empty
+/// result sets and should be null in those cases, whereas `expr` variants
+/// only return null values when supplied nulls as input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum AggregateFunc {
+    MaxInt32,
+    MaxInt64,
+    MaxFloat32,
+    MaxFloat64,
+    MaxDecimal,
+    MaxBool,
+    MaxString,
+    MaxDate,
+    MaxTimestamp,
+    MaxTimestampTz,
+    MinInt32,
+    MinInt64,
+    MinFloat32,
+    MinFloat64,
+    MinDecimal,
+    MinBool,
+    MinString,
+    MinDate,
+    MinTimestamp,
+    MinTimestampTz,
+    SumInt32,
+    SumInt64,
+    SumFloat32,
+    SumFloat64,
+    SumDecimal,
+    Count,
+    Any,
+    All,
+    /// Accumulates JSON-typed `Datum`s into a JSON list.
+    ///
+    /// WARNING: Unlike the `jsonb_agg` function that is exposed by the SQL
+    /// layer, this function filters out `Datum::Null`, for consistency with
+    /// the other aggregate functions.
+    JsonbAgg,
+    /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
+    ///
+    /// Useful for removing an expensive aggregation while maintaining the shape
+    /// of a reduce operator.
+    Dummy,
+}
+
+impl AggregateFunc {
+    /// Converts the `sql::AggregateFunc` to a corresponding `expr::AggregateFunc`.
+    pub fn into_expr(self) -> expr::AggregateFunc {
+        match self {
+            AggregateFunc::MaxInt64 => expr::AggregateFunc::MaxInt64,
+            AggregateFunc::MaxInt32 => expr::AggregateFunc::MaxInt32,
+            AggregateFunc::MaxFloat32 => expr::AggregateFunc::MaxFloat32,
+            AggregateFunc::MaxFloat64 => expr::AggregateFunc::MaxFloat64,
+            AggregateFunc::MaxDecimal => expr::AggregateFunc::MaxDecimal,
+            AggregateFunc::MaxBool => expr::AggregateFunc::MaxBool,
+            AggregateFunc::MaxString => expr::AggregateFunc::MaxString,
+            AggregateFunc::MaxDate => expr::AggregateFunc::MaxDate,
+            AggregateFunc::MaxTimestamp => expr::AggregateFunc::MaxTimestamp,
+            AggregateFunc::MaxTimestampTz => expr::AggregateFunc::MaxTimestampTz,
+            AggregateFunc::MinInt32 => expr::AggregateFunc::MinInt32,
+            AggregateFunc::MinInt64 => expr::AggregateFunc::MinInt64,
+            AggregateFunc::MinFloat32 => expr::AggregateFunc::MinFloat32,
+            AggregateFunc::MinFloat64 => expr::AggregateFunc::MinFloat64,
+            AggregateFunc::MinDecimal => expr::AggregateFunc::MinDecimal,
+            AggregateFunc::MinBool => expr::AggregateFunc::MinBool,
+            AggregateFunc::MinString => expr::AggregateFunc::MinString,
+            AggregateFunc::MinDate => expr::AggregateFunc::MinDate,
+            AggregateFunc::MinTimestamp => expr::AggregateFunc::MinTimestamp,
+            AggregateFunc::MinTimestampTz => expr::AggregateFunc::MinTimestampTz,
+            AggregateFunc::SumInt32 => expr::AggregateFunc::SumInt32,
+            AggregateFunc::SumInt64 => expr::AggregateFunc::SumInt64,
+            AggregateFunc::SumFloat32 => expr::AggregateFunc::SumFloat32,
+            AggregateFunc::SumFloat64 => expr::AggregateFunc::SumFloat64,
+            AggregateFunc::SumDecimal => expr::AggregateFunc::SumDecimal,
+            AggregateFunc::Count => expr::AggregateFunc::Count,
+            AggregateFunc::Any => expr::AggregateFunc::Any,
+            AggregateFunc::All => expr::AggregateFunc::All,
+            AggregateFunc::JsonbAgg => expr::AggregateFunc::JsonbAgg,
+            AggregateFunc::Dummy => expr::AggregateFunc::Dummy,
+        }
+    }
+
+    /// Returns a datum whose inclusion in the aggregation will not change its
+    /// result.
+    pub fn identity_datum(&self) -> Datum<'static> {
+        match self {
+            AggregateFunc::Any => Datum::False,
+            AggregateFunc::All => Datum::True,
+            AggregateFunc::Dummy => Datum::Dummy,
+            _ => Datum::Null,
+        }
+    }
+
+    /// The output column type for the result of an aggregation.
+    ///
+    /// The output column type also contains nullability information, which
+    /// is (without further information) true for aggregations that are not
+    /// counts.
+    pub fn output_type(&self, input_type: ColumnType) -> ColumnType {
+        let scalar_type = match self {
+            AggregateFunc::Count => ScalarType::Int64,
+            AggregateFunc::Any => ScalarType::Bool,
+            AggregateFunc::All => ScalarType::Bool,
+            AggregateFunc::JsonbAgg => ScalarType::Jsonb,
+            AggregateFunc::SumInt32 => ScalarType::Int64,
+            AggregateFunc::SumInt64 => {
+                ScalarType::Decimal(repr::adt::decimal::MAX_DECIMAL_PRECISION, 0)
+            }
+            _ => input_type.scalar_type,
+        };
+        // max/min/sum return null on empty sets
+        let nullable = !matches!(self, AggregateFunc::Count);
+        scalar_type.nullable(nullable)
+    }
 }
 
 impl RelationExpr {

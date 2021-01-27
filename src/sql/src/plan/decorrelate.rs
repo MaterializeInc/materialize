@@ -426,7 +426,12 @@ impl RelationExpr {
                 let input_type = input.typ();
                 let default = applied_aggregates
                     .iter()
-                    .map(|agg| (agg.func.default(), agg.typ(&input_type)))
+                    .map(|agg| {
+                        (
+                            agg.func.default(),
+                            agg.typ(&input_type).nullable(agg.func.default().is_null()),
+                        )
+                    })
                     .collect();
                 // NOTE we don't need to remove any extra columns from aggregate.applied_to above because the reduce will do that anyway
                 let mut reduced =
@@ -854,7 +859,7 @@ impl AggregateExpr {
         } = self;
 
         expr::AggregateExpr {
-            func,
+            func: func.into_expr(),
             expr: expr.applied_to(id_gen, col_map, inner),
             distinct,
         }
