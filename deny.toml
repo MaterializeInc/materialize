@@ -7,7 +7,9 @@ skip = [
     # Waiting for clap to upgrade to v0.12.
     { name = "ansi_term", version = "0.11.0" },
 
-    # Waiting for approximately the entire Rust ecosystem to upgrade to v1.0.
+    # Waiting on:
+    #   - Upgrade to rand v0.8.
+    #   - https://github.com/Alexhuszagh/rust-lexical/pull/54
     { name = "cfg-if", version = "0.1.0" },
 
     # Waiting on tracing-futures.
@@ -27,7 +29,6 @@ skip = [
 
     # Waiting on:
     #   - https://github.com/Amanieu/parking_lot/pull/275
-    #   - https://github.com/alexcrichton/tar-rs/pull/240
     { name = "redox_syscall", version = "0.1.56" },
 ]
 deny = [
