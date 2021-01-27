@@ -335,7 +335,8 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
         } else if active {
             timestamp_data_updates
                 .borrow_mut()
-                .insert(id.clone(), TimestampDataUpdate::RealTime(1));
+                .entry(id.source_id.clone())
+                .or_insert(TimestampDataUpdate::RealTime(1));
             timestamp_metadata_channel
                 .as_ref()
                 .borrow_mut()

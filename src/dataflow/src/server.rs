@@ -130,7 +130,7 @@ pub enum SequencedCommand {
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
         /// The ID of the timestamped source
-        id: SourceInstanceId,
+        id: GlobalId,
         /// The associated update (RT or BYO)
         update: TimestampSourceUpdate,
     },
@@ -280,7 +280,7 @@ pub enum TimestampDataUpdate {
     BringYourOwn(HashMap<PartitionId, VecDeque<(PartitionCount, Timestamp, MzOffset)>>),
 }
 /// Map of source ID to timestamp data updates (RT or BYO).
-pub type TimestampDataUpdates = Rc<RefCell<HashMap<SourceInstanceId, TimestampDataUpdate>>>;
+pub type TimestampDataUpdates = Rc<RefCell<HashMap<GlobalId, TimestampDataUpdate>>>;
 
 /// List of sources that need to start being timestamped or have been dropped and no longer require
 /// timestamping.
@@ -516,7 +516,6 @@ where
             match source_update {
                 TimestampMetadataUpdate::StopTimestamping(id) => {
                     // A source was deleted
-                    self.render_state.ts_histories.borrow_mut().remove(id);
                     self.render_state.ts_source_mapping.remove(id);
                     let connector = self.feedback_tx.as_mut().unwrap();
                     block_on(connector.send(WorkerFeedbackWithMeta {
@@ -799,14 +798,16 @@ where
                             }
                         }
                     }
-                    let source = self
-                        .render_state
-                        .ts_source_mapping
-                        .get(&id)
-                        .expect("Id should be present");
-                    if let Some(source) = source.upgrade() {
-                        if let Some(token) = &*source {
-                            token.activate();
+                    // TODO: clean this up to not do so much extra work each time
+                    for (source_instance_id, source) in
+                        self.render_state.ts_source_mapping.iter_mut()
+                    {
+                        if source_instance_id.source_id == id {
+                            if let Some(source) = source.upgrade() {
+                                if let Some(token) = &*source {
+                                    token.activate();
+                                }
+                            }
                         }
                     }
                 }
