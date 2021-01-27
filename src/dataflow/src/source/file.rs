@@ -210,7 +210,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         if active {
             let empty_timestamp_history = match consistency {
                 Consistency::BringYourOwn(_) => {
-                    TimestampDataUpdate::BringYourOwn(TimestampDataRecords::new())
+                    TimestampDataUpdate::BringYourOwn(TimestampDataRecords::default())
                 }
                 Consistency::RealTime => TimestampDataUpdate::RealTime(1),
             };

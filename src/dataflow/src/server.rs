@@ -301,20 +301,13 @@ impl TimestampDataRecord {
 
 /// Type that defines timestamp history for a given source and all of its
 /// partitions
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct TimestampDataRecords {
     pub partition_count: usize,
     pub partition_histories: HashMap<PartitionId, VecDeque<TimestampDataRecord>>,
 }
 
 impl TimestampDataRecords {
-    pub fn new() -> Self {
-        Self {
-            partition_count: 0,
-            partition_histories: HashMap::new(),
-        }
-    }
-
     fn add_timestamp_record(
         &mut self,
         partition_id: PartitionId,

@@ -111,7 +111,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     ) -> Option<TimestampMetadataUpdates> {
         let empty_timestamp_history = match consistency {
             Consistency::BringYourOwn(_) => {
-                TimestampDataUpdate::BringYourOwn(TimestampDataRecords::new())
+                TimestampDataUpdate::BringYourOwn(TimestampDataRecords::default())
             }
             Consistency::RealTime => TimestampDataUpdate::RealTime(1),
         };
