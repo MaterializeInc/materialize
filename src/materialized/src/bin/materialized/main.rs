@@ -17,176 +17,206 @@
 //!
 //! [0]: https://paper.dropbox.com/doc/Materialize-architecture-plans--AYSu6vvUu7ZDoOEZl7DNi8UQAg-sZj5rhJmISdZSfK0WBxAl
 
-use std::env::VarError;
+use std::cmp;
+use std::env;
 use std::ffi::CStr;
+use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::panic;
 use std::panic::PanicInfo;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use std::{cmp, env};
 
 use anyhow::{anyhow, bail, Context};
 use backtrace::Backtrace;
+use clap::AppSettings;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, warn};
+use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
 
 mod sys;
 mod tracing;
 
+type OptionalDuration = Option<Duration>;
+
+fn parse_optional_duration(s: &str) -> Result<OptionalDuration, anyhow::Error> {
+    match s {
+        "off" => Ok(None),
+        _ => Ok(Some(parse_duration::parse(s)?)),
+    }
+}
+
+/// The streaming SQL materialized view engine.
+#[derive(StructOpt)]
+#[structopt(settings = &[AppSettings::NextLineHelp, AppSettings::UnifiedHelpMessage], usage = "materialized [OPTION]...")]
+struct Args {
+    // === Special modes. ===
+    /// Print version information and exit.
+    ///
+    /// Specify twice to additionally print version information for selected
+    /// dependencies.
+    #[structopt(short, long, parse(from_occurrences))]
+    version: usize,
+    /// Allow running this dev (unoptimized) build.
+    #[cfg(debug_assertions)]
+    #[structopt(long)]
+    dev: bool,
+    // TODO(benesch): add an environment variable once we upgrade to clap v3.
+    // Doesn't presently work in clap v2. See: clap-rs/clap#1476.
+    /// [DANGEROUS] Enable experimental features.
+    #[structopt(long)]
+    experimental: bool,
+
+    // === Timely worker configuration. ===
+    /// Number of dataflow worker threads.
+    #[structopt(short, long, env = "MZ_WORKERS", value_name = "N", default_value)]
+    workers: WorkerCount,
+    /// Identity of this node in the cluster.
+    #[structopt(
+        short,
+        long,
+        env = "MZ_PROCESS",
+        value_name = "INDEX",
+        default_value = "0"
+    )]
+    process: usize,
+    /// Total number of nodes in the cluster.
+    #[structopt(
+        short = "n",
+        long,
+        env = "MZ_PROCESSES",
+        value_name = "N",
+        default_value = "1"
+    )]
+    processes: usize,
+    /// Text file containing the addresses of the nodes in the cluster.
+    ///
+    /// The addresses should be specified one per line.
+    #[structopt(short, long, env = "MZ_ADDRESSES", value_name = "PATH")]
+    addresses: Option<PathBuf>,
+    /// Log Timely logging itself.
+    #[structopt(long, hidden = true)]
+    debug_timely_logging: bool,
+
+    // === Performance tuning parameters. ===
+    /// Granularity of dataflow logs.
+    ///
+    /// Set to "off" to disable dataflow logging.
+    #[structopt(short = "l", long, env = "MZ_LOGGING_GRANULARITY", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1s")]
+    logging_granularity: OptionalDuration,
+    /// How much historical detail to maintain in arrangements.
+    ///
+    /// Set to "off" to disable logical compaction.
+    #[structopt(long, env = "MZ_LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "60s")]
+    logical_compaction_window: OptionalDuration,
+    /// [DEPRECATED] Frequency with which to advance timestamps.
+    #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str = parse_duration::parse), value_name = "DURATION", default_value = "10ms")]
+    timestamp_frequency: Duration,
+    /// Maximum number of source records to buffer in memory before flushing to
+    /// disk.
+    #[structopt(
+        long,
+        env = "MZ_CACHE_MAX_PENDING_RECORDS",
+        value_name = "N",
+        default_value = "1000000"
+    )]
+    cache_max_pending_records: usize,
+    /// [ADVANCED] Timely progress tracking mode.
+    #[structopt(long, env = "MZ_TIMELY_PROGRESS_MODE", value_name = "MODE", possible_values = &["eager", "demand"], default_value = "demand")]
+    timely_progress_mode: timely::worker::ProgressMode,
+    /// [ADVANCED] Amount of compaction to perform when idle.
+    #[structopt(long, env = "MZ_DIFFERENTIAL_IDLE_MERGE_EFFORT", value_name = "N")]
+    differential_idle_merge_effort: Option<isize>,
+
+    // === Logging options. ===
+    /// Where materialized will emit log messages.
+    #[structopt(long, env = "MZ_LOG_FILE", value_name = "PATH")]
+    log_file: Option<String>,
+    // == Connection options.
+    /// The address on which to listen for connections.
+    #[structopt(long, env = "MZ_LISTEN_ADDR", value_name = "HOST:PORT")]
+    listen_addr: Option<SocketAddr>,
+    /// Certificate file for TLS connections.
+    #[structopt(long, env = "MZ_TLS_CERT", requires = "tls-key", value_name = "PATH")]
+    tls_cert: Option<PathBuf>,
+    /// Private key file for TLS connections.
+    #[structopt(long, env = "MZ_TLS_KEY", requires = "tls-cert", value_name = "PATH")]
+    tls_key: Option<PathBuf>,
+
+    // === Storage options. ===
+    /// Where to store data.
+    #[structopt(
+        long,
+        env = "MZ_DATA_DIRECTORY",
+        value_name = "PATH",
+        default_value = "mzdata"
+    )]
+    data_directory: PathBuf,
+    /// Enable symbioisis with a PostgreSQL server.
+    #[structopt(long, env = "MZ_SYMBIOSIS", hidden = true)]
+    symbiosis: Option<String>,
+
+    // === Telemetry options. ===
+    // TODO(benesch): add an environment variable once we upgrade to clap v3.
+    // Doesn't presently work in clap v2. See: clap-rs/clap#1476.
+    /// Disable telemetry reporting.
+    #[structopt(long, conflicts_with = "telemetry-url")]
+    disable_telemetry: bool,
+    /// The URL of the telemetry server to report to.
+    #[structopt(long, env = "MZ_TELEMETRY_URL", hidden = true)]
+    telemetry_url: Option<String>,
+}
+
+/// This type is a hack to allow a dynamic default for the `--workers` argument,
+/// which depends on the number of available CPUs. Ideally structopt would
+/// expose a `default_fn` rather than accepting only string literals.
+struct WorkerCount(usize);
+
+impl Default for WorkerCount {
+    fn default() -> Self {
+        WorkerCount(cmp::max(1, num_cpus::get_physical() / 2))
+    }
+}
+
+impl FromStr for WorkerCount {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<WorkerCount, anyhow::Error> {
+        let n = s.parse()?;
+        if n == 0 {
+            bail!("must be greater than zero");
+        }
+        Ok(WorkerCount(n))
+    }
+}
+
+impl fmt::Display for WorkerCount {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 fn main() {
-    if let Err(err) = run() {
+    if let Err(err) = run(Args::from_args()) {
         eprintln!("materialized: {:#}", err);
         process::exit(1);
     }
 }
 
-fn run() -> Result<(), anyhow::Error> {
+fn run(args: Args) -> Result<(), anyhow::Error> {
     panic::set_hook(Box::new(handle_panic));
 
-    let args: Vec<_> = env::args().collect();
-    let mut opts = getopts::Options::new();
-
-    // Options that request informational output.
-    opts.optflag("h", "help", "show this usage information");
-    opts.optflagmulti(
-        "v",
-        "version",
-        "print version and exit (use -vv for additional info)",
-    );
-
-    // Accidental debug build protection.
-    if cfg!(debug_assertions) {
-        opts.optflag("", "dev", "allow running this dev (unoptimized) build");
-    }
-
-    // Dataflow worker options.
-    opts.optopt(
-        "w",
-        "workers",
-        "number of per-process timely worker threads",
-        "N",
-    );
-    opts.optopt("", "threads", "deprecated alias for --workers", "N");
-    opts.optopt(
-        "p",
-        "process",
-        "identity of this node when coordinating with other nodes (default 0)",
-        "INDEX",
-    );
-    opts.optopt(
-        "n",
-        "processes",
-        "total number of coordinating nodes (default 1)",
-        "N",
-    );
-    opts.optopt(
-        "a",
-        "address-file",
-        "text file whose lines are process addresses",
-        "FILE",
-    );
-
-    // Performance tuning parameters.
-    opts.optopt(
-        "l",
-        "logging-granularity",
-        "dataflow logging granularity (default 1s)",
-        "DURATION/\"off\"",
-    );
-    opts.optflag("", "debug-timely-logging", "(internal use only)");
-    opts.optopt(
-        "",
-        "logical-compaction-window",
-        "historical detail maintained for arrangements (default 60s)",
-        "DURATION/\"off\"",
-    );
-    opts.optopt(
-        "",
-        "timestamp-frequency",
-        "timestamp advancement frequency (default 10ms)",
-        "DURATION",
-    );
-    opts.optopt(
-        "",
-        "cache-max-pending-records",
-        "maximum number of records that have to be present before materialize will cache them immediately (default 1000000)",
-        "N",
-    );
-    opts.optopt(
-        "",
-        "timely-progress-mode",
-        "[advanced] timely progress tracking mode (default: demand)",
-        "<demand|eager>",
-    );
-    opts.optopt(
-        "",
-        "differential-idle-merge-effort",
-        "[advanced] amount of compaction to perform when idle",
-        "N",
-    );
-
-    // Logging options.
-    opts.optopt(
-        "",
-        "log-file",
-        "where materialized will write logs, \
-         can be either a file or the special value 'stderr' \
-         (default <data directory>/materialized.log)",
-        "PATH",
-    );
-
-    // Connection options.
-    opts.optopt(
-        "",
-        "listen-addr",
-        "the address and port on which materialized will listen for connections",
-        "ADDR:PORT",
-    );
-    opts.optopt(
-        "",
-        "tls-cert",
-        "certificate file for TLS connections",
-        "PATH",
-    );
-    opts.optopt("", "tls-key", "private key for TLS connections", "PATH");
-
-    // Storage options.
-    opts.optopt(
-        "D",
-        "data-directory",
-        "where materialized will store metadata (default mzdata)",
-        "PATH",
-    );
-    opts.optopt("", "symbiosis", "(internal use only)", "URL");
-
-    // Feature options.
-    opts.optflag(
-        "",
-        "experimental",
-        "enable experimental features (DANGEROUS)",
-    );
-
-    // Telemetry options.
-    opts.optflag("", "disable-telemetry", "disables telemetry reporting");
-
-    let popts = opts.parse(&args[1..])?;
-
-    // Handle options that request informational output.
-    if popts.opt_present("h") {
-        print!("{}", opts.usage("usage: materialized [options]"));
-        return Ok(());
-    } else if popts.opt_present("v") {
+    if args.version > 0 {
         println!("materialized {}", materialized::BUILD_INFO.human_version());
-        if popts.opt_count("v") > 1 {
+        if args.version > 1 {
             for bi in build_info() {
                 println!("{}", bi);
             }
@@ -195,7 +225,11 @@ fn run() -> Result<(), anyhow::Error> {
     }
 
     // Prevent accidental usage of development builds.
-    if cfg!(debug_assertions) && !popts.opt_present("dev") && !ore::env::is_var_truthy("MZ_DEV") {
+    //
+    // TODO(benesch): offload environment variable check to clap once we upgrade
+    // to clap v3. Doesn't presently work in clap v2. See: clap-rs/clap#1476.
+    #[cfg(debug_assertions)]
+    if !args.dev && !ore::env::is_var_truthy("MZ_DEV") {
         bail!(
             "refusing to run dev (unoptimized) binary without explicit opt-in\n\
              hint: Pass the '--dev' option or set MZ_DEV=1 in your environment to opt in.\n\
@@ -204,92 +238,47 @@ fn run() -> Result<(), anyhow::Error> {
     }
 
     // Configure Timely and Differential workers.
-    let threads = match popts.opt_get::<usize>("workers")? {
-        Some(val) => val,
-        None => match popts.opt_get::<usize>("threads")? {
-            Some(val) => {
-                warn!("--threads is deprecated and will stop working in the future. Please use --workers.");
-                val
-            }
-            None => match env::var("MZ_WORKERS") {
-                Ok(val) => val.parse()?,
-                Err(VarError::NotUnicode(_)) => bail!("non-unicode character found in MZ_WORKERS"),
-                Err(VarError::NotPresent) => cmp::max(1, num_cpus::get_physical() / 2),
-            },
-        },
-    };
-    if threads == 0 {
+    if args.process >= args.processes {
         bail!(
-            "'--workers' must be greater than 0\n\
-            hint: As a starting point, set the number of threads to half of the number of\n\
-            cores on your system. Then, further adjust based on your performance needs.\n\
-            hint: You may also set the environment variable MZ_WORKERS to the desired number\n\
-            of threads."
+            "process ID {} is not between 0 and {}",
+            args.process,
+            args.processes
         );
     }
-    let process = popts.opt_get_default("process", 0)?;
-    let processes = popts.opt_get_default("processes", 1)?;
-    let address_file = popts.opt_str("address-file");
-    if process >= processes {
-        bail!("process ID {} is not between 0 and {}", process, processes);
-    }
-    let addresses = match address_file {
-        None => (0..processes)
+    let addresses = match &args.addresses {
+        None => (0..args.processes)
             .map(|i| SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6875 + i as u16))
             .collect(),
-        Some(address_file) => read_address_file(&address_file, processes)?,
+        Some(addresses) => read_address_file(addresses, args.processes)?,
     };
-
-    // Handle performance tuning parameters.
-    let logging_granularity = match popts.opt_str("logging-granularity").as_deref() {
-        None => Some(Duration::from_secs(1)),
-        Some("off") => None,
-        Some(d) => Some(parse_duration::parse(&d)?),
-    };
-    let log_logging = popts.opt_present("debug-timely-logging");
-    let logical_compaction_window = match popts.opt_str("logical-compaction-window").as_deref() {
-        None => Some(Duration::from_secs(60)),
-        Some("off") => None,
-        Some(d) => Some(parse_duration::parse(&d)?),
-    };
-    let timestamp_frequency = match popts.opt_str("timestamp-frequency").as_deref() {
-        None => Duration::from_millis(10),
-        Some(d) => parse_duration::parse(&d)?,
-    };
-    let cache_max_pending_records = popts.opt_get_default("cache-max-pending-records", 1000000)?;
-    let timely_progress_mode = popts
-        .opt_get_default(
-            "timely-progress-mode",
-            timely::worker::ProgressMode::default(),
-        )
-        .map_err(|e| anyhow!(e))?;
-    let differential_idle_merge_effort =
-        popts.opt_get::<isize>("differential-idle-merge-effort")?;
+    let log_logging = args.debug_timely_logging;
+    let logging = args
+        .logging_granularity
+        .map(|granularity| coord::LoggingConfig {
+            granularity,
+            log_logging,
+        });
+    if log_logging && logging.is_none() {
+        bail!("cannot specify --debug-timely-logging and --logging-granularity=off simultaneously");
+    }
 
     // Configure connections.
-    let listen_addr = popts.opt_get("listen-addr")?;
-    let tls = match (popts.opt_str("tls-cert"), popts.opt_str("tls-key")) {
+    let tls = match (args.tls_cert, args.tls_key) {
         (None, None) => None,
         (None, Some(_)) | (Some(_), None) => {
-            bail!("--tls-cert and --tls-key must be specified together");
+            unreachable!("clap ensures --tls-cert and --tls-key are specified together");
         }
-        (Some(cert), Some(key)) => Some(materialized::TlsConfig {
-            cert: cert.into(),
-            key: key.into(),
-        }),
+        (Some(cert), Some(key)) => Some(materialized::TlsConfig { cert, key }),
     };
 
-    let experimental_mode = popts.opt_present("experimental");
-
     // Configure storage.
-    let data_directory = popts.opt_get_default("data-directory", PathBuf::from("mzdata"))?;
-    let symbiosis_url = popts.opt_str("symbiosis");
+    let data_directory = args.data_directory;
     fs::create_dir_all(&data_directory)
         .with_context(|| format!("creating data directory: {}", data_directory.display()))?;
 
     // Configure source caching.
-    let cache = if experimental_mode {
-        let cache_directory = data_directory.join("cache/");
+    let cache = if args.experimental {
+        let cache_directory = data_directory.join("cache");
         fs::create_dir_all(&cache_directory).with_context(|| {
             format!(
                 "creating source caching directory: {}",
@@ -298,17 +287,12 @@ fn run() -> Result<(), anyhow::Error> {
         })?;
 
         Some(coord::CacheConfig {
-            max_pending_records: cache_max_pending_records,
+            max_pending_records: args.cache_max_pending_records,
             path: cache_directory,
         })
     } else {
         None
     };
-
-    let logging = logging_granularity.map(|granularity| coord::LoggingConfig {
-        granularity,
-        log_logging,
-    });
 
     // If --disable-telemetry is present, disable telemetry. Otherwise, if a
     // MZ_TELEMETRY_URL environment variable is set, use that as the telemetry
@@ -316,16 +300,13 @@ fn run() -> Result<(), anyhow::Error> {
     // and disable telemetry in debug mode. This should allow for good defaults (on
     // in release, off in debug), but also easy development during testing of this
     // feature via the environment variable.
-    let telemetry_url = match popts.opt_present("disable-telemetry") {
+    let telemetry_url = match args.disable_telemetry {
         true => None,
-        false => match env::var("MZ_TELEMETRY_URL") {
-            Ok(url) => Some(url),
-            Err(VarError::NotUnicode(_)) => {
-                bail!("non-unicode character found in MZ_TELEMETRY_URL")
-            }
-            Err(VarError::NotPresent) => match cfg!(debug_assertions) {
+        false => match args.telemetry_url {
+            Some(url) => Some(url),
+            None => match cfg!(debug_assertions) {
                 true => None,
-                false => Some("https://telemetry.materialize.com".to_string()),
+                false => Some("https://telemetry.materialize.com".into()),
             },
         },
     };
@@ -344,7 +325,7 @@ fn run() -> Result<(), anyhow::Error> {
             .unwrap()
             .add_directive("panic=error".parse().unwrap()); // prevent suppressing logs about panics
 
-        match popts.opt_str("log-file").as_deref() {
+        match args.log_file.as_deref() {
             Some("stderr") => {
                 // The user explicitly directed logs to stderr. Log only to stderr
                 // with the user-specified `env_filter`.
@@ -415,7 +396,7 @@ swap: {swap_total}KB total, {swap_used}KB used",
             env::vars()
                 .filter(|(name, _value)| name.starts_with("MZ_"))
                 .map(|(name, value)| format!("{}={}", escape(&name), escape(&value)))
-                .chain(args.into_iter().map(|arg| escape(&arg).into_owned()))
+                .chain(env::args().into_iter().map(|arg| escape(&arg).into_owned()))
                 .join(" ")
         },
         os = os_info::get(),
@@ -434,11 +415,12 @@ swap: {swap_total}KB total, {swap_used}KB used",
     sys::adjust_rlimits();
 
     // Build Timely worker configuration.
-    let mut timely_worker = timely::WorkerConfig::default().progress_mode(timely_progress_mode);
+    let mut timely_worker =
+        timely::WorkerConfig::default().progress_mode(args.timely_progress_mode);
     differential_dataflow::configure(
         &mut timely_worker,
         &differential_dataflow::Config {
-            idle_merge_effort: differential_idle_merge_effort,
+            idle_merge_effort: args.differential_idle_merge_effort,
         },
     );
 
@@ -458,19 +440,19 @@ swap: {swap_total}KB total, {swap_used}KB used",
 
     let server = runtime.block_on(materialized::serve(
         materialized::Config {
-            threads,
-            process,
+            workers: args.workers.0,
+            process: args.process,
             addresses,
             timely_worker,
             logging,
-            logical_compaction_window,
-            timestamp_frequency,
+            logical_compaction_window: args.logical_compaction_window,
+            timestamp_frequency: args.timestamp_frequency,
             cache,
-            listen_addr,
+            listen_addr: args.listen_addr,
             tls,
             data_directory,
-            symbiosis_url,
-            experimental_mode,
+            symbiosis_url: args.symbiosis,
+            experimental_mode: args.experimental,
             telemetry_url,
         },
         runtime.clone(),
@@ -491,7 +473,7 @@ to improve both our software and your queries! Please reach out at:
 "
     );
 
-    if experimental_mode {
+    if args.experimental {
         eprintln!(
             "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                                 WARNING!
@@ -543,8 +525,9 @@ For more details, see https://materialize.com/docs/cli#experimental-mode
     }
 }
 
-fn read_address_file(path: &str, n: usize) -> Result<Vec<SocketAddr>, anyhow::Error> {
-    let file = File::open(path).with_context(|| format!("opening address file {}", path))?;
+fn read_address_file(path: &Path, n: usize) -> Result<Vec<SocketAddr>, anyhow::Error> {
+    let file =
+        File::open(path).with_context(|| format!("opening address file {}", path.display()))?;
     let mut lines = BufReader::new(file).lines();
     let addrs = lines.by_ref().take(n).collect::<Result<Vec<_>, _>>()?;
     if addrs.len() < n || lines.next().is_some() {

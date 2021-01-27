@@ -48,6 +48,9 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.6.2 %}}
 
+- Allow setting most [command-line flags](/cli#command-line-flags) via
+  environment variables.
+
 - Fix a bug that would cause `DROP` statements targeting multiple objects to fail
   when those objects had dependent objects in common {{% gh 5316 %}}.
 

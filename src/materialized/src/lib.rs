@@ -83,7 +83,7 @@ pub const BUILD_INFO: BuildInfo = BuildInfo {
 pub struct Config {
     // === Timely and Differential worker options. ===
     /// The number of Timely worker threads that this process should host.
-    pub threads: usize,
+    pub workers: usize,
     /// The ID of this process in the cluster. IDs must be contiguously
     /// allocated, starting at zero.
     pub process: usize,
@@ -131,10 +131,10 @@ pub struct Config {
 }
 
 impl Config {
-    /// The total number of timely workers, across all processes, described the
-    /// by the configuration.
-    pub fn num_timely_workers(&self) -> usize {
-        self.threads * self.addresses.len()
+    /// The total number of Timely workers, across all processes, described by
+    /// the configuration.
+    pub fn total_workers(&self) -> usize {
+        self.workers * self.addresses.len()
     }
 }
 
@@ -173,7 +173,7 @@ pub async fn serve(
 
     // Extract timely dataflow parameters.
     let is_primary = config.process == 0;
-    let num_timely_workers = config.num_timely_workers();
+    let total_workers = config.total_workers();
 
     // Validate TLS configuration, if present.
     let tls = match &config.tls {
@@ -230,7 +230,10 @@ pub async fn serve(
                     tls,
                     coord_client,
                     start_time,
-                    &num_timely_workers.to_string(),
+                    // TODO(benesch): passing this to `http::Server::new` just
+                    // so it can set a static metric is silly. We should just
+                    // set the metric directly here.
+                    total_workers,
                 ));
                 mux.serve(incoming.by_ref().take_until(drain_tripwire))
                     .await;
@@ -263,7 +266,7 @@ pub async fn serve(
     // Launch dataflow workers.
     let dataflow_guard = dataflow::serve(
         dataflow::Config {
-            threads: config.threads,
+            workers: config.workers,
             process: config.process,
             timely_worker: config.timely_worker,
         },
@@ -282,7 +285,7 @@ pub async fn serve(
             coord::Config {
                 switchboard,
                 cmd_rx,
-                num_timely_workers,
+                total_workers,
                 symbiosis_url: config.symbiosis_url.as_deref(),
                 logging: config.logging,
                 data_directory: &config.data_directory,
