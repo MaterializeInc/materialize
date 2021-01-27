@@ -64,6 +64,7 @@ main() {
 
     export MZ_CHBENCH_SNAP_ID="${snapshot_id}"
     export MZ_CHBENCH_SNAPSHOT="${snapshot}"
+    export MZ_CHBENCH_SNAPSHOT_DIR="${snapshot_dir}"
 
     if [ -d "${snapshot}" ]; then
         echo "Snapshot already downloaded; nothing to do!"
