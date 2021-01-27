@@ -505,8 +505,12 @@ impl AggregateFunc {
             AggregateFunc::SumInt64 => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
             _ => input_type.scalar_type,
         };
-        // max/min/sum return null on empty sets
-        let nullable = !matches!(self, AggregateFunc::Count);
+        // Count never produces null, and other aggregations only produce
+        // null in the presence of null inputs.
+        let nullable = match self {
+            AggregateFunc::Count => false,
+            _ => input_type.nullable,
+        };
         scalar_type.nullable(nullable)
     }
 }

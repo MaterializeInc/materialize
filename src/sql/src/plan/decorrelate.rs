@@ -854,7 +854,7 @@ impl AggregateExpr {
         } = self;
 
         expr::AggregateExpr {
-            func,
+            func: func.into_expr(),
             expr: expr.applied_to(id_gen, col_map, inner),
             distinct,
         }
