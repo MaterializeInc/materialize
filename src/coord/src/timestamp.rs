@@ -43,7 +43,7 @@ use dataflow_types::{
     KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector, SourceConnector,
     SourceEnvelope, TimestampSourceUpdate,
 };
-use expr::{PartitionId, SourceInstanceId};
+use expr::{GlobalId, PartitionId};
 use ore::collections::CollectionExt;
 
 use crate::coord;
@@ -120,8 +120,8 @@ pub struct TimestampConfig {
 
 #[derive(Debug)]
 pub enum TimestampMessage {
-    Add(SourceInstanceId, SourceConnector),
-    DropInstance(SourceInstanceId),
+    Add(GlobalId, SourceConnector),
+    Drop(GlobalId),
     Shutdown,
 }
 
@@ -180,7 +180,7 @@ impl ByoTimestampConsumer {
     fn update_and_send(
         &mut self,
         tx: &mpsc::UnboundedSender<coord::Message>,
-        sid: SourceInstanceId,
+        id: GlobalId,
         partition_count: i32,
         partition: PartitionId,
         timestamp: u64,
@@ -198,7 +198,7 @@ impl ByoTimestampConsumer {
             // This can only happen for Kafka sources
             tx.send(coord::Message::AdvanceSourceTimestamp(
                 coord::AdvanceSourceTimestamp {
-                    id: sid,
+                    id,
                     update: TimestampSourceUpdate::BringYourOwn(
                         partition_count,                         // The new partition count
                         PartitionId::Kafka(partition_count - 1), // the ID of the new partition
@@ -215,7 +215,7 @@ impl ByoTimestampConsumer {
         self.last_partition_ts.insert(partition.clone(), timestamp);
         tx.send(coord::Message::AdvanceSourceTimestamp(
             coord::AdvanceSourceTimestamp {
-                id: sid,
+                id,
                 update: TimestampSourceUpdate::BringYourOwn(
                     partition_count,
                     partition,
@@ -251,7 +251,7 @@ enum ConsistencyFormatting {
 #[derive(Clone)]
 struct RtKafkaConnector {
     coordination_state: Arc<TimestampingState>,
-    id: SourceInstanceId,
+    id: GlobalId,
     topic: String,
 }
 
@@ -455,10 +455,10 @@ fn get_kafka_partitions(
 
 pub struct Timestamper {
     /// Current list of up to date sources that use a real time consistency model
-    rt_sources: HashMap<SourceInstanceId, RtTimestampConsumer>,
+    rt_sources: HashMap<GlobalId, RtTimestampConsumer>,
 
     /// Current list of up to date sources that use a BYO consistency model
-    byo_sources: HashMap<SourceInstanceId, ByoTimestampConsumer>,
+    byo_sources: HashMap<GlobalId, ByoTimestampConsumer>,
 
     /// Channel through which timestamp data updates are communicated through the coordinator
     tx: mpsc::UnboundedSender<coord::Message>,
@@ -528,7 +528,7 @@ fn parse_byo(record: Vec<(String, Value)>) -> (String, i32, PartitionId, u64, Mz
 
 /// Extracts Materialize timestamp updates from a Debezium consistency record.
 fn generate_ts_updates_from_debezium(
-    id: &SourceInstanceId,
+    id: &GlobalId,
     tx: &mpsc::UnboundedSender<coord::Message>,
     byo_consumer: &mut ByoTimestampConsumer,
     value: Value,
@@ -776,7 +776,7 @@ impl Timestamper {
         // start checking
         while let Ok(update) = self.rx.try_recv() {
             match update {
-                TimestampMessage::Add(id, sc) => {
+                TimestampMessage::Add(source_id, sc) => {
                     let (sc, enc, env, cons) = if let SourceConnector::External {
                         connector,
                         encoding,
@@ -789,28 +789,39 @@ impl Timestamper {
                     } else {
                         panic!("A Local Source should never be timestamped");
                     };
-                    if !self.rt_sources.contains_key(&id) && !self.byo_sources.contains_key(&id) {
+
+                    if !self.rt_sources.contains_key(&source_id)
+                        && !self.byo_sources.contains_key(&source_id)
+                    {
                         // Did not know about source, must update
                         match cons {
                             Consistency::RealTime => {
-                                info!("Timestamping Source {} with Real Time Consistency.", id);
-                                let consumer = self.create_rt_connector(id, sc);
+                                info!(
+                                    "Timestamping Source {} with Real Time Consistency.",
+                                    source_id
+                                );
+                                let consumer = self.create_rt_connector(source_id, sc);
                                 if let Some(consumer) = consumer {
-                                    self.rt_sources.insert(id, consumer);
+                                    self.rt_sources.insert(source_id, consumer);
                                 }
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
-                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}.", id, consistency_topic);
-                                let consumer =
-                                    self.create_byo_connector(id, sc, enc, env, consistency_topic);
+                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}.", source_id, consistency_topic);
+                                let consumer = self.create_byo_connector(
+                                    source_id,
+                                    sc,
+                                    enc,
+                                    env,
+                                    consistency_topic,
+                                );
                                 if let Some(consumer) = consumer {
-                                    self.byo_sources.insert(id, consumer);
+                                    self.byo_sources.insert(source_id, consumer);
                                 }
                             }
                         }
                     }
                 }
-                TimestampMessage::DropInstance(id) => {
+                TimestampMessage::Drop(id) => {
                     info!("Dropping Timestamping for Source {}.", id);
                     if let Some(RtTimestampConsumer {
                         connector:
@@ -1040,9 +1051,10 @@ impl Timestamper {
     }
 
     /// Creates a RT connector
+    /// TODO(rkhaitan): this function burns my eyes
     fn create_rt_connector(
         &self,
-        id: SourceInstanceId,
+        id: GlobalId,
         sc: ExternalSourceConnector,
     ) -> Option<RtTimestampConsumer> {
         match sc {
@@ -1080,7 +1092,7 @@ impl Timestamper {
 
     fn create_byo_file_connector(
         &self,
-        _id: SourceInstanceId,
+        _id: GlobalId,
         fc: &FileSourceConnector,
         timestamp_topic: String,
     ) -> Option<ByoFileConnector<std::vec::Vec<u8>, anyhow::Error>> {
@@ -1108,7 +1120,7 @@ impl Timestamper {
 
     fn create_rt_kinesis_connector(
         &self,
-        _id: SourceInstanceId,
+        _id: GlobalId,
         kinc: KinesisSourceConnector,
     ) -> Option<RtKinesisConnector> {
         let (kinesis_client, cached_shard_ids) = match block_on(kinesis::client(kinc.aws_info)) {
@@ -1146,7 +1158,7 @@ impl Timestamper {
 
     fn create_rt_kafka_connector(
         &self,
-        id: SourceInstanceId,
+        id: GlobalId,
         kc: KafkaSourceConnector,
     ) -> Option<RtKafkaConnector> {
         let mut config = ClientConfig::new();
@@ -1199,7 +1211,7 @@ impl Timestamper {
 
     fn create_rt_ocf_connector(
         &self,
-        _id: SourceInstanceId,
+        _id: GlobalId,
         _fc: FileSourceConnector,
     ) -> Option<RtFileConnector> {
         Some(RtFileConnector {})
@@ -1207,7 +1219,7 @@ impl Timestamper {
 
     fn create_rt_file_connector(
         &self,
-        _id: SourceInstanceId,
+        _id: GlobalId,
         _fc: FileSourceConnector,
     ) -> Option<RtFileConnector> {
         Some(RtFileConnector {})
@@ -1215,7 +1227,7 @@ impl Timestamper {
 
     fn create_rt_s3_connector(
         &self,
-        _id: SourceInstanceId,
+        _id: GlobalId,
         _fc: S3SourceConnector,
     ) -> Option<RtS3Connector> {
         Some(RtS3Connector {})
@@ -1223,7 +1235,7 @@ impl Timestamper {
 
     fn create_byo_ocf_connector(
         &self,
-        _id: SourceInstanceId,
+        _id: GlobalId,
         fc: &FileSourceConnector,
         timestamp_topic: String,
     ) -> Option<ByoFileConnector<mz_avro::types::Value, anyhow::Error>> {
@@ -1252,7 +1264,7 @@ impl Timestamper {
     /// Creates a BYO connector
     fn create_byo_connector(
         &self,
-        id: SourceInstanceId,
+        id: GlobalId,
         sc: ExternalSourceConnector,
         enc: DataEncoding,
         env: SourceEnvelope,
@@ -1322,7 +1334,7 @@ impl Timestamper {
 
     fn create_byo_kinesis_connector(
         &self,
-        _id: SourceInstanceId,
+        _id: GlobalId,
         _kinc: &KinesisSourceConnector,
         _timestamp_topic: String,
     ) -> Option<ByoKinesisConnector> {
@@ -1331,7 +1343,7 @@ impl Timestamper {
 
     fn create_byo_kafka_connector(
         &self,
-        id: SourceInstanceId,
+        id: GlobalId,
         kc: &KafkaSourceConnector,
         timestamp_topic: String,
     ) -> Option<ByoKafkaConnector> {

@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
 use std::io::{self, BufRead, Read};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -21,21 +20,15 @@ use log::error;
 use timely::scheduling::{Activator, SyncActivator};
 
 use dataflow_types::{
-    AvroOcfEncoding, Compression, Consistency, DataEncoding, ExternalSourceConnector, MzOffset,
+    AvroOcfEncoding, Compression, DataEncoding, ExternalSourceConnector, MzOffset,
 };
 use expr::{PartitionId, SourceInstanceId};
 use mz_avro::types::Value;
 use mz_avro::{AvroRead, Schema, Skip};
 
+use crate::logging::materialized::Logger;
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
-};
-use crate::{
-    logging::materialized::Logger,
-    server::{
-        TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-        TimestampMetadataUpdates,
-    },
 };
 
 /// Contains all information necessary to ingest data from file sources (either
@@ -201,36 +194,6 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
 }
 
 impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
-    fn activate_source_timestamping(
-        id: &SourceInstanceId,
-        consistency: &Consistency,
-        active: bool,
-        timestamp_data_updates: TimestampDataUpdates,
-        timestamp_metadata_channel: TimestampMetadataUpdates,
-    ) -> Option<TimestampMetadataUpdates> {
-        if active {
-            let prev = if let Consistency::BringYourOwn(_) = consistency {
-                timestamp_data_updates.borrow_mut().insert(
-                    id.clone(),
-                    TimestampDataUpdate::BringYourOwn(HashMap::new()),
-                )
-            } else {
-                timestamp_data_updates
-                    .borrow_mut()
-                    .insert(id.clone(), TimestampDataUpdate::RealTime(1))
-            };
-            // Check that this is the first time this source id is registered
-            assert!(prev.is_none());
-            timestamp_metadata_channel
-                .as_ref()
-                .borrow_mut()
-                .push(TimestampMetadataUpdate::StartTimestamping(*id));
-            Some(timestamp_metadata_channel)
-        } else {
-            None
-        }
-    }
-
     fn can_close_timestamp(
         &self,
         consistency_info: &ConsistencyInfo,

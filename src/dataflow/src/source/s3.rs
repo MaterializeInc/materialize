@@ -27,13 +27,10 @@ use tokio::sync::mpsc as tokio_mpsc;
 use tokio::time::{self, Duration};
 
 use aws_util::aws;
-use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset, S3KeySource};
+use dataflow_types::{DataEncoding, ExternalSourceConnector, MzOffset, S3KeySource};
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::logging::materialized::Logger;
-use crate::server::{
-    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
-};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
@@ -559,35 +556,6 @@ async fn download_object(
 }
 
 impl SourceInfo<Vec<u8>> for S3SourceInfo {
-    fn activate_source_timestamping(
-        id: &SourceInstanceId,
-        consistency: &Consistency,
-        active: bool,
-        timestamp_data_updates: TimestampDataUpdates,
-        timestamp_metadata_channel: TimestampMetadataUpdates,
-    ) -> Option<TimestampMetadataUpdates>
-    where
-        Self: Sized,
-    {
-        // Putting source information on the Timestamp channel lets this
-        // Dataflow worker communicate that it has created a source.
-        if let Consistency::BringYourOwn(_) = consistency {
-            log::error!("S3 sources do not currently support BYO consistency");
-            None
-        } else if active {
-            timestamp_data_updates
-                .borrow_mut()
-                .insert(id.clone(), TimestampDataUpdate::RealTime(1));
-            timestamp_metadata_channel
-                .as_ref()
-                .borrow_mut()
-                .push(TimestampMetadataUpdate::StartTimestamping(*id));
-            Some(timestamp_metadata_channel)
-        } else {
-            None
-        }
-    }
-
     fn get_next_message(
         &mut self,
         _consistency_info: &mut ConsistencyInfo,
