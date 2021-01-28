@@ -221,9 +221,11 @@ Below are the recommended ways to work around this.
 ### Tailing with `FETCH`
 
 The recommended way to use `TAIL` is with [`DECLARE`](/sql/declare) and [`FETCH`](/sql/fetch).
+These must be used within a transaction.
 This allows you to limit the number of rows and the time window of your requests. First, declare a `TAIL` cursor:
 
 ```sql
+BEGIN;
 DECLARE c CURSOR FOR TAIL t;
 ````
 
@@ -270,104 +272,51 @@ with conn.cursor() as cur:
         cur.execute("FETCH ALL c")
         for row in cur:
             print(row)
-    cur.execute("CLOSE c")
 ```
 
-### Tailing with `COPY TO`
+#### Streaming with Python and psycopg3
 
-[`COPY TO`](/sql/copy-to) is supported by many drivers and does not buffer.
-However most drivers do not provide methods to parse the data coming from the `COPY`, in which case you'll have to do your own parsing.
-The PostgreSQL docs describe the [`COPY` text format](https://www.postgresql.org/docs/current/sql-copy.html#id-1.9.3.55.9.2), which is tab-separated lines with
-escapes and a sentinel for `NULL`.
+{{< warning >}}
+psycopg3 is not yet stable.
+The example here could break if their API changes.
+{{< /warning >}}
 
-#### `COPY TO` with C# and Npgsql
-
-Npgsql supports parsing the `BINARY` format of `COPY TO`:
-
-```
-// The TAIL won't ever end, so use reader.Cancel() to cancel the request.
-using (var reader = Conn.BeginBinaryExport("COPY (TAIL t) TO STDOUT (FORMAT BINARY)"))
-{
-    reader.StartRow();
-    Console.WriteLine(reader.Read<decimal>()); // timestamp column
-    Console.WriteLine(reader.Read<long>()); // diff column
-    Console.WriteLine(reader.Read<int>()); // first column of `t`
-
-    // ...
-}
-```
-
-For more details, see the [Binary `COPY`](https://www.npgsql.org/doc/copy.html#binary-copy) section of the Npgsql documentation.
-
-#### `COPY TO` with Python and psycopg2
+Although psycopg3 can function identically as the psycopg2 example above,
+it also has a `stream` feature where rows are not buffered and we can thus use `TAIL` directly.
 
 ```python
 #!/usr/bin/env python3
 
+import psycopg3
 import sys
-import psycopg2
 
-def main():
+dsn = "postgresql://localhost:6875/materialize?sslmode=disable"
+conn = psycopg3.connect(dsn)
 
-    dsn = 'postgresql://localhost:6875/materialize?sslmode=disable'
-    conn = psycopg2.connect(dsn)
-
-    with conn.cursor() as cursor:
-        cursor.copy_expert("COPY (TAIL some_materialized_view) TO STDOUT", sys.stdout)
-
-if __name__ == '__main__':
-    main()
+conn = psycopg3.connect(dsn)
+with conn.cursor() as cur:
+    for row in cur.stream("TAIL t"):
+        print(row)
 ```
 
-This will then stream the same output we saw above to `stdout`, though you could
-obviously do whatever you like with the output from this point.
+#### `FETCH` with C# and Npgsql
 
-### Tailing via the `psql` command-line client
-
-In this example, we'll assume `some_materialized_view` has one `text` column.
-
-```sql
-COPY (TAIL some_materialized_view) TO STDOUT
+```csharp
+var txn = conn.BeginTransaction();
+new NpgsqlCommand("DECLARE c CURSOR FOR TAIL t", conn, txn).ExecuteNonQuery();
+while (true)
+{
+    using (var cmd = new NpgsqlCommand("FETCH ALL c", conn, txn))
+    using (var reader  = cmd.ExecuteReader())
+    {
+        while (reader.Read())
+        {
+            // More columns available with reader[3], etc.
+            Console.WriteLine("ts: " + reader[0] + ", diff: " + reader[1] + ", column 1: " + reader[2]);
+        }
+    }
+}
 ```
-```
-1580000000000  1 insert_key
-1580000000001  1 will_delete
-1580000000003 -1 will_delete
-1580000000005  1 will_update_old
-1580000000007 -1 will_update_old
-1580000000007  1 will_update_new
-````
-
-This represents:
-
-- Inserting `insert_key`.
-- Inserting and then deleting `will_delete`.
-- Inserting `will_update_old`, and then updating it to `will_update_new`
-
-If you want to see the updates that had occurred in the last 30 seconds, you could run:
-
-```sql
-TAIL some_materialized_view AS OF now() - '30s'::INTERVAL
-```
-
-If you want timestamp completion messages:
-
-```sql
-COPY (TAIL some_materialized_view WITH (PROGRESS)) TO STDOUT
-```
-```
-1580000000000 f  1 insert_key
-1580000000001 t \N \N
-1580000000001 f  1 will_delete
-1580000000003 f -1 will_delete
-1580000000005 t \N \N
-1580000000005 f  1 will_update_old
-1580000000006 t \N \N
-1580000000007 t \N \N
-1580000000007 f -1 will_update_old
-1580000000007 f  1 will_update_new
-1580000000009 t \N \N
-````
 
 [`bigint`]: /sql/types/bigint
 [`numeric`]: /sql/types/numeric
