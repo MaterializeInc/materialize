@@ -5,7 +5,7 @@ assumes that Kafka topics should have 30 partitions and that you want 16 worker 
 
 ## Running the Avro Upsert Test
 
-Download `genavro_10m_v2_out.gz`, unzip it, and copy it into the directory called `data` in the
+Download `genavro_400m_v2_out.gz`, unzip it, and copy it into the directory called `data` in the
 current directory. Then run:
 
     ./mzcompose run test-upsert-performance
