@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+key_schema=$(</usr/share/producer/key-schema.json)
+value_schema=$(</usr/share/producer/value-schema.json)
+
+cat /data/genavro_10m_v2_int.out | kafka-avro-console-producer \
+        --property key.serializer=org.apache.kafka.common.serialization.StringSerializer \
+        --broker-list "kafka:9092" \
+        --property schema.registry.url="http://schema-registry:8081" \
+        --topic upsertavrotest \
+        --property parse.key=true \
+        --property key.schema="${key_schema}" \
+        --property "key.separator=:" \
+        --property value.schema="${value_schema}" \
+	;
