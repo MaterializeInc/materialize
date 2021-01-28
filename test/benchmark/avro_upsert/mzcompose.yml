@@ -13,13 +13,12 @@
 # This mostly just shows all the ports that are available to the host system, if you want
 # to change these you must restart the docker-compose cluster.
 x-port-mappings:
-  - &kafka-internal ${KAFKA_PORT:-9092:9092}
-  - &kafka-external 9093:9093
-  - &schema-registry ${SR_PORT:-8081:8081}
-  - &materialized ${MZ_PORT:-6875:6875}
+  - &kafka-internal ${KAFKA_PORT:-9092}
+  - &kafka-external 9093
+  - &schema-registry ${SR_PORT:-8081}
+  - &materialized ${MZ_PORT:-6875}
   - &grafana 3000:3000
-  - &prometheus 9090:9090
-  - &metabase 3030:3000
+  - &prometheus 9090
 
 version: '3.7'
 services:
@@ -32,6 +31,7 @@ services:
     init: true
     command:
       - --workers=${MZ_WORKERS:-16}
+      - --logical-compaction-window=1ms
       # We want this to eventually count up to the size of the largest batch in
       # an arrangement. This number represents a tradeoff between proactive
       # merging (which takes time) and low latency.

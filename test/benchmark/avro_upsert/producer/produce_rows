@@ -23,4 +23,4 @@ kafka-avro-console-producer \
         --property key.schema="${key_schema}" \
         --property "key.separator=:" \
         --property value.schema="${value_schema}" \
-        < /data/genavro_10m_v2_int.out
+        < /data/genavro_400m_v2_int.out
