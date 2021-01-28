@@ -561,7 +561,9 @@ class RemoveServicesStep(WorkflowStep):
       volumes: Boolean to indicate if the volumes should be removed as well
     """
 
-    def __init__(self, *, services: Optional[List[str]] = None, destroy_volumes: bool = False) -> None:
+    def __init__(
+        self, *, services: Optional[List[str]] = None, destroy_volumes: bool = False
+    ) -> None:
         self._services = services if services is not None else []
         self._destroy_volumes = destroy_volumes
         if not isinstance(self._services, list):
@@ -569,7 +571,15 @@ class RemoveServicesStep(WorkflowStep):
 
     def run(self, workflow: Workflow) -> None:
         try:
-            workflow.run_compose(["rm", "-f", "-s", *(["-v"] if self._destroy_volumes else []), *self._services])
+            workflow.run_compose(
+                [
+                    "rm",
+                    "-f",
+                    "-s",
+                    *(["-v"] if self._destroy_volumes else []),
+                    *self._services,
+                ]
+            )
         except subprocess.CalledProcessError:
             services = ", ".join(self._services)
             raise errors.Failed(f"ERROR: services didn't restart cleanly: {services}")
