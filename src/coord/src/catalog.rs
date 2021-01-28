@@ -124,6 +124,16 @@ pub struct Schema {
     #[serde(skip)]
     pub oid: u32,
     pub items: BTreeMap<String, GlobalId>,
+    pub functions: BTreeMap<String, GlobalId>,
+}
+
+impl Schema {
+    pub fn get_items(&self) -> &BTreeMap<String, GlobalId> {
+        &self.items
+    }
+    pub fn get_functions(&self) -> &BTreeMap<String, GlobalId> {
+        &self.functions
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -497,6 +507,7 @@ impl Catalog {
                     id,
                     oid,
                     items: BTreeMap::new(),
+                    functions: BTreeMap::new(),
                 },
             );
             events.push(Event::CreatedSchema {
@@ -805,6 +816,42 @@ impl Catalog {
         Err(SqlCatalogError::UnknownSchema(schema_name.into()))
     }
 
+    /// Resolves `name` to a non-function [`CatalogEntry`].
+    #[allow(clippy::useless_let_if_seq)]
+    pub fn resolve_item(
+        &self,
+        current_database: &str,
+        search_path: &[&str],
+        name: &PartialName,
+        conn_id: u32,
+    ) -> Result<&CatalogEntry, SqlCatalogError> {
+        self.resolve(
+            Schema::get_items,
+            current_database,
+            search_path,
+            name,
+            conn_id,
+        )
+    }
+
+    /// Resolves `name` to a function [`CatalogEntry`].
+    #[allow(clippy::useless_let_if_seq)]
+    pub fn resolve_function(
+        &self,
+        current_database: &str,
+        search_path: &[&str],
+        name: &PartialName,
+        conn_id: u32,
+    ) -> Result<&CatalogEntry, SqlCatalogError> {
+        self.resolve(
+            Schema::get_functions,
+            current_database,
+            search_path,
+            name,
+            conn_id,
+        )
+    }
+
     /// Resolves [`PartialName`] into a [`FullName`].
     ///
     /// If `name` does not specify a database, the `current_database` is used.
@@ -813,6 +860,7 @@ impl Catalog {
     #[allow(clippy::useless_let_if_seq)]
     pub fn resolve(
         &self,
+        get_schema_entries: fn(&Schema) -> &BTreeMap<String, GlobalId>,
         current_database: &str,
         search_path: &[&str],
         name: &PartialName,
@@ -845,7 +893,8 @@ impl Catalog {
                     Err(SqlCatalogError::UnknownSchema(_)) => continue,
                     Err(e) => return Err(e),
                 };
-            if let Some(id) = schema.items.get(&name.item) {
+
+            if let Some(id) = get_schema_entries(schema).get(&name.item) {
                 return Ok(&self.by_id[id]);
             }
         }
@@ -883,6 +932,7 @@ impl Catalog {
                 id: -1,
                 oid,
                 items: BTreeMap::new(),
+                functions: BTreeMap::new(),
             },
         );
         Ok(())
@@ -998,7 +1048,11 @@ impl Catalog {
             .get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
             .expect("catalog out of sync");
         let schema_id = schema.id;
-        schema.items.insert(entry.name.item.clone(), entry.id);
+        if let CatalogItem::Func(_) = entry.item() {
+            schema.functions.insert(entry.name.item.clone(), entry.id);
+        } else {
+            schema.items.insert(entry.name.item.clone(), entry.id);
+        }
         self.by_oid.insert(oid, entry.id);
         self.by_id.insert(entry.id, entry);
 
@@ -1400,6 +1454,7 @@ impl Catalog {
                             id,
                             oid,
                             items: BTreeMap::new(),
+                            functions: BTreeMap::new(),
                         },
                     );
                     Event::CreatedSchema {
@@ -2059,7 +2114,16 @@ impl SqlCatalog for ConnCatalog<'_> {
     ) -> Result<&dyn sql::catalog::CatalogItem, SqlCatalogError> {
         Ok(self
             .catalog
-            .resolve(&self.database, self.search_path, name, self.conn_id)?)
+            .resolve_item(&self.database, self.search_path, name, self.conn_id)?)
+    }
+
+    fn resolve_function(
+        &self,
+        name: &PartialName,
+    ) -> Result<&dyn sql::catalog::CatalogItem, SqlCatalogError> {
+        Ok(self
+            .catalog
+            .resolve_function(&self.database, self.search_path, name, self.conn_id)?)
     }
 
     fn list_items<'a>(

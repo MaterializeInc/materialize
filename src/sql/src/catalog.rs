@@ -96,6 +96,10 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
     /// of the search schemas. The catalog implementation must choose one.
     fn resolve_item(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
 
+    /// Performs the same operation as [`Catalog::resolve_item`] but for
+    /// functions within the catalog.
+    fn resolve_function(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
+
     /// Lists the items in the specified schema in the specified database.
     ///
     /// Panics if `schema_name` does not specify a valid schema.
@@ -357,6 +361,10 @@ impl Catalog for DummyCatalog {
     }
 
     fn resolve_item(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
+        unimplemented!();
+    }
+
+    fn resolve_function(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
         unimplemented!();
     }
 
