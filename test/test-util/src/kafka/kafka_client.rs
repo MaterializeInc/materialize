@@ -33,7 +33,7 @@ impl KafkaClient {
         config.set("bootstrap.servers", kafka_url);
         config.set("group.id", group_id);
         for (key, val) in configs {
-            config.set(key, val);
+            config.set(*key, *val);
         }
 
         let producer: FutureProducer = config.create()?;
