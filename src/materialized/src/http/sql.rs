@@ -20,7 +20,7 @@ use crate::http::{util, Server};
 use coord::ExecuteResponse;
 use dataflow_types::PeekResponse;
 use ore::collections::CollectionExt;
-use repr::Datum;
+use repr::{Datum, ScalarType};
 use sql::plan::Params;
 use sql_parser::parser::parse_statements;
 
@@ -79,12 +79,22 @@ async fn query_sql_as_system(
         _ => bail!("unexpected PeekResponse type"),
     };
     let mut sql_rows: Vec<Vec<Value>> = vec![];
+    let (col_names, col_types) = match res.desc {
+        Some(desc) => (
+            desc.iter_names()
+                .map(|name| name.map(|name| name.to_string()))
+                .collect(),
+            desc.typ().column_types.clone(),
+        ),
+        None => (vec![], vec![]),
+    };
     for row in rows {
         let datums = row.unpack();
         sql_rows.push(
             datums
                 .iter()
-                .map(|datum| match datum {
+                .enumerate()
+                .map(|(idx, datum)| match datum {
                     // Convert some common things to a native JSON value. This doesn't need to be
                     // too exhaustive because the SQL-over-HTTP interface is currently not hooked
                     // up to arbitrary external user queries.
@@ -96,18 +106,21 @@ async fn query_sql_as_system(
                     Datum::Float32(n) => float_to_json(n.into_inner() as f64),
                     Datum::Float64(n) => float_to_json(n.into_inner()),
                     Datum::String(s) => Value::String(s.to_string()),
+                    Datum::Decimal(d) => Value::String(if col_types.len() > idx {
+                        match col_types[idx].scalar_type {
+                            ScalarType::Decimal(_precision, scale) => {
+                                d.with_scale(scale).to_string()
+                            }
+                            _ => datum.to_string(),
+                        }
+                    } else {
+                        datum.to_string()
+                    }),
                     _ => Value::String(datum.to_string()),
                 })
                 .collect(),
         );
     }
-    let col_names = match res.desc {
-        Some(desc) => desc
-            .iter_names()
-            .map(|name| name.map(|name| name.to_string()))
-            .collect(),
-        None => vec![],
-    };
     Ok(SqlResult {
         rows: sql_rows,
         col_names,
