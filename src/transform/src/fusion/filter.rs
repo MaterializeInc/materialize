@@ -10,18 +10,18 @@
 //! Fuses multiple `Filter` operators into one; deduplicates predicates.
 //!
 //! ```rust
-//! use expr::{RelationExpr, ScalarExpr};
+//! use expr::{MirRelationExpr, MirScalarExpr};
 //! use repr::{ColumnType, Datum, RelationType, ScalarType};
 //!
 //! use transform::fusion::filter::Filter;
 //!
-//! let input = RelationExpr::constant(vec![], RelationType::new(vec![
+//! let input = MirRelationExpr::constant(vec![], RelationType::new(vec![
 //!     ScalarType::Bool.nullable(false),
 //! ]));
 //!
-//! let predicate0 = ScalarExpr::Column(0);
-//! let predicate1 = ScalarExpr::Column(0);
-//! let predicate2 = ScalarExpr::Column(0);
+//! let predicate0 = MirScalarExpr::Column(0);
+//! let predicate1 = MirScalarExpr::Column(0);
+//! let predicate2 = MirScalarExpr::Column(0);
 //!
 //! let mut expr =
 //! input
@@ -42,7 +42,8 @@
 //! assert_eq!(expr, correct);
 //! ```
 
-use crate::{RelationExpr, ScalarExpr, TransformArgs};
+use crate::TransformArgs;
+use expr::{MirRelationExpr, MirScalarExpr};
 
 /// Fuses multiple `Filter` operators into one and deduplicates predicates.
 #[derive(Debug)]
@@ -51,7 +52,7 @@ pub struct Filter;
 impl crate::Transform for Filter {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
@@ -63,10 +64,10 @@ impl crate::Transform for Filter {
 
 impl Filter {
     /// Fuses multiple `Filter` operators into one and deduplicates predicates.
-    pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Filter { input, predicates } = relation {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
+        if let MirRelationExpr::Filter { input, predicates } = relation {
             // consolidate nested filters.
-            while let RelationExpr::Filter {
+            while let MirRelationExpr::Filter {
                 input: inner,
                 predicates: p2,
             } = &mut **input
@@ -90,8 +91,8 @@ impl Filter {
 }
 
 /// Ensures that two equalities are made in a consistent order.
-fn canonicalize_predicate(predicate: &mut ScalarExpr) {
-    if let ScalarExpr::CallBinary {
+fn canonicalize_predicate(predicate: &mut MirScalarExpr) {
+    if let MirScalarExpr::CallBinary {
         func: expr::BinaryFunc::Eq,
         expr1,
         expr2,

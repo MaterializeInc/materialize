@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
-use expr::{ExprHumanizer, GlobalId, OptimizedRelationExpr, ScalarExpr};
+use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
@@ -82,7 +82,7 @@ pub struct Catalog {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     by_oid: HashMap<u32, GlobalId>,
-    indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>>,
+    indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     storage: Arc<Mutex<storage::Connection>>,
@@ -179,7 +179,7 @@ pub enum SinkConnectorState {
 pub struct View {
     pub create_sql: String,
     pub plan_cx: PlanContext,
-    pub optimized_expr: OptimizedRelationExpr,
+    pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
     pub conn_id: Option<u32>,
 }
@@ -189,7 +189,7 @@ pub struct Index {
     pub create_sql: String,
     pub plan_cx: PlanContext,
     pub on: GlobalId,
-    pub keys: Vec<ScalarExpr>,
+    pub keys: Vec<MirScalarExpr>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -501,7 +501,7 @@ impl Catalog {
                                     .variant
                                     .index_by()
                                     .into_iter()
-                                    .map(ScalarExpr::Column)
+                                    .map(MirScalarExpr::Column)
                                     .collect(),
                                 create_sql: super::coord::index_sql(
                                     index_name,
@@ -550,7 +550,7 @@ impl Catalog {
                                 on: table.id,
                                 keys: index_columns
                                     .iter()
-                                    .map(|i| ScalarExpr::Column(*i))
+                                    .map(|i| MirScalarExpr::Column(*i))
                                     .collect(),
                                 create_sql: index_sql,
                                 plan_cx: PlanContext::default(),
@@ -1545,7 +1545,7 @@ impl Catalog {
 
     /// Returns a mapping that indicates all indices that are available for
     /// each item in the catalog.
-    pub fn indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>> {
+    pub fn indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
         &self.indexes
     }
 
@@ -2046,7 +2046,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn index_details(&self) -> Option<(&[ScalarExpr], GlobalId)> {
+    fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)> {
         if let CatalogItem::Index(Index { keys, on, .. }) = self.item() {
             Some((keys, *on))
         } else {

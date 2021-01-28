@@ -7,14 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! This module houses a pretty printer for [`RelationExpr`]s.
+//! This module houses a pretty printer for [`MirRelationExpr`]s.
 //!
 //! Format details:
 //!
-//!   * The nodes in a `RelationExpr` are printed in post-order, left to right.
+//!   * The nodes in a `MirRelationExpr` are printed in post-order, left to right.
 //!   * Nodes which only have a single input are grouped together
 //!     into "chains."
-//!   * Each chain of `RelationExpr`s is referred to by ID, e.g. %4.
+//!   * Each chain of `MirRelationExpr`s is referred to by ID, e.g. %4.
 //!   * Nodes may be followed by additional, indented annotations.
 //!   * Columns are referred to by position, e.g. #4.
 //!   * Collections of columns are written as ranges where possible,
@@ -30,9 +30,9 @@ use std::iter;
 
 use repr::RelationType;
 
-use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, RelationExpr, RowSetFinishing};
+use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, MirRelationExpr, RowSetFinishing};
 
-/// An `Explanation` facilitates pretty-printing of a [`RelationExpr`].
+/// An `Explanation` facilitates pretty-printing of a [`MirRelationExpr`].
 ///
 /// By default, the [`fmt::Display`] implementation renders the expression as
 /// described in the module docs. Additional information may be attached to the
@@ -40,13 +40,13 @@ use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, RelationExpr, RowSet
 #[derive(Debug)]
 pub struct Explanation<'a> {
     expr_humanizer: &'a dyn ExprHumanizer,
-    /// One `ExplanationNode` for each `RelationExpr` in the plan, in
+    /// One `ExplanationNode` for each `MirRelationExpr` in the plan, in
     /// left-to-right post-order.
     nodes: Vec<ExplanationNode<'a>>,
     /// An optional `RowSetFinishing` to mention at the end.
     finishing: Option<RowSetFinishing>,
     /// Records the chain ID that was assigned to each expression.
-    expr_chains: HashMap<*const RelationExpr, usize>,
+    expr_chains: HashMap<*const MirRelationExpr, usize>,
     /// Records the chain ID that was assigned to each let.
     local_id_chains: HashMap<LocalId, usize>,
     /// Records the local ID that corresponds to a chain ID, if any.
@@ -59,7 +59,7 @@ pub struct Explanation<'a> {
 #[derive(Debug)]
 pub struct ExplanationNode<'a> {
     /// The expression being explained.
-    pub expr: &'a RelationExpr,
+    pub expr: &'a MirRelationExpr,
     /// The type of the expression, if desired.
     pub typ: Option<RelationType>,
     /// The ID of the linear chain to which this node belongs.
@@ -104,15 +104,18 @@ impl<'a> fmt::Display for Explanation<'a> {
 }
 
 impl<'a> Explanation<'a> {
-    /// Creates an explanation for a [`RelationExpr`].
-    pub fn new(expr: &'a RelationExpr, expr_humanizer: &'a dyn ExprHumanizer) -> Explanation<'a> {
-        use RelationExpr::*;
+    /// Creates an explanation for a [`MirRelationExpr`].
+    pub fn new(
+        expr: &'a MirRelationExpr,
+        expr_humanizer: &'a dyn ExprHumanizer,
+    ) -> Explanation<'a> {
+        use MirRelationExpr::*;
 
         // Do a post-order traversal of the expression, grouping "chains" of
         // nodes together as we go. We have to break the chain whenever we
         // encounter a node with multiple inputs, like a join.
 
-        fn walk<'a>(expr: &'a RelationExpr, explanation: &mut Explanation<'a>) {
+        fn walk<'a>(expr: &'a MirRelationExpr, explanation: &mut Explanation<'a>) {
             // First, walk the children, in order to perform a post-order
             // traversal.
             match expr {
@@ -156,22 +159,23 @@ impl<'a> Explanation<'a> {
             });
             explanation
                 .expr_chains
-                .insert(expr as *const RelationExpr, explanation.chain);
+                .insert(expr as *const MirRelationExpr, explanation.chain);
         }
 
         fn walk_many<'a, E>(exprs: E, explanation: &mut Explanation<'a>)
         where
-            E: IntoIterator<Item = &'a RelationExpr>,
+            E: IntoIterator<Item = &'a MirRelationExpr>,
         {
             for expr in exprs {
                 // Elide chains that would consist only a of single Get node.
-                if let RelationExpr::Get {
+                if let MirRelationExpr::Get {
                     id: Id::Local(id), ..
                 } = expr
                 {
-                    explanation
-                        .expr_chains
-                        .insert(expr as *const RelationExpr, explanation.local_id_chains[id]);
+                    explanation.expr_chains.insert(
+                        expr as *const MirRelationExpr,
+                        explanation.local_id_chains[id],
+                    );
                 } else {
                     walk(expr, explanation);
                     explanation.chain += 1;
@@ -206,7 +210,7 @@ impl<'a> Explanation<'a> {
     }
 
     fn fmt_node(&self, f: &mut fmt::Formatter, node: &ExplanationNode) -> fmt::Result {
-        use RelationExpr::*;
+        use MirRelationExpr::*;
 
         match node.expr {
             Constant { rows, .. } => writeln!(
@@ -377,7 +381,7 @@ impl<'a> Explanation<'a> {
     fn fmt_join_implementation(
         &self,
         f: &mut fmt::Formatter,
-        join_inputs: &[RelationExpr],
+        join_inputs: &[MirRelationExpr],
         implementation: &JoinImplementation,
     ) -> fmt::Result {
         match implementation {
@@ -430,8 +434,8 @@ impl<'a> Explanation<'a> {
     ///
     /// The `ExplanationNode` for `expr` must have already been inserted into
     /// the explanation.
-    fn expr_chain(&self, expr: &RelationExpr) -> usize {
-        self.expr_chains[&(expr as *const RelationExpr)]
+    fn expr_chain(&self, expr: &MirRelationExpr) -> usize {
+        self.expr_chains[&(expr as *const MirRelationExpr)]
     }
 }
 

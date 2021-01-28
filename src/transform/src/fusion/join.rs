@@ -15,7 +15,8 @@
 //! our ability to plan these joins, and reason about other operators motion
 //! aroud them.
 
-use crate::{RelationExpr, ScalarExpr, TransformArgs};
+use crate::TransformArgs;
+use expr::{MirRelationExpr, MirScalarExpr};
 
 /// Fuses multiple `Join` operators into one `Join` operator.
 #[derive(Debug)]
@@ -24,7 +25,7 @@ pub struct Join;
 impl crate::Transform for Join {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |e| {
@@ -36,8 +37,8 @@ impl crate::Transform for Join {
 
 impl Join {
     /// Fuses multiple `Join` operators into one `Join` operator.
-    pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Join {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
+        if let MirRelationExpr::Join {
             inputs,
             equivalences,
             demand,
@@ -51,7 +52,7 @@ impl Join {
             // We scan through each input, digesting any joins that we find and updating their equivalence classes.
             // We retain any existing equivalence classes, as they are already with respect to the cross product.
             for input in inputs.drain(..) {
-                if let RelationExpr::Join {
+                if let MirRelationExpr::Join {
                     mut inputs,
                     mut equivalences,
                     ..
@@ -61,7 +62,7 @@ impl Join {
                     for mut equivalence in equivalences.drain(..) {
                         for expr in equivalence.iter_mut() {
                             expr.visit_mut(&mut |e| {
-                                if let ScalarExpr::Column(c) = e {
+                                if let MirScalarExpr::Column(c) = e {
                                     *c += new_columns;
                                 }
                             });

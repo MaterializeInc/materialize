@@ -11,7 +11,8 @@
 //!
 //! At the moment, this only absorbs Map operators into Reduce operators.
 
-use crate::{RelationExpr, TransformArgs};
+use crate::TransformArgs;
+use expr::MirRelationExpr;
 
 /// Pushes Reduce operators toward sources.
 #[derive(Debug)]
@@ -20,7 +21,7 @@ pub struct ReductionPushdown;
 impl crate::Transform for ReductionPushdown {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |e| {
@@ -32,8 +33,8 @@ impl crate::Transform for ReductionPushdown {
 
 impl ReductionPushdown {
     /// Pushes Reduce operators toward sources.
-    pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Reduce {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
+        if let MirRelationExpr::Reduce {
             input,
             group_key,
             aggregates,
@@ -42,7 +43,7 @@ impl ReductionPushdown {
         } = relation
         {
             // Map expressions can be absorbed into the Reduce at no cost.
-            if let RelationExpr::Map {
+            if let MirRelationExpr::Map {
                 input: inner,
                 scalars,
             } = &mut **input
@@ -54,7 +55,7 @@ impl ReductionPushdown {
                 for index in 0..scalars.len() {
                     let (lower, upper) = scalars.split_at_mut(index);
                     upper[0].visit_mut(&mut |e| {
-                        if let crate::ScalarExpr::Column(c) = e {
+                        if let expr::MirScalarExpr::Column(c) = e {
                             if *c >= arity {
                                 *e = lower[*c - arity].clone();
                             }
@@ -63,7 +64,7 @@ impl ReductionPushdown {
                 }
                 for key in group_key.iter_mut() {
                     key.visit_mut(&mut |e| {
-                        if let crate::ScalarExpr::Column(c) = e {
+                        if let expr::MirScalarExpr::Column(c) = e {
                             if *c >= arity {
                                 *e = scalars[*c - arity].clone();
                             }
@@ -72,7 +73,7 @@ impl ReductionPushdown {
                 }
                 for agg in aggregates.iter_mut() {
                     agg.expr.visit_mut(&mut |e| {
-                        if let crate::ScalarExpr::Column(c) = e {
+                        if let expr::MirScalarExpr::Column(c) = e {
                             if *c >= arity {
                                 *e = scalars[*c - arity].clone();
                             }

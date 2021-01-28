@@ -135,8 +135,8 @@ mod tests {
 
     use expr::explain::Explanation;
     use expr::{
-        DummyHumanizer, ExprHumanizer, GlobalId, Id, JoinImplementation, LocalId, RelationExpr,
-        ScalarExpr,
+        DummyHumanizer, ExprHumanizer, GlobalId, Id, JoinImplementation, LocalId, MirRelationExpr,
+        MirScalarExpr,
     };
     use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
     use transform::{Optimizer, Transform, TransformArgs};
@@ -259,7 +259,11 @@ mod tests {
         }
     }
 
-    fn build_rel(s: Sexp, catalog: &TestCatalog, scope: &mut Scope) -> Result<RelationExpr, Error> {
+    fn build_rel(
+        s: Sexp,
+        catalog: &TestCatalog,
+        scope: &mut Scope,
+    ) -> Result<MirRelationExpr, Error> {
         // TODO(justin): cleaner destructuring of a sexp here: this is too lenient at the moment,
         // since extra arguments to an operator are ignored.
         match try_atom(&nth(&s, 0)?)?.as_str() {
@@ -267,10 +271,10 @@ mod tests {
             "get" => {
                 let name = try_atom(&nth(&s, 1)?)?;
                 match scope.get(&name) {
-                    Some((id, typ)) => Ok(RelationExpr::Get { id, typ }),
+                    Some((id, typ)) => Ok(MirRelationExpr::Get { id, typ }),
                     None => match catalog.get(&name) {
                         None => Err(anyhow!("no catalog object named {}", name)),
-                        Some((id, typ)) => Ok(RelationExpr::Get {
+                        Some((id, typ)) => Ok(MirRelationExpr::Get {
                             id: Id::Global(*id),
                             typ: typ.clone(),
                         }),
@@ -292,19 +296,19 @@ mod tests {
                     scope.remove(&name)
                 }
 
-                Ok(RelationExpr::Let {
+                Ok(MirRelationExpr::Let {
                     id,
                     value: Box::new(value),
                     body: Box::new(body),
                 })
             }
             // (map <input> [expressions])
-            "map" => Ok(RelationExpr::Map {
+            "map" => Ok(MirRelationExpr::Map {
                 input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
                 scalars: build_scalar_list(nth(&s, 2)?)?,
             }),
             // (project <input> [<col refs>])
-            "project" => Ok(RelationExpr::Project {
+            "project" => Ok(MirRelationExpr::Project {
                 input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
                 outputs: try_list(nth(&s, 2)?)?
                     .into_iter()
@@ -323,16 +327,16 @@ mod tests {
                     .map(|e| {
                         e.into_iter()
                             .map(build_scalar)
-                            .collect::<Result<Vec<ScalarExpr>, Error>>()
+                            .collect::<Result<Vec<MirScalarExpr>, Error>>()
                     })
-                    .collect::<Result<Vec<Vec<ScalarExpr>>, Error>>()?
+                    .collect::<Result<Vec<Vec<MirScalarExpr>>, Error>>()?
                     .iter()
                     .map(move |exprs| {
                         Ok(row_packer.pack(
                             exprs
                                 .iter()
                                 .map(|e| match e {
-                                    ScalarExpr::Literal(r, _) => {
+                                    MirScalarExpr::Literal(r, _) => {
                                         Ok(r.as_ref().unwrap().iter().next().unwrap().clone())
                                     }
                                     _ => bail!("exprs in constant must be literals"),
@@ -345,7 +349,7 @@ mod tests {
                     .map(|r| (r.clone(), 1))
                     .collect::<Vec<(Row, isize)>>();
 
-                Ok(RelationExpr::Constant {
+                Ok(MirRelationExpr::Constant {
                     rows,
                     typ: parse_type_list(nth(&s, 2)?)?,
                 })
@@ -355,18 +359,18 @@ mod tests {
                 let inputs = try_list(nth(&s, 1)?)?
                     .into_iter()
                     .map(|r| build_rel(r, catalog, scope))
-                    .collect::<Result<Vec<RelationExpr>, Error>>()?;
+                    .collect::<Result<Vec<MirRelationExpr>, Error>>()?;
 
                 // TODO(justin): is there a way to make this more comprehensible?
-                let equivalences: Vec<Vec<ScalarExpr>> = try_list(nth(&s, 2)?)?
+                let equivalences: Vec<Vec<MirScalarExpr>> = try_list(nth(&s, 2)?)?
                     .into_iter()
                     .map(try_list)
                     .collect::<Result<Vec<Vec<Sexp>>, Error>>()?
                     .into_iter()
                     .map(|e| e.into_iter().map(build_scalar).collect())
-                    .collect::<Result<Vec<Vec<ScalarExpr>>, Error>>()?;
+                    .collect::<Result<Vec<Vec<MirScalarExpr>>, Error>>()?;
 
-                Ok(RelationExpr::Join {
+                Ok(MirRelationExpr::Join {
                     inputs,
                     equivalences,
                     demand: None,
@@ -378,55 +382,55 @@ mod tests {
                 let inputs = try_list(nth(&s, 1)?)?
                     .into_iter()
                     .map(|r| build_rel(r, catalog, scope))
-                    .collect::<Result<Vec<RelationExpr>, Error>>()?;
+                    .collect::<Result<Vec<MirRelationExpr>, Error>>()?;
 
-                Ok(RelationExpr::Union {
+                Ok(MirRelationExpr::Union {
                     base: Box::new(inputs[0].clone()),
                     inputs: inputs[1..].to_vec(),
                 })
             }
             // (negate <input>)
-            "negate" => Ok(RelationExpr::Negate {
+            "negate" => Ok(MirRelationExpr::Negate {
                 input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
             }),
             // (filter <input> <predicate>)
-            "filter" => Ok(RelationExpr::Filter {
+            "filter" => Ok(MirRelationExpr::Filter {
                 input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
                 predicates: build_scalar_list(nth(&s, 2)?)?,
             }),
             // (arrange-by <input> [<keys>])
-            "arrange-by" => Ok(RelationExpr::ArrangeBy {
+            "arrange-by" => Ok(MirRelationExpr::ArrangeBy {
                 input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
                 keys: try_list(nth(&s, 2)?)?
                     .into_iter()
                     .map(build_scalar_list)
-                    .collect::<Result<Vec<Vec<ScalarExpr>>, Error>>()?,
+                    .collect::<Result<Vec<Vec<MirScalarExpr>>, Error>>()?,
             }),
             // TODO(justin): add the rest of the operators.
             name => Err(anyhow!("expected {} to be a relational operator", name)),
         }
     }
 
-    fn build_scalar_list(s: Sexp) -> Result<Vec<ScalarExpr>, Error> {
+    fn build_scalar_list(s: Sexp) -> Result<Vec<MirScalarExpr>, Error> {
         try_list(s)?
             .into_iter()
             .map(build_scalar)
-            .collect::<Result<Vec<ScalarExpr>, Error>>()
+            .collect::<Result<Vec<MirScalarExpr>, Error>>()
     }
 
     // TODO(justin): is there some way to re-use the sql parser/builder for this?
-    fn build_scalar(s: Sexp) -> Result<ScalarExpr, Error> {
+    fn build_scalar(s: Sexp) -> Result<MirScalarExpr, Error> {
         match s {
             // TODO(justin): support more scalar exprs.
             Sexp::Atom(s) => match s.as_str() {
-                "true" => Ok(ScalarExpr::literal(
+                "true" => Ok(MirScalarExpr::literal(
                     Ok(Datum::True),
                     ColumnType {
                         nullable: false,
                         scalar_type: ScalarType::Bool,
                     },
                 )),
-                "false" => Ok(ScalarExpr::literal(
+                "false" => Ok(MirScalarExpr::literal(
                     Ok(Datum::False),
                     ColumnType {
                         nullable: false,
@@ -439,14 +443,16 @@ mod tests {
                             // It shouldn't have parsed as an atom originally.
                             unreachable!();
                         }
-                        Some('#') => {
-                            Ok(ScalarExpr::Column(extract_idx(Sexp::Atom(s.to_string()))?))
-                        }
+                        Some('#') => Ok(MirScalarExpr::Column(extract_idx(Sexp::Atom(
+                            s.to_string(),
+                        ))?)),
                         Some('0') | Some('1') | Some('2') | Some('3') | Some('4') | Some('5')
-                        | Some('6') | Some('7') | Some('8') | Some('9') => Ok(ScalarExpr::literal(
-                            Ok(Datum::Int64(s.parse::<i64>()?)),
-                            ScalarType::Int64.nullable(false),
-                        )),
+                        | Some('6') | Some('7') | Some('8') | Some('9') => {
+                            Ok(MirScalarExpr::literal(
+                                Ok(Datum::Int64(s.parse::<i64>()?)),
+                                ScalarType::Int64.nullable(false),
+                            ))
+                        }
                         _ => Err(anyhow!("couldn't parse scalar: {}", s)),
                     }
                 }
@@ -504,7 +510,7 @@ mod tests {
     }
 
     fn generate_explanation(
-        rel: &RelationExpr,
+        rel: &MirRelationExpr,
         cat: &TestCatalog,
         format: Option<&Vec<String>>,
     ) -> String {

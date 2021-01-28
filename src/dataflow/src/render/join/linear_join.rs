@@ -20,7 +20,7 @@ use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::*;
-use expr::{MapFilterProject, RelationExpr, ScalarExpr};
+use expr::{MapFilterProject, MirRelationExpr, MirScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 use crate::operator::CollectionExt;
@@ -28,7 +28,7 @@ use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::datum_vec::DatumVec;
 use crate::render::join::{JoinBuildState, JoinClosure};
 
-impl<G, T> Context<G, RelationExpr, Row, T>
+impl<G, T> Context<G, MirRelationExpr, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
@@ -36,12 +36,12 @@ where
 {
     pub fn render_join(
         &mut self,
-        relation_expr: &RelationExpr,
+        relation_expr: &MirRelationExpr,
         map_filter_project: MapFilterProject,
         // TODO(frank): use this argument to create a region surrounding the join.
         _scope: &mut G,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>) {
-        if let RelationExpr::Join {
+        if let MirRelationExpr::Join {
             inputs,
             equivalences,
             demand,
@@ -60,7 +60,7 @@ where
                         demand_projection.push(column);
                     } else {
                         demand_projection.push(output_arity + dummies.len());
-                        dummies.push(ScalarExpr::literal_ok(Datum::Dummy, typ));
+                        dummies.push(MirScalarExpr::literal_ok(Datum::Dummy, typ));
                     }
                 }
                 (dummies, demand_projection)
@@ -247,8 +247,8 @@ where
     fn differential_join<J>(
         &mut self,
         prev_keyed: J,
-        next_input: &RelationExpr,
-        next_keys: &[ScalarExpr],
+        next_input: &MirRelationExpr,
+        next_keys: &[MirScalarExpr],
         closure: JoinClosure,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>)
     where
@@ -261,7 +261,7 @@ where
             // not formed. This *shouldn't* happen, but we prefer to do something
             // sane rather than panic.
             if self.collection(next_input).is_some() {
-                let arrange_by = RelationExpr::ArrangeBy {
+                let arrange_by = MirRelationExpr::ArrangeBy {
                     input: Box::new(next_input.clone()),
                     keys: vec![next_keys.to_vec()],
                 };

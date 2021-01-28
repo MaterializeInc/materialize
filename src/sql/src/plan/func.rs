@@ -25,8 +25,8 @@ use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
 use sql_parser::ast::{Expr, ObjectName, Raw};
 
 use super::expr::{
-    AggregateFunc, BinaryFunc, CoercibleScalarExpr, NullaryFunc, ScalarExpr, TableFunc, UnaryFunc,
-    VariadicFunc,
+    AggregateFunc, BinaryFunc, CoercibleScalarExpr, HirScalarExpr, NullaryFunc, TableFunc,
+    UnaryFunc, VariadicFunc,
 };
 use super::query::{self, ExprContext, QueryContext, QueryLifetime};
 use super::scope::Scope;
@@ -156,9 +156,9 @@ struct Operation<R>(
     >,
 );
 
-impl Operation<ScalarExpr> {
+impl Operation<HirScalarExpr> {
     /// Builds a unary operation that simply returns its input.
-    fn identity() -> Operation<ScalarExpr> {
+    fn identity() -> Operation<HirScalarExpr> {
         Operation::unary(|_ecx, e| Ok(e))
     }
 }
@@ -193,7 +193,7 @@ impl<R> Operation<R> {
     /// Builds an operation that takes one argument.
     fn unary<F>(f: F) -> Operation<R>
     where
-        F: Fn(&ExprContext, ScalarExpr) -> Result<R, anyhow::Error> + Send + Sync + 'static,
+        F: Fn(&ExprContext, HirScalarExpr) -> Result<R, anyhow::Error> + Send + Sync + 'static,
     {
         Self::variadic(move |ecx, exprs| f(ecx, exprs.into_element()))
     }
@@ -201,7 +201,7 @@ impl<R> Operation<R> {
     /// Builds an operation that takes two arguments.
     fn binary<F>(f: F) -> Operation<R>
     where
-        F: Fn(&ExprContext, ScalarExpr, ScalarExpr) -> Result<R, anyhow::Error>
+        F: Fn(&ExprContext, HirScalarExpr, HirScalarExpr) -> Result<R, anyhow::Error>
             + Send
             + Sync
             + 'static,
@@ -218,7 +218,7 @@ impl<R> Operation<R> {
     /// Builds an operation that takes any number of arguments.
     fn variadic<F>(f: F) -> Operation<R>
     where
-        F: Fn(&ExprContext, Vec<ScalarExpr>) -> Result<R, anyhow::Error> + Send + Sync + 'static,
+        F: Fn(&ExprContext, Vec<HirScalarExpr>) -> Result<R, anyhow::Error> + Send + Sync + 'static,
     {
         Self::new(move |ecx, spec, cexprs, params| {
             let exprs = coerce_args_to_types(ecx, spec, cexprs, params)?;
@@ -295,28 +295,28 @@ impl<R> fmt::Debug for FuncImpl<R> {
     }
 }
 
-impl From<NullaryFunc> for Operation<ScalarExpr> {
-    fn from(n: NullaryFunc) -> Operation<ScalarExpr> {
-        Operation::nullary(move |_ecx| Ok(ScalarExpr::CallNullary(n.clone())))
+impl From<NullaryFunc> for Operation<HirScalarExpr> {
+    fn from(n: NullaryFunc) -> Operation<HirScalarExpr> {
+        Operation::nullary(move |_ecx| Ok(HirScalarExpr::CallNullary(n.clone())))
     }
 }
 
-impl From<UnaryFunc> for Operation<ScalarExpr> {
-    fn from(u: UnaryFunc) -> Operation<ScalarExpr> {
+impl From<UnaryFunc> for Operation<HirScalarExpr> {
+    fn from(u: UnaryFunc) -> Operation<HirScalarExpr> {
         Operation::unary(move |_ecx, e| Ok(e.call_unary(u.clone())))
     }
 }
 
-impl From<BinaryFunc> for Operation<ScalarExpr> {
-    fn from(b: BinaryFunc) -> Operation<ScalarExpr> {
+impl From<BinaryFunc> for Operation<HirScalarExpr> {
+    fn from(b: BinaryFunc) -> Operation<HirScalarExpr> {
         Operation::binary(move |_ecx, left, right| Ok(left.call_binary(right, b.clone())))
     }
 }
 
-impl From<VariadicFunc> for Operation<ScalarExpr> {
-    fn from(v: VariadicFunc) -> Operation<ScalarExpr> {
+impl From<VariadicFunc> for Operation<HirScalarExpr> {
+    fn from(v: VariadicFunc) -> Operation<HirScalarExpr> {
         Operation::variadic(move |_ecx, exprs| {
-            Ok(ScalarExpr::CallVariadic {
+            Ok(HirScalarExpr::CallVariadic {
                 func: v.clone(),
                 exprs,
             })
@@ -324,8 +324,8 @@ impl From<VariadicFunc> for Operation<ScalarExpr> {
     }
 }
 
-impl From<AggregateFunc> for Operation<(ScalarExpr, AggregateFunc)> {
-    fn from(a: AggregateFunc) -> Operation<(ScalarExpr, AggregateFunc)> {
+impl From<AggregateFunc> for Operation<(HirScalarExpr, AggregateFunc)> {
+    fn from(a: AggregateFunc) -> Operation<(HirScalarExpr, AggregateFunc)> {
         Operation::unary(move |_ecx, e| Ok((e, a.clone())))
     }
 }
@@ -1072,7 +1072,7 @@ fn coerce_args_to_types(
     spec: FuncSpec,
     args: Vec<CoercibleScalarExpr>,
     params: &ParamList,
-) -> Result<Vec<ScalarExpr>, anyhow::Error> {
+) -> Result<Vec<HirScalarExpr>, anyhow::Error> {
     let types: Vec<_> = args.iter().map(|e| ecx.scalar_type(e)).collect();
     let get_constrained_ty = || {
         params
@@ -1163,13 +1163,13 @@ macro_rules! builtins {
 #[derive(Debug)]
 pub struct TableFuncPlan {
     pub func: TableFunc,
-    pub exprs: Vec<ScalarExpr>,
+    pub exprs: Vec<HirScalarExpr>,
     pub column_names: Vec<Option<ColumnName>>,
 }
 
 pub enum Func {
-    Scalar(Vec<FuncImpl<ScalarExpr>>),
-    Aggregate(Vec<FuncImpl<(ScalarExpr, AggregateFunc)>>),
+    Scalar(Vec<FuncImpl<HirScalarExpr>>),
+    Aggregate(Vec<FuncImpl<(HirScalarExpr, AggregateFunc)>>),
     Table(Vec<FuncImpl<TableFuncPlan>>),
 }
 
@@ -1235,7 +1235,7 @@ lazy_static! {
                             exprs.push(typeconv::to_string(ecx, expr));
                         }
                     }
-                    Ok(ScalarExpr::CallVariadic { func: VariadicFunc::Concat, exprs })
+                    Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::Concat, exprs })
                 })
             },
             "convert_from" => Scalar {
@@ -1246,13 +1246,13 @@ lazy_static! {
             },
             "current_schemas" => Scalar {
                 params!(Bool) => Operation::unary(|ecx, e| {
-                    let with_sys = ScalarExpr::literal_1d_array(
+                    let with_sys = HirScalarExpr::literal_1d_array(
                         ecx.qcx.scx.catalog.search_path(true).iter().map(|s| Datum::String(s)).collect(),
                         ScalarType::String)?;
-                    let without_sys = ScalarExpr::literal_1d_array(
+                    let without_sys = HirScalarExpr::literal_1d_array(
                         ecx.qcx.scx.catalog.search_path(false).iter().map(|s| Datum::String(s)).collect(),
                         ScalarType::String)?;
-                    Ok(ScalarExpr::If {
+                    Ok(HirScalarExpr::If {
                         cond: Box::new(e),
                         then: Box::new(with_sys),
                         els: Box::new(without_sys),
@@ -1299,7 +1299,7 @@ lazy_static! {
                 params!(Jsonb) => UnaryFunc::JsonbArrayLength
             },
             "jsonb_build_array" => Scalar {
-                params!(Any...) => Operation::variadic(|ecx, exprs| Ok(ScalarExpr::CallVariadic {
+                params!(Any...) => Operation::variadic(|ecx, exprs| Ok(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::JsonbBuildArray,
                     exprs: exprs.into_iter().map(|e| typeconv::to_jsonb(ecx, e)).collect(),
                 }))
@@ -1309,7 +1309,7 @@ lazy_static! {
                     if exprs.len() % 2 != 0 {
                         bail!("argument list must have even number of elements")
                     }
-                    Ok(ScalarExpr::CallVariadic {
+                    Ok(HirScalarExpr::CallVariadic {
                         func: VariadicFunc::JsonbBuildObject,
                         exprs: exprs.into_iter().tuples().map(|(key, val)| {
                             let key = typeconv::to_string(ecx, key);
@@ -1359,7 +1359,7 @@ lazy_static! {
                     // This function is meant to return the comment on a
                     // database object, but we don't presently support comments,
                     // so stubbed out out to always return NULL.
-                    Ok(ScalarExpr::literal_null(ScalarType::String))
+                    Ok(HirScalarExpr::literal_null(ScalarType::String))
                 })
             },
             "pg_encoding_to_char" => Scalar {
@@ -1394,7 +1394,7 @@ lazy_static! {
                     // regtype, when we support that type. Document the function
                     // at that point. For now, it's useful enough to have this
                     // halfway version that returns a string.
-                    Ok(ScalarExpr::literal(Datum::String(&name), ScalarType::String))
+                    Ok(HirScalarExpr::literal(Datum::String(&name), ScalarType::String))
                 })
             },
             "regexp_match" => Scalar {
@@ -1477,7 +1477,7 @@ lazy_static! {
                         "PostgreSQL 9.6 on {} (materialized {})",
                         build_info.target_triple, build_info.version,
                     );
-                    Ok(ScalarExpr::literal(Datum::String(&version), ScalarType::String))
+                    Ok(HirScalarExpr::literal(Datum::String(&version), ScalarType::String))
                 })
             },
 
@@ -1497,7 +1497,7 @@ lazy_static! {
             "count" => Aggregate {
                 params!() => Operation::nullary(|_ecx| {
                     // COUNT(*) is equivalent to COUNT(true).
-                    Ok((ScalarExpr::literal_true(), AggregateFunc::Count))
+                    Ok((HirScalarExpr::literal_true(), AggregateFunc::Count))
                 }),
                 params!(Any) => AggregateFunc::Count
             },
@@ -1535,8 +1535,8 @@ lazy_static! {
                     // of the SQL function require that `Datum::Null` is treated
                     // as `Datum::JsonbNull`. This call to `coalesce` converts
                     // between the two semantics.
-                    let json_null = ScalarExpr::literal(Datum::JsonNull, ScalarType::Jsonb);
-                    let e = ScalarExpr::CallVariadic {
+                    let json_null = HirScalarExpr::literal(Datum::JsonNull, ScalarType::Jsonb);
+                    let e = HirScalarExpr::CallVariadic {
                         func: VariadicFunc::Coalesce,
                         exprs: vec![typeconv::to_jsonb(ecx, e), json_null],
                     };
@@ -1681,7 +1681,7 @@ lazy_static! {
                 vec![ListAny] => Operation::unary(|ecx, e| {
                     ecx.require_experimental_mode("list_ndims")?;
                     let d = ecx.scalar_type(&e).unwrap_list_n_dims();
-                    Ok(ScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
+                    Ok(HirScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
                 })
             },
             "list_length" => Scalar {
@@ -1706,7 +1706,7 @@ lazy_static! {
             "mz_version" => Scalar {
                 params!() => Operation::nullary(|ecx| {
                     let version = ecx.catalog().config().build_info.human_version();
-                    Ok(ScalarExpr::literal(Datum::String(&version), ScalarType::String))
+                    Ok(HirScalarExpr::literal(Datum::String(&version), ScalarType::String))
                 })
             },
             "regexp_extract" => Table {
@@ -1806,9 +1806,9 @@ lazy_static! {
     };
 }
 
-fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<ScalarExpr, anyhow::Error> {
+fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<HirScalarExpr, anyhow::Error> {
     match ecx.qcx.lifetime {
-        QueryLifetime::OneShot => Ok(ScalarExpr::literal(
+        QueryLifetime::OneShot => Ok(HirScalarExpr::literal(
             Datum::from(ecx.qcx.scx.pcx.wall_time),
             ScalarType::TimestampTz,
         )),
@@ -1816,19 +1816,22 @@ fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<ScalarExpr, a
     }
 }
 
-fn mz_cluster_id(ecx: &ExprContext) -> Result<ScalarExpr, anyhow::Error> {
-    Ok(ScalarExpr::literal(
+fn mz_cluster_id(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+    Ok(HirScalarExpr::literal(
         Datum::from(ecx.catalog().config().cluster_id),
         ScalarType::Uuid,
     ))
 }
 
-fn array_to_string(ecx: &ExprContext, exprs: Vec<ScalarExpr>) -> Result<ScalarExpr, anyhow::Error> {
+fn array_to_string(
+    ecx: &ExprContext,
+    exprs: Vec<HirScalarExpr>,
+) -> Result<HirScalarExpr, anyhow::Error> {
     let elem_type = match ecx.scalar_type(&exprs[0]) {
         ScalarType::Array(elem_type) => *elem_type,
         _ => unreachable!("array_to_string is guaranteed to receive array as first argument"),
     };
-    Ok(ScalarExpr::CallVariadic {
+    Ok(HirScalarExpr::CallVariadic {
         func: VariadicFunc::ArrayToString { elem_type },
         exprs,
     })
@@ -2280,9 +2283,9 @@ lazy_static! {
 /// Rescales two decimals to have the same scale.
 fn rescale_decimals_to_same(
     ecx: &ExprContext,
-    lhs: ScalarExpr,
-    rhs: ScalarExpr,
-) -> (ScalarExpr, ScalarExpr) {
+    lhs: HirScalarExpr,
+    rhs: HirScalarExpr,
+) -> (HirScalarExpr, HirScalarExpr) {
     let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
     let (_, s2) = ecx.scalar_type(&rhs).unwrap_decimal_parts();
     let so = std::cmp::max(s1, s2);
@@ -2292,7 +2295,7 @@ fn rescale_decimals_to_same(
 }
 
 /// Resolves the operator to a set of function implementations.
-pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<ScalarExpr>], anyhow::Error> {
+pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], anyhow::Error> {
     match OP_IMPLS.get(op) {
         Some(Func::Scalar(impls)) => Ok(impls),
         Some(_) => unreachable!("all operators must be scalar functions"),

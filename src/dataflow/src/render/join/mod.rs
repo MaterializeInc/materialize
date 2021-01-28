@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Rendering of `RelationExpr::Join` operators, and supporting types.
+//! Rendering of `MirRelationExpr::Join` operators, and supporting types.
 //!
 //! Join planning proceeds by repeatedly introducing collections that
 //! extend the set of available output columns. The expected location
@@ -32,7 +32,7 @@ mod linear_join;
 
 use std::collections::HashMap;
 
-use expr::{MapFilterProject, ScalarExpr};
+use expr::{MapFilterProject, MirScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 /// A manual closure implementation of filtering and logic application.
@@ -42,7 +42,7 @@ use repr::{Datum, Row, RowArena, RowPacker};
 /// state and the arguments it takes when invoked. It was not clear how to do
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
 struct JoinClosure {
-    ready_equivalences: Vec<Vec<ScalarExpr>>,
+    ready_equivalences: Vec<Vec<MirScalarExpr>>,
     before: MapFilterProject,
 }
 
@@ -81,7 +81,7 @@ impl JoinClosure {
     /// be ignored).
     fn build(
         columns: &mut HashMap<usize, usize>,
-        equivalences: &mut Vec<Vec<ScalarExpr>>,
+        equivalences: &mut Vec<Vec<MirScalarExpr>>,
         mfp: &mut MapFilterProject,
     ) -> Self {
         // First, determine which columns should be compare due to `equivalences`.
@@ -214,7 +214,7 @@ struct JoinBuildState {
     /// the join expression. Importantly, "the same" should be evaluated with `Datum`s Rust
     /// equality, rather than the equality presented by the `BinaryFunc` equality operator.
     /// The distinction is important for null handling, at the least.
-    equivalences: Vec<Vec<ScalarExpr>>,
+    equivalences: Vec<Vec<MirScalarExpr>>,
     /// The linear operator logic (maps, filters, and projection) that remains to be applied
     /// to the output of the join.
     ///
@@ -229,7 +229,7 @@ impl JoinBuildState {
     /// The initial closure can be `None` which indicates that it is the identity operator.
     fn new(
         columns: std::ops::Range<usize>,
-        equivalences: &[Vec<ScalarExpr>],
+        equivalences: &[Vec<MirScalarExpr>],
         mfp: &MapFilterProject,
     ) -> Self {
         let mut column_map = HashMap::new();
@@ -253,7 +253,7 @@ impl JoinBuildState {
     fn add_columns(
         &mut self,
         new_columns: std::ops::Range<usize>,
-        bound_expressions: &[ScalarExpr],
+        bound_expressions: &[MirScalarExpr],
     ) -> JoinClosure {
         // Remove each element of `bound_expressions` from `equivalences`, so that we
         // avoid redundant predicate work. This removal also paves the way for

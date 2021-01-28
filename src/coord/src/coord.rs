@@ -46,8 +46,8 @@ use dataflow_types::{
     SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
 };
 use expr::{
-    ExprHumanizer, GlobalId, Id, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
-    ScalarExpr, SourceInstanceId,
+    ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
+    OptimizedMirRelationExpr, RowSetFinishing, SourceInstanceId,
 };
 use ore::collections::CollectionExt;
 use ore::thread::JoinHandleExt;
@@ -1254,7 +1254,7 @@ where
                 .expect("missing sql information for index key")
                 .to_string();
             let (field_number, expression) = match key {
-                ScalarExpr::Column(col) => (
+                MirScalarExpr::Column(col) => (
                     Datum::Int64(i64::try_from(*col + 1).expect("invalid index column number")),
                     Datum::Null,
                 ),
@@ -2200,7 +2200,7 @@ where
     async fn sequence_peek(
         &mut self,
         conn_id: u32,
-        source: RelationExpr,
+        source: MirRelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
         copy_to: Option<CopyFormat>,
@@ -2215,7 +2215,7 @@ where
         )?;
 
         // If this optimizes to a constant expression, we can immediately return the result.
-        let resp = if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
+        let resp = if let MirRelationExpr::Constant { rows, typ: _ } = source.as_ref() {
             let mut results = Vec::new();
             for &(ref row, count) in rows {
                 assert!(
@@ -2248,10 +2248,10 @@ where
 
             // We can use a fast path approach if our query corresponds to a read out of
             // an existing materialization. This is the case if the expression is now a
-            // `RelationExpr::Get` and its target is something we have materialized.
+            // `MirRelationExpr::Get` and its target is something we have materialized.
             // Otherwise, we will need to build a new dataflow.
             let mut fast_path: Option<(_, Option<Row>)> = None;
-            if let RelationExpr::Get {
+            if let MirRelationExpr::Get {
                 id: Id::Global(id),
                 typ: _,
             } = inner
@@ -2290,7 +2290,7 @@ where
                 // peek completes.
                 let typ = source.as_ref().typ();
                 map_filter_project = expr::MapFilterProject::new(typ.arity());
-                let key: Vec<_> = (0..typ.arity()).map(ScalarExpr::Column).collect();
+                let key: Vec<_> = (0..typ.arity()).map(MirScalarExpr::Column).collect();
                 let view_id = self.allocate_transient_id()?;
                 let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
                 dataflow.set_as_of(Antichain::from_elem(timestamp));
@@ -2415,7 +2415,7 @@ where
     /// not after `upper`).
     fn determine_timestamp(
         &mut self,
-        source: &RelationExpr,
+        source: &MirRelationExpr,
         when: PeekWhen,
     ) -> Result<Timestamp, anyhow::Error> {
         // Each involved trace has a validity interval `[since, upper)`.
@@ -2539,7 +2539,7 @@ where
         let frontier = if let Some(ts) = as_of {
             // If a timestamp was explicitly requested, use that.
             Antichain::from_elem(self.determine_timestamp(
-                &RelationExpr::Get {
+                &MirRelationExpr::Get {
                     id: Id::Global(source_id),
                     // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
                     typ: RelationType::empty(),
@@ -2572,8 +2572,8 @@ where
     fn sequence_explain_plan(
         &mut self,
         session: &Session,
-        raw_plan: sql::plan::RelationExpr,
-        decorrelated_plan: expr::RelationExpr,
+        raw_plan: sql::plan::HirRelationExpr,
+        decorrelated_plan: expr::MirRelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
         stage: ExplainStage,
         options: ExplainOptions,
@@ -2645,13 +2645,13 @@ where
         &mut self,
         session: &mut Session,
         id: GlobalId,
-        values: RelationExpr,
+        values: MirRelationExpr,
     ) -> Result<ExecuteResponse, anyhow::Error> {
         let prep_style = ExprPrepStyle::OneShot {
             logical_time: self.get_write_ts(),
         };
         match self.prep_relation_expr(values, prep_style)?.into_inner() {
-            RelationExpr::Constant { rows, typ: _ } => {
+            MirRelationExpr::Constant { rows, typ: _ } => {
                 let desc = self.catalog.get_by_id(&id).desc()?;
                 for (row, _) in &rows {
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
@@ -3039,9 +3039,9 @@ where
     /// relation expression.
     fn prep_relation_expr(
         &mut self,
-        mut expr: RelationExpr,
+        mut expr: MirRelationExpr,
         style: ExprPrepStyle,
-    ) -> Result<OptimizedRelationExpr, anyhow::Error> {
+    ) -> Result<OptimizedMirRelationExpr, anyhow::Error> {
         expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
 
         // TODO (wangandi): Is there anything that optimizes to a
@@ -3062,7 +3062,10 @@ where
     ///   * if `Explain`, calls are replaced with a dummy time.
     ///   * if `Static`, calls trigger an error indicating that static queries
     ///     are not permitted to observe their own timestamps.
-    fn prep_scalar_expr(expr: &mut ScalarExpr, style: ExprPrepStyle) -> Result<(), anyhow::Error> {
+    fn prep_scalar_expr(
+        expr: &mut MirScalarExpr,
+        style: ExprPrepStyle,
+    ) -> Result<(), anyhow::Error> {
         // Replace calls to `MzLogicalTimestamp` as described above.
         let ts = match style {
             ExprPrepStyle::Explain | ExprPrepStyle::Static => 0, // dummy timestamp
@@ -3070,9 +3073,9 @@ where
         };
         let mut observes_ts = false;
         expr.visit_mut(&mut |e| {
-            if let ScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
+            if let MirScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
                 observes_ts = true;
-                *e = ScalarExpr::literal_ok(Datum::from(i128::from(ts)), f.output_type());
+                *e = MirScalarExpr::literal_ok(Datum::from(i128::from(ts)), f.output_type());
             }
         });
         if observes_ts && matches!(style, ExprPrepStyle::Static) {
@@ -3391,7 +3394,10 @@ fn auto_generate_primary_idx(
         create_sql: index_sql(index_name, on_name, &on_desc, &default_key),
         plan_cx: PlanContext::default(),
         on: on_id,
-        keys: default_key.iter().map(|k| ScalarExpr::Column(*k)).collect(),
+        keys: default_key
+            .iter()
+            .map(|k| MirScalarExpr::Column(*k))
+            .collect(),
     }
 }
 

@@ -24,7 +24,7 @@ use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
-use expr::{AggregateExpr, AggregateFunc, RelationExpr};
+use expr::{AggregateExpr, AggregateFunc, MirRelationExpr};
 use repr::{Datum, DatumList, Row, RowArena, RowPacker};
 
 use super::context::Context;
@@ -48,16 +48,16 @@ enum ReductionType {
     Basic = 3,
 }
 
-impl<G, T> Context<G, RelationExpr, Row, T>
+impl<G, T> Context<G, MirRelationExpr, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    /// Renders a `RelationExpr::Reduce` using various non-obvious techniques to
+    /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
-    pub fn render_reduce(&mut self, relation_expr: &RelationExpr, scope: &mut G) {
-        if let RelationExpr::Reduce {
+    pub fn render_reduce(&mut self, relation_expr: &MirRelationExpr, scope: &mut G) {
+        if let MirRelationExpr::Reduce {
             input,
             group_key,
             aggregates,

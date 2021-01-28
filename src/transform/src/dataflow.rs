@@ -15,7 +15,7 @@
 //! in which the views will be executed.
 
 use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::{Id, LocalId, RelationExpr};
+use expr::{Id, LocalId, MirRelationExpr};
 use std::collections::{HashMap, HashSet};
 
 /// Optimizes the implementation of each dataflow.
@@ -113,7 +113,7 @@ fn inline_views(dataflow: &mut DataflowDesc) {
                     .relation_expr
                     .as_mut()
                     .visit_mut(&mut |expr| {
-                        if let RelationExpr::Get { id, .. } = expr {
+                        if let MirRelationExpr::Get { id, .. } = expr {
                             if id == &Id::Global(global_id) {
                                 *id = Id::Local(new_local);
                             }
@@ -121,7 +121,7 @@ fn inline_views(dataflow: &mut DataflowDesc) {
                     });
 
                 // With identifiers rewritten, we can replace `other` with
-                // a `RelationExpr::Let` binding, whose value is `index` and
+                // a `MirRelationExpr::Let` binding, whose value is `index` and
                 // whose body is `other`.
                 let body = dataflow.objects_to_build[other]
                     .relation_expr
@@ -131,7 +131,7 @@ fn inline_views(dataflow: &mut DataflowDesc) {
                     .relation_expr
                     .as_mut()
                     .take_dangerous();
-                *dataflow.objects_to_build[other].relation_expr.as_mut() = RelationExpr::Let {
+                *dataflow.objects_to_build[other].relation_expr.as_mut() = MirRelationExpr::Let {
                     id: new_local,
                     value: Box::new(value),
                     body: Box::new(body),
@@ -225,7 +225,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
 fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
     // Contains id -> predicates map, describing those predicates that
     // can (but need not) be applied to the collection named by `id`.
-    let mut predicates = HashMap::<Id, HashSet<expr::ScalarExpr>>::new();
+    let mut predicates = HashMap::<Id, HashSet<expr::MirScalarExpr>>::new();
 
     // Propagate predicate information from outputs to inputs.
     for build_desc in dataflow.objects_to_build.iter_mut().rev() {
@@ -264,30 +264,30 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
 pub mod monotonic {
 
     use dataflow_types::{DataflowDesc, SourceConnector, SourceEnvelope};
-    use expr::RelationExpr;
+    use expr::MirRelationExpr;
     use expr::{GlobalId, Id};
     use std::collections::HashSet;
 
     // Determines if a relation is monotonic, and applies any optimizations along the way.
-    fn is_monotonic(expr: &mut RelationExpr, sources: &HashSet<GlobalId>) -> bool {
+    fn is_monotonic(expr: &mut MirRelationExpr, sources: &HashSet<GlobalId>) -> bool {
         match expr {
-            RelationExpr::Get { id, .. } => {
+            MirRelationExpr::Get { id, .. } => {
                 if let Id::Global(id) = id {
                     sources.contains(id)
                 } else {
                     false
                 }
             }
-            RelationExpr::Project { input, .. } => is_monotonic(input, sources),
-            RelationExpr::Filter { input, .. } => is_monotonic(input, sources),
-            RelationExpr::Map { input, .. } => is_monotonic(input, sources),
-            RelationExpr::TopK {
+            MirRelationExpr::Project { input, .. } => is_monotonic(input, sources),
+            MirRelationExpr::Filter { input, .. } => is_monotonic(input, sources),
+            MirRelationExpr::Map { input, .. } => is_monotonic(input, sources),
+            MirRelationExpr::TopK {
                 input, monotonic, ..
             } => {
                 *monotonic = is_monotonic(input, sources);
                 false
             }
-            RelationExpr::Reduce {
+            MirRelationExpr::Reduce {
                 input,
                 aggregates,
                 monotonic,
@@ -298,7 +298,7 @@ pub mod monotonic {
                 // with no aggregate values; otherwise it may need to retract.
                 *monotonic && aggregates.is_empty()
             }
-            RelationExpr::Union { base, inputs } => {
+            MirRelationExpr::Union { base, inputs } => {
                 let mut monotonic = is_monotonic(base, sources);
                 for input in inputs.iter_mut() {
                     let monotonic_i = is_monotonic(input, sources);
@@ -306,12 +306,12 @@ pub mod monotonic {
                 }
                 monotonic
             }
-            RelationExpr::ArrangeBy { input, .. } => is_monotonic(input, sources),
-            RelationExpr::FlatMap { input, func, .. } => {
+            MirRelationExpr::ArrangeBy { input, .. } => is_monotonic(input, sources),
+            MirRelationExpr::FlatMap { input, func, .. } => {
                 let is_monotonic = is_monotonic(input, sources);
                 is_monotonic && func.preserves_monotonicity()
             }
-            RelationExpr::Join { inputs, .. } => {
+            MirRelationExpr::Join { inputs, .. } => {
                 // If all inputs to the join are monotonic then so is the join.
                 let mut monotonic = true;
                 for input in inputs.iter_mut() {
@@ -320,8 +320,8 @@ pub mod monotonic {
                 }
                 monotonic
             }
-            RelationExpr::Constant { rows, .. } => rows.iter().all(|(_, diff)| diff > &0),
-            RelationExpr::Threshold { input } => is_monotonic(input, sources),
+            MirRelationExpr::Constant { rows, .. } => rows.iter().all(|(_, diff)| diff > &0),
+            MirRelationExpr::Threshold { input } => is_monotonic(input, sources),
             // Let and Negate remain
             _ => {
                 expr.visit1_mut(|e| {
