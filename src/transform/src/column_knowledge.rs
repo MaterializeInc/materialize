@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use expr::{RelationExpr, ScalarExpr, UnaryFunc};
+use expr::{MirRelationExpr, MirScalarExpr, UnaryFunc};
 use repr::Datum;
 use repr::{ColumnType, RelationType, ScalarType};
 
@@ -26,7 +26,7 @@ pub struct ColumnKnowledge;
 impl crate::Transform for ColumnKnowledge {
     fn transform(
         &self,
-        expr: &mut RelationExpr,
+        expr: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         self.transform(expr)
@@ -35,23 +35,23 @@ impl crate::Transform for ColumnKnowledge {
 
 impl ColumnKnowledge {
     /// Transforms an expression through accumulated knowledge.
-    pub fn transform(&self, expr: &mut RelationExpr) -> Result<(), crate::TransformError> {
+    pub fn transform(&self, expr: &mut MirRelationExpr) -> Result<(), crate::TransformError> {
         ColumnKnowledge::harvest(expr, &mut HashMap::new())?;
         Ok(())
     }
 
     /// Harvest per-column knowledge.
     fn harvest(
-        expr: &mut RelationExpr,
+        expr: &mut MirRelationExpr,
         knowledge: &mut HashMap<expr::Id, Vec<DatumKnowledge>>,
     ) -> Result<Vec<DatumKnowledge>, crate::TransformError> {
         Ok(match expr {
-            RelationExpr::ArrangeBy { input, .. } => ColumnKnowledge::harvest(input, knowledge)?,
-            RelationExpr::Get { id, typ } => knowledge
+            MirRelationExpr::ArrangeBy { input, .. } => ColumnKnowledge::harvest(input, knowledge)?,
+            MirRelationExpr::Get { id, typ } => knowledge
                 .get(id)
                 .cloned()
                 .unwrap_or_else(|| typ.column_types.iter().map(DatumKnowledge::from).collect()),
-            RelationExpr::Constant { rows, typ } => {
+            MirRelationExpr::Constant { rows, typ } => {
                 if rows.len() == 1 {
                     let mut row_packer = repr::RowPacker::new();
                     rows[0]
@@ -67,7 +67,7 @@ impl ColumnKnowledge {
                     typ.column_types.iter().map(DatumKnowledge::from).collect()
                 }
             }
-            RelationExpr::Let { id, value, body } => {
+            MirRelationExpr::Let { id, value, body } => {
                 let value_knowledge = ColumnKnowledge::harvest(value, knowledge)?;
                 let prior_knowledge =
                     knowledge.insert(expr::Id::Local(id.clone()), value_knowledge);
@@ -78,14 +78,14 @@ impl ColumnKnowledge {
                 }
                 body_knowledge
             }
-            RelationExpr::Project { input, outputs } => {
+            MirRelationExpr::Project { input, outputs } => {
                 let input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
                 outputs
                     .iter()
                     .map(|i| input_knowledge[*i].clone())
                     .collect()
             }
-            RelationExpr::Map { input, scalars } => {
+            MirRelationExpr::Map { input, scalars } => {
                 let mut input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
                 for scalar in scalars.iter_mut() {
                     let know = optimize(scalar, &input.typ(), &input_knowledge[..])?;
@@ -93,7 +93,7 @@ impl ColumnKnowledge {
                 }
                 input_knowledge
             }
-            RelationExpr::FlatMap {
+            MirRelationExpr::FlatMap {
                 input,
                 func,
                 exprs,
@@ -107,7 +107,7 @@ impl ColumnKnowledge {
                 input_knowledge.extend(func_typ.column_types.iter().map(DatumKnowledge::from));
                 input_knowledge
             }
-            RelationExpr::Filter { input, predicates } => {
+            MirRelationExpr::Filter { input, predicates } => {
                 let mut input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
                 for predicate in predicates.iter_mut() {
                     optimize(predicate, &input.typ(), &input_knowledge[..])?;
@@ -115,14 +115,14 @@ impl ColumnKnowledge {
                 // If any predicate tests a column for equality, truth, or is_null, we learn stuff.
                 for predicate in predicates.iter() {
                     // Equality tests allow us to unify the column knowledge of each input.
-                    if let ScalarExpr::CallBinary { func, expr1, expr2 } = predicate {
+                    if let MirScalarExpr::CallBinary { func, expr1, expr2 } = predicate {
                         if func == &expr::BinaryFunc::Eq {
                             // Collect knowledge about the inputs (for columns and literals).
                             let mut knowledge = DatumKnowledge::default();
-                            if let ScalarExpr::Column(c) = &**expr1 {
+                            if let MirScalarExpr::Column(c) = &**expr1 {
                                 knowledge.absorb(&input_knowledge[*c]);
                             }
-                            if let ScalarExpr::Column(c) = &**expr2 {
+                            if let MirScalarExpr::Column(c) = &**expr2 {
                                 knowledge.absorb(&input_knowledge[*c]);
                             }
                             // Absorb literal knowledge about columns.
@@ -130,25 +130,25 @@ impl ColumnKnowledge {
                             knowledge.absorb(&DatumKnowledge::from(&**expr2));
 
                             // Write back unified knowledge to each column.
-                            if let ScalarExpr::Column(c) = &**expr1 {
+                            if let MirScalarExpr::Column(c) = &**expr1 {
                                 input_knowledge[*c].absorb(&knowledge);
                             }
-                            if let ScalarExpr::Column(c) = &**expr2 {
+                            if let MirScalarExpr::Column(c) = &**expr2 {
                                 input_knowledge[*c].absorb(&knowledge);
                             }
                         }
                     }
-                    if let ScalarExpr::CallUnary {
+                    if let MirScalarExpr::CallUnary {
                         func: UnaryFunc::Not,
                         expr,
                     } = predicate
                     {
-                        if let ScalarExpr::CallUnary {
+                        if let MirScalarExpr::CallUnary {
                             func: UnaryFunc::IsNull,
                             expr,
                         } = &**expr
                         {
-                            if let ScalarExpr::Column(c) = &**expr {
+                            if let MirScalarExpr::Column(c) = &**expr {
                                 input_knowledge[*c].nullable = false;
                             }
                         }
@@ -157,7 +157,7 @@ impl ColumnKnowledge {
 
                 input_knowledge
             }
-            RelationExpr::Join {
+            MirRelationExpr::Join {
                 inputs,
                 equivalences,
                 ..
@@ -174,13 +174,13 @@ impl ColumnKnowledge {
 
                     // We can produce composite knowledge for everything in the equivalence class.
                     for expr in equivalence.iter_mut() {
-                        if let ScalarExpr::Column(c) = expr {
+                        if let MirScalarExpr::Column(c) = expr {
                             knowledge.absorb(&knowledges[*c]);
                         }
                         knowledge.absorb(&DatumKnowledge::from(&*expr));
                     }
                     for expr in equivalence.iter_mut() {
-                        if let ScalarExpr::Column(c) = expr {
+                        if let MirScalarExpr::Column(c) = expr {
                             knowledges[*c] = knowledge.clone();
                         }
                     }
@@ -188,7 +188,7 @@ impl ColumnKnowledge {
 
                 knowledges
             }
-            RelationExpr::Reduce {
+            MirRelationExpr::Reduce {
                 input,
                 group_key,
                 aggregates,
@@ -243,10 +243,10 @@ impl ColumnKnowledge {
                 }
                 output
             }
-            RelationExpr::TopK { input, .. } => ColumnKnowledge::harvest(input, knowledge)?,
-            RelationExpr::Negate { input } => ColumnKnowledge::harvest(input, knowledge)?,
-            RelationExpr::Threshold { input } => ColumnKnowledge::harvest(input, knowledge)?,
-            RelationExpr::Union { base, inputs } => {
+            MirRelationExpr::TopK { input, .. } => ColumnKnowledge::harvest(input, knowledge)?,
+            MirRelationExpr::Negate { input } => ColumnKnowledge::harvest(input, knowledge)?,
+            MirRelationExpr::Threshold { input } => ColumnKnowledge::harvest(input, knowledge)?,
+            MirRelationExpr::Union { base, inputs } => {
                 let mut know = ColumnKnowledge::harvest(base, knowledge)?;
                 for input in inputs {
                     know = know
@@ -296,9 +296,9 @@ impl Default for DatumKnowledge {
     }
 }
 
-impl From<&ScalarExpr> for DatumKnowledge {
-    fn from(expr: &ScalarExpr) -> Self {
-        if let ScalarExpr::Literal(Ok(l), t) = expr {
+impl From<&MirScalarExpr> for DatumKnowledge {
+    fn from(expr: &MirScalarExpr) -> Self {
+        if let MirScalarExpr::Literal(Ok(l), t) = expr {
             Self {
                 value: Some((l.clone(), t.clone())),
                 nullable: expr.is_literal_null(),
@@ -320,19 +320,19 @@ impl From<&ColumnType> for DatumKnowledge {
 
 /// Attempts to optimize
 pub fn optimize(
-    expr: &mut ScalarExpr,
+    expr: &mut MirScalarExpr,
     input_type: &RelationType,
     column_knowledge: &[DatumKnowledge],
 ) -> Result<DatumKnowledge, crate::TransformError> {
     Ok(match expr {
-        ScalarExpr::Column(index) => {
+        MirScalarExpr::Column(index) => {
             let index = *index;
             if let Some((datum, typ)) = &column_knowledge[index].value {
-                *expr = ScalarExpr::Literal(Ok(datum.clone()), typ.clone());
+                *expr = MirScalarExpr::Literal(Ok(datum.clone()), typ.clone());
             }
             column_knowledge[index].clone()
         }
-        ScalarExpr::Literal(res, typ) => {
+        MirScalarExpr::Literal(res, typ) => {
             let row = match res {
                 Ok(row) => row,
                 Err(err) => return Err(err.clone().into()),
@@ -342,23 +342,23 @@ pub fn optimize(
                 nullable: row.unpack_first() == Datum::Null,
             }
         }
-        ScalarExpr::CallNullary(_) => {
+        MirScalarExpr::CallNullary(_) => {
             expr.reduce(input_type);
             optimize(expr, input_type, column_knowledge)?
         }
-        ScalarExpr::CallUnary { func, expr: inner } => {
+        MirScalarExpr::CallUnary { func, expr: inner } => {
             let knowledge = optimize(inner, input_type, column_knowledge)?;
             if knowledge.value.is_some() {
                 expr.reduce(input_type);
                 optimize(expr, input_type, column_knowledge)?
             } else if func == &UnaryFunc::IsNull && !knowledge.nullable {
-                *expr = ScalarExpr::literal_ok(Datum::False, ScalarType::Bool.nullable(false));
+                *expr = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool.nullable(false));
                 optimize(expr, input_type, column_knowledge)?
             } else {
                 DatumKnowledge::default()
             }
         }
-        ScalarExpr::CallBinary {
+        MirScalarExpr::CallBinary {
             func: _,
             expr1,
             expr2,
@@ -372,7 +372,7 @@ pub fn optimize(
                 DatumKnowledge::default()
             }
         }
-        ScalarExpr::CallVariadic { func: _, exprs } => {
+        MirScalarExpr::CallVariadic { func: _, exprs } => {
             let mut knows = Vec::new();
             for expr in exprs.iter_mut() {
                 knows.push(optimize(expr, input_type, column_knowledge)?);
@@ -385,7 +385,7 @@ pub fn optimize(
                 DatumKnowledge::default()
             }
         }
-        ScalarExpr::If { cond, then, els } => {
+        MirScalarExpr::If { cond, then, els } => {
             if let Some((value, _typ)) = optimize(cond, input_type, column_knowledge)?.value {
                 match value.unpack_first() {
                     Datum::True => *expr = (**then).clone(),

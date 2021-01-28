@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{scalar::EvalError, RelationExpr, ScalarExpr};
+use crate::{scalar::EvalError, MirRelationExpr, MirScalarExpr};
 use repr::{Datum, Row, RowArena, RowPacker};
 
 /// A compound operator that can be applied row-by-row.
@@ -27,7 +27,7 @@ pub struct MapFilterProject {
     ///
     /// Many of these expressions may not be produced in the output,
     /// and may only be present as common subexpressions.
-    pub expressions: Vec<ScalarExpr>,
+    pub expressions: Vec<MirScalarExpr>,
     /// Expressions that must evaluate to `Datum::True` for the output
     /// row to be produced.
     ///
@@ -38,7 +38,7 @@ pub struct MapFilterProject {
     /// guarded evaluation of predicates.
     ///
     /// This list should be sorted by the first field.
-    pub predicates: Vec<(usize, ScalarExpr)>,
+    pub predicates: Vec<(usize, MirScalarExpr)>,
     /// A sequence of column identifiers whose data form the output row.
     pub projection: Vec<usize>,
     /// The expected number of input columns.
@@ -139,7 +139,7 @@ impl MapFilterProject {
     /// If fine manipulation is required, the predicates can be added manually.
     pub fn filter<I>(mut self, predicates: I) -> Self
     where
-        I: IntoIterator<Item = ScalarExpr>,
+        I: IntoIterator<Item = MirScalarExpr>,
     {
         for mut predicate in predicates {
             // Correct column references.
@@ -170,7 +170,7 @@ impl MapFilterProject {
     /// Append the result of evaluating expressions to each row.
     pub fn map<I>(mut self, expressions: I) -> Self
     where
-        I: IntoIterator<Item = ScalarExpr>,
+        I: IntoIterator<Item = MirScalarExpr>,
     {
         for mut expression in expressions {
             // Correct column references.
@@ -195,7 +195,7 @@ impl MapFilterProject {
     ///
     /// In principle, this operator can be implemented as a sequence of
     /// more elemental operators, likely less efficiently.
-    pub fn as_map_filter_project(&self) -> (Vec<ScalarExpr>, Vec<ScalarExpr>, Vec<usize>) {
+    pub fn as_map_filter_project(&self) -> (Vec<MirScalarExpr>, Vec<MirScalarExpr>, Vec<usize>) {
         let map = self.expressions.clone();
         let filter = self
             .predicates
@@ -207,9 +207,9 @@ impl MapFilterProject {
     }
 
     /// Determines if a scalar expression must be equal to a literal datum.
-    pub fn literal_constraint(&self, expr: &ScalarExpr) -> Option<Datum> {
+    pub fn literal_constraint(&self, expr: &MirScalarExpr) -> Option<Datum> {
         for (_pos, predicate) in self.predicates.iter() {
-            if let ScalarExpr::CallBinary {
+            if let MirScalarExpr::CallBinary {
                 func: crate::BinaryFunc::Eq,
                 expr1,
                 expr2,
@@ -236,7 +236,7 @@ impl MapFilterProject {
     /// seems to line up with its callers' expectations of that being a non-constraint.
     /// The caller knows if `exprs` is empty, and can modify their behavior appopriately.
     /// if they would rather have a literal empty row.
-    pub fn literal_constraints(&self, exprs: &[ScalarExpr]) -> Option<Row> {
+    pub fn literal_constraints(&self, exprs: &[MirScalarExpr]) -> Option<Row> {
         if exprs.is_empty() {
             return None;
         }
@@ -256,20 +256,20 @@ impl MapFilterProject {
     /// The expression will be modified to extract any maps, filters, and
     /// projections, which will be return as `Self`. If there are no maps,
     /// filters, or projections the method will return an identity operator.
-    pub fn extract_from_expression(expr: &RelationExpr) -> (Self, &RelationExpr) {
+    pub fn extract_from_expression(expr: &MirRelationExpr) -> (Self, &MirRelationExpr) {
         // TODO: This could become iterative rather than recursive if
         // we were able to fuse MFP operators from below, rather than
         // from above.
         match expr {
-            RelationExpr::Map { input, scalars } => {
+            MirRelationExpr::Map { input, scalars } => {
                 let (mfp, expr) = Self::extract_from_expression(input);
                 (mfp.map(scalars.iter().cloned()), expr)
             }
-            RelationExpr::Filter { input, predicates } => {
+            MirRelationExpr::Filter { input, predicates } => {
                 let (mfp, expr) = Self::extract_from_expression(input);
                 (mfp.filter(predicates.iter().cloned()), expr)
             }
-            RelationExpr::Project { input, outputs } => {
+            MirRelationExpr::Project { input, outputs } => {
                 let (mfp, expr) = Self::extract_from_expression(input);
                 (mfp.project(outputs.iter().cloned()), expr)
             }
@@ -307,13 +307,13 @@ impl MapFilterProject {
     /// # Example
     ///
     /// ```rust
-    /// use expr::{BinaryFunc, MapFilterProject, ScalarExpr};
+    /// use expr::{BinaryFunc, MapFilterProject, MirScalarExpr};
     ///
     /// // imagine an action on columns (a, b, c, d).
     /// let original = MapFilterProject::new(4).map(vec![
-    ///    ScalarExpr::column(0).call_binary(ScalarExpr::column(1), BinaryFunc::AddInt64),
-    ///    ScalarExpr::column(2).call_binary(ScalarExpr::column(4), BinaryFunc::AddInt64),
-    ///    ScalarExpr::column(3).call_binary(ScalarExpr::column(5), BinaryFunc::AddInt64),
+    ///    MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::AddInt64),
+    ///    MirScalarExpr::column(2).call_binary(MirScalarExpr::column(4), BinaryFunc::AddInt64),
+    ///    MirScalarExpr::column(3).call_binary(MirScalarExpr::column(5), BinaryFunc::AddInt64),
     /// ]).project(vec![6]);
     ///
     /// // Imagine we start with columns (b, x, a, y, c).
@@ -332,13 +332,13 @@ impl MapFilterProject {
     ///
     /// // `before` sees all five input columns, and should append `a + b + c`.
     /// assert_eq!(before, MapFilterProject::new(5).map(vec![
-    ///    ScalarExpr::column(2).call_binary(ScalarExpr::column(0), BinaryFunc::AddInt64),
-    ///    ScalarExpr::column(4).call_binary(ScalarExpr::column(5), BinaryFunc::AddInt64),
+    ///    MirScalarExpr::column(2).call_binary(MirScalarExpr::column(0), BinaryFunc::AddInt64),
+    ///    MirScalarExpr::column(4).call_binary(MirScalarExpr::column(5), BinaryFunc::AddInt64),
     /// ]).project(vec![0, 1, 2, 3, 4, 6]));
     ///
     /// // `after` expects to see `(a, b, c, d, a + b + c)`.
     /// assert_eq!(after, MapFilterProject::new(5).map(vec![
-    ///    ScalarExpr::column(3).call_binary(ScalarExpr::column(4), BinaryFunc::AddInt64)
+    ///    MirScalarExpr::column(3).call_binary(MirScalarExpr::column(4), BinaryFunc::AddInt64)
     /// ]).project(vec![5]));
     ///
     /// // To reconstruct `self`, we must introduce the columns that are not present,

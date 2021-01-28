@@ -11,7 +11,8 @@
 
 use std::iter;
 
-use crate::{RelationExpr, TransformArgs};
+use crate::TransformArgs;
+use expr::MirRelationExpr;
 
 /// Fuses multiple `Union` operators into one.
 #[derive(Debug)]
@@ -20,7 +21,7 @@ pub struct Union;
 impl crate::Transform for Union {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
@@ -32,24 +33,24 @@ impl crate::Transform for Union {
 
 impl Union {
     /// Fuses multiple `Union` operators into one.
-    pub fn action(&self, relation: &mut RelationExpr) {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
         let relation_type = relation.typ();
-        if let RelationExpr::Union { base, inputs } = relation {
+        if let MirRelationExpr::Union { base, inputs } = relation {
             let can_fuse = iter::once(&**base)
                 .chain(&*inputs)
-                .any(|input| matches!(input, RelationExpr::Union { .. }));
+                .any(|input| matches!(input, MirRelationExpr::Union { .. }));
             if can_fuse {
-                let mut new_inputs: Vec<RelationExpr> = vec![];
+                let mut new_inputs: Vec<MirRelationExpr> = vec![];
                 for input in iter::once(&mut **base).chain(inputs) {
                     match input.take_dangerous() {
-                        RelationExpr::Union { base, inputs } => {
+                        MirRelationExpr::Union { base, inputs } => {
                             new_inputs.push(*base);
                             new_inputs.extend(inputs);
                         }
                         input => new_inputs.push(input),
                     }
                 }
-                *relation = RelationExpr::union_many(new_inputs, relation_type);
+                *relation = MirRelationExpr::union_many(new_inputs, relation_type);
             }
         }
     }

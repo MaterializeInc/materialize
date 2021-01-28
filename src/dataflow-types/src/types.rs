@@ -27,7 +27,7 @@ use timely::progress::frontier::Antichain;
 use url::Url;
 
 use aws_util::aws;
-use expr::{GlobalId, OptimizedRelationExpr, PartitionId, RelationExpr, ScalarExpr};
+use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, PartitionId};
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use kafka_util::KafkaAddrs;
@@ -66,7 +66,7 @@ pub struct Update {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildDesc {
     pub id: GlobalId,
-    pub relation_expr: OptimizedRelationExpr,
+    pub relation_expr: OptimizedMirRelationExpr,
     /// If building a view, the types of columns of the built view
     /// None if building an index
     pub typ: Option<RelationType>,
@@ -141,7 +141,7 @@ impl DataflowDesc {
     pub fn add_view_to_build(
         &mut self,
         id: GlobalId,
-        expr: OptimizedRelationExpr,
+        expr: OptimizedMirRelationExpr,
         typ: RelationType,
     ) {
         for get_id in expr.as_ref().global_uses() {
@@ -159,14 +159,16 @@ impl DataflowDesc {
         id: GlobalId,
         on_id: GlobalId,
         on_type: RelationType,
-        keys: Vec<ScalarExpr>,
+        keys: Vec<MirScalarExpr>,
     ) {
         self.objects_to_build.push(BuildDesc {
             id,
-            relation_expr: OptimizedRelationExpr::declare_optimized(RelationExpr::ArrangeBy {
-                input: Box::new(RelationExpr::global_get(on_id, on_type)),
-                keys: vec![keys],
-            }),
+            relation_expr: OptimizedMirRelationExpr::declare_optimized(
+                MirRelationExpr::ArrangeBy {
+                    input: Box::new(MirRelationExpr::global_get(on_id, on_type)),
+                    keys: vec![keys],
+                },
+            ),
             typ: None,
         });
     }
@@ -176,7 +178,7 @@ impl DataflowDesc {
         id: GlobalId,
         on_id: GlobalId,
         on_type: RelationType,
-        keys: Vec<ScalarExpr>,
+        keys: Vec<MirScalarExpr>,
     ) {
         self.index_exports
             .push((id, IndexDesc { on_id, keys }, on_type));
@@ -793,7 +795,7 @@ pub struct IndexDesc {
     /// Identity of the collection the index is on.
     pub on_id: GlobalId,
     /// Expressions to be arranged, in order of decreasing primacy.
-    pub keys: Vec<ScalarExpr>,
+    pub keys: Vec<MirScalarExpr>,
 }
 
 // TODO: change contract to ensure that the operator is always applied to
@@ -812,7 +814,7 @@ pub struct IndexDesc {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct LinearOperator {
     /// Rows that do not pass all predicates may be discarded.
-    pub predicates: Vec<ScalarExpr>,
+    pub predicates: Vec<MirScalarExpr>,
     /// Columns not present in `projection` may be replaced with
     /// default values.
     pub projection: Vec<usize>,

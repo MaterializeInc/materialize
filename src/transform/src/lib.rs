@@ -10,7 +10,7 @@
 //! Transformations for relation expressions.
 //!
 //! This crate contains traits, types, and methods suitable for transforming
-//! `RelationExpr` types in ways that preserve semantics and improve performance.
+//! `MirRelationExpr` types in ways that preserve semantics and improve performance.
 //! The core trait is `Transform`, and many implementors of this trait can be
 //! boxed and iterated over. Some common transformation patterns are wrapped
 //! as `Transform` implementors themselves.
@@ -25,7 +25,9 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
-use expr::{EvalError, GlobalId, IdGen, OptimizedRelationExpr, RelationExpr, ScalarExpr};
+use expr::MirRelationExpr;
+use expr::MirScalarExpr;
+use expr::{EvalError, GlobalId, IdGen};
 
 pub mod column_knowledge;
 pub mod cse;
@@ -59,7 +61,7 @@ pub struct TransformArgs<'a> {
     /// A shared instance of IdGen to allow constructing new Let expressions.
     pub id_gen: &'a mut IdGen,
     /// The indexes accessible.
-    pub indexes: &'a HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>>,
+    pub indexes: &'a HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
 }
 
 /// Types capable of transforming relation expressions.
@@ -67,7 +69,7 @@ pub trait Transform: std::fmt::Debug {
     /// Transform a relation into a functionally equivalent relation.
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError>;
     /// A string describing the transform.
@@ -115,7 +117,7 @@ pub struct Fixpoint {
 impl Transform for Fixpoint {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), TransformError> {
         for _ in 0..self.limit {
@@ -168,8 +170,8 @@ impl Optimizer {
     /// Optimizes the supplied relation expression.
     fn transform(
         &self,
-        relation: &mut RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>>,
+        relation: &mut MirRelationExpr,
+        indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     ) -> Result<(), TransformError> {
         let mut id_gen = Default::default();
         for transform in self.transforms.iter() {
@@ -240,7 +242,7 @@ impl Default for Optimizer {
             }),
             // As a final logical action, convert any constant expression to a constant.
             // Some optimizations fight against this, and we want to be sure to end as a
-            // `RelationExpr::Constant` if that is the case, so that subsequent use can
+            // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
             // clearly see this.
             Box::new(crate::reduction::FoldConstants),
             // TODO (wangandi): materialize#616 the FilterEqualLiteral transform
@@ -272,11 +274,11 @@ impl Optimizer {
     /// Optimizes the supplied relation expression.
     pub fn optimize(
         &mut self,
-        mut relation: RelationExpr,
-        indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>>,
-    ) -> Result<OptimizedRelationExpr, TransformError> {
+        mut relation: MirRelationExpr,
+        indexes: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+    ) -> Result<expr::OptimizedMirRelationExpr, TransformError> {
         self.transform(&mut relation, indexes)?;
-        Ok(expr::OptimizedRelationExpr(relation))
+        Ok(expr::OptimizedMirRelationExpr(relation))
     }
 
     /// Simple fusion and elision transformations to render the query readable.

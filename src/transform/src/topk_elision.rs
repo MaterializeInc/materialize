@@ -10,7 +10,7 @@
 //! Remove TopK operators with both an offset of zero and no limit.
 
 use crate::TransformArgs;
-use expr::RelationExpr;
+use expr::MirRelationExpr;
 
 /// Remove TopK operators with both an offset of zero and no limit.
 #[derive(Debug)]
@@ -19,7 +19,7 @@ pub struct TopKElision;
 impl crate::Transform for TopKElision {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |e| {
@@ -31,8 +31,8 @@ impl crate::Transform for TopKElision {
 
 impl TopKElision {
     /// Remove TopK operators with both an offset of zero and no limit.
-    pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::TopK {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
+        if let MirRelationExpr::TopK {
             input,
             group_key: _,
             order_key: _,

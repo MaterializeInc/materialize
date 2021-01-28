@@ -9,7 +9,7 @@
 
 //! Hoist literal values from maps wherever possible.
 //!
-//! This transform specifically looks for `RelationExpr::Map` operators
+//! This transform specifically looks for `MirRelationExpr::Map` operators
 //! where any of the `ScalarExpr` expressions are literals. Whenever it
 //! can, it lifts those expressions through or around operators.
 //!
@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{Id, JoinInputMapper, RelationExpr, ScalarExpr};
+use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 use itertools::Itertools;
 
 /// Hoist literal values from maps wherever possible.
@@ -33,7 +33,7 @@ pub struct LiteralLifting;
 impl crate::Transform for LiteralLifting {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let literals = self.action(relation, &mut HashMap::new());
@@ -61,12 +61,12 @@ impl LiteralLifting {
     // TODO(frank): Fix this.
     pub fn action(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         // Map from names to literals required for appending.
-        gets: &mut HashMap<Id, Vec<ScalarExpr>>,
-    ) -> Vec<ScalarExpr> {
+        gets: &mut HashMap<Id, Vec<MirScalarExpr>>,
+    ) -> Vec<MirScalarExpr> {
         match relation {
-            RelationExpr::Constant { rows, typ } => {
+            MirRelationExpr::Constant { rows, typ } => {
                 // From the back to the front, check if all values are identical.
                 // TODO(frank): any subset of constant values can be extracted with a permute.
                 let mut the_same = vec![true; typ.arity()];
@@ -85,7 +85,7 @@ impl LiteralLifting {
                         the_same.pop();
                         let datum = data.pop().unwrap();
                         let typum = typ.column_types.pop().unwrap();
-                        literals.push(ScalarExpr::literal_ok(datum, typum));
+                        literals.push(MirScalarExpr::literal_ok(datum, typum));
                     }
                     literals.reverse();
 
@@ -107,7 +107,7 @@ impl LiteralLifting {
                     Vec::new()
                 }
             }
-            RelationExpr::Get { id, typ } => {
+            MirRelationExpr::Get { id, typ } => {
                 // A get expression may need to have literal expressions appended to it.
                 let literals = gets.get(id).cloned().unwrap_or_else(Vec::new);
                 if !literals.is_empty() {
@@ -127,7 +127,7 @@ impl LiteralLifting {
                 }
                 literals
             }
-            RelationExpr::Let { id, value, body } => {
+            MirRelationExpr::Let { id, value, body } => {
                 // Any literals appended to the `value` should be used
                 // at corresponding `Get`s throughout the `body`.
                 let literals = self.action(value, gets);
@@ -140,7 +140,7 @@ impl LiteralLifting {
                 gets.remove(&id);
                 result
             }
-            RelationExpr::Project { input, outputs } => {
+            MirRelationExpr::Project { input, outputs } => {
                 // We do not want to lift literals around projections.
                 // Projections are the highest lifted operator and lifting
                 // literals around projections could cause us to fail to
@@ -170,7 +170,7 @@ impl LiteralLifting {
                 // Policy: Do not lift literals around projects.
                 Vec::new()
             }
-            RelationExpr::Map { input, scalars } => {
+            MirRelationExpr::Map { input, scalars } => {
                 let mut literals = self.action(input, gets);
 
                 // Make the map properly formed again.
@@ -193,7 +193,7 @@ impl LiteralLifting {
 
                 result
             }
-            RelationExpr::FlatMap {
+            MirRelationExpr::FlatMap {
                 input,
                 func: _,
                 exprs,
@@ -204,7 +204,7 @@ impl LiteralLifting {
                     let input_arity = input.arity();
                     for expr in exprs.iter_mut() {
                         expr.visit_mut(&mut |e| {
-                            if let ScalarExpr::Column(c) = e {
+                            if let MirScalarExpr::Column(c) = e {
                                 if *c >= input_arity {
                                     *e = literals[*c - input_arity].clone();
                                 }
@@ -218,7 +218,7 @@ impl LiteralLifting {
                 }
                 Vec::new()
             }
-            RelationExpr::Filter { input, predicates } => {
+            MirRelationExpr::Filter { input, predicates } => {
                 let literals = self.action(input, gets);
                 if !literals.is_empty() {
                     // We should be able to instantiate all uses of `literals`
@@ -226,7 +226,7 @@ impl LiteralLifting {
                     let input_arity = input.arity();
                     for expr in predicates.iter_mut() {
                         expr.visit_mut(&mut |e| {
-                            if let ScalarExpr::Column(c) = e {
+                            if let MirScalarExpr::Column(c) = e {
                                 if *c >= input_arity {
                                     *e = literals[*c - input_arity].clone();
                                 }
@@ -236,7 +236,7 @@ impl LiteralLifting {
                 }
                 literals
             }
-            RelationExpr::Join {
+            MirRelationExpr::Join {
                 inputs,
                 equivalences,
                 demand,
@@ -265,7 +265,7 @@ impl LiteralLifting {
                     for equivalence in equivalences.iter_mut() {
                         for expr in equivalence.iter_mut() {
                             expr.visit_mut(&mut |e| {
-                                if let ScalarExpr::Column(c) = e {
+                                if let MirScalarExpr::Column(c) = e {
                                     let (col, input) = old_input_mapper.map_column_to_local(*c);
                                     if col >= new_input_mapper.input_arity(input) {
                                         // the column refers to a literal that
@@ -309,7 +309,7 @@ impl LiteralLifting {
                 }
                 Vec::new()
             }
-            RelationExpr::Reduce {
+            MirRelationExpr::Reduce {
                 input,
                 group_key,
                 aggregates,
@@ -323,7 +323,7 @@ impl LiteralLifting {
                     // Inline literals into group key expressions.
                     for expr in group_key.iter_mut() {
                         expr.visit_mut(&mut |e| {
-                            if let ScalarExpr::Column(c) = e {
+                            if let MirScalarExpr::Column(c) = e {
                                 if *c >= input_arity {
                                     *e = literals[*c - input_arity].clone();
                                 }
@@ -333,7 +333,7 @@ impl LiteralLifting {
                     // Inline literals into aggregate value selector expressions.
                     for aggr in aggregates.iter_mut() {
                         aggr.expr.visit_mut(&mut |e| {
-                            if let ScalarExpr::Column(c) = e {
+                            if let MirScalarExpr::Column(c) = e {
                                 if *c >= input_arity {
                                     *e = literals[*c - input_arity].clone();
                                 }
@@ -357,7 +357,7 @@ impl LiteralLifting {
                     let eval = aggr
                         .func
                         .eval(Some(aggr.expr.eval(&[], &temp).unwrap()), &temp);
-                    result.push(ScalarExpr::literal_ok(
+                    result.push(MirScalarExpr::literal_ok(
                         eval,
                         // This type information should be available in the `a.expr` literal,
                         // but extracting it with pattern matching seems awkward.
@@ -368,7 +368,7 @@ impl LiteralLifting {
                 result.reverse();
                 result
             }
-            RelationExpr::TopK {
+            MirRelationExpr::TopK {
                 input,
                 group_key,
                 order_key,
@@ -387,20 +387,20 @@ impl LiteralLifting {
                 }
                 literals
             }
-            RelationExpr::Negate { input } => {
+            MirRelationExpr::Negate { input } => {
                 // Literals can just be lifted out of negate.
                 self.action(input, gets)
             }
-            RelationExpr::Threshold { input } => {
+            MirRelationExpr::Threshold { input } => {
                 // Literals can just be lifted out of threshold.
                 self.action(input, gets)
             }
-            RelationExpr::Union { base, inputs } => {
+            MirRelationExpr::Union { base, inputs } => {
                 let mut base_literals = self.action(base, gets);
                 let mut input_literals = inputs
                     .iter_mut()
                     .map(|input| self.action(input, gets))
-                    .collect::<Vec<Vec<ScalarExpr>>>();
+                    .collect::<Vec<Vec<MirScalarExpr>>>();
 
                 // We need to find the longest common suffix between all the arms of the union.
                 let mut suffix = Vec::new();
@@ -433,7 +433,7 @@ impl LiteralLifting {
                 }
                 suffix
             }
-            RelationExpr::ArrangeBy { input, keys } => {
+            MirRelationExpr::ArrangeBy { input, keys } => {
                 // TODO(frank): Not sure if this is the right behavior,
                 // as we disrupt the set of used arrangements. Though,
                 // we are probably most likely to use arranged `Get`
@@ -444,7 +444,7 @@ impl LiteralLifting {
                     for key in keys.iter_mut() {
                         for expr in key.iter_mut() {
                             expr.visit_mut(&mut |e| {
-                                if let ScalarExpr::Column(c) = e {
+                                if let MirScalarExpr::Column(c) = e {
                                     if *c >= input_arity {
                                         *e = literals[*c - input_arity].clone();
                                     }

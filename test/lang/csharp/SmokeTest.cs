@@ -43,20 +43,17 @@ namespace csharp
             new NpgsqlCommand("CREATE TABLE t (a int, b text)", conn).ExecuteNonQuery();
             new NpgsqlCommand("INSERT INTO t VALUES (1, 'a')", conn).ExecuteNonQuery();
 
-            // Start a tail using the binary copy protocol.
-            var reader = conn.BeginBinaryExport("COPY (TAIL t) TO STDOUT (FORMAT BINARY)");
-
-            // Validate the first row.
-            Assert.AreEqual(4, reader.StartRow());
-            reader.Read<decimal>(); // ignore timestamp column
-            Assert.AreEqual(1, reader.Read<long>()); // diff column
-            Assert.AreEqual(1, reader.Read<int>()); // a column
-            Assert.AreEqual("a", reader.Read<string>()); // b column
-
-            // Wait 2s so that the 1s NoticeResponse "test that the connection is still
-            // alive" check triggers. This verifies Npgsql can successfully ignore the
-            // NoticeResponse.
-            Thread.Sleep(2000);
+            var txn = conn.BeginTransaction();
+            new NpgsqlCommand("DECLARE c CURSOR FOR TAIL t", conn, txn).ExecuteNonQuery();
+            using (var cmd = new NpgsqlCommand("FETCH ALL c", conn, txn))
+            using (var reader  = cmd.ExecuteReader())
+            {
+                Assert.IsTrue(reader.Read());
+                Assert.AreEqual(1, reader[1]); // diff
+                Assert.AreEqual(1, reader[2]); // a
+                Assert.AreEqual("a", reader[3]); // b
+                Assert.IsFalse(reader.Read());
+            }
 
             // Insert another row from another connection to simulate an update
             // arriving.
@@ -64,15 +61,18 @@ namespace csharp
                 new NpgsqlCommand("INSERT INTO t VALUES (2, 'b')", conn2).ExecuteNonQuery();
             }
 
-            // Validate the new row.
-            Assert.AreEqual(4, reader.StartRow());
-            reader.Read<decimal>(); // ignore timestamp column
-            Assert.AreEqual(1, reader.Read<long>()); // diff column
-            Assert.AreEqual(2, reader.Read<int>()); // a column
-            Assert.AreEqual("b", reader.Read<string>()); // b column
+            using (var cmd = new NpgsqlCommand("FETCH ALL c", conn, txn))
+            using (var reader  = cmd.ExecuteReader())
+            {
+                Assert.IsTrue(reader.Read());
+                Assert.AreEqual(1, reader[1]); // diff
+                Assert.AreEqual(2, reader[2]); // a
+                Assert.AreEqual("b", reader[3]); // b
+                Assert.IsFalse(reader.Read());
+            }
+            txn.Commit();
 
-            // The tail won't end until we send a cancel request.
-            reader.Cancel();
+            new NpgsqlCommand("DROP TABLE t", conn).ExecuteNonQuery();
         }
     }
 }

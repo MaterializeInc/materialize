@@ -23,12 +23,12 @@ use lazy_static::lazy_static;
 use expr::VariadicFunc;
 use repr::{ColumnName, ColumnType, Datum, RelationType, ScalarBaseType, ScalarType};
 
-use super::expr::{BinaryFunc, CoercibleScalarExpr, ColumnRef, ScalarExpr, UnaryFunc};
+use super::expr::{BinaryFunc, CoercibleScalarExpr, ColumnRef, HirScalarExpr, UnaryFunc};
 use super::query::{ExprContext, QueryContext};
 use super::scope::Scope;
 
 /// A cast is a function that takes a `ScalarExpr` to another `ScalarExpr`.
-type Cast = Box<dyn FnOnce(ScalarExpr) -> ScalarExpr>;
+type Cast = Box<dyn FnOnce(HirScalarExpr) -> HirScalarExpr>;
 
 /// A cast template is a function that produces a `Cast` given a concrete input
 /// and output type. A template can return `None` to indicate that it is
@@ -50,7 +50,7 @@ impl CastTemplate {
             + Send
             + Sync
             + 'static,
-        C: FnOnce(ScalarExpr) -> ScalarExpr + 'static,
+        C: FnOnce(HirScalarExpr) -> HirScalarExpr + 'static,
     {
         CastTemplate(Box::new(move |ecx, ccx, from_ty, to_ty| {
             t(ecx, ccx, from_ty, to_ty).map(|o| Box::new(o) as Cast)
@@ -62,7 +62,7 @@ impl From<UnaryFunc> for CastTemplate {
     fn from(u: UnaryFunc) -> CastTemplate {
         CastTemplate::new(move |_ecx, _ccx, _from, _to| {
             let u = u.clone();
-            Some(move |expr: ScalarExpr| expr.call_unary(u))
+            Some(move |expr: HirScalarExpr| expr.call_unary(u))
         })
     }
 }
@@ -75,10 +75,10 @@ fn from_jsonb_f64_cast(
     _ccx: CastContext,
     _from_type: &ScalarType,
     to_type: &ScalarType,
-) -> Option<impl FnOnce(ScalarExpr) -> ScalarExpr> {
+) -> Option<impl FnOnce(HirScalarExpr) -> HirScalarExpr> {
     let from_f64_to_cast =
         get_cast(ecx, CastContext::Explicit, &ScalarType::Float64, &to_type).unwrap();
-    Some(|e: ScalarExpr| from_f64_to_cast(e.call_unary(UnaryFunc::CastJsonbToFloat64)))
+    Some(|e: HirScalarExpr| from_f64_to_cast(e.call_unary(UnaryFunc::CastJsonbToFloat64)))
 }
 
 /// Describes the context of a cast.
@@ -139,7 +139,7 @@ lazy_static! {
             (Int32, Float64) => Implicit: CastInt32ToFloat64,
             (Int32, Decimal) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: ScalarExpr| rescale_decimal(e.call_unary(CastInt32ToDecimal), 0, s))
+                Some(move |e: HirScalarExpr| rescale_decimal(e.call_unary(CastInt32ToDecimal), 0, s))
             }),
             (Int32, String) => Assignment: CastInt32ToString,
 
@@ -148,7 +148,7 @@ lazy_static! {
             (Int64, Int32) => Assignment: CastInt64ToInt32,
             (Int64, Decimal) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: ScalarExpr| rescale_decimal(e.call_unary(CastInt64ToDecimal), 0, s))
+                Some(move |e: HirScalarExpr| rescale_decimal(e.call_unary(CastInt64ToDecimal), 0, s))
             }),
             (Int64, Float32) => Implicit: CastInt64ToFloat32,
             (Int64, Float64) => Implicit: CastInt64ToFloat64,
@@ -164,8 +164,8 @@ lazy_static! {
             (Float32, Float64) => Implicit: CastFloat32ToFloat64,
             (Float32, Decimal) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
-                let s = ScalarExpr::literal(Datum::from(i32::from(s)), to_type.clone());
-                Some(|e: ScalarExpr| e.call_binary(s, BinaryFunc::CastFloat32ToDecimal))
+                let s = HirScalarExpr::literal(Datum::from(i32::from(s)), to_type.clone());
+                Some(|e: HirScalarExpr| e.call_binary(s, BinaryFunc::CastFloat32ToDecimal))
             }),
             (Float32, String) => Assignment: CastFloat32ToString,
 
@@ -175,43 +175,43 @@ lazy_static! {
             (Float64, Float32) => Assignment: CastFloat64ToFloat32,
             (Float64, Decimal) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
-                let s = ScalarExpr::literal(Datum::from(i32::from(s)), to_type.clone());
-                Some(|e: ScalarExpr| e.call_binary(s, BinaryFunc::CastFloat64ToDecimal))
+                let s = HirScalarExpr::literal(Datum::from(i32::from(s)), to_type.clone());
+                Some(|e: HirScalarExpr| e.call_binary(s, BinaryFunc::CastFloat64ToDecimal))
             }),
             (Float64, String) => Assignment: CastFloat64ToString,
 
             // DECIMAL
             (Decimal, Int32) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let (_, s) = from_type.unwrap_decimal_parts();
-                Some(move |e: ScalarExpr| e.call_unary(CastDecimalToInt32(s)))
+                Some(move |e: HirScalarExpr| e.call_unary(CastDecimalToInt32(s)))
             }),
             (Decimal, Int64) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let (_, s) = from_type.unwrap_decimal_parts();
-                Some(move |e: ScalarExpr| e.call_unary(CastDecimalToInt64(s)))
+                Some(move |e: HirScalarExpr| e.call_unary(CastDecimalToInt64(s)))
             }),
             (Decimal, Float32) => Implicit: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let (_, s) = from_type.unwrap_decimal_parts();
                 let factor = 10_f32.powi(i32::from(s));
                 let factor =
-                    ScalarExpr::literal(Datum::from(factor), ScalarType::Float32);
-                Some(|e: ScalarExpr| e.call_unary(CastSignificandToFloat32)
+                    HirScalarExpr::literal(Datum::from(factor), ScalarType::Float32);
+                Some(|e: HirScalarExpr| e.call_unary(CastSignificandToFloat32)
                     .call_binary(factor, BinaryFunc::DivFloat32))
             }),
             (Decimal, Float64) => Implicit: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let (_, s) = from_type.unwrap_decimal_parts();
                 let factor = 10_f64.powi(i32::from(s));
-                let factor = ScalarExpr::literal(Datum::from(factor), ScalarType::Float32);
-                Some(|e: ScalarExpr| e.call_unary(CastSignificandToFloat64)
+                let factor = HirScalarExpr::literal(Datum::from(factor), ScalarType::Float32);
+                Some(|e: HirScalarExpr| e.call_unary(CastSignificandToFloat64)
                     .call_binary(factor, BinaryFunc::DivFloat64))
             }),
             (Decimal, Decimal) => Implicit: CastTemplate::new(|_ecx, _ccx, from_type, to_type| {
                 let (_, f) = from_type.unwrap_decimal_parts();
                 let (_, t) = to_type.unwrap_decimal_parts();
-                Some(move |e: ScalarExpr| rescale_decimal(e, f, t))
+                Some(move |e: HirScalarExpr| rescale_decimal(e, f, t))
             }),
             (Decimal, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let (_, s) = from_type.unwrap_decimal_parts();
-                Some(move |e: ScalarExpr| e.call_unary(CastDecimalToString(s)))
+                Some(move |e: HirScalarExpr| e.call_unary(CastDecimalToString(s)))
             }),
 
             // DATE
@@ -249,7 +249,7 @@ lazy_static! {
             (String, Float64) => Explicit: CastStringToFloat64,
             (String, Decimal) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
-                Some(move |e: ScalarExpr| e.call_unary(CastStringToDecimal(s)))
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToDecimal(s)))
             }),
             (String, Date) => Explicit: CastStringToDate,
             (String, Time) => Explicit: CastStringToTime,
@@ -263,7 +263,7 @@ lazy_static! {
                 let return_ty = to_type.clone();
                 let to_el_type = to_type.unwrap_list_element_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_el_type)?;
-                Some(|e: ScalarExpr| e.call_unary(UnaryFunc::CastStringToList {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToList {
                     return_ty,
                     cast_expr: Box::new(cast_expr),
                 }))
@@ -272,7 +272,7 @@ lazy_static! {
                 let return_ty = to_type.clone();
                 let to_val_type = to_type.unwrap_map_value_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_type, to_val_type)?;
-                Some(|e: ScalarExpr| e.call_unary(UnaryFunc::CastStringToMap {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastStringToMap {
                     return_ty,
                     cast_expr: Box::new(cast_expr),
                 }))
@@ -281,26 +281,26 @@ lazy_static! {
             // RECORD
             (Record, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: ScalarExpr| e.call_unary(CastRecordToString { ty }))
+                Some(|e: HirScalarExpr| e.call_unary(CastRecordToString { ty }))
             }),
 
             // ARRAY
             (Array, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: ScalarExpr| e.call_unary(CastArrayToString { ty }))
+                Some(|e: HirScalarExpr| e.call_unary(CastArrayToString { ty }))
             }),
 
             // LIST
             (List, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: ScalarExpr| e.call_unary(CastListToString { ty }))
+                Some(|e: HirScalarExpr| e.call_unary(CastListToString { ty }))
             }),
             (List, List) => Implicit: CastTemplate::new(|ecx, ccx, from_type, to_type| {
                 let return_ty = to_type.clone();
                 let from_el_type = from_type.unwrap_list_element_type();
                 let to_el_type = to_type.unwrap_list_element_type();
                 let cast_expr = plan_hypothetical_cast(ecx, ccx, from_el_type, to_el_type)?;
-                Some(|e: ScalarExpr| e.call_unary(UnaryFunc::CastList1ToList2 {
+                Some(|e: HirScalarExpr| e.call_unary(UnaryFunc::CastList1ToList2 {
                     return_ty,
                     cast_expr: Box::new(cast_expr),
                 }))
@@ -309,7 +309,7 @@ lazy_static! {
             // MAP
             (Map, String) => Assignment: CastTemplate::new(|_ecx, _ccx, from_type, _to_type| {
                 let ty = from_type.clone();
-                Some(|e: ScalarExpr| e.call_unary(CastMapToString { ty }))
+                Some(|e: HirScalarExpr| e.call_unary(CastMapToString { ty }))
             }),
 
             // JSONB
@@ -381,17 +381,19 @@ fn get_cast(
     template.and_then(|template| (template.0)(ecx, ccx, from, to))
 }
 
-pub fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
+pub fn rescale_decimal(expr: HirScalarExpr, s1: u8, s2: u8) -> HirScalarExpr {
     match s1.cmp(&s2) {
         Ordering::Less => {
             let factor = 10_i128.pow(u32::from(s2 - s1));
-            let factor = ScalarExpr::literal(Datum::from(factor), ScalarType::Decimal(38, s2 - s1));
+            let factor =
+                HirScalarExpr::literal(Datum::from(factor), ScalarType::Decimal(38, s2 - s1));
             expr.call_binary(factor, BinaryFunc::MulDecimal)
         }
         Ordering::Equal => expr,
         Ordering::Greater => {
             let factor = 10_i128.pow(u32::from(s1 - s2));
-            let factor = ScalarExpr::literal(Datum::from(factor), ScalarType::Decimal(38, s1 - s2));
+            let factor =
+                HirScalarExpr::literal(Datum::from(factor), ScalarType::Decimal(38, s1 - s2));
             expr.call_binary(factor, BinaryFunc::DivDecimal)
         }
     }
@@ -400,7 +402,7 @@ pub fn rescale_decimal(expr: ScalarExpr, s1: u8, s2: u8) -> ScalarExpr {
 /// Converts an expression to `ScalarType::String`.
 ///
 /// All types are convertible to string, so this never fails.
-pub fn to_string(ecx: &ExprContext, expr: ScalarExpr) -> ScalarExpr {
+pub fn to_string(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
     plan_cast(
         "to_string",
         ecx,
@@ -422,7 +424,7 @@ pub fn to_string(ecx: &ExprContext, expr: ScalarExpr) -> ScalarExpr {
 ///   * Other types are converted to strings by their usual cast function an
 //      become JSON strings.
 ///   * A `Datum::Null` of any type becomes a JSON null.
-pub fn to_jsonb(ecx: &ExprContext, expr: ScalarExpr) -> ScalarExpr {
+pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
     use ScalarType::*;
 
     match ecx.scalar_type(&expr) {
@@ -435,7 +437,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: ScalarExpr) -> ScalarExpr {
         Record { fields, .. } => {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {
-                exprs.push(ScalarExpr::literal(
+                exprs.push(HirScalarExpr::literal(
                     Datum::String(name.as_str()),
                     ScalarType::String,
                 ));
@@ -444,7 +446,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: ScalarExpr) -> ScalarExpr {
                     expr.clone().call_unary(UnaryFunc::RecordGet(i)),
                 ));
             }
-            ScalarExpr::CallVariadic {
+            HirScalarExpr::CallVariadic {
                 func: VariadicFunc::JsonbBuildObject,
                 exprs,
             }
@@ -537,16 +539,16 @@ pub fn plan_coerce<'a>(
     ecx: &'a ExprContext,
     e: CoercibleScalarExpr,
     coerce_to: &ScalarType,
-) -> Result<ScalarExpr, anyhow::Error> {
+) -> Result<HirScalarExpr, anyhow::Error> {
     use CoercibleScalarExpr::*;
 
     Ok(match e {
         Coerced(e) => e,
 
-        LiteralNull => ScalarExpr::literal_null(coerce_to.clone()),
+        LiteralNull => HirScalarExpr::literal_null(coerce_to.clone()),
 
         LiteralString(s) => {
-            let lit = ScalarExpr::literal(Datum::String(&s), ScalarType::String);
+            let lit = HirScalarExpr::literal(Datum::String(&s), ScalarType::String);
             plan_cast("string literal", ecx, CastContext::Explicit, lit, coerce_to)?
         }
 
@@ -564,7 +566,7 @@ pub fn plan_coerce<'a>(
             for (e, coerce_to) in exprs.into_iter().zip(coercions) {
                 out.push(plan_coerce(ecx, e, &coerce_to)?);
             }
-            ScalarExpr::CallVariadic {
+            HirScalarExpr::CallVariadic {
                 func: VariadicFunc::RecordCreate {
                     field_names: (0..arity)
                         .map(|i| ColumnName::from(format!("f{}", i + 1)))
@@ -577,7 +579,7 @@ pub fn plan_coerce<'a>(
         Parameter(n) => {
             let prev = ecx.param_types().borrow_mut().insert(n, coerce_to.clone());
             assert!(prev.is_none());
-            ScalarExpr::Parameter(n)
+            HirScalarExpr::Parameter(n)
         }
     })
 }
@@ -593,7 +595,7 @@ fn plan_hypothetical_cast(
     ccx: CastContext,
     from: &ScalarType,
     to: &ScalarType,
-) -> Option<::expr::ScalarExpr> {
+) -> Option<::expr::MirScalarExpr> {
     // Reconstruct an expression context where the expression is evaluated on
     // the "first column" of some imaginary row.
     let mut scx = ecx.qcx.scx.clone();
@@ -615,7 +617,7 @@ fn plan_hypothetical_cast(
         allow_subqueries: true,
     };
 
-    let col_expr = ScalarExpr::Column(ColumnRef {
+    let col_expr = HirScalarExpr::Column(ColumnRef {
         level: 0,
         column: 0,
     });
@@ -646,9 +648,9 @@ pub fn plan_cast<D>(
     caller_name: D,
     ecx: &ExprContext,
     ccx: CastContext,
-    expr: ScalarExpr,
+    expr: HirScalarExpr,
     cast_to: &ScalarType,
-) -> Result<ScalarExpr, anyhow::Error>
+) -> Result<HirScalarExpr, anyhow::Error>
 where
     D: fmt::Display,
 {

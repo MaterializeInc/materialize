@@ -14,20 +14,20 @@ use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::*;
-use expr::RelationExpr;
+use expr::MirRelationExpr;
 use repr::{Row, RowArena};
 
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
 
-impl<G, T> Context<G, RelationExpr, Row, T>
+impl<G, T> Context<G, MirRelationExpr, Row, T>
 where
     G: Scope,
     G::Timestamp: Lattice + Refines<T>,
     T: Timestamp + Lattice,
 {
-    pub fn render_arrangeby(&mut self, relation_expr: &RelationExpr, id: Option<&str>) {
-        if let RelationExpr::ArrangeBy { input, keys } = relation_expr {
+    pub fn render_arrangeby(&mut self, relation_expr: &MirRelationExpr, id: Option<&str>) {
+        if let MirRelationExpr::ArrangeBy { input, keys } = relation_expr {
             if keys.is_empty() {
                 let collection = self.collection(input).unwrap();
                 self.collections.insert(relation_expr.clone(), collection);

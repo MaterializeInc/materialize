@@ -17,7 +17,7 @@ use std::time::SystemTime;
 use std::{error::Error, unimplemented};
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use expr::{DummyHumanizer, ExprHumanizer, GlobalId, ScalarExpr};
+use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
@@ -202,7 +202,7 @@ pub trait CatalogItem {
 
     /// Returns the index details associated with the catalog item, if the
     /// catalog item is an index.
-    fn index_details(&self) -> Option<(&[ScalarExpr], GlobalId)>;
+    fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)>;
 
     /// Returns the column defaults associated with the catalog item, if the
     /// catalog item is a table.

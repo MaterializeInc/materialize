@@ -991,11 +991,7 @@ pub fn plan_create_index(
         on_name,
         key_parts,
         if_not_exists,
-        temporary,
     } = &mut stmt;
-    if *temporary {
-        unsupported!("CREATE TEMPORARY INDEX")
-    }
     let on = scx.resolve_item(on_name.clone())?;
 
     if CatalogItemType::View != on.item_type()
@@ -1047,7 +1043,7 @@ pub fn plan_create_index(
             let index_name_col_suffix = keys
                 .iter()
                 .map(|k| match k {
-                    expr::ScalarExpr::Column(i) => match on_desc.get_unambiguous_name(*i) {
+                    expr::MirScalarExpr::Column(i) => match on_desc.get_unambiguous_name(*i) {
                         Some(col_name) => col_name.to_string(),
                         None => format!("{}", i + 1),
                     },

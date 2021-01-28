@@ -83,7 +83,6 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                     on_name: _,
                     key_parts,
                     if_not_exists: _,
-                    temporary: _,
                 }) => {
                     if let Some(key_parts) = key_parts {
                         for key_part in key_parts {

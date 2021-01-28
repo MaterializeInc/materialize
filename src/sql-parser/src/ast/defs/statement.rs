@@ -543,7 +543,6 @@ pub struct CreateIndexStatement<T: AstInfo> {
     /// key_parts will be inferred from the named object.
     pub key_parts: Option<Vec<Expr<T>>>,
     pub if_not_exists: bool,
-    pub temporary: bool,
 }
 
 impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
@@ -1404,11 +1403,11 @@ impl_display_t!(Assignment);
 /// Specifies what [Statement::Explain] is actually explaining
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExplainStage {
-    /// The sql::RelationExpr after parsing
+    /// The sql::HirRelationExpr after parsing
     RawPlan,
-    /// The expr::RelationExpr after decorrelation
+    /// The expr::MirRelationExpr after decorrelation
     DecorrelatedPlan,
-    /// The expr::RelationExpr after optimization
+    /// The expr::MirRelationExpr after optimization
     OptimizedPlan,
 }
 

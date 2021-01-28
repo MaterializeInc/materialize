@@ -24,9 +24,9 @@
 
 use std::collections::HashMap;
 
-use expr::{Id, JoinInputMapper};
+use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
-use crate::{RelationExpr, ScalarExpr, TransformArgs};
+use crate::TransformArgs;
 
 /// Remove redundant collections of distinct elements from joins.
 #[derive(Debug)]
@@ -35,7 +35,7 @@ pub struct RedundantJoin;
 impl crate::Transform for RedundantJoin {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         self.action(relation, &mut HashMap::new());
@@ -53,17 +53,17 @@ impl RedundantJoin {
     /// records of the one collection are contained in the records of the
     /// identified collection.
     ///
-    /// This provenance information is then used for the `RelationExpr::Join`
+    /// This provenance information is then used for the `MirRelationExpr::Join`
     /// variant to remove "redundant" joins, those that can be determined to
     /// neither restrict nor augment one of the input relations. Consult the
     /// `find_redundancy` method and its documentation for more detail.
     pub fn action(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         lets: &mut HashMap<Id, Vec<ProvInfo>>,
     ) -> Vec<ProvInfo> {
         match relation {
-            RelationExpr::Let { id, value, body } => {
+            MirRelationExpr::Let { id, value, body } => {
                 // Recursively determine provenance of the value.
                 let value_prov = self.action(value, lets);
                 let old = lets.insert(Id::Local(*id), value_prov);
@@ -75,7 +75,7 @@ impl RedundantJoin {
                 }
                 result
             }
-            RelationExpr::Get { id, typ } => {
+            MirRelationExpr::Get { id, typ } => {
                 // Extract the value provenance, or an empty list if unavailable.
                 let mut val_info = lets.get(id).cloned().unwrap_or_default();
                 // Add information about being exactly this let binding too.
@@ -87,7 +87,7 @@ impl RedundantJoin {
                 val_info
             }
 
-            RelationExpr::Join {
+            MirRelationExpr::Join {
                 inputs,
                 equivalences,
                 demand,
@@ -197,7 +197,7 @@ impl RedundantJoin {
                 }
             }
 
-            RelationExpr::Filter { input, .. } => {
+            MirRelationExpr::Filter { input, .. } => {
                 // Filter may drop records, and so we unset `exact`.
                 let mut result = self.action(input, lets);
                 for prov in result.iter_mut() {
@@ -206,9 +206,9 @@ impl RedundantJoin {
                 result
             }
 
-            RelationExpr::Map { input, .. } => self.action(input, lets),
+            MirRelationExpr::Map { input, .. } => self.action(input, lets),
 
-            RelationExpr::Union { base, inputs } => {
+            MirRelationExpr::Union { base, inputs } => {
                 let mut prov = self.action(base, lets);
                 for input in inputs {
                     let input_prov = self.action(input, lets);
@@ -225,9 +225,9 @@ impl RedundantJoin {
                 prov
             }
 
-            RelationExpr::Constant { .. } => Vec::new(),
+            MirRelationExpr::Constant { .. } => Vec::new(),
 
-            RelationExpr::Reduce {
+            MirRelationExpr::Reduce {
                 input, group_key, ..
             } => {
                 // Reduce yields its first few columns as a key, and produces
@@ -239,7 +239,7 @@ impl RedundantJoin {
                         .iter()
                         .enumerate()
                         .filter_map(|(i, e)| {
-                            if let ScalarExpr::Column(c) = e {
+                            if let MirScalarExpr::Column(c) = e {
                                 Some((i, c))
                             } else {
                                 None
@@ -263,7 +263,7 @@ impl RedundantJoin {
                 result
             }
 
-            RelationExpr::Threshold { input } => {
+            MirRelationExpr::Threshold { input } => {
                 // Threshold may drop records, and so we unset `exact`.
                 let mut result = self.action(input, lets);
                 for prov in result.iter_mut() {
@@ -272,7 +272,7 @@ impl RedundantJoin {
                 result
             }
 
-            RelationExpr::TopK { input, .. } => {
+            MirRelationExpr::TopK { input, .. } => {
                 // TopK may drop records, and so we unset `exact`.
                 let mut result = self.action(input, lets);
                 for prov in result.iter_mut() {
@@ -281,7 +281,7 @@ impl RedundantJoin {
                 result
             }
 
-            RelationExpr::Project { input, outputs } => {
+            MirRelationExpr::Project { input, outputs } => {
                 // Projections re-order, drop, and duplicate columns,
                 // but they neither drop rows nor invent values.
                 let mut result = self.action(input, lets);
@@ -303,7 +303,7 @@ impl RedundantJoin {
                 result
             }
 
-            RelationExpr::FlatMap { input, .. } => {
+            MirRelationExpr::FlatMap { input, .. } => {
                 // FlatMap may drop records, and so we unset `exact`.
                 let mut result = self.action(input, lets);
                 for prov in result.iter_mut() {
@@ -312,7 +312,7 @@ impl RedundantJoin {
                 result
             }
 
-            RelationExpr::Negate { input } => {
+            MirRelationExpr::Negate { input } => {
                 // Negate does not guarantee that the multiplicity of
                 // each source record it at least one. This could have
                 // been a problem in `Union`, where we might report
@@ -325,7 +325,7 @@ impl RedundantJoin {
                 result
             }
 
-            RelationExpr::ArrangeBy { input, .. } => self.action(input, lets),
+            MirRelationExpr::ArrangeBy { input, .. } => self.action(input, lets),
         }
     }
 }
@@ -391,7 +391,7 @@ fn find_redundancy(
     input: usize,
     keys: &[Vec<usize>],
     input_mapper: &JoinInputMapper,
-    equivalences: &[Vec<ScalarExpr>],
+    equivalences: &[Vec<MirScalarExpr>],
     input_prov: &[Vec<ProvInfo>],
 ) -> Option<Vec<usize>> {
     for provenance in input_prov[input].iter() {
@@ -411,20 +411,21 @@ fn find_redundancy(
                     }
 
                     // True iff `col = binding[col]` is in `equivalences` for all `col` in `cols`.
-                    let all_columns_equated = |cols: &Vec<usize>| {
-                        cols.iter().all(|input_col| {
-                            let other_col = bindings[&input_col];
-                            equivalences.iter().any(|e| {
-                                e.contains(
-                                    &input_mapper
-                                        .map_expr_to_global(ScalarExpr::Column(*input_col), input),
-                                ) && e.contains(
-                                    &input_mapper
-                                        .map_expr_to_global(ScalarExpr::Column(other_col), other),
-                                )
+                    let all_columns_equated =
+                        |cols: &Vec<usize>| {
+                            cols.iter().all(|input_col| {
+                                let other_col = bindings[&input_col];
+                                equivalences.iter().any(|e| {
+                                    e.contains(&input_mapper.map_expr_to_global(
+                                        MirScalarExpr::Column(*input_col),
+                                        input,
+                                    )) && e.contains(&input_mapper.map_expr_to_global(
+                                        MirScalarExpr::Column(other_col),
+                                        other,
+                                    ))
+                                })
                             })
-                        })
-                    };
+                        };
 
                     // If all columns of `input` are bound, and any key columns of `input` are equated,
                     // the binding can be returned as mapping replacements for each input column.

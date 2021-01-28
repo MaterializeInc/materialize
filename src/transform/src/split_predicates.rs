@@ -10,7 +10,7 @@
 //! Transforms predicates of the form "A and B" into two: "A" and "B".
 
 use crate::TransformArgs;
-use expr::{BinaryFunc, RelationExpr, ScalarExpr};
+use expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
 
 /// Transforms predicates of the form "A and B" into two: "A" and "B".
 #[derive(Debug)]
@@ -20,14 +20,14 @@ impl crate::Transform for SplitPredicates {
     /// Transforms predicates of the form "A and B" into two: "A" and "B".
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |expr| {
-            if let RelationExpr::Filter { predicates, .. } = expr {
+            if let MirRelationExpr::Filter { predicates, .. } = expr {
                 let mut pending_predicates = predicates.drain(..).collect::<Vec<_>>();
                 while let Some(expr) = pending_predicates.pop() {
-                    if let ScalarExpr::CallBinary {
+                    if let MirScalarExpr::CallBinary {
                         func: BinaryFunc::And,
                         expr1,
                         expr2,

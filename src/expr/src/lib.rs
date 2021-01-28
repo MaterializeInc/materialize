@@ -30,39 +30,39 @@ pub use relation::func::{AggregateFunc, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
-    compare_columns, AggregateExpr, ColumnOrder, IdGen, JoinImplementation, RelationExpr,
+    compare_columns, AggregateExpr, ColumnOrder, IdGen, JoinImplementation, MirRelationExpr,
     RowSetFinishing,
 };
 pub use scalar::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
-pub use scalar::{like_pattern, EvalError, ScalarExpr};
+pub use scalar::{like_pattern, EvalError, MirScalarExpr};
 
-/// A [`RelationExpr`] that claims to have been optimized, e.g., by an
+/// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
 /// [`Optimizer`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct OptimizedRelationExpr(pub RelationExpr);
+pub struct OptimizedMirRelationExpr(pub MirRelationExpr);
 
-impl OptimizedRelationExpr {
+impl OptimizedMirRelationExpr {
     /// Declare that the input `expr` is optimized, without actually running it
     /// through an optimizer. This can be useful to mark as optimized literal
-    /// `RelationExpr`s that are obviously optimal, without invoking the whole
+    /// `MirRelationExpr`s that are obviously optimal, without invoking the whole
     /// machinery of the optimizer.
-    pub fn declare_optimized(expr: RelationExpr) -> OptimizedRelationExpr {
-        OptimizedRelationExpr(expr)
+    pub fn declare_optimized(expr: MirRelationExpr) -> OptimizedMirRelationExpr {
+        OptimizedMirRelationExpr(expr)
     }
 
-    pub fn into_inner(self) -> RelationExpr {
+    pub fn into_inner(self) -> MirRelationExpr {
         self.0
     }
 }
 
-impl AsRef<RelationExpr> for OptimizedRelationExpr {
-    fn as_ref(&self) -> &RelationExpr {
+impl AsRef<MirRelationExpr> for OptimizedMirRelationExpr {
+    fn as_ref(&self) -> &MirRelationExpr {
         &self.0
     }
 }
 
-impl AsMut<RelationExpr> for OptimizedRelationExpr {
-    fn as_mut(&mut self) -> &mut RelationExpr {
+impl AsMut<MirRelationExpr> for OptimizedMirRelationExpr {
+    fn as_mut(&mut self) -> &mut MirRelationExpr {
         &mut self.0
     }
 }
