@@ -125,3 +125,15 @@ mzworkflows:
       service: producer
     - step: run
       service: create-views
+
+  restart-materialized:
+    env:
+      MZ_PORT: 6875
+    steps:
+    - step: remove-services
+      services: [materialized]
+      destroy_volumes: true
+    - step: start-services
+      services: [materialized]
+    - step: run
+      service: create-views

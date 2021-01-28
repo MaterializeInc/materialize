@@ -553,6 +553,38 @@ class RestartServicesStep(WorkflowStep):
             raise errors.Failed(f"ERROR: services didn't restart cleanly: {services}")
 
 
+@Steps.register("remove-services")
+class RemoveServicesStep(WorkflowStep):
+    """
+    Params:
+      services: List of service names
+      volumes: Boolean to indicate if the volumes should be removed as well
+    """
+
+    def __init__(
+        self, *, services: Optional[List[str]] = None, destroy_volumes: bool = False
+    ) -> None:
+        self._services = services if services is not None else []
+        self._destroy_volumes = destroy_volumes
+        if not isinstance(self._services, list):
+            raise errors.BadSpec(f"services should be a list, got: {self._services}")
+
+    def run(self, workflow: Workflow) -> None:
+        try:
+            workflow.run_compose(
+                [
+                    "rm",
+                    "-f",
+                    "-s",
+                    *(["-v"] if self._destroy_volumes else []),
+                    *self._services,
+                ]
+            )
+        except subprocess.CalledProcessError:
+            services = ", ".join(self._services)
+            raise errors.Failed(f"ERROR: services didn't restart cleanly: {services}")
+
+
 @Steps.register("stop-services")
 class StopServicesStep(WorkflowStep):
     """
