@@ -323,6 +323,11 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_item(&name)?)
     }
 
+    pub fn resolve_function(&self, name: ObjectName) -> Result<&dyn CatalogItem, PlanError> {
+        let name = normalize::object_name(name)?;
+        Ok(self.catalog.resolve_function(&name)?)
+    }
+
     pub fn experimental_mode(&self) -> bool {
         self.catalog.config().experimental_mode
     }

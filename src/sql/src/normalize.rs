@@ -113,6 +113,15 @@ pub fn create_statement(
         Ok(unresolve(item.name().clone()))
     };
 
+    fn normalize_function_name(
+        scx: &StatementContext,
+        name: &mut ObjectName,
+    ) -> Result<(), PlanError> {
+        let full_name = scx.resolve_function(name.clone())?;
+        *name = unresolve(full_name.name().clone());
+        Ok(())
+    };
+
     struct QueryNormalizer<'a> {
         scx: &'a StatementContext<'a>,
         ctes: Vec<Ident>,
@@ -140,7 +149,10 @@ pub fn create_statement(
         }
 
         fn visit_function_mut(&mut self, func: &'ast mut Function<Raw>) {
-            self.visit_object_name_mut(&mut func.name);
+            if let Err(e) = normalize_function_name(self.scx, &mut func.name) {
+                self.err = Some(e);
+                return;
+            }
 
             match &mut func.args {
                 FunctionArgs::Star => (),
@@ -163,8 +175,16 @@ pub fn create_statement(
                         self.visit_table_alias_mut(alias);
                     }
                 }
-                TableFactor::Function { name, args, alias } => {
-                    self.visit_object_name_mut(name);
+                TableFactor::Function {
+                    ref mut name,
+                    args,
+                    alias,
+                } => {
+                    if let Err(e) = normalize_function_name(self.scx, name) {
+                        self.err = Some(e);
+                        return;
+                    }
+
                     match args {
                         FunctionArgs::Star => (),
                         FunctionArgs::Args(args) => {

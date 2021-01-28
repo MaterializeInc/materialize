@@ -2468,7 +2468,7 @@ pub fn resolve_func(
     name: &ObjectName,
     args: &sql_parser::ast::FunctionArgs<Raw>,
 ) -> Result<&'static Func, anyhow::Error> {
-    if let Ok(i) = ecx.qcx.scx.resolve_item(name.clone()) {
+    if let Ok(i) = ecx.qcx.scx.resolve_function(name.clone()) {
         if let Ok(f) = i.func() {
             return Ok(f);
         }
@@ -2824,7 +2824,7 @@ impl<'a, 'ast> AggregateFuncVisitor<'a, 'ast> {
 
 impl<'a, 'ast> Visit<'ast, Raw> for AggregateFuncVisitor<'a, 'ast> {
     fn visit_function(&mut self, func: &'ast Function<Raw>) {
-        let item = match self.scx.resolve_item(func.name.clone()) {
+        let item = match self.scx.resolve_function(func.name.clone()) {
             Ok(i) => i,
             // Catching missing functions later in planning improves error messages.
             Err(_) => return,
