@@ -1327,10 +1327,15 @@ impl<'a> Parser<'a> {
                 self.prev_token();
                 self.prev_token();
                 self.parse_create_view()
+            } else if self.parse_keyword(MATERIALIZED) && self.parse_keyword(VIEW) {
+                self.prev_token();
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_view()
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "VIEW after CREATE TEMPORARY",
+                    "VIEW or MATERIALIZED VIEW after CREATE TEMPORARY",
                     self.peek_token(),
                 )
             }

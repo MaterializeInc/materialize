@@ -25,9 +25,9 @@ create_index ::=
         | 'DEFAULT INDEX ON' obj_name
     )
 create_materialized_view ::=
-  'CREATE' 'MATERIALIZED VIEW' view_name 'AS' select_stmt |
-  'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
-  'CREATE' 'OR REPLACE' 'MATERIALIZED VIEW' view_name 'AS' select_stmt
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name 'AS' select_stmt |
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
+  'CREATE' 'OR REPLACE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name 'AS' select_stmt
 create_role ::=
     'CREATE' 'ROLE' role_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
 create_schema ::=
