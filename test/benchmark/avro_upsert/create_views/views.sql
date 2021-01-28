@@ -14,7 +14,7 @@ FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
 ENVELOPE UPSERT
 FORMAT TEXT;
 
-CREATE MATERIALIZED VIEW upsertavrotest AS SELECT
+CREATE VIEW upsertavrotest AS SELECT
     -- cast("BookId" AS bigint) AS "BookId",
     -- cast("SecurityId" AS bigint) AS "SecurityId",
     -- cast("TradingBookId" AS int) AS "TradingBookId",
@@ -25,3 +25,5 @@ CREATE MATERIALIZED VIEW upsertavrotest AS SELECT
     (("Exposure")."Target"."Long"."Exposure")::float AS "TargetLongExposure", -- converting long to float
     (("Exposure")."Target"."Short"."Exposure")::float AS "TargetShortExposure" -- converting long to float
 FROM source_upsertavrotest;
+
+CREATE INDEX upsertavrotest_index ON upsertavrotest(BookId, SecurityId);
