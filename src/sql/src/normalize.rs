@@ -290,7 +290,6 @@ pub fn create_statement(
             on_name,
             key_parts,
             if_not_exists,
-            temporary: _,
         }) => {
             *on_name = resolve_item(on_name)?;
             let mut normalizer = QueryNormalizer::new(scx);
