@@ -82,10 +82,8 @@ The `TEMP`/`TEMPORARY` keyword creates a temporary view. Temporary views are
 automatically dropped at the end of the SQL session and are not visible to other
 connections. They are always created in the special `mz_temp` schema.
 
-Temporary views may depend upon other temporary views, but non-temporary views
-may not depend on a temporary view.
-
-Materialize does not yet support creating indexes on temporary views.
+Temporary views may depend upon other temporary database objects, but non-temporary
+views may not depend on temporary objects.
 
 ## Examples
 
