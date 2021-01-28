@@ -50,7 +50,7 @@ struct Args {
     /// Named AWS region to target for AWS API requests.
     #[structopt(long, default_value = "localstack")]
     aws_region: String,
-    /// Custom AWS endpoint.
+    /// Custom AWS endpoint
     #[structopt(long)]
     aws_endpoint: Option<String>,
 
@@ -109,7 +109,7 @@ async fn run(args: Args) -> Result<(), Error> {
             endpoint: args
                 .aws_endpoint
                 .and_then(|e| if e == "" { None } else { Some(e) })
-                .unwrap_or_else(|| "http://localhost:4566".into()),
+                .ok_or_else(|| "An endpoint must be provided for custom regions".to_string())?,
         };
         let account = "000000000000";
         let credentials =

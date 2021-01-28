@@ -169,6 +169,12 @@ impl From<InputError> for Error {
     }
 }
 
+impl From<String> for Error {
+    fn from(err: String) -> Error {
+        Error::message(err)
+    }
+}
+
 fn make_snippet(contents: &str, line_num: usize) -> String {
     let mut buf = String::new();
     writeln!(&mut buf, "     |").unwrap();
