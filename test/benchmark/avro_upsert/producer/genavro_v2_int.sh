@@ -1,18 +1,23 @@
 #! /bin/bash
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
 
 # Generates about 3M unique values with 100 + 32000 (for bookId plus SecurityId)
-# Average of 25K rows/sec output
-# bin/kafka-avro-console-producer --property key.serializer=org.apache.kafka.common.serialization.StringSerializer     --broker-list compute2:9092 --property schema.registry.url=http://compute2:8081    --topic upsertavrotest3   --property parse.key=true --property key.schema='{"type" : "string"}' --property "key.separator=:"     --property value.schema='{"name": "upsertavrotest", "type": "record", "namespace": "com.acme.avro", "fields": [{"name": "BookId", "type": "long"}, {"name": "SecurityId", "type": "long"}, {"name": "Exposure", "type": {"name": "Exposure", "type": "record", "fields": [{"name": "Current", "type": {"name": "Current", "type": "record", "fields": [{"name": "Long2", "type": {"name": "Long2", "type": "record", "fields": [{"name": "Exposure", "type": "string"} ] } }, {"name": "Short2", "type": {"name": "Short2", "type": "record", "fields": [{"name": "Exposure", "type": "string"} ] } } ] } }, {"name": "Target", "type": {"name": "Target", "type": "record", "fields": [{"name": "Long", "type": {"name": "Long", "type": "record", "fields": [{"name": "Exposure", "type": "string"} ] } }, {"name": "Short", "type": {"name": "Short", "type": "record", "fields": [{"name": "Exposure", "type": "string"} ] } } ] } } ] } } ] }'
 
-
-for i in {1..10000000} ## 10M rows
+for _ in {1..1000000000} ## 1B rows
 do
-bookID=$((1+$RANDOM % 100))
-SecurityID=$((1+$RANDOM % 32000))
-Exposure1=$((SecurityID+bookID+100000+$RANDOM))
-Exposure2=$((Exposure1+$RANDOM))
-Exposure3=$((Exposure1+$RANDOM))
-Exposure4=$((Exposure1+$RANDOM))
+bookID=$((1+RANDOM % 100))
+SecurityID=$((1+RANDOM % 32000))
+Exposure1=$((SecurityID+bookID+100000+RANDOM))
+Exposure2=$((Exposure1+RANDOM))
+Exposure3=$((Exposure1+RANDOM))
+Exposure4=$((Exposure1+RANDOM))
 #bookID=`shuf -i 1-9 -n 1 --random-source=/dev/urandom`
 #SecurityID=$((bookID+1000))
 #SecurityID=`shuf -i 1-1000 -n 1 --random-source=/dev/urandom`
