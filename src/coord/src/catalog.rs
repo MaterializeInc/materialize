@@ -28,7 +28,9 @@ use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
-use sql::catalog::{Catalog as SqlCatalog, CatalogError as SqlCatalogError};
+use sql::catalog::{
+    Catalog as SqlCatalog, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+};
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
@@ -225,14 +227,14 @@ impl From<sql::plan::TypeInner> for TypeInner {
 
 impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
-    pub fn type_string(&self) -> &'static str {
+    fn typ(&self) -> sql::catalog::CatalogItemType {
         match self {
-            CatalogItem::Table(_) => "table",
-            CatalogItem::Source(_) => "source",
-            CatalogItem::Sink(_) => "sink",
-            CatalogItem::View(_) => "view",
-            CatalogItem::Index(_) => "index",
-            CatalogItem::Type(_) => "type",
+            CatalogItem::Table(_) => sql::catalog::CatalogItemType::Table,
+            CatalogItem::Source(_) => sql::catalog::CatalogItemType::Source,
+            CatalogItem::Sink(_) => sql::catalog::CatalogItemType::Sink,
+            CatalogItem::View(_) => sql::catalog::CatalogItemType::View,
+            CatalogItem::Index(_) => sql::catalog::CatalogItemType::Index,
+            CatalogItem::Type(_) => sql::catalog::CatalogItemType::Type,
         }
     }
 
@@ -240,10 +242,13 @@ impl CatalogItem {
         match &self {
             CatalogItem::Table(tbl) => Ok(&tbl.desc),
             CatalogItem::Source(src) => Ok(&src.desc),
-            CatalogItem::Sink(_) => Err(SqlCatalogError::InvalidSinkDependency(name.to_string())),
             CatalogItem::View(view) => Ok(&view.desc),
-            CatalogItem::Index(_) => Err(SqlCatalogError::InvalidIndexDependency(name.to_string())),
-            CatalogItem::Type(_) => Err(SqlCatalogError::InvalidTypeDependency(name.to_string())),
+            CatalogItem::Index(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => {
+                Err(SqlCatalogError::InvalidDependency {
+                    name: name.to_string(),
+                    typ: self.typ(),
+                })
+            }
         }
     }
 
@@ -887,7 +892,7 @@ impl Catalog {
         item: CatalogItem,
     ) -> Event {
         if !item.is_placeholder() {
-            info!("create {} {} ({})", item.type_string(), name, id);
+            info!("create {} {} ({})", item.typ(), name, id);
         }
 
         let entry = CatalogEntry {
@@ -1342,12 +1347,7 @@ impl Catalog {
                 Action::DropItem(id) => {
                     let metadata = self.by_id.remove(&id).unwrap();
                     if !metadata.item.is_placeholder() {
-                        info!(
-                            "drop {} {} ({})",
-                            metadata.item.type_string(),
-                            metadata.name,
-                            id
-                        );
+                        info!("drop {} {} ({})", metadata.item_type(), metadata.name, id);
                     }
                     for u in metadata.uses() {
                         if let Some(dep_metadata) = self.by_id.get_mut(&u) {
@@ -1402,12 +1402,7 @@ impl Catalog {
                     item,
                 } => {
                     let mut entry = self.by_id.remove(&id).unwrap();
-                    info!(
-                        "update {} {} ({})",
-                        entry.item.type_string(),
-                        entry.name,
-                        id
-                    );
+                    info!("update {} {} ({})", entry.item_type(), entry.name, id);
                     assert_eq!(entry.uses(), item.uses());
                     let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
                     let schema = &mut self
@@ -2036,14 +2031,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
     }
 
     fn item_type(&self) -> sql::catalog::CatalogItemType {
-        match self.item() {
-            CatalogItem::Table(_) => sql::catalog::CatalogItemType::Table,
-            CatalogItem::Source(_) => sql::catalog::CatalogItemType::Source,
-            CatalogItem::Sink(_) => sql::catalog::CatalogItemType::Sink,
-            CatalogItem::View(_) => sql::catalog::CatalogItemType::View,
-            CatalogItem::Index(_) => sql::catalog::CatalogItemType::Index,
-            CatalogItem::Type(_) => sql::catalog::CatalogItemType::Type,
-        }
+        self.item().typ()
     }
 
     fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)> {

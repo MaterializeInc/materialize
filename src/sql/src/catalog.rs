@@ -248,12 +248,13 @@ pub enum CatalogError {
     UnknownSchema(String),
     /// Unknown item.
     UnknownItem(String),
-    /// Invalid attempt to depend on a sink.
-    InvalidSinkDependency(String),
-    /// Invalid attempt to depend on an index.
-    InvalidIndexDependency(String),
-    /// Invalid attempt to depend on a type.
-    InvalidTypeDependency(String),
+    /// Invalid attempt to depend on a non-dependable item.
+    InvalidDependency {
+        /// The invalid item's name.
+        name: String,
+        /// The invalid item's type.
+        typ: CatalogItemType,
+    },
 }
 
 impl fmt::Display for CatalogError {
@@ -262,20 +263,16 @@ impl fmt::Display for CatalogError {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
-            Self::InvalidSinkDependency(name) => write!(
+            Self::InvalidDependency { name, typ } => write!(
                 f,
-                "catalog item '{}' is a sink and so cannot be depended upon",
-                name
-            ),
-            Self::InvalidIndexDependency(name) => write!(
-                f,
-                "catalog item '{}' is an index and so cannot be depended upon",
-                name
-            ),
-            Self::InvalidTypeDependency(name) => write!(
-                f,
-                "catalog item '{}' is a type and so cannot be depended upon",
-                name
+                "catalog item '{}' is {} {} and so cannot be depended upon",
+                name,
+                if matches!(typ, CatalogItemType::Index) {
+                    "an"
+                } else {
+                    "a"
+                },
+                typ,
             ),
         }
     }
