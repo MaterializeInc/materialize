@@ -25,3 +25,5 @@ CREATE MATERIALIZED VIEW upsertavrotest AS SELECT
     (("Exposure")."Target"."Long"."Exposure")::float AS "TargetLongExposure", -- converting long to float
     (("Exposure")."Target"."Short"."Exposure")::float AS "TargetShortExposure" -- converting long to float
 FROM source_upsertavrotest;
+
+CREATE INDEX upsertavrotest_index ON upsertavrotest(BookId, SecurityId);
