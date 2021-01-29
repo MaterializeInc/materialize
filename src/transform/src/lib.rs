@@ -298,4 +298,32 @@ impl Optimizer {
         ];
         Self { transforms }
     }
+
+    /// Transformations sufficient to ensure the expression can be rendered.
+    ///
+    /// This primarily includes join implemenation strategy, but may also include
+    /// transformations in preparation for rendering which map be counter-productive
+    /// for or fight with logical optimization.
+    pub fn implementation() -> Self {
+        // Implementation transformations
+        let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
+            Box::new(crate::Fixpoint {
+                limit: 100,
+                transforms: vec![
+                    Box::new(crate::projection_lifting::ProjectionLifting),
+                    Box::new(crate::join_implementation::JoinImplementation),
+                    Box::new(crate::fusion::filter::Filter),
+                    Box::new(crate::demand::Demand),
+                    Box::new(crate::map_lifting::LiteralLifting),
+                ],
+            }),
+            Box::new(crate::reduction_pushdown::ReductionPushdown),
+            Box::new(crate::cse::map::Map),
+            Box::new(crate::projection_lifting::ProjectionLifting),
+            Box::new(crate::join_implementation::JoinImplementation),
+            Box::new(crate::fusion::project::Project),
+            Box::new(crate::reduction::FoldConstants),
+        ];
+        Self { transforms }
+    }
 }

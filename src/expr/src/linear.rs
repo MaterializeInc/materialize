@@ -1012,4 +1012,37 @@ impl MapFilterProject {
             }))
             .project(projection.into_iter().map(|c| remap[&c]));
     }
+
+    /// Extract common work from multiple operators.
+    ///
+    /// This method identifies common logic in each element of `operators`,
+    /// extracts the commonality to its output, and updates the elements of
+    /// operators correspondingly.
+    ///
+    /// Rather than apply each operator to a common input, the output of this
+    /// method can be applied to the input and each updated operator can then
+    /// be applied to the updated input.
+    ///
+    /// The easiest case is when `operators` has a single element, in which
+    /// case the operator can simply be moved to the output. When there are
+    /// multiple inputs, the reasoning about commonality can be complicated,
+    /// and may evolve as we learn more about the trade-offs. For example,
+    /// it may make sense to push down the *union* of map expressions, if it
+    /// allows us to project away a large column (e.g. a JSON blob of which
+    /// we need only a few members).
+    pub fn intersect(operators: &mut [Self]) -> Self {
+        // Quick sanity checks to make sure we aren't mis-applying the logic.
+        assert!(!operators.is_empty());
+        assert!(operators
+            .iter()
+            .all(|o| o.input_arity == operators[0].input_arity));
+        // If a singleton operator, all of it can be pushed down followed by
+        // a no-op identity operator in its place.
+        if operators.len() == 1 {
+            let output_arity = operators[0].projection.len();
+            std::mem::replace(&mut operators[0], Self::new(output_arity))
+        } else {
+            Self::new(operators[0].input_arity)
+        }
+    }
 }

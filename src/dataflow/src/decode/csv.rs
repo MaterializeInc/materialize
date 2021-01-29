@@ -13,12 +13,13 @@ use expr::MapFilterProject;
 
 use log::error;
 
-use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
 use dataflow_types::DataflowError;
 use repr::{Datum, Diff, Row, RowArena, Timestamp};
 
+use crate::operator::StreamExt;
+use crate::render::datum_vec::DatumVec;
 use crate::{metrics::EVENTS_COUNTER, source::SourceOutput};
 
 pub fn csv<G>(
@@ -36,16 +37,27 @@ where
 {
     // Delimiters must be single-byte utf8 to safely treat all matched fields as valid utf8.
     assert!(delimiter.is_ascii());
+
     // Take ownership of MFP and leave behind the identity operators.
-    let map_filter_project = std::mem::replace(
+    let mut map_filter_project = std::mem::replace(
         map_filter_project,
         MapFilterProject::new(map_filter_project.input_arity),
     );
+    // Determine demanded columns, so that we only populate references to these.
+    // For simplicity, we will append in `line_no` unconditionally.
+    let mut demand: Vec<usize> = map_filter_project.demand().into_iter().collect::<Vec<_>>();
+    demand.sort();
+    // Drop any reference to the demanded line number if it exists.
+    demand.retain(|x| x < &n_cols);
+    let mut remap = std::collections::HashMap::new();
+    for input_column in demand.iter() {
+        remap.insert(*input_column, remap.len());
+    }
+    remap.insert(n_cols, remap.len());
+    map_filter_project.permute(&remap, remap.len());
+    map_filter_project.optimize();
 
-    // TODO: Directly write operator to produce two output streams rather than `ok_err` to simplify dataflow.
-    use timely::dataflow::operators::OkErr;
-
-    stream.unary(
+    stream.unary_fallible(
         SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
         "CsvDecode",
         |_, _| {
@@ -54,11 +66,13 @@ where
             let mut bounds = vec![0usize];
             let mut csv_reader = csv_core::ReaderBuilder::new().delimiter(delimiter).build();
             let mut row_packer = repr::RowPacker::new();
-            move |input, output| {
+            let mut datums = DatumVec::new();
+            move |input, output_ok, output_err| {
                 let mut events_success = 0;
                 let mut events_error = 0;
                 input.for_each(|cap, lines| {
-                    let mut session = output.session(&cap);
+                    let mut session_ok = output_ok.session(&cap);
+                    let mut session_err = output_err.session(&cap);
                     // TODO: There is extra work going on here:
                     // LinesCodec is already splitting our input into lines,
                     // but the CsvReader *itself* searches for line breaks.
@@ -117,34 +131,29 @@ where
                                                 n_cols, bounds_valid,
                                             );
                                         } else {
+                                            // Evaluation may error, in which case we produce the error rather than a partial row.
+                                            // We flag this as a "success" as the failure happens not in the source, but in subsequent logic.
                                             events_success += 1;
+                                            let temp_storage = RowArena::new();
+                                            let mut datums_local = datums.borrow();
                                             // Push strings into a vector for MFP evaluation.
-                                            // TODO(mcsherry): re-use allocations for datums.
-                                            let mut datums = (0 .. n_cols)
+                                            datums_local.extend(demand.iter()
                                                 .map(|i| unsafe {
                                                     // NOTE(mcsherry): unsafety justified because the source string is utf8 and the
                                                     // delimiter is a single-byte utf8, which we concluded ensured that all fields
-                                                    // would also be valid utf8, through discussion and head scratching.
-                                                    Datum::String(std::str::from_utf8_unchecked(&buffer[bounds[i]..bounds[i + 1]]))
+                                                    // would also be valid utf8, through discussion and extensive head scratching.
+                                                    Datum::String(std::str::from_utf8_unchecked(&buffer[bounds[*i]..bounds[*i + 1]]))
                                                 })
-                                                .chain(iter::once(line_no.map(Datum::Int64).into()))
-                                                .collect::<Vec<_>>();
-                                            // Evaluation may error, in which case we produce the error rather than a partial row.
-                                            // We flag this as a "success" as the failure happens not in the source, but in subsequent logic.
-                                            let temp_storage = RowArena::new();
+                                                .chain(iter::once(line_no.map(Datum::Int64).into())));
 
-                                            if let Some(result) = map_filter_project.evaluate_iter(&mut datums, &temp_storage).map_err(DataflowError::from).transpose() {
-                                                session.give((
-                                                    // Produce either the resulting row, or any evaluation error.
-                                                    result.map(|iter| {
-                                                        row_packer.clear();
-                                                        row_packer.extend(iter);
-                                                        row_packer.finish_and_reuse()
-                                                    }),
-                                                    *cap.time(),
-                                                    1,
-                                                ));
+                                            if let Some(result) = map_filter_project.evaluate(&mut datums_local, &temp_storage, &mut row_packer).map_err(DataflowError::from).transpose() {
+                                                match result {
+                                                    Ok(x) => session_ok.give((x, *cap.time(), 1)),
+                                                    Err(x) => session_err.give((x, *cap.time(), 1)),
+                                                }
                                             }
+
+                                            drop(datums_local);
 
                                             // Reset valid data to extract the next record, should one exist.
                                             buffer_valid = 0;
@@ -167,8 +176,5 @@ where
                 }
             }
         },
-    ).ok_err(|(d,t,r)| match d {
-        Ok(d) => Ok((d,t,r)),
-        Err(e) => Err((e,t,r)),
-    })
+    )
 }

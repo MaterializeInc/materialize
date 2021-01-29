@@ -850,26 +850,25 @@ where
                 let (ok_collection, mut err_collection) = self
                     .flat_map_ref(&input, move |exprs| mfp2.literal_constraints(exprs), {
                         let mut row_packer = repr::RowPacker::new();
-                        let mut datums = vec![];
+                        let mut datums = crate::render::datum_vec::DatumVec::new();
                         move |row| {
                             let pack_result = {
                                 let temp_storage = RowArena::new();
-                                let mut datums_local = std::mem::take(&mut datums);
-                                datums_local.extend(row.iter());
+                                let mut datums_local = datums.borrow_with(&row);
                                 // Temporary assignment looks weird, but seems needed to convince
                                 // Rust that the lifetime of `evaluate_iter` does not escape.
-                                let result =
-                                    match mfp.evaluate_iter(&mut datums_local, &temp_storage) {
-                                        Ok(Some(iter)) => {
-                                            row_packer.clear();
-                                            row_packer.extend(iter);
-                                            Some(Ok(()))
-                                        }
-                                        Ok(None) => None,
-                                        Err(e) => Some(Err(e.into())),
-                                    };
-                                datums = ore::vec::repurpose_allocation(datums_local);
-                                result
+                                let temporary =
+                                match mfp.evaluate_iter(&mut datums_local, &temp_storage) {
+                                    Ok(Some(iter)) => {
+                                        row_packer.clear();
+                                        row_packer.extend(iter);
+                                        Some(Ok(()))
+                                    }
+                                    Ok(None) => None,
+                                    Err(e) => Some(Err(e.into())),
+                                };
+                                drop(datums_local);
+                                temporary
                             };
 
                             // Re-use the input `row` if at all possible.
