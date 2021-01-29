@@ -38,11 +38,11 @@ use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
 use crate::ast::{ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement};
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 
-pub(crate) mod decorrelate;
 pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod expr;
 pub(crate) mod func;
+pub(crate) mod lowering;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;

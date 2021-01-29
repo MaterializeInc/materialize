@@ -61,7 +61,7 @@ pub fn plan_insert(
 ) -> Result<Plan, anyhow::Error> {
     let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
     expr.bind_parameters(&params)?;
-    let expr = expr.decorrelate();
+    let expr = expr.lower();
 
     Ok(Plan::Insert { id, values: expr })
 }
@@ -199,7 +199,7 @@ pub fn plan_explain(
         Some(finishing)
     };
     sql_expr.bind_parameters(&params)?;
-    let expr = sql_expr.clone().decorrelate();
+    let expr = sql_expr.clone().lower();
     Ok(Plan::ExplainPlan {
         raw_plan: sql_expr,
         decorrelated_plan: expr,
@@ -219,7 +219,7 @@ pub fn plan_query(
 ) -> Result<(::expr::MirRelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
     let (mut expr, desc, finishing) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params)?;
-    Ok((expr.decorrelate(), desc, finishing))
+    Ok((expr.lower(), desc, finishing))
 }
 
 with_options! {
