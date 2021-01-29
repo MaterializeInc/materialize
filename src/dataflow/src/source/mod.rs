@@ -594,7 +594,13 @@ impl ConsistencyInfo {
                                         .set(self.partition_metadata.get(pid).unwrap().ts);
                                 }
 
-                                if source.can_close_timestamp(&self, pid, record.end_offset) {
+                                // Because everything is a half open interval now
+                                // we need to decrement the end to keep it consistent with the expectations of
+                                // all of the other code.
+                                // TODO(rkhaitan): make this less shitty
+                                let mut end_offset = record.end_offset;
+                                end_offset.offset -= 1;
+                                if source.can_close_timestamp(&self, pid, end_offset) {
                                     // We have either 1) seen all messages corresponding to this timestamp for this
                                     // partition 2) do not own this partition 3) the consumer has forwarded past the
                                     // timestamped offset. Either way, we have the guarantee tha we will never see a message with a < timestamp
