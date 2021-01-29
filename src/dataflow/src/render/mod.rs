@@ -848,7 +848,8 @@ where
         worker_index: usize,
     ) -> bool {
         // Extract a MapFilterProject and residual from `relation_expr`.
-        let (mfp, input) = MapFilterProject::extract_from_expression(relation_expr);
+        let (mut mfp, input) = MapFilterProject::extract_from_expression(relation_expr);
+        mfp.optimize();
         match input {
             MirRelationExpr::Get { .. } => {
                 // TODO: determine if `mfp` is no-op to simplify implementation.
