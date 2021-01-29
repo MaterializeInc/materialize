@@ -17,6 +17,7 @@
 use std::collections::{HashMap, HashSet};
 
 use dataflow_types::DataflowDesc;
+use expr::{Id, LocalId, MirRelationExpr, MirScalarExpr};
 use repr::Datum;
 
 /// Optimizes the implementation of each dataflow.
@@ -216,7 +217,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
                     demand_projection.push(column);
                 } else {
                     demand_projection.push(output_arity + dummies.len());
-                    dummies.push(ScalarExpr::literal_ok(Datum::Dummy, typ.clone()));
+                    dummies.push(MirScalarExpr::literal_ok(Datum::Dummy, typ.clone()));
                 }
             }
 

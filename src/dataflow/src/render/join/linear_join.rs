@@ -105,7 +105,7 @@ where
                     // If there is no starting arrangement, then we can run filters
                     // directly on the starting collection.
                     // If there is only one input, we are done joining, so run filters
-                    let (j, es) = joined.flat_map_fallible({
+                    let (j, es) = joined.flat_map_fallible("InitialMFP", {
                         // Reuseable allocation for unpacking.
                         let mut datums = DatumVec::new();
                         let mut row_packer = RowPacker::new();
@@ -216,7 +216,7 @@ where
             // and projections that could not be applied (e.g. column repetition).
             let closure = join_build_state.complete();
             if !closure.is_identity() {
-                let (updates, errors) = joined.flat_map_fallible({
+                let (updates, errors) = joined.flat_map_fallible("ResidualMFP", {
                     // Reuseable allocation for unpacking.
                     let mut datums = DatumVec::new();
                     let mut row_packer = repr::RowPacker::new();

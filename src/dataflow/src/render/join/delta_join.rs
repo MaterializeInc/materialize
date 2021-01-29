@@ -216,7 +216,7 @@ where
                                 // Apply what `closure` we are able to, and record any errors.
                                 if !initial_closure.is_identity() {
 
-                                    let (stream, errs) = update_stream.flat_map_fallible({
+                                    let (stream, errs) = update_stream.flat_map_fallible("InitialMFP", {
                                         let mut datums = DatumVec::new();
                                         let mut row_packer = RowPacker::new();
                                         move |row| {
@@ -286,7 +286,7 @@ where
                                 // and projections that could not be applied (e.g. column repetition).
                                 let closure = join_build_state.complete();
                                 if !closure.is_identity() {
-                                    let (updates, errors) = update_stream.flat_map_fallible({
+                                    let (updates, errors) = update_stream.flat_map_fallible("ResidualMFP", {
                                         // Reuseable allocation for unpacking.
                                         let mut datums = DatumVec::new();
                                         let mut row_packer = repr::RowPacker::new();

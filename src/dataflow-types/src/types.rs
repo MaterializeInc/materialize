@@ -27,7 +27,10 @@ use timely::progress::frontier::Antichain;
 use url::Url;
 
 use aws_util::aws;
-use expr::{GlobalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, PartitionId};
+use expr::{
+    GlobalId, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+    PartitionId,
+};
 use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use kafka_util::KafkaAddrs;
