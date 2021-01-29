@@ -1599,14 +1599,21 @@ ORDER BY substr(c_state, 1, 1)
 
 %8 =
 | Union %6 %7
+| Reduce group=(#0, #1, #2)
+| | agg count(true)
+| ArrangeBy (#0, #1, #2)
 
 %9 =
 | Join %3 %8 (= #0 #25) (= #1 #26) (= #2 #27)
-| | implementation = Differential %8 %3.(#0, #1, #2)
-| | demand = (#9, #16)
+| | implementation = DeltaQuery
+| |   delta %3 %8.(#0, #1, #2)
+| |   delta %8 %3.(#0, #1, #2)
+| | demand = (#9, #16, #28)
 | Reduce group=(substr(#9, 1, 1))
-| | agg count(true)
+| | agg sum(#28)
 | | agg sum(#16)
+| Map dectoi64(#1)
+| Project (#0, #3, #2)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#2)
 

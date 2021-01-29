@@ -259,6 +259,7 @@ impl Default for Optimizer {
                 ],
             }),
             Box::new(crate::reduction_pushdown::ReductionPushdown),
+            Box::new(crate::reduce_elision::ReduceElision),
             Box::new(crate::projection_lifting::ProjectionLifting),
             Box::new(crate::fusion::map::Map),
             Box::new(crate::cse::map::Map),

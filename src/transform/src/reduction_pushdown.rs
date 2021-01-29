@@ -85,7 +85,11 @@ impl ReductionPushdown {
                     });
                 }
 
-                **input = inner.take_dangerous()
+                **input = inner.take_dangerous();
+
+                // visit relation again to see if the reduction can be pushed
+                // down into whatever the map was around
+                self.action(relation)
             } else if let MirRelationExpr::Join {
                 inputs,
                 equivalences,
@@ -279,6 +283,15 @@ impl<'a> ReductionPusher<'a> {
             }
         }
 
+        // Union together the supports of all outer aggs, which will become
+        // `aggs_not_pushed_support`.
+        let mut outer_agg_support_iter = outer_aggs.iter().map(|(_, agg)| agg.expr.support());
+        let outer_agg_support = outer_agg_support_iter
+            .next()
+            .map(|set| outer_agg_support_iter.fold(set, |set1, set2| &set1 | &set2))
+            .unwrap_or_default();
+        let aggs_not_pushed_support = old_join_mapper.split_column_set_by_input(&outer_agg_support);
+
         // skip reduction pushdown if there are no eligible aggregations to push
         // down
         if single_input_aggs_to_push.iter().all(|aggs| aggs.is_empty())
@@ -288,14 +301,6 @@ impl<'a> ReductionPusher<'a> {
         }
 
         let join_graph = create_join_graph(&old_join_mapper, equivalences)?;
-
-        // Union together the supports of all outer aggs, which will become
-        // `aggs_not_pushed_support`.
-        let mut outer_agg_support_iter = outer_aggs.iter().map(|(_, agg)| agg.expr.support());
-        let outer_agg_support = outer_agg_support_iter
-            .next()
-            .map(|set| outer_agg_support_iter.fold(set, |set1, set2| &set1 | &set2))
-            .unwrap_or_default();
 
         Some(Self {
             new_inputs: inputs.to_vec(),
@@ -313,7 +318,7 @@ impl<'a> ReductionPusher<'a> {
                 .map(|typ| typ.keys.clone())
                 .collect::<Vec<_>>(),
             equivalences,
-            aggs_not_pushed_support: old_join_mapper.split_column_set_by_input(&outer_agg_support),
+            aggs_not_pushed_support,
             old_join_mapper,
             join_graph,
             pushdown_succeeded: false,
