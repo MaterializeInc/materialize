@@ -813,9 +813,8 @@ impl MapFilterProject {
     ///
     /// # Example
     ///
-    /// In this example, we see that with only a single reference to column 2,
-    /// there is no reason to produce its integer parse to be shared among the
-    /// expressions, and it can instead be inlined. Similarly, column references
+    /// In this example, we see that with only a single reference to columns
+    /// 0 and 2, their parsing can each be inlined. Similarly, column references
     /// can be cleaned up among expressions, and in the final projection.
     ///
     /// Also notice the remaining expressions, which can be cleaned up in a later
@@ -823,8 +822,7 @@ impl MapFilterProject {
     ///
     /// ```rust
     /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
-    /// // Use the output from `memoize_expression` example, minus the last column
-    /// // in order to introduce uniquess of reference to columns 0 and 2.
+    /// // Use the output from first `memoize_expression` example.
     /// let mut map_filter_project = MapFilterProject::new(5)
     ///     .map(vec![
     ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),

@@ -90,6 +90,12 @@ where
 
             let input_arity = input.arity();
 
+            // TODO(mcsherry): These two MFPs could be unified into one, which would
+            // allow optimization across their computation, e.g. if both parsed input
+            // strings to typed data, but it involves a bit of dancing around when we
+            // pull the data out of their output (i.e. as an iterator, rather than use
+            // the built-in evaluation direction to a `Row`).
+
             // Form an operator for evaluating key expressions.
             let mut key_mfp = expr::MapFilterProject::new(input_arity)
                 .map(group_key.iter().cloned())
@@ -121,6 +127,8 @@ where
                 demand[index] -= demand[index - 1];
                 demand[index] -= 1;
             }
+            // rename as skips to reflect their new role.
+            let skips = demand;
 
             let mut row_packer = RowPacker::new();
             let mut datums = DatumVec::new();
@@ -137,7 +145,7 @@ where
                         // Unpack only the demanded columns.
                         let mut datums_local = datums.borrow();
                         let mut row_iter = row.iter();
-                        for skip in demand.iter() {
+                        for skip in skips.iter() {
                             datums_local.push((&mut row_iter).nth(*skip).unwrap());
                         }
 
@@ -153,7 +161,8 @@ where
                             _ => panic!("Row expected as no predicate was used"),
                         };
                         // Evaluate the value expressions.
-                        datums_local.truncate(demand.len());
+                        // The prior evaluation may have left additional columns we should delete.
+                        datums_local.truncate(skips.len());
                         let val = match val_mfp.evaluate_iter(&mut datums_local, &temp_storage) {
                             Err(e) => return Some(Err(DataflowError::from(e))),
                             Ok(Some(val)) => val,
