@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+key_schema=$(<producer/key-schema.json)
+value_schema=$(<producer/value-schema.json)
+value_distribution=$(<producer/value-distribution.json)
+
+cargo run --bin kgen --release -- \
+    --bootstrap-server localhost:9093 \
+    --num-messages 100000 \
+    --topic test_avro_upsert \
+    --partitions 30 \
+    --keys random \
+    --key-min 0 \
+    --key-max 3200000 \
+    --values avro \
+    --avro-schema="${value_schema}" \
+    --avro-distribution="${value_distribution}" \
+    ;

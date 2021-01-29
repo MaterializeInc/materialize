@@ -501,6 +501,16 @@ async fn main() -> anyhow::Result<()> {
                 .default_value("localhost:9092"),
         )
         .arg(
+            Arg::with_name("schema-registry")
+                .short("s")
+                .long("schema-registry")
+                .takes_value(true)
+                .default_value("http://localhost:8081"),
+                // .conflicts_with("values", "bytes"),
+                // conflicts_with can only take the argument name, not value
+                // perhaps we can do [--avro, --bytes] instead of --values and then conflicts_with("bytes")
+        )
+        .arg(
             Arg::with_name("keys")
                 .long("keys")
                 .short("k")
@@ -532,6 +542,7 @@ async fn main() -> anyhow::Result<()> {
         bail!("Partitions must a positive number.");
     }
     let bootstrap = matches.value_of("bootstrap").unwrap();
+    let schema_registry = matches.value_of("schema-registry").unwrap();
     let mut _schema_holder = None;
     let mut value_gen = match matches.value_of("values").unwrap() {
         "bytes" => {
@@ -546,7 +557,7 @@ async fn main() -> anyhow::Result<()> {
         "avro" => {
             let schema = matches.value_of("avro-schema").unwrap();
             let ccsr =
-                ccsr::ClientConfig::new(Url::parse("http://localhost:8081").unwrap()).build();
+                ccsr::ClientConfig::new(Url::parse(schema_registry).unwrap()).build();
             let schema_id = ccsr
                 .publish_schema(&format!("{}-value", topic), schema)
                 .await?;
