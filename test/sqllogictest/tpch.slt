@@ -1300,17 +1300,14 @@ WHERE
 | |   delta %3 %4.(#0)
 | |   delta %4 %3.(#0)
 | | demand = (#0, #2, #3)
-| Reduce group=(#0)
-| | agg sum(#2)
-| | agg sum(#3)
-| Map dectoi64(#2), (2dec * (((#1 * 10000000dec) / i64todec(if (#3 = 0) then {null} else {#3})) / 10dec))
+| Map i64todec(#3), dectoi64(#4), (2dec * (((#2 * 10000000dec) / i64todec(if (#5 = 0) then {null} else {#5})) / 10dec))
 | ArrangeBy (#0)
 
 %6 = Let l1 =
 | Join %2 %5 (= #1 #25)
 | | implementation = Differential %2 %5.(#0)
-| | demand = (#4, #5, #29)
-| Filter ((#4 * 10000000dec) < #29)
+| | demand = (#4, #5, #31)
+| Filter ((#4 * 10000000dec) < #31)
 | Reduce group=()
 | | agg sum(#5)
 
@@ -1406,15 +1403,14 @@ ORDER BY
 | |   delta %4 %5.(#0)
 | |   delta %5 %4.(#0)
 | | demand = (#0, #2)
-| Reduce group=(#0)
-| | agg sum(#2)
+| Map 
 | ArrangeBy (#0)
 
 %7 =
 | Join %3 %6 (= #8 #33)
 | | implementation = Differential %3 %6.(#0)
-| | demand = (#0, #1, #8, #11, #12, #21, #34)
-| Filter (#34 > 30000dec)
+| | demand = (#0, #1, #8, #11, #12, #21, #35)
+| Filter (#35 > 30000dec)
 | Reduce group=(#1, #0, #8, #12, #11)
 | | agg sum(#21)
 
@@ -1839,14 +1835,21 @@ ORDER BY
 
 %8 =
 | Union %6 %7
+| Reduce group=(#0)
+| | agg count(true)
+| ArrangeBy (#0)
 
 %9 =
 | Join %3 %8 (= #0 #11)
-| | implementation = Differential %8 %3.(#0)
-| | demand = (#4, #5)
+| | implementation = DeltaQuery
+| |   delta %3 %8.(#0)
+| |   delta %8 %3.(#0)
+| | demand = (#4, #5, #12)
 | Reduce group=(substr(#4, 1, 2))
-| | agg count(true)
+| | agg sum(#12)
 | | agg sum(#5)
+| Map dectoi64(#1)
+| Project (#0, #3, #2)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#2)
 
