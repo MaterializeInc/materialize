@@ -93,12 +93,12 @@ where
             // Form an operator for evaluating key expressions.
             let mut key_mfp = expr::MapFilterProject::new(input_arity)
                 .map(group_key.iter().cloned())
-                .project(input_arity..input_arity + group_key.len());
+                .project(input_arity..(input_arity + group_key.len()));
 
             // Form an operator for evaluating value expressions.
             let mut val_mfp = expr::MapFilterProject::new(input_arity)
                 .map(aggregates.iter().map(|a| a.expr.clone()))
-                .project(input_arity..input_arity + aggregates.len());
+                .project(input_arity..(input_arity + aggregates.len()));
 
             // Determine the columns we'll need from the row.
             let mut demand = Vec::new();

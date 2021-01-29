@@ -554,6 +554,46 @@ impl MapFilterProject {
 // Optimization routines.
 impl MapFilterProject {
     /// Optimize the internal expression evaluation order.
+    ///
+    /// This method performs several optimizations that are meant to streamline
+    /// the execution of the `MapFilterProject` instance, but not to alter its
+    /// semantics. This includes extracting expressions that are used multiple
+    /// times, inlining those that are not, and removing expressions that are
+    /// unreferenced.
+    ///
+    /// # Example
+    ///
+    /// This example demonstrates how the re-use of one expression, converting
+    /// column 1 from a string to an integer, can be extracted and the results
+    /// shared among the two uses. This example is used for each of the steps
+    /// along the optimization path.
+    ///
+    /// ```rust
+    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// // Demonstrate extraction of common expressions (here: parsing strings).
+    /// let mut map_filter_project = MapFilterProject::new(5)
+    ///     .map(vec![
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///     ])
+    ///     .project(vec![3,4,5,6]);
+    ///
+    /// let mut expected_optimized = MapFilterProject::new(5)
+    ///     .map(vec![
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(5), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///     ])
+    ///     .project(vec![3,4,6,7]);
+    ///
+    /// // Optimize the expression.
+    /// map_filter_project.optimize();
+    ///
+    /// assert_eq!(
+    ///     map_filter_project,
+    ///     expected_optimized,
+    /// );
+    /// ```
     pub fn optimize(&mut self) {
         // Optimization memoizes individual `ScalarExpr` expressions that
         // are sure to be evaluated, canonicalizes references to the first
@@ -580,6 +620,93 @@ impl MapFilterProject {
     ///
     /// This tranformation is restricted to expressions we are certain will
     /// be evaluated, which does not include expressions in `if` statements.
+    ///
+    /// # Example
+    ///
+    /// This example demonstrates how memoization notices `MirScalarExpr`s
+    /// that are used multiple times, and ensures that each are extracted
+    /// into columns and then referenced by column. This pass does not try
+    /// to minimize the occurrences of column references, which will happen
+    /// in inliniing.
+    ///
+    /// ```rust
+    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// // Demonstrate extraction of common expressions (here: parsing strings).
+    /// let mut map_filter_project = MapFilterProject::new(5)
+    ///     .map(vec![
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///     ])
+    ///     .project(vec![3,4,5,6]);
+    ///
+    /// let mut expected_optimized = MapFilterProject::new(5)
+    ///     .map(vec![
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(7),
+    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(9), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(10),
+    ///     ])
+    ///     .project(vec![3,4,8,11]);
+    ///
+    /// // Memoize expressions, ensuring uniqueness of each `MirScalarExpr`.
+    /// map_filter_project.memoize_expressions();
+    ///
+    /// assert_eq!(
+    ///     map_filter_project,
+    ///     expected_optimized,
+    /// );
+    /// ```
+    ///
+    /// Expressions may not be memoized if they are not certain to be evaluated,
+    /// for example if they occur in conditional branches of a `MirScalarExpr::If`.
+    ///
+    /// ```rust
+    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// // Demonstrate extraction of unconditionally evaluated expressions, as well as
+    /// // the non-extraction of common expressions guarded by conditions.
+    /// let mut map_filter_project = MapFilterProject::new(2)
+    ///     .map(vec![
+    ///         MirScalarExpr::If {
+    ///             cond: Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::Lt)),
+    ///             then: Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::DivInt64)),
+    ///             els:  Box::new(MirScalarExpr::column(1).call_binary(MirScalarExpr::column(0), BinaryFunc::DivInt64)),
+    ///         },
+    ///         MirScalarExpr::If {
+    ///             cond: Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::Lt)),
+    ///             then: Box::new(MirScalarExpr::column(1).call_binary(MirScalarExpr::column(0), BinaryFunc::DivInt64)),
+    ///             els:  Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::DivInt64)),
+    ///         },
+    ///     ]);
+    ///
+    /// let mut expected_optimized = MapFilterProject::new(2)
+    ///     .map(vec![
+    ///         MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::Lt),
+    ///         MirScalarExpr::If {
+    ///             cond: Box::new(MirScalarExpr::column(2)),
+    ///             then: Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::DivInt64)),
+    ///             els:  Box::new(MirScalarExpr::column(1).call_binary(MirScalarExpr::column(0), BinaryFunc::DivInt64)),
+    ///         },
+    ///         MirScalarExpr::column(3),
+    ///         MirScalarExpr::If {
+    ///             cond: Box::new(MirScalarExpr::column(2)),
+    ///             then: Box::new(MirScalarExpr::column(1).call_binary(MirScalarExpr::column(0), BinaryFunc::DivInt64)),
+    ///             els:  Box::new(MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), BinaryFunc::DivInt64)),
+    ///         },
+    ///         MirScalarExpr::column(5),
+    ///     ])
+    ///     .project(vec![0,1,4,6]);
+    ///
+    /// // Memoize expressions, ensuring uniqueness of each `MirScalarExpr`.
+    /// map_filter_project.memoize_expressions();
+    ///
+    /// assert_eq!(
+    ///     map_filter_project,
+    ///     expected_optimized,
+    /// );
+    /// ```
     pub fn memoize_expressions(&mut self) {
         // Record the mapping from starting column references to new column
         // references.
@@ -675,9 +802,62 @@ impl MapFilterProject {
     /// This method inlines expressions with a single use.
     ///
     /// This method only inlines expressions; it does not delete expressions
-    /// that are no longer referenced. The `remove_undemanded()` method should
-    /// be used to do that.
-    fn inline_expressions(&mut self) {
+    /// that are no longer referenced. The `remove_undemanded()` method does
+    /// that, and should ilkely be used after this method.
+    ///
+    /// Inlining replaces column references when the refered-to item is either
+    /// another column reference, or the only referrer of its referent. This
+    /// is most common after memoization has atomized all expressions to seek
+    /// out re-use: inlining re-assembles expressions that were not helpfully
+    /// shared with other expressions.
+    ///
+    /// # Example
+    ///
+    /// In this example, we see that with only a single reference to column 2,
+    /// there is no reason to produce its integer parse to be shared among the
+    /// expressions, and it can instead be inlined. Similarly, column references
+    /// can be cleaned up among expressions, and in the final projection.
+    ///
+    /// Also notice the remaining expressions, which can be cleaned up in a later
+    /// pass (the `remove_undemanded` method).
+    ///
+    /// ```rust
+    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// // Use the output from `memoize_expression` example, minus the last column
+    /// // in order to introduce uniquess of reference to columns 0 and 2.
+    /// let mut map_filter_project = MapFilterProject::new(5)
+    ///     .map(vec![
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(7),
+    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(9), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(10),
+    ///     ])
+    ///     .project(vec![3,4,8,11]);
+    ///
+    /// let mut expected_optimized = MapFilterProject::new(5)
+    ///     .map(vec![
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///     ])
+    ///     .project(vec![3,4,8,11]);
+    ///
+    /// // Inline expressions that are referenced only once.
+    /// map_filter_project.inline_expressions();
+    ///
+    /// assert_eq!(
+    ///     map_filter_project,
+    ///     expected_optimized,
+    /// );
+    /// ```
+    pub fn inline_expressions(&mut self) {
         // Local copy of input_arity to avoid borrowing `self` in closures.
         let input_arity = self.input_arity;
         // Reference counts track the number of places that a reference occurs.
@@ -749,6 +929,40 @@ impl MapFilterProject {
     /// Expressions are "used" if they are relied upon by any output columns
     /// or any predicates, even transitively. Any expressions that are not
     /// relied upon in this way can be discarded.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use expr::{MapFilterProject, MirScalarExpr, UnaryFunc, BinaryFunc};
+    /// // Use the output from `inline_expression` example.
+    /// let mut map_filter_project = MapFilterProject::new(5)
+    ///     .map(vec![
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(6), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(6).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///     ])
+    ///     .project(vec![3,4,8,11]);
+    ///
+    /// let mut expected_optimized = MapFilterProject::new(5)
+    ///     .map(vec![
+    ///         MirScalarExpr::column(1).call_unary(UnaryFunc::CastStringToInt64),
+    ///         MirScalarExpr::column(0).call_unary(UnaryFunc::CastStringToInt64).call_binary(MirScalarExpr::column(5), BinaryFunc::AddInt64),
+    ///         MirScalarExpr::column(5).call_binary(MirScalarExpr::column(2).call_unary(UnaryFunc::CastStringToInt64), BinaryFunc::AddInt64),
+    ///     ])
+    ///     .project(vec![3,4,6,7]);
+    ///
+    /// // Remove undemandedd expressions, streamlining the work done..
+    /// map_filter_project.remove_undemanded();
+    ///
+    /// assert_eq!(
+    ///     map_filter_project,
+    ///     expected_optimized,
+    /// );
+    /// ```
     pub fn remove_undemanded(&mut self) {
         // Determine the demanded expressions to remove irrelevant ones.
         let mut demand = std::collections::HashSet::new();
