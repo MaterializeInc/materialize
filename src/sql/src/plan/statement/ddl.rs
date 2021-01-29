@@ -696,7 +696,7 @@ pub fn plan_create_view(
     relation_expr.bind_parameters(&params)?;
     //TODO: materialize#724 - persist finishing information with the view?
     relation_expr.finish(finishing);
-    let relation_expr = relation_expr.decorrelate();
+    let relation_expr = relation_expr.lower();
     let replace = if *if_exists == IfExistsBehavior::Replace {
         if let Ok(item) = scx.catalog.resolve_item(&name.clone().into()) {
             if relation_expr.global_uses().contains(&item.id()) {

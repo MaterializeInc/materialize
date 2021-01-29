@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Decorrelation is the process of transforming a `sql::expr::HirRelationExpr`
-//! into a `expr::MirRelationExpr`, importantly replacing instances of
+//! Lowering is the process of transforming a `sql::expr::HirRelationExpr`
+//! into a `expr::MirRelationExpr`.
+//!
+//! The most crucial part of lowering is decorrelation; i.e.: rewriting a
 //! `HirScalarExpr` that may contain subqueries (e.g. `SELECT` or `EXISTS`)
 //! with instances of `MirScalarExpr` that contain none of these.
 //!
@@ -112,7 +114,7 @@ impl ColumnMap {
 impl HirRelationExpr {
     /// Rewrite `self` into a `expr::MirRelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
-    pub fn decorrelate(mut self) -> expr::MirRelationExpr {
+    pub fn lower(mut self) -> expr::MirRelationExpr {
         let mut id_gen = expr::IdGen::default();
         transform_expr::split_subquery_predicates(&mut self);
         transform_expr::try_simplify_quantified_comparisons(&mut self);
