@@ -591,20 +591,20 @@ impl MapFilterProject {
 
         // A helper method which memoizes expressions by recursively memoizing their parts.
         fn memoize_expr(
-            expr: &mut ScalarExpr,
-            new_scalars: &mut Vec<ScalarExpr>,
+            expr: &mut MirScalarExpr,
+            new_scalars: &mut Vec<MirScalarExpr>,
             projection: &HashMap<usize, usize>,
             input_arity: usize,
         ) {
             match expr {
-                ScalarExpr::Column(index) => {
+                MirScalarExpr::Column(index) => {
                     // Column references need to be rewritten, but do not need to be memoized.
                     *index = projection[index];
                 }
                 _ => {
                     // We should not eagerly memoize `if` branches that might not be taken.
                     // TODO: Memoize expressions in the intersection of `then` and `els`.
-                    if let ScalarExpr::If { cond, then, els } = expr {
+                    if let MirScalarExpr::If { cond, then, els } = expr {
                         memoize_expr(cond, new_scalars, projection, input_arity);
                         // Conditionally evaluated expressions still need to update their
                         // column references.
@@ -616,13 +616,13 @@ impl MapFilterProject {
                     if let Some(position) = new_scalars.iter().position(|e| e == expr) {
                         // Any complex expression that already exists as a prior column can
                         // be replaced by a reference to that column.
-                        *expr = ScalarExpr::Column(input_arity + position);
+                        *expr = MirScalarExpr::Column(input_arity + position);
                     } else {
                         // A complex expression that does not exist should be memoized, and
                         // replaced by a reference to the column.
                         new_scalars.push(std::mem::replace(
                             expr,
-                            ScalarExpr::Column(input_arity + new_scalars.len()),
+                            MirScalarExpr::Column(input_arity + new_scalars.len()),
                         ));
                     }
                 }
@@ -704,7 +704,7 @@ impl MapFilterProject {
                 if i < input_arity {
                     false
                 } else {
-                    if let ScalarExpr::Column(_) = self.expressions[i - input_arity] {
+                    if let MirScalarExpr::Column(_) = self.expressions[i - input_arity] {
                         true
                     } else {
                         reference_count[i] == 1
@@ -717,7 +717,7 @@ impl MapFilterProject {
         for index in 0..self.expressions.len() {
             let (prior, expr) = self.expressions.split_at_mut(index);
             expr[0].visit_mut(&mut |e| {
-                if let ScalarExpr::Column(i) = e {
+                if let MirScalarExpr::Column(i) = e {
                     if should_inline[*i] {
                         *e = prior[*i - input_arity].clone();
                     }
@@ -727,7 +727,7 @@ impl MapFilterProject {
         for (_index, pred) in self.predicates.iter_mut() {
             let expressions = &self.expressions;
             pred.visit_mut(&mut |e| {
-                if let ScalarExpr::Column(i) = e {
+                if let MirScalarExpr::Column(i) = e {
                     if should_inline[*i] {
                         *e = expressions[*i - input_arity].clone();
                     }
@@ -737,7 +737,7 @@ impl MapFilterProject {
         // We can only inline column references in `self.projection`, but we should.
         for proj in self.projection.iter_mut() {
             if *proj >= self.input_arity {
-                if let ScalarExpr::Column(i) = self.expressions[*proj - self.input_arity] {
+                if let MirScalarExpr::Column(i) = self.expressions[*proj - self.input_arity] {
                     *proj = i;
                 }
             }
