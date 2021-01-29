@@ -87,21 +87,48 @@ where
             // Our first step is to extract `(key, vals)` from `input`.
             // We do this carefully, attempting to avoid unneccesary allocations
             // that would result from cloning rows in input arrangements.
-            let group_key_clone = group_key.clone();
-            let aggregates_clone = aggregates.clone();
 
-            // Tracks the required number of columns to extract.
-            let mut columns_needed = 0;
-            for key in group_key.iter() {
-                for column in key.support() {
-                    columns_needed = std::cmp::max(columns_needed, column + 1);
-                }
+            let input_arity = input.arity();
+
+            // TODO(mcsherry): These two MFPs could be unified into one, which would
+            // allow optimization across their computation, e.g. if both parsed input
+            // strings to typed data, but it involves a bit of dancing around when we
+            // pull the data out of their output (i.e. as an iterator, rather than use
+            // the built-in evaluation direction to a `Row`).
+
+            // Form an operator for evaluating key expressions.
+            let mut key_mfp = expr::MapFilterProject::new(input_arity)
+                .map(group_key.iter().cloned())
+                .project(input_arity..(input_arity + group_key.len()));
+
+            // Form an operator for evaluating value expressions.
+            let mut val_mfp = expr::MapFilterProject::new(input_arity)
+                .map(aggregates.iter().map(|a| a.expr.clone()))
+                .project(input_arity..(input_arity + aggregates.len()));
+
+            // Determine the columns we'll need from the row.
+            let mut demand = Vec::new();
+            demand.extend(key_mfp.demand());
+            demand.extend(val_mfp.demand());
+            demand.sort();
+            demand.dedup();
+            // remap column references to the subset we use.
+            let mut demand_map = std::collections::HashMap::new();
+            for column in demand.iter() {
+                demand_map.insert(*column, demand_map.len());
             }
-            for aggr in aggregates.iter() {
-                for column in aggr.expr.support() {
-                    columns_needed = std::cmp::max(columns_needed, column + 1);
-                }
+            key_mfp.permute(&demand_map, demand_map.len());
+            key_mfp.optimize();
+            val_mfp.permute(&demand_map, demand_map.len());
+            val_mfp.optimize();
+
+            // transform `demand` into "skips" we'll do on an iterator.
+            for index in (1..demand.len()).rev() {
+                demand[index] -= demand[index - 1];
+                demand[index] -= 1;
             }
+            // rename as skips to reflect their new role.
+            let skips = demand;
 
             let mut row_packer = RowPacker::new();
             let mut datums = DatumVec::new();
@@ -114,34 +141,32 @@ where
                     |_expr| None,
                     move |row| {
                         let temp_storage = RowArena::new();
-                        // Ensure the packer is clear, and does not reflect
-                        // columns from prior rows that may have errored.
-                        row_packer.clear();
 
-                        // First, evaluate the key selector expressions.
+                        // Unpack only the demanded columns.
                         let mut datums_local = datums.borrow();
-                        datums_local.extend(row.iter().take(columns_needed));
-                        for expr in group_key_clone.iter() {
-                            match expr.eval(&datums_local, &temp_storage) {
-                                Ok(val) => row_packer.push(val),
-                                Err(e) => {
-                                    return Some(Err(e.into()));
-                                }
-                            }
+                        let mut row_iter = row.iter();
+                        for skip in skips.iter() {
+                            datums_local.push((&mut row_iter).nth(*skip).unwrap());
                         }
 
-                        // Second, evaluate the value selector expressions.
-                        let key = row_packer.finish_and_reuse();
-                        for aggr in aggregates_clone.iter() {
-                            match aggr.expr.eval(&datums_local, &temp_storage) {
-                                Ok(val) => {
-                                    row_packer.push(val);
-                                }
-                                Err(e) => {
-                                    return Some(Err(e.into()));
-                                }
-                            }
-                        }
+                        // Evaluate the key expressions.
+                        row_packer.clear();
+                        let key = match key_mfp.evaluate(
+                            &mut datums_local,
+                            &temp_storage,
+                            &mut row_packer,
+                        ) {
+                            Err(e) => return Some(Err(DataflowError::from(e))),
+                            Ok(key) => key.expect("Row expected as no predicate was used"),
+                        };
+                        // Evaluate the value expressions.
+                        // The prior evaluation may have left additional columns we should delete.
+                        datums_local.truncate(skips.len());
+                        let val = match val_mfp.evaluate_iter(&mut datums_local, &temp_storage) {
+                            Err(e) => return Some(Err(DataflowError::from(e))),
+                            Ok(val) => val.expect("Row expected as no predicate was used"),
+                        };
+                        row_packer.extend(val);
                         drop(datums_local);
 
                         // Mint the final row, ideally re-using resources.

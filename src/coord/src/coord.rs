@@ -2245,6 +2245,7 @@ where
             // out the contents from an existing arrangement.
             let (mut map_filter_project, inner) =
                 expr::MapFilterProject::extract_from_expression(source.as_ref());
+            map_filter_project.optimize();
 
             // We can use a fast path approach if our query corresponds to a read out of
             // an existing materialization. This is the case if the expression is now a
