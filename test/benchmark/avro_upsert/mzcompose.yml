@@ -79,12 +79,8 @@ services:
      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
      - SCHEMA_REGISTRY_LISTENERS=http://schema-registry:8081,http://localhost:8081
     depends_on: [zookeeper, kafka]
-  kgen:
-    mzbuild: kgen
-  producer:
-    mzbuild: avro-upsert-producer
-    volumes:
-      - ./data:/data
+  avro-upsert-generator:
+    mzbuild: avro-upsert-generator
   # All monitoring
   dashboard:
     mzbuild: dashboard
@@ -124,14 +120,14 @@ mzworkflows:
       host: schema-registry
       port: 8081
     - step: run
-      service: producer
+      service: avro-upsert-generator
     - step: run
       service: create-views
 
-  run-kgen:
+  run-generator:
     steps:
     - step: run
-      service: kgen-avro-upsert
+      service: avro-upsert-generator
 
   restart-materialized:
     env:

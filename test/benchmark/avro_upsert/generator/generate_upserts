@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+key_schema=$(</usr/share/generator/key-schema.json)
+value_schema=$(</usr/share/generator/value-schema.json)
+value_distribution=$(</usr/share/generator/value-distribution.json)
+
+num_messages="${MZ_KGEN_NUM_MESSAGES:-400000000}"
+generator_processes="${MZ_KGEN_NUM_PROCESSES:-40}"
+
+echo ${num_messages}
+echo ${generator_processes}
+messages_per_process=$((num_messages / generator_processes))
+
+kgen_command=cat <<- EOF
+kgen --bootstrap-server kafka:9092
+     --schema-registry http://schema-registry:8081
+     --num-messages "${num_messages}"
+     --topic upsertavrotest
+     --partitions 30
+     --keys random
+     --key-min 0
+     --key-max 25000000
+     --values avro
+     --avro-schema="${value_schema}"
+     --avro-distribution="${value_distribution}"
+EOF
+
+echo seq "${generator_processes}" | parallel -n0 -j "${generator_processes}" "${kgen_command}"

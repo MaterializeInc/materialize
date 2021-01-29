@@ -7,13 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM confluentinc/cp-schema-registry:5.5.3
+MZFROM kgen
 
-RUN mkdir /data
+FROM python:3.9-slim
 
-RUN mkdir /usr/share/producer
-COPY key-schema.json /usr/share/producer/
-COPY value-schema.json /usr/share/producer/
+COPY --from=0 /usr/local/bin/kgen /usr/local/bin
 
-COPY produce_rows /usr/local/bin
-CMD /usr/local/bin/produce_rows
+RUN mkdir /usr/share/generator
+COPY key-schema.json /usr/share/generator/
+COPY value-schema.json /usr/share/generator/
+COPY value-distribution.json /usr/share/generator/
+
+COPY generate_upserts.py /usr/local/bin
+ENTRYPOINT /usr/local/bin/generate_upserts.py
