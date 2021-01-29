@@ -443,6 +443,13 @@ async fn main() -> anyhow::Result<()> {
     let matches = App::new("kgen")
         .about("Put random data in Kafka")
         .arg(
+            Arg::with_name("quiet")
+                .short("q")
+                .long("quiet")
+                .takes_value(false)
+                .help("Supress printing progress messages"),
+        )
+        .arg(
             Arg::with_name("topic")
                 .short("t")
                 .long("topic")
@@ -594,8 +601,10 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+
+    let quiet = matches.is_present("quiet");
     for i in 0..n {
-        if i % 10000 == 0 {
+        if !quiet && i % 10000 == 0 {
             eprintln!("Generating message {}", i);
         }
         value_gen.next_value(&mut buf);

@@ -28,6 +28,7 @@ def run(args: argparse.Namespace) -> None:
 
     kafka_gen = [
         "/usr/local/bin/kgen",
+        "--quiet",
         "--bootstrap-server",
         "kafka:9092",
         "--schema-registry",
@@ -52,9 +53,13 @@ def run(args: argparse.Namespace) -> None:
         value_distribution,
     ]
 
+    print(
+        f"Spawning {args.parallelism} generator processes, writing {messages_per_process} messages each"
+    )
     procs = [subprocess.Popen(kafka_gen) for _ in range(0, args.parallelism)]
-    for p in procs:
+    for (i, p) in enumerate(procs):
         p.wait()
+        print(f"{i}/{args.parallelism} processes finished: pid={p.pid} returncode={p.returncode}")
 
 
 if __name__ == "__main__":
