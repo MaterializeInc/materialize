@@ -272,26 +272,30 @@ impl<'a> RandomAvroGenerator<'a> {
         let p: *const _ = &*node.inner;
 
         let dist_json = field_name.and_then(|fn_| annotations.get(fn_));
+        let err = format!(
+            "Distribution annotation not found: {}",
+            field_name.unwrap_or("(None)")
+        );
         match node.inner {
             SchemaPiece::Null => {}
             SchemaPiece::Boolean => {
-                let dist = bool_dist(dist_json.unwrap(), rng);
+                let dist = bool_dist(dist_json.expect(&err), rng);
                 self.bools.insert(p, Box::new(dist));
             }
             SchemaPiece::Int => {
-                let dist = integral_dist(dist_json.unwrap(), rng);
+                let dist = integral_dist(dist_json.expect(&err), rng);
                 self.ints.insert(p, Box::new(dist));
             }
             SchemaPiece::Long => {
-                let dist = integral_dist(dist_json.unwrap(), rng);
+                let dist = integral_dist(dist_json.expect(&err), rng);
                 self.longs.insert(p, Box::new(dist));
             }
             SchemaPiece::Float => {
-                let dist = float_dist(dist_json.unwrap(), rng);
+                let dist = float_dist(dist_json.expect(&err), rng);
                 self.floats.insert(p, Box::new(dist));
             }
             SchemaPiece::Double => {
-                let dist = double_dist(dist_json.unwrap(), rng);
+                let dist = double_dist(dist_json.expect(&err), rng);
                 self.doubles.insert(p, Box::new(dist));
             }
             SchemaPiece::Date => {}
@@ -328,7 +332,7 @@ impl<'a> RandomAvroGenerator<'a> {
             }
             SchemaPiece::Map(_) => unimplemented!(),
             SchemaPiece::Union(us) => {
-                let variant_jsons = dist_json.unwrap().as_array().unwrap();
+                let variant_jsons = dist_json.expect(&err).as_array().unwrap();
                 assert!(variant_jsons.len() == us.variants().len());
                 let probabilities = variant_jsons.iter().map(|v| v.as_f64().unwrap());
                 let dist = WeightedIndex::new(probabilities).unwrap();
