@@ -746,6 +746,8 @@ impl Row {
 impl<'a> RowRef<'a> {
     /// Construct a `RowRef` from a byte slice.
     ///
+    /// # Safety
+    ///
     /// This method is unsafe because if the byte slice is not a valid
     /// row encoding, then unpacking its contents can cause undefined
     /// behavior.
