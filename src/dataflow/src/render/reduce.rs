@@ -157,16 +157,14 @@ where
                             &mut row_packer,
                         ) {
                             Err(e) => return Some(Err(DataflowError::from(e))),
-                            Ok(Some(key)) => key,
-                            _ => panic!("Row expected as no predicate was used"),
+                            Ok(key) => key.expect("Row expected as no predicate was used"),
                         };
                         // Evaluate the value expressions.
                         // The prior evaluation may have left additional columns we should delete.
                         datums_local.truncate(skips.len());
                         let val = match val_mfp.evaluate_iter(&mut datums_local, &temp_storage) {
                             Err(e) => return Some(Err(DataflowError::from(e))),
-                            Ok(Some(val)) => val,
-                            _ => panic!("Row expected as no predicate was used"),
+                            Ok(val) => val.expect("Row expected as no predicate was used"),
                         };
                         row_packer.extend(val);
                         drop(datums_local);
