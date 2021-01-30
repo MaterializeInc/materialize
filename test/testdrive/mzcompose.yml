@@ -8,29 +8,67 @@
 # by the Apache License, Version 2.0.
 
 version: '3.7'
-services:
+
+mzworkflows:
+  # Run tests with s3 stubbed out, no credentials needed
   testdrive:
+    steps:
+      - step: start-services
+        services: [localstack]
+      - step: workflow
+        workflow: start-deps
+      - step: wait-for-tcp
+        host: localstack
+        port: 4566
+      - step: run
+        service: testdrive-svc
+        command: --aws-endpoint=http://localstack:4566 ${TD_TEST:-*.td esoteric/*.td}
+
+  # Run tests, requires AWS credentials to be present. See guide-testing for
+  # details.
+  ci:
+    steps:
+      - step: workflow
+        workflow: start-deps
+      - step: run
+        service: testdrive-svc
+        command: --aws-region=us-east-2 --ci-output ${TD_TEST:-*.td esoteric/*.td}
+
+  start-deps:
+    steps:
+      - step: start-services
+        services: [kafka, schema-registry, materialized]
+      - step: wait-for-tcp
+        host: schema-registry
+        port: 8081
+      - step: wait-for-tcp
+        host: kafka
+        port: 9092
+      - step: wait-for-mz
+
+services:
+  testdrive-svc:
     mzbuild: testdrive
     entrypoint:
       - bash
       - -c
       - >-
-        wait-for-it --timeout=30 kafka:9092 &&
-        wait-for-it --timeout=30 schema-registry:8081 &&
-        wait-for-it --timeout=30 materialized:6875 &&
         testdrive
         --kafka-addr=kafka:9092
-        --aws-region=${AWS_REGION-us-east-2}
         --schema-registry-url=http://schema-registry:8081
         --materialized-url=postgres://ignored@materialized:6875
         --validate-catalog=/share/mzdata/catalog
         $$*
       - bash
-    command: test/testdrive/${TD_TEST:-*.td}
     environment:
     - TMPDIR=/share/tmp
+    - MZ_LOG
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+    - AWS_SESSION_TOKEN
+    - AWS_SECURITY_TOKEN
     volumes:
-    - ../../:/workdir
+    - .:/workdir
     - mzdata:/share/mzdata
     - tmp:/share/tmp
     propagate-uid-gid: true
@@ -44,8 +82,15 @@ services:
       -w1 --experimental
       --cache-max-pending-records 1
       --disable-telemetry
+    ports:
+      - 6875
     environment:
     - MZ_DEV=1
+    - MZ_LOG
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+    - AWS_SESSION_TOKEN
+    - AWS_SECURITY_TOKEN
     volumes:
     - mzdata:/share/mzdata
     - tmp:/share/tmp
@@ -66,6 +111,13 @@ services:
     - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
     - SCHEMA_REGISTRY_HOST_NAME=localhost
     depends_on: [kafka, zookeeper]
+  localstack:
+    image: localstack/localstack:0.12.5
+    environment:
+    - SERVICES=kinesis,s3
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
 volumes:
   mzdata:
   tmp:
