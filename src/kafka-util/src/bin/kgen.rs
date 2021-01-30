@@ -493,6 +493,12 @@ async fn main() -> anyhow::Result<()> {
                 .required_if("values", "bytes"),
         )
         .arg(
+            Arg::with_name("avro-key-schema")
+                .long("avro-key-schema")
+                .takes_value(true)
+                .required_if("values", "avro"),
+        )
+        .arg(
             Arg::with_name("avro-schema")
                 .long("avro-schema")
                 .takes_value(true)
@@ -566,9 +572,14 @@ async fn main() -> anyhow::Result<()> {
             ValueGenerator::UniformBytes { len, bytes, rng }
         }
         "avro" => {
-            let schema = matches.value_of("avro-schema").unwrap();
             let ccsr =
                 ccsr::ClientConfig::new(Url::parse(schema_registry).unwrap()).build();
+
+            let key_schema = matches.value_of("avro-key-schema").unwrap();
+            ccsr.publish_schema(&format!("{}-key", topic), key_schema)
+                .await?;
+
+            let schema = matches.value_of("avro-schema").unwrap();
             let schema_id = ccsr
                 .publish_schema(&format!("{}-value", topic), schema)
                 .await?;

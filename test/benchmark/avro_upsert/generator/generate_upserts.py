@@ -21,6 +21,7 @@ def run(args: argparse.Namespace) -> None:
 
     messages_per_process = int(args.num_messages / args.parallelism)
 
+    key_schema = pathlib.Path(SHARED_FILES, "key-schema.json").read_text().strip()
     value_schema = pathlib.Path(SHARED_FILES, "value-schema.json").read_text().strip()
     value_distribution = (
         pathlib.Path(SHARED_FILES, "value-distribution.json").read_text().strip()
@@ -47,6 +48,8 @@ def run(args: argparse.Namespace) -> None:
         str(args.num_keys),
         "--values",
         "avro",
+        "--avro-key-schema",
+        key_schema,
         "--avro-schema",
         value_schema,
         "--avro-distribution",
