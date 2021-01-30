@@ -176,7 +176,7 @@ fn test_ci_output_bad_file() {
         .stderr(predicate::str::starts_with(
             "error: reading tests: Is a directory",
         ))
-        .stdout(predicate::str::starts_with("^^^ +++"));
+        .stdout(predicate::str::contains("^^^ +++"));
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn test_ci_output_cmd_arg() {
      |       ^
 "#,
         )
-        .stdout(predicate::str::starts_with(
+        .stdout(predicate::str::contains(
             "--- ==> <stdin>
 ^^^ +++",
         ));
