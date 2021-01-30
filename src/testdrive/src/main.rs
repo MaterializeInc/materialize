@@ -50,7 +50,7 @@ struct Args {
     /// Named AWS region to target for AWS API requests.
     #[structopt(long, default_value = "localstack")]
     aws_region: String,
-    /// Custom AWS endpoint.
+    /// Custom AWS endpoint. Default: "http://localhost:4566".
     #[structopt(long)]
     aws_endpoint: Option<String>,
 
@@ -92,7 +92,7 @@ async fn run(args: Args) -> Result<(), Error> {
         match (args.aws_region.parse(), args.aws_endpoint) {
             (Ok(region), None) => {
                 // Standard AWS region without a custom endpoint. Try to find actual AWS
-                // credentials.
+                // credentials by looking through env vars and AWS resources.
                 let timeout = Duration::from_secs(5);
                 let account = aws::account(timeout)
                     .await
@@ -104,8 +104,9 @@ async fn run(args: Args) -> Result<(), Error> {
             }
             (_, aws_endpoint) => {
                 // Either a non-standard AWS region, a custom endpoint, or both. Assume
-                // dummy authentication, and just use default dummy credentials in the
-                // default config.
+                // we have a "custom" region. For us that means 'LocalStack' which
+                // requires an endpoint but the region name itself doesn't matter, and
+                // credentials are ignored.
                 let region = rusoto_core::Region::Custom {
                     name: args.aws_region,
                     endpoint: aws_endpoint.unwrap_or_else(|| "http://localhost:4566".into()),
@@ -119,7 +120,14 @@ async fn run(args: Args) -> Result<(), Error> {
                 );
                 (region, account.into(), credentials)
             }
-        };
+        }
+    };
+
+    if args.files.iter().any(|f| f.contains("esoteric")) {
+        // Esoteric tests include all AWS tests, where whether you are connecting to
+        // LocalStack or real AWS makes a big difference for debugging.
+        println!("testdrive is connecting to AWS_REGION={:?}", aws_region);
+    }
 
     let config = Config {
         kafka_addr: args.kafka_addr,
