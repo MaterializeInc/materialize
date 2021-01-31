@@ -96,12 +96,30 @@ c 9 3
 > SELECT * FROM csv_example WHERE counts = '8';
 c 8 2
 
-$ s3-put-object bucket=${bucket} key=server.log
-[2020-01-20T12:00:00] INFO 10.0.0.1 GET /login connection_established
-[2020-01-20T12:00:01] INFO 10.0.0.1 PUT /login logged_in
+$ s3-put-object bucket=${bucket} key=logs/2020/12/31/frontend.log
+99.99.44.44 - - [12/31/2020:23:55:59] "GET /updates HTTP/1.1" 200 10020 "-" "Python/Requests_22"
+80.91.33.133 - - [12/31/2020:23:55:02] "GET /downloads/materialized HTTP/1.1" 304 0 "-" "Rust/reqwest 0.3"
+173.203.139.108 - - [12/31/2020:23:55:07] "GET /wpadmin HTTP/1.1" 404 332 "-" "Firefox 9000"
+173.203.139.108 - - [12/31/2020:23:55:14] "GET /downloads/materialized HTTP/1.1" 404 334 "-" "Python/Requests_22"
+99.99.44.44 - - [12/31/2020:23:55:01] "GET /downloads/materialized HTTP/1.1" 304 0 "-" "Python/Requests_22"
+80.91.33.133 - - [12/31/2020:23:55:41] "GET /downloads/materialized HTTP/1.1" 304 0 "-" "Rust/reqwest 0.3"
+37.26.93.214 - - [12/31/2020:23:55:52] "GET /updates HTTP/1.1" 200 3318 "-" "Go_1.1_package_http"
 
-> CREATE MATERIALIZED SOURCE re
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN MATCHING '*.log'
+$ s3-put-object bucket=${bucket} key=logs/2021/01/01/frontend.log
+99.99.44.44 - - [01/01/2021:00:00:41] "GET /updates HTTP/1.1" 200 10020 "-" "Python/Requests_22"
+188.138.60.101 - - [01/01/2021:00:00:48] "GET /updates HTTP/1.1" 200 10020 "-" "Python/Requests_22"
+46.50.21.83 - - [01/01/2021:00:00:02] "GET /downloads/materialized HTTP/1.1" 304 0 "-" "Python/Requests_22.01"
+99.99.44.44 - - [01/01/2021:00:00:25] "GET /downloads/materialized HTTP/1.1" 304 0 "-" "Python/Requests_22"
+91.239.186.133 - - [01/01/2021:00:00:04] "GET /updates HTTP/1.1" 200 10020 "-" "Python/Requests_22"
+173.203.139.108 - - [01/01/2021:00:00:08] "GET /downloads/materialized HTTP/1.1" 304 0 "-" "Python/Requests_22"
+80.91.33.133 - - [01/01/2021:00:00:04] "GET /downloads/materialized HTTP/1.1" 304 0 "-" "Rust/reqwest 0.3"
+93.190.71.150 - - [01/01/2021:00:00:33] "GET /updates HTTP/1.1" 200 10020 "-" "Python/Requests_22"
+91.234.194.89 - - [01/01/2021:00:00:57] "GET /updates HTTP/1.1" 200 10020 "-" "Python/Requests_22"
+46.4.83.163 - - [01/01/2021:00:00:20] "GET /downloads/materialized HTTP/1.1" 304 0 "-" "Python/Requests_22"
+173.203.139.108 - - [01/01/2021:00:00:39] "GET /downloads/materialized HTTP/1.1" 404 335 "-" "Python/Requests_22"
+
+> CREATE MATERIALIZED SOURCE frontend_logs
+  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN MATCHING 'logs/**/*.log'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -109,11 +127,13 @@ $ s3-put-object bucket=${bucket} key=server.log
     secret_access_key = '${testdrive.aws-secret-access-key}',
     token = '${testdrive.aws-token}'
   )
-  FORMAT REGEX '\[(?P<dt>[^]]+)\] (?P<level>\w+) (?P<ip>[^ ]+) (?P<method>\w+) (?P<path>[^ ]+) (?P<message>.*)';
+  FORMAT REGEX '(?P<ip>[^ ]+) - - \[(?P<dt>[^]]+)\] "(?P<method>\w+) (?P<path>[^ ]+)[^"]+" (?P<status>\d+) (?P<content_length>\d+) "-" "(?P<user_agent>[^"]+)"';
 
-> SELECT * FROM re ORDER BY dt DESC
-2020-01-20T12:00:01 INFO 10.0.0.1 PUT /login logged_in 2
-2020-01-20T12:00:00 INFO 10.0.0.1 GET /login connection_established 1
-
-> SELECT * FROM re WHERE method = 'PUT'
-2020-01-20T12:00:01 INFO 10.0.0.1 PUT /login logged_in 2
+> SELECT dt, ip, user_agent FROM frontend_logs WHERE path = '/updates' ORDER BY dt
+01/01/2021:00:00:04 91.239.186.133 Python/Requests_22
+01/01/2021:00:00:33 93.190.71.150 Python/Requests_22
+01/01/2021:00:00:41 99.99.44.44 Python/Requests_22
+01/01/2021:00:00:48 188.138.60.101 Python/Requests_22
+01/01/2021:00:00:57 91.234.194.89 Python/Requests_22
+12/31/2020:23:55:52 37.26.93.214 Go_1.1_package_http
+12/31/2020:23:55:59 99.99.44.44 Python/Requests_22

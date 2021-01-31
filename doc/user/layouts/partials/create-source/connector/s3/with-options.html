@@ -1,0 +1,24 @@
+`region` | `text` | **required** A valid AWS region.
+
+#### AWS Credentials `WITH` options
+
+Field | Value | Description
+------|-------|------------
+{{ partial (printf "aws-credentials-with-options") . -}}
+
+##### Permissions Required
+
+The IAM User or Role that `materialized` is operating as requires permission to
+perform different AWS actions depending on what **OBJECTS FROM** specifies as a
+key name source.
+
+* All S3 sources require the [`GetObject` permission][getobject] for the objects that they will
+  download.
+* The **SCAN** object source additionally requires the [`ListObject`
+  permission][listobject] for the buckets it will scan.
+
+The root AWS documentation for S3 permissions is [available here][s3-permissions].
+
+[getobject]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html
+[listobject]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
+[s3-permissions]: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html
