@@ -40,7 +40,7 @@ url = "2.2.0"
 uuid = "0.8.2"
 
 [dev-dependencies]
-criterion = "0.3.0"
+criterion = "0.3.4"
 
 [build-dependencies]
 protoc = { path = "../protoc" }
