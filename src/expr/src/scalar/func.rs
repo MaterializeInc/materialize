@@ -2093,6 +2093,7 @@ pub enum BinaryFunc {
     ListLengthMax { max_dim: usize },
     ArrayContains,
     ArrayIndex,
+    ArrayLength,
     ArrayLower,
     ArrayUpper,
     ListListConcat,
@@ -2237,6 +2238,7 @@ impl BinaryFunc {
             BinaryFunc::EncodedBytesCharLength => eager!(encoded_bytes_char_length),
             BinaryFunc::ListIndex => Ok(eager!(list_index)),
             BinaryFunc::ListLengthMax { max_dim } => eager!(list_length_max, *max_dim),
+            BinaryFunc::ArrayLength => Ok(eager!(array_length)),
             BinaryFunc::ArrayContains => Ok(eager!(array_contains)),
             BinaryFunc::ArrayIndex => Ok(eager!(array_index)),
             BinaryFunc::ArrayLower => Ok(eager!(array_lower)),
@@ -2408,7 +2410,9 @@ impl BinaryFunc {
                 .clone()
                 .nullable(true),
 
-            ListLengthMax { .. } | ArrayLower | ArrayUpper => ScalarType::Int64.nullable(true),
+            ListLengthMax { .. } | ArrayLength | ArrayLower | ArrayUpper => {
+                ScalarType::Int64.nullable(true)
+            }
             ListListConcat | ListElementConcat => input1_type.scalar_type.nullable(true),
             ElementListConcat => input2_type.scalar_type.nullable(true),
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
@@ -2559,6 +2563,7 @@ impl BinaryFunc {
             | IsRegexpMatch { .. }
             | ArrayContains
             | ArrayIndex
+            | ArrayLength
             | ArrayLower
             | ArrayUpper
             | ListListConcat
@@ -2695,6 +2700,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
             BinaryFunc::ArrayContains => f.write_str("array_contains"),
             BinaryFunc::ArrayIndex => f.write_str("array_index"),
+            BinaryFunc::ArrayLength => f.write_str("array_length"),
             BinaryFunc::ArrayLower => f.write_str("array_lower"),
             BinaryFunc::ArrayUpper => f.write_str("array_upper"),
             BinaryFunc::ListListConcat => f.write_str("||"),
@@ -3980,6 +3986,17 @@ fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
         .iter()
         .nth(i as usize - 1)
         .unwrap_or(Datum::Null)
+}
+
+fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let i = b.unwrap_int64();
+    if i < 1 {
+        return Datum::Null;
+    }
+    match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
+        Some(ArrayDimension { length: 0, .. }) | None => Datum::Null,
+        Some(dim) => Datum::Int64(dim.length as i64),
+    }
 }
 
 fn array_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
