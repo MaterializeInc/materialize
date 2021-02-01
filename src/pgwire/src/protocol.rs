@@ -102,19 +102,30 @@ where
         params: Vec<(String, String)>,
     ) -> impl Future<Output = Result<(), comm::Error>> + Send {
         async move {
-            let mut state = self.startup(version, params).await?;
-
-            loop {
-                state = match state {
-                    State::Ready => self.advance_ready().await?,
-                    State::Drain => self.advance_drain().await?,
-                    State::Done => break,
-                }
-            }
-
+            // Call the inner logic from a function that's safe to use `?` in so that
+            // terminate can correctly be called in all cases.
+            let res = self.run_inner(version, params).await;
             self.coord_client.terminate().await;
-            Ok(())
+            res
         }
+    }
+
+    async fn run_inner(
+        &mut self,
+        version: i32,
+        params: Vec<(String, String)>,
+    ) -> Result<(), comm::Error> {
+        let mut state = self.startup(version, params).await?;
+
+        loop {
+            state = match state {
+                State::Ready => self.advance_ready().await?,
+                State::Drain => self.advance_drain().await?,
+                State::Done => break,
+            }
+        }
+
+        Ok(())
     }
 
     async fn advance_ready(&mut self) -> Result<State, comm::Error> {
