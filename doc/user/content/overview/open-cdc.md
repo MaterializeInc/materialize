@@ -10,11 +10,11 @@ menu:
 
 Change data capture (CDC) tools provide feeds that record any changes to a database. Typically, the feeds are then saved to another platform, like Kafka, for storage or processing.
 
-However, sometimes the system of record can have missing or duplicate records, or they receive records out of order. For example, if Debezium crashes while writing a record, it may retry and write the record again, resulting in a duplicate entry.
+However, sometimes the stream can have missing or duplicate records, or send records out of order. For example, if Debezium crashes while writing a record, it may retry and write the record again, resulting in a duplicate entry.
 
 To prevent the introduction of this kind of error, Materialize has developed the **Open CDC format**. The Open CDC format carries enough information for a downstream data consumer (like Materialize) to recognize when records are missing, duplicated, or out of order. Each record contains:
 
-- the record being changed
+- the fields being changed
 - the timestamp for the change
 - the number of messages used to transmit the record
 
