@@ -1187,6 +1187,9 @@ lazy_static! {
                 params!(Float32) => UnaryFunc::AbsFloat32,
                 params!(Float64) => UnaryFunc::AbsFloat64
             },
+            "array_length" => Scalar {
+                params![ArrayAny, Int64] => BinaryFunc::ArrayLength
+            },
             "array_lower" => Scalar {
                 params!(ArrayAny, Int64) => BinaryFunc::ArrayLower
             },

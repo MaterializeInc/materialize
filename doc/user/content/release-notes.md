@@ -46,6 +46,7 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+- Add support for `array_length()` {{% gh 5538 %}}.
 - Support [gzip-compressed](/sql/create-source/text-file/#compression) file sources {{% gh 5392 %}}.
 
 {{% version-header v0.6.2 %}}
