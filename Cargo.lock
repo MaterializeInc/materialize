@@ -3316,7 +3316,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
+source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
 dependencies = [
  "async-trait",
  "base64",
@@ -3340,7 +3340,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
+source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3357,7 +3357,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kinesis"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
+source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3370,7 +3370,7 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
+source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
 dependencies = [
  "async-trait",
  "bytes",
@@ -3382,7 +3382,7 @@ dependencies = [
 [[package]]
 name = "rusoto_signature"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
+source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
 dependencies = [
  "base64",
  "bytes",
@@ -3407,7 +3407,7 @@ dependencies = [
 [[package]]
 name = "rusoto_sts"
 version = "0.46.0"
-source = "git+https://github.com/rusoto/rusoto.git#bcf80486ab8aa389296ee5211c7c4c3d40f7ffbb"
+source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
 dependencies = [
  "async-trait",
  "bytes",
