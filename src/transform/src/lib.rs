@@ -259,6 +259,7 @@ impl Default for Optimizer {
             Box::new(crate::demand::Demand),
             Box::new(crate::fusion::project::Project),
             Box::new(crate::reduction::FoldConstants),
+            Box::new(crate::empty_map::EmptyMap),
         ];
         Self { transforms }
     }
