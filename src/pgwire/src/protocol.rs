@@ -854,6 +854,10 @@ where
             ExecuteResponse::CreatedSchema { existed } => {
                 created!(existed, SqlState::DUPLICATE_SCHEMA, "schema")
             }
+            ExecuteResponse::CreatedRole => {
+                let existed = false;
+                created!(existed, SqlState::DUPLICATE_OBJECT, "role")
+            }
             ExecuteResponse::CreatedTable { existed } => {
                 created!(existed, SqlState::DUPLICATE_TABLE, "table")
             }
@@ -879,6 +883,7 @@ where
             ExecuteResponse::DiscardedAll => command_complete!("DISCARD ALL"),
             ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
             ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),
+            ExecuteResponse::DroppedRole => command_complete!("DROP ROLE"),
             ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
             ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX"),
             ExecuteResponse::DroppedSink => command_complete!("DROP SINK"),

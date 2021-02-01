@@ -88,6 +88,7 @@ pub struct Catalog {
     indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
+    roles: HashMap<String, Role>,
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
     config: sql::catalog::CatalogConfig,
@@ -123,6 +124,14 @@ pub struct Schema {
     #[serde(skip)]
     pub oid: u32,
     pub items: BTreeMap<String, GlobalId>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Role {
+    pub name: String,
+    pub id: i64,
+    #[serde(skip)]
+    pub oid: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -409,6 +418,7 @@ impl Catalog {
             indexes: HashMap::new(),
             ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
+            roles: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
             config: sql::catalog::CatalogConfig {
@@ -468,6 +478,20 @@ impl Catalog {
                 schema_name,
                 oid,
             })
+        }
+
+        let roles = catalog.storage().load_roles()?;
+        for (id, name) in roles {
+            let oid = catalog.allocate_oid()?;
+            catalog.roles.insert(
+                name.clone(),
+                Role {
+                    name: name.clone(),
+                    id,
+                    oid,
+                },
+            );
+            events.push(Event::CreatedRole { name, id, oid });
         }
 
         for builtin in BUILTINS.values() {
@@ -1058,6 +1082,11 @@ impl Catalog {
                 database_name: String,
                 schema_name: String,
             },
+            CreateRole {
+                id: i64,
+                oid: u32,
+                name: String,
+            },
             CreateItem {
                 id: GlobalId,
                 oid: u32,
@@ -1070,6 +1099,9 @@ impl Catalog {
             DropSchema {
                 database_name: String,
                 schema_name: String,
+            },
+            DropRole {
+                name: String,
             },
             DropItem(GlobalId),
             UpdateItem {
@@ -1119,6 +1151,11 @@ impl Catalog {
                         schema_name,
                     }]
                 }
+                Op::CreateRole { name, oid } => vec![Action::CreateRole {
+                    id: tx.insert_role(&name)?,
+                    oid,
+                    name,
+                }],
                 Op::CreateItem {
                     id,
                     oid,
@@ -1187,6 +1224,10 @@ impl Catalog {
                         database_name,
                         schema_name,
                     }]
+                }
+                Op::DropRole { name } => {
+                    tx.remove_role(&name)?;
+                    vec![Action::DropRole { name }]
                 }
                 Op::DropItem(id) => {
                     let entry = self.get_by_id(&id);
@@ -1313,6 +1354,19 @@ impl Catalog {
                     }
                 }
 
+                Action::CreateRole { id, oid, name } => {
+                    info!("create role {}", name);
+                    self.roles.insert(
+                        name.clone(),
+                        Role {
+                            name: name.clone(),
+                            id,
+                            oid,
+                        },
+                    );
+                    Event::CreatedRole { name, id, oid }
+                }
+
                 Action::CreateItem {
                     id,
                     oid,
@@ -1344,6 +1398,18 @@ impl Catalog {
                         None => Event::NoOp,
                     }
                 }
+
+                Action::DropRole { name } => match self.roles.remove(&name) {
+                    Some(role) => {
+                        info!("drop role {}", name);
+                        Event::DroppedRole {
+                            name,
+                            id: role.id,
+                            oid: role.oid,
+                        }
+                    }
+                    None => Event::NoOp,
+                },
 
                 Action::DropItem(id) => {
                     let metadata = self.by_id.remove(&id).unwrap();
@@ -1643,6 +1709,10 @@ pub enum Op {
         schema_name: String,
         oid: u32,
     },
+    CreateRole {
+        name: String,
+        oid: u32,
+    },
     CreateItem {
         id: GlobalId,
         oid: u32,
@@ -1655,6 +1725,9 @@ pub enum Op {
     DropSchema {
         database_name: DatabaseSpecifier,
         schema_name: String,
+    },
+    DropRole {
+        name: String,
     },
     /// Unconditionally removes the identified items. It is required that the
     /// IDs come from the output of `plan_remove`; otherwise consistency rules
@@ -1679,6 +1752,11 @@ pub enum Event {
         schema_name: String,
         oid: u32,
     },
+    CreatedRole {
+        name: String,
+        id: i64,
+        oid: u32,
+    },
     CreatedItem {
         schema_id: i64,
         id: GlobalId,
@@ -1695,6 +1773,11 @@ pub enum Event {
         database_id: i64,
         schema_id: i64,
         schema_name: String,
+        oid: u32,
+    },
+    DroppedRole {
+        name: String,
+        id: i64,
         oid: u32,
     },
     DroppedIndex {
@@ -1864,6 +1947,11 @@ impl SqlCatalog for ConnCatalog<'_> {
         }
     }
 
+    fn user(&self) -> &str {
+        // TODO(benesch): wire this up to the session.
+        "materialize"
+    }
+
     fn default_database(&self) -> &str {
         &self.database
     }
@@ -1886,6 +1974,16 @@ impl SqlCatalog for ConnCatalog<'_> {
         Ok(self
             .catalog
             .resolve_schema(&self.database, database, schema_name, self.conn_id)?)
+    }
+
+    fn resolve_role(
+        &self,
+        role_name: &str,
+    ) -> Result<&dyn sql::catalog::CatalogRole, SqlCatalogError> {
+        match self.catalog.roles.get(role_name) {
+            Some(role) => Ok(role),
+            None => Err(SqlCatalogError::UnknownRole(role_name.into())),
+        }
     }
 
     fn resolve_item(
@@ -1984,6 +2082,16 @@ impl sql::catalog::CatalogDatabase for Database {
 
 impl sql::catalog::CatalogSchema for Schema {
     fn name(&self) -> &SchemaName {
+        &self.name
+    }
+
+    fn id(&self) -> i64 {
+        self.id
+    }
+}
+
+impl sql::catalog::CatalogRole for Role {
+    fn name(&self) -> &str {
         &self.name
     }
 

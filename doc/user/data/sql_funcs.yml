@@ -391,6 +391,10 @@
     description: Returns the server's version information as a human-readable string.
   - signature: 'format_type(oid: int, typemod: int) -> text'
     description: Returns the canonical SQL name for the type specified by `oid` with `typemod` applied.
+  - signature: 'current_user() -> text'
+    description: >-
+      Returns the name of the user who executed the containing query.
+      At the moment this is always `materialize`.
 
 - type: PostgreSQL compatibility
   description: Functions whose primary purpose is to facilitate compatibility with PostgreSQL tools

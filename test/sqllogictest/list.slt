@@ -1906,9 +1906,9 @@ SELECT '{1,2}'::int4_list_c::text;
 {1,2}
 
 query T
-SELECT oid FROM pg_type WHERE typname = 'int4_list_c';
+SELECT oid >= 20000 FROM pg_type WHERE typname = 'int4_list_c';
 ----
-20055
+true
 
 query T
 SELECT '{{1,2}}'::int4_list_c list::text

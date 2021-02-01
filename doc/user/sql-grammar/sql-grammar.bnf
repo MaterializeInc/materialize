@@ -28,6 +28,8 @@ create_materialized_view ::=
   'CREATE' 'MATERIALIZED VIEW' view_name 'AS' select_stmt |
   'CREATE' 'MATERIALIZED VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'MATERIALIZED VIEW' view_name 'AS' select_stmt
+create_role ::=
+    'CREATE' 'ROLE' role_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
 create_schema ::=
     'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
 create_sink ::=
@@ -134,6 +136,8 @@ create_source_text_kinesis ::=
   )?
 create_type ::=
     'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')'
+create_user ::=
+    'CREATE' 'USER' user_name ('LOGIN' | 'NOLOGIN' | 'SUPERUSER' | 'NOSUPERUSER')*
 create_view ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name 'AS' select_stmt |
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
@@ -152,6 +156,8 @@ drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name
 drop_index ::=
     'DROP' 'INDEX' index_name
+drop_role ::=
+    'DROP' 'ROLE' ('IF EXISTS')? role_name
 drop_schema ::=
     'DROP' 'SCHEMA' ('IF EXISTS')? schema_name ('CASCADE' | 'RESTRICT')
 drop_sink ::=
@@ -162,6 +168,8 @@ drop_view ::=
   'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
 drop_table ::=
   'DROP' 'TABLE' ('IF' 'EXISTS')? table_name
+drop_user ::=
+    'DROP' 'USER' ('IF EXISTS')? role_name
 explain ::=
   'EXPLAIN'
   'TYPED'? ( ( 'RAW' | 'DECORRELATED' | 'OPTIMIZED' )? 'PLAN FOR' )?
