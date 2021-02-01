@@ -622,6 +622,36 @@ NULL
 query error Cannot call function array_upper\(unknown, integer\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT array_upper(NULL, 1)
 
+query I
+SELECT array_length(ARRAY['a', 'b'], 1)
+----
+2
+
+query I
+SELECT array_length(ARRAY['a'], 1)
+----
+1
+
+query I
+SELECT array_length(ARRAY['a'], 0)
+----
+NULL
+
+query I
+SELECT array_length(ARRAY['a'], 2)
+----
+NULL
+
+query I
+SELECT array_length(ARRAY[ARRAY[1, 2]], 2)
+----
+2
+
+query I
+SELECT array_length(ARRAY[]::int[], 1)
+----
+NULL
+
 query T
 SELECT upper('a1Bd')
 ----

@@ -30,6 +30,7 @@ use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
 use sql::catalog::{
     Catalog as SqlCatalog, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+    CatalogItemType as SqlCatalogItemType,
 };
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::{Params, Plan, PlanContext};
@@ -2030,7 +2031,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         }
     }
 
-    fn item_type(&self) -> sql::catalog::CatalogItemType {
+    fn item_type(&self) -> SqlCatalogItemType {
         self.item().typ()
     }
 

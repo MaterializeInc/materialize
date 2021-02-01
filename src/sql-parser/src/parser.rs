@@ -321,6 +321,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(CASE) => self.parse_case_expr(),
             Token::Keyword(CAST) => self.parse_cast_expr(),
             Token::Keyword(COALESCE) => self.parse_coalesce_expr(),
+            Token::Keyword(NULLIF) => self.parse_nullif_expr(),
             Token::Keyword(EXISTS) => self.parse_exists_expr(),
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
             Token::Keyword(INTERVAL) => self.parse_literal_interval(),
@@ -638,6 +639,15 @@ impl<'a> Parser<'a> {
         let exprs = self.parse_comma_separated(Parser::parse_expr)?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Coalesce { exprs })
+    }
+
+    fn parse_nullif_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let l_expr = Box::new(self.parse_expr()?);
+        self.expect_token(&Token::Comma)?;
+        let r_expr = Box::new(self.parse_expr()?);
+        self.expect_token(&Token::RParen)?;
+        Ok(Expr::NullIf { l_expr, r_expr })
     }
 
     fn parse_extract_expr(&mut self) -> Result<Expr<Raw>, ParserError> {

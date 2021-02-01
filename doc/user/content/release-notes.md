@@ -61,6 +61,9 @@ Wrap your release notes at the 80 character mark.
 
 - Remove deprecated `MZ_THREADS` alias for `MZ_WORKERS`.
 
+- Support equality operations on `uuid` data, which enables joins on `uuid`
+  columns {{% gh 5540 %}}.
+
 {{% version-header v0.6.1 %}}
 
 - **Backwards-incompatible change.** Validate `WITH` clauses in [`CREATE
