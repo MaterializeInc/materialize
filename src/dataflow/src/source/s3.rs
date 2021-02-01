@@ -81,11 +81,8 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
-        encoding: DataEncoding,
+        _encoding: DataEncoding,
     ) -> Result<S3SourceInfo, anyhow::Error> {
-        if !matches!(encoding, DataEncoding::Text | DataEncoding::Bytes) {
-            anyhow::bail!("S3 sources only support 'text' or 'bytes' encodings");
-        }
         let s3_conn = match connector {
             ExternalSourceConnector::S3(s3_conn) => s3_conn,
             _ => {
