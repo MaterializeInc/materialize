@@ -1262,6 +1262,9 @@ lazy_static! {
             "current_timestamp" => Scalar {
                 params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "current_timestamp"))
             },
+            "current_user" => Scalar {
+                params!() => Operation::nullary(|ecx| Ok(HirScalarExpr::literal(Datum::String(ecx.qcx.scx.catalog.user()), ScalarType::String)))
+            },
             "date_part" => Scalar {
                 params!(String, Interval) => BinaryFunc::DatePartInterval,
                 params!(String, Timestamp) => BinaryFunc::DatePartTimestamp,

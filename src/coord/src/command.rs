@@ -124,6 +124,8 @@ pub enum ExecuteResponse {
     CreatedSchema {
         existed: bool,
     },
+    /// The requested role was created.
+    CreatedRole,
     /// The requested index was created.
     CreatedIndex {
         existed: bool,
@@ -156,6 +158,8 @@ pub enum ExecuteResponse {
     DiscardedAll,
     /// The requested database was dropped.
     DroppedDatabase,
+    /// The requested role was dropped.
+    DroppedRole,
     /// The requested schema was dropped.
     DroppedSchema,
     /// The requested source was dropped.

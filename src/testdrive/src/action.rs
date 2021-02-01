@@ -82,6 +82,7 @@ pub struct State {
     temp_dir: tempfile::TempDir,
     materialized_catalog_path: Option<PathBuf>,
     materialized_addr: String,
+    materialized_user: String,
     pgclient: tokio_postgres::Client,
     schema_registry_url: Url,
     ccsr_client: ccsr::Client,
@@ -120,6 +121,24 @@ impl State {
             .batch_execute("CREATE DATABASE materialize")
             .await
             .err_ctx("resetting materialized state: CREATE DATABASE materialize")?;
+
+        for row in self
+            .pgclient
+            .query("SELECT name FROM mz_roles", &[])
+            .await
+            .err_ctx("resetting materialized state: SELECT name FROM mz_roles")?
+        {
+            let role_name: String = row.get(0);
+            if role_name == "materialize" {
+                continue;
+            }
+            let query = format!("DROP ROLE {}", role_name);
+            sql::print_query(&query);
+            self.pgclient.batch_execute(&query).await.err_ctx(format!(
+                "resetting materialized state: DROP ROLE {}",
+                role_name,
+            ))?;
+        }
         Ok(())
     }
 
@@ -312,6 +331,10 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
             _ => "".into(),
         },
     );
+    vars.insert(
+        "testdrive.materialized-user".into(),
+        state.materialized_user.clone(),
+    );
     for cmd in cmds {
         let pos = cmd.pos;
         let wrap_err = |e| InputError { msg: e, pos };
@@ -455,7 +478,7 @@ pub async fn create_state(
         None
     };
 
-    let (materialized_addr, pgclient, pgconn_task) = {
+    let (materialized_addr, materialized_user, pgclient, pgconn_task) = {
         let materialized_url = util::postgres::config_url(&config.materialized_pgconfig)?;
         let (pgclient, pgconn) = config
             .materialized_pgconfig
@@ -472,12 +495,17 @@ pub async fn create_state(
             join.expect("pgconn_task unexpectedly canceled")
                 .err_ctx("running SQL connection")
         });
+        let materialized_user = pgclient
+            .query_one("SELECT current_user", &[])
+            .await
+            .err_ctx("fetching current user")?
+            .get(0);
         let materialized_addr = format!(
             "{}:{}",
             materialized_url.host_str().unwrap(),
             materialized_url.port().unwrap()
         );
-        (materialized_addr, pgclient, pgconn_task)
+        (materialized_addr, materialized_user, pgclient, pgconn_task)
     };
 
     let schema_registry_url = config.schema_registry_url.to_owned();
@@ -566,6 +594,7 @@ pub async fn create_state(
         temp_dir,
         materialized_catalog_path,
         materialized_addr,
+        materialized_user,
         pgclient,
         schema_registry_url,
         ccsr_client,

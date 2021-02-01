@@ -70,8 +70,9 @@ use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::cache::{CacheConfig, Cacher};
 use crate::catalog::builtin::{
     BUILTINS, MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES,
-    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_SCHEMAS,
-    MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_ROLES,
+    MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS,
+    MZ_VIEW_KEYS,
 };
 use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type, TypeInner};
 use crate::command::{
@@ -1156,6 +1157,21 @@ where
         .await
     }
 
+    async fn report_role_update(&mut self, role_id: i64, oid: u32, name: &str, diff: isize) {
+        self.update_catalog_view(
+            MZ_ROLES.id,
+            iter::once((
+                Row::pack_slice(&[
+                    Datum::Int64(role_id),
+                    Datum::Int32(oid as i32),
+                    Datum::String(&name),
+                ]),
+                diff,
+            )),
+        )
+        .await
+    }
+
     async fn report_column_updates(
         &mut self,
         desc: &RelationDesc,
@@ -1444,6 +1460,8 @@ where
                 session,
             ),
 
+            Plan::CreateRole { name } => tx.send(self.sequence_create_role(name).await, session),
+
             Plan::CreateTable {
                 name,
                 table,
@@ -1525,6 +1543,8 @@ where
             }
 
             Plan::DropSchema { name } => tx.send(self.sequence_drop_schema(name).await, session),
+
+            Plan::DropRoles { names } => tx.send(self.sequence_drop_roles(names).await, session),
 
             Plan::DropItems { items, ty } => {
                 tx.send(self.sequence_drop_items(items, ty).await, session)
@@ -1748,6 +1768,17 @@ where
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
             Err(err) => Err(err),
         }
+    }
+
+    async fn sequence_create_role(
+        &mut self,
+        name: String,
+    ) -> Result<ExecuteResponse, anyhow::Error> {
+        let oid = self.catalog.allocate_oid()?;
+        let op = catalog::Op::CreateRole { name, oid };
+        self.catalog_transact(vec![op])
+            .await
+            .map(|_| ExecuteResponse::CreatedRole)
     }
 
     async fn sequence_create_table(
@@ -2078,6 +2109,18 @@ where
         let ops = self.catalog.drop_schema_ops(name);
         self.catalog_transact(ops).await?;
         Ok(ExecuteResponse::DroppedSchema)
+    }
+
+    async fn sequence_drop_roles(
+        &mut self,
+        names: Vec<String>,
+    ) -> Result<ExecuteResponse, anyhow::Error> {
+        let ops = names
+            .into_iter()
+            .map(|name| catalog::Op::DropRole { name })
+            .collect();
+        self.catalog_transact(ops).await?;
+        Ok(ExecuteResponse::DroppedRole)
     }
 
     async fn sequence_drop_items(
@@ -2750,6 +2793,9 @@ where
                     self.report_schema_update(*schema_id, *oid, *database_id, schema_name, 1)
                         .await;
                 }
+                catalog::Event::CreatedRole { id, oid, name } => {
+                    self.report_role_update(*id, *oid, name, 1).await;
+                }
                 catalog::Event::CreatedItem {
                     schema_id,
                     id,
@@ -2872,6 +2918,9 @@ where
                     )
                     .await;
                 }
+                catalog::Event::DroppedRole { id, oid, name } => {
+                    self.report_role_update(*id, *oid, name, -1).await;
+                }
                 catalog::Event::DroppedIndex { entry, nullable } => match entry.item() {
                     CatalogItem::Index(index) => {
                         indexes_to_drop.push(entry.id());
@@ -2986,7 +3035,7 @@ where
                         self.report_column_updates(desc, entry.id(), -1).await?;
                     }
                 }
-                _ => (),
+                catalog::Event::NoOp => (),
             }
         }
 

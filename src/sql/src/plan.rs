@@ -70,6 +70,9 @@ pub enum Plan {
         schema_name: String,
         if_not_exists: bool,
     },
+    CreateRole {
+        name: String,
+    },
     CreateSource {
         name: FullName,
         source: Source,
@@ -113,6 +116,9 @@ pub enum Plan {
     },
     DropSchema {
         name: SchemaName,
+    },
+    DropRoles {
+        names: Vec<String>,
     },
     DropItems {
         items: Vec<GlobalId>,
