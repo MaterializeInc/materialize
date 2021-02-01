@@ -1403,7 +1403,6 @@ ORDER BY
 | |   delta %4 %5.(#0)
 | |   delta %5 %4.(#0)
 | | demand = (#0, #2)
-| Map 
 | ArrangeBy (#0)
 
 %7 =
