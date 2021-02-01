@@ -67,6 +67,19 @@ catalog item 'foo' already exists
 
 > CREATE OR REPLACE TEMPORARY MATERIALIZED VIEW foo AS SELECT * FROM v
 
+> CREATE TEMPORARY TABLE temp_t (a int, b text NOT NULL)
+
+! CREATE TEMP TABLE temp_t (a int, b text NOT NULL)
+catalog item 'temp_t' already exists
+
+> INSERT INTO temp_t VALUES (1, 'testing')
+
+> SHOW INDEXES FROM temp_t
+ on_name    key_name            seq_in_index  column_name  expression  nullable
+---------------------------------------------------------------------------
+ temp_t     temp_t_primary_idx  1             a            <null>      true
+ temp_t     temp_t_primary_idx  2             b            <null>      false
+
 #####################################################################
 # Test things we shouldn't be able to make temporary.
 
@@ -103,6 +116,8 @@ unknown catalog item 'double_temp_v'
 > DISCARD TEMP
 
 > SELECT * FROM mz_indexes WHERE name = 'foo_primary_idx'
+
+> SELECT * FROM mz_indexes WHERE name = 'temp_t_primary_idx'
 
 ! SELECT * FROM temp_v;
 unknown catalog item 'temp_v'

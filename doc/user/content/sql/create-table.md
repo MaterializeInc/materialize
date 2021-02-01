@@ -37,6 +37,7 @@ You might want to create a table when...
 
 Field | Use
 ------|-----
+**TEMP** / **TEMPORARY** | Mark the table as [temporary](#temporary-tables).
 _table&lowbar;name_ | A name for the table.
 _col&lowbar;name_ | The name of the column to be created in the table.
 _col&lowbar;type_ | The data type of the column indicated by _col&lowbar;name_.
@@ -59,6 +60,15 @@ Additionally, tables do not currently support:
   INSERT INTO t1 SELECT * FROM t2
   ```
 - `UPDATE ...` and `DELETE` statements
+
+### Temporary tables
+
+The `TEMP`/`TEMPORARY` keyword creates a temporary table. Temporary tables are
+automatically dropped at the end of the SQL session and are not visible to other
+connections. They are always created in the special `mz_temp` schema.
+
+Temporary tables may depend upon other temporary database objects, but non-temporary
+tables may not depend on temporary objects.
 
 ## Examples
 
