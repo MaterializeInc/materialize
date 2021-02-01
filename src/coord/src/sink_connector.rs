@@ -39,6 +39,7 @@ pub async fn build(
 async fn register_kafka_topic(
     client: &AdminClient<DefaultClientContext>,
     topic: &str,
+    partition_count: i32,
     replication_factor: i32,
     ccsr: &ccsr::Client,
     value_schema: &str,
@@ -48,7 +49,7 @@ async fn register_kafka_topic(
         .create_topics(
             &[NewTopic::new(
                 &topic,
-                1,
+                partition_count,
                 TopicReplication::Fixed(replication_factor),
             )],
             &AdminOptions::new().request_timeout(Some(Duration::from_secs(5))),
@@ -110,7 +111,8 @@ async fn build_kafka(
     let (key_schema_id, value_schema_id) = register_kafka_topic(
         &client,
         &topic,
-        builder.replication_factor as i32,
+        builder.partition_count,
+        builder.replication_factor,
         &ccsr,
         &builder.value_schema,
         builder.key_schema.as_deref(),
@@ -123,7 +125,8 @@ async fn build_kafka(
         let (_, consistency_schema_id) = register_kafka_topic(
             &client,
             &consistency_topic,
-            builder.replication_factor as i32,
+            builder.partition_count,
+            builder.replication_factor,
             &ccsr,
             &consistency_value_schema,
             None,
