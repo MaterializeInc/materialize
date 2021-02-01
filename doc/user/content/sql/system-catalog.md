@@ -175,6 +175,17 @@ Field       | Type       | Meaning
 `name`      | [`text`]   | The name of the relation.
 `type`      | [`text`]   | The type of the relation: either `table`, `source`, or `view`.
 
+### `mz_roles`
+
+The `mz_roles` table contains a row for each role in the system.
+
+Field  | Type       | Meaning
+-------|------------|--------
+`id`   | [`bigint`] | Materialize's unique ID for the role.
+`oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the role.
+`name` | [`text`]   | The name of the role.
+
+
 ### `mz_schemas`
 
 The `mz_schemas` table contains a row for each schema in the system.

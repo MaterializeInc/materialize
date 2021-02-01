@@ -92,6 +92,14 @@ const MIGRATIONS: &[&str] = &[
         name TEXT PRIMARY KEY,
         value TEXT
     );",
+    // Creates the roles table and a default "materialize" user.
+    //
+    // Introduced in v0.6.2.
+    "CREATE TABLE roles (
+        id   integer PRIMARY KEY,
+        name text NOT NULL UNIQUE
+    );
+    INSERT INTO roles VALUES (1, 'materialize');",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -309,6 +317,17 @@ impl Connection {
             .collect()
     }
 
+    pub fn load_roles(&self) -> Result<Vec<(i64, String)>, Error> {
+        self.inner
+            .prepare("SELECT id, name FROM roles")?
+            .query_and_then(params![], |row| -> Result<_, Error> {
+                let id: i64 = row.get(0)?;
+                let name: String = row.get(1)?;
+                Ok((id, name))
+            })?
+            .collect()
+    }
+
     pub fn load_items(&self) -> Result<Vec<(GlobalId, FullName, Vec<u8>)>, Error> {
         // Order user views by their GlobalId
         self.inner
@@ -421,6 +440,20 @@ impl Transaction<'_> {
         }
     }
 
+    pub fn insert_role(&mut self, role_name: &str) -> Result<i64, Error> {
+        match self
+            .inner
+            .prepare_cached("INSERT INTO roles (name) VALUES (?)")?
+            .execute(params![role_name])
+        {
+            Ok(_) => Ok(self.inner.last_insert_rowid()),
+            Err(err) if is_constraint_violation(&err) => Err(Error::new(
+                ErrorKind::RoleAlreadyExists(role_name.to_owned()),
+            )),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     pub fn insert_item(
         &self,
         id: GlobalId,
@@ -466,6 +499,19 @@ impl Transaction<'_> {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownSchema(schema_name.to_owned()).into())
+        }
+    }
+
+    pub fn remove_role(&self, name: &str) -> Result<(), Error> {
+        let n = self
+            .inner
+            .prepare_cached("DELETE FROM roles WHERE name = ?")?
+            .execute(params![name])?;
+        assert!(n <= 1);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownRole(name.to_owned()).into())
         }
     }
 

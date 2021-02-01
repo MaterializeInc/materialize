@@ -53,6 +53,9 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
     /// Returns the search path used by the catalog.
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str>;
 
+    /// Returns the name of the user who is issuing the query.
+    fn user(&self) -> &str;
+
     /// Returns the database to use if one is not explicitly specified.
     fn default_database(&self) -> &str;
 
@@ -74,6 +77,9 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
         database_name: Option<String>,
         schema_name: &str,
     ) -> Result<&dyn CatalogSchema, CatalogError>;
+
+    /// Resolves the named role.
+    fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
 
     /// Resolves a partially-specified item name.
     ///
@@ -154,12 +160,21 @@ pub trait CatalogDatabase {
     fn id(&self) -> i64;
 }
 
-/// A database in a [`Catalog`].
+/// A schema in a [`Catalog`].
 pub trait CatalogSchema {
     /// Returns a fully-specified name of the schema.
     fn name(&self) -> &SchemaName;
 
     /// Returns a stable ID for the schema.
+    fn id(&self) -> i64;
+}
+
+/// A role in a [`Catalog`].
+pub trait CatalogRole {
+    /// Returns a fully-specified name of the role.
+    fn name(&self) -> &str;
+
+    /// Returns a stable ID for the role.
     fn id(&self) -> i64;
 }
 
@@ -246,6 +261,8 @@ pub enum CatalogError {
     UnknownDatabase(String),
     /// Unknown schema.
     UnknownSchema(String),
+    /// Unknown role.
+    UnknownRole(String),
     /// Unknown item.
     UnknownItem(String),
     /// Invalid attempt to depend on a non-dependable item.
@@ -262,6 +279,7 @@ impl fmt::Display for CatalogError {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
+            Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
             Self::InvalidDependency { name, typ } => write!(
                 f,
@@ -301,6 +319,10 @@ impl Catalog for DummyCatalog {
         vec!["dummy"]
     }
 
+    fn user(&self) -> &str {
+        "dummy"
+    }
+
     fn default_database(&self) -> &str {
         "dummy"
     }
@@ -314,6 +336,10 @@ impl Catalog for DummyCatalog {
         _: Option<String>,
         _: &str,
     ) -> Result<&dyn CatalogSchema, CatalogError> {
+        unimplemented!();
+    }
+
+    fn resolve_role(&self, _: &str) -> Result<&dyn CatalogRole, CatalogError> {
         unimplemented!();
     }
 

@@ -1836,7 +1836,7 @@ impl<'a> Parser<'a> {
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
         let object_type = match self.parse_one_of_keywords(&[
-            DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, VIEW,
+            DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
         ]) {
             Some(DATABASE) => {
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {

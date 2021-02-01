@@ -1297,6 +1297,12 @@ lazy_static! {
                     })
                 }), 1403;
             },
+            "current_user" => Scalar {
+                params!() => Operation::nullary(|ecx| {
+                    let datum = Datum::String(ecx.qcx.scx.catalog.user());
+                    Ok(HirScalarExpr::literal(datum, ScalarType::String))
+                }), 745;
+            },
             "date_part" => Scalar {
                 params!(String, Interval) => BinaryFunc::DatePartInterval, 1172;
                 params!(String, Timestamp) => BinaryFunc::DatePartTimestamp, 2021;

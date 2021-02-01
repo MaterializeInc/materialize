@@ -29,6 +29,7 @@ pub(crate) enum ErrorKind {
     Sql(SqlCatalogError),
     DatabaseAlreadyExists(String),
     SchemaAlreadyExists(String),
+    RoleAlreadyExists(String),
     ItemAlreadyExists(String),
     UnacceptableSchemaName(String),
     ReadOnlySystemSchema(String),
@@ -84,6 +85,7 @@ impl std::error::Error for Error {
             | ErrorKind::OidExhaustion
             | ErrorKind::DatabaseAlreadyExists(_)
             | ErrorKind::SchemaAlreadyExists(_)
+            | ErrorKind::RoleAlreadyExists(_)
             | ErrorKind::ItemAlreadyExists(_)
             | ErrorKind::UnacceptableSchemaName(_)
             | ErrorKind::ReadOnlySystemSchema(_)
@@ -115,6 +117,9 @@ impl fmt::Display for Error {
                 write!(f, "database '{}' already exists", name)
             }
             ErrorKind::SchemaAlreadyExists(name) => write!(f, "schema '{}' already exists", name),
+            ErrorKind::RoleAlreadyExists(name) => {
+                write!(f, "role '{}' already exists", name)
+            }
             ErrorKind::ItemAlreadyExists(name) => {
                 write!(f, "catalog item '{}' already exists", name)
             }
