@@ -666,6 +666,16 @@ lazy_static! {
             id: GlobalId::System(3035),
             index_id: GlobalId::System(3036),
     };
+    pub static ref MZ_ROLES: BuiltinTable = BuiltinTable {
+        name: "mz_roles",
+        schema: MZ_CATALOG_SCHEMA,
+        desc: RelationDesc::empty()
+            .with_column("id", ScalarType::Int64.nullable(false))
+            .with_column("oid", ScalarType::Oid.nullable(false))
+            .with_column("name", ScalarType::String.nullable(false)),
+        id: GlobalId::System(3037),
+        index_id: GlobalId::System(3038),
+    };
 }
 
 pub const MZ_RELATIONS: BuiltinView = BuiltinView {
@@ -1163,6 +1173,7 @@ lazy_static! {
             Builtin::Table(&MZ_BASE_TYPES),
             Builtin::Table(&MZ_LIST_TYPES),
             Builtin::Table(&MZ_MAP_TYPES),
+            Builtin::Table(&MZ_ROLES),
             Builtin::View(&MZ_RELATIONS),
             Builtin::View(&MZ_OBJECTS),
             Builtin::View(&MZ_CATALOG_NAMES),

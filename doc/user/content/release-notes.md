@@ -63,6 +63,14 @@ Wrap your release notes at the 80 character mark.
 
 - Support equality operations on `uuid` data, which enables joins on `uuid`
   columns {{% gh 5540 %}}.
+- Add the [`current_user`](/sql/functions/#system-information-func) system
+  information function.
+
+- Add the [`CREATE ROLE`](/sql/create-role),
+  [`CREATE USER`](/sql/create-user), [`DROP ROLE`](/sql/drop-role), and
+  [`DROP USER`](/sql/drop-user) statements to manage roles in a Materialize
+  instance. These roles do not yet serve any purpose, but they will enable
+  authentication in a later release.
 
 {{% version-header v0.6.1 %}}
 

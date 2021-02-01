@@ -36,16 +36,15 @@ use ore::collections::CollectionExt;
 use ore::iter::IteratorExt;
 use regex::Regex;
 use repr::{strconv, RelationDesc, RelationType, ScalarType};
-use sql_parser::ast::Envelope;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
-    ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateRoleStatement,
-    CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement, CreateTableStatement,
-    CreateTypeAs, CreateTypeStatement, CreateViewStatement, DataType, DropDatabaseStatement,
-    DropObjectsStatement, Expr, Format, Ident, IfExistsBehavior, ObjectName, ObjectType, Raw,
-    SqlOption, Statement, Value,
+    ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateRoleOption,
+    CreateRoleStatement, CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement,
+    CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement, DataType,
+    DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior,
+    ObjectName, ObjectType, Raw, SqlOption, Statement, Value,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -1226,9 +1225,40 @@ pub fn describe_create_role(
 
 pub fn plan_create_role(
     _: &StatementContext,
-    _: CreateRoleStatement,
+    CreateRoleStatement {
+        name,
+        is_user,
+        options,
+    }: CreateRoleStatement,
 ) -> Result<Plan, anyhow::Error> {
-    unsupported!("CREATE ROLE")
+    let mut login = None;
+    let mut super_user = None;
+    for option in options {
+        match option {
+            CreateRoleOption::Login | CreateRoleOption::NoLogin if login.is_some() => {
+                bail!("conflicting or redundant options");
+            }
+            CreateRoleOption::SuperUser | CreateRoleOption::NoSuperUser if super_user.is_some() => {
+                bail!("conflicting or redundant options");
+            }
+            CreateRoleOption::Login => login = Some(true),
+            CreateRoleOption::NoLogin => login = Some(false),
+            CreateRoleOption::SuperUser => super_user = Some(true),
+            CreateRoleOption::NoSuperUser => super_user = Some(false),
+        }
+    }
+    if is_user && login.is_none() {
+        login = Some(true);
+    }
+    if login != Some(true) {
+        unsupported!("non-login users");
+    }
+    if super_user != Some(true) {
+        unsupported!("non-superusers");
+    }
+    Ok(Plan::CreateRole {
+        name: normalize::ident(name),
+    })
 }
 
 pub fn describe_drop_database(
@@ -1281,7 +1311,7 @@ pub fn plan_drop_objects(
         | ObjectType::Index
         | ObjectType::Sink
         | ObjectType::Type => plan_drop_items(scx, object_type, if_exists, names, cascade),
-        ObjectType::Role => unsupported!("DROP ROLE"),
+        ObjectType::Role => plan_drop_role(scx, if_exists, names),
         ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
     }
 }
@@ -1316,7 +1346,7 @@ pub fn plan_drop_schema(
         }
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the
-            // database does not exist.
+            // schema does not exist.
             // TODO(benesch): adjust the types here properly, rather than making
             // up a nonexistent database.
             Ok(Plan::DropSchema {
@@ -1328,6 +1358,33 @@ pub fn plan_drop_schema(
         }
         Err(e) => Err(e.into()),
     }
+}
+
+pub fn plan_drop_role(
+    scx: &StatementContext,
+    if_exists: bool,
+    names: Vec<ObjectName>,
+) -> Result<Plan, anyhow::Error> {
+    let mut out = vec![];
+    for name in names {
+        let name = if name.0.len() == 1 {
+            normalize::ident(name.0.into_element())
+        } else {
+            bail!("invalid role name \"{}\"", name)
+        };
+        if name == scx.catalog.user() {
+            bail!("current user cannot be dropped");
+        }
+        match scx.catalog.resolve_role(&name) {
+            Ok(_) => out.push(name),
+            Err(_) if if_exists => {
+                // TODO(benesch): generate a notice indicating that the
+                // role does not exist.
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(Plan::DropRoles { names: out })
 }
 
 pub fn plan_drop_items(

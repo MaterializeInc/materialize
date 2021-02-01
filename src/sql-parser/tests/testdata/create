@@ -163,6 +163,6 @@ DropObjects(DropObjectsStatement { object_type: Role, if_exists: false, names: [
 parse-statement
 DROP USER usr
 ----
-error: Expected DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW after DROP, found USER
-DROP USER usr
-     ^
+DROP ROLE usr
+=>
+DropObjects(DropObjectsStatement { object_type: Role, if_exists: false, names: [ObjectName([Ident("usr")])], cascade: false })
