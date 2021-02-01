@@ -119,6 +119,7 @@ where
         Exchange::new(move |x: &(SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)| x.0.key.hashed()),
         "UpsertCompaction",
         |_cap, _info| {
+            // this is a map of (time) -> ((key) -> (value with max offset))
             let mut values = HashMap::<_, HashMap<_, SourceData>>::new();
             let mut vector = Vec::new();
 
@@ -147,14 +148,14 @@ where
                                 if offset < new_offset {
                                     *value = SourceData {
                                         value: val,
-                                        position: Some(offset),
+                                        position,
                                         upstream_time_millis,
                                     };
                                 }
                             } else {
                                 *value = SourceData {
                                     value: val,
-                                    position: Some(new_offset),
+                                    position,
                                     upstream_time_millis,
                                 };
                             }
