@@ -103,6 +103,15 @@ impl ObjectName {
     pub fn unqualified(n: &str) -> ObjectName {
         ObjectName(vec![Ident::new(n)])
     }
+
+    /// Creates an `ObjectName` with an [`Ident`] for each element of `n`.
+    ///
+    /// Panics if passed an in ineligible `&[&str]` whose length is 0 or greater
+    /// than 3.
+    pub fn qualified(n: &[&str]) -> ObjectName {
+        assert!(n.len() <= 3 && n.len() > 0);
+        ObjectName(n.iter().map(|n| (*n).into()).collect::<Vec<_>>())
+    }
 }
 
 impl AstDisplay for ObjectName {
