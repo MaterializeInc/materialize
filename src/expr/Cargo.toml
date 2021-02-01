@@ -26,5 +26,5 @@ repr = { path = "../repr" }
 serde = { version = "1.0.122", features = ["derive"] }
 serde_json = "1.0.0"
 sha-1 = "0.9.2"
-sha2 = "0.9.2"
+sha2 = "0.9.3"
 unicase = "2.6.0"
