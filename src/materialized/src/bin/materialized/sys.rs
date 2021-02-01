@@ -9,7 +9,13 @@
 
 //! System support functions.
 
+use std::alloc::{self, Layout};
+use std::ptr;
+
+use anyhow::{bail, Context};
 use log::{trace, warn};
+use nix::errno;
+use nix::sys::signal;
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "ios")))]
 pub fn adjust_rlimits() {
@@ -89,4 +95,63 @@ pub fn adjust_rlimits() {
             soft, recommended_soft
         )
     }
+}
+
+/// Attempts to enable backtraces when SIGSEGV occurs.
+///
+/// In particular, this means producing backtraces on stack overflow, as
+/// stack overflow raises SIGSEGV. The approach here involves making system
+/// calls to handle SIGSEGV on an alternate signal stack, which seems to work
+/// well in practice but may technically be undefined behavior.
+///
+/// Rust may someday do this by default.
+/// Follow: https://github.com/rust-lang/rust/issues/51405.
+pub fn enable_sigsegv_backtraces() -> Result<(), anyhow::Error> {
+    // This code is derived from the code in the backtrace-on-stack-overflow
+    // crate, which is freely available under the terms of the Apache 2.0
+    // license. The modifications here provide better error messages if any of
+    // the various system calls fail.
+    //
+    // See: https://github.com/matklad/backtrace-on-stack-overflow
+
+    // Chosen to match the default Rust thread stack size of 2MiB. Probably
+    // overkill, but we'd much rather have backtraces on stack overflow than
+    // squabble over a few megabytes.
+    const STACK_SIZE: usize = 2 << 20;
+
+    // x86_64 requires 16-byte alignment. Hopefully other platforms don't
+    // have more stringent requirements.
+    const STACK_ALIGN: usize = 16;
+
+    // Allocate a stack.
+    let buf_layout =
+        Layout::from_size_align(STACK_SIZE, STACK_ALIGN).expect("layout known to be valid");
+    let buf = unsafe { alloc::alloc(buf_layout) };
+
+    // Request that signals be delivered to this alternate stack.
+    let stack = libc::stack_t {
+        ss_sp: buf as *mut libc::c_void,
+        ss_flags: 0,
+        ss_size: STACK_SIZE,
+    };
+    let ret = unsafe { libc::sigaltstack(&stack, ptr::null_mut()) };
+    if ret == -1 {
+        let errno = errno::from_i32(errno::errno());
+        bail!("failed to configure alternate signal stack: {}", errno);
+    }
+
+    // Install a handler for SIGSEGV.
+    let action = signal::SigAction::new(
+        signal::SigHandler::Handler(handle_sigsegv),
+        signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+        signal::SigSet::empty(),
+    );
+    unsafe { signal::sigaction(signal::SIGSEGV, &action) }
+        .context("failed to install SIGSEGV handler")?;
+
+    Ok(())
+}
+
+extern "C" fn handle_sigsegv(_: i32) {
+    panic!("stack overflow");
 }
