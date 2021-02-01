@@ -19,6 +19,7 @@ byteorder = "1.4.2"
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.5.0", features = ["serde"] }
 enum-kinds = "0.5.0"
+fast-float = "0.2.0"
 hex = "0.4.2"
 itertools = "0.9.0"
 ordered-float = { version = "2.0.0", features = ["serde"] }

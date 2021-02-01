@@ -30,12 +30,11 @@ use std::fmt;
 
 use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
-use ore::lex::LexBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use ore::ascii::UncasedStr;
 use ore::fmt::FormatBuffer;
+use ore::lex::LexBuf;
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
@@ -127,18 +126,7 @@ where
 
 /// Parses an `f32` from `s`.
 pub fn parse_float32(s: &str) -> Result<f32, ParseError> {
-    let s = UncasedStr::new(s.trim());
-    if s == "inf" || s == "infinity" || s == "+inf" || s == "+infinity" {
-        Ok(f32::INFINITY)
-    } else if s == "-inf" || s == "-infinity" {
-        Ok(f32::NEG_INFINITY)
-    } else if s == "nan" {
-        Ok(f32::NAN)
-    } else {
-        s.as_str()
-            .parse()
-            .map_err(|e| ParseError::new("real", s.as_str()).with_details(e))
-    }
+    fast_float::parse(s).map_err(|_| ParseError::new("real", s))
 }
 
 /// Writes an `f32` to `buf`.
@@ -160,18 +148,7 @@ where
 
 /// Parses an `f64` from `s`.
 pub fn parse_float64(s: &str) -> Result<f64, ParseError> {
-    let s = UncasedStr::new(s.trim());
-    if s == "inf" || s == "infinity" || s == "+inf" || s == "+infinity" {
-        Ok(f64::INFINITY)
-    } else if s == "-inf" || s == "-infinity" {
-        Ok(f64::NEG_INFINITY)
-    } else if s == "nan" {
-        Ok(f64::NAN)
-    } else {
-        s.as_str()
-            .parse()
-            .map_err(|e| ParseError::new("double precision", s.as_str()).with_details(e))
-    }
+    fast_float::parse(s).map_err(|_| ParseError::new("double precision", s))
 }
 
 /// Writes an `f64` to `buf`.
