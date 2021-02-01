@@ -69,6 +69,8 @@ where
 //
 //   * Rewrites the suite of standard deviation and variance functions in a
 //     manner similar to `avg`.
+//
+// TODO(sploiselle): rewrite these in terms of func::sql_op!
 struct FuncRewriter<'a> {
     scx: &'a StatementContext<'a>,
     status: Result<(), anyhow::Error>,
@@ -82,19 +84,25 @@ impl<'a> FuncRewriter<'a> {
         }
     }
 
-    // Divides `lhs` by `rhs` but replaces division-by-zero errors with NULL.
+    // Divides `lhs` by `rhs` but replaces division-by-zero errors with NULL;
+    // note that this is semantically equivalent to `NULLIF(rhs, 0)`.
     fn plan_divide(lhs: Expr<Raw>, rhs: Expr<Raw>) -> Expr<Raw> {
-        lhs.divide(Self::plan_null_if(rhs, Expr::number("0")))
+        lhs.divide(Expr::Case {
+            operand: None,
+            conditions: vec![rhs.clone().equals(Expr::number("0"))],
+            results: vec![Expr::null()],
+            else_result: Some(Box::new(rhs)),
+        })
     }
 
     fn plan_agg(
-        name: &'static str,
+        name: ObjectName,
         expr: Expr<Raw>,
         filter: Option<Box<Expr<Raw>>>,
         distinct: bool,
     ) -> Expr<Raw> {
         Expr::Function(Function {
-            name: ObjectName::unqualified(name),
+            name,
             args: FunctionArgs::Args(vec![expr]),
             filter,
             over: None,
@@ -103,9 +111,19 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_avg(expr: Expr<Raw>, filter: Option<Box<Expr<Raw>>>, distinct: bool) -> Expr<Raw> {
-        let sum = Self::plan_agg("sum", expr.clone(), filter.clone(), distinct)
-            .call_unary(vec!["mz_internal", "mz_avg_promotion"]);
-        let count = Self::plan_agg("count", expr, filter, distinct);
+        let sum = Self::plan_agg(
+            ObjectName::qualified(&["pg_catalog", "sum"]),
+            expr.clone(),
+            filter.clone(),
+            distinct,
+        )
+        .call_unary(vec!["mz_internal", "mz_avg_promotion"]);
+        let count = Self::plan_agg(
+            ObjectName::qualified(&["pg_catalog", "count"]),
+            expr,
+            filter,
+            distinct,
+        );
         Self::plan_divide(sum, count)
     }
 
@@ -131,10 +149,25 @@ impl<'a> FuncRewriter<'a> {
         //
         let expr = expr.call_unary(vec!["mz_internal", "mz_avg_promotion"]);
         let expr_squared = expr.clone().multiply(expr.clone());
-        let sum_squares = Self::plan_agg("sum", expr_squared, filter.clone(), distinct);
-        let sum = Self::plan_agg("sum", expr.clone(), filter.clone(), distinct);
+        let sum_squares = Self::plan_agg(
+            ObjectName::qualified(&["pg_catalog", "sum"]),
+            expr_squared,
+            filter.clone(),
+            distinct,
+        );
+        let sum = Self::plan_agg(
+            ObjectName::qualified(&["pg_catalog", "sum"]),
+            expr.clone(),
+            filter.clone(),
+            distinct,
+        );
         let sum_squared = sum.clone().multiply(sum);
-        let count = Self::plan_agg("count", expr, filter, distinct);
+        let count = Self::plan_agg(
+            ObjectName::qualified(&["pg_catalog", "count"]),
+            expr,
+            filter,
+            distinct,
+        );
         Self::plan_divide(
             sum_squares.minus(Self::plan_divide(sum_squared, count.clone())),
             if sample {
@@ -152,15 +185,6 @@ impl<'a> FuncRewriter<'a> {
         sample: bool,
     ) -> Expr<Raw> {
         Self::plan_variance(expr, filter, distinct, sample).call_unary(vec!["sqrt"])
-    }
-
-    fn plan_null_if(left: Expr<Raw>, right: Expr<Raw>) -> Expr<Raw> {
-        Expr::Case {
-            operand: None,
-            conditions: vec![left.clone().equals(right)],
-            results: vec![Expr::null()],
-            else_result: Some(Box::new(left)),
-        }
     }
 
     fn rewrite_expr(&mut self, expr: &Expr<Raw>) -> Option<(Ident, Expr<Raw>)> {
@@ -200,7 +224,6 @@ impl<'a> FuncRewriter<'a> {
                     let (lhs, rhs) = (args[0].clone(), args[1].clone());
                     match name.item.as_str() {
                         "mod" => lhs.modulo(rhs),
-                        "nullif" => Self::plan_null_if(lhs, rhs),
                         _ => return None,
                     }
                 } else {
