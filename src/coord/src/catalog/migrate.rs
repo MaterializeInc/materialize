@@ -62,6 +62,7 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                     constraints: _,
                     with_options: _,
                     if_not_exists: _,
+                    temporary: _,
                 }) => {
                     for c in columns {
                         TypeNormalizer.visit_column_def_mut(c);

@@ -160,6 +160,7 @@ pub struct Table {
     pub desc: RelationDesc,
     #[serde(skip)]
     pub defaults: Vec<Expr<Raw>>,
+    pub conn_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,6 +304,7 @@ impl CatalogItem {
         match self {
             CatalogItem::View(view) => view.conn_id,
             CatalogItem::Index(index) => index.conn_id,
+            CatalogItem::Table(table) => table.conn_id,
             _ => None,
         }
     }
@@ -567,6 +569,7 @@ impl Catalog {
                             plan_cx: PlanContext::default(),
                             desc: table.desc.clone(),
                             defaults: vec![Expr::null(); table.desc.arity()],
+                            conn_id: None,
                         }),
                     ));
                     let oid = catalog.allocate_oid()?;
@@ -1101,6 +1104,7 @@ impl Catalog {
                 name: FullName,
                 item: CatalogItem,
             },
+
             DropDatabase {
                 name: String,
             },
@@ -1575,6 +1579,7 @@ impl Catalog {
                 plan_cx: pcx,
                 desc: table.desc,
                 defaults: table.defaults,
+                conn_id: None,
             }),
             Plan::CreateSource { source, .. } => CatalogItem::Source(Source {
                 create_sql: source.create_sql,

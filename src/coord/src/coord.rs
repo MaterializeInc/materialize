@@ -1467,7 +1467,7 @@ where
                 table,
                 if_not_exists,
             } => tx.send(
-                self.sequence_create_table(pcx, name, table, if_not_exists)
+                self.sequence_create_table(pcx, name, table, if_not_exists, session.conn_id())
                     .await,
                 session,
             ),
@@ -1787,13 +1787,16 @@ where
         name: FullName,
         table: sql::plan::Table,
         if_not_exists: bool,
+        conn_id: u32,
     ) -> Result<ExecuteResponse, anyhow::Error> {
+        let conn_id = if table.temporary { Some(conn_id) } else { None };
         let table_id = self.catalog.allocate_id()?;
         let table = catalog::Table {
             create_sql: table.create_sql,
             plan_cx: pcx,
             desc: table.desc,
             defaults: table.defaults,
+            conn_id,
         };
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
@@ -1803,7 +1806,7 @@ where
             name.clone(),
             table_id,
             &table.desc,
-            None,
+            conn_id,
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;

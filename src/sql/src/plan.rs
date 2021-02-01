@@ -191,6 +191,7 @@ pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
     pub defaults: Vec<Expr<Raw>>,
+    pub temporary: bool,
 }
 
 #[derive(Clone, Debug)]

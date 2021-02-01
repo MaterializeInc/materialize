@@ -130,6 +130,7 @@ END $$;
                 columns,
                 constraints,
                 if_not_exists,
+                temporary,
                 ..
             }) => {
                 let sql_types: Vec<_> = columns
@@ -204,10 +205,12 @@ END $$;
                 self.table_types
                     .insert(name.clone(), (sql_types, desc.clone()));
 
+                let temporary = *temporary;
                 let table = Table {
                     create_sql: stmt.to_string(),
                     desc,
                     defaults,
+                    temporary,
                 };
                 Plan::CreateTable {
                     name,
