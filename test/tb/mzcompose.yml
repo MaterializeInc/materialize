@@ -69,9 +69,7 @@ mzworkflows:
       expected:
         - [AAPL, 501]
         - [GOOG, 1608]
-    - step: stop-services
-      services: [tb]
-    - step: start-services
+    - step: restart-services
       services: [tb]
     - step: run-mysql
       query: INSERT INTO tb_test.stonks VALUES ('MSFT', 221)
