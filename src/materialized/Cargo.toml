@@ -103,7 +103,7 @@ pgtest = { path = "../pgtest" }
 postgres = { version = "0.19.0", features = ["with-chrono-0_4"] }
 postgres-openssl = "0.5.0"
 postgres_array = "0.11.0"
-predicates = "1.0.6"
+predicates = "1.0.7"
 repr = { path = "../repr" }
 reqwest = { version = "0.11.0", features = ["blocking"] }
 serde_json = "1.0.0"
