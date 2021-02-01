@@ -111,7 +111,7 @@ tokio-postgres = { version = "0.7.0", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
 anyhow = "1.0.38"
-flate2 = "1.0.19"
+flate2 = "1.0.20"
 hex = "0.4.2"
 hex-literal = "0.3.1"
 reqwest = { version = "0.11.0", features = ["blocking"] }
