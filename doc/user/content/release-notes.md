@@ -64,6 +64,8 @@ Wrap your release notes at the 80 character mark.
 - Support equality operations on `uuid` data, which enables joins on `uuid`
   columns {{% gh 5540 %}}.
 
+- Functions can now be resolved as schema-qualified objects, e.g. `SELECT pg_catalog.abs(-1);`.
+
 {{% version-header v0.6.1 %}}
 
 - **Backwards-incompatible change.** Validate `WITH` clauses in [`CREATE
