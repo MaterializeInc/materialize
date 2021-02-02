@@ -12,7 +12,7 @@ FROM KAFKA BROKER 'kafka:9092'
 TOPIC 'upsertavrotest'
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
 ENVELOPE UPSERT
-FORMAT TEXT;
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
 
 CREATE VIEW upsertavrotest AS SELECT
     -- cast("BookId" AS bigint) AS "BookId",

@@ -15,6 +15,7 @@ COPY --from=0 /usr/local/bin/kgen /usr/local/bin
 
 RUN mkdir /usr/share/generator
 COPY key-schema.json /usr/share/generator/
+COPY key-distribution.json /usr/share/generator/
 COPY value-schema.json /usr/share/generator/
 COPY value-distribution.json /usr/share/generator/
 

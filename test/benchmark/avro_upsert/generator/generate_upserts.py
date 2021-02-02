@@ -21,6 +21,11 @@ def run(args: argparse.Namespace) -> None:
 
     messages_per_process = int(args.num_messages / args.parallelism)
 
+    key_schema = pathlib.Path(SHARED_FILES, "key-schema.json").read_text().strip()
+    key_distribution = (
+        pathlib.Path(SHARED_FILES, "key-distribution.json").read_text().strip()
+    )
+
     value_schema = pathlib.Path(SHARED_FILES, "value-schema.json").read_text().strip()
     value_distribution = (
         pathlib.Path(SHARED_FILES, "value-distribution.json").read_text().strip()
@@ -37,20 +42,18 @@ def run(args: argparse.Namespace) -> None:
         str(messages_per_process),
         "--topic",
         "upsertavrotest",
-        "--partitions",
-        "30",
         "--keys",
-        "random",
-        "--key-min",
-        "0",
-        "--key-max",
-        str(args.num_keys),
+        "avro",
         "--values",
         "avro",
         "--avro-schema",
         value_schema,
         "--avro-distribution",
         value_distribution,
+        "--avro-key-schema",
+        key_schema,
+        "--avro-key-distribution",
+        key_distribution,
     ]
 
     print(
