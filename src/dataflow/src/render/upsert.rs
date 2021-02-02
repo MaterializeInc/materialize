@@ -130,33 +130,33 @@ where
                     for (
                         SourceOutput {
                             key,
-                            value: val,
-                            position,
-                            upstream_time_millis,
+                            value: new_value,
+                            position: new_position,
+                            upstream_time_millis: new_upstream_time_millis,
                         },
                         time,
                     ) in vector.drain(..)
                     {
-                        let value = values
+                        let entry = values
                             .entry(cap.delayed(&time))
                             .or_insert_with(HashMap::new)
                             .entry(key)
                             .or_insert_with(Default::default);
 
-                        if let Some(new_offset) = position {
-                            if let Some(offset) = value.position {
+                        if let Some(new_offset) = new_position {
+                            if let Some(offset) = entry.position {
                                 if offset < new_offset {
-                                    *value = SourceData {
-                                        value: val,
-                                        position,
-                                        upstream_time_millis,
+                                    *entry = SourceData {
+                                        value: new_value,
+                                        position: new_position,
+                                        upstream_time_millis: new_upstream_time_millis,
                                     };
                                 }
                             } else {
-                                *value = SourceData {
-                                    value: val,
-                                    position,
-                                    upstream_time_millis,
+                                *entry = SourceData {
+                                    value: new_value,
+                                    position: new_position,
+                                    upstream_time_millis: new_upstream_time_millis,
                                 };
                             }
                         }
