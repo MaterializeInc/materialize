@@ -137,3 +137,14 @@ $ s3-put-object bucket=${bucket} key=logs/2021/01/01/frontend.log
 01/01/2021:00:00:57 91.234.194.89 Python/Requests_22
 12/31/2020:23:55:52 37.26.93.214 Go_1.1_package_http
 12/31/2020:23:55:59 99.99.44.44 Python/Requests_22
+
+! CREATE SOURCE err FROM S3 BUCKET 'dog' OBJECTS FROM SCAN, SCAN
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT TEXT
+SCAN may only be specified once
