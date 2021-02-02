@@ -241,6 +241,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_s3",
+ "rusoto_sqs",
  "rusoto_sts",
  "serde",
  "tokio",
@@ -802,6 +803,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_s3",
+ "rusoto_sqs",
  "serde",
  "serde_json",
  "timely",
@@ -3468,6 +3470,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusoto_sqs"
+version = "0.46.0"
+source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "rusoto_core",
+ "serde_urlencoded",
+ "xml-rs",
+]
+
+[[package]]
 name = "rusoto_sts"
 version = "0.46.0"
 source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
@@ -3669,9 +3684,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.60"
+version = "1.0.61"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1500e84d27fe482ed1dc791a56eddc2f230046a040fa908c08bda1d9fb615779"
+checksum = "4fceb2595057b6891a4ee808f70054bd2d12f0e97f1cbb78689b59f676df325a"
 dependencies = [
  "itoa",
  "ryu",
