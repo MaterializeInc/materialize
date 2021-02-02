@@ -241,6 +241,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_s3",
+ "rusoto_sqs",
  "rusoto_sts",
  "serde",
  "tokio",
@@ -781,6 +782,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_s3",
+ "rusoto_sqs",
  "serde",
  "serde_json",
  "timely",
@@ -3436,6 +3438,19 @@ dependencies = [
  "serde",
  "sha2",
  "tokio",
+]
+
+[[package]]
+name = "rusoto_sqs"
+version = "0.46.0"
+source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "rusoto_core",
+ "serde_urlencoded",
+ "xml-rs",
 ]
 
 [[package]]

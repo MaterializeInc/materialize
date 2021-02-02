@@ -9,6 +9,7 @@
 
 //! Functionality for creating S3 sources
 
+use std::collections::{HashMap, HashSet};
 use std::convert::{From, TryInto};
 use std::default::Default;
 use std::ops::AddAssign;
@@ -16,7 +17,9 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use anyhow::{anyhow, Error};
 use globset::GlobMatcher;
+use notifications::Event;
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
+use rusoto_sqs::{DeleteMessageRequest, GetQueueUrlRequest, ReceiveMessageRequest, Sqs};
 use timely::scheduling::{Activator, SyncActivator};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc as tokio_mpsc;
@@ -33,6 +36,10 @@ use crate::server::{
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
+
+use self::notifications::{EventType, TestEvent};
+
+mod notifications;
 
 type Out = Vec<u8>;
 struct InternalMessage {
@@ -126,6 +133,14 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
                             keys_tx.clone(),
                         ));
                     }
+                    S3KeySource::SqsNotifications { queue } => {
+                        tokio::spawn(read_sqs_task(
+                            glob.clone(),
+                            queue,
+                            aws_info.clone(),
+                            keys_tx.clone(),
+                        ));
+                    }
                 }
             }
             dataflow_rx
@@ -167,10 +182,25 @@ async fn download_objects_task(
         }
     };
 
-    while let Some(record) = rx.recv().await {
-        match record {
-            Ok(record) => {
-                download_object(&tx, &activator, &client, record.bucket, record.key).await
+    let mut seen_buckets: HashMap<String, HashSet<String>> = HashMap::new();
+
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            Ok(msg) => {
+                if let Some(keys) = seen_buckets.get_mut(&msg.bucket) {
+                    // the insert by default is justified because that should be the
+                    // common case, we should very rarely get duplicate keys
+                    let is_new = keys.insert(msg.key.clone());
+                    if !is_new {
+                        continue;
+                    }
+                } else {
+                    let mut keys = HashSet::new();
+                    keys.insert(msg.key.clone());
+                    seen_buckets.insert(msg.bucket.clone(), keys);
+                }
+
+                download_object(&tx, &activator, &client, msg.bucket, msg.key).await;
             }
             Err(e) => tx
                 .send(Err(e))
@@ -248,6 +278,143 @@ async fn scan_bucket_task(
                     log::warn!(
                         "unable to list bucket {}: {} ({} retries remaining)",
                         bucket,
+                        e,
+                        allowed_errors
+                    );
+                }
+
+                time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+}
+
+async fn read_sqs_task(
+    glob: Option<GlobMatcher>,
+    queue: String,
+    aws_info: aws::ConnectInfo,
+    tx: tokio_mpsc::Sender<anyhow::Result<KeyInfo>>,
+) {
+    let client = match aws_util::sqs::client(aws_info).await {
+        Ok(client) => client,
+        Err(e) => {
+            tx.send(Err(anyhow!("Unable to create sqs client: {}", e)))
+                .await
+                .unwrap_or_else(|e| {
+                    log::debug!("unable to send error on stream creating sqs client: {}", e)
+                });
+            return;
+        }
+    };
+
+    let glob = glob.as_ref();
+
+    // TODO: accept a full url
+    let queue_url = match client
+        .get_queue_url(GetQueueUrlRequest {
+            queue_name: queue.clone(),
+            queue_owner_aws_account_id: None,
+        })
+        .await
+    {
+        Ok(response) => {
+            if let Some(url) = response.queue_url {
+                url
+            } else {
+                log::error!("Empty queue url response for queue {}", queue);
+                return;
+            }
+        }
+        Err(e) => {
+            log::error!("Unable to retrieve queue url for queue {}: {}", queue, e);
+            return;
+        }
+    };
+
+    let mut allowed_errors = 10;
+    loop {
+        let response = client
+            .receive_message(ReceiveMessageRequest {
+                max_number_of_messages: Some(10),
+                queue_url: queue_url.clone(),
+                visibility_timeout: Some(500),
+                // the maximum possible time for a long poll
+                wait_time_seconds: Some(20),
+                ..Default::default()
+            })
+            .await;
+
+        match response {
+            Ok(response) => {
+                allowed_errors = 10;
+
+                for message in response.messages.iter().flat_map(|ms| ms) {
+                    if let Some(body) = message.body.as_ref() {
+                        let event: Result<Event, _> = serde_json::from_str(body);
+                        match event {
+                            Ok(event) => {
+                                for record in event.records {
+                                    if matches!(
+                                        record.event_type,
+                                        EventType::ObjectCreatedPut
+                                            | EventType::ObjectCreatedPost
+                                            | EventType::ObjectCreatedCompleteMultipartUpload
+                                    ) {
+                                        let key = record.s3.object.key;
+                                        if glob.map(|g| g.is_match(&key)).unwrap_or(true) {
+                                            tx.send(Ok(KeyInfo {
+                                                bucket: record.s3.bucket.name,
+                                                key,
+                                            }))
+                                            .await
+                                            .unwrap_or_else(|e| {
+                                                log::debug!(
+                                                    "unable to send key from sqs to donloader: {}",
+                                                    e,
+                                                )
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                let test: Result<TestEvent, _> = serde_json::from_str(&body);
+                                match test {
+                                    Ok(_) => {} // expected when connecting to a new queue
+                                    Err(_) => {
+                                        log::error!(
+                                            "[customer-data] Unrecognized message from SQS queue {}: {}",
+                                            queue, body,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Err(e) = client
+                        .delete_message(DeleteMessageRequest {
+                            queue_url: queue_url.clone(),
+                            receipt_handle: message
+                                .receipt_handle
+                                .clone()
+                                .expect("receipt handle is always returned"),
+                        })
+                        .await
+                    {
+                        log::warn!("Error deleting processed SQS message: {}", e)
+                    }
+                }
+            }
+            Err(e) => {
+                allowed_errors -= 1;
+                if allowed_errors == 0 {
+                    log::error!("failed to read from SQS queue {}: {}", queue, e);
+                    break;
+                } else {
+                    log::warn!(
+                        "unable to read from SQS queue {}: {} ({} retries remaining)",
+                        queue,
                         e,
                         allowed_errors
                     );

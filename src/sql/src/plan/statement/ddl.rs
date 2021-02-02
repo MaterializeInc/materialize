@@ -456,6 +456,11 @@ pub fn plan_create_source(
                             bucket: bucket.clone(),
                         }
                     }
+                    sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
+                        dataflow_types::S3KeySource::SqsNotifications {
+                            queue: queue.clone(),
+                        }
+                    }
                 };
                 converted_sources.push(dtks);
             }
