@@ -119,6 +119,7 @@ where
         Exchange::new(move |x: &(SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)| x.0.key.hashed()),
         "UpsertCompaction",
         |_cap, _info| {
+            // this is a map of (time) -> ((key) -> (value with max offset))
             let mut values = HashMap::<_, HashMap<_, SourceData>>::new();
             let mut vector = Vec::new();
 
@@ -129,33 +130,33 @@ where
                     for (
                         SourceOutput {
                             key,
-                            value: val,
-                            position,
-                            upstream_time_millis,
+                            value: new_value,
+                            position: new_position,
+                            upstream_time_millis: new_upstream_time_millis,
                         },
                         time,
                     ) in vector.drain(..)
                     {
-                        let value = values
+                        let entry = values
                             .entry(cap.delayed(&time))
                             .or_insert_with(HashMap::new)
                             .entry(key)
                             .or_insert_with(Default::default);
 
-                        if let Some(new_offset) = position {
-                            if let Some(offset) = value.position {
+                        if let Some(new_offset) = new_position {
+                            if let Some(offset) = entry.position {
                                 if offset < new_offset {
-                                    *value = SourceData {
-                                        value: val,
-                                        position: Some(offset),
-                                        upstream_time_millis,
+                                    *entry = SourceData {
+                                        value: new_value,
+                                        position: new_position,
+                                        upstream_time_millis: new_upstream_time_millis,
                                     };
                                 }
                             } else {
-                                *value = SourceData {
-                                    value: val,
-                                    position: Some(new_offset),
-                                    upstream_time_millis,
+                                *entry = SourceData {
+                                    value: new_value,
+                                    position: new_position,
+                                    upstream_time_millis: new_upstream_time_millis,
                                 };
                             }
                         }
