@@ -134,8 +134,8 @@ The updates for a single record might look like this:
 This will be summarized as:
 
 ```
-{"com.materialize.cdc.progress":{"lower":[0],"upper":[3],"counts":[]}}
-{"com.materialize.cdc.progress":{"lower":[3],"upper":[10],"counts":[{"time":1424849130112,"count":1},{"time":1424849130111,"count":2}, {"time": 1424849130113, "count": 1}]}}
+{"com.materialize.cdc.progress":{"lower":[1424849130110],"upper":[1424849130116],"counts":[{"time":1424849130112,"count":1},{"time":1424849130111,"count":2}, {"time": 1424849130113, "count": 1}]}}
 ```
+`lower` and `upper` define the bounds of the timestamps.
 
 Materialize should see 1 message for time 1424849130112, 2 messages for time 1424849130111, and 1 message for time 1424849130113. If there are 2 messages for time 1424849130113 with identical data updates, Materializes determines that this is a duplicate entry and discards one message.
