@@ -17,7 +17,7 @@
 //! must accumulate to the same value as would an un-compacted trace.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
@@ -158,10 +158,6 @@ where
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
     since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
-    /// For each connection running a TAIL command, the name of the dataflow
-    /// that is servicing the TAIL. A connection can only run one TAIL at a
-    /// time.
-    active_tails: HashMap<u32, GlobalId>,
     timestamp_config: TimestampConfig,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
@@ -1014,37 +1010,23 @@ where
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
-    /// the named `conn_id`. This means canceling the active PEEK or TAIL, if
-    /// one exists.
-    ///
-    /// NOTE(benesch): this function makes the assumption that a connection can
-    /// only have one active query at a time. This is true today, but will not
-    /// be true once we have full support for portals.
+    /// the named `conn_id`.
     async fn handle_cancel(&mut self, conn_id: u32) {
-        if let Some(name) = self.active_tails.remove(&conn_id) {
-            // A TAIL is known to be active, so drop the dataflow that is
-            // servicing it. No need to try to cancel PEEKs in this case,
-            // because if a TAIL is active, a PEEK cannot be.
-            self.drop_sinks(vec![name]).await;
-        } else {
-            // No TAIL is known to be active, so drop the PEEK that may be
-            // active on this connection. This is a no-op if no PEEKs are
-            // active.
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::CancelPeek { conn_id },
-            )
-            .await;
-        }
+        // Tell dataflow to cancel any pending peeks.
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::CancelPeek { conn_id },
+        )
+        .await;
     }
 
     /// Handle termination of a client session.
     ///
     // This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
-        if let Some(name) = self.active_tails.remove(&session.conn_id()) {
-            self.drop_sinks(vec![name]).await;
-        }
+        let (drop_sinks, _) = session.clear_transaction();
+        self.drop_sinks(drop_sinks).await;
+
         self.drop_temp_items(session.conn_id()).await;
         self.catalog
             .drop_temporary_schema(session.conn_id())
@@ -1662,7 +1644,7 @@ where
                 desc,
             } => tx.send(
                 self.sequence_tail(
-                    &session,
+                    &mut session,
                     id,
                     with_snapshot,
                     ts,
@@ -1734,7 +1716,8 @@ where
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
                     self.drop_temp_items(session.conn_id()).await;
-                    session.reset();
+                    let drop_sinks = session.reset();
+                    self.drop_sinks(drop_sinks).await;
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
                     Err(CoordError::OperationProhibitsTransaction(
@@ -2268,7 +2251,8 @@ where
             TransactionStatus::InTransactionImplicit(_)
         );
 
-        let txn = session.clear_transaction();
+        let (drop_sinks, txn) = session.clear_transaction();
+        self.drop_sinks(drop_sinks).await;
 
         if let EndTransactionAction::Commit = action {
             match txn {
@@ -2466,7 +2450,7 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn sequence_tail(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         source_id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
@@ -2486,7 +2470,7 @@ where
                 .expect("Source id is known to exist in catalog")
         );
         let sink_id = self.catalog.allocate_id()?;
-        self.active_tails.insert(session.conn_id(), sink_id);
+        session.add_drop_sink(sink_id);
         let (tx, rx) = self.switchboard.mpsc_limited(self.total_workers);
 
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
@@ -3131,11 +3115,13 @@ where
     }
 
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::DropSinks(dataflow_names),
-        )
-        .await
+        if !dataflow_names.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::DropSinks(dataflow_names),
+            )
+            .await
+        }
     }
 
     async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
@@ -3438,7 +3424,6 @@ where
             symbiosis,
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
-            active_tails: HashMap::new(),
             logging_granularity: logging.and_then(|c| c.granularity.as_millis().try_into().ok()),
             timestamp_config,
             logical_compaction_window_ms: logical_compaction_window
