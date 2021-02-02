@@ -144,7 +144,7 @@ def trim_pipeline(pipeline: Any) -> None:
             # changed, but `git diff` with no pathspecs means "diff everything",
             # not "diff nothing", so explicitly skip.
             continue
-        if have_paths_changed(*inputs):
+        if have_paths_changed(inputs):
             changed.add(step.id)
 
     # Then collect all changed steps, and all the steps that those changed steps
