@@ -745,6 +745,10 @@ pub enum SinkConnector {
 pub struct KafkaSinkConsistencyConnector {
     pub topic: String,
     pub schema_id: i32,
+    // gate_ts is the most recent high watermark tailed from the consistency topic
+    // Exactly-once sinks use this to determine when they should start publishing again. This
+    // tells them when they have caught up to where the previous materialize instance stopped.
+    pub gate_ts: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -828,13 +832,14 @@ pub struct KafkaSinkConnectorBuilder {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub value_desc: RelationDesc,
     pub topic_prefix: String,
-    pub topic_suffix: String,
+    pub topic_suffix_nonce: String,
     pub partition_count: i32,
     pub replication_factor: i32,
     pub fuel: usize,
     pub consistency_value_schema: Option<String>,
     pub config_options: BTreeMap<String, String>,
     pub ccsr_config: ccsr::ClientConfig,
+    pub exactly_once: bool,
 }
 
 /// An index storing processed updates so they can be queried
