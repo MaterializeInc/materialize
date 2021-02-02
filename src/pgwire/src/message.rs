@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::io;
 
@@ -53,7 +54,7 @@ pub enum FrontendStartupMessage {
     /// Begin a connection.
     Startup {
         version: i32,
-        params: Vec<(String, String)>,
+        params: HashMap<String, String>,
     },
 
     /// Request SSL encryption for the connection.

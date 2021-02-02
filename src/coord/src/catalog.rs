@@ -100,6 +100,7 @@ pub struct ConnCatalog<'a> {
     conn_id: u32,
     database: String,
     search_path: &'a [&'a str],
+    user: String,
 }
 
 impl ConnCatalog<'_> {
@@ -700,6 +701,7 @@ impl Catalog {
             conn_id: session.conn_id(),
             database: session.vars().database().into(),
             search_path: session.vars().search_path(),
+            user: session.user().into(),
         }
     }
 
@@ -711,6 +713,7 @@ impl Catalog {
             conn_id: SYSTEM_CONN_ID,
             database: "materialize".into(),
             search_path: &[],
+            user: "system".into(),
         }
     }
 
@@ -1948,8 +1951,7 @@ impl SqlCatalog for ConnCatalog<'_> {
     }
 
     fn user(&self) -> &str {
-        // TODO(benesch): wire this up to the session.
-        "materialize"
+        &self.user
     }
 
     fn default_database(&self) -> &str {

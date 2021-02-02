@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::future::Future;
 use std::iter;
@@ -99,7 +100,7 @@ where
     pub fn run(
         mut self,
         version: i32,
-        params: Vec<(String, String)>,
+        params: HashMap<String, String>,
     ) -> impl Future<Output = Result<(), comm::Error>> + Send {
         async move {
             // Call the inner logic from a function that's safe to use `?` in so that
@@ -113,10 +114,9 @@ where
     async fn run_inner(
         &mut self,
         version: i32,
-        params: Vec<(String, String)>,
+        params: HashMap<String, String>,
     ) -> Result<(), comm::Error> {
         let mut state = self.startup(version, params).await?;
-
         loop {
             state = match state {
                 State::Ready => self.advance_ready().await?,
@@ -124,7 +124,7 @@ where
                 State::Done => break,
             }
         }
-
+        self.flush().await?;
         Ok(())
     }
 
@@ -210,7 +210,7 @@ where
     async fn startup(
         &mut self,
         version: i32,
-        params: Vec<(String, String)>,
+        params: HashMap<String, String>,
     ) -> Result<State, comm::Error> {
         if version != VERSION_3 {
             return self
@@ -246,7 +246,7 @@ where
                 .collect(),
             Err(e) => {
                 return self
-                    .error(ErrorResponse::error(
+                    .error(ErrorResponse::fatal(
                         SqlState::INTERNAL_ERROR,
                         format!("{:#}", e),
                     ))

@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
 use dataflow_types::SinkEnvelope;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, TryFutureExt};
@@ -576,14 +576,6 @@ where
     ) {
         match cmd {
             Command::Startup { session, tx } => {
-                let mut messages = vec![];
-                let catalog = self.catalog.for_session(&session);
-                if catalog
-                    .resolve_database(catalog.default_database())
-                    .is_err()
-                {
-                    messages.push(StartupMessage::UnknownSessionDatabase);
-                }
                 if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
                     let _ = tx.send(Response {
                         result: Err(anyhow::Error::from(e)),
@@ -591,6 +583,24 @@ where
                     });
                     return;
                 }
+
+                let catalog = self.catalog.for_session(&session);
+                if catalog.resolve_role(session.user()).is_err() {
+                    let _ = tx.send(Response {
+                        result: Err(anyhow!("unknown user \"{}\"", session.user())),
+                        session,
+                    });
+                    return;
+                }
+
+                let mut messages = vec![];
+                if catalog
+                    .resolve_database(catalog.default_database())
+                    .is_err()
+                {
+                    messages.push(StartupMessage::UnknownSessionDatabase);
+                }
+
                 ClientTransmitter::new(tx).send(Ok(messages), session)
             }
 
