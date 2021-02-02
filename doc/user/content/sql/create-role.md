@@ -14,9 +14,13 @@ menu:
 
 A role is a user account in a Materialize instance.
 
+When you [connect to a Materialize instance](/connect/cli), you must specify
+the name of a valid role in the system.
+
 {{< warning >}}
-Roles in Materialize are currently inert. In the future they will be used for
-role-based access control. See GitHub issue {{% gh 677 %}} for details.
+Roles in Materialize are currently limited in functionality. In the future they
+will be used for role-based access control. See GitHub issue {{% gh 677 %}}
+for details.
 {{< /warning >}}
 
 ## Syntax

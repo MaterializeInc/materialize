@@ -654,6 +654,7 @@ class WaitForMzStep(WaitForPgStep):
     def __init__(
         self,
         *,
+        user: str = "materialize",
         dbname: str = "materialize",
         host: str = "localhost",
         port: Optional[int] = None,
@@ -664,6 +665,7 @@ class WaitForMzStep(WaitForPgStep):
         service: str = "materialized",
     ) -> None:
         super().__init__(
+            user=user,
             dbname=dbname,
             host=host,
             port=port,

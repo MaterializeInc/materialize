@@ -56,7 +56,7 @@ services:
         testdrive
         --kafka-addr=kafka:9092
         --schema-registry-url=http://schema-registry:8081
-        --materialized-url=postgres://ignored@materialized:6875
+        --materialized-url=postgres://materialize@materialized:6875
         --validate-catalog=/share/mzdata/catalog
         $$*
       - bash

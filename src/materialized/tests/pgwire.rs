@@ -226,6 +226,27 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn test_conn_user() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let (server, mut client) = util::start_server(util::Config::default())?;
+
+    // Attempting to connect as a nonexistent user should fail.
+    match server.pg_config().user("rj").connect(postgres::NoTls) {
+        Ok(_) => panic!("connection with bad user unexpectedly succeeded"),
+        Err(e) => assert_eq!(e.to_string(), "db error: FATAL: unknown user \"rj\""),
+    }
+
+    // But should succeed after that user comes into existence.
+    client.batch_execute("CREATE ROLE rj LOGIN SUPERUSER")?;
+    let mut client = server.pg_config().user("rj").connect(postgres::NoTls)?;
+    let row = client.query_one("SELECT current_user", &[])?;
+    assert_eq!(row.get::<_, String>(0), "rj");
+
+    Ok(())
+}
+
+#[test]
 fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 

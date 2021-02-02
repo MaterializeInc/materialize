@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::io;
 
@@ -54,7 +55,7 @@ pub enum FrontendStartupMessage {
     /// Begin a connection.
     Startup {
         version: i32,
-        params: Vec<(String, String)>,
+        params: HashMap<String, String>,
     },
 
     /// Request SSL encryption for the connection.
@@ -299,26 +300,7 @@ impl ErrorResponse {
         }
     }
 
-    pub fn with_hint<S>(mut self, hint: S) -> ErrorResponse
-    where
-        S: Into<String>,
-    {
-        self.hint = Some(hint.into());
-        self
-    }
-
-    pub fn with_position(mut self, position: usize) -> ErrorResponse {
-        self.position = Some(position);
-        self
-    }
-
-    pub fn into_message(self) -> BackendMessage {
-        BackendMessage::ErrorResponse(self)
-    }
-}
-
-impl From<CoordError> for ErrorResponse {
-    fn from(e: CoordError) -> ErrorResponse {
+    pub fn from_coord(severity: Severity, e: CoordError) -> ErrorResponse {
         // TODO(benesch): we should only use `SqlState::INTERNAL_ERROR` for
         // those errors that are truly internal errors. At the moment we have
         // a various classes of uncategorized errors that use this error code
@@ -335,6 +317,7 @@ impl From<CoordError> for ErrorResponse {
             CoordError::Transform(_) => SqlState::INTERNAL_ERROR,
             CoordError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
             CoordError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
+            CoordError::UnknownLoginRole(_) => SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
             CoordError::Unstructured(_) => SqlState::INTERNAL_ERROR,
             // It's not immediately clear which error code to use here because a
             // "write-only transaction" is not a thing in Postgres. This error
@@ -343,13 +326,30 @@ impl From<CoordError> for ErrorResponse {
             CoordError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
         };
         ErrorResponse {
-            severity: Severity::Error,
+            severity,
             code,
             message: e.to_string(),
             detail: e.detail(),
             hint: e.hint(),
             position: None,
         }
+    }
+
+    pub fn with_hint<S>(mut self, hint: S) -> ErrorResponse
+    where
+        S: Into<String>,
+    {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn with_position(mut self, position: usize) -> ErrorResponse {
+        self.position = Some(position);
+        self
+    }
+
+    pub fn into_message(self) -> BackendMessage {
+        BackendMessage::ErrorResponse(self)
     }
 }
 
