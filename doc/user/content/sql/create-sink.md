@@ -45,10 +45,11 @@ Field | Use
 
 The following options are valid within the `WITH` clause.
 
-Field | Value type | Description
-------|------------|------------
-`replication_factor` | `int` | Set the sink Kafka topic's replication factor. This defaults to 1.
-`consistency` | `boolean` | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. This defaults to false.
+Field                | Value type | Description
+---------------------|------------|------------
+`partition_count`    | `int`      | Set the sink Kafka topic's partition count. This defaults to -1 (use the broker default).
+`replication_factor` | `int`      | Set the sink Kafka topic's replication factor. This defaults to -1 (use the broker default).
+`consistency`        | `boolean`  | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. This defaults to false.
 
 #### SSL `WITH` options
 
@@ -92,7 +93,7 @@ Any further updates to these results are produced at the time when they occur. T
 
 ## Detail
 
-- Materialize currently only supports Avro formatted sinks that write to either a single partition topic or a Avro object container file.
+- Materialize currently only supports Avro formatted sinks that write to either a topic or an Avro object container file.
 - On each restart, Materialize creates new, distinct topics and files for each sink.
 - Materialize stores information about actual topic names and actual file names in the `mz_kafka_sinks` and `mz_avro_ocf_sinks` log sources. See the [examples](#examples) below for more details.
 - Materialize generates Avro schemas for views and sources that are stored in sinks. The generated schemas have a [Debezium-style diff envelope](#debezium-envelope-details) to capture changes in the input view or source.

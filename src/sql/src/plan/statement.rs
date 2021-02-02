@@ -29,7 +29,7 @@ use crate::plan::query;
 use crate::plan::{Params, Plan, PlanContext};
 
 #[macro_use]
-mod with_options;
+pub(crate) mod with_options;
 
 mod ddl;
 mod dml;

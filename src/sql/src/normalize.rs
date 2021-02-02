@@ -14,12 +14,14 @@ use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
-    IfExistsBehavior, ObjectName, Query, Raw, SqlOption, Statement, TableFactor, Value,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType, Function,
+    FunctionArgs, Ident, IfExistsBehavior, ObjectName, Query, Raw, SqlOption, Statement,
+    TableFactor, Value,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::plan::error::PlanError;
+use crate::plan::query;
 use crate::plan::statement::StatementContext;
 
 pub fn ident(ident: Ident) -> String {
@@ -197,6 +199,20 @@ pub fn create_statement(
 
         fn visit_table_mut(&mut self, table: &'ast mut <Raw as AstInfo>::Table) {
             self.visit_object_name_mut(table);
+        }
+
+        fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType) {
+            if let DataType::Other { name, typ_mod } = data_type {
+                let canonical_name = query::canonicalize_type_name_internal(&name.clone());
+                if &canonical_name != name {
+                    // None of our underlying types with aliases support
+                    // typ_mods, while the aliases themselves do, so we should
+                    // ensure they're empty.
+                    *typ_mod = vec![];
+                    *name = canonical_name;
+                }
+            }
+            visit_mut::visit_data_type_mut(self, data_type)
         }
     }
 

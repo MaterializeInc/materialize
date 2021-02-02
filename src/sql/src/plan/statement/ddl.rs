@@ -388,10 +388,9 @@ pub fn plan_create_source(
             (connector, encoding)
         }
         Connector::Kinesis { arn, .. } => {
-            let arn: ARN = match arn.parse() {
-                Ok(arn) => arn,
-                Err(e) => bail!("Unable to parse provided ARN: {:#?}", e),
-            };
+            let arn: ARN = arn
+                .parse()
+                .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?;
             let stream_name = match arn.resource {
                 Resource::Path(path) => {
                     if let Some(path) = path.strip_prefix("stream/") {
@@ -407,9 +406,10 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
+            let aws_info = aws_connect_info(&mut with_options, Some(region))?;
             let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                 stream_name,
-                aws_info: aws_connect_info(&mut with_options, Some(region))?,
+                aws_info,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
@@ -437,6 +437,7 @@ pub fn plan_create_source(
         }
         Connector::S3 { bucket, pattern } => {
             scx.require_experimental_mode("S3 Sources")?;
+            let aws_info = aws_connect_info(&mut with_options, None)?;
             let connector = ExternalSourceConnector::S3(S3SourceConnector {
                 bucket: bucket.clone(),
                 pattern: pattern
@@ -448,7 +449,7 @@ pub fn plan_create_source(
                             .build()
                     })
                     .transpose()?,
-                aws_info: aws_connect_info(&mut with_options, None)?,
+                aws_info,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
@@ -774,15 +775,30 @@ fn kafka_sink_builder(
         .key_writer_schema()
         .map(|key_schema| key_schema.canonical_form());
 
-    // Use the user supplied value for replication factor, or default to 1
-    let replication_factor = match with_options.remove("replication_factor") {
-        None => 1,
-        Some(Value::Number(n)) => n.parse::<u32>()?,
-        Some(_) => bail!("replication factor for sink topics has to be a positive integer"),
+    // Use the user supplied value for partition count, or default to -1 (broker default)
+    let partition_count = match with_options.remove("partition_count") {
+        None => -1,
+        Some(Value::Number(n)) => n.parse::<i32>()?,
+        Some(_) => bail!("partition count for sink topics must be an integer"),
     };
 
-    if replication_factor == 0 {
-        bail!("replication factor for sink topics has to be greater than zero");
+    if partition_count == 0 || partition_count < -1 {
+        bail!(
+            "partition count for sink topics must be a positive integer or -1 for broker default"
+        );
+    }
+
+    // Use the user supplied value for replication factor, or default to -1 (broker default)
+    let replication_factor = match with_options.remove("replication_factor") {
+        None => -1,
+        Some(Value::Number(n)) => n.parse::<i32>()?,
+        Some(_) => bail!("replication factor for sink topics must be an integer"),
+    };
+
+    if replication_factor == 0 || replication_factor < -1 {
+        bail!(
+            "replication factor for sink topics must be a positive integer or -1 for broker default"
+        );
     }
 
     let consistency_value_schema = if include_consistency {
@@ -803,6 +819,7 @@ fn kafka_sink_builder(
         value_schema,
         topic_prefix,
         topic_suffix,
+        partition_count,
         replication_factor,
         fuel: 10000,
         consistency_value_schema,

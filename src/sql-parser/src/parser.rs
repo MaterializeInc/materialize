@@ -1327,10 +1327,15 @@ impl<'a> Parser<'a> {
                 self.prev_token();
                 self.prev_token();
                 self.parse_create_view()
+            } else if self.parse_keyword(MATERIALIZED) && self.parse_keyword(VIEW) {
+                self.prev_token();
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_view()
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "VIEW after CREATE TEMPORARY",
+                    "VIEW or MATERIALIZED VIEW after CREATE TEMPORARY",
                     self.peek_token(),
                 )
             }
@@ -2244,6 +2249,10 @@ impl<'a> Parser<'a> {
                         format!("No value parser for keyword {}", kw)
                     );
                 }
+                Token::Op(ref op) if op == "-" => match self.next_token() {
+                    Some(Token::Number(n)) => Ok(Value::Number(format!("-{}", n))),
+                    other => self.expected(self.peek_prev_pos(), "literal int", other),
+                },
                 Token::Number(ref n) => Ok(Value::Number(n.to_string())),
                 Token::String(ref s) => Ok(Value::String(s.to_string())),
                 Token::HexString(ref s) => Ok(Value::HexString(s.to_string())),
@@ -2412,6 +2421,7 @@ impl<'a> Parser<'a> {
                 // Misc.
                 BOOLEAN => other("bool"),
                 BYTES => other("bytea"),
+                JSON => other("jsonb"),
                 REGCLASS => other("oid"),
 
                 _ => {
