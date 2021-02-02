@@ -69,7 +69,7 @@
 //! "#;
 //!
 //! // if the schema is not valid, this function will return an error
-//! let schema = Schema::parse_str(raw_schema).unwrap();
+//! let schema: Schema = raw_schema.parse().unwrap();
 //!
 //! // schemas can be printed for debugging
 //! println!("{:?}", schema);
@@ -107,7 +107,7 @@
 //! #         ]
 //! #     }
 //! # "#;
-//! # let schema = Schema::parse_str(raw_schema).unwrap();
+//! # let schema: Schema = raw_schema.parse().unwrap();
 //! // a writer needs a schema and something to write to
 //! let mut writer = Writer::new(schema.clone(), Vec::new());
 //!
@@ -165,7 +165,7 @@
 //! #         ]
 //! #     }
 //! # "#;
-//! # let schema = Schema::parse_str(raw_schema).unwrap();
+//! # let schema: Schema = raw_schema.parse().unwrap();
 //! let mut writer = Writer::with_codec(schema, Vec::new(), Codec::Deflate);
 //! ```
 //!
@@ -192,7 +192,7 @@
 //! #         ]
 //! #     }
 //! # "#;
-//! # let schema = Schema::parse_str(raw_schema).unwrap();
+//! # let schema: Schema = raw_schema.parse().unwrap();
 //! # let mut writer = Writer::new(schema.clone(), Vec::new());
 //! # let mut record = Record::new(schema.top_node()).unwrap();
 //! # record.put("a", 27i64);
@@ -222,7 +222,7 @@
 //! #         ]
 //! #     }
 //! # "#;
-//! # let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
+//! # let writer_schema: Schema = writer_raw_schema.parse().unwrap();
 //! # let mut writer = Writer::new(writer_schema.clone(), Vec::new());
 //! # let mut record = Record::new(writer_schema.top_node()).unwrap();
 //! # record.put("a", 27i64);
@@ -243,7 +243,7 @@
 //!     }
 //! "#;
 //!
-//! let reader_schema = Schema::parse_str(reader_raw_schema).unwrap();
+//! let reader_schema: Schema = reader_raw_schema.parse().unwrap();
 //!
 //! // reader creation can fail in case the input to read from is not Avro-compatible or malformed
 //! let reader = Reader::with_schema(&reader_schema, &input[..]).unwrap();
@@ -282,7 +282,7 @@
 //! #         ]
 //! #     }
 //! # "#;
-//! # let schema = Schema::parse_str(raw_schema).unwrap();
+//! # let schema: Schema = raw_schema.parse().unwrap();
 //! # let mut writer = Writer::new(schema.clone(), Vec::new());
 //! # let mut record = Record::new(schema.top_node()).unwrap();
 //! # record.put("a", 27i64);
@@ -335,6 +335,8 @@ pub use crate::writer::{to_avro_datum, write_avro_datum, ValidationError, Writer
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
     use crate::reader::Reader;
     use crate::schema::Schema;
@@ -372,8 +374,8 @@ mod tests {
                 ]
             }
         "#;
-        let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
-        let reader_schema = Schema::parse_str(reader_raw_schema).unwrap();
+        let writer_schema = Schema::from_str(writer_raw_schema).unwrap();
+        let reader_schema = Schema::from_str(reader_raw_schema).unwrap();
         let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
         let mut record = Record::new(writer_schema.top_node()).unwrap();
         record.put("a", 27i64);
@@ -415,7 +417,7 @@ mod tests {
                 ]
             }
         "#;
-        let schema = Schema::parse_str(raw_schema).unwrap();
+        let schema = Schema::from_str(raw_schema).unwrap();
         let mut writer = Writer::with_codec(schema.clone(), Vec::new(), Codec::Null);
         let mut record = Record::new(schema.top_node()).unwrap();
         record.put("a", 27i64);
@@ -477,8 +479,8 @@ mod tests {
                 ]
             }
         "#;
-        let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
-        let reader_schema = Schema::parse_str(reader_raw_schema).unwrap();
+        let writer_schema = Schema::from_str(writer_raw_schema).unwrap();
+        let reader_schema = Schema::from_str(reader_raw_schema).unwrap();
         let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
         let mut record = Record::new(writer_schema.top_node()).unwrap();
         record.put("a", 27i64);
@@ -514,7 +516,7 @@ mod tests {
                 ]
             }
         "#;
-        let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
+        let writer_schema = Schema::from_str(writer_raw_schema).unwrap();
         let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
         let mut record = Record::new(writer_schema.top_node()).unwrap();
         record.put("a", 27i64);
@@ -547,7 +549,7 @@ mod tests {
                 }
             }
         ]}"#;
-        let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
+        let writer_schema = Schema::from_str(writer_raw_schema).unwrap();
         let mut writer = Writer::with_codec(writer_schema.clone(), Vec::new(), Codec::Null);
         let mut record = Record::new(writer_schema.top_node()).unwrap();
         let dt = chrono::NaiveDateTime::from_timestamp(1_000, 995_000_000);
@@ -575,7 +577,7 @@ mod tests {
             }
         "#;
 
-        let schema = Schema::parse_str(raw_schema).unwrap();
+        let schema = Schema::from_str(raw_schema).unwrap();
 
         // Would allocated 18446744073709551605 bytes
         let illformed: &[u8] = &[0x3e, 0x15, 0xff, 0x1f, 0x15, 0xff];

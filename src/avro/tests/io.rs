@@ -3,7 +3,9 @@
 // Use of this software is governed by the Apache License, Version 2.0
 
 //! Port of https://github.com/apache/avro/blob/master/lang/py/test/test_io.py
+
 use std::io::Cursor;
+use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
@@ -67,7 +69,7 @@ lazy_static! {
         (r#"{"type": "record", "name": "F", "fields": [{"name": "A", "type": "int"}]}"#, r#"{"A": 5}"#,Value::Record(vec![("A".to_string(), Value::Int(5))])),
     ];
 
-    static ref LONG_RECORD_SCHEMA: Schema = Schema::parse_str(r#"
+    static ref LONG_RECORD_SCHEMA: Schema = Schema::from_str(r#"
     {
         "type": "record",
         "name": "Test",
@@ -97,7 +99,7 @@ lazy_static! {
 #[test]
 fn test_validate() {
     for (raw_schema, value) in SCHEMAS_TO_VALIDATE.iter() {
-        let schema = Schema::parse_str(raw_schema).unwrap();
+        let schema = Schema::from_str(raw_schema).unwrap();
         assert!(
             value.validate(schema.top_node()),
             format!("value {:?} does not validate schema: {}", value, raw_schema)
@@ -108,7 +110,7 @@ fn test_validate() {
 #[test]
 fn test_round_trip() {
     for (raw_schema, value) in SCHEMAS_TO_VALIDATE.iter() {
-        let schema = Schema::parse_str(raw_schema).unwrap();
+        let schema = Schema::from_str(raw_schema).unwrap();
         let encoded = to_avro_datum(&schema, value.clone()).unwrap();
         let decoded = from_avro_datum(&schema, &mut Cursor::new(encoded)).unwrap();
         assert_eq!(value, &decoded);
@@ -119,7 +121,7 @@ fn test_round_trip() {
 fn test_binary_int_encoding() {
     for (number, hex_encoding) in BINARY_ENCODINGS.iter() {
         let encoded = to_avro_datum(
-            &Schema::parse_str("\"int\"").unwrap(),
+            &Schema::from_str("\"int\"").unwrap(),
             Value::Int(*number as i32),
         )
         .unwrap();
@@ -131,7 +133,7 @@ fn test_binary_int_encoding() {
 fn test_binary_long_encoding() {
     for (number, hex_encoding) in BINARY_ENCODINGS.iter() {
         let encoded = to_avro_datum(
-            &Schema::parse_str("\"long\"").unwrap(),
+            &Schema::from_str("\"long\"").unwrap(),
             Value::Long(*number as i64),
         )
         .unwrap();
@@ -151,10 +153,10 @@ fn test_schema_promotion() {
         Value::Double(219.0),
     ];
     for (i, writer_raw_schema) in promotable_schemas.iter().enumerate() {
-        let writer_schema = Schema::parse_str(writer_raw_schema).unwrap();
+        let writer_schema = Schema::from_str(writer_raw_schema).unwrap();
         let original_value = &promotable_values[i];
         for (j, reader_raw_schema) in promotable_schemas.iter().enumerate().skip(i + 1) {
-            let reader_schema = Schema::parse_str(reader_raw_schema).unwrap();
+            let reader_schema = Schema::from_str(reader_raw_schema).unwrap();
             let encoded = to_avro_datum(&writer_schema, original_value.clone()).unwrap();
             let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
             let decoded = from_avro_datum(&resolved_schema, &mut Cursor::new(encoded))
@@ -172,11 +174,9 @@ fn test_schema_promotion() {
 #[test]
 fn test_unknown_symbol() {
     let writer_schema =
-        Schema::parse_str(r#"{"type": "enum", "name": "Test", "symbols": ["FOO", "BAR"]}"#)
-            .unwrap();
+        Schema::from_str(r#"{"type": "enum", "name": "Test", "symbols": ["FOO", "BAR"]}"#).unwrap();
     let reader_schema =
-        Schema::parse_str(r#"{"type": "enum", "name": "Test", "symbols": ["BAR", "BAZ"]}"#)
-            .unwrap();
+        Schema::from_str(r#"{"type": "enum", "name": "Test", "symbols": ["BAR", "BAZ"]}"#).unwrap();
     let original_value = Value::Enum(0, "FOO".to_string());
     let encoded = to_avro_datum(&writer_schema, original_value).unwrap();
     let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
@@ -187,7 +187,7 @@ fn test_unknown_symbol() {
 #[test]
 fn test_default_value() {
     for (field_type, default_json, default_datum) in DEFAULT_VALUE_EXAMPLES.iter() {
-        let reader_schema = Schema::parse_str(&format!(
+        let reader_schema = Schema::from_str(&format!(
             r#"{{
                 "type": "record",
                 "name": "Test",
@@ -212,7 +212,7 @@ fn test_default_value() {
 
 #[test]
 fn test_no_default_value() -> Result<(), String> {
-    let reader_schema = Schema::parse_str(
+    let reader_schema = Schema::from_str(
         r#"{
             "type": "record",
             "name": "Test",
@@ -237,7 +237,7 @@ fn test_no_default_value() -> Result<(), String> {
 
 #[test]
 fn test_union_default() {
-    let reader_schema = Schema::parse_str(
+    let reader_schema = Schema::from_str(
         r#"{
             "type": "record",
             "name": "Test",
@@ -248,7 +248,7 @@ fn test_union_default() {
         }"#,
     )
     .unwrap();
-    let writer_schema = Schema::parse_str(
+    let writer_schema = Schema::from_str(
         r#"{
             "type": "record",
             "name": "Test",
@@ -263,7 +263,7 @@ fn test_union_default() {
 
 #[test]
 fn test_datetime_resolutions() {
-    let writer_schema = Schema::parse_str(
+    let writer_schema = Schema::from_str(
         r#"{
             "type": "record",
             "name": "Test",
@@ -313,7 +313,7 @@ fn test_datetime_resolutions() {
 "#,
     )
     .unwrap();
-    let reader_schema = Schema::parse_str(
+    let reader_schema = Schema::from_str(
         r#"{
             "type": "record",
             "name": "Test",
@@ -410,7 +410,7 @@ fn test_datetime_resolutions() {
 
 #[test]
 fn test_projection() {
-    let reader_schema = Schema::parse_str(
+    let reader_schema = Schema::from_str(
         r#"
         {
             "type": "record",
@@ -435,7 +435,7 @@ fn test_projection() {
 
 #[test]
 fn test_field_order() {
-    let reader_schema = Schema::parse_str(
+    let reader_schema = Schema::from_str(
         r#"
         {
             "type": "record",
@@ -460,7 +460,7 @@ fn test_field_order() {
 
 #[test]
 fn test_type_exception() -> Result<(), String> {
-    let writer_schema = Schema::parse_str(
+    let writer_schema = Schema::from_str(
         r#"
         {
              "type": "record",
@@ -504,7 +504,7 @@ fn test_namespaces() {
             }
         ]
     }"#;
-    let schema = Schema::parse_str(schema).unwrap();
+    let schema = Schema::from_str(schema).unwrap();
     let datum_to_write = Value::Record(vec![(
         "link".to_owned(),
         Value::Union {
@@ -572,7 +572,7 @@ fn test_self_referential_schema() {
             ]
         }
         "#;
-    let schema = Schema::parse_str(schema).unwrap();
+    let schema = Schema::from_str(schema).unwrap();
     let datum_to_write = Value::Record(vec![
         (
             "f1".to_owned(),
@@ -944,8 +944,8 @@ fn test_complex_resolutions() {
             ]
         }
     "#;
-    let writer_schema = Schema::parse_str(writer_schema).unwrap();
-    let reader_schema = Schema::parse_str(reader_schema).unwrap();
+    let writer_schema = Schema::from_str(writer_schema).unwrap();
+    let reader_schema = Schema::from_str(reader_schema).unwrap();
     let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
     let encoded = to_avro_datum(&writer_schema, datum_to_write).unwrap();
     let datum_read = from_avro_datum(&resolved_schema, &mut Cursor::new(encoded)).unwrap();
@@ -981,8 +981,8 @@ fn test_partially_broken_union() {
             },
             "long"
        ]"#;
-    let writer_schema = Schema::parse_str(writer_schema).unwrap();
-    let reader_schema = Schema::parse_str(reader_schema).unwrap();
+    let writer_schema = Schema::from_str(writer_schema).unwrap();
+    let reader_schema = Schema::from_str(reader_schema).unwrap();
     let resolved_schema = resolve_schemas(&writer_schema, &reader_schema).unwrap();
     let datum_to_write = Value::Union {
         index: 2,

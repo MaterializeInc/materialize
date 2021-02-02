@@ -97,7 +97,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
                         encoding
                     ),
                 };
-                let reader_schema = Schema::parse_str(reader_schema).unwrap();
+                let reader_schema: Schema = reader_schema.parse().unwrap();
                 let ctor = { move |file| mz_avro::Reader::with_schema(&reader_schema, file) };
                 let tail = if oc.tail {
                     FileReadStyle::TailFollowFd

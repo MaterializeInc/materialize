@@ -88,8 +88,8 @@ fn main() {
         {"namespace": "my.example", "type": "record", "name": "userInfo", "fields": [{"default": "NONE", "type": "string", "name": "username"}, {"default": -1, "type": "int", "name": "age"}, {"default": "NONE", "type": "string", "name": "phone"}, {"default": "NONE", "type": "string", "name": "housenum"}, {"default": {}, "type": {"fields": [{"default": "NONE", "type": "string", "name": "street"}, {"default": "NONE", "type": "string", "name": "city"}, {"default": "NONE", "type": "string", "name": "state_prov"}, {"default": "NONE", "type": "string", "name": "country"}, {"default": "NONE", "type": "string", "name": "zip"}], "type": "record", "name": "mailing_address"}, "name": "address"}]}
     "#;
 
-    let small_schema = Schema::parse_str(raw_small_schema).unwrap();
-    let big_schema = Schema::parse_str(raw_big_schema).unwrap();
+    let small_schema: Schema = raw_small_schema.parse().unwrap();
+    let big_schema: Schema = raw_big_schema.parse().unwrap();
 
     println!("{:?}", small_schema);
     println!("{:?}", big_schema);
@@ -99,7 +99,7 @@ fn main() {
     let small_record = small_record.avro();
 
     let raw_address_schema = r#"{"fields": [{"default": "NONE", "type": "string", "name": "street"}, {"default": "NONE", "type": "string", "name": "city"}, {"default": "NONE", "type": "string", "name": "state_prov"}, {"default": "NONE", "type": "string", "name": "country"}, {"default": "NONE", "type": "string", "name": "zip"}], "type": "record", "name": "mailing_address"}"#;
-    let address_schema = Schema::parse_str(raw_address_schema).unwrap();
+    let address_schema: Schema = raw_address_schema.parse().unwrap();
     let mut address = Record::new(address_schema.top_node()).unwrap();
     address.put("street", "street");
     address.put("city", "city");

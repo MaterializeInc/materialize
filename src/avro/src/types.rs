@@ -443,6 +443,8 @@ impl Value {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
     use crate::Schema;
 
@@ -505,7 +507,7 @@ mod tests {
         ];
 
         for (value, schema_str, valid) in value_schema_valid.into_iter() {
-            let schema = Schema::parse_str(schema_str).unwrap();
+            let schema = Schema::from_str(schema_str).unwrap();
             assert_eq!(
                 valid,
                 value.validate(schema.top_node()),
@@ -519,7 +521,7 @@ mod tests {
     #[test]
     fn validate_fixed() {
         let schema =
-            Schema::parse_str(r#"{"type": "fixed", "size": 4, "name": "some_fixed"}"#).unwrap();
+            Schema::from_str(r#"{"type": "fixed", "size": 4, "name": "some_fixed"}"#).unwrap();
 
         assert!(Value::Fixed(4, vec![0, 0, 0, 0]).validate(schema.top_node()));
         assert!(!Value::Fixed(5, vec![0, 0, 0, 0, 0]).validate(schema.top_node()));
@@ -527,7 +529,7 @@ mod tests {
 
     #[test]
     fn validate_enum() {
-        let schema = Schema::parse_str(r#"{"type": "enum", "name": "some_enum", "symbols": ["spades", "hearts", "diamonds", "clubs"]}"#).unwrap();
+        let schema = Schema::from_str(r#"{"type": "enum", "name": "some_enum", "symbols": ["spades", "hearts", "diamonds", "clubs"]}"#).unwrap();
 
         assert!(Value::Enum(0, "spades".to_string()).validate(schema.top_node()));
         assert!(Value::String("spades".to_string()).validate(schema.top_node()));
@@ -535,14 +537,14 @@ mod tests {
         assert!(!Value::Enum(1, "spades".to_string()).validate(schema.top_node()));
         assert!(!Value::String("lorem".to_string()).validate(schema.top_node()));
 
-        let other_schema = Schema::parse_str(r#"{"type": "enum", "name": "some_other_enum", "symbols": ["hearts", "diamonds", "clubs", "spades"]}"#).unwrap();
+        let other_schema = Schema::from_str(r#"{"type": "enum", "name": "some_other_enum", "symbols": ["hearts", "diamonds", "clubs", "spades"]}"#).unwrap();
 
         assert!(!Value::Enum(0, "spades".to_string()).validate(other_schema.top_node()));
     }
 
     #[test]
     fn validate_record() {
-        let schema = Schema::parse_str(
+        let schema = Schema::from_str(
             r#"{
            "type": "record",
            "fields": [
@@ -594,7 +596,7 @@ mod tests {
             scale: 5
         })
         .validate(
-            Schema::parse_str(
+            Schema::from_str(
                 r#"
             {
                 "type": "bytes",
@@ -614,7 +616,7 @@ mod tests {
             scale: 5
         })
         .validate(
-            Schema::parse_str(
+            Schema::from_str(
                 r#"
             {
                 "type": "bytes",
