@@ -599,8 +599,7 @@ async fn main() -> anyhow::Result<()> {
     let mut key_gen = match matches.value_of("keys").unwrap() {
         "avro" => {
             let key_schema = matches.value_of("avro-key-schema").unwrap();
-            let ccsr =
-                ccsr::ClientConfig::new(Url::parse("http://localhost:8081").unwrap()).build();
+            let ccsr = ccsr::ClientConfig::new(Url::parse(schema_registry).unwrap()).build();
             let key_schema_id = ccsr
                 .publish_schema(&format!("{}-key", topic), key_schema)
                 .await?;
