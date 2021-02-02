@@ -16,6 +16,7 @@ use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
 
+use anyhow::bail;
 use chrono::{NaiveDate, NaiveDateTime};
 use clap::arg_enum;
 use rand::distributions::{
@@ -495,7 +496,7 @@ struct Args {
     key_max: Option<u64>,
     /// Schema describing Avro key data to randomly generate, if using
     /// Avro-formatted keys.
-    #[structopt(long, required_if("keys", "avro"), conflicts_with_all(&["key-min", "key-max"]))]
+    #[structopt(long, required_if("keys", "avro"))]
     avro_key_schema: Option<Schema>,
     /// JSON object describing the distribution parameters for each field of
     /// the Avro key object, if using Avro-formatted keys.
@@ -529,10 +530,7 @@ struct Args {
     avro_value_schema: Option<Schema>,
     /// JSON object describing the distribution parameters for each field of
     /// the Avro value object, if using Avro-formatted keys.
-    #[structopt(
-        long = "avro-distribution", required_if("value-format", "avro"),
-        conflicts_with_all(&["key-min", "key-max"])
-    )]
+    #[structopt(long = "avro-distribution", required_if("value-format", "avro"))]
     avro_value_distribution: Option<serde_json::Value>,
 
     // == Output control. ==
@@ -547,6 +545,14 @@ async fn main() -> anyhow::Result<()> {
 
     let mut value_gen = match args.value_format {
         ValueFormat::Bytes => {
+            // Clap may one day be able to do this validation automatically.
+            // See: https://github.com/clap-rs/clap/discussions/2039
+            if args.avro_value_schema.is_some() {
+                bail!("cannot specify --avro-schema without --values=avro");
+            }
+            if args.avro_value_distribution.is_some() {
+                bail!("cannot specify --avro-distribution without --values=avro");
+            }
             let len =
                 Uniform::new_inclusive(args.min_value_size.unwrap(), args.max_value_size.unwrap());
             let bytes = Uniform::new_inclusive(0, 255);
@@ -555,6 +561,14 @@ async fn main() -> anyhow::Result<()> {
             ValueGenerator::UniformBytes { len, bytes, rng }
         }
         ValueFormat::Avro => {
+            // Clap may one day be able to do this validation automatically.
+            // See: https://github.com/clap-rs/clap/discussions/2039
+            if args.min_value_size.is_some() {
+                bail!("cannot specify --min-message-size without --values=bytes");
+            }
+            if args.max_value_size.is_some() {
+                bail!("cannot specify --max-message-size without --values=bytes");
+            }
             let value_schema = args.avro_value_schema.as_ref().unwrap();
             let ccsr = ccsr::ClientConfig::new(args.schema_registry_url.clone()).build();
             let schema_id = ccsr
@@ -575,6 +589,14 @@ async fn main() -> anyhow::Result<()> {
 
     let mut key_gen = match args.key_format {
         KeyFormat::Avro => {
+            // Clap may one day be able to do this validation automatically.
+            // See: https://github.com/clap-rs/clap/discussions/2039
+            if args.key_min.is_some() {
+                bail!("cannot specify --key-min without --keys=bytes");
+            }
+            if args.key_max.is_some() {
+                bail!("cannot specify --key-max without --keys=bytes");
+            }
             let key_schema = args.avro_key_schema.as_ref().unwrap();
             let ccsr = ccsr::ClientConfig::new(args.schema_registry_url).build();
             let key_schema_id = ccsr
@@ -588,7 +610,17 @@ async fn main() -> anyhow::Result<()> {
                 schema_id: key_schema_id,
             })
         }
-        _ => None,
+        _ => {
+            // Clap may one day be able to do this validation automatically.
+            // See: https://github.com/clap-rs/clap/discussions/2039
+            if args.avro_key_schema.is_some() {
+                bail!("cannot specify --avro-key-schema without --keys=avro");
+            }
+            if args.avro_key_distribution.is_some() {
+                bail!("cannot specify --avro-key-distribution without --keys=avro");
+            }
+            None
+        }
     };
 
     let producer: ThreadedProducer<DefaultProducerContext> = ClientConfig::new()
