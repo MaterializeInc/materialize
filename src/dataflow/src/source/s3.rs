@@ -13,13 +13,13 @@ use std::convert::{From, TryInto};
 use std::default::Default;
 use std::ops::AddAssign;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
-use std::sync::Arc;
 
 use anyhow::{anyhow, Error};
 use globset::GlobMatcher;
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
 use timely::scheduling::{Activator, SyncActivator};
 use tokio::io::AsyncReadExt;
+use tokio::sync::mpsc as tokio_mpsc;
 use tokio::time::{self, Duration};
 
 use aws_util::aws;
@@ -91,29 +91,33 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             }
         };
 
-        let activator = Arc::new(consumer_activator);
-
         // a single arbitrary worker is responsible for scanning the bucket
         let receiver = if active {
             log::debug!("reading bucket={} worker={}", s3_conn.bucket, worker_id);
-            let (tx, rx) = std::sync::mpsc::sync_channel(10000);
+            let (dataflow_tx, dataflow_rx) = std::sync::mpsc::sync_channel(10_000);
+            let (keys_tx, keys_rx) = tokio_mpsc::channel(10_000);
             let bucket = s3_conn.bucket.clone();
             let glob = s3_conn.pattern.map(|g| g.compile_matcher());
             let aws_info = s3_conn.aws_info;
+            tokio::spawn(download_objects_task(
+                keys_rx,
+                dataflow_tx,
+                aws_info.clone(),
+                consumer_activator,
+            ));
             for key_source in s3_conn.key_sources {
                 match key_source {
                     S3KeySource::Scan => {
-                        tokio::spawn(read_bucket_task(
+                        tokio::spawn(scan_bucket_task(
                             bucket.clone(),
                             glob.clone(),
                             aws_info.clone(),
-                            tx.clone(),
-                            activator.clone(),
+                            keys_tx.clone(),
                         ));
                     }
                 }
             }
-            rx
+            dataflow_rx
         } else {
             let (_tx, rx) = std::sync::mpsc::sync_channel(0);
             rx
@@ -137,19 +141,51 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
     }
 }
 
-async fn read_bucket_task(
+struct KeyInfo {
     bucket: String,
-    glob: Option<GlobMatcher>,
-    aws_info: aws::ConnectInfo,
+    key: String,
+}
+
+async fn download_objects_task(
+    mut rx: tokio_mpsc::Receiver<anyhow::Result<KeyInfo>>,
     tx: SyncSender<anyhow::Result<Vec<u8>>>,
-    activator: Arc<SyncActivator>,
+    aws_info: aws::ConnectInfo,
+    activator: SyncActivator,
 ) {
     let client = match aws_util::s3::client(aws_info).await {
         Ok(client) => client,
         Err(e) => {
             tx.send(Err(anyhow!("Unable to create s3 client: {}", e)))
                 .unwrap_or_else(|e| {
-                    log::trace!("unable to send error on stream creating s3 client: {}", e)
+                    log::debug!("unable to send error on stream creating s3 client: {}", e)
+                });
+            return;
+        }
+    };
+
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            Ok(msg) => download_object(&tx, &activator, &client, msg.bucket, msg.key).await,
+            Err(e) => tx
+                .send(Err(e))
+                .unwrap_or_else(|e| log::debug!("unable to send error: {}", e)),
+        }
+    }
+}
+
+async fn scan_bucket_task(
+    bucket: String,
+    glob: Option<GlobMatcher>,
+    aws_info: aws::ConnectInfo,
+    tx: tokio_mpsc::Sender<anyhow::Result<KeyInfo>>,
+) {
+    let client = match aws_util::s3::client(aws_info).await {
+        Ok(client) => client,
+        Err(e) => {
+            tx.send(Err(anyhow!("Unable to create s3 client: {}", e)))
+                .await
+                .unwrap_or_else(|e| {
+                    log::debug!("unable to send error on stream creating s3 client: {}", e)
                 });
             return;
         }
@@ -181,7 +217,14 @@ async fn read_bucket_task(
                         .filter(|k| glob.map(|g| g.is_match(k)).unwrap_or(true));
 
                     for key in keys {
-                        download_object(&tx, &activator, &client, bucket.clone(), key).await;
+                        tx.send(Ok(KeyInfo {
+                            bucket: bucket.clone(),
+                            key,
+                        }))
+                        .await
+                        .unwrap_or_else(|e| {
+                            log::debug!("unable to send keys to downloader: {}", e)
+                        });
                     }
                 }
 
