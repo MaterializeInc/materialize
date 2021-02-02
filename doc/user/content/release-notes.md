@@ -51,6 +51,15 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.6.2 %}}
 
+- **Breaking change.** Require a valid user name when [connecting to
+  Materialize](/connect/cli#connection-details). Previously, Materialize did not
+  support the concept of [roles](/sql/create-role), so it accepted all user
+  names.
+
+  Materialize instances have a user named `materialize` installed, unless you
+  drop this user with [`DROP USER`](/sql/drop-user). You can add additional
+  users with [`CREATE ROLE`](/sql/create-role).
+
 - Allow setting most [command-line flags](/cli#command-line-flags) via
   environment variables.
 

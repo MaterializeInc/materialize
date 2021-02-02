@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::future::Future;
 use std::iter;
@@ -38,7 +39,9 @@ use sql::ast::{FetchDirection, Ident, Raw, Statement};
 use sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
-use crate::message::{self, BackendMessage, ErrorResponse, FrontendMessage, VERSIONS, VERSION_3};
+use crate::message::{
+    self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
+};
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -100,7 +103,7 @@ where
     pub fn run(
         mut self,
         version: i32,
-        params: Vec<(String, String)>,
+        params: HashMap<String, String>,
     ) -> impl Future<Output = Result<(), comm::Error>> + Send {
         async move {
             // Call the inner logic from a function that's safe to use `?` in so that
@@ -114,10 +117,9 @@ where
     async fn run_inner(
         &mut self,
         version: i32,
-        params: Vec<(String, String)>,
+        params: HashMap<String, String>,
     ) -> Result<(), comm::Error> {
         let mut state = self.startup(version, params).await?;
-
         loop {
             state = match state {
                 State::Ready => self.advance_ready().await?,
@@ -125,7 +127,7 @@ where
                 State::Done => break,
             }
         }
-
+        self.flush().await?;
         Ok(())
     }
 
@@ -211,7 +213,7 @@ where
     async fn startup(
         &mut self,
         version: i32,
-        params: Vec<(String, String)>,
+        params: HashMap<String, String>,
     ) -> Result<State, comm::Error> {
         if version != VERSION_3 {
             return self
@@ -246,7 +248,9 @@ where
                 })
                 .collect(),
             Err(e) => {
-                return self.error(ErrorResponse::from(e)).await;
+                return self
+                    .error(ErrorResponse::from_coord(Severity::Fatal, e))
+                    .await;
             }
         };
 
@@ -280,7 +284,9 @@ where
             .declare(EMPTY_PORTAL.to_string(), stmt.clone(), param_types)
             .await
         {
-            return self.error(ErrorResponse::from(e)).await;
+            return self
+                .error(ErrorResponse::from_coord(Severity::Error, e))
+                .await;
         }
 
         let stmt_desc = self
@@ -323,7 +329,10 @@ where
                 )
                 .await
             }
-            Err(e) => self.error(ErrorResponse::from(e)).await,
+            Err(e) => {
+                self.error(ErrorResponse::from_coord(Severity::Error, e))
+                    .await
+            }
         };
 
         // Destroy the portal.
@@ -435,7 +444,10 @@ where
                 self.conn.send(BackendMessage::ParseComplete).await?;
                 Ok(State::Ready)
             }
-            Err(e) => self.error(ErrorResponse::from(e)).await,
+            Err(e) => {
+                self.error(ErrorResponse::from_coord(Severity::Error, e))
+                    .await
+            }
         }
     }
 
@@ -595,7 +607,10 @@ where
                             )
                             .await
                         }
-                        Err(e) => self.error(ErrorResponse::from(e)).await,
+                        Err(e) => {
+                            self.error(ErrorResponse::from_coord(Severity::Error, e))
+                                .await
+                        }
                     }
                 }
                 PortalState::InProgress(rows) => {

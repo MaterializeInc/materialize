@@ -56,7 +56,7 @@ struct Args {
 
     // === Materialize options. ===
     /// materialized connection string.
-    #[structopt(long, default_value = "postgres://localhost:6875")]
+    #[structopt(long, default_value = "postgres://materialize@localhost:6875")]
     materialized_url: tokio_postgres::Config,
     /// Validate the on-disk state of the materialized catalog.
     #[structopt(long)]

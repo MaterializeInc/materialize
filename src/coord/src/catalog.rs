@@ -101,6 +101,7 @@ pub struct ConnCatalog<'a> {
     conn_id: u32,
     database: String,
     search_path: &'a [&'a str],
+    user: String,
 }
 
 impl ConnCatalog<'_> {
@@ -705,6 +706,7 @@ impl Catalog {
             conn_id: session.conn_id(),
             database: session.vars().database().into(),
             search_path: session.vars().search_path(),
+            user: session.user().into(),
         }
     }
 
@@ -716,6 +718,7 @@ impl Catalog {
             conn_id: SYSTEM_CONN_ID,
             database: "materialize".into(),
             search_path: &[],
+            user: "mz_system".into(),
         }
     }
 
@@ -1154,8 +1157,8 @@ impl Catalog {
                     schema_name,
                     oid,
                 } => {
-                    if schema_name.starts_with("mz_") || schema_name.starts_with("pg_") {
-                        return Err(Error::new(ErrorKind::UnacceptableSchemaName(schema_name)));
+                    if is_reserved_name(&schema_name) {
+                        return Err(Error::new(ErrorKind::ReservedSchemaName(schema_name)));
                     }
                     let (database_id, database_name) = match database_name {
                         DatabaseSpecifier::Name(name) => (tx.load_database_id(&name)?, name),
@@ -1170,11 +1173,16 @@ impl Catalog {
                         schema_name,
                     }]
                 }
-                Op::CreateRole { name, oid } => vec![Action::CreateRole {
-                    id: tx.insert_role(&name)?,
-                    oid,
-                    name,
-                }],
+                Op::CreateRole { name, oid } => {
+                    if is_reserved_name(&name) {
+                        return Err(Error::new(ErrorKind::ReservedRoleName(name)));
+                    }
+                    vec![Action::CreateRole {
+                        id: tx.insert_role(&name)?,
+                        oid,
+                        name,
+                    }]
+                }
                 Op::CreateItem {
                     id,
                     oid,
@@ -1718,6 +1726,10 @@ impl Catalog {
     }
 }
 
+fn is_reserved_name(name: &str) -> bool {
+    name.starts_with("mz_") || name.starts_with("pg_")
+}
+
 #[derive(Debug, Clone)]
 pub enum Op {
     CreateDatabase {
@@ -1968,8 +1980,7 @@ impl SqlCatalog for ConnCatalog<'_> {
     }
 
     fn user(&self) -> &str {
-        // TODO(benesch): wire this up to the session.
-        "materialize"
+        &self.user
     }
 
     fn default_database(&self) -> &str {

@@ -37,14 +37,15 @@ pub struct Session {
     prepared_statements: HashMap<String, PreparedStatement>,
     portals: HashMap<String, Portal>,
     transaction: TransactionStatus,
+    user: String,
     vars: Vars,
 }
 
 impl Session {
     /// Creates a new session for the specified connection ID.
-    pub fn new(conn_id: u32) -> Session {
+    pub fn new(conn_id: u32, user: String) -> Session {
         assert_ne!(conn_id, DUMMY_CONNECTION_ID);
-        Self::new_internal(conn_id)
+        Self::new_internal(conn_id, user)
     }
 
     /// Creates a new dummy session.
@@ -52,15 +53,16 @@ impl Session {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session {
-        Self::new_internal(DUMMY_CONNECTION_ID)
+        Self::new_internal(DUMMY_CONNECTION_ID, "system".into())
     }
 
-    fn new_internal(conn_id: u32) -> Session {
+    fn new_internal(conn_id: u32, user: String) -> Session {
         Session {
             conn_id,
             transaction: TransactionStatus::Default,
             prepared_statements: HashMap::new(),
             portals: HashMap::new(),
+            user,
             vars: Vars::default(),
         }
     }
@@ -229,6 +231,11 @@ impl Session {
         self.prepared_statements.clear();
         self.portals.clear();
         self.vars = Vars::default();
+    }
+
+    /// Returns the name of the user who owns this session.
+    pub fn user(&self) -> &str {
+        &self.user
     }
 
     /// Returns a reference to the variables in this session.

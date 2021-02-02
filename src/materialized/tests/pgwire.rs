@@ -23,7 +23,7 @@ use repr::adt::decimal::Significand;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
 use postgres::config::SslMode;
-use postgres::error::SqlState;
+use postgres::error::{DbError, SqlState};
 use postgres::types::Type;
 use postgres::SimpleQueryMessage;
 use postgres_array::{Array, Dimension};
@@ -221,6 +221,39 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
             "hello",
         );
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_conn_user() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    let (server, mut client) = util::start_server(util::Config::default())?;
+
+    // Attempting to connect as a nonexistent user should fail.
+    match server.pg_config().user("rj").connect(postgres::NoTls) {
+        Ok(_) => panic!("connection with bad user unexpectedly succeeded"),
+        Err(e) => {
+            let e = e
+                .source()
+                .and_then(|e| e.downcast_ref::<DbError>())
+                .unwrap();
+            assert_eq!(e.severity(), "FATAL");
+            assert_eq!(*e.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+            assert_eq!(e.message(), "role \"rj\" does not exist");
+            assert_eq!(
+                e.hint(),
+                Some("Try connecting as the \"materialize\" user.")
+            );
+        }
+    }
+
+    // But should succeed after that user comes into existence.
+    client.batch_execute("CREATE ROLE rj LOGIN SUPERUSER")?;
+    let mut client = server.pg_config().user("rj").connect(postgres::NoTls)?;
+    let row = client.query_one("SELECT current_user", &[])?;
+    assert_eq!(row.get::<_, String>(0), "rj");
 
     Ok(())
 }

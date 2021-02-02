@@ -39,6 +39,8 @@ pub enum CoordError {
     Transform(TransformError),
     /// The named cursor does not exist.
     UnknownCursor(String),
+    /// The named role does not exist.
+    UnknownLoginRole(String),
     /// The named parameter is unknown to the system.
     UnknownParameter(String),
     /// A generic error occurred.
@@ -52,12 +54,28 @@ pub enum CoordError {
 impl CoordError {
     /// Reports additional details about the error, if any are available.
     pub fn detail(&self) -> Option<String> {
-        None
+        match self {
+            CoordError::Catalog(c) => c.detail(),
+            _ => None,
+        }
     }
 
     /// Reports a hint for the user about how the error could be fixed.
     pub fn hint(&self) -> Option<String> {
-        None
+        match self {
+            CoordError::Catalog(c) => c.hint(),
+            CoordError::UnknownLoginRole(_) => {
+                // TODO(benesch): this will be a bad hint when people are used
+                // to creating roles in Materialize, since they might drop the
+                // default "materialize" role. Remove it in a few months
+                // (say, April 2021) when folks are more used to using roles
+                // with Materialize. (We don't want to do something more clever
+                // and include the actual roles that exist in the message,
+                // because that leaks information to unauthenticated clients.)
+                Some("Try connecting as the \"materialize\" user.".into())
+            }
+            _ => None,
+        }
     }
 }
 
@@ -91,6 +109,9 @@ impl fmt::Display for CoordError {
             CoordError::Transform(e) => e.fmt(f),
             CoordError::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())
+            }
+            CoordError::UnknownLoginRole(name) => {
+                write!(f, "role {} does not exist", name.quoted())
             }
             CoordError::UnknownParameter(name) => {
                 write!(f, "unrecognized configuration parameter {}", name.quoted())

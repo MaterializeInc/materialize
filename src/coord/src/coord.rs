@@ -577,14 +577,6 @@ where
     ) {
         match cmd {
             Command::Startup { session, tx } => {
-                let mut messages = vec![];
-                let catalog = self.catalog.for_session(&session);
-                if catalog
-                    .resolve_database(catalog.default_database())
-                    .is_err()
-                {
-                    messages.push(StartupMessage::UnknownSessionDatabase);
-                }
                 if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
                     let _ = tx.send(Response {
                         result: Err(e.into()),
@@ -592,6 +584,24 @@ where
                     });
                     return;
                 }
+
+                let catalog = self.catalog.for_session(&session);
+                if catalog.resolve_role(session.user()).is_err() {
+                    let _ = tx.send(Response {
+                        result: Err(CoordError::UnknownLoginRole(session.user().into())),
+                        session,
+                    });
+                    return;
+                }
+
+                let mut messages = vec![];
+                if catalog
+                    .resolve_database(catalog.default_database())
+                    .is_err()
+                {
+                    messages.push(StartupMessage::UnknownSessionDatabase);
+                }
+
                 ClientTransmitter::new(tx).send(Ok(messages), session)
             }
 

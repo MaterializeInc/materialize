@@ -30,7 +30,7 @@ class SmokeTest {
         if (port == null)
             port = "6875";
         String url = String.format("jdbc:postgresql://%s:%s/", host, port);
-        conn = DriverManager.getConnection(url);
+        conn = DriverManager.getConnection(url, "materialize", null);
     }
 
     @AfterEach

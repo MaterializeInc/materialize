@@ -14,8 +14,18 @@ using a compatible command-line client.
 Detail | Info
 -------|------
 **Database** | `materialize`
+**User** | Any valid [role](/sql/create-role) (usually `materialize`)
 **Port** | `6875`
 **SSL** | Not supported yet
+
+Materialize instances have a user named `materialize` installed, unless you drop
+this user with [`DROP USER`](/sql/drop-user). You can add additional users with
+[`CREATE ROLE`](/sql/create-role).
+
+{{< version-changed v0.6.2 >}}
+Materialize requires that you name a valid user when you connect. Previously,
+Materialize did not support the concept of roles, so it accepted all user names.
+{{< /version-changed >}}
 
 ### Supported tools
 
@@ -48,8 +58,8 @@ mzcli -h <host>
 You could use any of the following formats to connect to `materialized` with `psql`:
 
 ```shell
-psql postgres://<host>:6875/materialize
-psql -h <host> -p 6875 materialize
-psql -h <host> -p 6875 -d materialize
-psql host=<host> port=6875 dbname=materialize
+psql postgres://materialize@<host>:6875/materialize
+psql -U materialize -h <host> -p 6875 materialize
+psql -U materialize -h <host> -p 6875 -d materialize
+psql user=materialize host=<host> port=6875 dbname=materialize
 ```
