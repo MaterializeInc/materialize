@@ -202,6 +202,7 @@ pub struct Index {
     pub plan_cx: PlanContext,
     pub on: GlobalId,
     pub keys: Vec<MirScalarExpr>,
+    pub conn_id: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,6 +302,7 @@ impl CatalogItem {
     pub fn conn_id(&self) -> Option<u32> {
         match self {
             CatalogItem::View(view) => view.conn_id,
+            CatalogItem::Index(index) => index.conn_id,
             _ => None,
         }
     }
@@ -540,6 +542,7 @@ impl Catalog {
                                     &log.variant.index_by(),
                                 ),
                                 plan_cx: PlanContext::default(),
+                                conn_id: None,
                             }),
                         ),
                     );
@@ -584,6 +587,7 @@ impl Catalog {
                                     .collect(),
                                 create_sql: index_sql,
                                 plan_cx: PlanContext::default(),
+                                conn_id: None,
                             }),
                         ),
                     );
@@ -853,11 +857,12 @@ impl Catalog {
     }
 
     pub fn drop_temp_item_ops(&mut self, conn_id: u32) -> Vec<Op> {
-        self.temporary_schemas[&conn_id]
+        let ids: Vec<GlobalId> = self.temporary_schemas[&conn_id]
             .items
             .values()
-            .map(|id| Op::DropItem(*id))
-            .collect()
+            .cloned()
+            .collect();
+        self.drop_items_ops(&ids)
     }
 
     pub fn drop_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
@@ -1038,28 +1043,31 @@ impl Catalog {
 
     /// Gets GlobalIds of temporary items to be created, checks for name collisions
     /// within a connection id.
-    fn temporary_ids(&mut self, ops: &[Op]) -> Result<Vec<GlobalId>, Error> {
-        let mut creating = HashSet::new();
-        let mut temporary_ids = Vec::new();
+    fn temporary_ids(
+        &mut self,
+        ops: &[Op],
+        temporary_drops: HashSet<(u32, String)>,
+    ) -> Result<Vec<GlobalId>, Error> {
+        let mut creating = HashSet::with_capacity(ops.len());
+        let mut temporary_ids = Vec::with_capacity(ops.len());
         for op in ops.iter() {
             if let Op::CreateItem {
                 id,
                 oid: _,
                 name,
-                item:
-                    CatalogItem::View(View {
-                        conn_id: Some(conn_id),
-                        ..
-                    }),
+                item,
             } = op
             {
-                if self.item_exists_in_temp_schemas(*conn_id, &name.item)
-                    || creating.contains(&(conn_id, &name.item))
-                {
-                    return Err(Error::new(ErrorKind::ItemAlreadyExists(name.item.clone())));
-                } else {
-                    creating.insert((conn_id, &name.item));
-                    temporary_ids.push(id.clone());
+                if let Some(conn_id) = item.conn_id() {
+                    if self.item_exists_in_temp_schemas(conn_id, &name.item)
+                        && !temporary_drops.contains(&(conn_id, name.item.clone()))
+                        || creating.contains(&(conn_id, &name.item))
+                    {
+                        return Err(Error::new(ErrorKind::ItemAlreadyExists(name.item.clone())));
+                    } else {
+                        creating.insert((conn_id, &name.item));
+                        temporary_ids.push(id.clone());
+                    }
                 }
             }
         }
@@ -1112,7 +1120,6 @@ impl Catalog {
             },
         }
 
-        let temporary_ids = self.temporary_ids(&ops)?;
         let drop_ids: HashSet<_> = ops
             .iter()
             .filter_map(|op| match op {
@@ -1120,6 +1127,17 @@ impl Catalog {
                 _ => None,
             })
             .collect();
+        let temporary_drops = drop_ids
+            .iter()
+            .filter_map(|id| {
+                let entry = self.get_by_id(id);
+                match entry.item.conn_id() {
+                    Some(conn_id) => Some((conn_id, entry.name().item.clone())),
+                    None => None,
+                }
+            })
+            .collect();
+        let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut actions = Vec::with_capacity(ops.len());
         let mut storage = self.storage();
         let mut tx = storage.transaction()?;
@@ -1581,6 +1599,7 @@ impl Catalog {
                 plan_cx: pcx,
                 on: index.on,
                 keys: index.keys,
+                conn_id: None,
             }),
             Plan::CreateSink {
                 sink,

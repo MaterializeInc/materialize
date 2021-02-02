@@ -1798,8 +1798,13 @@ where
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
         index_name.item += "_primary_idx";
-        let index =
-            auto_generate_primary_idx(index_name.item.clone(), name.clone(), table_id, &table.desc);
+        let index = auto_generate_primary_idx(
+            index_name.item.clone(),
+            name.clone(),
+            table_id,
+            &table.desc,
+            None,
+        );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
         match self
@@ -1854,8 +1859,13 @@ where
         let index_id = if materialized {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
-            let index =
-                auto_generate_primary_idx(index_name.item.clone(), name, source_id, &source.desc);
+            let index = auto_generate_primary_idx(
+                index_name.item.clone(),
+                name,
+                source_id,
+                &source.desc,
+                None,
+            );
             let index_id = self.catalog.allocate_id()?;
             let index_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
@@ -2006,8 +2016,13 @@ where
         let index_id = if materialize {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
-            let index =
-                auto_generate_primary_idx(index_name.item.clone(), name, view_id, &view.desc);
+            let index = auto_generate_primary_idx(
+                index_name.item.clone(),
+                name,
+                view_id,
+                &view.desc,
+                view.conn_id,
+            );
             let index_id = self.catalog.allocate_id()?;
             let index_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
@@ -2048,6 +2063,7 @@ where
             plan_cx: pcx,
             keys: index.keys,
             on: index.on,
+            conn_id: None,
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -3437,6 +3453,7 @@ fn auto_generate_primary_idx(
     on_name: FullName,
     on_id: GlobalId,
     on_desc: &RelationDesc,
+    conn_id: Option<u32>,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
 
@@ -3448,6 +3465,7 @@ fn auto_generate_primary_idx(
             .iter()
             .map(|k| MirScalarExpr::Column(*k))
             .collect(),
+        conn_id,
     }
 }
 
