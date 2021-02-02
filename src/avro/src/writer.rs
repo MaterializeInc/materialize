@@ -347,6 +347,7 @@ pub fn to_avro_datum<T: ToAvro>(schema: &Schema, value: T) -> Result<Vec<u8>, Er
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::str::FromStr;
 
     use serde::{Deserialize, Serialize};
 
@@ -371,7 +372,7 @@ mod tests {
 
     #[test]
     fn test_to_avro_datum() {
-        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let schema = Schema::from_str(SCHEMA).unwrap();
         let mut record = Record::new(schema.top_node()).unwrap();
         record.put("a", 27i64);
         record.put("b", "foo");
@@ -386,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_union() {
-        let schema = Schema::parse_str(UNION_SCHEMA).unwrap();
+        let schema = Schema::from_str(UNION_SCHEMA).unwrap();
         let union = Value::Union {
             index: 1,
             inner: Box::new(Value::Long(3)),
@@ -403,7 +404,7 @@ mod tests {
 
     #[test]
     fn test_writer_append() {
-        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let schema = Schema::from_str(SCHEMA).unwrap();
         let mut writer = Writer::new(schema.clone(), Vec::new());
 
         let mut record = Record::new(schema.top_node()).unwrap();
@@ -454,7 +455,7 @@ mod tests {
 
     #[test]
     fn test_writer_extend() {
-        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let schema = Schema::from_str(SCHEMA).unwrap();
         let mut writer = Writer::new(schema.clone(), Vec::new());
 
         let mut record = Record::new(schema.top_node()).unwrap();
@@ -512,7 +513,7 @@ mod tests {
 
     #[test]
     fn test_writer_with_codec() {
-        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let schema = Schema::from_str(SCHEMA).unwrap();
         let mut writer = Writer::with_codec(schema.clone(), Vec::new(), Codec::Deflate);
 
         let mut record = Record::new(schema.top_node()).unwrap();
@@ -564,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_writer_roundtrip() {
-        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let schema = Schema::from_str(SCHEMA).unwrap();
         let make_record = |a: i64, b| {
             let mut record = Record::new(schema.top_node()).unwrap();
             record.put("a", a);
