@@ -329,17 +329,24 @@ impl AstDisplay for Connector {
 }
 impl_display!(Connector);
 
-/// The key sources specified in the `OBJECTS FROM` clause.
+/// The key sources specified in the S3 source's `OBJECTS FROM` clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum S3KeySource {
     /// `OBJECTS FROM SCAN`
     Scan,
+    /// `OBJECTS FROM SQS NOTIFICATIONS '<queue-name>'`
+    SqsNotifications { queue: String },
 }
 
 impl AstDisplay for S3KeySource {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             S3KeySource::Scan => f.write_str(" SCAN"),
+            S3KeySource::SqsNotifications { queue } => {
+                f.write_str(" SQS NOTIFICATIONS '");
+                f.write_str(&display::escape_single_quote_string(queue));
+                f.write_str("'");
+            }
         }
     }
 }

@@ -453,6 +453,11 @@ pub fn plan_create_source(
                         parsed_scan = true;
                         dataflow_types::S3KeySource::Scan
                     }
+                    sql_parser::ast::S3KeySource::SqsNotifications { queue } => {
+                        dataflow_types::S3KeySource::SqsNotifications {
+                            queue: queue.clone(),
+                        }
+                    }
                 };
                 converted_sources.push(dtks);
             }
