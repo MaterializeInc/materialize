@@ -6,6 +6,7 @@
 //!     - https://github.com/apache/avro/blob/master/lang/py/avro/test/test_schema.py
 //!     - https://github.com/apache/avro/tree/master/lang/c/tests/schema_tests
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveDateTime};
 use lazy_static::lazy_static;
@@ -242,7 +243,7 @@ lazy_static! {
 fn test_unparseable_schemas() {
     for raw_schema in UNPARSEABLE_SCHEMAS.iter() {
         assert!(
-            Schema::parse_str(raw_schema).is_err(),
+            Schema::from_str(raw_schema).is_err(),
             format!("expected Avro schema not to parse: {}", raw_schema)
         );
     }
@@ -252,7 +253,7 @@ fn test_unparseable_schemas() {
 fn test_unparseable_logical_types() {
     for raw_schema in UNPARSEABLE_LOGICAL_TYPES.iter() {
         assert!(
-            Schema::parse_str(raw_schema).is_err(),
+            Schema::from_str(raw_schema).is_err(),
             format!("expected Avro schema not to parse: {}", raw_schema)
         );
     }
@@ -261,7 +262,7 @@ fn test_unparseable_logical_types() {
 #[test]
 fn test_valid_schemas() {
     for (raw_schema, value) in VALID_SCHEMAS.iter() {
-        let schema = Schema::parse_str(raw_schema).unwrap();
+        let schema = Schema::from_str(raw_schema).unwrap();
         assert!(
             value.validate(schema.top_node()),
             format!("value {:?} does not validate schema: {}", value, raw_schema)
@@ -272,7 +273,7 @@ fn test_valid_schemas() {
 #[test]
 fn test_valid_logical_types() {
     for (raw_schema, value) in VALID_LOGICAL_TYPES.iter() {
-        let schema = Schema::parse_str(raw_schema).unwrap();
+        let schema = Schema::from_str(raw_schema).unwrap();
         assert!(
             value.validate(schema.top_node()),
             format!("value {:?} does not validate schema: {}", value, raw_schema)
@@ -283,7 +284,7 @@ fn test_valid_logical_types() {
 #[test]
 fn test_ignored_logical_types() {
     for (raw_schema, value) in IGNORED_LOGICAL_TYPES.iter() {
-        let schema = Schema::parse_str(raw_schema).unwrap();
+        let schema = Schema::from_str(raw_schema).unwrap();
         assert!(
             value.validate(schema.top_node()),
             format!("value {:?} does not validate schema: {}", value, raw_schema)

@@ -395,7 +395,7 @@ where
                             ),
                         };
 
-                        let reader_schema = Schema::parse_str(reader_schema).unwrap();
+                        let reader_schema: Schema = reader_schema.parse().unwrap();
                         (
                             decode_avro_values(&source, &envelope, reader_schema, &self.debug_name),
                             capability,
