@@ -16,8 +16,8 @@ use dataflow_types::PeekResponse;
 use repr::Row;
 use sql::ast::{FetchDirection, ObjectType, Raw, Statement};
 use sql::plan::ExecuteTimeout;
-use tokio_postgres::error::SqlState;
 
+use crate::error::CoordError;
 use crate::session::{EndTransactionAction, Session};
 
 #[derive(Debug)]
@@ -71,13 +71,13 @@ pub enum Command {
     NoSessionExecute {
         stmt: Statement<Raw>,
         params: sql::plan::Params,
-        tx: futures::channel::oneshot::Sender<anyhow::Result<NoSessionExecuteResponse>>,
+        tx: futures::channel::oneshot::Sender<Result<NoSessionExecuteResponse, CoordError>>,
     },
 }
 
 #[derive(Debug)]
 pub struct Response<T> {
-    pub result: Result<T, anyhow::Error>,
+    pub result: Result<T, CoordError>,
     pub session: Session,
 }
 
@@ -187,11 +187,6 @@ pub enum ExecuteResponse {
     },
     /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
-    /// A SQL error occurred.
-    PgError {
-        code: SqlState,
-        message: String,
-    },
     /// Rows will be delivered via the specified future.
     SendingRows(#[derivative(Debug = "ignore")] RowsFuture),
     /// The specified variable was set to a new value.

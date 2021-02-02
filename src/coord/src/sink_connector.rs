@@ -10,7 +10,7 @@
 use std::fs::OpenOptions;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, Context};
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::config::ClientConfig;
@@ -24,12 +24,14 @@ use ore::collections::CollectionExt;
 use repr::Timestamp;
 use timely::progress::Antichain;
 
+use crate::error::CoordError;
+
 pub async fn build(
     builder: SinkConnectorBuilder,
     with_snapshot: bool,
     frontier: Antichain<Timestamp>,
     id: GlobalId,
-) -> Result<SinkConnector, anyhow::Error> {
+) -> Result<SinkConnector, CoordError> {
     match builder {
         SinkConnectorBuilder::Kafka(k) => build_kafka(k, with_snapshot, frontier, id).await,
         SinkConnectorBuilder::AvroOcf(a) => build_avro_ocf(a, with_snapshot, frontier, id),
@@ -44,7 +46,7 @@ async fn register_kafka_topic(
     ccsr: &ccsr::Client,
     value_schema: &str,
     key_schema: Option<&str>,
-) -> Result<(Option<i32>, i32), anyhow::Error> {
+) -> Result<(Option<i32>, i32), CoordError> {
     let res = client
         .create_topics(
             &[NewTopic::new(
@@ -57,7 +59,7 @@ async fn register_kafka_topic(
         .await
         .with_context(|| format!("error creating new topic {} for sink", topic))?;
     if res.len() != 1 {
-        bail!(
+        coord_bail!(
             "error creating topic {} for sink: \
              kafka topic creation returned {} results, but exactly one result was expected",
             topic,
@@ -94,7 +96,7 @@ async fn build_kafka(
     with_snapshot: bool,
     frontier: Antichain<Timestamp>,
     id: GlobalId,
-) -> Result<SinkConnector, anyhow::Error> {
+) -> Result<SinkConnector, CoordError> {
     let topic = format!("{}-{}-{}", builder.topic_prefix, id, builder.topic_suffix);
 
     // Create Kafka topic with single partition.
@@ -162,9 +164,9 @@ fn build_avro_ocf(
     with_snapshot: bool,
     frontier: Antichain<Timestamp>,
     id: GlobalId,
-) -> Result<SinkConnector, anyhow::Error> {
+) -> Result<SinkConnector, CoordError> {
     let mut name = match builder.path.file_stem() {
-        None => bail!(
+        None => coord_bail!(
             "unable to read file name from path {}",
             builder.path.display()
         ),
