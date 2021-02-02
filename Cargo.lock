@@ -1822,6 +1822,7 @@ dependencies = [
  "rdkafka",
  "serde",
  "serde_json",
+ "structopt",
  "tokio",
  "url",
 ]
