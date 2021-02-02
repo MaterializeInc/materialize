@@ -26,18 +26,40 @@ from materialize import spawn
 from materialize import git
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import Any, List, Set, Sequence
+from typing import Any, Iterable, List, Set, Sequence
 import os
 import subprocess
 import sys
 import yaml
 
+# These paths contain "CI glue code", i.e., the code that powers CI itself,
+# including this very script! All of CI implicitly depends on this code, so
+# whenever it changes, we ought not trim any jobs from the pipeline in order to
+# exercise as much of the glue code as possible.
+#
+# It's tough to track this code with any sort of fine-grained granularity, so we
+# err on the side of including too much rather than too little. (For example,
+# bin/resync-submodules is not presently used by CI, but it's just not worth
+# trying to capture that.)
+CI_GLUE_GLOBS = ["bin", "ci", "misc/python"]
+
 
 def main() -> int:
+    # Make sure we have an up to date view of main.
+    spawn.runv(["git", "fetch", "origin", "main"])
+
+    # Print out a summary of all changes.
+    os.environ["GIT_PAGER"] = ""
+    spawn.runv(["git", "diff", "--stat", "origin/main..."])
+
     with open(Path(__file__).parent / "pipeline.template.yml") as f:
         pipeline = yaml.safe_load(f)
 
-    if os.environ["BUILDKITE_BRANCH"] != "main" and not os.environ["BUILDKITE_TAG"]:
+    if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
+        print("On main branch or tag, so not trimming pipeline")
+    elif have_paths_changed(CI_GLUE_GLOBS):
+        print("Repository glue code has changed, so not trimming pipeline")
+    else:
         print("--- Trimming unchanged steps from pipeline")
         trim_pipeline(pipeline)
 
@@ -112,14 +134,6 @@ def trim_pipeline(pipeline: Any) -> None:
                         step.extra_inputs.add(str(repo.compositions[name]))
         steps[step.id] = step
 
-    # Make sure we have an up to date view of main.
-    spawn.runv(["git", "fetch", "origin", "main"])
-    base = "origin/main..."
-
-    # Print out a summary of all changes.
-    os.environ["GIT_PAGER"] = ""
-    spawn.runv(["git", "diff", "--stat", base])
-
     # Find all the steps whose inputs have changed with respect to main.
     # We delegate this hard work to Git.
     changed = set()
@@ -130,10 +144,7 @@ def trim_pipeline(pipeline: Any) -> None:
             # changed, but `git diff` with no pathspecs means "diff everything",
             # not "diff nothing", so explicitly skip.
             continue
-        diff = subprocess.run(
-            ["git", "diff", "--no-patch", "--quiet", base, "--", *inputs]
-        )
-        if diff.returncode != 0:
+        if have_paths_changed(*inputs):
             changed.add(step.id)
 
     # Then collect all changed steps, and all the steps that those changed steps
@@ -163,6 +174,14 @@ def trim_pipeline(pipeline: Any) -> None:
 
     # Restrict the pipeline to the needed steps.
     pipeline["steps"] = [step for step in pipeline["steps"] if step["id"] in needed]
+
+
+def have_paths_changed(globs: Iterable[str]) -> bool:
+    """Reports whether the specified globs have diverged from origin/main."""
+    diff = subprocess.run(
+        ["git", "diff", "--no-patch", "--quiet", "origin/main...", *globs]
+    )
+    return diff.returncode != 0
 
 
 if __name__ == "__main__":
