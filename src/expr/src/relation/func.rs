@@ -856,6 +856,11 @@ impl TableFunc {
     }
 
     pub fn empty_on_null_input(&self) -> bool {
+        // Warning: this returns currently "true" for all TableFuncs.
+        // If adding a TableFunc for which this function will return "false",
+        // check the places where `empty_on_null_input` is called to ensure,
+        // such as NonNullRequirements that the case this function returns
+        // false is properly handled.
         match self {
             TableFunc::JsonbEach { .. }
             | TableFunc::JsonbObjectKeys

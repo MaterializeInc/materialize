@@ -90,7 +90,7 @@ impl NonNullRequirements {
                     .any(|c| *c >= arity && scalars[*c - arity].is_literal_null())
                 {
                     // A null value was introduced in a marked column;
-                    // the entire expression can be zerod out.
+                    // the entire expression can be zeroed out.
                     relation.take_safely();
                 } else {
                     // For each column, if it must be non-null, extract the expression's
@@ -112,11 +112,30 @@ impl NonNullRequirements {
                 exprs,
                 demand: _,
             } => {
+                // Columns whose number is smaller than arity refer to
+                // columns of `input`. Columns whose number is
+                // greater than or equal to the arity refer to columns created
+                // by the FlatMap. The latter group of columns cannot be
+                // propagated down.
+                let arity = input.arity();
+                columns.retain(|c| *c < arity);
+
                 if func.empty_on_null_input() {
+                    // we can safely disregard rows where any of the exprs
+                    // evaluate to null
                     for expr in exprs {
                         expr.non_null_requirements(&mut columns);
                     }
                 }
+
+                // TODO: if `!func.empty_on_null_input()` and there are members
+                // of `columns` that refer to columns created by the FlatMap, we
+                // may be able to propagate some non-null requirements based on
+                // which columns created by the FlatMap cannot be null. However,
+                // as there are no TableFuncs for which
+                // `!func.empty_on_null_input()`, it is yet unknown what should
+                // be done in this case.
+
                 self.action(input, columns, gets);
             }
             MirRelationExpr::Filter { input, predicates } => {
