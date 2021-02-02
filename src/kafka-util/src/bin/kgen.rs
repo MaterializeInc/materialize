@@ -461,6 +461,9 @@ struct Args {
     /// cluster to connect to.
     #[structopt(short = "b", long, default_value = "localhost:9092")]
     bootstrap_server: String,
+    /// URL of the schema registry to connect to, if using Avro keys or values.
+    #[structopt(short = "s", long, default_value = "http://localhost:8081")]
+    schema_registry_url: url::Url,
     /// Topic into which to write records.
     #[structopt(short = "t", long = "topic")]
     topic: String,
@@ -548,8 +551,7 @@ async fn main() -> anyhow::Result<()> {
         }
         ValueFormat::Avro => {
             let value_schema = args.avro_value_schema.as_ref().unwrap();
-            let ccsr =
-                ccsr::ClientConfig::new(Url::parse("http://localhost:8081").unwrap()).build();
+            let ccsr = ccsr::ClientConfig::new(args.schema_registry_url).build();
             let schema_id = ccsr
                 .publish_schema(
                     &format!("{}-value", args.topic),
