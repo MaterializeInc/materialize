@@ -117,3 +117,14 @@ $ s3-put-object bucket=${bucket} key=server.log
 
 > SELECT * FROM re WHERE method = 'PUT'
 2020-01-20T12:00:01 INFO 10.0.0.1 PUT /login logged_in 2
+
+! CREATE SOURCE err FROM S3 BUCKET 'dog' OBJECTS FROM SCAN SCAN
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT TEXT
+SCAN may only be specified once

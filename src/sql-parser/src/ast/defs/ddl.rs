@@ -23,6 +23,8 @@
 
 use std::path::PathBuf;
 
+use dataflow_types::S3KeySource;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{AstInfo, DataType, Expr, Ident, ObjectName, SqlOption};
 
@@ -265,9 +267,26 @@ pub enum Connector {
     },
     S3 {
         bucket: String,
+        /// The list of places that we will look for object keys
+        key_sources: Vec<KeySource>,
         /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
         pattern: Option<String>,
     },
+}
+
+/// A Source of Object Key names, the argument of the `OBJECTS FROM` clause
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum KeySource {
+    /// `OBJECTS FROM SCAN`
+    Scan,
+}
+
+impl From<KeySource> for S3KeySource {
+    fn from(other: KeySource) -> S3KeySource {
+        match other {
+            KeySource::Scan => S3KeySource::Scan,
+        }
+    }
 }
 
 impl AstDisplay for Connector {
@@ -305,10 +324,19 @@ impl AstDisplay for Connector {
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
             }
-            Connector::S3 { bucket, pattern } => {
+            Connector::S3 {
+                bucket,
+                key_sources,
+                pattern,
+            } => {
                 f.write_str("S3 BUCKET '");
                 f.write_str(&display::escape_single_quote_string(bucket));
-                f.write_str("' OBJECTS FROM SCAN");
+                f.write_str("' OBJECTS FROM");
+                for ks in key_sources {
+                    match ks {
+                        KeySource::Scan => f.write_str(" SCAN"),
+                    }
+                }
                 if let Some(pattern) = pattern {
                     f.write_str(" MATCHING '");
                     f.write_str(&display::escape_single_quote_string(pattern));

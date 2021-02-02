@@ -13,6 +13,7 @@ use std::convert::{From, TryInto};
 use std::default::Default;
 use std::ops::AddAssign;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
+use std::sync::Arc;
 
 use anyhow::{anyhow, Error};
 use globset::GlobMatcher;
@@ -22,7 +23,7 @@ use tokio::io::AsyncReadExt;
 use tokio::time::{self, Duration};
 
 use aws_util::aws;
-use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset};
+use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset, S3KeySource};
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::logging::materialized::Logger;
@@ -90,20 +91,28 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             }
         };
 
+        let activator = Arc::new(consumer_activator);
+
         // a single arbitrary worker is responsible for scanning the bucket
         let receiver = if active {
             log::debug!("reading bucket={} worker={}", s3_conn.bucket, worker_id);
             let (tx, rx) = std::sync::mpsc::sync_channel(10000);
             let bucket = s3_conn.bucket.clone();
-            let glob = s3_conn.pattern.clone();
+            let glob = s3_conn.pattern.map(|g| g.compile_matcher());
             let aws_info = s3_conn.aws_info;
-            tokio::spawn(read_bucket_task(
-                bucket,
-                glob.map(|g| g.compile_matcher()),
-                aws_info,
-                tx,
-                Some(consumer_activator),
-            ));
+            for key_source in s3_conn.key_sources {
+                match key_source {
+                    S3KeySource::Scan => {
+                        tokio::spawn(read_bucket_task(
+                            bucket.clone(),
+                            glob.clone(),
+                            aws_info.clone(),
+                            tx.clone(),
+                            activator.clone(),
+                        ));
+                    }
+                }
+            }
             rx
         } else {
             let (_tx, rx) = std::sync::mpsc::sync_channel(0);
@@ -133,7 +142,7 @@ async fn read_bucket_task(
     glob: Option<GlobMatcher>,
     aws_info: aws::ConnectInfo,
     tx: SyncSender<anyhow::Result<Vec<u8>>>,
-    activator: Option<SyncActivator>,
+    activator: Arc<SyncActivator>,
 ) {
     let client = match aws_util::s3::client(aws_info).await {
         Ok(client) => client,
@@ -172,8 +181,7 @@ async fn read_bucket_task(
                         .filter(|k| glob.map(|g| g.is_match(k)).unwrap_or(true));
 
                     for key in keys {
-                        download_object(&tx, activator.as_ref(), &client, bucket.clone(), key)
-                            .await;
+                        download_object(&tx, &activator, &client, bucket.clone(), key).await;
                     }
                 }
 
@@ -204,7 +212,7 @@ async fn read_bucket_task(
 
 async fn download_object(
     tx: &SyncSender<anyhow::Result<Vec<u8>>>,
-    activator: Option<&SyncActivator>,
+    activator: &SyncActivator,
     client: &S3Client,
     bucket: String,
     key: String,
@@ -243,9 +251,7 @@ async fn download_object(
                 }
                 log::trace!("sent {} lines to reader", lines);
                 if activate {
-                    if let Some(activator) = activator {
-                        activator.activate().expect("s3 reader activation failed");
-                    }
+                    activator.activate().expect("s3 reader activation failed");
                 }
             }
             Err(e) => {

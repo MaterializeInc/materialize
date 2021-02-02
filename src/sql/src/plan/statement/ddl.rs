@@ -435,11 +435,16 @@ pub fn plan_create_source(
             let encoding = get_encoding(format)?;
             (connector, encoding)
         }
-        Connector::S3 { bucket, pattern } => {
+        Connector::S3 {
+            bucket,
+            key_sources,
+            pattern,
+        } => {
             scx.require_experimental_mode("S3 Sources")?;
             let aws_info = aws_connect_info(&mut with_options, None)?;
             let connector = ExternalSourceConnector::S3(S3SourceConnector {
                 bucket: bucket.clone(),
+                key_sources: key_sources.iter().map(|ks| ks.clone().into()).collect(),
                 pattern: pattern
                     .as_ref()
                     .map(|p| {
