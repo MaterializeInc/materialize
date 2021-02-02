@@ -534,6 +534,11 @@ struct Args {
         conflicts_with_all(&["key-min", "key-max"])
     )]
     avro_value_distribution: Option<serde_json::Value>,
+
+    // == Output control. ==
+    /// Suppress printing progress messages.
+    #[structopt(short = "q", long)]
+    quiet: bool,
 }
 
 #[tokio::main]
@@ -601,7 +606,7 @@ async fn main() -> anyhow::Result<()> {
         None
     };
     for i in 0..args.num_records {
-        if i % 10000 == 0 {
+        if !args.quiet && i % 10000 == 0 {
             eprintln!("Generating message {}", i);
         }
         value_gen.next_value(&mut buf);
