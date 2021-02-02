@@ -36,6 +36,7 @@ use url::Url;
 use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_avro::types::Value;
 use mz_avro::Schema;
+use ore::cast::CastFrom;
 
 struct RandomAvroGenerator<'a> {
     // generators
@@ -454,7 +455,7 @@ arg_enum! {
     }
 }
 
-/// Writes random data to Kafka.
+/// Write random data to Kafka.
 #[derive(StructOpt)]
 struct Args {
     // == Kafka configuration arguments. ==
@@ -622,13 +623,6 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
-
-    let producer: ThreadedProducer<DefaultProducerContext> = ClientConfig::new()
-        .set("bootstrap.servers", args.bootstrap_server.to_string())
-        .create()?;
-    let mut buf = vec![];
-
-    let mut rng = thread_rng();
     let key_dist = if let KeyFormat::Random = args.key_format {
         Some(Uniform::new_inclusive(
             args.key_min.unwrap(),
@@ -637,27 +631,30 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+
+    let producer: ThreadedProducer<DefaultProducerContext> = ClientConfig::new()
+        .set("bootstrap.servers", args.bootstrap_server.to_string())
+        .create()?;
+    let mut key_buf = vec![];
+    let mut value_buf = vec![];
+    let mut rng = thread_rng();
     for i in 0..args.num_records {
         if !args.quiet && i % 10000 == 0 {
             eprintln!("Generating message {}", i);
         }
-        value_gen.next_value(&mut buf);
-        let key = if let Some(key_gen) = key_gen.as_mut() {
-            // TODO: find a nicer way of doing this. The API is designed to
-            // reuse the same buffer over and over again for random data but the
-            // alternative key generation methods currently want to allocate their
-            // a new buffer each time so for now, we're going with a mildly silly
-            // workaround.
-            let mut key_buf = vec![];
-            key_gen.next_value(&mut key_buf);
-            key_buf
-        } else if let Some(key_dist) = key_dist.as_ref() {
-            key_dist.sample(&mut rng).to_be_bytes().to_vec()
-        } else {
-            (i as u64).to_be_bytes().to_vec()
-        };
-        let mut rec = BaseRecord::to(&args.topic).key(&key).payload(&buf);
 
+        value_gen.next_value(&mut value_buf);
+        let key = if let Some(key_gen) = key_gen.as_mut() {
+            key_gen.next_value(&mut key_buf);
+        } else if let Some(key_dist) = key_dist.as_ref() {
+            key_buf.clear();
+            key_buf.extend(key_dist.sample(&mut rng).to_be_bytes().iter())
+        } else {
+            key_buf.clear();
+            key_buf.extend(u64::cast_from(i).to_be_bytes().iter())
+        };
+
+        let mut rec = BaseRecord::to(&args.topic).key(&key).payload(&value_buf);
         if args.partitions_round_robin != 0 {
             rec = rec.partition((i % args.partitions_round_robin) as i32);
         }
