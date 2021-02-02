@@ -331,7 +331,15 @@ where
                     connector.frontier.less_equal(&time)
                 };
 
-                if !should_emit {
+                let previously_published = match &connector.consistency {
+                    Some(consistency) => match consistency.gate_ts {
+                        Some(ts) => time <= ts,
+                        None => false,
+                    },
+                    None => false,
+                };
+
+                if !should_emit || previously_published {
                     // Skip stale data for already published timestamps
                     continue;
                 }
