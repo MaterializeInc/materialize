@@ -774,15 +774,30 @@ fn kafka_sink_builder(
         .key_writer_schema()
         .map(|key_schema| key_schema.canonical_form());
 
-    // Use the user supplied value for replication factor, or default to 1
-    let replication_factor = match with_options.remove("replication_factor") {
-        None => 1,
-        Some(Value::Number(n)) => n.parse::<u32>()?,
-        Some(_) => bail!("replication factor for sink topics has to be a positive integer"),
+    // Use the user supplied value for partition count, or default to -1 (broker default)
+    let partition_count = match with_options.remove("partition_count") {
+        None => -1,
+        Some(Value::Number(n)) => n.parse::<i32>()?,
+        Some(_) => bail!("partition count for sink topics must be an integer"),
     };
 
-    if replication_factor == 0 {
-        bail!("replication factor for sink topics has to be greater than zero");
+    if partition_count == 0 || partition_count < -1 {
+        bail!(
+            "partition count for sink topics must be a positive integer or -1 for broker default"
+        );
+    }
+
+    // Use the user supplied value for replication factor, or default to -1 (broker default)
+    let replication_factor = match with_options.remove("replication_factor") {
+        None => -1,
+        Some(Value::Number(n)) => n.parse::<i32>()?,
+        Some(_) => bail!("replication factor for sink topics must be an integer"),
+    };
+
+    if replication_factor == 0 || replication_factor < -1 {
+        bail!(
+            "replication factor for sink topics must be a positive integer or -1 for broker default"
+        );
     }
 
     let consistency_value_schema = if include_consistency {
@@ -803,6 +818,7 @@ fn kafka_sink_builder(
         value_schema,
         topic_prefix,
         topic_suffix,
+        partition_count,
         replication_factor,
         fuel: 10000,
         consistency_value_schema,

@@ -2244,6 +2244,10 @@ impl<'a> Parser<'a> {
                         format!("No value parser for keyword {}", kw)
                     );
                 }
+                Token::Op(ref op) if op == "-" => match self.next_token() {
+                    Some(Token::Number(n)) => Ok(Value::Number(format!("-{}", n))),
+                    other => self.expected(self.peek_prev_pos(), "literal int", other),
+                },
                 Token::Number(ref n) => Ok(Value::Number(n.to_string())),
                 Token::String(ref s) => Ok(Value::String(s.to_string())),
                 Token::HexString(ref s) => Ok(Value::HexString(s.to_string())),
