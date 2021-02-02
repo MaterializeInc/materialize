@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt;
 use std::io::Read;
+use std::str::FromStr;
 use std::{cell::RefCell, iter, rc::Rc};
 
 use anyhow::Context;
@@ -2622,7 +2623,7 @@ impl SchemaCache {
                 // which  we don't want to repeat for every record. So, parse and resolve it, and cache the
                 // result (whether schema or error).
                 let rf = &self.reader_fingerprint.bytes;
-                let result = Schema::parse_str(&response.raw).and_then(|schema| {
+                let result = Schema::from_str(&response.raw).and_then(|schema| {
                     if &schema.fingerprint::<Sha256>().bytes == rf {
                         Ok(schema)
                     } else {

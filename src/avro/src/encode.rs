@@ -169,7 +169,7 @@ mod tests {
         let empty: Vec<Value> = Vec::new();
         encode(
             &Value::Array(empty),
-            &Schema::parse_str(r#"{"type": "array", "items": "int"}"#).unwrap(),
+            &r#"{"type": "array", "items": "int"}"#.parse().unwrap(),
             &mut buf,
         );
         assert_eq!(vec![0u8], buf);
@@ -181,7 +181,7 @@ mod tests {
         let empty: HashMap<String, Value> = HashMap::new();
         encode(
             &Value::Map(empty),
-            &Schema::parse_str(r#"{"type": "map", "values": "int"}"#).unwrap(),
+            &r#"{"type": "map", "values": "int"}"#.parse().unwrap(),
             &mut buf,
         );
         assert_eq!(vec![0u8], buf);

@@ -16,8 +16,9 @@ use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
 
+use anyhow::bail;
 use chrono::{NaiveDate, NaiveDateTime};
-use clap::{App, Arg};
+use clap::arg_enum;
 use rand::distributions::{
     uniform::SampleUniform, Alphanumeric, Bernoulli, Uniform, WeightedIndex,
 };
@@ -29,11 +30,13 @@ use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::util::Timeout;
 use rdkafka::ClientConfig;
 use serde_json::Map;
+use structopt::StructOpt;
 use url::Url;
 
 use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use mz_avro::types::Value;
 use mz_avro::Schema;
+use ore::cast::CastFrom;
 
 struct RandomAvroGenerator<'a> {
     // generators
@@ -437,208 +440,223 @@ impl<'a> ValueGenerator<'a> {
     }
 }
 
+arg_enum! {
+    pub enum KeyFormat {
+        Avro,
+        Random,
+        Sequential,
+    }
+}
+
+arg_enum! {
+    pub enum ValueFormat {
+        Bytes,
+        Avro,
+    }
+}
+
+/// Write random data to Kafka.
+#[derive(StructOpt)]
+struct Args {
+    // == Kafka configuration arguments. ==
+    /// Address of one or more Kafka nodes, comma separated, in the Kafka
+    /// cluster to connect to.
+    #[structopt(short = "b", long, default_value = "localhost:9092")]
+    bootstrap_server: String,
+    /// URL of the schema registry to connect to, if using Avro keys or values.
+    #[structopt(short = "s", long, default_value = "http://localhost:8081")]
+    schema_registry_url: Url,
+    /// Topic into which to write records.
+    #[structopt(short = "t", long = "topic")]
+    topic: String,
+    /// Number of records to write.
+    #[structopt(short = "n", long = "num-records")]
+    num_records: usize,
+    /// Number of partitions over which records should be distributed in a
+    /// round-robin fashion, regardless of the value of the keys of these
+    /// records.
+    ///
+    /// The default value, 0, indicates that Kafka's default strategy of
+    /// distributing writes based upon the hash of their keys should be used
+    /// instead.
+    #[structopt(long, default_value = "0")]
+    partitions_round_robin: usize,
+
+    // == Key arguments. ==
+    /// Format in which to generate keys.
+    #[structopt(
+        short = "k", long = "keys", case_insensitive = true,
+        possible_values = &KeyFormat::variants(), default_value = "sequential"
+    )]
+    key_format: KeyFormat,
+    /// Minimum key value to generate, if using random-formatted keys.
+    #[structopt(long, required_if("keys", "random"))]
+    key_min: Option<u64>,
+    /// Maximum key value to generate, if using random-formatted keys.
+    #[structopt(long, required_if("keys", "random"))]
+    key_max: Option<u64>,
+    /// Schema describing Avro key data to randomly generate, if using
+    /// Avro-formatted keys.
+    #[structopt(long, required_if("keys", "avro"))]
+    avro_key_schema: Option<Schema>,
+    /// JSON object describing the distribution parameters for each field of
+    /// the Avro key object, if using Avro-formatted keys.
+    #[structopt(long, required_if("keys", "avro"))]
+    avro_key_distribution: Option<serde_json::Value>,
+
+    // == Value arguments. ==
+    /// Format in which to generate values.
+    #[structopt(
+        short = "v", long = "values", case_insensitive = true,
+        possible_values = &ValueFormat::variants(), default_value = "bytes"
+    )]
+    value_format: ValueFormat,
+    /// Minimum value size to generate, if using bytes-formatted values.
+    #[structopt(
+        short = "m",
+        long = "min-message-size",
+        required_if("value-format", "bytes")
+    )]
+    min_value_size: Option<usize>,
+    /// Maximum value size to generate, if using bytes-formatted values.
+    #[structopt(
+        short = "M",
+        long = "max-message-size",
+        required_if("value-format", "bytes")
+    )]
+    max_value_size: Option<usize>,
+    /// Schema describing Avro value data to randomly generate, if using
+    /// Avro-formatted values.
+    #[structopt(long = "avro-schema", required_if("value-format", "avro"))]
+    avro_value_schema: Option<Schema>,
+    /// JSON object describing the distribution parameters for each field of
+    /// the Avro value object, if using Avro-formatted keys.
+    #[structopt(long = "avro-distribution", required_if("value-format", "avro"))]
+    avro_value_distribution: Option<serde_json::Value>,
+
+    // == Output control. ==
+    /// Suppress printing progress messages.
+    #[structopt(short = "q", long)]
+    quiet: bool,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let matches = App::new("kgen")
-        .about("Put random data in Kafka")
-        .arg(
-            Arg::with_name("topic")
-                .short("t")
-                .long("topic")
-                .takes_value(true)
-                .required(true),
-        )
-        .arg(
-            Arg::with_name("num-records")
-                .short("n")
-                .long("num-messages")
-                .takes_value(true)
-                .required(true),
-        )
-        .arg(
-            // default 1
-            Arg::with_name("partitions-round-robin")
-                .long("partitions-round-robin")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("values")
-                .short("v")
-                .long("values")
-                .takes_value(true)
-                .possible_values(&["bytes", "avro"])
-                .default_value("bytes"),
-        )
-        .arg(
-            Arg::with_name("min")
-                .short("m")
-                .long("min-message-size")
-                .takes_value(true)
-                .required_if("values", "bytes"),
-        )
-        .arg(
-            Arg::with_name("max")
-                .short("M")
-                .long("max-message-size")
-                .takes_value(true)
-                .required_if("values", "bytes"),
-        )
-        .arg(
-            Arg::with_name("avro-schema")
-                .long("avro-schema")
-                .takes_value(true)
-                .required_if("values", "avro"),
-        )
-        .arg(
-            Arg::with_name("avro-key-schema")
-                .long("avro-key-schema")
-                .takes_value(true)
-                .required_if("keys", "avro")
-                .conflicts_with_all(&["key-min", "key-max"]),
-        )
-        .arg(
-            Arg::with_name("avro-distribution")
-                .long("avro-distribution")
-                .takes_value(true)
-                .required_if("values", "avro")
-                .conflicts_with_all(&["key-min", "key-max"]),
-        )
-        .arg(
-            Arg::with_name("avro-key-distribution")
-                .long("avro-key-distribution")
-                .takes_value(true)
-                .required_if("keys", "avro"),
-        )
-        .arg(
-            Arg::with_name("bootstrap")
-                .short("b")
-                .long("bootstrap-server")
-                .takes_value(true)
-                .default_value("localhost:9092"),
-        )
-        .arg(
-            Arg::with_name("keys")
-                .long("keys")
-                .short("k")
-                .takes_value(true)
-                .possible_values(&["avro", "sequential", "random"])
-                .default_value("sequential"),
-        )
-        .arg(
-            Arg::with_name("key-min")
-                .long("key-min")
-                .takes_value(true)
-                .required_if("keys", "random"),
-        )
-        .arg(
-            Arg::with_name("key-max")
-                .long("key-max")
-                .takes_value(true)
-                .required_if("keys", "random"),
-        )
-        .get_matches();
-    let topic = matches.value_of("topic").unwrap();
-    let n: usize = matches.value_of("num-records").unwrap().parse()?;
-    let partitions_round_robin: usize = matches
-        .value_of("partitions-round-robin")
-        .map(str::parse)
-        .transpose()?
-        .unwrap_or(0);
-    let bootstrap = matches.value_of("bootstrap").unwrap();
-    let mut _schema_holder = None;
-    let mut _key_schema_holder = None;
-    let mut value_gen = match matches.value_of("values").unwrap() {
-        "bytes" => {
-            let min: usize = matches.value_of("min").unwrap().parse()?;
-            let max: usize = matches.value_of("max").unwrap().parse()?;
-            let len = Uniform::new_inclusive(min, max);
+    let args: Args = ore::cli::parse_args();
+
+    let mut value_gen = match args.value_format {
+        ValueFormat::Bytes => {
+            // Clap may one day be able to do this validation automatically.
+            // See: https://github.com/clap-rs/clap/discussions/2039
+            if args.avro_value_schema.is_some() {
+                bail!("cannot specify --avro-schema without --values=avro");
+            }
+            if args.avro_value_distribution.is_some() {
+                bail!("cannot specify --avro-distribution without --values=avro");
+            }
+            let len =
+                Uniform::new_inclusive(args.min_value_size.unwrap(), args.max_value_size.unwrap());
             let bytes = Uniform::new_inclusive(0, 255);
             let rng = thread_rng();
 
             ValueGenerator::UniformBytes { len, bytes, rng }
         }
-        "avro" => {
-            let schema = matches.value_of("avro-schema").unwrap();
-            let ccsr =
-                ccsr::ClientConfig::new(Url::parse("http://localhost:8081").unwrap()).build();
+        ValueFormat::Avro => {
+            // Clap may one day be able to do this validation automatically.
+            // See: https://github.com/clap-rs/clap/discussions/2039
+            if args.min_value_size.is_some() {
+                bail!("cannot specify --min-message-size without --values=bytes");
+            }
+            if args.max_value_size.is_some() {
+                bail!("cannot specify --max-message-size without --values=bytes");
+            }
+            let value_schema = args.avro_value_schema.as_ref().unwrap();
+            let ccsr = ccsr::ClientConfig::new(args.schema_registry_url.clone()).build();
             let schema_id = ccsr
-                .publish_schema(&format!("{}-value", topic), schema)
+                .publish_schema(
+                    &format!("{}-value", args.topic),
+                    &value_schema.canonical_form(),
+                )
                 .await?;
-            _schema_holder = Some(Schema::parse_str(schema)?);
-            let schema = _schema_holder.as_ref().unwrap();
-            let annotations = matches.value_of("avro-distribution").unwrap();
-            let annotations: serde_json::Value = serde_json::from_str(annotations)?;
-            let generator = RandomAvroGenerator::new(schema, &annotations);
-
+            let generator =
+                RandomAvroGenerator::new(value_schema, &args.avro_value_distribution.unwrap());
             ValueGenerator::RandomAvro {
                 inner: generator,
-                schema,
+                schema: value_schema,
                 schema_id,
             }
         }
-        _ => unreachable!(),
     };
 
-    let mut key_gen = match matches.value_of("keys").unwrap() {
-        "avro" => {
-            let key_schema = matches.value_of("avro-key-schema").unwrap();
-            let ccsr =
-                ccsr::ClientConfig::new(Url::parse("http://localhost:8081").unwrap()).build();
+    let mut key_gen = match args.key_format {
+        KeyFormat::Avro => {
+            // Clap may one day be able to do this validation automatically.
+            // See: https://github.com/clap-rs/clap/discussions/2039
+            if args.key_min.is_some() {
+                bail!("cannot specify --key-min without --keys=bytes");
+            }
+            if args.key_max.is_some() {
+                bail!("cannot specify --key-max without --keys=bytes");
+            }
+            let key_schema = args.avro_key_schema.as_ref().unwrap();
+            let ccsr = ccsr::ClientConfig::new(args.schema_registry_url).build();
             let key_schema_id = ccsr
-                .publish_schema(&format!("{}-key", topic), key_schema)
+                .publish_schema(&format!("{}-key", args.topic), &key_schema.canonical_form())
                 .await?;
-            _key_schema_holder = Some(Schema::parse_str(key_schema)?);
-            let key_schema = _key_schema_holder.as_ref().unwrap();
-            let annotations = matches.value_of("avro-key-distribution").unwrap();
-            let annotations: serde_json::Value = serde_json::from_str(annotations)?;
-            let generator = RandomAvroGenerator::new(key_schema, &annotations);
-
+            let generator =
+                RandomAvroGenerator::new(key_schema, &args.avro_key_distribution.unwrap());
             Some(ValueGenerator::RandomAvro {
                 inner: generator,
                 schema: key_schema,
                 schema_id: key_schema_id,
             })
         }
-        _ => None,
+        _ => {
+            // Clap may one day be able to do this validation automatically.
+            // See: https://github.com/clap-rs/clap/discussions/2039
+            if args.avro_key_schema.is_some() {
+                bail!("cannot specify --avro-key-schema without --keys=avro");
+            }
+            if args.avro_key_distribution.is_some() {
+                bail!("cannot specify --avro-key-distribution without --keys=avro");
+            }
+            None
+        }
     };
-
-    let producer: ThreadedProducer<DefaultProducerContext> = ClientConfig::new()
-        .set("bootstrap.servers", bootstrap)
-        .create()?;
-    let mut buf = vec![];
-
-    let mut rng = thread_rng();
-    let keys_random = matches.value_of("keys").unwrap() == "random";
-    let key_dist = if keys_random {
-        let key_min: u64 = matches.value_of("key-min").unwrap().parse()?;
-        let key_max: u64 = matches.value_of("key-max").unwrap().parse()?;
-        Some(Uniform::new_inclusive(key_min, key_max))
+    let key_dist = if let KeyFormat::Random = args.key_format {
+        Some(Uniform::new_inclusive(
+            args.key_min.unwrap(),
+            args.key_max.unwrap(),
+        ))
     } else {
         None
     };
-    for i in 0..n {
-        if i % 10000 == 0 {
+
+    let producer: ThreadedProducer<DefaultProducerContext> = ClientConfig::new()
+        .set("bootstrap.servers", args.bootstrap_server.to_string())
+        .create()?;
+    let mut key_buf = vec![];
+    let mut value_buf = vec![];
+    let mut rng = thread_rng();
+    for i in 0..args.num_records {
+        if !args.quiet && i % 10000 == 0 {
             eprintln!("Generating message {}", i);
         }
-        value_gen.next_value(&mut buf);
-        let key = if let Some(key_gen) = key_gen.as_mut() {
-            // TODO: find a nicer way of doing this. The API is designed to
-            // reuse the same buffer over and over again for random data but the
-            // alternative key generation methods currently want to allocate their
-            // a new buffer each time so for now, we're going with a mildly silly
-            // workaround.
-            let mut key_buf = vec![];
-            key_gen.next_value(&mut key_buf);
-            key_buf
-        } else if let Some(key_dist) = key_dist.as_ref() {
-            key_dist.sample(&mut rng).to_be_bytes().to_vec()
-        } else {
-            (i as u64).to_be_bytes().to_vec()
-        };
-        let mut rec = BaseRecord::to(topic).key(&key).payload(&buf);
 
-        if partitions_round_robin != 0 {
-            rec = rec.partition((i % partitions_round_robin) as i32);
+        value_gen.next_value(&mut value_buf);
+        let key = if let Some(key_gen) = key_gen.as_mut() {
+            key_gen.next_value(&mut key_buf);
+        } else if let Some(key_dist) = key_dist.as_ref() {
+            key_buf.clear();
+            key_buf.extend(key_dist.sample(&mut rng).to_be_bytes().iter())
+        } else {
+            key_buf.clear();
+            key_buf.extend(u64::cast_from(i).to_be_bytes().iter())
+        };
+
+        let mut rec = BaseRecord::to(&args.topic).key(&key).payload(&value_buf);
+        if args.partitions_round_robin != 0 {
+            rec = rec.partition((i % args.partitions_round_robin) as i32);
         }
 
         loop {
