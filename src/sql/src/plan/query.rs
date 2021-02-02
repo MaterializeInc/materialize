@@ -2650,7 +2650,6 @@ pub fn canonicalize_type_name_internal(name: &ObjectName) -> ObjectName {
     // use in the catalog, i.e. canonicalize the catalog name.
     match name.to_string().as_str() {
         "char" | "varchar" => ObjectName::unqualified("text"),
-        "json" => ObjectName::unqualified("jsonb"),
         "smallint" => ObjectName::unqualified("int4"),
         _ => name.clone(),
     }
