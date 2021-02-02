@@ -50,7 +50,7 @@ struct Args {
     /// Named AWS region to target for AWS API requests.
     #[structopt(long, default_value = "localstack")]
     aws_region: String,
-    /// Custom AWS endpoint.
+    /// Custom AWS endpoint. Default: "http://localhost:4566".
     #[structopt(long)]
     aws_endpoint: Option<String>,
 
@@ -92,7 +92,7 @@ async fn run(args: Args) -> Result<(), Error> {
         match (args.aws_region.parse(), args.aws_endpoint) {
             (Ok(region), None) => {
                 // Standard AWS region without a custom endpoint. Try to find actual AWS
-                // credentials.
+                // credentials by looking through env vars and AWS resources.
                 let timeout = Duration::from_secs(5);
                 let account = aws::account(timeout)
                     .await
@@ -103,9 +103,11 @@ async fn run(args: Args) -> Result<(), Error> {
                 (region, account, credentials)
             }
             (_, aws_endpoint) => {
-                // Either a non-standard AWS region, a custom endpoint, or both. Assume
-                // dummy authentication, and just use default dummy credentials in the
-                // default config.
+                // The user specified a non-standard AWS region, a custom endpoint, or
+                // both. We instruct Rusoto to use these values by constructing an
+                // appropriate Region::Custom. We additionally assume we're targeting a
+                // stubbed-out AWS implementation that does not check authentication
+                // credentials, so we install dummy credentials in the default config.
                 let region = rusoto_core::Region::Custom {
                     name: args.aws_region,
                     endpoint: aws_endpoint.unwrap_or_else(|| "http://localhost:4566".into()),
@@ -120,6 +122,18 @@ async fn run(args: Args) -> Result<(), Error> {
                 (region, account.into(), credentials)
             }
         };
+
+    println!(
+        "Configuration parameters:
+    AWS region: {:?}
+    Kafka Address: {}
+    Schema registry URL: {}
+    materialized host: {:?}",
+        aws_region,
+        args.kafka_addr,
+        args.schema_registry_url,
+        args.materialized_url.get_hosts()[0],
+    );
 
     let config = Config {
         kafka_addr: args.kafka_addr,
