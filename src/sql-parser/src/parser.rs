@@ -2421,6 +2421,7 @@ impl<'a> Parser<'a> {
                 // Misc.
                 BOOLEAN => other("bool"),
                 BYTES => other("bytea"),
+                JSON => other("jsonb"),
                 REGCLASS => other("oid"),
 
                 _ => {

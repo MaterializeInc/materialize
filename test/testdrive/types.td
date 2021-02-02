@@ -92,6 +92,54 @@ timestamp        system
 timestamptz      system
 uuid             system
 
+# Support creating tables with catalog types and their aliases
+> CREATE TABLE bool_t (a bool);
+> CREATE TABLE boolean_t (a boolean);
+
+> CREATE TABLE bytea_t (a bytea);
+> CREATE TABLE bytes_t (a bytes);
+
+> CREATE TABLE date_t (a date);
+
+> CREATE TABLE float4_t (a float4);
+> CREATE TABLE real_t (a real);
+> CREATE TABLE float16_t (a float(16));
+
+> CREATE TABLE float8_t (a float8);
+> CREATE TABLE float_t (a float);
+> CREATE TABLE double_t (a double);
+
+> CREATE TABLE int4_t (a int4);
+> CREATE TABLE int_t (a int);
+> CREATE TABLE integer_t (a integer);
+
+> CREATE TABLE int8_t (a int8);
+> CREATE TABLE bigint_t (a bigint);
+
+> CREATE TABLE interval_t (a interval);
+
+> CREATE TABLE jsonb_t (a jsonb);
+> CREATE TABLE json_t (a json);
+
+> CREATE TABLE numeric_t (a numeric);
+> CREATE TABLE decimal_t (a decimal);
+> CREATE TABLE dec_t (a dec);
+
+> CREATE TABLE oid_t (a oid);
+> CREATE TABLE regclass_t (a regclass);
+
+> CREATE TABLE text_t (a text);
+> CREATE TABLE char_t (a char(100));
+> CREATE TABLE varchar_t (a varchar(100));
+
+> CREATE TABLE time_t (a time);
+
+> CREATE TABLE timestamp_t (a timestamp);
+
+> CREATE TABLE timestamptz_t (a timestamptz);
+
+> CREATE TABLE uuid_t (a uuid);
+
 # User-defined types
 
 > CREATE TYPE int_list_c AS LIST (element_type=int4);
