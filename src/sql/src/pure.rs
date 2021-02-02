@@ -23,7 +23,6 @@ use sql_parser::ast::{
 
 use crate::kafka_util;
 use crate::normalize;
-use crate::plan::statement::with_options::aws_connect_info;
 
 /// Removes dependencies on external state from `stmt`: inlining schemas in
 /// files, fetching schemas from registries, and so on. The [`Statement`]
@@ -76,7 +75,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 file = Some(f);
             }
             Connector::S3 { .. } => {
-                let aws_info = aws_connect_info(&mut with_options_map, None)?;
+                let aws_info = normalize::aws_connect_info(&mut with_options_map, None)?;
                 aws_util::aws::validate_credentials(aws_info.clone(), Duration::from_secs(1))
                     .await?;
             }
@@ -87,7 +86,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                     .region
                     .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-                let aws_info = aws_connect_info(&mut with_options_map, Some(region))?;
+                let aws_info = normalize::aws_connect_info(&mut with_options_map, Some(region))?;
                 aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
             }
         }

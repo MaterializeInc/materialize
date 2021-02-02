@@ -51,7 +51,6 @@ use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
 use crate::plan::query::QueryLifetime;
-use crate::plan::statement::with_options::aws_connect_info;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     self, plan_utils, query, AlterIndexLogicalCompactionWindow, Index, LogicalCompactionWindow,
@@ -406,7 +405,7 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-            let aws_info = aws_connect_info(&mut with_options, Some(region))?;
+            let aws_info = normalize::aws_connect_info(&mut with_options, Some(region))?;
             let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                 stream_name,
                 aws_info,
@@ -437,7 +436,7 @@ pub fn plan_create_source(
         }
         Connector::S3 { bucket, pattern } => {
             scx.require_experimental_mode("S3 Sources")?;
-            let aws_info = aws_connect_info(&mut with_options, None)?;
+            let aws_info = normalize::aws_connect_info(&mut with_options, None)?;
             let connector = ExternalSourceConnector::S3(S3SourceConnector {
                 bucket: bucket.clone(),
                 pattern: pattern
