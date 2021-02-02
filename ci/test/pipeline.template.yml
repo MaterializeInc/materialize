@@ -233,7 +233,7 @@ steps:
     label: ":python: tests"
     depends_on: build
     timeout_in_minutes: 10
-    inputs: [test/lang/python]
+    inputs: [test/lang/python, "**/*.py"]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: python
