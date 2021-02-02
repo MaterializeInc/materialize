@@ -158,6 +158,7 @@ Nologin
 None
 Nosuperuser
 Not
+Notifications
 Null
 Nullif
 Objects
@@ -217,6 +218,7 @@ Snapshot
 Some
 Source
 Sources
+Sqs
 Start
 Stdin
 Stdout
