@@ -11,8 +11,10 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
+use aws_arn::ARN;
 use tokio::io::AsyncBufReadExt;
+use tokio::time::Duration;
 
 use repr::strconv;
 use sql_parser::ast::{
@@ -21,6 +23,7 @@ use sql_parser::ast::{
 
 use crate::kafka_util;
 use crate::normalize;
+use crate::plan::statement::with_options::aws_connect_info;
 
 /// Removes dependencies on external state from `stmt`: inlining schemas in
 /// files, fetching schemas from registries, and so on. The [`Statement`]
@@ -72,7 +75,21 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 }
                 file = Some(f);
             }
-            _ => (),
+            Connector::S3 { .. } => {
+                let aws_info = aws_connect_info(&mut with_options_map, None)?;
+                aws_util::aws::validate_credentials(aws_info.clone(), Duration::from_secs(1))
+                    .await?;
+            }
+            Connector::Kinesis { arn } => {
+                let region = arn
+                    .parse::<ARN>()
+                    .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?
+                    .region
+                    .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
+
+                let aws_info = aws_connect_info(&mut with_options_map, Some(region))?;
+                aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
+            }
         }
 
         purify_format(format, connector, col_names, file, &config_options).await?;

@@ -388,10 +388,9 @@ pub fn plan_create_source(
             (connector, encoding)
         }
         Connector::Kinesis { arn, .. } => {
-            let arn: ARN = match arn.parse() {
-                Ok(arn) => arn,
-                Err(e) => bail!("Unable to parse provided ARN: {:#?}", e),
-            };
+            let arn: ARN = arn
+                .parse()
+                .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?;
             let stream_name = match arn.resource {
                 Resource::Path(path) => {
                     if let Some(path) = path.strip_prefix("stream/") {
@@ -407,9 +406,10 @@ pub fn plan_create_source(
                 .region
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
+            let aws_info = aws_connect_info(&mut with_options, Some(region))?;
             let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                 stream_name,
-                aws_info: aws_connect_info(&mut with_options, Some(region))?,
+                aws_info,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
@@ -437,6 +437,7 @@ pub fn plan_create_source(
         }
         Connector::S3 { bucket, pattern } => {
             scx.require_experimental_mode("S3 Sources")?;
+            let aws_info = aws_connect_info(&mut with_options, None)?;
             let connector = ExternalSourceConnector::S3(S3SourceConnector {
                 bucket: bucket.clone(),
                 pattern: pattern
@@ -448,7 +449,7 @@ pub fn plan_create_source(
                             .build()
                     })
                     .transpose()?,
-                aws_info: aws_connect_info(&mut with_options, None)?,
+                aws_info,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
