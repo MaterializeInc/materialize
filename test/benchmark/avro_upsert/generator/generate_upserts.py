@@ -17,9 +17,9 @@ SHARED_FILES = "/usr/share/generator"
 
 
 def run(args: argparse.Namespace) -> None:
-    """Run the generator, inserting args.num_messages number of messages."""
+    """Run the generator, inserting args.num_records number of messages."""
 
-    messages_per_process = int(args.num_messages / args.parallelism)
+    records_per_process = int(args.num_records / args.parallelism)
 
     key_schema = pathlib.Path(SHARED_FILES, "key-schema.json").read_text().strip()
     key_distribution = (
@@ -36,10 +36,10 @@ def run(args: argparse.Namespace) -> None:
         "--quiet",
         "--bootstrap-server",
         "kafka:9092",
-        "--schema-registry",
+        "--schema-registry-url",
         "http://schema-registry:8081",
-        "--num-messages",
-        str(messages_per_process),
+        "--num-records",
+        str(records_per_process),
         "--topic",
         "upsertavrotest",
         "--keys",
@@ -57,7 +57,7 @@ def run(args: argparse.Namespace) -> None:
     ]
 
     print(
-        f"Spawning {args.parallelism} generator processes, writing {messages_per_process} messages each"
+        f"Spawning {args.parallelism} generator processes, writing {records_per_process} messages each"
     )
     procs = [subprocess.Popen(kafka_gen) for _ in range(0, args.parallelism)]
     for (i, p) in enumerate(procs):
@@ -71,15 +71,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "-k",
-        "--num-keys",
-        type=int,
-        default=25000000,
-        help="Number of unique keys to generate (should match value-distribution!)",
-    )
-    parser.add_argument(
         "-n",
-        "--num-messages",
+        "--num-records",
         type=int,
         default=400000000,
         help="Total number of messages to generate",
