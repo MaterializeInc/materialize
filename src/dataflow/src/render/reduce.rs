@@ -225,7 +225,7 @@ where
                 // a subsequence of the overall sequence of aggregates.
                 for index in 0..aggregates.len() {
                     let typ = reduction_type(&aggregates[index].func);
-                    let aggregates_list = reduction_types.entry(typ).or_insert(Vec::new());
+                    let aggregates_list = reduction_types.entry(typ).or_insert_with(Vec::new);
                     aggregates_list.push((index, aggregates[index].clone()));
                 }
 

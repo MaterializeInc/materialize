@@ -37,7 +37,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn is_done(&self) -> bool {
-        self.contents == ""
+        self.contents.is_empty()
     }
 
     pub fn location(&self) -> Location {
@@ -77,7 +77,7 @@ impl<'a> Parser<'a> {
         }
         let first_line = self.split_at(&COMMENT_AND_LINE_REGEX)?.trim();
 
-        if first_line == "" {
+        if first_line.is_empty() {
             // query starts on the next line
             return self.parse_record();
         }

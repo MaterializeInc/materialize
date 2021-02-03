@@ -113,20 +113,15 @@ impl Server {
                     return Ok(());
                 }
 
-                Some(FrontendStartupMessage::SslRequest) => match conn {
-                    // NOTE(benesch): we can match on `self.tls` properly,
-                    // instead of checking `is_some` and `unwrap`ping, when
-                    // the move_ref_patterns feature stabilizes.
-                    // See: https://github.com/rust-lang/rust/issues/68354
-                    Conn::Unencrypted(mut conn) if self.tls.is_some() => {
+                Some(FrontendStartupMessage::SslRequest) => match (conn, &self.tls) {
+                    (Conn::Unencrypted(mut conn), Some(tls)) => {
                         trace!("cid={} send=AcceptSsl", conn_id);
                         conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                        let tls = self.tls.as_ref().unwrap();
                         let mut ssl_stream = SslStream::new(Ssl::new(tls)?, conn)?;
                         Pin::new(&mut ssl_stream).accept().await?;
                         Conn::Ssl(ssl_stream)
                     }
-                    mut conn => {
+                    (mut conn, _) => {
                         trace!("cid={} send=RejectSsl", conn_id);
                         conn.write_all(&[REJECT_ENCRYPTION]).await?;
                         conn

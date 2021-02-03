@@ -75,9 +75,9 @@ impl SexpParser {
     }
 
     fn is_atom_char(ch: char) -> bool {
-        ch >= 'a' && ch <= 'z'
-            || ch >= 'A' && ch <= 'Z'
-            || ch >= '0' && ch <= '9'
+        ('a'..='z').contains(&ch)
+            || ('A'..='Z').contains(&ch)
+            || ('0'..='9').contains(&ch)
             || ch == '-'
             || ch == '_'
             || ch == '#'

@@ -41,9 +41,9 @@ impl Ident {
         let mut chars = self.0.chars();
         chars
             .next()
-            .map(|ch| (ch >= 'a' && ch <= 'z') || (ch == '_'))
+            .map(|ch| ('a'..='z').contains(&ch) || (ch == '_'))
             .unwrap_or(false)
-            && chars.all(|ch| (ch >= 'a' && ch <= 'z') || (ch == '_') || (ch >= '0' && ch <= '9'))
+            && chars.all(|ch| ('a'..='z').contains(&ch) || (ch == '_') || ('0'..='9').contains(&ch))
             && !self
                 .as_keyword()
                 .map(Keyword::is_sometimes_reserved)
