@@ -42,9 +42,10 @@ use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, DataflowError, MzOffset, PeekResponse, TimestampSourceUpdate, Update,
+    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, MzOffset, PeekResponse,
+    SourceConnector, TimestampSourceUpdate, Update,
 };
-use expr::{GlobalId, MapFilterProject, PartitionId, RowSetFinishing, SourceInstanceId};
+use expr::{GlobalId, MapFilterProject, PartitionId, RowSetFinishing};
 use ore::future::channel::mpsc::ReceiverExt;
 use repr::{Diff, Row, RowArena, Timestamp};
 
@@ -127,6 +128,13 @@ pub enum SequencedCommand {
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
     AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
+    /// Add a new source to be aware of for timestamping.
+    AddSourceTimestamping {
+        /// The ID of the timestamped source
+        id: GlobalId,
+        /// The connector for the timestamped source.
+        connector: SourceConnector,
+    },
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
         /// The ID of the timestamped source
@@ -178,10 +186,6 @@ pub enum CacheMessage {
 pub enum WorkerFeedback {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
-    /// The id of a source whose source connector has been dropped
-    DroppedSource(SourceInstanceId),
-    /// The id of a source whose source connector has been created
-    CreateSource(SourceInstanceId),
 }
 
 /// Configures a dataflow server.
@@ -701,6 +705,58 @@ where
                 // this should lead timely to wind down eventually
                 self.render_state.traces.del_all_traces();
                 self.shutdown_logging();
+            }
+            SequencedCommand::AddSourceTimestamping { id, connector } => {
+                let byo_default = TimestampDataUpdate::BringYourOwn(HashMap::new());
+                let rt_default = TimestampDataUpdate::RealTime(1);
+
+                let source_timestamp_data = if let SourceConnector::External {
+                    connector,
+                    consistency,
+                    ..
+                } = connector
+                {
+                    match (connector, consistency) {
+                        (ExternalSourceConnector::Kafka(_), Consistency::BringYourOwn(_)) => {
+                            Some(byo_default)
+                        }
+                        (ExternalSourceConnector::Kafka(_), Consistency::RealTime) => {
+                            Some(rt_default)
+                        }
+                        (ExternalSourceConnector::AvroOcf(_), Consistency::BringYourOwn(_)) => {
+                            Some(byo_default)
+                        }
+                        (ExternalSourceConnector::AvroOcf(_), Consistency::RealTime) => {
+                            Some(rt_default)
+                        }
+                        (ExternalSourceConnector::File(_), Consistency::BringYourOwn(_)) => {
+                            Some(byo_default)
+                        }
+                        (ExternalSourceConnector::File(_), Consistency::RealTime) => {
+                            Some(rt_default)
+                        }
+                        (ExternalSourceConnector::Kinesis(_), Consistency::RealTime) => {
+                            Some(rt_default)
+                        }
+                        (ExternalSourceConnector::S3(_), Consistency::RealTime) => Some(rt_default),
+                        (ExternalSourceConnector::Kinesis(_), Consistency::BringYourOwn(_)) => {
+                            log::error!("BYO timestamping not supported for Kinesis sources");
+                            None
+                        }
+                        (ExternalSourceConnector::S3(_), Consistency::BringYourOwn(_)) => {
+                            log::error!("BYO timestamping not supported for S3 sources");
+                            None
+                        }
+                    }
+                } else {
+                    log::error!("Timestamping not supported for local sources");
+                    None
+                };
+
+                if let Some(data) = source_timestamp_data {
+                    let prev = self.render_state.ts_histories.borrow_mut().insert(id, data);
+                    assert!(prev.is_none());
+                }
             }
             SequencedCommand::AdvanceSourceTimestamp { id, update } => {
                 let mut timestamps = self.render_state.ts_histories.borrow_mut();

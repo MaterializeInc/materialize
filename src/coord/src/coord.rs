@@ -401,9 +401,10 @@ where
         while let Some(msg) = messages.next().await {
             match msg {
                 Message::Command(cmd) => self.message_command(cmd, &internal_cmd_tx).await,
-                Message::Worker(worker) => self.message_worker(worker, &ts_tx).await,
+                Message::Worker(worker) => self.message_worker(worker).await,
                 Message::StatementReady(ready) => {
-                    self.message_statement_ready(ready, &internal_cmd_tx).await
+                    self.message_statement_ready(ready, &internal_cmd_tx, &ts_tx)
+                        .await
                 }
                 Message::SinkConnectorReady(ready) => {
                     self.message_sink_connector_ready(ready).await
@@ -455,7 +456,6 @@ where
             worker_id: _,
             message,
         }: WorkerFeedbackWithMeta,
-        ts_tx: &std::sync::mpsc::Sender<TimestampMessage>,
     ) {
         match message {
             WorkerFeedback::FrontierUppers(updates) => {
@@ -463,26 +463,16 @@ where
                     self.update_upper(&name, changes);
                 }
                 self.maintenance().await;
-            }
-            WorkerFeedback::DroppedSource(source_id) => {
-                // Notify timestamping thread that source has been dropped
-                ts_tx
-                    .send(TimestampMessage::DropInstance(source_id))
-                    .expect("Failed to send Drop Instance notice to timestamper");
-            }
-            WorkerFeedback::CreateSource(src_instance_id) => {
-                if let Some(entry) = self.catalog.try_get_by_id(src_instance_id.source_id) {
-                    if let CatalogItem::Source(s) = entry.item() {
-                        ts_tx
-                            .send(TimestampMessage::Add(src_instance_id, s.connector.clone()))
-                            .expect("Failed to send CREATE Instance notice to timestamper");
-                    } else {
-                        panic!("A non-source is re-using the same source ID");
-                    }
-                } else {
-                    // Someone already dropped the source
-                }
-            }
+            } /*
+              WorkerFeedback::DroppedSource(source_id) => {
+                      } else {
+                          panic!("A non-source is re-using the same source ID");
+                      }
+                  } else {
+                      // Someone already dropped the source
+                  }
+              }
+              */
         }
     }
 
@@ -495,13 +485,14 @@ where
             params,
         }: StatementReady,
         internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
+        ts_tx: &std::sync::mpsc::Sender<TimestampMessage>,
     ) {
         match future::ready(result)
             .and_then(|stmt| self.handle_statement(&session, stmt, &params))
             .await
         {
             Ok((pcx, plan)) => {
-                self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan)
+                self.sequence_plan(&internal_cmd_tx, &ts_tx, tx, session, pcx, plan)
                     .await
             }
             Err(e) => tx.send(Err(e), session),
@@ -1495,6 +1486,7 @@ where
     async fn sequence_plan(
         &mut self,
         internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
+        ts_tx: &std::sync::mpsc::Sender<TimestampMessage>,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         pcx: PlanContext,
@@ -1537,7 +1529,7 @@ where
                 if_not_exists,
                 materialized,
             } => tx.send(
-                self.sequence_create_source(pcx, name, source, if_not_exists, materialized)
+                self.sequence_create_source(pcx, name, source, if_not_exists, materialized, ts_tx)
                     .await,
                 session,
             ),
@@ -1890,6 +1882,7 @@ where
         source: sql::plan::Source,
         if_not_exists: bool,
         materialized: bool,
+        ts_tx: &std::sync::mpsc::Sender<TimestampMessage>,
     ) -> Result<ExecuteResponse, CoordError> {
         let source = catalog::Source {
             create_sql: source.create_sql,
@@ -1929,6 +1922,7 @@ where
         };
         match self.catalog_transact(ops).await {
             Ok(()) => {
+                self.update_timestamper(ts_tx, source_id, true).await;
                 if let Some(index_id) = index_id {
                     self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
                         .await?;
@@ -3298,6 +3292,36 @@ where
         )
         .await;
         Ok(())
+    }
+
+    // Notify the timestamper thread that a source has been created or dropped.
+    async fn update_timestamper(
+        &mut self,
+        ts_tx: &std::sync::mpsc::Sender<TimestampMessage>,
+        source_id: GlobalId,
+        create: bool,
+    ) {
+        if create == true {
+            if let Some(entry) = self.catalog.try_get_by_id(source_id) {
+                if let CatalogItem::Source(s) = entry.item() {
+                    ts_tx
+                        .send(TimestampMessage::Add(source_id, s.connector.clone()))
+                        .expect("Failed to send CREATE Instance notice to timestamper");
+                    broadcast(
+                        &mut self.broadcast_tx,
+                        SequencedCommand::AddSourceTimestamping {
+                            id: source_id,
+                            connector: s.connector.clone(),
+                        },
+                    )
+                    .await;
+                }
+            }
+        } /*else {
+              ts_tx
+                  .send(TimestampMessage::DropInstance(source_id))
+                  .expect("Failed to send Drop Instance notice to timestamper");
+          }*/
     }
 
     // Tell the cacher to start caching data for `id` if that source

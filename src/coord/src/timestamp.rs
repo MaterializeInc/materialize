@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::io::BufRead;
 use std::ops::Deref;
@@ -119,7 +119,7 @@ pub struct TimestampConfig {
 
 #[derive(Debug)]
 pub enum TimestampMessage {
-    Add(SourceInstanceId, SourceConnector),
+    Add(GlobalId, SourceConnector),
     DropInstance(SourceInstanceId),
     Shutdown,
 }
@@ -130,13 +130,6 @@ struct RtTimestampConsumer {
     // The connector field is never read back because we dont currently delete consumers
     #[allow(dead_code)]
     connector: RtTimestampConnector,
-    source_instances: BTreeSet<SourceInstanceId>,
-}
-
-impl RtTimestampConsumer {
-    fn remove_source_instance(&mut self, source_instance_id: SourceInstanceId) -> bool {
-        self.source_instances.remove(&source_instance_id)
-    }
 }
 
 enum RtTimestampConnector {
@@ -784,7 +777,7 @@ impl Timestamper {
         // start checking
         while let Ok(update) = self.rx.try_recv() {
             match update {
-                TimestampMessage::Add(id, sc) => {
+                TimestampMessage::Add(source_id, sc) => {
                     let (sc, enc, env, cons) = if let SourceConnector::External {
                         connector,
                         encoding,
@@ -798,22 +791,23 @@ impl Timestamper {
                         panic!("A Local Source should never be timestamped");
                     };
 
-                    let source_id = id.source_id;
                     if !self.rt_sources.contains_key(&source_id)
                         && !self.byo_sources.contains_key(&source_id)
                     {
                         // Did not know about source, must update
                         match cons {
                             Consistency::RealTime => {
-                                info!("Timestamping Source {} with Real Time Consistency.", id);
+                                info!(
+                                    "Timestamping Source {} with Real Time Consistency.",
+                                    source_id
+                                );
                                 let consumer = self.create_rt_connector(source_id, sc);
-                                if let Some(mut consumer) = consumer {
-                                    consumer.source_instances.insert(id);
+                                if let Some(consumer) = consumer {
                                     self.rt_sources.insert(source_id, consumer);
                                 }
                             }
                             Consistency::BringYourOwn(consistency_topic) => {
-                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}.", id, consistency_topic);
+                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}.", source_id, consistency_topic);
                                 let consumer = self.create_byo_connector(
                                     source_id,
                                     sc,
@@ -832,10 +826,6 @@ impl Timestamper {
                     info!("Dropping Timestamping for Source {}.", id);
 
                     // TODO: we can only remove the consumer when we actually drop the source
-                    if let Some(consumer) = self.rt_sources.get_mut(&id.source_id) {
-                        consumer.remove_source_instance(id);
-                    }
-
                     // TODO: not going to bother keeping track of source instances rn
                     // The proper fix is to delete when we drop the source
                     // self.byo_sources.remove(&id);
@@ -1067,34 +1057,29 @@ impl Timestamper {
                 self.create_rt_kafka_connector(id, kc)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Kafka(connector),
-                        source_instances: BTreeSet::new(),
                     })
             }
             ExternalSourceConnector::File(fc) => {
                 self.create_rt_file_connector(id, fc)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::File(connector),
-                        source_instances: BTreeSet::new(),
                     })
             }
             ExternalSourceConnector::AvroOcf(fc) => {
                 self.create_rt_ocf_connector(id, fc)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::Ocf(connector),
-                        source_instances: BTreeSet::new(),
                     })
             }
             ExternalSourceConnector::Kinesis(kinc) => self
                 .create_rt_kinesis_connector(id, kinc)
                 .map(|connector| RtTimestampConsumer {
                     connector: RtTimestampConnector::Kinesis(connector),
-                    source_instances: BTreeSet::new(),
                 }),
             ExternalSourceConnector::S3(s3c) => {
                 self.create_rt_s3_connector(id, s3c)
                     .map(|connector| RtTimestampConsumer {
                         connector: RtTimestampConnector::S3(connector),
-                        source_instances: BTreeSet::new(),
                     })
             }
         }

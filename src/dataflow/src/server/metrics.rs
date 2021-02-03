@@ -105,6 +105,8 @@ struct CommandsProcessedMetrics {
     allow_compaction: IntCounter,
     append_log_int: i32,
     append_log: IntCounter,
+    add_source_timestamping_int: i32,
+    add_source_timestamping: IntCounter,
     advance_source_timestamp_int: i32,
     advance_source_timestamp: IntCounter,
     enable_feedback_int: i32,
@@ -145,6 +147,9 @@ impl CommandsProcessedMetrics {
                 .with_label_values(&[worker, "allow_compaction"]),
             append_log_int: 0,
             append_log: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "append_log"]),
+            add_source_timestamping_int: 0,
+            add_source_timestamping: COMMANDS_PROCESSED_RAW
+                .with_label_values(&[worker, "advance_source_timestamp"]),
             advance_source_timestamp_int: 0,
             advance_source_timestamp: COMMANDS_PROCESSED_RAW
                 .with_label_values(&[worker, "advance_source_timestamp"]),
@@ -172,6 +177,7 @@ impl CommandsProcessedMetrics {
             SequencedCommand::CancelPeek { .. } => self.cancel_peek_int += 1,
             SequencedCommand::Insert { .. } => self.insert_int += 1,
             SequencedCommand::AllowCompaction(..) => self.allow_compaction_int += 1,
+            SequencedCommand::AddSourceTimestamping { .. } => self.add_source_timestamping_int += 1,
             SequencedCommand::AdvanceSourceTimestamp { .. } => {
                 self.advance_source_timestamp_int += 1
             }
@@ -219,6 +225,11 @@ impl CommandsProcessedMetrics {
             self.allow_compaction
                 .inc_by(self.allow_compaction_int as i64);
             self.allow_compaction_int = 0;
+        }
+        if self.add_source_timestamping_int > 0 {
+            self.add_source_timestamping
+                .inc_by(self.add_source_timestamping_int as i64);
+            self.add_source_timestamping_int = 0;
         }
         if self.advance_source_timestamp_int > 0 {
             self.advance_source_timestamp

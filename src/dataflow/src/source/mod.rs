@@ -272,16 +272,6 @@ impl MaybeLength for Value {
 /// Each source must implement this trait. Sources will then get created as part of the
 /// [`create_source`] function.
 pub(crate) trait SourceInfo<Out> {
-    /// Activates timestamping for a given source. The actions
-    /// taken are a function of the source type and the consistency
-    fn activate_source_timestamping(
-        id: &SourceInstanceId,
-        consistency: &Consistency,
-        active: bool,
-        timestamp_data_updates: TimestampDataUpdates,
-    ) where
-        Self: Sized;
-
     /// This function determines whether it is safe to close the current timestamp.
     /// It is safe to close the current timestamp if
     /// 1) this worker does not own the current partition
@@ -863,9 +853,6 @@ where
         logger,
         ..
     } = config;
-
-    S::activate_source_timestamping(&id, &consistency, active, timestamp_histories.clone());
-
     let (stream, capability) = source(scope, name.clone(), move |info| {
         // Create activator for source
         let activator = scope.activator_for(&info.address[..]);

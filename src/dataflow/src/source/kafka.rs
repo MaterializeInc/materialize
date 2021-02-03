@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::fs;
 use std::path::PathBuf;
@@ -26,7 +26,7 @@ use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionLi
 use timely::scheduling::activate::{Activator, SyncActivator};
 
 use dataflow_types::{
-    Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
+    DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
 };
 use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
@@ -38,10 +38,7 @@ use crate::source::cache::{CacheSender, RecordFileMetadata, WorkerCacheData};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
-use crate::{
-    logging::materialized::Logger,
-    server::{CacheMessage, TimestampDataUpdate, TimestampDataUpdates},
-};
+use crate::{logging::materialized::Logger, server::CacheMessage};
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceInfo {
@@ -99,25 +96,6 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
 }
 
 impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
-    fn activate_source_timestamping(
-        id: &SourceInstanceId,
-        consistency: &Consistency,
-        _active: bool,
-        timestamp_data_updates: TimestampDataUpdates,
-    ) {
-        if let Consistency::BringYourOwn(_) = consistency {
-            timestamp_data_updates
-                .borrow_mut()
-                .entry(id.source_id.clone())
-                .or_insert(TimestampDataUpdate::BringYourOwn(HashMap::new()));
-        } else {
-            timestamp_data_updates
-                .borrow_mut()
-                .entry(id.source_id.clone())
-                .or_insert(TimestampDataUpdate::RealTime(1));
-        }
-    }
-
     /// This function determines whether it is safe to close the current timestamp.
     /// It is safe to close the current timestamp if
     /// 1) this worker does not own the current partition
