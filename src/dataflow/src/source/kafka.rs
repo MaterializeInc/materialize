@@ -40,10 +40,7 @@ use crate::source::{
 };
 use crate::{
     logging::materialized::Logger,
-    server::{
-        CacheMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-        TimestampMetadataUpdates,
-    },
+    server::{CacheMessage, TimestampDataUpdate, TimestampDataUpdates},
 };
 
 /// Contains all information necessary to ingest data from Kafka
@@ -107,8 +104,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         consistency: &Consistency,
         _active: bool,
         timestamp_data_updates: TimestampDataUpdates,
-        timestamp_metadata_channel: TimestampMetadataUpdates,
-    ) -> Option<TimestampMetadataUpdates> {
+    ) {
         if let Consistency::BringYourOwn(_) = consistency {
             timestamp_data_updates
                 .borrow_mut()
@@ -120,11 +116,6 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 .entry(id.source_id.clone())
                 .or_insert(TimestampDataUpdate::RealTime(1));
         }
-        timestamp_metadata_channel
-            .as_ref()
-            .borrow_mut()
-            .push(TimestampMetadataUpdate::StartTimestamping(*id));
-        Some(timestamp_metadata_channel)
     }
 
     /// This function determines whether it is safe to close the current timestamp.

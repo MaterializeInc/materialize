@@ -32,10 +32,7 @@ use crate::source::{
 };
 use crate::{
     logging::materialized::Logger,
-    server::{
-        TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-        TimestampMetadataUpdates,
-    },
+    server::{TimestampDataUpdate, TimestampDataUpdates},
 };
 
 lazy_static! {
@@ -177,23 +174,16 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
         consistency: &Consistency,
         _active: bool,
         timestamp_data_updates: TimestampDataUpdates,
-        timestamp_metadata_channel: TimestampMetadataUpdates,
-    ) -> Option<TimestampMetadataUpdates> {
+    ) {
         // Putting source information on the Timestamp channel lets this
         // Dataflow worker communicate that it has created a source.
         if let Consistency::BringYourOwn(_) = consistency {
             error!("Kinesis sources do not currently support BYO consistency");
-            None
         } else {
             timestamp_data_updates
                 .borrow_mut()
                 .entry(id.source_id.clone())
                 .or_insert(TimestampDataUpdate::RealTime(1));
-            timestamp_metadata_channel
-                .as_ref()
-                .borrow_mut()
-                .push(TimestampMetadataUpdate::StartTimestamping(*id));
-            Some(timestamp_metadata_channel)
         }
     }
 

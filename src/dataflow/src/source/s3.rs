@@ -27,9 +27,7 @@ use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffse
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::logging::materialized::Logger;
-use crate::server::{
-    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
-};
+use crate::server::{TimestampDataUpdate, TimestampDataUpdates};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
@@ -322,29 +320,19 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
         consistency: &Consistency,
         active: bool,
         timestamp_data_updates: TimestampDataUpdates,
-        timestamp_metadata_channel: TimestampMetadataUpdates,
-    ) -> Option<TimestampMetadataUpdates>
-    where
+    ) where
         Self: Sized,
     {
         // Putting source information on the Timestamp channel lets this
         // Dataflow worker communicate that it has created a source.
         if let Consistency::BringYourOwn(_) = consistency {
             log::error!("S3 sources do not currently support BYO consistency");
-            None
         } else if active {
             timestamp_data_updates
                 .borrow_mut()
                 .entry(id.source_id.clone())
                 .or_insert(TimestampDataUpdate::RealTime(1));
-            timestamp_metadata_channel
-                .as_ref()
-                .borrow_mut()
-                .push(TimestampMetadataUpdate::StartTimestamping(*id));
-            Some(timestamp_metadata_channel)
-        } else {
-            None
-        }
+        };
     }
 
     fn get_next_message(

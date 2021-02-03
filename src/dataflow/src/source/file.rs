@@ -32,10 +32,7 @@ use crate::source::{
 };
 use crate::{
     logging::materialized::Logger,
-    server::{
-        TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-        TimestampMetadataUpdates,
-    },
+    server::{TimestampDataUpdate, TimestampDataUpdates},
 };
 
 /// Contains all information necessary to ingest data from file sources (either
@@ -206,8 +203,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         consistency: &Consistency,
         active: bool,
         timestamp_data_updates: TimestampDataUpdates,
-        timestamp_metadata_channel: TimestampMetadataUpdates,
-    ) -> Option<TimestampMetadataUpdates> {
+    ) {
         if active {
             if let Consistency::BringYourOwn(_) = consistency {
                 timestamp_data_updates
@@ -220,13 +216,6 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
                     .entry(id.source_id.clone())
                     .or_insert(TimestampDataUpdate::RealTime(1));
             }
-            timestamp_metadata_channel
-                .as_ref()
-                .borrow_mut()
-                .push(TimestampMetadataUpdate::StartTimestamping(*id));
-            Some(timestamp_metadata_channel)
-        } else {
-            None
         }
     }
 

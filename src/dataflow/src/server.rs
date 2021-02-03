@@ -250,7 +250,6 @@ where
                     local_inputs: HashMap::new(),
                     ts_source_mapping: HashMap::new(),
                     ts_histories: Default::default(),
-                    ts_source_updates: Default::default(),
                     dataflow_tokens: HashMap::new(),
                     caching_tx: None,
                 },
@@ -281,20 +280,6 @@ pub enum TimestampDataUpdate {
 }
 /// Map of source ID to timestamp data updates (RT or BYO).
 pub type TimestampDataUpdates = Rc<RefCell<HashMap<GlobalId, TimestampDataUpdate>>>;
-
-/// List of sources that need to start being timestamped or have been dropped and no longer require
-/// timestamping.
-/// A source inserts a StartTimestamping to this vector on source creation, and adds a
-/// StopTimestamping request once the operator for the source is dropped.
-pub type TimestampMetadataUpdates = Rc<RefCell<Vec<TimestampMetadataUpdate>>>;
-
-/// Possible timestamping metadata information messages that get sent from workers to coordinator
-pub enum TimestampMetadataUpdate {
-    /// Requests to start timestamping a source with given id
-    StartTimestamping(SourceInstanceId),
-    /// Request to stop timestamping a source wth given id
-    StopTimestamping(SourceInstanceId),
-}
 
 /// State maintained for each worker thread.
 ///
@@ -487,8 +472,6 @@ where
             // Report frontier information back the coordinator.
             self.report_frontiers();
 
-            self.report_source_modifications();
-
             // Handle any received commands.
             let mut cmds = vec![];
             while let Ok(Some(cmd)) = self.command_rx.try_next() {
@@ -507,35 +490,6 @@ where
             self.metrics.observe_command_finish();
             self.process_peeks();
         }
-    }
-
-    /// Report source drops or creations to the coordinator
-    fn report_source_modifications(&mut self) {
-        let mut updates = self.render_state.ts_source_updates.borrow_mut();
-        for source_update in updates.iter() {
-            match source_update {
-                TimestampMetadataUpdate::StopTimestamping(id) => {
-                    // A source was deleted
-                    self.render_state.ts_source_mapping.remove(id);
-                    let connector = self.feedback_tx.as_mut().unwrap();
-                    block_on(connector.send(WorkerFeedbackWithMeta {
-                        worker_id: self.timely_worker.index(),
-                        message: WorkerFeedback::DroppedSource(*id),
-                    }))
-                    .unwrap();
-                }
-                TimestampMetadataUpdate::StartTimestamping(id) => {
-                    // A source was created
-                    let connector = self.feedback_tx.as_mut().unwrap();
-                    block_on(connector.send(WorkerFeedbackWithMeta {
-                        worker_id: self.timely_worker.index(),
-                        message: WorkerFeedback::CreateSource(*id),
-                    }))
-                    .unwrap();
-                }
-            }
-        }
-        updates.clear();
     }
 
     /// Send progress information to the coordinator.

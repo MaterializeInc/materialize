@@ -134,7 +134,7 @@ use repr::{Datum, RelationType, Row, RowArena, RowPacker, Timestamp};
 use crate::decode::{decode_avro_values, decode_values};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::server::{CacheMessage, LocalInput, TimestampDataUpdates, TimestampMetadataUpdates};
+use crate::server::{CacheMessage, LocalInput, TimestampDataUpdates};
 use crate::sink;
 use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo, S3SourceInfo};
 use crate::source::{SourceConfig, SourceToken};
@@ -162,9 +162,6 @@ pub struct RenderState {
     pub ts_source_mapping: HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
     /// Timestamp data updates for each source.
     pub ts_histories: TimestampDataUpdates,
-    /// Communication channel for enabling/disabling timestamping on new/dropped
-    /// sources.
-    pub ts_source_updates: TimestampMetadataUpdates,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
@@ -318,7 +315,6 @@ where
                     // Distribute read responsibility among workers.
                     active: active_read_worker,
                     timestamp_histories: render_state.ts_histories.clone(),
-                    timestamp_tx: render_state.ts_source_updates.clone(),
                     consistency,
                     timestamp_frequency: ts_frequency,
                     worker_id: scope.index(),

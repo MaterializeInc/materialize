@@ -40,9 +40,7 @@ use timely::Data;
 use super::source::util::source;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::StreamExt;
-use crate::server::{
-    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
-};
+use crate::server::{TimestampDataUpdate, TimestampDataUpdates};
 use crate::source::cache::CacheSender;
 
 mod file;
@@ -76,8 +74,6 @@ pub struct SourceConfig<'a, G> {
     // Timestamping fields.
     /// Data-timestamping updates: information about (timestamp, source offset)
     pub timestamp_histories: TimestampDataUpdates,
-    /// Control-timestamping updates: information about when to start/stop timestamping a source
-    pub timestamp_tx: TimestampMetadataUpdates,
     /// A source can use Real-Time consistency timestamping or BYO consistency information.
     pub consistency: Consistency,
     /// Source Type
@@ -191,12 +187,8 @@ where
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
-    id: SourceInstanceId,
     capability: Rc<RefCell<Option<Capability<Timestamp>>>>,
     activator: Activator,
-    /// A reference to the timestamper control channel. Inserts a timestamp drop message
-    /// when this source token is dropped
-    timestamp_drop: Option<TimestampMetadataUpdates>,
 }
 
 impl SourceToken {
@@ -210,13 +202,6 @@ impl Drop for SourceToken {
     fn drop(&mut self) {
         *self.capability.borrow_mut() = None;
         self.activator.activate();
-        if self.timestamp_drop.is_some() {
-            self.timestamp_drop
-                .as_ref()
-                .unwrap()
-                .borrow_mut()
-                .push(TimestampMetadataUpdate::StopTimestamping(self.id));
-        }
     }
 }
 
@@ -294,9 +279,7 @@ pub(crate) trait SourceInfo<Out> {
         consistency: &Consistency,
         active: bool,
         timestamp_data_updates: TimestampDataUpdates,
-        timestamp_metadata_channel: TimestampMetadataUpdates,
-    ) -> Option<TimestampMetadataUpdates>
-    where
+    ) where
         Self: Sized;
 
     /// This function determines whether it is safe to close the current timestamp.
@@ -870,7 +853,6 @@ where
         id,
         scope,
         timestamp_histories,
-        timestamp_tx,
         worker_id,
         worker_count,
         consistency,
@@ -882,15 +864,9 @@ where
         ..
     } = config;
 
-    let timestamp_channel = S::activate_source_timestamping(
-        &id,
-        &consistency,
-        active,
-        timestamp_histories.clone(),
-        timestamp_tx,
-    );
+    S::activate_source_timestamping(&id, &consistency, active, timestamp_histories.clone());
 
-    let (stream, capability) = source(id, timestamp_channel, scope, name.clone(), move |info| {
+    let (stream, capability) = source(scope, name.clone(), move |info| {
         // Create activator for source
         let activator = scope.activator_for(&info.address[..]);
 
