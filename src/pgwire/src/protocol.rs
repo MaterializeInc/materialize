@@ -245,12 +245,7 @@ where
                 })
                 .collect(),
             Err(e) => {
-                return self
-                    .error(ErrorResponse::error(
-                        SqlState::INTERNAL_ERROR,
-                        format!("{:#}", e),
-                    ))
-                    .await;
+                return self.error(ErrorResponse::from(e)).await;
             }
         };
 
@@ -284,12 +279,7 @@ where
             .declare(EMPTY_PORTAL.to_string(), stmt.clone(), param_types)
             .await
         {
-            return self
-                .error(ErrorResponse::error(
-                    SqlState::INTERNAL_ERROR,
-                    format!("{:#}", e),
-                ))
-                .await;
+            return self.error(ErrorResponse::from(e)).await;
         }
 
         let stmt_desc = self
@@ -332,13 +322,7 @@ where
                 )
                 .await
             }
-            Err(e) => {
-                self.error(ErrorResponse::error(
-                    SqlState::INTERNAL_ERROR,
-                    format!("{:#}", e),
-                ))
-                .await
-            }
+            Err(e) => self.error(ErrorResponse::from(e)).await,
         };
 
         // Destroy the portal.
@@ -450,13 +434,7 @@ where
                 self.conn.send(BackendMessage::ParseComplete).await?;
                 Ok(State::Ready)
             }
-            Err(e) => {
-                self.error(ErrorResponse::error(
-                    SqlState::INTERNAL_ERROR,
-                    format!("{:#}", e),
-                ))
-                .await
-            }
+            Err(e) => self.error(ErrorResponse::from(e)).await,
         }
     }
 
@@ -616,13 +594,7 @@ where
                             )
                             .await
                         }
-                        Err(e) => {
-                            self.error(ErrorResponse::error(
-                                SqlState::INTERNAL_ERROR,
-                                format!("{:#}", e),
-                            ))
-                            .await
-                        }
+                        Err(e) => self.error(ErrorResponse::from(e)).await,
                     }
                 }
                 PortalState::InProgress(rows) => {
@@ -1043,9 +1015,6 @@ where
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
             ExecuteResponse::AlteredIndexLogicalCompaction => command_complete!("ALTER INDEX"),
-            ExecuteResponse::PgError { code, message } => {
-                self.error(ErrorResponse::error(code, message)).await
-            }
         }
     }
 

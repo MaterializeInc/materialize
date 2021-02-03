@@ -34,6 +34,7 @@ pub mod ast;
 pub mod catalog;
 pub mod func;
 pub mod names;
+#[macro_use]
 pub mod normalize;
 pub mod parse;
 pub mod plan;

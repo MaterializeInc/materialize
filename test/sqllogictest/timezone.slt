@@ -21,7 +21,7 @@ SET TIME ZONE 'uTc'
 statement ok
 SET TimeZone = 'uTc'
 
-statement error parameter TimeZone can only be set to UTC
+statement error parameter "TimeZone" can only be set to "UTC"
 SET TIME ZONE bad
 
 query T

@@ -39,7 +39,7 @@ use transform::Optimizer;
 use crate::catalog::builtin::{
     Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
-use crate::catalog::error::{Error, ErrorKind};
+use crate::catalog::error::ErrorKind;
 use crate::catalog::migrate::CONTENT_MIGRATIONS;
 use crate::session::Session;
 
@@ -51,6 +51,7 @@ pub mod builtin;
 pub mod storage;
 
 pub use crate::catalog::config::Config;
+pub use crate::catalog::error::Error;
 
 const SYSTEM_CONN_ID: u32 = 0;
 
