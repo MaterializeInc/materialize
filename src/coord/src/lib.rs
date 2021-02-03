@@ -20,10 +20,18 @@
 //! [`pgwire`](../pgwire/index.html) produces, though they can, in theory, be
 //! provided by something other than a pgwire server.
 
+// TODO(benesch): delete this once we use structured errors everywhere.
+macro_rules! coord_bail {
+    ($($e:expr),*) => {
+        return Err(crate::error::CoordError::Unstructured(::anyhow::anyhow!($($e),*)))
+    }
+}
+
 mod cache;
 mod client;
 mod command;
 mod coord;
+mod error;
 mod sink_connector;
 mod timestamp;
 mod util;
@@ -35,4 +43,5 @@ pub use crate::cache::CacheConfig;
 pub use crate::client::{Client, SessionClient};
 pub use crate::command::{ExecuteResponse, NoSessionExecuteResponse, StartupMessage};
 pub use crate::coord::{describe, serve, Config, LoggingConfig};
+pub use crate::error::CoordError;
 pub use crate::timestamp::TimestampConfig;

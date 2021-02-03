@@ -11,6 +11,7 @@ use std::convert::TryFrom;
 use std::io;
 
 use bytes::BytesMut;
+use coord::CoordError;
 use itertools::Itertools;
 use postgres::error::SqlState;
 
@@ -313,6 +314,42 @@ impl ErrorResponse {
 
     pub fn into_message(self) -> BackendMessage {
         BackendMessage::ErrorResponse(self)
+    }
+}
+
+impl From<CoordError> for ErrorResponse {
+    fn from(e: CoordError) -> ErrorResponse {
+        // TODO(benesch): we should only use `SqlState::INTERNAL_ERROR` for
+        // those errors that are truly internal errors. At the moment we have
+        // a various classes of uncategorized errors that use this error code
+        // inappropriately.
+        let code = match e {
+            CoordError::Catalog(_) => SqlState::INTERNAL_ERROR,
+            CoordError::ConstrainedParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
+            CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
+            CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
+            CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
+            CoordError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
+            CoordError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+            CoordError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
+            CoordError::Transform(_) => SqlState::INTERNAL_ERROR,
+            CoordError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
+            CoordError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
+            CoordError::Unstructured(_) => SqlState::INTERNAL_ERROR,
+            // It's not immediately clear which error code to use here because a
+            // "write-only transaction" is not a thing in Postgres. This error
+            // code is the generic "bad txn thing" code, so it's probably the
+            // best choice.
+            CoordError::WriteOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
+        };
+        ErrorResponse {
+            severity: Severity::Error,
+            code,
+            message: e.to_string(),
+            detail: e.detail(),
+            hint: e.hint(),
+            position: None,
+        }
     }
 }
 
