@@ -866,7 +866,8 @@ impl Catalog {
         conn_id: u32,
     ) -> Result<&CatalogEntry, SqlCatalogError> {
         // If a schema name was specified, just try to find the item in that
-        // schema. If no schema was specified, try to find the item in every
+        // schema. If no schema was specified, try to find the item in the connection's
+        // temporary schema. If the item is not found, try to find the item in every
         // schema in the search path.
         //
         // This is written strangely to work around limitations in Rust's
@@ -881,7 +882,14 @@ impl Catalog {
         // [0]: https://github.com/rust-lang/rust/issues/15023
         let mut schemas = &[name.schema.as_deref().unwrap_or("")][..];
         if name.schema.is_none() {
-            schemas = search_path;
+            let temp_schema = self
+                .get_schema(&DatabaseSpecifier::Ambient, MZ_TEMP_SCHEMA, conn_id)
+                .expect("missing temporary schema for connection");
+            if let Some(id) = temp_schema.items.get(&name.item) {
+                return Ok(&self.by_id[id]);
+            } else {
+                schemas = search_path;
+            }
         }
 
         for &schema_name in schemas {
@@ -1289,12 +1297,17 @@ impl Catalog {
                             return Err(Error::new(ErrorKind::InvalidTemporarySchema));
                         }
                     } else {
-                        if item.uses().iter().any(|id| match self.try_get_by_id(*id) {
-                            Some(entry) => entry.item().is_temporary(),
-                            None => temporary_ids.contains(&id),
-                        }) {
+                        if let Some(temp_id) =
+                            item.uses()
+                                .iter()
+                                .find(|id| match self.try_get_by_id(**id) {
+                                    Some(entry) => entry.item().is_temporary(),
+                                    None => temporary_ids.contains(&id),
+                                })
+                        {
+                            let temp_item = self.get_by_id(temp_id);
                             return Err(Error::new(ErrorKind::InvalidTemporaryDependency(
-                                id.to_string(),
+                                temp_item.name().item.clone(),
                             )));
                         }
                         let database_id = match &name.database {
@@ -1405,9 +1418,15 @@ impl Catalog {
                                 })
                             })?;
 
-                        let serialized_item = self.serialize_item(&updated_item);
+                        if !item.is_temporary() {
+                            let serialized_item = self.serialize_item(&updated_item);
+                            tx.update_item(
+                                id.clone(),
+                                &dependent_item.name.item,
+                                &serialized_item,
+                            )?;
+                        }
 
-                        tx.update_item(id.clone(), &dependent_item.name.item, &serialized_item)?;
                         actions.push(Action::UpdateItem {
                             id: id.clone(),
                             from_name: None,
@@ -1415,7 +1434,9 @@ impl Catalog {
                             item: updated_item,
                         });
                     }
-                    tx.update_item(id.clone(), &to_full_name.item, &serialized_item)?;
+                    if !item.is_temporary() {
+                        tx.update_item(id.clone(), &to_full_name.item, &serialized_item)?;
+                    }
                     actions.push(Action::UpdateItem {
                         id,
                         from_name: Some(entry.name.clone()),
