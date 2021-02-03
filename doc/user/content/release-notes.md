@@ -46,9 +46,19 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+- Support [multi-partition](/sql/create-sink/#with-options) kafka sinks {{% gh 5537 %}}.
 - Support [gzip-compressed](/sql/create-source/text-file/#compression) file sources {{% gh 5392 %}}.
 
 {{% version-header v0.6.2 %}}
+
+- **Breaking change.** Require a valid user name when [connecting to
+  Materialize](/connect/cli#connection-details). Previously, Materialize did not
+  support the concept of [roles](/sql/create-role), so it accepted all user
+  names.
+
+  Materialize instances have a user named `materialize` installed, unless you
+  drop this user with [`DROP USER`](/sql/drop-user). You can add additional
+  users with [`CREATE ROLE`](/sql/create-role).
 
 - Allow setting most [command-line flags](/cli#command-line-flags) via
   environment variables.
@@ -60,6 +70,19 @@ Wrap your release notes at the 80 character mark.
   on objects that were about to be dropped {{% gh 5272 %}}.
 
 - Remove deprecated `MZ_THREADS` alias for `MZ_WORKERS`.
+
+- Support equality operations on `uuid` data, which enables joins on `uuid`
+  columns {{% gh 5540 %}}.
+- Add the [`current_user`](/sql/functions/#system-information-func) system
+  information function.
+
+- Add the [`CREATE ROLE`](/sql/create-role),
+  [`CREATE USER`](/sql/create-user), [`DROP ROLE`](/sql/drop-role), and
+  [`DROP USER`](/sql/drop-user) statements to manage roles in a Materialize
+  instance. These roles do not yet serve any purpose, but they will enable
+  authentication in a later release.
+
+- Functions can now be resolved as schema-qualified objects, e.g. `SELECT pg_catalog.abs(-1);`.
 
 {{% version-header v0.6.1 %}}
 

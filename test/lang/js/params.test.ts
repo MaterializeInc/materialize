@@ -12,6 +12,7 @@ import { Client } from "pg";
 const client = new Client({
   port: parseInt(process.env.PGPORT, 10) || 6875,
   database: process.env.PGDATABASE || "materialize",
+  user: process.env.PGUSER || "materialize",
 });
 
 beforeAll(async () => await client.connect());

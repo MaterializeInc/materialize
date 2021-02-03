@@ -848,7 +848,7 @@ impl Runner {
 async fn connect(server: &materialized::Server) -> tokio_postgres::Client {
     let addr = server.local_addr();
     let (client, connection) = tokio_postgres::connect(
-        &format!("host={} port={} user=root", addr.ip(), addr.port()),
+        &format!("host={} port={} user=materialize", addr.ip(), addr.port()),
         NoTls,
     )
     .await

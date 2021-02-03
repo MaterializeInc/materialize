@@ -38,8 +38,8 @@ input        column1  column2
 some,csv     some     csv
 testing,123  testing  123
 
-query error csv_extract number of columns must be a positive integer literal
+query error Cannot call function csv_extract\(integer, text\): csv_extract number of columns must be a positive integer literal
 SELECT * FROM data, (VALUES (2)) ncols, csv_extract(ncols.column1, data.input)
 
-query error csv_extract number of columns must be a positive integer literal
+query error Cannot call function csv_extract\(integer, text\): csv_extract number of columns must be a positive integer literal
 SELECT * FROM data, csv_extract((SELECT 2), data.input)

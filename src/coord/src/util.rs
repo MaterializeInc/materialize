@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use crate::command::Response;
+use crate::error::CoordError;
 use crate::session::Session;
 
 /// Handles responding to clients.
@@ -23,7 +24,7 @@ impl<T> ClientTransmitter<T> {
 
     /// Transmits `result` to the client, returning ownership of the session
     /// `session` as well.
-    pub fn send(mut self, result: Result<T, anyhow::Error>, session: Session) {
+    pub fn send(mut self, result: Result<T, CoordError>, session: Session) {
         // We can safely ignore failure to send the message, as that simply
         // indicates that the client has disconnected and is no longer
         // interested in the response.

@@ -16,18 +16,17 @@ use std::mem;
 
 use derivative::Derivative;
 use futures::Stream;
-use tokio_postgres::error::SqlState;
 
 use expr::GlobalId;
 use repr::{Datum, Row, ScalarType};
 use sql::ast::{Raw, Statement};
 use sql::plan::{Params, StatementDesc};
 
-use crate::ExecuteResponse;
+use crate::error::CoordError;
 
 mod vars;
 
-pub use self::vars::Vars;
+pub use self::vars::{Var, Vars};
 
 const DUMMY_CONNECTION_ID: u32 = 0;
 
@@ -38,14 +37,15 @@ pub struct Session {
     prepared_statements: HashMap<String, PreparedStatement>,
     portals: HashMap<String, Portal>,
     transaction: TransactionStatus,
+    user: String,
     vars: Vars,
 }
 
 impl Session {
     /// Creates a new session for the specified connection ID.
-    pub fn new(conn_id: u32) -> Session {
+    pub fn new(conn_id: u32, user: String) -> Session {
         assert_ne!(conn_id, DUMMY_CONNECTION_ID);
-        Self::new_internal(conn_id)
+        Self::new_internal(conn_id, user)
     }
 
     /// Creates a new dummy session.
@@ -53,15 +53,16 @@ impl Session {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session {
-        Self::new_internal(DUMMY_CONNECTION_ID)
+        Self::new_internal(DUMMY_CONNECTION_ID, "system".into())
     }
 
-    fn new_internal(conn_id: u32) -> Session {
+    fn new_internal(conn_id: u32, user: String) -> Session {
         Session {
             conn_id,
             transaction: TransactionStatus::Default,
             prepared_statements: HashMap::new(),
             portals: HashMap::new(),
+            user,
             vars: Vars::default(),
         }
     }
@@ -128,7 +129,7 @@ impl Session {
 
     /// Adds operations to the current transaction. An error is produced if they
     /// cannot be merged (i.e., a read cannot be merged to an insert).
-    pub fn add_transaction_ops(&mut self, add_ops: TransactionOps) -> Result<(), ExecuteResponse> {
+    pub fn add_transaction_ops(&mut self, add_ops: TransactionOps) -> Result<(), CoordError> {
         match &mut self.transaction {
             TransactionStatus::Started(txn_ops)
             | TransactionStatus::InTransaction(txn_ops)
@@ -136,25 +137,14 @@ impl Session {
                 TransactionOps::None => *txn_ops = add_ops,
                 TransactionOps::Reads => match add_ops {
                     TransactionOps::Reads => {}
-                    _ => {
-                        return Err(ExecuteResponse::PgError {
-                            code: SqlState::READ_ONLY_SQL_TRANSACTION,
-                            message: "transaction in read-only mode".to_string(),
-                        })
-                    }
+                    _ => return Err(CoordError::ReadOnlyTransaction),
                 },
                 TransactionOps::Writes(txn_writes) => match add_ops {
                     TransactionOps::Writes(mut add_writes) => {
                         txn_writes.append(&mut add_writes);
                     }
                     _ => {
-                        return Err(ExecuteResponse::PgError {
-                            // It's not immediately clear which error code to use here because a
-                            // "write-only transaction" is not a thing in Postgres. This error code is the
-                            // generic "bad txn thing" code, so it's probably the best choice.
-                            code: SqlState::INVALID_TRANSACTION_STATE,
-                            message: "transaction in write-only mode".to_string(),
-                        });
+                        return Err(CoordError::WriteOnlyTransaction);
                     }
                 },
             },
@@ -241,6 +231,11 @@ impl Session {
         self.prepared_statements.clear();
         self.portals.clear();
         self.vars = Vars::default();
+    }
+
+    /// Returns the name of the user who owns this session.
+    pub fn user(&self) -> &str {
+        &self.user
     }
 
     /// Returns a reference to the variables in this session.

@@ -29,6 +29,7 @@ use std::mem;
 use anyhow::{anyhow, bail, ensure, Context};
 use itertools::Itertools;
 use ore::iter::IteratorExt;
+use ore::str::StrExt;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
@@ -44,6 +45,7 @@ use repr::{
 };
 
 use crate::catalog::{Catalog, CatalogItemType};
+use crate::func::{self, Func, FuncSpec};
 use crate::names::PartialName;
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -51,7 +53,6 @@ use crate::plan::expr::{
     AbstractColumnType, AbstractExpr, AggregateExpr, BinaryFunc, CoercibleScalarExpr, ColumnOrder,
     ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, UnaryFunc, VariadicFunc,
 };
-use crate::plan::func::{self, Func, FuncSpec};
 use crate::plan::plan_utils;
 use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
@@ -177,14 +178,14 @@ pub fn plan_insert_query(
                 source_types.push(&typ.scalar_type);
             } else {
                 bail!(
-                    "column \"{}\" of relation \"{}\" does not exist",
-                    c.as_str(),
-                    table.name()
+                    "column {} of relation {} does not exist",
+                    c.as_str().quoted(),
+                    table.name().to_string().quoted()
                 );
             }
         }
         if let Some(dup) = columns.iter().duplicates().next() {
-            bail!("column \"{}\" specified more than once", dup.as_str());
+            bail!("column {} specified more than once", dup.as_str().quoted());
         }
     };
 
@@ -243,9 +244,11 @@ pub fn plan_insert_query(
     // installing assignment casts where necessary and possible.
     let expr = cast_relation(&qcx, CastContext::Assignment, expr, source_types).map_err(|e| {
         anyhow!(
-            "column \"{}\" is of type {} but expression is of type {}",
+            "column {} is of type {} but expression is of type {}",
             desc.get_name(e.column)
-                .unwrap_or(&ColumnName::from("?column?")),
+                .unwrap_or(&ColumnName::from("?column?"))
+                .as_str()
+                .quoted(),
             pgrepr::Type::from(&e.target_type).name(),
             pgrepr::Type::from(&e.source_type).name(),
         )
@@ -459,7 +462,10 @@ fn plan_query(
         let cte_name = normalize::ident(cte.alias.name.clone());
 
         if used_names.contains(&cte_name) {
-            bail!("WITH query name \"{}\" specified more than once", cte_name)
+            bail!(
+                "WITH query name {} specified more than once",
+                cte_name.quoted()
+            )
         }
         used_names.insert(cte_name.clone());
 
@@ -978,7 +984,7 @@ fn plan_view_select(
                     if let Some(column) = select_all_mapping.get(&i).copied() {
                         HirScalarExpr::Column(ColumnRef { level: 0, column })
                     } else {
-                        bail!("column \"{}\" must appear in the GROUP BY clause or be used in an aggregate function", from_scope.items[*i].short_display_name());
+                        bail!("column {} must appear in the GROUP BY clause or be used in an aggregate function", from_scope.items[*i].short_display_name().quoted());
                     }
                 }
                 ExpandedSelectItem::Expr(expr) => plan_expr(ecx, &expr)?.type_as_any(ecx)?,
@@ -1362,15 +1368,13 @@ fn plan_table_function(
     alias: Option<&TableAlias>,
     args: &FunctionArgs<Raw>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
-    let name = normalize::object_name(name.clone())?;
-
-    if name.database.is_none() && name.schema.is_none() && name.item == "values" {
+    if *name == ObjectName::unqualified("values") {
         // Produce a nice error message for the common typo
         // `SELECT * FROM VALUES (1)`.
         bail!("VALUES expression in FROM clause must be surrounded by parentheses");
     }
 
-    let impls = match func::resolve_func(&ecx.qcx.scx, &name)? {
+    let impls = match resolve_func(ecx, name, args)? {
         Func::Table(impls) => impls,
         _ => bail!("{} is not a table function", name),
     };
@@ -1378,6 +1382,7 @@ fn plan_table_function(
         FunctionArgs::Star => bail!("{} does not accept * as an argument", name),
         FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
+    let name = normalize::object_name(name.clone())?;
     let tf = func::select_impl(ecx, FuncSpec::Func(&name), impls, args)?;
     let call = HirRelationExpr::CallTable {
         func: tf.func,
@@ -1465,6 +1470,7 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Raw>) -> Option<ScopeItemNa
             }
         }
         Expr::Coalesce { .. } => Some("coalesce".into()),
+        Expr::NullIf { .. } => Some("nullif".into()),
         Expr::Array { .. } => Some("array".into()),
         Expr::List { .. } => Some("list".into()),
         Expr::Cast { expr, .. } => return invent_column_name(ecx, expr),
@@ -1811,7 +1817,10 @@ fn plan_using_constraint(
 
         // Join keys must be resolved to same type.
         let mut exprs = coerce_homogeneous_exprs(
-            &format!("NATURAL/USING join column \"{}\"", column_name),
+            &format!(
+                "NATURAL/USING join column {}",
+                column_name.as_str().quoted()
+            ),
             &ecx,
             vec![
                 CoercibleScalarExpr::Coerced(HirScalarExpr::Column(lhs)),
@@ -1973,6 +1982,14 @@ pub fn plan_expr<'a>(
             };
             expr.into()
         }
+        Expr::NullIf { l_expr, r_expr } => plan_case(
+            ecx,
+            &None,
+            &[l_expr.clone().equals(*r_expr.clone())],
+            &[Expr::null()],
+            &Some(Box::new(*l_expr.clone())),
+        )?
+        .into(),
         Expr::FieldAccess { expr, field } => {
             let field = normalize::column_name(field.clone());
             let expr = plan_expr(ecx, expr)?.type_as_any(ecx)?;
@@ -2253,8 +2270,7 @@ fn plan_aggregate(
     ecx: &ExprContext,
     sql_func: &Function<Raw>,
 ) -> Result<AggregateExpr, anyhow::Error> {
-    let name = normalize::object_name(sql_func.name.clone())?;
-    let impls = match func::resolve_func(&ecx.qcx.scx, &name)? {
+    let impls = match resolve_func(ecx, &sql_func.name, &sql_func.args)? {
         Func::Aggregate(impls) => impls,
         _ => unreachable!("plan_aggregate called on non-aggregate function,"),
     };
@@ -2262,6 +2278,8 @@ fn plan_aggregate(
     if sql_func.over.is_some() {
         unsupported!(213, "window functions");
     }
+
+    let name = normalize::object_name(sql_func.name.clone())?;
 
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
     // generalized function selection framework. The rule is simple: the user
@@ -2400,8 +2418,7 @@ fn plan_function<'a>(
     ecx: &ExprContext,
     sql_func: &'a Function<Raw>,
 ) -> Result<HirScalarExpr, anyhow::Error> {
-    let name = normalize::object_name(sql_func.name.clone())?;
-    let impls = match func::resolve_func(&ecx.qcx.scx, &name)? {
+    let impls = match resolve_func(ecx, &sql_func.name, &sql_func.args)? {
         Func::Aggregate(_) if ecx.allow_aggregates => {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
             bail!(
@@ -2415,7 +2432,7 @@ fn plan_function<'a>(
         Func::Table(_) => {
             unsupported!(
                 1546,
-                format!("table function ({}) in scalar position", name)
+                format!("table function ({}) in scalar position", sql_func.name)
             );
         }
         Func::Scalar(impls) => impls,
@@ -2427,15 +2444,52 @@ fn plan_function<'a>(
     if sql_func.filter.is_some() {
         bail!(
             "FILTER specified but {}() is not an aggregate function",
-            name
+            sql_func.name
         );
     }
+
     let args = match &sql_func.args {
-        FunctionArgs::Star => bail!("* argument is invalid with non-aggregate function {}", name),
+        FunctionArgs::Star => bail!(
+            "* argument is invalid with non-aggregate function {}",
+            sql_func.name
+        ),
         FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
 
+    let name = normalize::object_name(sql_func.name.clone())?;
     func::select_impl(ecx, FuncSpec::Func(&name), impls, args)
+}
+
+/// Resolves the name to a set of function implementations.
+///
+/// If the name does not specify a known built-in function, returns an error.
+pub fn resolve_func(
+    ecx: &ExprContext,
+    name: &ObjectName,
+    args: &sql_parser::ast::FunctionArgs<Raw>,
+) -> Result<&'static Func, anyhow::Error> {
+    if let Ok(i) = ecx.qcx.scx.resolve_function(name.clone()) {
+        if let Ok(f) = i.func() {
+            return Ok(f);
+        }
+    }
+
+    // Couldn't resolve function with this name, so generate verbose error
+    // message.
+    let cexprs = match args {
+        sql_parser::ast::FunctionArgs::Star => vec![],
+        sql_parser::ast::FunctionArgs::Args(args) => plan_exprs(ecx, &args)?,
+    };
+
+    let types: Vec<_> = cexprs
+        .iter()
+        .map(|e| match ecx.scalar_type(e) {
+            Some(ty) => ecx.humanize_scalar_type(&ty),
+            None => "unknown".to_string(),
+        })
+        .collect();
+
+    bail!("function {}({}) does not exist", name, types.join(", "))
 }
 
 fn plan_is_null_expr<'a>(
@@ -2608,7 +2662,7 @@ pub fn scalar_type_from_sql(
             let canonical_name = normalize::object_name(canonical_name)?;
             let item = match scx.catalog.resolve_item(&canonical_name) {
                 Ok(i) => i,
-                Err(_) => bail!("type \"{}\" does not exist", name),
+                Err(_) => bail!("type {} does not exist", name.to_string().quoted()),
             };
             match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
                 Some(t) => match t {
@@ -2630,7 +2684,7 @@ pub fn scalar_type_from_sql(
                         t
                     }
                 },
-                None => bail!("type \"{}\" does not exist", name),
+                None => bail!("type {} does not exist", name.to_string().quoted()),
             }
         }
     })
@@ -2641,7 +2695,6 @@ pub fn canonicalize_type_name_internal(name: &ObjectName) -> ObjectName {
     // use in the catalog, i.e. canonicalize the catalog name.
     match name.to_string().as_str() {
         "char" | "varchar" => ObjectName::unqualified("text"),
-        "json" => ObjectName::unqualified("jsonb"),
         "smallint" => ObjectName::unqualified("int4"),
         _ => name.clone(),
     }
@@ -2771,29 +2824,33 @@ impl<'a, 'ast> AggregateFuncVisitor<'a, 'ast> {
 
 impl<'a, 'ast> Visit<'ast, Raw> for AggregateFuncVisitor<'a, 'ast> {
     fn visit_function(&mut self, func: &'ast Function<Raw>) {
-        if let Ok(name) = normalize::object_name(func.name.clone()) {
-            if let Ok(Func::Aggregate(_)) = func::resolve_func(self.scx, &name) {
-                if self.within_aggregate {
-                    self.err = Some(anyhow!("nested aggregate functions are not allowed"));
-                    return;
-                }
-                self.aggs.push(func);
-                let Function {
-                    name: _,
-                    args,
-                    filter,
-                    over: _,
-                    distinct: _,
-                } = func;
-                if let Some(filter) = filter {
-                    self.visit_expr(filter);
-                }
-                let old_within_aggregate = self.within_aggregate;
-                self.within_aggregate = true;
-                self.visit_function_args(args);
-                self.within_aggregate = old_within_aggregate;
+        let item = match self.scx.resolve_function(func.name.clone()) {
+            Ok(i) => i,
+            // Catching missing functions later in planning improves error messages.
+            Err(_) => return,
+        };
+
+        if let Ok(Func::Aggregate { .. }) = item.func() {
+            if self.within_aggregate {
+                self.err = Some(anyhow!("nested aggregate functions are not allowed"));
                 return;
             }
+            self.aggs.push(func);
+            let Function {
+                name: _,
+                args,
+                filter,
+                over: _,
+                distinct: _,
+            } = func;
+            if let Some(filter) = filter {
+                self.visit_expr(filter);
+            }
+            let old_within_aggregate = self.within_aggregate;
+            self.within_aggregate = true;
+            self.visit_function_args(args);
+            self.within_aggregate = old_within_aggregate;
+            return;
         }
         visit::visit_function(self, func);
     }

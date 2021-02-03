@@ -17,6 +17,7 @@ name
 -------
 public
 mz_catalog
+mz_internal
 pg_catalog
 
 # What objects do we have by default?
@@ -245,7 +246,7 @@ unacceptable schema name 'pg_bar'
 > SHOW search_path
 "mz_catalog, pg_catalog, public, mz_temp"
 ! SET search_path = foo
-parameter search_path is read only
+parameter "search_path" cannot be changed
 
 # Creating views in non-existent databases should fail.
 ! CREATE VIEW noexist.ignored AS SELECT 1
@@ -334,11 +335,14 @@ mz_avro_ocf_sinks
 mz_base_types
 mz_columns
 mz_databases
+mz_functions
 mz_index_columns
 mz_indexes
 mz_kafka_sinks
 mz_list_types
 mz_map_types
+mz_pseudo_types
+mz_roles
 mz_schemas
 mz_sinks
 mz_sources
@@ -356,11 +360,14 @@ mz_avro_ocf_sinks     system
 mz_base_types         system
 mz_columns            system
 mz_databases          system
+mz_functions          system
 mz_index_columns      system
 mz_indexes            system
 mz_kafka_sinks        system
 mz_list_types         system
 mz_map_types          system
+mz_pseudo_types       system
+mz_roles              system
 mz_schemas            system
 mz_sinks              system
 mz_sources            system
@@ -375,11 +382,11 @@ SHOW EXTENDED TABLES not yet supported
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-18
+21
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-32
+35
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

@@ -17,7 +17,7 @@
 target:
   type: materialize
   host: materialized
-  user: root
+  user: materialize
   pass: password
   database: materialize
   schema: "dbt_test_{{ var('_dbt_random_suffix') }}"

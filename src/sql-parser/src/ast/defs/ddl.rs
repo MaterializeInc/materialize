@@ -265,6 +265,8 @@ pub enum Connector {
     },
     S3 {
         bucket: String,
+        /// The list of places that we will look for object keys
+        key_sources: Vec<S3KeySource>,
         /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
         pattern: Option<String>,
     },
@@ -305,10 +307,17 @@ impl AstDisplay for Connector {
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
             }
-            Connector::S3 { bucket, pattern } => {
+            Connector::S3 {
+                bucket,
+                key_sources,
+                pattern,
+            } => {
                 f.write_str("S3 BUCKET '");
                 f.write_str(&display::escape_single_quote_string(bucket));
-                f.write_str("' OBJECTS FROM SCAN");
+                f.write_str("' OBJECTS FROM");
+                for ks in key_sources {
+                    ks.fmt(f);
+                }
                 if let Some(pattern) = pattern {
                     f.write_str(" MATCHING '");
                     f.write_str(&display::escape_single_quote_string(pattern));
@@ -319,6 +328,22 @@ impl AstDisplay for Connector {
     }
 }
 impl_display!(Connector);
+
+/// The key sources specified in the `OBJECTS FROM` clause.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum S3KeySource {
+    /// `OBJECTS FROM SCAN`
+    Scan,
+}
+
+impl AstDisplay for S3KeySource {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            S3KeySource::Scan => f.write_str(" SCAN"),
+        }
+    }
+}
+impl_display!(S3KeySource);
 
 /// A table-level constraint, specified in a `CREATE TABLE` or an
 /// `ALTER TABLE ADD <constraint>` statement.

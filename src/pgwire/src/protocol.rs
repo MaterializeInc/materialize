@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::future::Future;
 use std::iter;
@@ -31,13 +32,16 @@ use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use ore::netio::AsyncReady;
+use ore::str::StrExt;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
 use sql::ast::{FetchDirection, Ident, Raw, Statement};
 use sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
-use crate::message::{self, BackendMessage, ErrorResponse, FrontendMessage, VERSIONS, VERSION_3};
+use crate::message::{
+    self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
+};
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -99,22 +103,32 @@ where
     pub fn run(
         mut self,
         version: i32,
-        params: Vec<(String, String)>,
+        params: HashMap<String, String>,
     ) -> impl Future<Output = Result<(), comm::Error>> + Send {
         async move {
-            let mut state = self.startup(version, params).await?;
-
-            loop {
-                state = match state {
-                    State::Ready => self.advance_ready().await?,
-                    State::Drain => self.advance_drain().await?,
-                    State::Done => break,
-                }
-            }
-
+            // Call the inner logic from a function that's safe to use `?` in so that
+            // terminate can correctly be called in all cases.
+            let res = self.run_inner(version, params).await;
             self.coord_client.terminate().await;
-            Ok(())
+            res
         }
+    }
+
+    async fn run_inner(
+        &mut self,
+        version: i32,
+        params: HashMap<String, String>,
+    ) -> Result<(), comm::Error> {
+        let mut state = self.startup(version, params).await?;
+        loop {
+            state = match state {
+                State::Ready => self.advance_ready().await?,
+                State::Drain => self.advance_drain().await?,
+                State::Done => break,
+            }
+        }
+        self.flush().await?;
+        Ok(())
     }
 
     async fn advance_ready(&mut self) -> Result<State, comm::Error> {
@@ -199,7 +213,7 @@ where
     async fn startup(
         &mut self,
         version: i32,
-        params: Vec<(String, String)>,
+        params: HashMap<String, String>,
     ) -> Result<State, comm::Error> {
         if version != VERSION_3 {
             return self
@@ -235,10 +249,7 @@ where
                 .collect(),
             Err(e) => {
                 return self
-                    .error(ErrorResponse::error(
-                        SqlState::INTERNAL_ERROR,
-                        format!("{:#}", e),
-                    ))
+                    .error(ErrorResponse::from_coord(Severity::Fatal, e))
                     .await;
             }
         };
@@ -274,10 +285,7 @@ where
             .await
         {
             return self
-                .error(ErrorResponse::error(
-                    SqlState::INTERNAL_ERROR,
-                    format!("{:#}", e),
-                ))
+                .error(ErrorResponse::from_coord(Severity::Error, e))
                 .await;
         }
 
@@ -322,11 +330,8 @@ where
                 .await
             }
             Err(e) => {
-                self.error(ErrorResponse::error(
-                    SqlState::INTERNAL_ERROR,
-                    format!("{:#}", e),
-                ))
-                .await
+                self.error(ErrorResponse::from_coord(Severity::Error, e))
+                    .await
             }
         };
 
@@ -440,11 +445,8 @@ where
                 Ok(State::Ready)
             }
             Err(e) => {
-                self.error(ErrorResponse::error(
-                    SqlState::INTERNAL_ERROR,
-                    format!("{:#}", e),
-                ))
-                .await
+                self.error(ErrorResponse::from_coord(Severity::Error, e))
+                    .await
             }
         }
     }
@@ -570,7 +572,7 @@ where
                     return self
                         .error(ErrorResponse::error(
                             SqlState::INVALID_CURSOR_NAME,
-                            format!("portal \"{}\" does not exist", portal_name),
+                            format!("portal {} does not exist", portal_name.quoted()),
                         ))
                         .await;
                 }
@@ -606,11 +608,8 @@ where
                             .await
                         }
                         Err(e) => {
-                            self.error(ErrorResponse::error(
-                                SqlState::INTERNAL_ERROR,
-                                format!("{:#}", e),
-                            ))
-                            .await
+                            self.error(ErrorResponse::from_coord(Severity::Error, e))
+                                .await
                         }
                     }
                 }
@@ -695,7 +694,7 @@ where
             None => {
                 self.error(ErrorResponse::error(
                     SqlState::INVALID_CURSOR_NAME,
-                    format!("portal \"{}\" does not exist", name),
+                    format!("portal {} does not exist", name.quoted()),
                 ))
                 .await
             }
@@ -854,6 +853,10 @@ where
             ExecuteResponse::CreatedSchema { existed } => {
                 created!(existed, SqlState::DUPLICATE_SCHEMA, "schema")
             }
+            ExecuteResponse::CreatedRole => {
+                let existed = false;
+                created!(existed, SqlState::DUPLICATE_OBJECT, "role")
+            }
             ExecuteResponse::CreatedTable { existed } => {
                 created!(existed, SqlState::DUPLICATE_TABLE, "table")
             }
@@ -879,6 +882,7 @@ where
             ExecuteResponse::DiscardedAll => command_complete!("DISCARD ALL"),
             ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
             ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),
+            ExecuteResponse::DroppedRole => command_complete!("DROP ROLE"),
             ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
             ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX"),
             ExecuteResponse::DroppedSink => command_complete!("DROP SINK"),
@@ -1027,9 +1031,6 @@ where
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
             ExecuteResponse::AlteredIndexLogicalCompaction => command_complete!("ALTER INDEX"),
-            ExecuteResponse::PgError { code, message } => {
-                self.error(ErrorResponse::error(code, message)).await
-            }
         }
     }
 

@@ -11,6 +11,7 @@ use std::fmt;
 
 use backtrace::Backtrace;
 
+use ore::str::StrExt;
 use sql::catalog::CatalogError as SqlCatalogError;
 
 #[derive(Debug)]
@@ -29,8 +30,10 @@ pub(crate) enum ErrorKind {
     Sql(SqlCatalogError),
     DatabaseAlreadyExists(String),
     SchemaAlreadyExists(String),
+    RoleAlreadyExists(String),
     ItemAlreadyExists(String),
-    UnacceptableSchemaName(String),
+    ReservedSchemaName(String),
+    ReservedRoleName(String),
     ReadOnlySystemSchema(String),
     ReadOnlyItem(String),
     SchemaNotEmpty(String),
@@ -62,6 +65,24 @@ impl Error {
             backtrace: Backtrace::new_unresolved(),
         }
     }
+
+    /// Reports additional details about the error, if any are available.
+    pub fn detail(&self) -> Option<String> {
+        match &self.kind {
+            ErrorKind::ReservedSchemaName(_) => {
+                Some("The prefixes \"mz_\" and \"pg_\" are reserved for system schemas.".into())
+            }
+            ErrorKind::ReservedRoleName(_) => {
+                Some("The prefixes \"mz_\" and \"pg_\" are reserved for system roles.".into())
+            }
+            _ => None,
+        }
+    }
+
+    /// Reports a hint for the user about how the error could be fixed.
+    pub fn hint(&self) -> Option<String> {
+        None
+    }
 }
 
 impl From<rusqlite::Error> for Error {
@@ -84,8 +105,10 @@ impl std::error::Error for Error {
             | ErrorKind::OidExhaustion
             | ErrorKind::DatabaseAlreadyExists(_)
             | ErrorKind::SchemaAlreadyExists(_)
+            | ErrorKind::RoleAlreadyExists(_)
             | ErrorKind::ItemAlreadyExists(_)
-            | ErrorKind::UnacceptableSchemaName(_)
+            | ErrorKind::ReservedSchemaName(_)
+            | ErrorKind::ReservedRoleName(_)
             | ErrorKind::ReadOnlySystemSchema(_)
             | ErrorKind::ReadOnlyItem(_)
             | ErrorKind::SchemaNotEmpty(_)
@@ -115,11 +138,17 @@ impl fmt::Display for Error {
                 write!(f, "database '{}' already exists", name)
             }
             ErrorKind::SchemaAlreadyExists(name) => write!(f, "schema '{}' already exists", name),
+            ErrorKind::RoleAlreadyExists(name) => {
+                write!(f, "role '{}' already exists", name)
+            }
             ErrorKind::ItemAlreadyExists(name) => {
                 write!(f, "catalog item '{}' already exists", name)
             }
-            ErrorKind::UnacceptableSchemaName(name) => {
+            ErrorKind::ReservedSchemaName(name) => {
                 write!(f, "unacceptable schema name '{}'", name)
+            }
+            ErrorKind::ReservedRoleName(name) => {
+                write!(f, "role name {} is reserved", name.quoted())
             }
             ErrorKind::ReadOnlySystemSchema(name) => {
                 write!(f, "system schema '{}' cannot be modified", name)

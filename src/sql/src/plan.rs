@@ -41,7 +41,6 @@ use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod expr;
-pub(crate) mod func;
 pub(crate) mod lowering;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
@@ -69,6 +68,9 @@ pub enum Plan {
         database_name: DatabaseSpecifier,
         schema_name: String,
         if_not_exists: bool,
+    },
+    CreateRole {
+        name: String,
     },
     CreateSource {
         name: FullName,
@@ -113,6 +115,9 @@ pub enum Plan {
     },
     DropSchema {
         name: SchemaName,
+    },
+    DropRoles {
+        names: Vec<String>,
     },
     DropItems {
         items: Vec<GlobalId>,

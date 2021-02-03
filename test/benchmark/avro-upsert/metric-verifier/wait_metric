@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+import argparse
+import sys
+import time
+
+import prometheus_api_client
+
+def run(args: argparse.Namespace) -> int:
+    """Run the generator, inserting args.num_records number of messages."""
+
+    prom = prometheus_api_client.PrometheusConnect(f'http://{args.host}:{args.port}')
+
+    time_so_far = 0
+    start = int(time.monotonic())
+    while time_so_far < args.timeout_seconds:
+        current_values = prom.custom_query(args.prom_query)
+        if args.verbose:
+            print(current_values)
+
+        if len(current_values) != 1:
+            print('ERROR: Prometheus query must only return a single result!')
+            return 1
+
+        # We aren't running query_range, so there should only be a single timestamp and point in the reponse
+        (ts, point) = current_values[0]['value']
+        if point == args.expected_value:
+            print(f"SUCCESS! Query settled in {time_so_far} seconds")
+            return 0
+
+        time.sleep(1)
+        time_so_far = int(time.monotonic()) - start
+
+    # Check this last because it's okay to have a 1-2 second grace period and we want the
+    # ability to print the most recent result
+    print(f"FAILED! Query response is '{point}' after {time_so_far} seconds")
+    return 1
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging to print the results of each prometheus query",
+    )
+
+    parser.add_argument(
+        "--host",
+        type=str,
+        default='dashboard',
+        help="Hostname of the prometheus instance to query",
+    )
+
+    parser.add_argument(
+        "-p",
+        "--port",
+        type=int,
+        default=9090,
+        help="Port on which the prometheus instance is running",
+    )
+
+    parser.add_argument(
+        "-t",
+        "--timeout-seconds",
+        type=int,
+        default=900,
+        help="Length of time to wait until the metric reaches the specified value",
+    )
+
+    parser.add_argument(
+        "prom_query",
+        type=str,
+        help="Prometheus query to run",
+    )
+
+    parser.add_argument(
+        "expected_value",
+        type=str,
+        help="Expected value of the metric queried",
+    )
+
+    args = parser.parse_args()
+    sys.exit(run(args))

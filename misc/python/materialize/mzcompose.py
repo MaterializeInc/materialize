@@ -585,26 +585,6 @@ class RemoveServicesStep(WorkflowStep):
             raise errors.Failed(f"ERROR: services didn't restart cleanly: {services}")
 
 
-@Steps.register("stop-services")
-class StopServicesStep(WorkflowStep):
-    """
-    Params:
-      services: List of service names
-    """
-
-    def __init__(self, *, services: Optional[List[str]] = None) -> None:
-        self._services = services if services is not None else []
-        if not isinstance(self._services, list):
-            raise errors.BadSpec(f"services should be a list, got: {self._services}")
-
-    def run(self, workflow: Workflow) -> None:
-        try:
-            workflow.run_compose(["stop", *self._services])
-        except subprocess.CalledProcessError:
-            services = ", ".join(self._services)
-            raise errors.Failed(f"ERROR: services didn't come up cleanly: {services}")
-
-
 @Steps.register("wait-for-postgres")
 class WaitForPgStep(WorkflowStep):
     """
@@ -674,6 +654,7 @@ class WaitForMzStep(WaitForPgStep):
     def __init__(
         self,
         *,
+        user: str = "materialize",
         dbname: str = "materialize",
         host: str = "localhost",
         port: Optional[int] = None,
@@ -684,6 +665,7 @@ class WaitForMzStep(WaitForPgStep):
         service: str = "materialized",
     ) -> None:
         super().__init__(
+            user=user,
             dbname=dbname,
             host=host,
             port=port,

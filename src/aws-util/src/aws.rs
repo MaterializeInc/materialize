@@ -9,11 +9,13 @@
 
 //! Utility functions for AWS.
 
-use rusoto_core::Region;
-use rusoto_credential::{AwsCredentials, ChainProvider, ProvideAwsCredentials};
+use anyhow::{anyhow, Context};
+use rusoto_core::{HttpClient, Region};
+use rusoto_credential::{
+    AutoRefreshingProvider, AwsCredentials, ChainProvider, ProvideAwsCredentials, StaticProvider,
+};
 use rusoto_sts::{GetCallerIdentityRequest, Sts, StsClient};
 use serde::{Deserialize, Serialize};
-use tokio::time::error::Elapsed;
 use tokio::time::{self, Duration};
 
 /// Information required to connnect to AWS
@@ -71,29 +73,50 @@ impl ConnectInfo {
 
 /// Fetches the AWS account number of the caller via AWS Security Token Service.
 ///
-/// For details about STS, see AWS documentation.
-pub async fn account(timeout: Duration) -> Result<String, anyhow::Error> {
-    let sts_client = StsClient::new(Region::default());
+/// For details about STS, see [AWS documentation][].
+///
+/// [AWS documentation]: https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html
+pub async fn account(
+    provider: impl ProvideAwsCredentials + Send + Sync + 'static,
+    region: Region,
+    timeout: Duration,
+) -> Result<String, anyhow::Error> {
+    let dispatcher = HttpClient::new().context("creating HTTP for AWS STS Account verification")?;
+    let sts_client = StsClient::new_with(dispatcher, provider, region);
     let get_identity = sts_client.get_caller_identity(GetCallerIdentityRequest {});
     let account = time::timeout(timeout, get_identity)
         .await
-        .map_err(|e: Elapsed| {
-            anyhow::Error::new(e)
-                .context("timeout while retrieving AWS account number from STS".to_owned())
-        })?
-        .map_err(|e| anyhow::Error::new(e).context("retrieving AWS account ID".to_owned()))?
+        .context("timeout while retrieving AWS account number from STS".to_owned())?
+        .context("retrieving AWS account ID")?
         .account
-        .ok_or_else(|| anyhow::Error::msg("AWS did not return account ID".to_owned()))?;
+        .ok_or_else(|| anyhow!("AWS did not return account ID"))?;
     Ok(account)
 }
 
-/// Fetches AWS credentials by consulting several known sources.
+/// Verify that the provided credentials are legitimate
 ///
-/// For details about where AWS credentials can be stored, see Rusoto's
-/// [`ChainProvider`] documentation.
-pub async fn credentials(timeout: Duration) -> Result<AwsCredentials, anyhow::Error> {
-    let mut provider = ChainProvider::new();
-    provider.set_timeout(timeout);
-    let credentials = provider.credentials().await?;
-    Ok(credentials)
+/// This uses an [always-valid][] API request to check that the AWS credentials
+/// provided are recognized by AWS. It does not verify that the credentials can
+/// perform all of the actions required for any specific source.
+///
+/// [always-valid]: https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html
+pub async fn validate_credentials(
+    conn_info: ConnectInfo,
+    timeout: Duration,
+) -> Result<(), anyhow::Error> {
+    if let Some(creds) = conn_info.credentials {
+        let provider = StaticProvider::from(AwsCredentials::from(creds));
+        crate::aws::account(provider.clone(), conn_info.region, timeout)
+            .await
+            .context("Using statically provided credentials")?;
+    } else {
+        let mut provider = ChainProvider::new();
+        provider.set_timeout(Duration::from_secs(10));
+        let provider =
+            AutoRefreshingProvider::new(provider).context("generating AWS credentials")?;
+        crate::aws::account(provider.clone(), conn_info.region, timeout)
+            .await
+            .context("Looking through the environment for credentials")?;
+    }
+    Ok(())
 }

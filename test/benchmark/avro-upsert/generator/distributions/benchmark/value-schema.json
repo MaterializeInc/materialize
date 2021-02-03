@@ -1,0 +1,94 @@
+{
+  "name": "upsertavrotest",
+  "type": "record",
+  "namespace": "com.acme.avro",
+  "fields": [
+    {
+      "name": "BookIdUnused",
+      "type": "long"
+    },
+    {
+      "name": "SecurityIdUnused",
+      "type": "long"
+    },
+    {
+      "name": "Exposure",
+      "type": {
+        "name": "Exposure",
+        "type": "record",
+        "fields": [
+          {
+            "name": "Current",
+            "type": {
+              "name": "Current",
+              "type": "record",
+              "fields": [
+                {
+                  "name": "Long2",
+                  "type": {
+                    "name": "Long2",
+                    "type": "record",
+                    "fields": [
+                      {
+                        "name": "Exposure",
+                        "type": "long"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "Short2",
+                  "type": {
+                    "name": "Short2",
+                    "type": "record",
+                    "fields": [
+                      {
+                        "name": "Exposure",
+                        "type": "long"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "Target",
+            "type": {
+              "name": "Target",
+              "type": "record",
+              "fields": [
+                {
+                  "name": "Long",
+                  "type": {
+                    "name": "Long",
+                    "type": "record",
+                    "fields": [
+                      {
+                        "name": "Exposure",
+                        "type": "long"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "name": "Short",
+                  "type": {
+                    "name": "Short",
+                    "type": "record",
+                    "fields": [
+                      {
+                        "name": "Exposure",
+                        "type": "long"
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

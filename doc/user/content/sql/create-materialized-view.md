@@ -22,6 +22,7 @@ query in memory. For more information, see [API Components: Materialized views](
 
 Field | Use
 ------|-----
+**TEMP** / **TEMPORARY** | Mark the materialized view as [temporary](#temporary-materialized-views).
 **OR REPLACE** | If a view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views or sinks depend on, nor can you replace a non-view object with a view.
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a view of the same name already exists. <br/><br/>If _not_ specified, throw an error if a view of the same name already exists. _(Default)_
 _view&lowbar;name_ | A name for the view.
@@ -52,6 +53,16 @@ Some things you might want to do with indexes...
 - If you find that your queries would benefit from other indexes, e.g. you want
   to join two relations on some foreign key, you can [create
   indexes](../create-index).
+
+### Temporary materialized views
+
+The `TEMP`/`TEMPORARY` keyword creates a temporary materialized view. Temporary
+materialized views are automatically dropped at the end of the SQL session and
+are not visible to other connections. They are always created in the special `mz_temp`
+schema.
+
+Temporary materialized views may depend upon other temporary database objects,
+but non-temporary materialized views may not depend on temporary objects.
 
 ## Examples
 

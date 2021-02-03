@@ -19,12 +19,13 @@ byteorder = "1.4.2"
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.5.0", features = ["serde"] }
 enum-kinds = "0.5.0"
+fast-float = "0.2.0"
 hex = "0.4.2"
 itertools = "0.9.0"
 ordered-float = { version = "2.0.0", features = ["serde"] }
 ore = { path = "../ore" }
 regex = "1.4.3"
-serde = { version = "1.0.122", features = ["derive"] }
+serde = { version = "1.0.123", features = ["derive"] }
 serde_json = "1.0.0"
 serde_regex = "1.1.0"
 smallvec = { version = "1.5.1", features = ["serde"] }

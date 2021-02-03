@@ -28,9 +28,6 @@ use crate::plan::error::PlanError;
 use crate::plan::query;
 use crate::plan::{Params, Plan, PlanContext};
 
-#[macro_use]
-mod with_options;
-
 mod ddl;
 mod dml;
 mod scl;
@@ -324,6 +321,11 @@ impl<'a> StatementContext<'a> {
     pub fn resolve_item(&self, name: ObjectName) -> Result<&dyn CatalogItem, PlanError> {
         let name = normalize::object_name(name)?;
         Ok(self.catalog.resolve_item(&name)?)
+    }
+
+    pub fn resolve_function(&self, name: ObjectName) -> Result<&dyn CatalogItem, PlanError> {
+        let name = normalize::object_name(name)?;
+        Ok(self.catalog.resolve_function(&name)?)
     }
 
     pub fn experimental_mode(&self) -> bool {

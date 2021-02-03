@@ -89,8 +89,12 @@ impl Server {
                 // `SslRequest`. This is considered a graceful termination.
                 None => return Ok(()),
 
-                Some(FrontendStartupMessage::Startup { version, params }) => {
-                    let coord_client = self.coord_client.for_session(Session::new(conn_id));
+                Some(FrontendStartupMessage::Startup {
+                    version,
+                    mut params,
+                }) => {
+                    let user = params.remove("user").unwrap_or_else(String::new);
+                    let coord_client = self.coord_client.for_session(Session::new(conn_id, user));
                     let machine = StateMachine {
                         conn: FramedConn::new(conn_id, conn),
                         conn_id,

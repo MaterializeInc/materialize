@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "demo/billing",
+    "fuzz",
     "play/mbta",
     "src/avro",
     "src/avro-derive",
@@ -38,6 +39,7 @@ members = [
     "test/metabase/smoketest",
     "test/performance/perf-kinesis",
     "test/performance/perf-upsert",
+    "test/performance/s3-datagen",
     "test/smith",
     "test/test-util",
 ]

@@ -12,7 +12,7 @@ use std::process;
 use std::time::Duration;
 
 use aws_util::aws;
-use rusoto_credential::AwsCredentials;
+use rusoto_credential::{AwsCredentials, ChainProvider, ProvideAwsCredentials};
 use structopt::StructOpt;
 use url::Url;
 
@@ -50,13 +50,13 @@ struct Args {
     /// Named AWS region to target for AWS API requests.
     #[structopt(long, default_value = "localstack")]
     aws_region: String,
-    /// Custom AWS endpoint.
+    /// Custom AWS endpoint. Default: "http://localhost:4566".
     #[structopt(long)]
     aws_endpoint: Option<String>,
 
     // === Materialize options. ===
     /// materialized connection string.
-    #[structopt(long, default_value = "postgres://localhost:6875")]
+    #[structopt(long, default_value = "postgres://materialize@localhost:6875")]
     materialized_url: tokio_postgres::Config,
     /// Validate the on-disk state of the materialized catalog.
     #[structopt(long)]
@@ -91,21 +91,28 @@ async fn run(args: Args) -> Result<(), Error> {
     let (aws_region, aws_account, aws_credentials) =
         match (args.aws_region.parse(), args.aws_endpoint) {
             (Ok(region), None) => {
-                // Standard AWS region without a custom endpoint. Try to find actual AWS
-                // credentials.
+                // Standard region, which means we should ignore the endpoint, whether
+                // or not it was provided.
+                let region: rusoto_core::Region = region;
+
                 let timeout = Duration::from_secs(5);
-                let account = aws::account(timeout)
+                let mut provider = ChainProvider::new();
+                provider.set_timeout(timeout);
+                let credentials = provider
+                    .credentials()
+                    .await
+                    .err_ctx("Retrieving aws credentials")?;
+                let account = aws::account(provider, region.clone(), timeout)
                     .await
                     .err_ctx("getting AWS account details")?;
-                let credentials = aws::credentials(timeout)
-                    .await
-                    .err_ctx("getting AWS account credentials")?;
                 (region, account, credentials)
             }
             (_, aws_endpoint) => {
-                // Either a non-standard AWS region, a custom endpoint, or both. Assume
-                // dummy authentication, and just use default dummy credentials in the
-                // default config.
+                // The user specified a non-standard AWS region, a custom endpoint, or
+                // both. We instruct Rusoto to use these values by constructing an
+                // appropriate Region::Custom. We additionally assume we're targeting a
+                // stubbed-out AWS implementation that does not check authentication
+                // credentials, so we install dummy credentials in the default config.
                 let region = rusoto_core::Region::Custom {
                     name: args.aws_region,
                     endpoint: aws_endpoint.unwrap_or_else(|| "http://localhost:4566".into()),
@@ -120,6 +127,18 @@ async fn run(args: Args) -> Result<(), Error> {
                 (region, account.into(), credentials)
             }
         };
+
+    println!(
+        "Configuration parameters:
+    AWS region: {:?}
+    Kafka Address: {}
+    Schema registry URL: {}
+    materialized host: {:?}",
+        aws_region,
+        args.kafka_addr,
+        args.schema_registry_url,
+        args.materialized_url.get_hosts()[0],
+    );
 
     let config = Config {
         kafka_addr: args.kafka_addr,

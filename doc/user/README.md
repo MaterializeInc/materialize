@@ -110,7 +110,12 @@ each meaningfully distinct combination of connector and format), and leveraged
 Hugo partials and shortcodes to simplify page creation and resuse content across
 pages.
 
-You can find all of the `CREATE SOURCE` docs at [content/sql/create-source](content/sql/create-source/).
+* You can find all of the `CREATE SOURCE` docs at
+  [content/sql/create-source](content/sql/create-source/).
+* Each `CREATE SOURCE` doc page will call the `create-source` *layout* to provide uniform details
+  [layouts/shortcodes/create-source](layouts/shortcodes/create-source)
+* The details of that layout are filled in by partials at
+  [layouts/partials/create-source/connector](layouts/partials/create-source/connector)
 
 ### Hugo shortcodes and partials
 

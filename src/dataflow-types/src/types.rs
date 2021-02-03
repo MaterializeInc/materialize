@@ -669,8 +669,16 @@ pub struct FileSourceConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct S3SourceConnector {
     pub bucket: String,
+    pub key_sources: Vec<S3KeySource>,
     pub pattern: Option<Glob>,
     pub aws_info: aws::ConnectInfo,
+}
+
+/// A Source of Object Key names, the argument of the `OBJECTS FROM` clause
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum S3KeySource {
+    /// Scan the S3 Bucket in the S3 source connector to discover keys to download
+    Scan,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -781,7 +789,8 @@ pub struct KafkaSinkConnectorBuilder {
     pub value_desc: RelationDesc,
     pub topic_prefix: String,
     pub topic_suffix: String,
-    pub replication_factor: u32,
+    pub partition_count: i32,
+    pub replication_factor: i32,
     pub fuel: usize,
     pub consistency_value_schema: Option<String>,
     pub config_options: BTreeMap<String, String>,
