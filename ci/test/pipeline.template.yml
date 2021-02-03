@@ -162,6 +162,15 @@ steps:
           run: ci
     timeout_in_minutes: 30
 
+  - id: avro-upsert-benchmark
+    label: "avro upsert benchmark sanity check"
+    depends_on: build
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: avro-upsert
+          run: ci
+    timeout_in_minutes: 10
+
   - id: tb
     label: tb
     depends_on: build

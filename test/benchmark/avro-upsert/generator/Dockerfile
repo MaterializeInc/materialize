@@ -13,11 +13,8 @@ FROM python:3.9-slim
 
 COPY --from=0 /usr/local/bin/kgen /usr/local/bin
 
-RUN mkdir /usr/share/generator
-COPY key-schema.json /usr/share/generator/
-COPY key-distribution.json /usr/share/generator/
-COPY value-schema.json /usr/share/generator/
-COPY value-distribution.json /usr/share/generator/
+RUN mkdir -p /usr/share/generator/distributions
+COPY distributions /usr/share/generator/distributions
 
-COPY generate_upserts.py /usr/local/bin
-ENTRYPOINT /usr/local/bin/generate_upserts.py
+COPY generate_upserts /usr/local/bin
+ENTRYPOINT ["generate_upserts"]

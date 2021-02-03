@@ -81,6 +81,8 @@ services:
     depends_on: [zookeeper, kafka]
   avro-upsert-generator:
     mzbuild: avro-upsert-generator
+  metric-verifier:
+    mzbuild: metric-verifier
   # All monitoring
   dashboard:
     mzbuild: dashboard
@@ -104,7 +106,7 @@ volumes:
   prometheus:
 
 mzworkflows:
-  test-upsert-performance:
+  benchmark:
     steps:
     - step: start-services
       services: [dashboard]
@@ -118,8 +120,36 @@ mzworkflows:
       port: 8081
     - step: run
       service: avro-upsert-generator
+      # No command needed, defaults to benchmark distribution
     - step: run
       service: create-views
+
+  ci:
+    steps:
+    - step: start-services
+      services: [dashboard]
+    - step: start-services
+      services: [kafka, schema-registry, materialized]
+    - step: wait-for-tcp
+      host: kafka
+      port: 9092
+    - step: wait-for-tcp
+      host: schema-registry
+      port: 8081
+    - step: run
+      service: avro-upsert-generator
+      command: >-
+        --parallelism=4
+        --num-records=100000
+        --distribution=small
+    - step: run
+      service: create-views
+    - step: run
+      service: metric-verifier
+      command: >-
+        --timeout-seconds=30
+        "sum(mz_messages_ingested)"
+        "100000"
 
   run-generator:
     steps:
