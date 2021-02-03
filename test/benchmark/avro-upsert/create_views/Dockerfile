@@ -10,7 +10,7 @@
 FROM postgres
 
 RUN mkdir /data
-COPY views.sql /data
+COPY views /data
 
 COPY create_views /usr/local/bin
-CMD /usr/local/bin/create_views
+ENTRYPOINT ["/usr/local/bin/create_views"]
