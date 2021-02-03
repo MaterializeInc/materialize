@@ -463,16 +463,7 @@ where
                     self.update_upper(&name, changes);
                 }
                 self.maintenance().await;
-            } /*
-              WorkerFeedback::DroppedSource(source_id) => {
-                      } else {
-                          panic!("A non-source is re-using the same source ID");
-                      }
-                  } else {
-                      // Someone already dropped the source
-                  }
-              }
-              */
+            }
         }
     }
 
@@ -1598,7 +1589,7 @@ where
             Plan::DropRoles { names } => tx.send(self.sequence_drop_roles(names).await, session),
 
             Plan::DropItems { items, ty } => {
-                tx.send(self.sequence_drop_items(items, ty).await, session)
+                tx.send(self.sequence_drop_items(items, ty, ts_tx).await, session)
             }
 
             Plan::EmptyQuery => tx.send(Ok(ExecuteResponse::EmptyQuery), session),
@@ -2186,6 +2177,7 @@ where
         &mut self,
         items: Vec<GlobalId>,
         ty: ObjectType,
+        ts_tx: &std::sync::mpsc::Sender<TimestampMessage>,
     ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_items_ops(&items);
         self.catalog_transact(ops).await?;
@@ -2193,6 +2185,7 @@ where
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => {
                 for id in items.iter() {
+                    self.update_timestamper(ts_tx, *id, false).await;
                     if let Some(cache_tx) = &mut self.cache_tx {
                         cache_tx
                             .send(CacheMessage::DropSource(*id))
@@ -3301,7 +3294,7 @@ where
         source_id: GlobalId,
         create: bool,
     ) {
-        if create == true {
+        if create {
             if let Some(entry) = self.catalog.try_get_by_id(source_id) {
                 if let CatalogItem::Source(s) = entry.item() {
                     ts_tx
@@ -3317,11 +3310,11 @@ where
                     .await;
                 }
             }
-        } /*else {
-              ts_tx
-                  .send(TimestampMessage::DropInstance(source_id))
-                  .expect("Failed to send Drop Instance notice to timestamper");
-          }*/
+        } else {
+            ts_tx
+                .send(TimestampMessage::Drop(source_id))
+                .expect("Failed to send Drop Instance notice to timestamper");
+        }
     }
 
     // Tell the cacher to start caching data for `id` if that source

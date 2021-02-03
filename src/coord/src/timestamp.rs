@@ -42,7 +42,7 @@ use dataflow_types::{
     KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector, SourceConnector,
     SourceEnvelope, TimestampSourceUpdate,
 };
-use expr::{GlobalId, PartitionId, SourceInstanceId};
+use expr::{GlobalId, PartitionId};
 use ore::collections::CollectionExt;
 
 use crate::coord;
@@ -120,7 +120,7 @@ pub struct TimestampConfig {
 #[derive(Debug)]
 pub enum TimestampMessage {
     Add(GlobalId, SourceConnector),
-    DropInstance(SourceInstanceId),
+    Drop(GlobalId),
     Shutdown,
 }
 
@@ -822,7 +822,7 @@ impl Timestamper {
                         }
                     }
                 }
-                TimestampMessage::DropInstance(id) => {
+                TimestampMessage::Drop(id) => {
                     info!("Dropping Timestamping for Source {}.", id);
 
                     // TODO: we can only remove the consumer when we actually drop the source
