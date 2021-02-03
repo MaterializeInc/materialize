@@ -28,9 +28,6 @@ use crate::plan::error::PlanError;
 use crate::plan::query;
 use crate::plan::{Params, Plan, PlanContext};
 
-#[macro_use]
-pub(crate) mod with_options;
-
 mod ddl;
 mod dml;
 mod scl;
