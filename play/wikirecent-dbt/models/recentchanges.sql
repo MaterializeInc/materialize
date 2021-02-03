@@ -37,4 +37,4 @@ SELECT
     val->>'type' AS type,
     val->>'user' AS user,
     val->>'wiki' AS wiki
-FROM (SELECT data::jsonb AS val FROM materialize.public.wikirecent)
+FROM (SELECT data::jsonb AS val FROM {{ source('wikimedia', 'wikirecent') }})

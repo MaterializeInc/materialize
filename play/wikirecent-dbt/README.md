@@ -15,12 +15,10 @@ To get everything you need to run dbt with Materialize, do the following:
    git clone https://github.com/MaterializeInc/materialize
    ```
 
-1. Create a new Python virtual environment on your machine. Activate that environment,
-   and install the following:
+1. Install the `dbt-materialize` plugin. You may wish to do this within a Python virtual environment on your machine:
     ```nofmt
     python3 -m venv dbt-venv
     source dbt-venv/bin/activate
-    pip install dbt
     pip install dbt-materialize
     ```
 
@@ -36,7 +34,7 @@ To get everything you need to run dbt with Materialize, do the following:
           user: user
           pass: pass
           dbname: materialize
-          schema: public
+          schema: analytics
 
       target: dev
     ```
@@ -67,7 +65,9 @@ on top of streaming Wikipedia data using dbt.
 1. [Connect to your Materialize instance](https://materialize.com/docs/connect/cli/) from your shell.
    Then, [create a source](https://materialize.com/docs/sql/create-source/text-file/#main) using your `wikirecent` file:
    ```nofmt
-   CREATE SOURCE wikirecent
+   CREATE SCHEMA wikimedia;
+
+   CREATE SOURCE wikimedia.wikirecent
    FROM FILE '[path to wikirecent]' WITH (tail = true)
    FORMAT REGEX '^data: (?P<data>.*)';
    ```
@@ -76,36 +76,35 @@ on top of streaming Wikipedia data using dbt.
 
    You can see the columns that get generated for this source:
    ```nofmt
-    > SHOW SOURCES;
+    > SHOW SOURCES FROM wikimedia;
       name
     ------------
      wikirecent
 
-    > SHOW COLUMNS FROM wikirecent;
+    > SHOW COLUMNS FROM wikimedia.wikirecent;
       name    | nullable | type
      ------------+----------+------
     data       | t        | text
     mz_line_no | f        | int8
    ```
 
-1. Now we can use dbt to create materialized views on top of `wikirecent`. In your shell, navigate to the
-   root of this repo on your local machine. Once you're there, run the following [dbt commands](https://docs.getdbt.com/reference/dbt-commands/)
-   inside your Python virtual environment:
+1. Now we can use dbt to create materialized views on top of `wikirecent`. In your shell, navigate to
+   `play/wikirecent-dbt` within the clone of this repo on your local machine. Once
+   you're there, run the following [dbt command](https://docs.getdbt.com/reference/dbt-commands/):
    ```nofmt
-   dbt compile
    dbt run
    ```
-   `dbt compile` generates executable SQL from our model files, which can be found in the `models` directory
-   of this project. `dbt run` executes the compiled SQL files against the target database, creating
+   This command generates executable SQL from our model files (found in the `models` directory
+   of this project), and executes that SQL against the target database, creating
    our materialized views.
 
-   Note: If you haven't set up your Python environment with `dbt` and the `dbt-materialize` adapter,
-   please revisit the [setup](#setup-dbt--materialize) above.
+   Note: If you installed `dbt-materialize` in a virtual environment, make sure it's activated.
+   If you don't have it installed, please revisit the [setup](#setup-dbt--materialize) above.
 
 1. Congratulations! You just used dbt to create materialized views in Materialize. You can verify the
    views were created from your `psql` shell connected to Materialize:
       ```nofmt
-      > SHOW VIEWS;
+      > SHOW VIEWS FROM analytics;
            name
       ---------------
        recentchanges
@@ -115,7 +114,7 @@ on top of streaming Wikipedia data using dbt.
 
    More importantly, you can now query each of the views you created interactively. For example:
    ```nofmt
-   > SELECT * FROM top10;
+   > SELECT * FROM analytics.top10;
         user      | changes
    ---------------+---------
     Fæ            |   10834
@@ -131,7 +130,12 @@ on top of streaming Wikipedia data using dbt.
    (10 rows)
    ```
 
-1. Now that you have your views, let's generate their docs using dbt. From your Python virtual environment, run:
+1. Now that you have your views, let's test expectations about those views. We believe that the `user` field in our `useredits` and `top10` models should never have null values. Run:
+    ```nofmt
+    dbt test
+    ```
+
+1. Finally, let's generate their docs using dbt. From your virtual environment, run:
    ```nofmt
    dbt docs generate
    dbt docs serve
