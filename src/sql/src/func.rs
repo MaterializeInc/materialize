@@ -21,6 +21,7 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
+use ore::str::StrExt;
 use pgrepr::oid;
 use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
 use sql_parser::ast::{Expr, ObjectName, Raw};
@@ -1965,7 +1966,7 @@ pub fn resolve_func(
             return Ok(func);
         }
     }
-    bail!("function \"{}\" does not exist", name)
+    bail!("function {} does not exist", name.to_string().quoted())
 }
 
 lazy_static! {

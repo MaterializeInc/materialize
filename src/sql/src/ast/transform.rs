@@ -11,6 +11,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use ore::str::StrExt;
+
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
@@ -96,7 +98,11 @@ fn rewrite_query(from: FullName, to: String, query: &mut Query<Raw>) -> Result<(
 }
 
 fn ambiguous_err(n: &Ident, t: &str) -> String {
-    format!("\"{}\" potentially used ambiguously as item and {}", n, t)
+    format!(
+        "{} potentially used ambiguously as item and {}",
+        n.as_str().quoted(),
+        t
+    )
 }
 
 /// Visits a [`Query`], assessing catalog item [`Ident`]s' use of a specified `Ident`.
@@ -162,8 +168,8 @@ impl<'a> QueryIdentAgg<'a> {
 
         if v.min_qual_depth < req_depth {
             Err(format!(
-                "\"{}\" is not sufficiently qualified to support renaming",
-                name
+                "{} is not sufficiently qualified to support renaming",
+                name.as_str().quoted()
             ))
         } else {
             Ok(req_depth)
@@ -176,9 +182,10 @@ impl<'a> QueryIdentAgg<'a> {
         if let Some(f) = &self.fail_on {
             if v.iter().any(|i| i == f) {
                 self.err = Some(format!(
-                    "found reference to \"{}\"; cannot rename \"{}\" to any identity \
+                    "found reference to {}; cannot rename {} to any identity \
                     used in any existing view definitions",
-                    f, self.name
+                    f.as_str().quoted(),
+                    self.name.as_str().quoted()
                 ));
                 return;
             }

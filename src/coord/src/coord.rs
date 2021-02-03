@@ -49,6 +49,7 @@ use expr::{
     OptimizedMirRelationExpr, RowSetFinishing, SourceInstanceId,
 };
 use ore::collections::CollectionExt;
+use ore::str::StrExt;
 use ore::thread::JoinHandleExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timestamp};
 use sql::ast::display::AstDisplay;
@@ -2693,8 +2694,10 @@ where
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
                         if datum == &Datum::Null && !typ.nullable {
                             coord_bail!(
-                                "null value in column \"{}\" violates not-null constraint",
+                                "null value in column {} violates not-null constraint",
                                 name.unwrap_or(&ColumnName::from("unnamed column"))
+                                    .as_str()
+                                    .quoted()
                             )
                         }
                     }

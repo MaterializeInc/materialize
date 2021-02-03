@@ -29,6 +29,7 @@ use std::mem;
 use anyhow::{anyhow, bail, ensure, Context};
 use itertools::Itertools;
 use ore::iter::IteratorExt;
+use ore::str::StrExt;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
@@ -177,14 +178,14 @@ pub fn plan_insert_query(
                 source_types.push(&typ.scalar_type);
             } else {
                 bail!(
-                    "column \"{}\" of relation \"{}\" does not exist",
-                    c.as_str(),
-                    table.name()
+                    "column {} of relation {} does not exist",
+                    c.as_str().quoted(),
+                    table.name().to_string().quoted()
                 );
             }
         }
         if let Some(dup) = columns.iter().duplicates().next() {
-            bail!("column \"{}\" specified more than once", dup.as_str());
+            bail!("column {} specified more than once", dup.as_str().quoted());
         }
     };
 
@@ -243,9 +244,11 @@ pub fn plan_insert_query(
     // installing assignment casts where necessary and possible.
     let expr = cast_relation(&qcx, CastContext::Assignment, expr, source_types).map_err(|e| {
         anyhow!(
-            "column \"{}\" is of type {} but expression is of type {}",
+            "column {} is of type {} but expression is of type {}",
             desc.get_name(e.column)
-                .unwrap_or(&ColumnName::from("?column?")),
+                .unwrap_or(&ColumnName::from("?column?"))
+                .as_str()
+                .quoted(),
             pgrepr::Type::from(&e.target_type).name(),
             pgrepr::Type::from(&e.source_type).name(),
         )
@@ -459,7 +462,10 @@ fn plan_query(
         let cte_name = normalize::ident(cte.alias.name.clone());
 
         if used_names.contains(&cte_name) {
-            bail!("WITH query name \"{}\" specified more than once", cte_name)
+            bail!(
+                "WITH query name {} specified more than once",
+                cte_name.quoted()
+            )
         }
         used_names.insert(cte_name.clone());
 
@@ -978,7 +984,7 @@ fn plan_view_select(
                     if let Some(column) = select_all_mapping.get(&i).copied() {
                         HirScalarExpr::Column(ColumnRef { level: 0, column })
                     } else {
-                        bail!("column \"{}\" must appear in the GROUP BY clause or be used in an aggregate function", from_scope.items[*i].short_display_name());
+                        bail!("column {} must appear in the GROUP BY clause or be used in an aggregate function", from_scope.items[*i].short_display_name().quoted());
                     }
                 }
                 ExpandedSelectItem::Expr(expr) => plan_expr(ecx, &expr)?.type_as_any(ecx)?,
@@ -1812,7 +1818,10 @@ fn plan_using_constraint(
 
         // Join keys must be resolved to same type.
         let mut exprs = coerce_homogeneous_exprs(
-            &format!("NATURAL/USING join column \"{}\"", column_name),
+            &format!(
+                "NATURAL/USING join column {}",
+                column_name.as_str().quoted()
+            ),
             &ecx,
             vec![
                 CoercibleScalarExpr::Coerced(HirScalarExpr::Column(lhs)),
@@ -2617,7 +2626,7 @@ pub fn scalar_type_from_sql(
             let canonical_name = normalize::object_name(canonical_name)?;
             let item = match scx.catalog.resolve_item(&canonical_name) {
                 Ok(i) => i,
-                Err(_) => bail!("type \"{}\" does not exist", name),
+                Err(_) => bail!("type {} does not exist", name.to_string().quoted()),
             };
             match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
                 Some(t) => match t {
@@ -2639,7 +2648,7 @@ pub fn scalar_type_from_sql(
                         t
                     }
                 },
-                None => bail!("type \"{}\" does not exist", name),
+                None => bail!("type {} does not exist", name.to_string().quoted()),
             }
         }
     })

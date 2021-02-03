@@ -10,6 +10,7 @@
 use std::error::Error;
 use std::fmt;
 
+use ore::str::StrExt;
 use transform::TransformError;
 
 use crate::catalog;
@@ -66,15 +67,15 @@ impl fmt::Display for CoordError {
             CoordError::Catalog(e) => e.fmt(f),
             CoordError::ConstrainedParameter(p) => write!(
                 f,
-                "parameter \"{}\" can only be set to \"{}\"",
-                p.name(),
-                p.value()
+                "parameter {} can only be set to {}",
+                p.name().quoted(),
+                p.value().quoted()
             ),
             CoordError::InvalidParameterType(p) => write!(
                 f,
-                "parameter \"{}\" requires a {} value",
-                p.name(),
-                p.type_name()
+                "parameter {} requires a {} value",
+                p.name().quoted(),
+                p.type_name().quoted()
             ),
             CoordError::OperationProhibitsTransaction(op) => {
                 write!(f, "{} cannot be run inside a transaction block", op)
@@ -84,15 +85,15 @@ impl fmt::Display for CoordError {
             }
             CoordError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
             CoordError::ReadOnlyParameter(p) => {
-                write!(f, "parameter \"{}\" cannot be changed", p.name())
+                write!(f, "parameter {} cannot be changed", p.name().quoted())
             }
             CoordError::SqlCatalog(e) => e.fmt(f),
             CoordError::Transform(e) => e.fmt(f),
             CoordError::UnknownCursor(name) => {
-                write!(f, "cursor \"{}\" does not exist", name)
+                write!(f, "cursor {} does not exist", name.quoted())
             }
             CoordError::UnknownParameter(name) => {
-                write!(f, "unrecognized configuration parameter \"{}\"", name)
+                write!(f, "unrecognized configuration parameter {}", name.quoted())
             }
             CoordError::Unstructured(e) => write!(f, "{:#}", e),
             CoordError::WriteOnlyTransaction => f.write_str("transaction in write-only mode"),

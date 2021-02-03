@@ -1448,23 +1448,23 @@ SELECT ('{{a, "", "\""}, "{a, \"\", \"\\\"\"}"}'::text list list)::text
 {{a,"","\""},{a,"","\""}}
 
 # Unquoted elements cannot have special characters interleaved within them
-query error invalid input syntax for list: malformed literal; must escape special character '"': "\{a"b"\}"
+query error invalid input syntax for list: malformed literal; must escape special character '"'
 SELECT ('{a"b"}'::text list)::text
 
-query error invalid input syntax for list: malformed literal; must escape special character '\{': "\{a\{b\}"
+query error invalid input syntax for list: malformed literal; must escape special character '\{'
 SELECT ('{a{b}'::text list)::text
 
-query error invalid input syntax for list: malformed array literal; contains 'b' after terminal '\}': "\{a\}b\}"
+query error invalid input syntax for list: malformed array literal; contains 'b' after terminal '\}'
 SELECT ('{a}b}'::text list)::text
 
 # No non-whitespace characters after the escape
-query error invalid input syntax for list: expected ',' or '\}', got 'b': "\{"a"b\}"
+query error invalid input syntax for list: expected ',' or '\}', got 'b'
 SELECT ('{"a"b}'::text list)::text
 
-query error invalid input syntax for list: expected ',' or '\}', got '"': "\{""""\}"
+query error invalid input syntax for list: expected ',' or '\}', got '"'
 SELECT ('{""""}'::text list)::text
 
-query error invalid input syntax for list: expected ',' or '\}', got '"': "\{"""\}"
+query error invalid input syntax for list: expected ',' or '\}', got '"'
 SELECT ('{"""}'::text list)::text
 
 # 🔬🔬🔬🔬 Unquoted escapes

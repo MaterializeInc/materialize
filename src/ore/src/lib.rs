@@ -33,6 +33,7 @@ pub mod panic;
 pub mod result;
 pub mod retry;
 pub mod stats;
+pub mod str;
 pub mod sync;
 pub mod test;
 pub mod thread;
