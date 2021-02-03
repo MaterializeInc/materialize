@@ -644,7 +644,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         value_gen.next_value(&mut value_buf);
-        let key = if let Some(key_gen) = key_gen.as_mut() {
+        if let Some(key_gen) = key_gen.as_mut() {
             key_gen.next_value(&mut key_buf);
         } else if let Some(key_dist) = key_dist.as_ref() {
             key_buf.clear();
@@ -654,7 +654,9 @@ async fn main() -> anyhow::Result<()> {
             key_buf.extend(u64::cast_from(i).to_be_bytes().iter())
         };
 
-        let mut rec = BaseRecord::to(&args.topic).key(&key).payload(&value_buf);
+        let mut rec = BaseRecord::to(&args.topic)
+            .key(&key_buf)
+            .payload(&value_buf);
         if args.partitions_round_robin != 0 {
             rec = rec.partition((i % args.partitions_round_robin) as i32);
         }
