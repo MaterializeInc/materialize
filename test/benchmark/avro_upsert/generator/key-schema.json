@@ -1,0 +1,15 @@
+{
+    "name": "upsertavrotestkey",
+    "type" : "record",
+    "namespace": "com.acme.avro",
+    "fields": [
+     {
+       "name": "BookId",
+       "type": "long"
+     },
+     {
+         "name": "SecurityId",
+         "type": "long"
+     }
+    ]
+}

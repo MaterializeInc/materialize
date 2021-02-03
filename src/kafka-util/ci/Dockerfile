@@ -7,5 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: avro-upsert-producer
-publish: false
+FROM ubuntu:bionic-20200403
+
+COPY kgen /usr/local/bin
+
+ENTRYPOINT ["kgen"]
