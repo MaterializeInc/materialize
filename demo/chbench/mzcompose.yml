@@ -332,7 +332,7 @@ mzworkflows:
       OLTP_THREADS: 4
     steps:
       - step: workflow
-        workflow: generate-snapshot
+        workflow: setup-ingest-benchmark
       - step: down
         destroy_volumes: true
       - step: workflow
@@ -365,10 +365,15 @@ mzworkflows:
         -q loadtest
 
   # Run a test that populates Kafka with data from chbench for a set amount of time
-  # Once chbench exits, record offsets ingested by Materialize and view states
+  # After the first timer expires, stop chbench and wait for the data to stabilize
+  # Record offsets ingested by Materialize and the answers to our count(*) views
+  # Take a snapshot of topic schemas and contents
   # Leaves the cluster running
   setup-ingest-benchmark:
     steps:
+    - step: run
+      service: peeker
+      command: --write-config /snapshot/config.toml
     - step: workflow
       workflow: bring-up-source-data-mysql
     # start the dashboard before the load data get started so that we have data from
@@ -408,18 +413,6 @@ mzworkflows:
     - step: run
       service: mzutil
       command: wait_for_view_states.py
-
-  # Run a test that populates Kafka with data from chbench for a set amount of time
-  # After the first timer expires, stop chbench and wait for the data to stabilize
-  # Record offsets ingested by Materialize and the answers to our count(*) views
-  # Take a snapshot of topic schemas and contents
-  generate-snapshot:
-    steps:
-    - step: run
-      service: peeker
-      command: --write-config /snapshot/config.toml
-    - step: workflow
-      workflow: setup-ingest-benchmark
 
   # Run a test that populates Kafka with data from topic snapshots
   # Then run Materialize and measure time until it catches up to snapshotted view state
