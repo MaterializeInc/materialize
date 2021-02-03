@@ -10,12 +10,12 @@
 use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use anyhow::anyhow;
-use differential_dataflow::{capture::YieldingIter, hashable::Hashable};
+use differential_dataflow::capture::YieldingIter;
 use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use timely::{
     dataflow::{
-        channels::pact::{Exchange, ParallelizationContract},
+        channels::pact::{ParallelizationContract, Pipeline},
         channels::pushers::buffer::Session,
         channels::pushers::Counter as PushCounter,
         channels::pushers::Tee,
@@ -235,44 +235,40 @@ where
     K: DecoderState + 'static,
     V: DecoderState + 'static,
 {
-    stream.unary(
-        Exchange::new(|x: &((Vec<u8>, _), _)| (x.0).hashed()),
-        &op_name,
-        move |_, _| {
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    let mut session = output.session(&cap);
-                    for ((key, data), time) in data.iter() {
-                        if key.is_empty() {
-                            error!("{}", "Encountered empty key");
-                            continue;
+    stream.unary(Pipeline, &op_name, move |_, _| {
+        move |input, output| {
+            input.for_each(|cap, data| {
+                let mut session = output.session(&cap);
+                for ((key, data), time) in data.iter() {
+                    if key.is_empty() {
+                        error!("{}", "Encountered empty key");
+                        continue;
+                    }
+                    match key_decoder_state.decode_key(key) {
+                        Ok(key) => {
+                            if data.value.is_empty() {
+                                session.give((key, None, *cap.time()));
+                            } else {
+                                value_decoder_state.give_key_value(
+                                    key,
+                                    &data.value,
+                                    data.position,
+                                    data.upstream_time_millis,
+                                    &mut session,
+                                    *time,
+                                );
+                            }
                         }
-                        match key_decoder_state.decode_key(key) {
-                            Ok(key) => {
-                                if data.value.is_empty() {
-                                    session.give((key, None, *cap.time()));
-                                } else {
-                                    value_decoder_state.give_key_value(
-                                        key,
-                                        &data.value,
-                                        data.position,
-                                        data.upstream_time_millis,
-                                        &mut session,
-                                        *time,
-                                    );
-                                }
-                            }
-                            Err(err) => {
-                                error!("{}", err);
-                            }
+                        Err(err) => {
+                            error!("{}", err);
                         }
                     }
-                });
-                key_decoder_state.log_error_count();
-                value_decoder_state.log_error_count();
-            }
-        },
-    )
+                }
+            });
+            key_decoder_state.log_error_count();
+            value_decoder_state.log_error_count();
+        }
+    })
 }
 
 pub(crate) fn decode_upsert<G>(
