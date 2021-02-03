@@ -18,7 +18,7 @@ namespace csharp
         private NpgsqlConnection conn;
 
         private NpgsqlConnection OpenConnection() {
-            var conn = new NpgsqlConnection("host=materialized;port=6875;database=materialize");
+            var conn = new NpgsqlConnection("host=materialized;port=6875;database=materialize;username=materialize");
             conn.Open();
             return conn;
         }

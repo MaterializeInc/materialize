@@ -32,9 +32,12 @@ async fn connect_materialized() -> Result<tokio_postgres::Client, anyhow::Error>
         res
     })
     .await?;
-    let (client, conn) = tokio_postgres::connect("postgres://materialized:6875/materialize", NoTls)
-        .await
-        .context("failed connecting to materialized")?;
+    let (client, conn) = tokio_postgres::connect(
+        "postgres://materialize@materialized:6875/materialize",
+        NoTls,
+    )
+    .await
+    .context("failed connecting to materialized")?;
     tokio::spawn(async {
         if let Err(e) = conn.await {
             panic!("postgres connection error: {}", e);

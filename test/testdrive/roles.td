@@ -62,3 +62,9 @@ current user cannot be dropped
 # No creating roles that already exist.
 ! CREATE ROLE materialize LOGIN SUPERUSER
 role 'materialize' already exists
+
+# No creating roles that look like system roles.
+! CREATE ROLE mz_system LOGIN SUPERUSER
+role name "mz_system" is reserved
+! CREATE ROLE mz_foo LOGIN SUPERUSER
+role name "mz_foo" is reserved
