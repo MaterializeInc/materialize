@@ -20,6 +20,7 @@ use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
 use globset::GlobBuilder;
 use itertools::Itertools;
+use ore::str::StrExt;
 use reqwest::Url;
 
 use dataflow_types::{
@@ -144,8 +145,8 @@ pub fn plan_create_table(
 
     if let Some(dup) = names.iter().duplicates().next() {
         bail!(
-            "cannot CREATE TABLE: column \"{}\" specified more than once",
-            dup
+            "cannot CREATE TABLE: column {} specified more than once",
+            dup.as_str().quoted()
         );
     }
 
@@ -1138,9 +1139,9 @@ pub fn plan_create_type(
                 DataType::Other { name, typ_mod } => {
                     if !typ_mod.is_empty() {
                         bail!(
-                            "CREATE TYPE ... AS {}option \"{}\" cannot accept type modifier on \
+                            "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
                             {}, you must use the default type",
-                            as_type,
+                            as_type.to_string().quoted(),
                             key,
                             name
                         )
@@ -1148,9 +1149,9 @@ pub fn plan_create_type(
                     query::canonicalize_type_name_internal(&name)
                 }
                 d => bail!(
-                    "CREATE TYPE ... AS {}option \"{}\" can only use named data types, but \
+                    "CREATE TYPE ... AS {}option {} can only use named data types, but \
                     found unnamed data type {}. Use CREATE TYPE to create a named type first",
-                    as_type,
+                    as_type.to_string().quoted(),
                     key,
                     d.to_ast_string(),
                 ),
@@ -1186,7 +1187,7 @@ pub fn plan_create_type(
 
     let name = scx.allocate_name(normalize::object_name(name)?);
     if scx.catalog.item_exists(&name) {
-        bail!("catalog item \"{}\" already exists", name.to_string());
+        bail!("catalog item {} already exists", name.to_string().quoted());
     }
 
     let inner = match as_type {
@@ -1386,7 +1387,7 @@ pub fn plan_drop_role(
         let name = if name.0.len() == 1 {
             normalize::ident(name.0.into_element())
         } else {
-            bail!("invalid role name \"{}\"", name)
+            bail!("invalid role name {}", name.to_string().quoted())
         };
         if name == scx.catalog.user() {
             bail!("current user cannot be dropped");
@@ -1516,8 +1517,8 @@ pub fn plan_alter_index_options(
                     };
 
                     if !options.is_empty() {
-                        bail!("unrecognized parameter: \"{}\". Only \"logical_compaction_window\" is currently supported.",
-                              options.keys().next().expect("known to exist"))
+                        bail!("unrecognized parameter: {}. Only \"logical_compaction_window\" is currently supported.",
+                              options.keys().next().expect("known to exist").quoted())
                     }
 
                     logical_compaction_window

@@ -31,6 +31,7 @@ use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use ore::netio::AsyncReady;
+use ore::str::StrExt;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
 use sql::ast::{FetchDirection, Ident, Raw, Statement};
@@ -559,7 +560,7 @@ where
                     return self
                         .error(ErrorResponse::error(
                             SqlState::INVALID_CURSOR_NAME,
-                            format!("portal \"{}\" does not exist", portal_name),
+                            format!("portal {} does not exist", portal_name.quoted()),
                         ))
                         .await;
                 }
@@ -678,7 +679,7 @@ where
             None => {
                 self.error(ErrorResponse::error(
                     SqlState::INVALID_CURSOR_NAME,
-                    format!("portal \"{}\" does not exist", name),
+                    format!("portal {} does not exist", name.quoted()),
                 ))
                 .await
             }
