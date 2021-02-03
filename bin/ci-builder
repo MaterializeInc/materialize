@@ -119,7 +119,7 @@ case "$cmd" in
             # Forward Docker configuration too, if available.
             if [[ -d ~/.docker ]]; then
                 args+=(
-                    --volume "$HOME/.docker:/docker"
+                    --volume "${DOCKER_CONFIG:-$HOME/.docker}:/docker"
                     --env "DOCKER_CONFIG=/docker"
                 )
             fi
