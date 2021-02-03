@@ -8,4 +8,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-psql -h materialized -p 6875 -f /data/views.sql materialize
+psql -h materialized -p 6875 -U materialize -f /data/views.sql materialize
