@@ -88,7 +88,9 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
         cmds_exec = cmds.clone();
         let (mut state, state_cleanup) = action::create_state(config).await?;
         if config.reset_materialized {
+            println!("resetting mz");
             state.reset_materialized().await?;
+            println!("done resetting mz");
         }
         let actions = action::build(cmds_exec, &state)?;
         for a in actions.iter().rev() {
