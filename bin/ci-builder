@@ -117,9 +117,10 @@ case "$cmd" in
             )
 
             # Forward Docker configuration too, if available.
-            if [[ -d ~/.docker ]]; then
+            docker_dir=${DOCKER_CONFIG:-$HOME/.docker}
+            if [[ -d "$docker_dir" ]]; then
                 args+=(
-                    --volume "${DOCKER_CONFIG:-$HOME/.docker}:/docker"
+                    --volume "$docker_dir:/docker"
                     --env "DOCKER_CONFIG=/docker"
                 )
             fi
