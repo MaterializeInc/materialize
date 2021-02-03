@@ -31,6 +31,7 @@ use sha2::{Sha224, Sha256, Sha384, Sha512};
 use ore::collections::CollectionExt;
 use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
+use ore::str::StrExt;
 use pgrepr::Type;
 use repr::adt::array::ArrayDimension;
 use repr::adt::datetime::{DateTimeUnits, Timezone};
@@ -3318,7 +3319,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::BitLengthString => f.write_str("bit_length"),
             UnaryFunc::ByteLengthBytes => f.write_str("byte_length"),
             UnaryFunc::ByteLengthString => f.write_str("byte_length"),
-            UnaryFunc::IsRegexpMatch(regex) => write!(f, "\"{}\" ~", regex.as_str()),
+            UnaryFunc::IsRegexpMatch(regex) => write!(f, "{} ~", regex.as_str().quoted()),
             UnaryFunc::RegexpMatch(regex) => write!(f, "regexp_match[{}]", regex.as_str()),
             UnaryFunc::DatePartInterval(units) => write!(f, "date_part_{}_iv", units),
             UnaryFunc::DatePartTimestamp(units) => write!(f, "date_part_{}_ts", units),

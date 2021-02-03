@@ -10,6 +10,8 @@
 use std::error::Error;
 use std::fmt;
 
+use ore::str::StrExt;
+
 use crate::catalog::CatalogError;
 
 #[derive(Debug)]
@@ -36,8 +38,8 @@ impl fmt::Display for PlanError {
                 }
                 Ok(())
             }
-            Self::UnknownColumn(name) => write!(f, "column \"{}\" does not exist", name),
-            Self::AmbiguousColumn(name) => write!(f, "column name \"{}\" is ambiguous", name),
+            Self::UnknownColumn(name) => write!(f, "column {} does not exist", name.quoted()),
+            Self::AmbiguousColumn(name) => write!(f, "column name {} is ambiguous", name.quoted()),
             Self::MisqualifiedName(name) => write!(
                 f,
                 "qualified name did not have between 1 and 3 components: {}",

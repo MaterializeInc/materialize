@@ -42,6 +42,7 @@ use mz_avro::{
     AvroArrayAccess, AvroDecode, AvroDeserializer, AvroMapAccess, AvroRead, AvroRecordAccess,
     GeneralDeserializer, StatefulAvroDecodable, TrivialDecoder, ValueDecoder, ValueOrReader,
 };
+use ore::str::StrExt;
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::jsonb::{JsonbPacker, JsonbRef};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, RowPacker, ScalarType};
@@ -1919,16 +1920,16 @@ fn take_field_by_index(
 ) -> anyhow::Result<Value> {
     let (name, value) = fields.get_mut(idx).ok_or_else(|| {
         anyhow!(
-            "Value does not match schema: \"{}\" field not at index {}",
-            expected_name,
+            "Value does not match schema: {} field not at index {}",
+            expected_name.quoted(),
             idx
         )
     })?;
     if name != expected_name {
         bail!(
-            "Value does not match schema: expected \"{}\", found \"{}\"",
-            expected_name,
-            name
+            "Value does not match schema: expected {}, found {}",
+            expected_name.quoted(),
+            name.quoted()
         );
     }
     Ok(std::mem::replace(value, Value::Null))

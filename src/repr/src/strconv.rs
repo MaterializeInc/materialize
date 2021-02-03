@@ -35,6 +35,7 @@ use uuid::Uuid;
 
 use ore::fmt::FormatBuffer;
 use ore::lex::LexBuf;
+use ore::str::StrExt;
 
 use crate::adt::array::ArrayDimension;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
@@ -1119,7 +1120,7 @@ impl fmt::Display for ParseError {
         if let Some(details) = &self.details {
             write!(f, "{}: ", details)?;
         }
-        write!(f, "\"{}\"", self.input)
+        write!(f, "{}", self.input.quoted())
     }
 }
 
