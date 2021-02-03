@@ -10,10 +10,11 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import multiprocessing
 import pathlib
 import subprocess
 
-SHARED_FILES = "/usr/share/generator"
+DISTRIBUTIONS = "/usr/share/generator/distributions"
 
 
 def run(args: argparse.Namespace) -> None:
@@ -21,14 +22,17 @@ def run(args: argparse.Namespace) -> None:
 
     records_per_process = int(args.num_records / args.parallelism)
 
-    key_schema = pathlib.Path(SHARED_FILES, "key-schema.json").read_text().strip()
+    distribution_dir = pathlib.Path(DISTRIBUTIONS, args.distribution)
+    key_schema = pathlib.Path(distribution_dir, "key-schema.json").read_text().strip()
     key_distribution = (
-        pathlib.Path(SHARED_FILES, "key-distribution.json").read_text().strip()
+        pathlib.Path(distribution_dir, "key-distribution.json").read_text().strip()
     )
 
-    value_schema = pathlib.Path(SHARED_FILES, "value-schema.json").read_text().strip()
+    value_schema = (
+        pathlib.Path(distribution_dir, "value-schema.json").read_text().strip()
+    )
     value_distribution = (
-        pathlib.Path(SHARED_FILES, "value-distribution.json").read_text().strip()
+        pathlib.Path(distribution_dir, "value-distribution.json").read_text().strip()
     )
 
     kafka_gen = [
@@ -71,6 +75,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
+        "-d",
+        "--distribution",
+        type=str,
+        default="benchmark",
+        help="Name of the distribution to use for generating random records",
+        choices=[p.name for p in pathlib.Path(DISTRIBUTIONS).iterdir()],
+    )
+
+    parser.add_argument(
         "-n",
         "--num-records",
         type=int,
@@ -78,7 +91,11 @@ if __name__ == "__main__":
         help="Total number of messages to generate",
     )
     parser.add_argument(
-        "-p", "--parallelism", type=int, default=40, help="Number of processes to spawn"
+        "-p",
+        "--parallelism",
+        type=int,
+        default=multiprocessing.cpu_count(),
+        help="Number of processes to spawn",
     )
 
     args = parser.parse_args()

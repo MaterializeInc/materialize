@@ -7,14 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM kgen
-
 FROM python:3.9-slim
 
-COPY --from=0 /usr/local/bin/kgen /usr/local/bin
+COPY requirements.txt /tmp
+RUN pip install -r /tmp/requirements.txt
 
-RUN mkdir -p /usr/share/generator/distributions
-COPY distributions /usr/share/generator/distributions
-
-COPY generate_upserts /usr/local/bin
-ENTRYPOINT ["generate_upserts"]
+COPY wait_metric /usr/local/bin
+ENTRYPOINT ["wait_metric"]
