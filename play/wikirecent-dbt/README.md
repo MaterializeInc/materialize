@@ -66,7 +66,7 @@ on top of streaming Wikipedia data using dbt.
    Then, [create a source](https://materialize.com/docs/sql/create-source/text-file/#main) using your `wikirecent` file:
    ```nofmt
    CREATE SCHEMA wikimedia;
-   
+
    CREATE SOURCE wikimedia.wikirecent
    FROM FILE '[path to wikirecent]' WITH (tail = true)
    FORMAT REGEX '^data: (?P<data>.*)';
@@ -76,12 +76,12 @@ on top of streaming Wikipedia data using dbt.
 
    You can see the columns that get generated for this source:
    ```nofmt
-    > SHOW SOURCES;
+    > SHOW SOURCES FROM wikimedia;
       name
     ------------
      wikirecent
 
-    > SHOW COLUMNS FROM wikirecent;
+    > SHOW COLUMNS FROM wikimedia.wikirecent;
       name    | nullable | type
      ------------+----------+------
     data       | t        | text
@@ -89,7 +89,7 @@ on top of streaming Wikipedia data using dbt.
    ```
 
 1. Now we can use dbt to create materialized views on top of `wikirecent`. In your shell, navigate to
-   `play/wikirecent-dbt` within the clone of this repo on your local machine. Once 
+   `play/wikirecent-dbt` within the clone of this repo on your local machine. Once
    you're there, run the following [dbt command](https://docs.getdbt.com/reference/dbt-commands/):
    ```nofmt
    dbt run
@@ -104,7 +104,7 @@ on top of streaming Wikipedia data using dbt.
 1. Congratulations! You just used dbt to create materialized views in Materialize. You can verify the
    views were created from your `psql` shell connected to Materialize:
       ```nofmt
-      > SHOW VIEWS;
+      > SHOW VIEWS FROM analytics;
            name
       ---------------
        recentchanges
@@ -114,7 +114,7 @@ on top of streaming Wikipedia data using dbt.
 
    More importantly, you can now query each of the views you created interactively. For example:
    ```nofmt
-   > SELECT * FROM top10;
+   > SELECT * FROM analytics.top10;
         user      | changes
    ---------------+---------
     Fæ            |   10834

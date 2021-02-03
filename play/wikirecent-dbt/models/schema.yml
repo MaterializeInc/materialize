@@ -26,7 +26,7 @@ sources:
 models:
   - name: recentchanges
     description: "Event data, unnested and cast to columns"
-    
+
   - name: useredits
     description: "Edit counts per user"
     columns:
@@ -36,7 +36,7 @@ models:
           - not_null
       - name: changes
         description: "The number of edits made by the user"
-  
+
   - name: top10
     description: "Top 10 Wikipedia editors since the stream started"
     columns:
