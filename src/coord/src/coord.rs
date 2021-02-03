@@ -17,12 +17,12 @@
 //! must accumulate to the same value as would an un-compacted trace.
 
 use std::cmp;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
@@ -34,6 +34,7 @@ use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::{Handle, Runtime};
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use build_info::BuildInfo;
@@ -79,7 +80,7 @@ use crate::catalog::{
     self, Catalog, CatalogItem, Func, Index, SinkConnectorState, Type, TypeInner,
 };
 use crate::command::{
-    Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
+    Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
 use crate::error::CoordError;
 use crate::session::{
@@ -177,6 +178,9 @@ where
     /// TODO(justin): this is a hack, and does not work right with TAIL.
     need_advance: bool,
     transient_id_counter: u64,
+    /// Map from connection id to a tokio::sync::watch sender that can be used to
+    /// signal to the receiver end that a cancel message has been sent.
+    cancel: HashMap<u32, Arc<Mutex<watch::Sender<Cancelled>>>>,
 }
 
 impl<C> Coordinator<C>
@@ -844,6 +848,15 @@ where
                 let result = self.sequence_end_transaction(&mut session, action).await;
                 let _ = tx.send(Response { result, session });
             }
+
+            Command::RegisterCancel {
+                conn_id,
+                cancel_tx,
+                tx,
+            } => {
+                self.cancel.insert(conn_id, cancel_tx);
+                let _ = tx.send(());
+            }
         }
     }
 
@@ -1018,6 +1031,12 @@ where
             SequencedCommand::CancelPeek { conn_id },
         )
         .await;
+
+        // Inform the session (if it asks) about the cancellation.
+        if let Some(cancel) = self.cancel.get_mut(&conn_id) {
+            let sender = cancel.lock().unwrap();
+            let _ = sender.send(Cancelled::Cancelled);
+        }
     }
 
     /// Handle termination of a client session.
@@ -1031,6 +1050,7 @@ where
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
+        self.cancel.remove(&session.conn_id());
     }
 
     // Removes all temporary items created by the specified connection, though
@@ -3434,6 +3454,7 @@ where
             last_op_was_read: false,
             need_advance: true,
             transient_id_counter: 1,
+            cancel: HashMap::new(),
         };
         coord.bootstrap(initial_catalog_events).await?;
         Ok((coord, cluster_id))

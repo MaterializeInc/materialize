@@ -9,6 +9,7 @@
 
 use std::fmt;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use anyhow::bail;
@@ -16,9 +17,11 @@ use async_trait::async_trait;
 use log::trace;
 use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
+use tokio::sync::watch;
 use tokio_openssl::SslStream;
 
 use coord::session::Session;
+use coord::Cancelled;
 use ore::netio::AsyncReady;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
@@ -93,6 +96,15 @@ impl Server {
                     version,
                     mut params,
                 }) => {
+                    // Cancellation works by creating a watch channel (which remembers only
+                    // the last value sent to it) and sharing it between the coordinator and
+                    // connection. The coordinator will send a cancelled message on it if a
+                    // cancellation request comes. The connection will reset that on every message
+                    // it receives and then check for it where we want to add the ability to cancel
+                    // an in-progress statement.
+                    let (cancel_tx, cancel_rx) = watch::channel(Cancelled::NotCancelled);
+                    let cancel_tx = Arc::new(Mutex::new(cancel_tx));
+
                     let user = params.remove("user").unwrap_or_else(String::new);
                     let coord_client = self.coord_client.for_session(Session::new(conn_id, user));
                     let machine = StateMachine {
@@ -100,6 +112,8 @@ impl Server {
                         conn_id,
                         secret_key: self.secrets.get(conn_id).unwrap(),
                         coord_client,
+                        cancel_tx,
+                        cancel_rx,
                     };
                     machine.run(version, params).await?;
                     return Ok(());

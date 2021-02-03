@@ -13,6 +13,7 @@ use std::convert::TryFrom;
 use std::future::Future;
 use std::iter;
 use std::mem;
+use std::sync::{Arc, Mutex};
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{BoxFuture, FutureExt};
@@ -23,12 +24,13 @@ use log::debug;
 use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{AsyncRead, AsyncWrite, Interest};
+use tokio::sync::watch;
 use tokio::time::{self, Duration, Instant};
 
 use coord::session::{
     EndTransactionAction, Portal, PortalState, RowBatchStream, TransactionStatus,
 };
-use coord::{ExecuteResponse, StartupMessage};
+use coord::{Cancelled, ExecuteResponse, StartupMessage};
 use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use ore::netio::AsyncReady;
@@ -90,6 +92,9 @@ pub struct StateMachine<A> {
     pub conn_id: u32,
     pub secret_key: u32,
     pub coord_client: coord::SessionClient,
+
+    pub cancel_tx: Arc<Mutex<watch::Sender<Cancelled>>>,
+    pub cancel_rx: watch::Receiver<Cancelled>,
 }
 
 impl<A> StateMachine<A>
@@ -119,6 +124,9 @@ where
         version: i32,
         params: HashMap<String, String>,
     ) -> Result<(), comm::Error> {
+        self.coord_client
+            .register_cancel(self.conn_id, Arc::clone(&self.cancel_tx))
+            .await;
         let mut state = self.startup(version, params).await?;
         loop {
             state = match state {
@@ -138,6 +146,13 @@ where
             Some(message) => message.name(),
             None => "eof",
         };
+
+        // Clear any cancellation message.
+        // TODO(mjibson): This makes the use of .changed annoying since it will
+        // generally always have a NotCancelled message first that needs to be ignored,
+        // and thus run in a loop. Figure out a way to have the future only resolve on
+        // a Cancelled message.
+        let _ = self.cancel_tx.lock().unwrap().send(Cancelled::NotCancelled);
 
         let next_state = match message {
             Some(FrontendMessage::Query { sql }) => self.query(sql).await?,
@@ -1077,14 +1092,27 @@ where
             wait_once: &mut bool,
             deadline: &mut Option<Instant>,
             rows: &mut RowBatchStream,
-        ) -> Result<Option<Vec<Row>>, comm::Error> {
-            let res = match deadline {
-                None => rows.try_next().await,
-                Some(deadline) => match time::timeout_at(*deadline, rows.try_next()).await {
-                    Ok(batch) => batch,
-                    Err(_elapsed) => Ok(None),
-                },
+            cancel: &mut watch::Receiver<Cancelled>,
+        ) -> Result<FetchResult, comm::Error> {
+            let res = loop {
+                tokio::select! {
+                    _ = time::sleep_until(deadline.unwrap_or(time::Instant::now())), if deadline.is_some() =>  break FetchResult::Rows(None),
+                    _ = cancel.changed() => {
+                        // .changed will first immediately return NotCancelled since it was set
+                        // previously (unless a cancel was received already).
+                        if let Cancelled::Cancelled = *cancel.borrow() {
+                            break FetchResult::Cancelled;
+                        }
+                    },
+                    batch = rows.try_next() => match batch? {
+                        // If we got an empty batch, we don't want to trigger bumping wait_once, so get
+                        // another.
+                        Some(batch) if batch.is_empty() => {},
+                        batch => break FetchResult::Rows(batch)
+                    },
+                }
             };
+
             // If wait_once is true: the first time this fn is called it blocks (same as
             // deadline == None). The second time this fn is called it should behave the
             // same a 0s timeout.
@@ -1092,11 +1120,16 @@ where
                 *deadline = Some(Instant::now());
                 *wait_once = false;
             }
-            res
+            Ok(res)
         };
 
-        let mut batch: Option<Vec<Row>> =
-            fetch_batch(&mut wait_once, &mut deadline, &mut rows).await?;
+        let mut batch = fetch_batch(
+            &mut wait_once,
+            &mut deadline,
+            &mut rows,
+            &mut self.cancel_rx,
+        )
+        .await?;
         if let Some([row, ..]) = batch.as_deref() {
             let datums = row.unpack();
             let col_types = &row_desc.typ().column_types;
@@ -1145,25 +1178,44 @@ where
         };
 
         // Send rows while the client still wants them and there are still rows to send.
-        while let Some(batch_rows) = batch {
-            let mut batch_rows = batch_rows;
-            // Drain panics if it's > len, so cap it.
-            let drain_rows = cmp::min(want_rows, batch_rows.len());
-            self.conn
-                .send_all(batch_rows.drain(..drain_rows).map(|row| {
-                    BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
-                }))
-                .await?;
-            total_sent_rows += drain_rows;
-            want_rows -= drain_rows;
-            // If we have sent the number of requested rows, put the remainder of the batch
-            // back and stop sending.
-            if want_rows == 0 {
-                rows = Box::new(stream::iter(vec![Ok(batch_rows)]).chain(rows));
-                break;
+        loop {
+            match batch {
+                FetchResult::Rows(None) => break,
+                FetchResult::Rows(Some(batch_rows)) => {
+                    let mut batch_rows = batch_rows;
+                    // Drain panics if it's > len, so cap it.
+                    let drain_rows = cmp::min(want_rows, batch_rows.len());
+                    self.conn
+                        .send_all(batch_rows.drain(..drain_rows).map(|row| {
+                            BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
+                        }))
+                        .await?;
+                    total_sent_rows += drain_rows;
+                    want_rows -= drain_rows;
+                    // If we have sent the number of requested rows, put the remainder of the batch
+                    // back and stop sending.
+                    if want_rows == 0 && !batch_rows.is_empty() {
+                        rows = Box::new(stream::iter(vec![Ok(batch_rows)]).chain(rows));
+                        break;
+                    }
+                    self.conn.flush().await?;
+                    batch = fetch_batch(
+                        &mut wait_once,
+                        &mut deadline,
+                        &mut rows,
+                        &mut self.cancel_rx,
+                    )
+                    .await?;
+                }
+                FetchResult::Cancelled => {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::QUERY_CANCELED,
+                            "canceling statement due to user request",
+                        ))
+                        .await;
+                }
             }
-            self.conn.flush().await?;
-            batch = fetch_batch(&mut wait_once, &mut deadline, &mut rows).await?;
         }
 
         ROWS_RETURNED.inc_by(u64::cast_from(total_sent_rows));
@@ -1233,19 +1285,8 @@ where
 
         let mut count = 0;
         loop {
-            match time::timeout(Duration::from_secs(1), stream.next()).await {
-                Ok(None) => break,
-                Ok(Some(rows)) => {
-                    let rows = rows?;
-                    count += rows.len();
-                    for row in rows {
-                        encode_fn(row, typ, &mut out)?;
-                        self.conn
-                            .send(BackendMessage::CopyData(mem::take(&mut out)))
-                            .await?;
-                    }
-                }
-                Err(time::error::Elapsed { .. }) => {
+            tokio::select! {
+                _ = time::sleep_until(Instant::now() + Duration::from_secs(1)) => {
                     // It's been a while since we've had any data to send, and
                     // the client may have disconnected. Check whether the
                     // socket is no longer readable and error if so. Otherwise
@@ -1266,8 +1307,33 @@ where
                             ))
                             .await;
                     }
-                }
+                },
+                _ = self.cancel_rx.changed() => {
+                    let cancelled = *self.cancel_rx.borrow();
+                    if let Cancelled::Cancelled = cancelled {
+                        return self
+                            .error(ErrorResponse::error(
+                                SqlState::QUERY_CANCELED,
+                                "canceling statement due to user request",
+                            ))
+                        .await;
+                    }
+                },
+                batch = stream.next() => match batch {
+                    None => break,
+                    Some(rows) => {
+                        let rows = rows?;
+                        count += rows.len();
+                        for row in rows {
+                            encode_fn(row, typ, &mut out)?;
+                            self.conn
+                                .send(BackendMessage::CopyData(mem::take(&mut out)))
+                                .await?;
+                        }
+                    }
+                },
             }
+
             self.conn.flush().await?;
         }
         // Send required trailers.
@@ -1424,5 +1490,22 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
         // Add PREPARE to this if we ever support it.
         Some(stmt) => matches!(stmt, Statement::Commit(_) | Statement::Rollback(_)),
         None => false,
+    }
+}
+
+#[derive(Debug)]
+enum FetchResult {
+    Rows(Option<Vec<Row>>),
+    Cancelled,
+}
+
+impl std::ops::Deref for FetchResult {
+    type Target = Option<Vec<Row>>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            FetchResult::Rows(rows) => &rows,
+            _ => &None,
+        }
     }
 }

@@ -7,13 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::{Arc, Mutex};
+
 use futures::SinkExt;
+use tokio::sync::watch;
 
 use sql::ast::{Raw, Statement};
 use sql::plan::Params;
 
 use crate::command::{
-    Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
+    Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
 use crate::error::CoordError;
 use crate::session::{EndTransactionAction, Session};
@@ -114,6 +117,20 @@ impl SessionClient {
             }
             Err(e) => Err(e),
         }
+    }
+
+    pub async fn register_cancel(
+        &mut self,
+        conn_id: u32,
+        cancel_tx: Arc<Mutex<watch::Sender<Cancelled>>>,
+    ) {
+        self.inner
+            .send(|tx| Command::RegisterCancel {
+                conn_id,
+                cancel_tx,
+                tx,
+            })
+            .await;
     }
 
     /// Saves the specified statement as a prepared statement.

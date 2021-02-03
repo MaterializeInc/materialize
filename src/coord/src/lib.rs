@@ -41,7 +41,7 @@ pub mod session;
 
 pub use crate::cache::CacheConfig;
 pub use crate::client::{Client, SessionClient};
-pub use crate::command::{ExecuteResponse, NoSessionExecuteResponse, StartupMessage};
+pub use crate::command::{Cancelled, ExecuteResponse, NoSessionExecuteResponse, StartupMessage};
 pub use crate::coord::{describe, serve, Config, LoggingConfig};
 pub use crate::error::CoordError;
 pub use crate::timestamp::TimestampConfig;
