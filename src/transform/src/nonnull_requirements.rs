@@ -250,10 +250,7 @@ mod tests {
                             },
                         ]),
                     }),
-                    scalars: vec![MirScalarExpr::literal_null(ColumnType {
-                        nullable: true,
-                        scalar_type: ScalarType::Int32,
-                    })],
+                    scalars: vec![MirScalarExpr::literal_null(ScalarType::Int32)],
                 }),
                 func: TableFunc::GenerateSeriesInt32,
                 exprs: vec![MirScalarExpr::Column(1)],

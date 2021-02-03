@@ -375,7 +375,7 @@ mod tests {
             expr1: Box::new(MirScalarExpr::Column(2)),
             expr2: Box::new(MirScalarExpr::literal(
                 Ok(Datum::Int32(4)),
-                ScalarType::Int32.nullable(false),
+                ScalarType::Int32,
             )),
         };
         let key22 = MirScalarExpr::Column(5);
