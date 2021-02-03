@@ -324,6 +324,24 @@ mzworkflows:
     - step: down
       destroy_volumes: true
 
+  ingest-bench-ci:
+    env:
+      MZ_WORKERS: 4
+      CHBENCH_RUN_SECONDS: 60
+      NUM_WAREHOUSES: 1
+      OLTP_THREADS: 4
+    steps:
+      - step: workflow
+        workflow: generate-snapshot
+      - step: down
+        destroy_volumes: true
+      - step: workflow
+        workflow: setup-replay-benchmark
+      - step: workflow
+        workflow: measure-ingest-perforamnce
+      - step: down
+        destroy_volumes: true
+
   # Temporary migration workflow in case folks look at the docs before the next version
   # has been released
   demo-load:

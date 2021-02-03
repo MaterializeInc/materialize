@@ -162,6 +162,15 @@ steps:
           run: ci
     timeout_in_minutes: 30
 
+  - id: ingest-benchmark
+    label: "chbench ingest benchmark sanity check"
+    depends_on: build
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: chbench
+          run: ingest-bench-ci
+    timeout_in_minutes: 30
+
   - id: avro-upsert-benchmark
     label: "avro upsert benchmark sanity check"
     depends_on: build
