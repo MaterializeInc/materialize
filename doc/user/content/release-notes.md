@@ -82,6 +82,8 @@ Wrap your release notes at the 80 character mark.
   instance. These roles do not yet serve any purpose, but they will enable
   authentication in a later release.
 
+- Functions can now be resolved as schema-qualified objects, e.g. `SELECT pg_catalog.abs(-1);`.
+
 {{% version-header v0.6.1 %}}
 
 - **Backwards-incompatible change.** Validate `WITH` clauses in [`CREATE

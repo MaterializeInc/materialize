@@ -97,6 +97,11 @@ impl_display!(Ident);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ObjectName(pub Vec<Ident>);
 
+pub enum CatalogName {
+    ObjectName(Vec<Ident>),
+    FuncName(Vec<Ident>),
+}
+
 impl ObjectName {
     /// Creates an `ObjectName` with a single [`Ident`], i.e. it appears as
     /// "unqualified".

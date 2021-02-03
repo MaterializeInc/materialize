@@ -51,6 +51,7 @@ use expr::{
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
 use ore::thread::JoinHandleExt;
+use repr::adt::array::ArrayDimension;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
@@ -70,11 +71,13 @@ use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::cache::{CacheConfig, Cacher};
 use crate::catalog::builtin::{
     BUILTINS, MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES,
-    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_ROLES,
-    MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS,
-    MZ_VIEW_KEYS,
+    MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES,
+    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
-use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type, TypeInner};
+use crate::catalog::{
+    self, Catalog, CatalogItem, Func, Index, SinkConnectorState, Type, TypeInner,
+};
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
@@ -1427,6 +1430,7 @@ where
                 MZ_MAP_TYPES.id,
                 vec![id.to_string(), key_id.to_string(), value_id.to_string()],
             ),
+            TypeInner::Pseudo => (MZ_PSEUDO_TYPES.id, vec![id.to_string()]),
         };
         self.update_catalog_view(
             index_id,
@@ -1436,6 +1440,56 @@ where
             )),
         )
         .await
+    }
+
+    async fn report_func_update(
+        &mut self,
+        id: GlobalId,
+        schema_id: i64,
+        name: &str,
+        func: &Func,
+        diff: isize,
+    ) {
+        for func_impl_details in func.inner.func_impls() {
+            let arg_ids = func_impl_details
+                .arg_oids
+                .iter()
+                .map(|oid| self.catalog.get_by_oid(oid).id().to_string())
+                .collect::<Vec<_>>();
+            let mut packer = RowPacker::new();
+            packer
+                .push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: arg_ids.len(),
+                    }],
+                    arg_ids.iter().map(|id| Datum::String(&id)),
+                )
+                .unwrap();
+            let row = packer.finish();
+            let arg_ids = row.unpack_first();
+
+            let variadic_id = match func_impl_details.variadic_oid {
+                Some(oid) => Some(self.catalog.get_by_oid(&oid).id().to_string()),
+                None => None,
+            };
+
+            self.update_catalog_view(
+                MZ_FUNCTIONS.id,
+                iter::once((
+                    Row::pack_slice(&[
+                        Datum::String(&id.to_string()),
+                        Datum::Int32(func_impl_details.oid as i32),
+                        Datum::Int64(schema_id),
+                        Datum::String(name),
+                        arg_ids,
+                        Datum::from(variadic_id.as_deref()),
+                    ]),
+                    diff,
+                )),
+            )
+            .await
+        }
     }
 
     async fn sequence_plan(
@@ -2842,6 +2896,10 @@ where
                             self.report_type_update(*id, *oid, *schema_id, &name.item, ty, 1)
                                 .await;
                         }
+                        CatalogItem::Func(func) => {
+                            self.report_func_update(*id, *schema_id, &name.item, func, 1)
+                                .await;
+                        }
                     }
                 }
                 catalog::Event::UpdatedItem {
@@ -2903,6 +2961,7 @@ where
                             self.report_type_update(*id, *oid, *schema_id, &to_name.item, &typ, 1)
                                 .await;
                         }
+                        CatalogItem::Func(_) => unreachable!("functions cannot be updated"),
                     }
                 }
                 catalog::Event::DroppedDatabase { id, oid, name } => {
@@ -3034,6 +3093,9 @@ where
                         }
                         CatalogItem::Index(_) => {
                             unreachable!("dropped indexes should be handled by DroppedIndex");
+                        }
+                        CatalogItem::Func(_) => {
+                            unreachable!("functions cannot be dropped")
                         }
                     }
                     if let Ok(desc) = entry.desc() {

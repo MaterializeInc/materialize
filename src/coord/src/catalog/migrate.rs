@@ -14,11 +14,11 @@ use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::VisitMut;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType,
-    Ident, ObjectName, Raw, Statement,
+    Function, Ident, ObjectName, Raw, Statement, TableFactor,
 };
 
-use crate::catalog::PG_CATALOG_SCHEMA;
 use crate::catalog::{Catalog, SerializedCatalogItem};
+use crate::catalog::{MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, PG_CATALOG_SCHEMA};
 
 pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] = &[
     // Rewrites all built-in type references to have `pg_catalog` qualification;
@@ -104,6 +104,93 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                 // At the time the migration was written, sinks and sources
                 // could not contain references to types.
                 Statement::CreateSource(_) | Statement::CreateSink(_) => continue,
+
+                _ => bail!("catalog item contained inappropriate statement: {}", stmt),
+            }
+
+            let serialized_item = SerializedCatalogItem::V1 {
+                create_sql: stmt.to_ast_string_stable(),
+                eval_env,
+            };
+
+            let serialized_item =
+                serde_json::to_vec(&serialized_item).expect("catalog serialization cannot fail");
+            tx.update_item(id, &name.item, &serialized_item)?;
+        }
+        tx.commit()?;
+        Ok(())
+    },
+    |catalog: &mut Catalog| {
+        fn normalize_function_name(name: &mut ObjectName) {
+            if name.0.len() == 1 {
+                let func_name = name.to_string();
+                for (schema, funcs) in &[
+                    (PG_CATALOG_SCHEMA, &*sql::func::PG_CATALOG_BUILTINS),
+                    (MZ_CATALOG_SCHEMA, &*sql::func::MZ_CATALOG_BUILTINS),
+                    (MZ_INTERNAL_SCHEMA, &*sql::func::MZ_INTERNAL_BUILTINS),
+                ] {
+                    if funcs.contains_key(func_name.as_str()) {
+                        *name = ObjectName(vec![Ident::new(*schema), name.0.remove(0)]);
+                        break;
+                    }
+                }
+            }
+        }
+
+        struct FuncNormalizer;
+
+        impl<'ast> VisitMut<'ast, Raw> for FuncNormalizer {
+            fn visit_function_mut(&mut self, func: &'ast mut Function<Raw>) {
+                normalize_function_name(&mut func.name);
+            }
+            fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Raw>) {
+                if let TableFactor::Function { ref mut name, .. } = table_factor {
+                    normalize_function_name(name);
+                }
+            }
+        }
+
+        let mut storage = catalog.storage();
+        let items = storage.load_items()?;
+        let tx = storage.transaction()?;
+
+        for (id, name, def) in items {
+            let SerializedCatalogItem::V1 {
+                create_sql,
+                eval_env,
+            } = serde_json::from_slice(&def)?;
+
+            let mut stmt = sql::parse::parse(&create_sql)?.into_element();
+            match &mut stmt {
+                Statement::CreateView(CreateViewStatement {
+                    name: _,
+                    columns: _,
+                    query,
+                    temporary: _,
+                    materialized: _,
+                    if_exists: _,
+                    with_options: _,
+                }) => FuncNormalizer.visit_query_mut(query),
+
+                Statement::CreateIndex(CreateIndexStatement {
+                    name: _,
+                    on_name: _,
+                    key_parts,
+                    if_not_exists: _,
+                }) => {
+                    if let Some(key_parts) = key_parts {
+                        for key_part in key_parts {
+                            FuncNormalizer.visit_expr_mut(key_part);
+                        }
+                    }
+                }
+
+                // At the time the migration was written, tables, sinks,
+                // sources, and types could not contain references to functions.
+                Statement::CreateTable(_)
+                | Statement::CreateSink(_)
+                | Statement::CreateSource(_)
+                | Statement::CreateType(_) => continue,
 
                 _ => bail!("catalog item contained inappropriate statement: {}", stmt),
             }

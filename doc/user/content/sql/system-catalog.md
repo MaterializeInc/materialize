@@ -101,6 +101,19 @@ Field  | Type       | Meaning
 `oid`  | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the database.
 `name` | [`text`]   | The name of the database.
 
+### `mz_functions`
+
+The `mz_functions` table contains a row for each function in the system.
+
+Field         | Type           | Meaning
+--------------|----------------|--------
+`id`          | [`text`]       | Materialize's unique ID for the function.
+`oid`         | [`oid`]        | A [PostgreSQL-compatible OID][oid] for the function.
+`schema_id`   | [`bigint`]     | The ID of the schema to which the function belongs.
+`name`        | [`text`]       | The name of the function.
+`arg_ids`     | [`text array`] | The function's arguments' types. Elements refers to `mz_types.id`.
+`variadic_id` | [`text`]       | The variadic array parameter's elements, or `NULL` if the function does not have a variadic parameter. Refers to `mz_types.id`.
+
 ### `mz_indexes`
 
 The `mz_indexes` table contains a row for each index in the system.
@@ -128,7 +141,6 @@ Field            | Type        | Meaning
 `on_position`    | [`bigint`]  | If not `NULL`, specifies the 1-indexed position of a column in the relation on which this index is built that determines the value of this index column.
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
-
 
 ### `mz_kafka_sinks`
 
@@ -161,6 +173,14 @@ Field       | Type       | Meaning
 `schema_id` | [`bigint`] | The ID of the schema to which the object belongs.
 `name`      | [`text`]   | The name of the object.
 `type`      | [`text`]   | The type of the object: either `table`, `source`, `view`, `sink`, or `index`.
+
+### `mz_pseudo_types`
+
+The `mz_pseudo_types` table contains a row for each psuedo type in the system.
+
+Field          | Type       | Meaning
+---------------|------------|----------
+`type_id`      | [`text`]   | The ID of the type.
 
 ### `mz_relations`
 
@@ -284,3 +304,4 @@ Materialize with minor changes to the `pg_catalog` compatibility shim.
 [`text`]: /sql/types/text
 [gh-issue]: https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md
 [oid]: /sql/types/oid
+[`text array`]: /sql/types/array

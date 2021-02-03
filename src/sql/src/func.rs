@@ -21,7 +21,6 @@ use itertools::Itertools;
 use lazy_static::lazy_static;
 
 use ore::collections::CollectionExt;
-use ore::str::StrExt;
 use pgrepr::oid;
 use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
 use sql_parser::ast::{Expr, ObjectName, Raw};
@@ -36,7 +35,6 @@ use crate::plan::query::{self, ExprContext, QueryContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, rescale_decimal, CastContext};
-use crate::plan::StatementContext;
 
 /// A specifier for a function or an operator.
 #[derive(Clone, Copy, Debug)]
@@ -287,6 +285,24 @@ pub struct FuncImpl<R> {
     oid: u32,
     params: ParamList,
     op: Operation<R>,
+}
+
+/// Describes how each implementation should be represented in the catalog.
+#[derive(Debug)]
+pub struct FuncImplCatalogDetails {
+    pub oid: u32,
+    pub arg_oids: Vec<u32>,
+    pub variadic_oid: Option<u32>,
+}
+
+impl<R> FuncImpl<R> {
+    fn details(&self) -> FuncImplCatalogDetails {
+        FuncImplCatalogDetails {
+            oid: self.oid,
+            arg_oids: self.params.arg_oids(),
+            variadic_oid: self.params.variadic_oid(),
+        }
+    }
 }
 
 impl<R> fmt::Debug for FuncImpl<R> {
@@ -654,6 +670,22 @@ impl ParamList {
     fn exact_match(&self, types: &[&ScalarType]) -> bool {
         types.iter().enumerate().all(|(i, t)| self[i] == **t)
     }
+
+    /// Generates values underlying data for for `mz_catalog.mz_functions.arg_ids`.
+    fn arg_oids(&self) -> Vec<u32> {
+        match self {
+            ParamList::Exact(p) => p.iter().map(|p| p.oid()).collect::<Vec<_>>(),
+            ParamList::Variadic(p) => vec![p.oid()],
+        }
+    }
+
+    /// Generates values for `mz_catalog.mz_functions.variadic_id`.
+    fn variadic_oid(&self) -> Option<u32> {
+        match self {
+            ParamList::Exact(_) => None,
+            ParamList::Variadic(p) => Some(p.oid()),
+        }
+    }
 }
 
 impl std::ops::Index<usize> for ParamList {
@@ -751,6 +783,29 @@ impl ParamType {
         match self {
             ArrayAny | ListAny | MapAny | ListElementAny | NonVecAny => true,
             Any | DecimalAny | Plain(_) => false,
+        }
+    }
+
+    fn oid(&self) -> u32 {
+        match self {
+            ParamType::Plain(t) => match t {
+                ScalarType::List { custom_oid, .. } | ScalarType::Map { custom_oid, .. }
+                    if custom_oid.is_some() =>
+                {
+                    custom_oid.unwrap()
+                }
+                t => {
+                    let t: pgrepr::Type = t.into();
+                    t.oid()
+                }
+            },
+            ParamType::Any => postgres_types::Type::ANY.oid(),
+            ParamType::ArrayAny => postgres_types::Type::ANYARRAY.oid(),
+            ParamType::DecimalAny => postgres_types::Type::NUMERIC.oid(),
+            ParamType::ListAny => pgrepr::LIST.oid(),
+            ParamType::ListElementAny => postgres_types::Type::ANYELEMENT.oid(),
+            ParamType::MapAny => pgrepr::MAP.oid(),
+            ParamType::NonVecAny => postgres_types::Type::ANYNONARRAY.oid(),
         }
     }
 }
@@ -1178,6 +1233,16 @@ pub enum Func {
     Table(Vec<FuncImpl<TableFuncPlan>>),
 }
 
+impl Func {
+    pub fn func_impls(&self) -> Vec<FuncImplCatalogDetails> {
+        match self {
+            Func::Scalar(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
+            Func::Aggregate(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
+            Func::Table(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
+        }
+    }
+}
+
 /// Functions using this macro should be transformed/planned away before
 /// reaching function selection code, but still need to be present in the
 /// catalog during planning.
@@ -1192,7 +1257,7 @@ macro_rules! catalog_name_only {
 
 lazy_static! {
     /// Correlates a built-in function name to its implementations.
-    static ref PG_CATALOG_BUILTINS: HashMap<&'static str, Func> = {
+    pub static ref PG_CATALOG_BUILTINS: HashMap<&'static str, Func> = {
         use ParamType::*;
         use ScalarType::*;
         builtins! {
@@ -1857,7 +1922,7 @@ lazy_static! {
     };
 
 
-    static ref MZ_INTERNAL_BUILTINS: HashMap<&'static str, Func> = {
+    pub static ref MZ_INTERNAL_BUILTINS: HashMap<&'static str, Func> = {
         use ParamType::*;
         use ScalarType::*;
         builtins! {
@@ -1932,41 +1997,6 @@ fn array_to_string(
         func: VariadicFunc::ArrayToString { elem_type },
         exprs,
     })
-}
-
-/// Resolves the name to a set of function implementations.
-///
-/// If the name does not specify a known built-in function, returns an error.
-pub fn resolve_func(
-    scx: &StatementContext,
-    name: &PartialName,
-) -> Result<&'static Func, anyhow::Error> {
-    // NOTE(benesch): In theory, the catalog should be in charge of resolving
-    // function names. In practice, it is much easier to do our own hardcoded
-    // resolution here while all functions are builtins. This decision will
-    // need to be revisited when either:
-    //   * we support configuring the search path from its default, or
-    //   * we support user-defined functions.
-
-    if let Some(database) = &name.database {
-        // If a database name is provided, we need only verify that the
-        // database exists, as presently functions can only exist in ambient
-        // schemas.
-        let _ = scx.catalog.resolve_database(database)?;
-    }
-    let search_path = match name.schema.as_deref() {
-        Some("pg_catalog") => vec![&*PG_CATALOG_BUILTINS],
-        Some("mz_catalog") => vec![&*MZ_CATALOG_BUILTINS],
-        Some("mz_internal") => vec![&*MZ_INTERNAL_BUILTINS],
-        Some(_) => vec![],
-        None => vec![&*MZ_CATALOG_BUILTINS, &*PG_CATALOG_BUILTINS],
-    };
-    for builtins in search_path {
-        if let Some(func) = builtins.get(&*name.item) {
-            return Ok(func);
-        }
-    }
-    bail!("function {} does not exist", name.to_string().quoted())
 }
 
 lazy_static! {
@@ -2411,7 +2441,7 @@ fn rescale_decimals_to_same(
 /// Resolves the operator to a set of function implementations.
 pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], anyhow::Error> {
     match OP_IMPLS.get(op) {
-        Some(Func::Scalar(impls)) => Ok(impls),
+        Some(Func::Scalar(impls)) => Ok(&impls),
         Some(_) => unreachable!("all operators must be scalar functions"),
         // TODO: these require sql arrays
         // JsonContainsAnyFields
