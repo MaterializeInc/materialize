@@ -306,7 +306,7 @@ mzworkflows:
         --run-seconds=${CHBENCH_RUN_SECONDS:-500}
         -l /dev/stdout
         --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
-        --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+        --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
     - step: ensure-stays-up
       container: chbench
       seconds: 10
@@ -602,7 +602,7 @@ mzworkflows:
         --run-seconds=${CHBENCH_RUN_SECONDS:-1200}
         -l /dev/stdout
         --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
-        --mz-url=postgresql://${MZ_HOST:-materialized}:6875/materialize?sslmode=disable
+        --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
     - step: run
       service: peeker
       daemon: true
@@ -728,7 +728,7 @@ mzworkflows:
         --run-seconds=${CHBENCH_RUN_SECONDS:-864000}
         -l /var/log/chbench.log
         --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
-        --mz-url=postgresql://${MZ_HOST:-materialized}:6875/materialize?sslmode=disable
+        --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
 
   heavy-load-postgres:
     steps:
@@ -743,4 +743,4 @@ mzworkflows:
         --run-seconds=${CHBENCH_RUN_SECONDS:-864000}
         -l /var/log/chbench.log
         --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
-        --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+        --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
