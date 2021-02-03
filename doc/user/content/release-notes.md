@@ -57,7 +57,7 @@ Wrap your release notes at the 80 character mark.
   names.
 
   Materialize instances have a user named `materialize` installed, unless you
-  drop this user with [`DROP USER`](/sql/drop-user). You can add additional
+  drop this user with [`DROP USER`](/sql/drop-user). You can create additional
   users with [`CREATE ROLE`](/sql/create-role).
 
 - Allow setting most [command-line flags](/cli#command-line-flags) via
@@ -69,10 +69,11 @@ Wrap your release notes at the 80 character mark.
 - Prevent a bug that would allow `CREATE OR REPLACE` statements to create dependencies
   on objects that were about to be dropped {{% gh 5272 %}}.
 
-- Remove deprecated `MZ_THREADS` alias for `MZ_WORKERS`.
+- Remove the deprecated `MZ_THREADS` alias for `MZ_WORKERS`.
 
 - Support equality operations on `uuid` data, which enables joins on `uuid`
   columns {{% gh 5540 %}}.
+
 - Add the [`current_user`](/sql/functions/#system-information-func) system
   information function.
 
