@@ -34,9 +34,12 @@ checksum = "ee2a4ec343196209d6594e19543ae87a39f96d5534d7174822a3ad825dd6ed7e"
 
 [[package]]
 name = "ahash"
-version = "0.4.6"
+version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6789e291be47ace86a60303502173d84af8327e3627ecf334356ee0f87a164c"
+checksum = "739f4a8db6605981345c5654f3a85b056ce52f37a39d34da03f25bf2151ea16e"
+dependencies = [
+ "const-random",
+]
 
 [[package]]
 name = "aho-corasick"
@@ -535,6 +538,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-random"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f590d95d011aa80b063ffe3253422ed5aa462af4e9867d43ce8337562bac77c4"
+dependencies = [
+ "const-random-macro",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "const-random-macro"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "615f6e27d000a2bffbc7f2f6a8669179378fa27ee4d0a509e985dfc0a7defb40"
+dependencies = [
+ "getrandom 0.2.1",
+ "lazy_static",
+ "proc-macro-hack",
+ "tiny-keccak",
+]
+
+[[package]]
 name = "const_fn"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -721,6 +746,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crunchy"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a81dae078cea95a014a339291cec439d2f232ebe854a9d672b796c6afafa9b7"
+
+[[package]]
 name = "crypto-mac"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -765,6 +796,7 @@ dependencies = [
 name = "dataflow"
 version = "0.0.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "async-trait",
  "aws-util",
@@ -4302,6 +4334,15 @@ name = "timely_sort"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6e4b497ab85f6e09ea309d696342d198e444e93a4a55500bf3b0c3c53bdd4b3"
+
+[[package]]
+name = "tiny-keccak"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237"
+dependencies = [
+ "crunchy",
+]
 
 [[package]]
 name = "tinytemplate"

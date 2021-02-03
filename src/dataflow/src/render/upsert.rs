@@ -7,11 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
-
+use ahash::AHashMap;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::{operator, Operator};
 use timely::dataflow::operators::map::Map;
@@ -120,7 +118,7 @@ where
         "UpsertCompaction",
         |_cap, _info| {
             // this is a map of (time) -> ((key) -> (value with max offset))
-            let mut values = HashMap::<_, HashMap<_, SourceData>>::new();
+            let mut values = AHashMap::<_, AHashMap<_, SourceData>>::new();
             let mut vector = Vec::new();
 
             move |input, output| {
@@ -139,7 +137,7 @@ where
                     {
                         let entry = values
                             .entry(cap.delayed(&time))
-                            .or_insert_with(HashMap::new)
+                            .or_insert_with(AHashMap::new)
                             .entry(key)
                             .or_insert_with(Default::default);
 

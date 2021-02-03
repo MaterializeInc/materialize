@@ -6,6 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
+ahash = "0.4.0" # hashbrown hasn't released an update that depends on the latest version
 anyhow = "1.0.38"
 async-trait = "0.1.42"
 aws-util = { path = "../aws-util" }
