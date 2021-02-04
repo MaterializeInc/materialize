@@ -56,7 +56,7 @@ quick and dirty analysis:
 
 ```sql
 CREATE MATERIALIZED SOURCE frontend_logs
-FROM S3 BUCKET 'frontend' OBJECTS FROM SCAN MATCHING 'logs/202?/**/*.log'
+FROM S3 OBJECTS FROM SCAN BUCKET 'frontend' MATCHING 'logs/202?/**/*.log'
 WITH (region = 'us-east-2')
 FORMAT TEXT;
 ```
@@ -83,7 +83,7 @@ can use the REGEX format specifier to extract useful data:
 
 ```sql
 CREATE MATERIALIZED SOURCE frontend_logs
-FROM S3 BUCKET 'frontend' OBJECTS FROM SCAN MATCHING 'logs/202?/**/*.log'
+FROM S3 OBJECTS FROM SCAN BUCKET 'frontend' MATCHING 'logs/202?/**/*.log'
 WITH (region = 'us-east-2')
 FORMAT REGEX '(?P<ip>[^ ]+) - - \[?P<dt>([^]]_)\] "(?P<method>\w+) (?P<path>[^ ]+)[^"]+" (?P<status>\d+) (?P<content_length>\d+) "-" "(?P<user_agent>[^"]+)"';
 ```
