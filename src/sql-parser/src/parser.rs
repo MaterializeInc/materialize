@@ -2818,7 +2818,11 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::LParen)?;
         let query = self.parse_query()?;
         self.expect_token(&Token::RParen)?;
-        Ok(Cte { alias, query })
+        Ok(Cte {
+            alias,
+            query,
+            id: (),
+        })
     }
 
     /// Parse a "query body", which is an expression with roughly the
