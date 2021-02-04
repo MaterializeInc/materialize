@@ -23,12 +23,13 @@ use repr::adt::decimal::Significand;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
 use postgres::config::SslMode;
-use postgres::error::{DbError, SqlState};
+use postgres::error::SqlState;
 use postgres::types::Type;
 use postgres::SimpleQueryMessage;
 use postgres_array::{Array, Dimension};
 use postgres_openssl::MakeTlsConnector;
 use tokio::runtime::Runtime;
+use util::PostgresErrorExt;
 
 pub mod util;
 
@@ -75,15 +76,13 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
     }
 
     // A `CREATE` statement with parameters should be rejected.
-    match client.query_one("CREATE VIEW v AS SELECT $3", &[]) {
-        Ok(_) => panic!("query with invalid parameters executed successfully"),
-        Err(err) => {
-            assert!(err.to_string().contains("there is no parameter $3"));
-            // TODO(benesch): this should be `UNDEFINED_PARAMETER`, but blocked
-            // on #3147.
-            assert_eq!(err.code(), Some(&SqlState::INTERNAL_ERROR));
-        }
-    }
+    let err = client
+        .query_one("CREATE VIEW v AS SELECT $3", &[])
+        .unwrap_db_error();
+    // TODO(benesch): this should be `UNDEFINED_PARAMETER`, but blocked
+    // on #3147.
+    assert_eq!(err.message(), "there is no parameter $3");
+    assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
 
     // Test that `INSERT` statements support prepared statements.
     {
@@ -237,22 +236,18 @@ fn test_conn_user() -> Result<(), Box<dyn Error>> {
     let mut client = server.connect(postgres::NoTls)?;
 
     // Attempting to connect as a nonexistent user should fail.
-    match server.pg_config().user("rj").connect(postgres::NoTls) {
-        Ok(_) => panic!("connection with bad user unexpectedly succeeded"),
-        Err(e) => {
-            let e = e
-                .source()
-                .and_then(|e| e.downcast_ref::<DbError>())
-                .unwrap();
-            assert_eq!(e.severity(), "FATAL");
-            assert_eq!(*e.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
-            assert_eq!(e.message(), "role \"rj\" does not exist");
-            assert_eq!(
-                e.hint(),
-                Some("Try connecting as the \"materialize\" user.")
-            );
-        }
-    }
+    let err = server
+        .pg_config()
+        .user("rj")
+        .connect(postgres::NoTls)
+        .unwrap_db_error();
+    assert_eq!(err.severity(), "FATAL");
+    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+    assert_eq!(err.message(), "role \"rj\" does not exist");
+    assert_eq!(
+        err.hint(),
+        Some("Try connecting as the \"materialize\" user.")
+    );
 
     // But should succeed after that user comes into existence.
     client.batch_execute("CREATE ROLE rj LOGIN SUPERUSER")?;

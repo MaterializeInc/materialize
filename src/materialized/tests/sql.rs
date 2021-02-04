@@ -20,10 +20,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use postgres::error::DbError;
 use tempfile::NamedTempFile;
 
-use util::MzTimestamp;
+use util::{MzTimestamp, PostgresErrorExt};
 
 pub mod util;
 
@@ -178,18 +177,12 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         assert_eq!(rows[i].get::<_, String>("data"), format!("line {}", i + 1));
     }
 
-    match client_reads.batch_execute("TAIL v AS OF 1") {
-        Ok(()) => panic!("TAIL with bad AS OF unexpectedly succeeded"),
-        Err(e) => {
-            let e = e
-                .source()
-                .and_then(|e| e.downcast_ref::<DbError>())
-                .unwrap();
-            assert!(e
-                .message()
-                .starts_with("Timestamp (1) is not valid for all inputs"));
-        }
-    }
+    let err = client_reads
+        .batch_execute("TAIL v AS OF 1")
+        .unwrap_db_error();
+    assert!(err
+        .message()
+        .starts_with("Timestamp (1) is not valid for all inputs"));
 
     Ok(())
 }
@@ -492,10 +485,9 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
     // Ensure that client_b can query v, but not temp_v.
     let count: i64 = client_b.query_one(query_v, &[])?.get("count");
     assert_eq!(4, count);
-    match client_b.query_one(query_temp_v, &[]) {
-        Ok(_) => panic!("query unexpectedly succeeded"),
-        Err(e) => assert!(e.to_string().contains("unknown catalog item \'temp_v\'")),
-    }
+
+    let err = client_b.query_one(query_temp_v, &[]).unwrap_db_error();
+    assert_eq!(err.message(), "unknown catalog item \'temp_v\'");
 
     Ok(())
 }
