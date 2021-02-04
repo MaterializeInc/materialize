@@ -125,20 +125,20 @@ impl fmt::Display for SourceInstanceId {
 ///     Kafka -> partition
 ///     Kinesis -> shard
 ///     File -> only one
-///     S3 -> only one
+///     S3 -> bucket
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
     Kinesis(String),
     File,
-    // TODO(bwm): should this partition based on object keys?
-    S3,
+    S3 { bucket: String },
 }
 
 impl fmt::Display for PartitionId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PartitionId::Kafka(id) => write!(f, "{}", id.to_string()),
+            PartitionId::S3 { bucket } => write!(f, "{}", bucket),
             _ => write!(f, "0"),
         }
     }

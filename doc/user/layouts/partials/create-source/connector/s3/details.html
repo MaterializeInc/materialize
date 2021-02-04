@@ -11,7 +11,7 @@ The S3 source is designed to ingest a large volume of static data from S3.
 
 #### Scanning S3 Buckets
 
-The **OBJECTS FROM SCAN** syntax causes S3 sources to issue [ListBucket][] requests to collect the
+The **OBJECTS FROM SCAN BUCKET** syntax causes S3 sources to issue [ListBucket][] requests to collect the
 names of objects to collect. After collecting the list of keys, their names are checked against
 the **MATCHING** clause, if present, before downloading and extracting objects line by line.
 
