@@ -31,38 +31,76 @@ use super::context::Context;
 use crate::render::context::Arrangement;
 use crate::render::datum_vec::DatumVec;
 
+// Top level object for the Reduce lower-level IR
 #[derive(Clone, Debug)]
 enum LIrReduceExpr {
+    // No aggregations, just distinct
     Distinct,
+    // Aggregations that can be computed in place
     Accumulable(AccumulableReduceExpr),
+    // Aggregations that can be computed hierarchically
     Hierarchical(HierarchicalReduceExpr),
+    // Aggregations that cannot be computed in place
+    // or hierarchically.
     Basic(BasicReduceExpr),
+    // A mix of multiple types of aggregates that need
+    // to be combined together.
     Collation(CollationReduceExpr),
 }
 
+// LIR node for accumulable reductions
 #[derive(Clone, Debug)]
 struct AccumulableReduceExpr {
+    // Aggregations being computed in-place, + the
+    // index for each aggregate in the final output
     aggrs: Vec<(usize, AggregateExpr)>,
 }
 
+// LIR node for hierarchical reductions
 #[derive(Clone, Debug)]
 enum HierarchicalReduceExpr {
+    // LIR node for hierarchical, monotonic reductions
     Monotonic(Vec<(usize, AggregateExpr)>),
+    // LIR node for hierarchical reductions that are not
+    // monotonic
+    // TODO: is there a better name here
     Regular(RegularHierarchicalReduceExpr),
 }
 
+// LIR node for hierarchical reductions that are not
+// monotonic. This gets rendered with a series of reduce
+// operators that serve as a min / max heap
 #[derive(Clone, Debug)]
 struct RegularHierarchicalReduceExpr {
+    // Aggregations being computed in-place, + the
+    // index for each aggregate in the final output
     aggrs: Vec<(usize, AggregateExpr)>,
+    // Sequence of bitshifts for each key sub-division expression.
+    // To perform a large hierarchical reduction with stable runtimes
+    // under updates we'll subdivide the group key into buckets, compute
+    // the reduction in each of those buckets and then combine into a
+    // coarser bucket and redo the reduction in another layer.
+    // These shifts denote the log_base_2 of the number of
+    // buckets in each layer.
     shifts: Vec<usize>,
 }
 
+// LIR node for basic reductions - those that are neither
+// computed in place nor computed hierarchically.
 #[derive(Clone, Debug)]
 enum BasicReduceExpr {
+    // LIR node for reductions with only a single basic reduction
     Single(usize, AggregateExpr),
+    // LIR node for reductions with multiple basic reductions
+    // These need to then be collated together in an additional
+    // reduction.
     Multiple(Vec<(usize, AggregateExpr)>),
 }
 
+// LIR for reduce collation. We use this when the underlying
+// list of aggregates contains more than one type of reduction
+// to stitch answers together in the order requested by the user
+// TODO: could we express this as a delta join
 #[derive(Clone, Debug, Default)]
 struct CollationReduceExpr {
     accumulable: Option<AccumulableReduceExpr>,
@@ -262,6 +300,8 @@ where
     }
 }
 
+// Generate a lower-level IR node for the supplied aggregations that
+// describes what the resulting dataflow will look like.
 fn plan_reduce(
     aggregates: Vec<AggregateExpr>,
     monotonic: bool,
@@ -310,10 +350,13 @@ fn plan_reduce(
         }
     };
 
+    // If we don't have any aggregations we are just computing a distinct.
     if aggregates.is_empty() {
         return LIrReduceExpr::Distinct;
     }
 
+    // Otherwise, we need to group aggregations according to their
+    // reduction type (accumulable, hierarchical, or basic)
     let mut reduction_types = BTreeMap::new();
     // We need to make sure that each list of aggregates by type forms
     // a subsequence of the overall sequence of aggregates.
@@ -323,15 +366,19 @@ fn plan_reduce(
         aggregates_list.push((index, aggregates[index].clone()));
     }
 
+    // Convert each grouped list of reductions into a LIR node.
     let lir: Vec<_> = reduction_types
         .into_iter()
         .map(|(typ, aggregates_list)| lower(typ, aggregates_list))
         .collect();
 
+    // If we only have a single type of aggregation present we can
+    // render that directly
     if lir.len() == 1 {
         return lir[0].clone();
     }
 
+    // Otherwise, we have to stitch reductions together.
     assert!(lir.len() <= 3);
     let mut collation: CollationReduceExpr = Default::default();
     let aggregate_types = aggregates
@@ -362,6 +409,7 @@ fn plan_reduce(
     LIrReduceExpr::Collation(collation)
 }
 
+// Render a dataflow based on the provided LIR node.
 fn build_reduce<G>(collection: Collection<G, (Row, Row)>, lir: LIrReduceExpr) -> Arrangement<G, Row>
 where
     G: Scope,
@@ -396,6 +444,7 @@ where
         LIrReduceExpr::Hierarchical(expr) => build_hierarchical(collection, expr, true),
         LIrReduceExpr::Basic(expr) => build_basic(collection, expr, true),
         LIrReduceExpr::Collation(expr) => {
+            // First, we need to render our constituent aggregations.
             let mut to_collate = vec![];
 
             if let Some(accumulable) = expr.accumulable {
@@ -416,12 +465,18 @@ where
                     build_basic(collection.clone(), basic, false),
                 ));
             }
-
+            // Now we need to collate them together.
             build_collation(to_collate, expr.aggregate_types, &mut collection.scope())
         }
     }
 }
 
+// Collate multiple arrangements together into a single arrangement. This
+// is basically the same thing as a join on the group key followed by
+// shuffling the values into the correct order.
+// This implementation assumes that all input arrangements
+// present values in a way thats respects the desired output order,
+// so we can do a linear merge to form the output.
 fn build_collation<G>(
     arrangements: Vec<(ReductionType, Arrangement<G, Row>)>,
     aggregate_types: Vec<ReductionType>,
