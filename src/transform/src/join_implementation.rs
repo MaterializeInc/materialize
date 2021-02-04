@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{Id, JoinInputMapper, RelationExpr, ScalarExpr};
+use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
 /// Determines the join implementation for join operators.
 #[derive(Debug)]
@@ -28,7 +28,7 @@ pub struct JoinImplementation;
 impl crate::Transform for JoinImplementation {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let mut arranged = HashMap::new();
@@ -42,25 +42,25 @@ impl crate::Transform for JoinImplementation {
 }
 
 impl JoinImplementation {
-    /// Pre-order visitor for each `RelationExpr` to find join operators.
+    /// Pre-order visitor for each `MirRelationExpr` to find join operators.
     ///
     /// This method accumulates state about let-bound arrangements, so that
     /// join operators can more accurately assess their available arrangements.
     pub fn action_recursive(
         &self,
-        relation: &mut RelationExpr,
-        arranged: &mut HashMap<Id, Vec<Vec<ScalarExpr>>>,
+        relation: &mut MirRelationExpr,
+        arranged: &mut HashMap<Id, Vec<Vec<MirScalarExpr>>>,
     ) {
-        if let RelationExpr::Let { id, value, body } = relation {
+        if let MirRelationExpr::Let { id, value, body } = relation {
             self.action_recursive(value, arranged);
             match &**value {
-                RelationExpr::ArrangeBy { keys, .. } => {
+                MirRelationExpr::ArrangeBy { keys, .. } => {
                     arranged.insert(Id::Local(*id), keys.clone());
                 }
-                RelationExpr::Reduce { group_key, .. } => {
+                MirRelationExpr::Reduce { group_key, .. } => {
                     arranged.insert(
                         Id::Local(*id),
-                        vec![(0..group_key.len()).map(ScalarExpr::Column).collect()],
+                        vec![(0..group_key.len()).map(MirScalarExpr::Column).collect()],
                     );
                 }
                 _ => {}
@@ -74,8 +74,12 @@ impl JoinImplementation {
     }
 
     /// Determines the join implementation for join operators.
-    pub fn action(&self, relation: &mut RelationExpr, indexes: &HashMap<Id, Vec<Vec<ScalarExpr>>>) {
-        if let RelationExpr::Join {
+    pub fn action(
+        &self,
+        relation: &mut MirRelationExpr,
+        indexes: &HashMap<Id, Vec<Vec<MirScalarExpr>>>,
+    ) {
+        if let MirRelationExpr::Join {
             inputs,
             equivalences,
             ..
@@ -100,7 +104,7 @@ impl JoinImplementation {
             for index in 0..inputs.len() {
                 // We can work around filters, as we can lift the predicates into the join execution.
                 let mut input = &mut inputs[index];
-                while let RelationExpr::Filter {
+                while let MirRelationExpr::Filter {
                     input: inner,
                     predicates: _,
                 } = input
@@ -109,24 +113,24 @@ impl JoinImplementation {
                 }
                 // Get and ArrangeBy expressions contribute arrangements.
                 match input {
-                    RelationExpr::Get { id, typ: _ } => {
+                    MirRelationExpr::Get { id, typ: _ } => {
                         if let Some(keys) = indexes.get(id) {
                             available_arrangements[index].extend(keys.clone());
                         }
                     }
-                    RelationExpr::ArrangeBy { input, keys } => {
+                    MirRelationExpr::ArrangeBy { input, keys } => {
                         // We may use any presented arrangement keys.
                         available_arrangements[index].extend(keys.clone());
-                        if let RelationExpr::Get { id, typ: _ } = &**input {
+                        if let MirRelationExpr::Get { id, typ: _ } = &**input {
                             if let Some(keys) = indexes.get(id) {
                                 available_arrangements[index].extend(keys.clone());
                             }
                         }
                     }
-                    RelationExpr::Reduce { group_key, .. } => {
+                    MirRelationExpr::Reduce { group_key, .. } => {
                         // The first `keys.len()` columns form an arrangement key.
                         available_arrangements[index]
-                            .push((0..group_key.len()).map(ScalarExpr::Column).collect());
+                            .push((0..group_key.len()).map(MirScalarExpr::Column).collect());
                     }
                     _ => {}
                 }
@@ -173,20 +177,20 @@ impl JoinImplementation {
 
 mod delta_queries {
 
-    use expr::{JoinImplementation, JoinInputMapper, RelationExpr, ScalarExpr};
+    use expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
     /// Creates a delta query plan, and any predicates that need to be lifted.
     ///
     /// The method returns `None` if it fails to find a sufficiently pleasing plan.
     pub fn plan(
-        join: &RelationExpr,
+        join: &MirRelationExpr,
         input_mapper: &JoinInputMapper,
-        available: &[Vec<Vec<ScalarExpr>>],
+        available: &[Vec<Vec<MirScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
-    ) -> Option<RelationExpr> {
+    ) -> Option<MirRelationExpr> {
         let mut new_join = join.clone();
 
-        if let RelationExpr::Join {
+        if let MirRelationExpr::Join {
             inputs,
             equivalences,
             demand,
@@ -264,18 +268,18 @@ mod delta_queries {
 
 mod differential {
 
-    use expr::{JoinImplementation, JoinInputMapper, RelationExpr, ScalarExpr};
+    use expr::{JoinImplementation, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
     /// Creates a linear differential plan, and any predicates that need to be lifted.
     pub fn plan(
-        join: &RelationExpr,
+        join: &MirRelationExpr,
         input_mapper: &JoinInputMapper,
-        available: &[Vec<Vec<ScalarExpr>>],
+        available: &[Vec<Vec<MirScalarExpr>>],
         unique_keys: &[Vec<Vec<usize>>],
-    ) -> Option<RelationExpr> {
+    ) -> Option<MirRelationExpr> {
         let mut new_join = join.clone();
 
-        if let RelationExpr::Join {
+        if let MirRelationExpr::Join {
             inputs,
             equivalences,
             demand,
@@ -382,11 +386,11 @@ mod differential {
 ///
 /// Lift filter predicates when all needed arrangements are otherwise available.
 fn implement_arrangements<'a>(
-    inputs: &mut [RelationExpr],
-    available_arrangements: &[Vec<Vec<ScalarExpr>>],
+    inputs: &mut [MirRelationExpr],
+    available_arrangements: &[Vec<Vec<MirScalarExpr>>],
     input_mapper: &JoinInputMapper,
-    needed_arrangements: impl Iterator<Item = &'a (usize, Vec<ScalarExpr>)>,
-    lifted_predicates: &mut Vec<ScalarExpr>,
+    needed_arrangements: impl Iterator<Item = &'a (usize, Vec<MirScalarExpr>)>,
+    lifted_predicates: &mut Vec<MirScalarExpr>,
 ) {
     // Collect needed arrangements by source index.
     let mut needed = vec![Vec::new(); inputs.len()];
@@ -405,7 +409,7 @@ fn implement_arrangements<'a>(
                 .iter()
                 .all(|key| available_arrangements[index].contains(key))
         {
-            while let RelationExpr::Filter {
+            while let MirRelationExpr::Filter {
                 input: inner,
                 predicates,
             } = &mut inputs[index]
@@ -419,21 +423,21 @@ fn implement_arrangements<'a>(
             }
         }
         // Clean up existing arrangements, and install one with the needed keys.
-        while let RelationExpr::ArrangeBy { input: inner, .. } = &mut inputs[index] {
+        while let MirRelationExpr::ArrangeBy { input: inner, .. } = &mut inputs[index] {
             inputs[index] = inner.take_dangerous();
         }
         if !needed.is_empty() {
-            inputs[index] = RelationExpr::arrange_by(inputs[index].take_dangerous(), needed);
+            inputs[index] = MirRelationExpr::arrange_by(inputs[index].take_dangerous(), needed);
         }
     }
 }
 
 fn optimize_orders(
-    equivalences: &[Vec<ScalarExpr>],
-    available: &[Vec<Vec<ScalarExpr>>],
+    equivalences: &[Vec<MirScalarExpr>],
+    available: &[Vec<Vec<MirScalarExpr>>],
     unique_keys: &[Vec<Vec<usize>>],
     input_mapper: &JoinInputMapper,
-) -> Vec<Vec<(Characteristics, Vec<ScalarExpr>, usize)>> {
+) -> Vec<Vec<(Characteristics, Vec<MirScalarExpr>, usize)>> {
     let mut orderer = Orderer::new(equivalences, available, unique_keys, input_mapper);
     (0..available.len())
         .map(move |i| orderer.optimize_order_for(i))
@@ -472,25 +476,25 @@ impl Characteristics {
 
 struct Orderer<'a> {
     inputs: usize,
-    equivalences: &'a [Vec<ScalarExpr>],
-    arrangements: &'a [Vec<Vec<ScalarExpr>>],
+    equivalences: &'a [Vec<MirScalarExpr>],
+    arrangements: &'a [Vec<Vec<MirScalarExpr>>],
     unique_keys: &'a [Vec<Vec<usize>>],
     input_mapper: &'a JoinInputMapper,
     reverse_equivalences: Vec<Vec<(usize, usize)>>,
     unique_arrangement: Vec<Vec<bool>>,
 
-    order: Vec<(Characteristics, Vec<ScalarExpr>, usize)>,
+    order: Vec<(Characteristics, Vec<MirScalarExpr>, usize)>,
     placed: Vec<bool>,
-    bound: Vec<Vec<ScalarExpr>>,
+    bound: Vec<Vec<MirScalarExpr>>,
     equivalences_active: Vec<bool>,
     arrangement_active: Vec<Vec<usize>>,
-    priority_queue: std::collections::BinaryHeap<(Characteristics, Vec<ScalarExpr>, usize)>,
+    priority_queue: std::collections::BinaryHeap<(Characteristics, Vec<MirScalarExpr>, usize)>,
 }
 
 impl<'a> Orderer<'a> {
     fn new(
-        equivalences: &'a [Vec<ScalarExpr>],
-        arrangements: &'a [Vec<Vec<ScalarExpr>>],
+        equivalences: &'a [Vec<MirScalarExpr>],
+        arrangements: &'a [Vec<Vec<MirScalarExpr>>],
         unique_keys: &'a [Vec<Vec<usize>>],
         input_mapper: &'a JoinInputMapper,
     ) -> Self {
@@ -508,11 +512,10 @@ impl<'a> Orderer<'a> {
         let mut unique_arrangement = vec![Vec::new(); inputs];
         for (input, keys) in arrangements.iter().enumerate() {
             for key in keys.iter() {
-                unique_arrangement[input].push(
-                    unique_keys[input]
-                        .iter()
-                        .any(|cols| cols.iter().all(|c| key.contains(&ScalarExpr::Column(*c)))),
-                );
+                unique_arrangement[input].push(unique_keys[input].iter().any(|cols| {
+                    cols.iter()
+                        .all(|c| key.contains(&MirScalarExpr::Column(*c)))
+                }));
             }
         }
 
@@ -542,7 +545,7 @@ impl<'a> Orderer<'a> {
     fn optimize_order_for(
         &mut self,
         start: usize,
-    ) -> Vec<(Characteristics, Vec<ScalarExpr>, usize)> {
+    ) -> Vec<(Characteristics, Vec<MirScalarExpr>, usize)> {
         self.order.clear();
         self.priority_queue.clear();
         for input in 0..self.inputs {
@@ -697,8 +700,9 @@ impl<'a> Orderer<'a> {
                                     }
                                 }
                                 let is_unique = self.unique_keys[rel].iter().any(|cols| {
-                                    cols.iter()
-                                        .all(|c| self.bound[rel].contains(&ScalarExpr::Column(*c)))
+                                    cols.iter().all(|c| {
+                                        self.bound[rel].contains(&MirScalarExpr::Column(*c))
+                                    })
                                 });
                                 self.priority_queue.push((
                                     Characteristics::new(

@@ -16,12 +16,14 @@
 //! `Value`s are easily converted to and from [`repr::Datum`]s. See, for
 //! example, the [`values_from_row`] function.
 
-#![forbid(missing_docs)]
 #![deny(clippy::as_conversions)]
+#![deny(missing_docs)]
 
 mod format;
 mod types;
 mod value;
+
+pub mod oid;
 
 pub use format::Format;
 pub use types::{Type, LIST, MAP};

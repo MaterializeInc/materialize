@@ -24,19 +24,22 @@ use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
-use expr::{ExprHumanizer, GlobalId, OptimizedRelationExpr, ScalarExpr};
+use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
-use sql::catalog::{Catalog as SqlCatalog, CatalogError as SqlCatalogError};
+use sql::catalog::{
+    Catalog as SqlCatalog, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+    CatalogItemType as SqlCatalogItemType,
+};
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
 
 use crate::catalog::builtin::{
-    Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
 };
-use crate::catalog::error::{Error, ErrorKind};
+use crate::catalog::error::ErrorKind;
 use crate::catalog::migrate::CONTENT_MIGRATIONS;
 use crate::session::Session;
 
@@ -48,6 +51,7 @@ pub mod builtin;
 pub mod storage;
 
 pub use crate::catalog::config::Config;
+pub use crate::catalog::error::Error;
 
 const SYSTEM_CONN_ID: u32 = 0;
 
@@ -82,9 +86,10 @@ pub struct Catalog {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
     by_oid: HashMap<u32, GlobalId>,
-    indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>>,
+    indexes: HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
+    roles: HashMap<String, Role>,
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
     config: sql::catalog::CatalogConfig,
@@ -96,6 +101,7 @@ pub struct ConnCatalog<'a> {
     conn_id: u32,
     database: String,
     search_path: &'a [&'a str],
+    user: String,
 }
 
 impl ConnCatalog<'_> {
@@ -120,6 +126,15 @@ pub struct Schema {
     #[serde(skip)]
     pub oid: u32,
     pub items: BTreeMap<String, GlobalId>,
+    pub functions: BTreeMap<String, GlobalId>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Role {
+    pub name: String,
+    pub id: i64,
+    #[serde(skip)]
+    pub oid: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -131,7 +146,7 @@ pub struct CatalogEntry {
     name: FullName,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub enum CatalogItem {
     Table(Table),
     Source(Source),
@@ -139,9 +154,10 @@ pub enum CatalogItem {
     Sink(Sink),
     Index(Index),
     Type(Type),
+    Func(Func),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Table {
     pub create_sql: String,
     pub plan_cx: PlanContext,
@@ -150,7 +166,7 @@ pub struct Table {
     pub defaults: Vec<Expr<Raw>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Source {
     pub create_sql: String,
     pub plan_cx: PlanContext,
@@ -158,7 +174,7 @@ pub struct Source {
     pub desc: RelationDesc,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Sink {
     pub create_sql: String,
     pub plan_cx: PlanContext,
@@ -169,37 +185,38 @@ pub struct Sink {
     pub as_of: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub enum SinkConnectorState {
     Pending(SinkConnectorBuilder),
     Ready(SinkConnector),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct View {
     pub create_sql: String,
     pub plan_cx: PlanContext,
-    pub optimized_expr: OptimizedRelationExpr,
+    pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
     pub conn_id: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Index {
     pub create_sql: String,
     pub plan_cx: PlanContext,
     pub on: GlobalId,
-    pub keys: Vec<ScalarExpr>,
+    pub keys: Vec<MirScalarExpr>,
+    pub conn_id: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Type {
     pub create_sql: String,
     pub plan_cx: PlanContext,
     pub inner: TypeInner,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub enum TypeInner {
     Array {
         element_id: GlobalId,
@@ -212,6 +229,7 @@ pub enum TypeInner {
         key_id: GlobalId,
         value_id: GlobalId,
     },
+    Pseudo,
 }
 
 impl From<sql::plan::TypeInner> for TypeInner {
@@ -222,28 +240,46 @@ impl From<sql::plan::TypeInner> for TypeInner {
         }
     }
 }
+#[derive(Debug, Clone, Serialize)]
+pub struct Func {
+    pub plan_cx: PlanContext,
+    #[serde(skip)]
+    pub inner: &'static sql::func::Func,
+}
 
 impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
-    pub fn type_string(&self) -> &'static str {
+    fn typ(&self) -> sql::catalog::CatalogItemType {
         match self {
-            CatalogItem::Table(_) => "table",
-            CatalogItem::Source(_) => "source",
-            CatalogItem::Sink(_) => "sink",
-            CatalogItem::View(_) => "view",
-            CatalogItem::Index(_) => "index",
-            CatalogItem::Type(_) => "type",
+            CatalogItem::Table(_) => sql::catalog::CatalogItemType::Table,
+            CatalogItem::Source(_) => sql::catalog::CatalogItemType::Source,
+            CatalogItem::Sink(_) => sql::catalog::CatalogItemType::Sink,
+            CatalogItem::View(_) => sql::catalog::CatalogItemType::View,
+            CatalogItem::Index(_) => sql::catalog::CatalogItemType::Index,
+            CatalogItem::Type(_) => sql::catalog::CatalogItemType::Type,
+            CatalogItem::Func(_) => sql::catalog::CatalogItemType::Func,
         }
     }
 
     pub fn desc(&self, name: &FullName) -> Result<&RelationDesc, SqlCatalogError> {
         match &self {
-            CatalogItem::Table(tbl) => Ok(&tbl.desc),
             CatalogItem::Source(src) => Ok(&src.desc),
-            CatalogItem::Sink(_) => Err(SqlCatalogError::InvalidSinkDependency(name.to_string())),
+            CatalogItem::Table(tbl) => Ok(&tbl.desc),
             CatalogItem::View(view) => Ok(&view.desc),
-            CatalogItem::Index(_) => Err(SqlCatalogError::InvalidIndexDependency(name.to_string())),
-            CatalogItem::Type(_) => Err(SqlCatalogError::InvalidTypeDependency(name.to_string())),
+            CatalogItem::Func(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_) => Err(SqlCatalogError::InvalidDependency {
+                name: name.to_string(),
+                typ: self.typ(),
+            }),
+        }
+    }
+
+    pub fn func(&self, name: &FullName) -> Result<&'static sql::func::Func, SqlCatalogError> {
+        match &self {
+            CatalogItem::Func(func) => Ok(func.inner),
+            _ => Err(SqlCatalogError::UnknownFunction(name.to_string())),
         }
     }
 
@@ -251,17 +287,18 @@ impl CatalogItem {
     /// upon.
     pub fn uses(&self) -> Vec<GlobalId> {
         match self {
-            CatalogItem::Table(_) => vec![],
-            CatalogItem::Source(_) => vec![],
-            CatalogItem::Sink(sink) => vec![sink.from],
-            CatalogItem::View(view) => view.optimized_expr.as_ref().global_uses(),
+            CatalogItem::Func(_) => vec![],
             CatalogItem::Index(idx) => vec![idx.on],
+            CatalogItem::Sink(sink) => vec![sink.from],
+            CatalogItem::Source(_) => vec![],
+            CatalogItem::Table(_) => vec![],
             CatalogItem::Type(typ) => match &typ.inner {
                 TypeInner::Array { element_id } => vec![*element_id],
-                TypeInner::Base { .. } => vec![],
+                TypeInner::Base | TypeInner::Pseudo => vec![],
                 TypeInner::List { element_id } => vec![*element_id],
                 TypeInner::Map { key_id, value_id } => vec![*key_id, *value_id],
             },
+            CatalogItem::View(view) => view.optimized_expr.as_ref().global_uses(),
         }
     }
 
@@ -269,11 +306,12 @@ impl CatalogItem {
     /// or if it's actually a real item.
     pub fn is_placeholder(&self) -> bool {
         match self {
-            CatalogItem::Table(_)
-            | CatalogItem::Source(_)
-            | CatalogItem::View(_)
+            CatalogItem::Func(_)
             | CatalogItem::Index(_)
-            | CatalogItem::Type(_) => false,
+            | CatalogItem::Source(_)
+            | CatalogItem::Table(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::View(_) => false,
             CatalogItem::Sink(s) => match s.connector {
                 SinkConnectorState::Pending(_) => true,
                 SinkConnectorState::Ready(_) => false,
@@ -286,6 +324,7 @@ impl CatalogItem {
     pub fn conn_id(&self) -> Option<u32> {
         match self {
             CatalogItem::View(view) => view.conn_id,
+            CatalogItem::Index(index) => index.conn_id,
             _ => None,
         }
     }
@@ -340,7 +379,9 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Index(i))
             }
-            CatalogItem::Type(_) => unreachable!("types cannot be renamed"),
+            CatalogItem::Func(_) | CatalogItem::Type(_) => {
+                unreachable!("{}s cannot be renamed", self.typ())
+            }
         }
     }
 }
@@ -349,6 +390,11 @@ impl CatalogEntry {
     /// Reports the description of the datums produced by this catalog item.
     pub fn desc(&self) -> Result<&RelationDesc, SqlCatalogError> {
         self.item.desc(&self.name)
+    }
+
+    /// Returns the [`sql::func::Func`] associated with this `CatalogEntry`.
+    pub fn func(&self) -> Result<&'static sql::func::Func, SqlCatalogError> {
+        self.item.func(&self.name)
     }
 
     /// Reports whether this catalog entry is a table.
@@ -403,6 +449,7 @@ impl Catalog {
             indexes: HashMap::new(),
             ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
+            roles: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
             config: sql::catalog::CatalogConfig {
@@ -454,6 +501,7 @@ impl Catalog {
                     id,
                     oid,
                     items: BTreeMap::new(),
+                    functions: BTreeMap::new(),
                 },
             );
             events.push(Event::CreatedSchema {
@@ -462,6 +510,20 @@ impl Catalog {
                 schema_name,
                 oid,
             })
+        }
+
+        let roles = catalog.storage().load_roles()?;
+        for (id, name) in roles {
+            let oid = catalog.allocate_oid()?;
+            catalog.roles.insert(
+                name.clone(),
+                Role {
+                    name: name.clone(),
+                    id,
+                    oid,
+                },
+            );
+            events.push(Event::CreatedRole { name, id, oid });
         }
 
         for builtin in BUILTINS.values() {
@@ -501,7 +563,7 @@ impl Catalog {
                                     .variant
                                     .index_by()
                                     .into_iter()
-                                    .map(ScalarExpr::Column)
+                                    .map(MirScalarExpr::Column)
                                     .collect(),
                                 create_sql: super::coord::index_sql(
                                     index_name,
@@ -510,6 +572,7 @@ impl Catalog {
                                     &log.variant.index_by(),
                                 ),
                                 plan_cx: PlanContext::default(),
+                                conn_id: None,
                             }),
                         ),
                     );
@@ -550,10 +613,11 @@ impl Catalog {
                                 on: table.id,
                                 keys: index_columns
                                     .iter()
-                                    .map(|i| ScalarExpr::Column(*i))
+                                    .map(|i| MirScalarExpr::Column(*i))
                                     .collect(),
                                 create_sql: index_sql,
                                 plan_cx: PlanContext::default(),
+                                conn_id: None,
                             }),
                         ),
                     );
@@ -593,8 +657,23 @@ impl Catalog {
                                         .items[element_type.name()];
                                     TypeInner::Array { element_id }
                                 }
-                                _ => TypeInner::Base,
+                                postgres_types::Kind::Pseudo => TypeInner::Pseudo,
+                                postgres_types::Kind::Simple => TypeInner::Base,
+                                _ => unreachable!(),
                             },
+                        }),
+                    ));
+                }
+
+                Builtin::Func(func) => {
+                    let oid = catalog.allocate_oid()?;
+                    events.push(catalog.insert_item(
+                        func.id,
+                        oid,
+                        name.clone(),
+                        CatalogItem::Func(Func {
+                            plan_cx: PlanContext::default(),
+                            inner: func.inner,
                         }),
                     ));
                 }
@@ -670,6 +749,7 @@ impl Catalog {
             conn_id: session.conn_id(),
             database: session.vars().database().into(),
             search_path: session.vars().search_path(),
+            user: session.user().into(),
         }
     }
 
@@ -681,6 +761,7 @@ impl Catalog {
             conn_id: SYSTEM_CONN_ID,
             database: "materialize".into(),
             search_path: &[],
+            user: "mz_system".into(),
         }
     }
 
@@ -733,6 +814,40 @@ impl Catalog {
         Err(SqlCatalogError::UnknownSchema(schema_name.into()))
     }
 
+    /// Resolves `name` to a non-function [`CatalogEntry`].
+    pub fn resolve_item(
+        &self,
+        current_database: &str,
+        search_path: &[&str],
+        name: &PartialName,
+        conn_id: u32,
+    ) -> Result<&CatalogEntry, SqlCatalogError> {
+        self.resolve(
+            |schema| &schema.items,
+            current_database,
+            search_path,
+            name,
+            conn_id,
+        )
+    }
+
+    /// Resolves `name` to a function [`CatalogEntry`].
+    pub fn resolve_function(
+        &self,
+        current_database: &str,
+        search_path: &[&str],
+        name: &PartialName,
+        conn_id: u32,
+    ) -> Result<&CatalogEntry, SqlCatalogError> {
+        self.resolve(
+            |schema| &schema.functions,
+            current_database,
+            search_path,
+            name,
+            conn_id,
+        )
+    }
+
     /// Resolves [`PartialName`] into a [`FullName`].
     ///
     /// If `name` does not specify a database, the `current_database` is used.
@@ -741,6 +856,7 @@ impl Catalog {
     #[allow(clippy::useless_let_if_seq)]
     pub fn resolve(
         &self,
+        get_schema_entries: fn(&Schema) -> &BTreeMap<String, GlobalId>,
         current_database: &str,
         search_path: &[&str],
         name: &PartialName,
@@ -773,7 +889,8 @@ impl Catalog {
                     Err(SqlCatalogError::UnknownSchema(_)) => continue,
                     Err(e) => return Err(e),
                 };
-            if let Some(id) = schema.items.get(&name.item) {
+
+            if let Some(id) = get_schema_entries(schema).get(&name.item) {
                 return Ok(&self.by_id[id]);
             }
         }
@@ -797,6 +914,11 @@ impl Catalog {
         &self.by_id[id]
     }
 
+    pub fn get_by_oid(&self, oid: &u32) -> &CatalogEntry {
+        let id = &self.by_oid[oid];
+        &self.by_id[id]
+    }
+
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
     pub fn create_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
@@ -811,6 +933,7 @@ impl Catalog {
                 id: -1,
                 oid,
                 items: BTreeMap::new(),
+                functions: BTreeMap::new(),
             },
         );
         Ok(())
@@ -823,11 +946,12 @@ impl Catalog {
     }
 
     pub fn drop_temp_item_ops(&mut self, conn_id: u32) -> Vec<Op> {
-        self.temporary_schemas[&conn_id]
+        let ids: Vec<GlobalId> = self.temporary_schemas[&conn_id]
             .items
             .values()
-            .map(|id| Op::DropItem(*id))
-            .collect()
+            .cloned()
+            .collect();
+        self.drop_items_ops(&ids)
     }
 
     pub fn drop_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
@@ -887,7 +1011,7 @@ impl Catalog {
         item: CatalogItem,
     ) -> Event {
         if !item.is_placeholder() {
-            info!("create {} {} ({})", item.type_string(), name, id);
+            info!("create {} {} ({})", item.typ(), name, id);
         }
 
         let entry = CatalogEntry {
@@ -917,7 +1041,7 @@ impl Catalog {
                     .unwrap()
                     .push((id, index.keys.clone()));
             }
-            CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
+            CatalogItem::Func(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
         }
 
         let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
@@ -925,7 +1049,11 @@ impl Catalog {
             .get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
             .expect("catalog out of sync");
         let schema_id = schema.id;
-        schema.items.insert(entry.name.item.clone(), entry.id);
+        if let CatalogItem::Func(_) = entry.item() {
+            schema.functions.insert(entry.name.item.clone(), entry.id);
+        } else {
+            schema.items.insert(entry.name.item.clone(), entry.id);
+        }
         self.by_oid.insert(oid, entry.id);
         self.by_id.insert(entry.id, entry);
 
@@ -1008,28 +1136,31 @@ impl Catalog {
 
     /// Gets GlobalIds of temporary items to be created, checks for name collisions
     /// within a connection id.
-    fn temporary_ids(&mut self, ops: &[Op]) -> Result<Vec<GlobalId>, Error> {
-        let mut creating = HashSet::new();
-        let mut temporary_ids = Vec::new();
+    fn temporary_ids(
+        &mut self,
+        ops: &[Op],
+        temporary_drops: HashSet<(u32, String)>,
+    ) -> Result<Vec<GlobalId>, Error> {
+        let mut creating = HashSet::with_capacity(ops.len());
+        let mut temporary_ids = Vec::with_capacity(ops.len());
         for op in ops.iter() {
             if let Op::CreateItem {
                 id,
                 oid: _,
                 name,
-                item:
-                    CatalogItem::View(View {
-                        conn_id: Some(conn_id),
-                        ..
-                    }),
+                item,
             } = op
             {
-                if self.item_exists_in_temp_schemas(*conn_id, &name.item)
-                    || creating.contains(&(conn_id, &name.item))
-                {
-                    return Err(Error::new(ErrorKind::ItemAlreadyExists(name.item.clone())));
-                } else {
-                    creating.insert((conn_id, &name.item));
-                    temporary_ids.push(id.clone());
+                if let Some(conn_id) = item.conn_id() {
+                    if self.item_exists_in_temp_schemas(conn_id, &name.item)
+                        && !temporary_drops.contains(&(conn_id, name.item.clone()))
+                        || creating.contains(&(conn_id, &name.item))
+                    {
+                        return Err(Error::new(ErrorKind::ItemAlreadyExists(name.item.clone())));
+                    } else {
+                        creating.insert((conn_id, &name.item));
+                        temporary_ids.push(id.clone());
+                    }
                 }
             }
         }
@@ -1052,6 +1183,11 @@ impl Catalog {
                 database_name: String,
                 schema_name: String,
             },
+            CreateRole {
+                id: i64,
+                oid: u32,
+                name: String,
+            },
             CreateItem {
                 id: GlobalId,
                 oid: u32,
@@ -1065,6 +1201,9 @@ impl Catalog {
                 database_name: String,
                 schema_name: String,
             },
+            DropRole {
+                name: String,
+            },
             DropItem(GlobalId),
             UpdateItem {
                 id: GlobalId,
@@ -1074,7 +1213,6 @@ impl Catalog {
             },
         }
 
-        let temporary_ids = self.temporary_ids(&ops)?;
         let drop_ids: HashSet<_> = ops
             .iter()
             .filter_map(|op| match op {
@@ -1082,6 +1220,17 @@ impl Catalog {
                 _ => None,
             })
             .collect();
+        let temporary_drops = drop_ids
+            .iter()
+            .filter_map(|id| {
+                let entry = self.get_by_id(id);
+                match entry.item.conn_id() {
+                    Some(conn_id) => Some((conn_id, entry.name().item.clone())),
+                    None => None,
+                }
+            })
+            .collect();
+        let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut actions = Vec::with_capacity(ops.len());
         let mut storage = self.storage();
         let mut tx = storage.transaction()?;
@@ -1097,8 +1246,8 @@ impl Catalog {
                     schema_name,
                     oid,
                 } => {
-                    if schema_name.starts_with("mz_") || schema_name.starts_with("pg_") {
-                        return Err(Error::new(ErrorKind::UnacceptableSchemaName(schema_name)));
+                    if is_reserved_name(&schema_name) {
+                        return Err(Error::new(ErrorKind::ReservedSchemaName(schema_name)));
                     }
                     let (database_id, database_name) = match database_name {
                         DatabaseSpecifier::Name(name) => (tx.load_database_id(&name)?, name),
@@ -1111,6 +1260,16 @@ impl Catalog {
                         oid,
                         database_name,
                         schema_name,
+                    }]
+                }
+                Op::CreateRole { name, oid } => {
+                    if is_reserved_name(&name) {
+                        return Err(Error::new(ErrorKind::ReservedRoleName(name)));
+                    }
+                    vec![Action::CreateRole {
+                        id: tx.insert_role(&name)?,
+                        oid,
+                        name,
                     }]
                 }
                 Op::CreateItem {
@@ -1181,6 +1340,10 @@ impl Catalog {
                         database_name,
                         schema_name,
                     }]
+                }
+                Op::DropRole { name } => {
+                    tx.remove_role(&name)?;
+                    vec![Action::DropRole { name }]
                 }
                 Op::DropItem(id) => {
                     let entry = self.get_by_id(&id);
@@ -1297,6 +1460,7 @@ impl Catalog {
                             id,
                             oid,
                             items: BTreeMap::new(),
+                            functions: BTreeMap::new(),
                         },
                     );
                     Event::CreatedSchema {
@@ -1305,6 +1469,19 @@ impl Catalog {
                         schema_name,
                         oid,
                     }
+                }
+
+                Action::CreateRole { id, oid, name } => {
+                    info!("create role {}", name);
+                    self.roles.insert(
+                        name.clone(),
+                        Role {
+                            name: name.clone(),
+                            id,
+                            oid,
+                        },
+                    );
+                    Event::CreatedRole { name, id, oid }
                 }
 
                 Action::CreateItem {
@@ -1339,15 +1516,22 @@ impl Catalog {
                     }
                 }
 
+                Action::DropRole { name } => match self.roles.remove(&name) {
+                    Some(role) => {
+                        info!("drop role {}", name);
+                        Event::DroppedRole {
+                            name,
+                            id: role.id,
+                            oid: role.oid,
+                        }
+                    }
+                    None => Event::NoOp,
+                },
+
                 Action::DropItem(id) => {
                     let metadata = self.by_id.remove(&id).unwrap();
                     if !metadata.item.is_placeholder() {
-                        info!(
-                            "drop {} {} ({})",
-                            metadata.item.type_string(),
-                            metadata.name,
-                            id
-                        );
+                        info!("drop {} {} ({})", metadata.item_type(), metadata.name, id);
                     }
                     for u in metadata.uses() {
                         if let Some(dep_metadata) = self.by_id.get_mut(&u) {
@@ -1402,12 +1586,7 @@ impl Catalog {
                     item,
                 } => {
                     let mut entry = self.by_id.remove(&id).unwrap();
-                    info!(
-                        "update {} {} ({})",
-                        entry.item.type_string(),
-                        entry.name,
-                        id
-                    );
+                    info!("update {} {} ({})", entry.item_type(), entry.name, id);
                     assert_eq!(entry.uses(), item.uses());
                     let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
                     let schema = &mut self
@@ -1463,6 +1642,7 @@ impl Catalog {
                 create_sql: typ.create_sql.clone(),
                 eval_env: Some(typ.plan_cx.clone().into()),
             },
+            CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
         };
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
@@ -1519,6 +1699,7 @@ impl Catalog {
                 plan_cx: pcx,
                 on: index.on,
                 keys: index.keys,
+                conn_id: None,
             }),
             Plan::CreateSink {
                 sink,
@@ -1545,7 +1726,7 @@ impl Catalog {
 
     /// Returns a mapping that indicates all indices that are available for
     /// each item in the catalog.
-    pub fn indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<ScalarExpr>)>> {
+    pub fn indexes(&self) -> &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>> {
         &self.indexes
     }
 
@@ -1595,8 +1776,13 @@ impl Catalog {
                 CatalogItem::Table(_) => {
                     unreachable!("tables always have at least one index");
                 }
-                CatalogItem::Sink(_) | CatalogItem::Index(_) | CatalogItem::Type(_) => {
-                    unreachable!("sinks, indexes, and user-defined types cannot be depended upon");
+                CatalogItem::Func(_)
+                | CatalogItem::Index(_)
+                | CatalogItem::Sink(_)
+                | CatalogItem::Type(_) => {
+                    unreachable!(
+                        "cannot depend on functions, indexes, sinks, or user-defined types"
+                    );
                 }
             }
         }
@@ -1616,8 +1802,11 @@ impl Catalog {
             CatalogItem::Table(_) => true,
             CatalogItem::Source(_) => false,
             item @ CatalogItem::View(_) => item.uses().into_iter().any(|id| self.uses_tables(id)),
-            CatalogItem::Sink(_) | CatalogItem::Index(_) | CatalogItem::Type(_) => {
-                unreachable!("sinks, indexes, and user-defined types cannot be depended upon");
+            CatalogItem::Func(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_) => {
+                unreachable!("cannot depend on functions, indexes, sinks, or user-defined types");
             }
         }
     }
@@ -1636,6 +1825,10 @@ impl Catalog {
     }
 }
 
+fn is_reserved_name(name: &str) -> bool {
+    name.starts_with("mz_") || name.starts_with("pg_")
+}
+
 #[derive(Debug, Clone)]
 pub enum Op {
     CreateDatabase {
@@ -1645,6 +1838,10 @@ pub enum Op {
     CreateSchema {
         database_name: DatabaseSpecifier,
         schema_name: String,
+        oid: u32,
+    },
+    CreateRole {
+        name: String,
         oid: u32,
     },
     CreateItem {
@@ -1659,6 +1856,9 @@ pub enum Op {
     DropSchema {
         database_name: DatabaseSpecifier,
         schema_name: String,
+    },
+    DropRole {
+        name: String,
     },
     /// Unconditionally removes the identified items. It is required that the
     /// IDs come from the output of `plan_remove`; otherwise consistency rules
@@ -1683,6 +1883,11 @@ pub enum Event {
         schema_name: String,
         oid: u32,
     },
+    CreatedRole {
+        name: String,
+        id: i64,
+        oid: u32,
+    },
     CreatedItem {
         schema_id: i64,
         id: GlobalId,
@@ -1699,6 +1904,11 @@ pub enum Event {
         database_id: i64,
         schema_id: i64,
         schema_name: String,
+        oid: u32,
+    },
+    DroppedRole {
+        name: String,
+        id: i64,
         oid: u32,
     },
     DroppedIndex {
@@ -1862,10 +2072,15 @@ impl SqlCatalog for ConnCatalog<'_> {
                     (**s != PG_CATALOG_SCHEMA)
                         && (**s != MZ_CATALOG_SCHEMA)
                         && (**s != MZ_TEMP_SCHEMA)
+                        && (**s != MZ_INTERNAL_SCHEMA)
                 })
                 .cloned()
                 .collect()
         }
+    }
+
+    fn user(&self) -> &str {
+        &self.user
     }
 
     fn default_database(&self) -> &str {
@@ -1892,13 +2107,32 @@ impl SqlCatalog for ConnCatalog<'_> {
             .resolve_schema(&self.database, database, schema_name, self.conn_id)?)
     }
 
+    fn resolve_role(
+        &self,
+        role_name: &str,
+    ) -> Result<&dyn sql::catalog::CatalogRole, SqlCatalogError> {
+        match self.catalog.roles.get(role_name) {
+            Some(role) => Ok(role),
+            None => Err(SqlCatalogError::UnknownRole(role_name.into())),
+        }
+    }
+
     fn resolve_item(
         &self,
         name: &PartialName,
     ) -> Result<&dyn sql::catalog::CatalogItem, SqlCatalogError> {
         Ok(self
             .catalog
-            .resolve(&self.database, self.search_path, name, self.conn_id)?)
+            .resolve_item(&self.database, self.search_path, name, self.conn_id)?)
+    }
+
+    fn resolve_function(
+        &self,
+        name: &PartialName,
+    ) -> Result<&dyn sql::catalog::CatalogItem, SqlCatalogError> {
+        Ok(self
+            .catalog
+            .resolve_function(&self.database, self.search_path, name, self.conn_id)?)
     }
 
     fn list_items<'a>(
@@ -1968,6 +2202,7 @@ impl SqlCatalog for ConnCatalog<'_> {
                     custom_oid: Some(entry.oid),
                 }
             }
+            TypeInner::Pseudo => return None,
         })
     }
 
@@ -1996,6 +2231,16 @@ impl sql::catalog::CatalogSchema for Schema {
     }
 }
 
+impl sql::catalog::CatalogRole for Role {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn id(&self) -> i64 {
+        self.id
+    }
+}
+
 impl sql::catalog::CatalogItem for CatalogEntry {
     fn name(&self) -> &FullName {
         self.name()
@@ -2013,6 +2258,10 @@ impl sql::catalog::CatalogItem for CatalogEntry {
         Ok(self.desc()?)
     }
 
+    fn func(&self) -> Result<&'static sql::func::Func, SqlCatalogError> {
+        Ok(self.func()?)
+    }
+
     fn create_sql(&self) -> &str {
         match self.item() {
             CatalogItem::Table(Table { create_sql, .. }) => create_sql,
@@ -2021,6 +2270,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::View(View { create_sql, .. }) => create_sql,
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
+            CatalogItem::Func(_) => "TODO",
         }
     }
 
@@ -2032,21 +2282,15 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::View(View { plan_cx, .. }) => plan_cx,
             CatalogItem::Index(Index { plan_cx, .. }) => plan_cx,
             CatalogItem::Type(Type { plan_cx, .. }) => plan_cx,
+            CatalogItem::Func(Func { plan_cx, .. }) => plan_cx,
         }
     }
 
-    fn item_type(&self) -> sql::catalog::CatalogItemType {
-        match self.item() {
-            CatalogItem::Table(_) => sql::catalog::CatalogItemType::Table,
-            CatalogItem::Source(_) => sql::catalog::CatalogItemType::Source,
-            CatalogItem::Sink(_) => sql::catalog::CatalogItemType::Sink,
-            CatalogItem::View(_) => sql::catalog::CatalogItemType::View,
-            CatalogItem::Index(_) => sql::catalog::CatalogItemType::Index,
-            CatalogItem::Type(_) => sql::catalog::CatalogItemType::Type,
-        }
+    fn item_type(&self) -> SqlCatalogItemType {
+        self.item().typ()
     }
 
-    fn index_details(&self) -> Option<(&[ScalarExpr], GlobalId)> {
+    fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)> {
         if let CatalogItem::Index(Index { keys, on, .. }) = self.item() {
             Some((keys, *on))
         } else {

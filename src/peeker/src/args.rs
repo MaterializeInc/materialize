@@ -40,7 +40,7 @@ pub struct Args {
     /// URL of materialized instance to collect metrics from.
     #[structopt(
         long,
-        default_value = "postgres://ignoreuser@materialized:6875/materialize",
+        default_value = "postgres://materialize@materialized:6875/materialize",
         value_name = "URL"
     )]
     pub materialized_url: String,

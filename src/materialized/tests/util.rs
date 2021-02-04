@@ -140,7 +140,7 @@ impl Server {
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
             .port(local_addr.port())
-            .user("root");
+            .user("materialize");
         config
     }
 
@@ -150,7 +150,7 @@ impl Server {
         config
             .host(&Ipv4Addr::LOCALHOST.to_string())
             .port(local_addr.port())
-            .user("root");
+            .user("materialize");
         config
     }
 

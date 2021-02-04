@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use dataflow_types::SinkEnvelope;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, TryFutureExt};
@@ -34,7 +34,6 @@ use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::{Handle, Runtime};
-use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
 use build_info::BuildInfo;
@@ -46,11 +45,13 @@ use dataflow_types::{
     SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
 };
 use expr::{
-    ExprHumanizer, GlobalId, Id, NullaryFunc, OptimizedRelationExpr, RelationExpr, RowSetFinishing,
-    ScalarExpr, SourceInstanceId,
+    ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
+    OptimizedMirRelationExpr, RowSetFinishing, SourceInstanceId,
 };
 use ore::collections::CollectionExt;
+use ore::str::StrExt;
 use ore::thread::JoinHandleExt;
+use repr::adt::array::ArrayDimension;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
@@ -70,13 +71,17 @@ use self::arrangement_state::{ArrangementFrontiers, Frontiers};
 use crate::cache::{CacheConfig, Cacher};
 use crate::catalog::builtin::{
     BUILTINS, MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES,
-    MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_SCHEMAS,
-    MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS, MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
+    MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES,
+    MZ_PSEUDO_TYPES, MZ_ROLES, MZ_SCHEMAS, MZ_SINKS, MZ_SOURCES, MZ_TABLES, MZ_TYPES, MZ_VIEWS,
+    MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
-use crate::catalog::{self, Catalog, CatalogItem, Index, SinkConnectorState, Type, TypeInner};
+use crate::catalog::{
+    self, Catalog, CatalogItem, Func, Index, SinkConnectorState, Type, TypeInner,
+};
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
+use crate::error::CoordError;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -104,7 +109,7 @@ pub struct AdvanceSourceTimestamp {
 pub struct StatementReady {
     pub session: Session,
     pub tx: ClientTransmitter<ExecuteResponse>,
-    pub result: Result<sql::ast::Statement<Raw>, anyhow::Error>,
+    pub result: Result<sql::ast::Statement<Raw>, CoordError>,
     pub params: Params,
 }
 
@@ -113,7 +118,7 @@ pub struct SinkConnectorReady {
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub id: GlobalId,
     pub oid: u32,
-    pub result: Result<SinkConnector, anyhow::Error>,
+    pub result: Result<SinkConnector, CoordError>,
 }
 
 #[derive(Clone, Debug)]
@@ -227,7 +232,7 @@ where
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
-    async fn bootstrap(&mut self, events: Vec<catalog::Event>) -> Result<(), anyhow::Error> {
+    async fn bootstrap(&mut self, events: Vec<catalog::Event>) -> Result<(), CoordError> {
         let items: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
@@ -575,21 +580,31 @@ where
     ) {
         match cmd {
             Command::Startup { session, tx } => {
-                let mut messages = vec![];
+                if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
+                    let _ = tx.send(Response {
+                        result: Err(e.into()),
+                        session,
+                    });
+                    return;
+                }
+
                 let catalog = self.catalog.for_session(&session);
+                if catalog.resolve_role(session.user()).is_err() {
+                    let _ = tx.send(Response {
+                        result: Err(CoordError::UnknownLoginRole(session.user().into())),
+                        session,
+                    });
+                    return;
+                }
+
+                let mut messages = vec![];
                 if catalog
                     .resolve_database(catalog.default_database())
                     .is_err()
                 {
                     messages.push(StartupMessage::UnknownSessionDatabase);
                 }
-                if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
-                    let _ = tx.send(Response {
-                        result: Err(anyhow::Error::from(e)),
-                        session,
-                    });
-                    return;
-                }
+
                 ClientTransmitter::new(tx).send(Ok(messages), session)
             }
 
@@ -600,7 +615,7 @@ where
             } => {
                 let result = session
                     .get_portal(&portal_name)
-                    .ok_or_else(|| anyhow::format_err!("portal does not exist {:?}", portal_name));
+                    .ok_or(CoordError::UnknownCursor(portal_name));
                 let portal = match result {
                     Ok(portal) => portal,
                     Err(e) => {
@@ -631,10 +646,9 @@ where
                                     // immediately closed. Users don't know this detail, so this error helps them
                                     // understand what's going wrong. Postgres does this too.
                                     let _ = tx.send(Response {
-                                        result: Ok(ExecuteResponse::PgError {
-                                            code: SqlState::NO_ACTIVE_SQL_TRANSACTION,
-                                            message: "DECLARE CURSOR can only be used in transaction blocks".into(),
-                                        }),
+                                        result: Err(CoordError::OperationRequiresTransaction(
+                                            "DECLARE CURSOR".into(),
+                                        )),
                                         session,
                                     });
                                     return;
@@ -677,11 +691,11 @@ where
                                 }
 
                                 Statement::Copy(_) | Statement::Select(_) | Statement::Tail(_) => {
-                                    if let Err(response) =
+                                    if let Err(e) =
                                         session.add_transaction_ops(TransactionOps::Reads)
                                     {
                                         let _ = tx.send(Response {
-                                            result: Ok(response),
+                                            result: Err(e),
                                             session,
                                         });
                                         return;
@@ -691,11 +705,11 @@ where
                                 Statement::Insert(_) => {
                                     // Insert will add the actual operations later. We can still do a check to
                                     // early exit here before processing it.
-                                    if let Err(response) =
+                                    if let Err(e) =
                                         session.add_transaction_ops(TransactionOps::Writes(vec![]))
                                     {
                                         let _ = tx.send(Response {
-                                            result: Ok(response),
+                                            result: Err(e),
                                             session,
                                         });
                                         return;
@@ -720,13 +734,9 @@ where
                                 | Statement::SetVariable(_)
                                 | Statement::Update(_) => {
                                     let _ = tx.send(Response {
-                                        result: Ok(ExecuteResponse::PgError {
-                                            code: SqlState::ACTIVE_SQL_TRANSACTION,
-                                            message: format!(
-                                                "{} cannot be run inside a transaction block",
-                                                stmt
-                                            ),
-                                        }),
+                                        result: Err(CoordError::OperationProhibitsTransaction(
+                                            stmt.to_string(),
+                                        )),
                                         session,
                                     });
                                     return;
@@ -736,7 +746,7 @@ where
 
                         let mut internal_cmd_tx = internal_cmd_tx.clone();
                         tokio::spawn(async move {
-                            let result = sql::pure::purify(stmt).await;
+                            let result = sql::pure::purify(stmt).await.map_err(|e| e.into());
                             internal_cmd_tx
                                 .send(Message::StatementReady(StatementReady {
                                     session,
@@ -785,7 +795,7 @@ where
 
                         Plan::SendRows(rows) => send_immediate_rows(rows),
 
-                        _ => bail!("unsupported plan"),
+                        _ => coord_bail!("unsupported plan"),
                     };
                     Ok(NoSessionExecuteResponse {
                         desc: desc.relation_desc,
@@ -907,7 +917,7 @@ where
         session: &Session,
         stmt: sql::ast::Statement<Raw>,
         params: &sql::plan::Params,
-    ) -> Result<(PlanContext, sql::plan::Plan), anyhow::Error> {
+    ) -> Result<(PlanContext, sql::plan::Plan), CoordError> {
         let pcx = PlanContext::default();
 
         // When symbiosis mode is enabled, use symbiosis planning for:
@@ -946,7 +956,7 @@ where
                         .await?;
                     Ok((pcx, plan))
                 }
-                _ => Err(err),
+                _ => Err(err.into()),
             },
         }
     }
@@ -957,7 +967,7 @@ where
         name: String,
         stmt: Statement<Raw>,
         param_types: Vec<Option<pgrepr::Type>>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), CoordError> {
         // handle_describe cares about symbiosis mode here. Declared cursors are
         // perhaps rare enough we can ignore that worry and just error instead.
         let desc = describe(
@@ -978,7 +988,7 @@ where
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), CoordError> {
         let desc = if let Some(stmt) = stmt.clone() {
             match describe(
                 &self.catalog.for_session(session),
@@ -1055,7 +1065,7 @@ where
         id: GlobalId,
         oid: u32,
         connector: SinkConnector,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), CoordError> {
         // Update catalog entry with sink connector.
         let entry = self.catalog.get_by_id(&id);
         let name = entry.name().clone();
@@ -1156,12 +1166,27 @@ where
         .await
     }
 
+    async fn report_role_update(&mut self, role_id: i64, oid: u32, name: &str, diff: isize) {
+        self.update_catalog_view(
+            MZ_ROLES.id,
+            iter::once((
+                Row::pack_slice(&[
+                    Datum::Int64(role_id),
+                    Datum::Int32(oid as i32),
+                    Datum::String(&name),
+                ]),
+                diff,
+            )),
+        )
+        .await
+    }
+
     async fn report_column_updates(
         &mut self,
         desc: &RelationDesc,
         global_id: GlobalId,
         diff: isize,
-    ) -> Result<(), anyhow::Error> {
+    ) {
         for (i, (column_name, column_type)) in desc.iter().enumerate() {
             self.update_catalog_view(
                 MZ_COLUMNS.id,
@@ -1182,7 +1207,6 @@ where
             )
             .await
         }
-        Ok(())
     }
 
     async fn report_index_update(
@@ -1254,7 +1278,7 @@ where
                 .expect("missing sql information for index key")
                 .to_string();
             let (field_number, expression) = match key {
-                ScalarExpr::Column(col) => (
+                MirScalarExpr::Column(col) => (
                     Datum::Int64(i64::try_from(*col + 1).expect("invalid index column number")),
                     Datum::Null,
                 ),
@@ -1406,6 +1430,7 @@ where
                 MZ_MAP_TYPES.id,
                 vec![id.to_string(), key_id.to_string(), value_id.to_string()],
             ),
+            TypeInner::Pseudo => (MZ_PSEUDO_TYPES.id, vec![id.to_string()]),
         };
         self.update_catalog_view(
             index_id,
@@ -1415,6 +1440,56 @@ where
             )),
         )
         .await
+    }
+
+    async fn report_func_update(
+        &mut self,
+        id: GlobalId,
+        schema_id: i64,
+        name: &str,
+        func: &Func,
+        diff: isize,
+    ) {
+        for func_impl_details in func.inner.func_impls() {
+            let arg_ids = func_impl_details
+                .arg_oids
+                .iter()
+                .map(|oid| self.catalog.get_by_oid(oid).id().to_string())
+                .collect::<Vec<_>>();
+            let mut packer = RowPacker::new();
+            packer
+                .push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: arg_ids.len(),
+                    }],
+                    arg_ids.iter().map(|id| Datum::String(&id)),
+                )
+                .unwrap();
+            let row = packer.finish();
+            let arg_ids = row.unpack_first();
+
+            let variadic_id = match func_impl_details.variadic_oid {
+                Some(oid) => Some(self.catalog.get_by_oid(&oid).id().to_string()),
+                None => None,
+            };
+
+            self.update_catalog_view(
+                MZ_FUNCTIONS.id,
+                iter::once((
+                    Row::pack_slice(&[
+                        Datum::String(&id.to_string()),
+                        Datum::Int32(func_impl_details.oid as i32),
+                        Datum::Int64(schema_id),
+                        Datum::String(name),
+                        arg_ids,
+                        Datum::from(variadic_id.as_deref()),
+                    ]),
+                    diff,
+                )),
+            )
+            .await
+        }
     }
 
     async fn sequence_plan(
@@ -1443,6 +1518,8 @@ where
                     .await,
                 session,
             ),
+
+            Plan::CreateRole { name } => tx.send(self.sequence_create_role(name).await, session),
 
             Plan::CreateTable {
                 name,
@@ -1525,6 +1602,8 @@ where
             }
 
             Plan::DropSchema { name } => tx.send(self.sequence_drop_schema(name).await, session),
+
+            Plan::DropRoles { names } => tx.send(self.sequence_drop_roles(names).await, session),
 
             Plan::DropItems { items, ty } => {
                 tx.send(self.sequence_drop_items(items, ty).await, session)
@@ -1656,14 +1735,13 @@ where
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
                     self.drop_temp_items(session.conn_id()).await;
                     session.reset();
-                    ExecuteResponse::DiscardedAll
+                    Ok(ExecuteResponse::DiscardedAll)
                 } else {
-                    ExecuteResponse::PgError {
-                        code: SqlState::ACTIVE_SQL_TRANSACTION,
-                        message: "DISCARD ALL cannot run inside a transaction block".to_string(),
-                    }
+                    Err(CoordError::OperationProhibitsTransaction(
+                        "DISCARD ALL".into(),
+                    ))
                 };
-                tx.send(Ok(ret), session);
+                tx.send(ret, session);
             }
 
             Plan::Declare { name, stmt } => {
@@ -1691,16 +1769,7 @@ where
                 if session.remove_portal(&name) {
                     tx.send(Ok(ExecuteResponse::ClosedCursor), session)
                 } else {
-                    tx.send(
-                        Ok(ExecuteResponse::PgError {
-                            code: SqlState::INVALID_CURSOR_NAME,
-                            message: format!(
-                                "cursor {} does not exist",
-                                Ident::new(name).to_ast_string_stable()
-                            ),
-                        }),
-                        session,
-                    )
+                    tx.send(Err(CoordError::UnknownCursor(name)), session)
                 }
             }
         }
@@ -1710,7 +1779,7 @@ where
         &mut self,
         name: String,
         if_not_exists: bool,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let db_oid = self.catalog.allocate_oid()?;
         let schema_oid = self.catalog.allocate_oid()?;
         let ops = vec![
@@ -1736,7 +1805,7 @@ where
         database_name: DatabaseSpecifier,
         schema_name: String,
         if_not_exists: bool,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateSchema {
             database_name,
@@ -1750,13 +1819,21 @@ where
         }
     }
 
+    async fn sequence_create_role(&mut self, name: String) -> Result<ExecuteResponse, CoordError> {
+        let oid = self.catalog.allocate_oid()?;
+        let op = catalog::Op::CreateRole { name, oid };
+        self.catalog_transact(vec![op])
+            .await
+            .map(|_| ExecuteResponse::CreatedRole)
+    }
+
     async fn sequence_create_table(
         &mut self,
         pcx: PlanContext,
         name: FullName,
         table: sql::plan::Table,
         if_not_exists: bool,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let table_id = self.catalog.allocate_id()?;
         let table = catalog::Table {
             create_sql: table.create_sql,
@@ -1767,8 +1844,13 @@ where
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
         index_name.item += "_primary_idx";
-        let index =
-            auto_generate_primary_idx(index_name.item.clone(), name.clone(), table_id, &table.desc);
+        let index = auto_generate_primary_idx(
+            index_name.item.clone(),
+            name.clone(),
+            table_id,
+            &table.desc,
+            None,
+        );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
         match self
@@ -1805,7 +1887,7 @@ where
         source: sql::plan::Source,
         if_not_exists: bool,
         materialized: bool,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let source = catalog::Source {
             create_sql: source.create_sql,
             plan_cx: pcx,
@@ -1823,8 +1905,13 @@ where
         let index_id = if materialized {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
-            let index =
-                auto_generate_primary_idx(index_name.item.clone(), name, source_id, &source.desc);
+            let index = auto_generate_primary_idx(
+                index_name.item.clone(),
+                name,
+                source_id,
+                &source.desc,
+                None,
+            );
             let index_id = self.catalog.allocate_id()?;
             let index_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
@@ -1949,7 +2036,7 @@ where
         conn_id: u32,
         materialize: bool,
         if_not_exists: bool,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = vec![];
         if let Some(id) = replace {
             ops.extend(self.catalog.drop_items_ops(&[id]));
@@ -1975,8 +2062,13 @@ where
         let index_id = if materialize {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
-            let index =
-                auto_generate_primary_idx(index_name.item.clone(), name, view_id, &view.desc);
+            let index = auto_generate_primary_idx(
+                index_name.item.clone(),
+                name,
+                view_id,
+                &view.desc,
+                view.conn_id,
+            );
             let index_id = self.catalog.allocate_id()?;
             let index_oid = self.catalog.allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
@@ -2008,7 +2100,7 @@ where
         name: FullName,
         mut index: sql::plan::Index,
         if_not_exists: bool,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         for key in &mut index.keys {
             Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
         }
@@ -2017,6 +2109,7 @@ where
             plan_cx: pcx,
             keys: index.keys,
             on: index.on,
+            conn_id: None,
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -2042,7 +2135,7 @@ where
         pcx: PlanContext,
         name: FullName,
         typ: sql::plan::Type,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let typ = catalog::Type {
             create_sql: typ.create_sql,
             plan_cx: pcx,
@@ -2065,7 +2158,7 @@ where
     async fn sequence_drop_database(
         &mut self,
         name: String,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_database_ops(name);
         self.catalog_transact(ops).await?;
         Ok(ExecuteResponse::DroppedDatabase)
@@ -2074,17 +2167,29 @@ where
     async fn sequence_drop_schema(
         &mut self,
         name: SchemaName,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_schema_ops(name);
         self.catalog_transact(ops).await?;
         Ok(ExecuteResponse::DroppedSchema)
+    }
+
+    async fn sequence_drop_roles(
+        &mut self,
+        names: Vec<String>,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let ops = names
+            .into_iter()
+            .map(|name| catalog::Op::DropRole { name })
+            .collect();
+        self.catalog_transact(ops).await?;
+        Ok(ExecuteResponse::DroppedRole)
     }
 
     async fn sequence_drop_items(
         &mut self,
         items: Vec<GlobalId>,
         ty: ObjectType,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let ops = self.catalog.drop_items_ops(&items);
         self.catalog_transact(ops).await?;
         Ok(match ty {
@@ -2113,7 +2218,7 @@ where
     async fn sequence_show_all_variables(
         &mut self,
         session: &Session,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let mut row_packer = RowPacker::new();
         Ok(send_immediate_rows(
             session
@@ -2134,7 +2239,7 @@ where
         &self,
         session: &Session,
         name: String,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let variable = session.vars().get(&name)?;
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
@@ -2145,7 +2250,7 @@ where
         session: &mut Session,
         name: String,
         value: String,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         session.vars_mut().set(&name, &value)?;
         Ok(ExecuteResponse::SetVariable { name })
     }
@@ -2154,7 +2259,7 @@ where
         &mut self,
         session: &mut Session,
         action: EndTransactionAction,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let was_implicit = matches!(
             session.transaction(),
             TransactionStatus::InTransactionImplicit(_)
@@ -2200,11 +2305,11 @@ where
     async fn sequence_peek(
         &mut self,
         conn_id: u32,
-        source: RelationExpr,
+        source: MirRelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
         copy_to: Option<CopyFormat>,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let timestamp = self.determine_timestamp(&source, when)?;
 
         let source = self.prep_relation_expr(
@@ -2215,7 +2320,7 @@ where
         )?;
 
         // If this optimizes to a constant expression, we can immediately return the result.
-        let resp = if let RelationExpr::Constant { rows, typ: _ } = source.as_ref() {
+        let resp = if let MirRelationExpr::Constant { rows, typ: _ } = source.as_ref() {
             let mut results = Vec::new();
             for &(ref row, count) in rows {
                 assert!(
@@ -2245,13 +2350,14 @@ where
             // out the contents from an existing arrangement.
             let (mut map_filter_project, inner) =
                 expr::MapFilterProject::extract_from_expression(source.as_ref());
+            map_filter_project.optimize();
 
             // We can use a fast path approach if our query corresponds to a read out of
             // an existing materialization. This is the case if the expression is now a
-            // `RelationExpr::Get` and its target is something we have materialized.
+            // `MirRelationExpr::Get` and its target is something we have materialized.
             // Otherwise, we will need to build a new dataflow.
             let mut fast_path: Option<(_, Option<Row>)> = None;
-            if let RelationExpr::Get {
+            if let MirRelationExpr::Get {
                 id: Id::Global(id),
                 typ: _,
             } = inner
@@ -2290,7 +2396,7 @@ where
                 // peek completes.
                 let typ = source.as_ref().typ();
                 map_filter_project = expr::MapFilterProject::new(typ.arity());
-                let key: Vec<_> = (0..typ.arity()).map(ScalarExpr::Column).collect();
+                let key: Vec<_> = (0..typ.arity()).map(MirScalarExpr::Column).collect();
                 let view_id = self.allocate_transient_id()?;
                 let mut dataflow = DataflowDesc::new(format!("temp-view-{}", view_id));
                 dataflow.set_as_of(Antichain::from_elem(timestamp));
@@ -2365,7 +2471,7 @@ where
         emit_progress: bool,
         object_columns: usize,
         desc: RelationDesc,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
         let frontier = self.determine_frontier(ts, source_id)?;
@@ -2415,9 +2521,9 @@ where
     /// not after `upper`).
     fn determine_timestamp(
         &mut self,
-        source: &RelationExpr,
+        source: &MirRelationExpr,
         when: PeekWhen,
-    ) -> Result<Timestamp, anyhow::Error> {
+    ) -> Result<Timestamp, CoordError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
         // accumulated at a time greater or equal to `since`, and they
@@ -2448,7 +2554,7 @@ where
             // original sources on which they depend.
             PeekWhen::Immediately => {
                 if !indexes_complete {
-                    bail!(
+                    coord_bail!(
                         "Unable to automatically determine a timestamp for your query; \
                         this can happen if your query depends on non-materialized sources.\n\
                         For more details, see https://materialize.com/s/non-materialized-error"
@@ -2482,7 +2588,7 @@ where
                                         .less_equal(&0)
                                 })
                                 .collect::<Vec<_>>();
-                            bail!(
+                            coord_bail!(
                                 "At least one input has no complete timestamps yet: {:?}",
                                 unstarted
                             );
@@ -2521,7 +2627,7 @@ where
                 })
                 .map(|id| (id, self.indexes.since_of(id)))
                 .collect::<Vec<_>>();
-            bail!(
+            coord_bail!(
                 "Timestamp ({}) is not valid for all inputs: {:?}",
                 timestamp,
                 invalid
@@ -2535,11 +2641,11 @@ where
         &mut self,
         as_of: Option<u64>,
         source_id: GlobalId,
-    ) -> Result<Antichain<u64>, anyhow::Error> {
+    ) -> Result<Antichain<u64>, CoordError> {
         let frontier = if let Some(ts) = as_of {
             // If a timestamp was explicitly requested, use that.
             Antichain::from_elem(self.determine_timestamp(
-                &RelationExpr::Get {
+                &MirRelationExpr::Get {
                     id: Id::Global(source_id),
                     // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
                     typ: RelationType::empty(),
@@ -2572,12 +2678,12 @@ where
     fn sequence_explain_plan(
         &mut self,
         session: &Session,
-        raw_plan: sql::plan::RelationExpr,
-        decorrelated_plan: expr::RelationExpr,
+        raw_plan: sql::plan::HirRelationExpr,
+        decorrelated_plan: expr::MirRelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
         stage: ExplainStage,
         options: ExplainOptions,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let explanation_string = match stage {
             ExplainStage::RawPlan => {
                 let catalog = self.catalog.for_session(session);
@@ -2627,38 +2733,35 @@ where
         rows: Vec<(Row, isize)>,
         affected_rows: usize,
         kind: MutationKind,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
-        if let Err(response) =
-            session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp { id, rows }]))
-        {
-            Ok(response)
-        } else {
-            Ok(match kind {
-                MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
-                MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
-                MutationKind::Update => ExecuteResponse::Updated(affected_rows),
-            })
-        }
+    ) -> Result<ExecuteResponse, CoordError> {
+        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp { id, rows }]))?;
+        Ok(match kind {
+            MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
+            MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
+            MutationKind::Update => ExecuteResponse::Updated(affected_rows),
+        })
     }
 
     async fn sequence_insert(
         &mut self,
         session: &mut Session,
         id: GlobalId,
-        values: RelationExpr,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+        values: MirRelationExpr,
+    ) -> Result<ExecuteResponse, CoordError> {
         let prep_style = ExprPrepStyle::OneShot {
             logical_time: self.get_write_ts(),
         };
         match self.prep_relation_expr(values, prep_style)?.into_inner() {
-            RelationExpr::Constant { rows, typ: _ } => {
+            MirRelationExpr::Constant { rows, typ: _ } => {
                 let desc = self.catalog.get_by_id(&id).desc()?;
                 for (row, _) in &rows {
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
                         if datum == &Datum::Null && !typ.nullable {
-                            bail!(
-                                "null value in column \"{}\" violates not-null constraint",
+                            coord_bail!(
+                                "null value in column {} violates not-null constraint",
                                 name.unwrap_or(&ColumnName::from("unnamed column"))
+                                    .as_str()
+                                    .quoted()
                             )
                         }
                     }
@@ -2670,7 +2773,7 @@ where
             // If we couldn't optimize the INSERT statement to a constant, it
             // must depend on another relation. We're not yet sophisticated
             // enough to handle this.
-            _ => bail!("INSERT statements cannot reference other relations"),
+            _ => coord_bail!("INSERT statements cannot reference other relations"),
         }
     }
 
@@ -2679,7 +2782,7 @@ where
         id: Option<GlobalId>,
         to_name: String,
         object_type: ObjectType,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let id = match id {
             Some(id) => id,
             // None is generated by `IF EXISTS`
@@ -2695,7 +2798,7 @@ where
     fn sequence_alter_index_logical_compaction_window(
         &mut self,
         alter_index: Option<AlterIndexLogicalCompactionWindow>,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         let (index, logical_compaction_window) = match alter_index {
             Some(AlterIndexLogicalCompactionWindow {
                 index,
@@ -2718,11 +2821,11 @@ where
         } else {
             // This can potentially happen if tries to delete the index and also
             // alter the index concurrently
-            bail!("index {} not found", index.to_string())
+            coord_bail!("index {} not found", index.to_string())
         }
     }
 
-    async fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), anyhow::Error> {
+    async fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), CoordError> {
         let events = self.catalog.transact(ops)?;
         self.process_catalog_events(events).await
     }
@@ -2730,7 +2833,7 @@ where
     async fn process_catalog_events(
         &mut self,
         events: Vec<catalog::Event>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), CoordError> {
         let mut sources_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
@@ -2749,6 +2852,9 @@ where
                     self.report_schema_update(*schema_id, *oid, *database_id, schema_name, 1)
                         .await;
                 }
+                catalog::Event::CreatedRole { id, oid, name } => {
+                    self.report_role_update(*id, *oid, name, 1).await;
+                }
                 catalog::Event::CreatedItem {
                     schema_id,
                     id,
@@ -2757,7 +2863,7 @@ where
                     item,
                 } => {
                     if let Ok(desc) = item.desc(&name) {
-                        self.report_column_updates(desc, *id, 1).await?;
+                        self.report_column_updates(desc, *id, 1).await;
                     }
                     match item {
                         CatalogItem::Index(index) => {
@@ -2788,6 +2894,10 @@ where
                         }
                         CatalogItem::Type(ty) => {
                             self.report_type_update(*id, *oid, *schema_id, &name.item, ty, 1)
+                                .await;
+                        }
+                        CatalogItem::Func(func) => {
+                            self.report_func_update(*id, *schema_id, &name.item, func, 1)
                                 .await;
                         }
                     }
@@ -2851,6 +2961,7 @@ where
                             self.report_type_update(*id, *oid, *schema_id, &to_name.item, &typ, 1)
                                 .await;
                         }
+                        CatalogItem::Func(_) => unreachable!("functions cannot be updated"),
                     }
                 }
                 catalog::Event::DroppedDatabase { id, oid, name } => {
@@ -2870,6 +2981,9 @@ where
                         -1,
                     )
                     .await;
+                }
+                catalog::Event::DroppedRole { id, oid, name } => {
+                    self.report_role_update(*id, *oid, name, -1).await;
                 }
                 catalog::Event::DroppedIndex { entry, nullable } => match entry.item() {
                     CatalogItem::Index(index) => {
@@ -2980,12 +3094,15 @@ where
                         CatalogItem::Index(_) => {
                             unreachable!("dropped indexes should be handled by DroppedIndex");
                         }
+                        CatalogItem::Func(_) => {
+                            unreachable!("functions cannot be dropped")
+                        }
                     }
                     if let Ok(desc) = entry.desc() {
-                        self.report_column_updates(desc, entry.id(), -1).await?;
+                        self.report_column_updates(desc, entry.id(), -1).await;
                     }
                 }
-                _ => (),
+                catalog::Event::NoOp => (),
             }
         }
 
@@ -3039,9 +3156,9 @@ where
     /// relation expression.
     fn prep_relation_expr(
         &mut self,
-        mut expr: RelationExpr,
+        mut expr: MirRelationExpr,
         style: ExprPrepStyle,
-    ) -> Result<OptimizedRelationExpr, anyhow::Error> {
+    ) -> Result<OptimizedMirRelationExpr, CoordError> {
         expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
 
         // TODO (wangandi): Is there anything that optimizes to a
@@ -3062,7 +3179,7 @@ where
     ///   * if `Explain`, calls are replaced with a dummy time.
     ///   * if `Static`, calls trigger an error indicating that static queries
     ///     are not permitted to observe their own timestamps.
-    fn prep_scalar_expr(expr: &mut ScalarExpr, style: ExprPrepStyle) -> Result<(), anyhow::Error> {
+    fn prep_scalar_expr(expr: &mut MirScalarExpr, style: ExprPrepStyle) -> Result<(), CoordError> {
         // Replace calls to `MzLogicalTimestamp` as described above.
         let ts = match style {
             ExprPrepStyle::Explain | ExprPrepStyle::Static => 0, // dummy timestamp
@@ -3070,13 +3187,13 @@ where
         };
         let mut observes_ts = false;
         expr.visit_mut(&mut |e| {
-            if let ScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
+            if let MirScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
                 observes_ts = true;
-                *e = ScalarExpr::literal_ok(Datum::from(i128::from(ts)), f.output_type());
+                *e = MirScalarExpr::literal_ok(Datum::from(i128::from(ts)), f.output_type());
             }
         });
         if observes_ts && matches!(style, ExprPrepStyle::Static) {
-            bail!("mz_logical_timestamp cannot be used in static queries");
+            coord_bail!("mz_logical_timestamp cannot be used in static queries");
         }
         Ok(())
     }
@@ -3090,7 +3207,7 @@ where
     /// In particular, there are requirement on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
-    async fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) -> Result<(), anyhow::Error> {
+    async fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) -> Result<(), CoordError> {
         // The identity for `join` is the minimum element.
         let mut since = Antichain::from_elem(Timestamp::minimum());
 
@@ -3153,7 +3270,7 @@ where
             // If we have requested a specific time that is invalid .. someone errored.
             use timely::order::PartialOrder;
             if !(<_ as PartialOrder>::less_equal(&since, as_of)) {
-                bail!(
+                coord_bail!(
                     "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
                     dataflow.debug_name,
                     as_of,
@@ -3202,10 +3319,10 @@ where
         }
     }
 
-    fn allocate_transient_id(&mut self) -> Result<GlobalId, anyhow::Error> {
+    fn allocate_transient_id(&mut self) -> Result<GlobalId, CoordError> {
         let id = self.transient_id_counter;
         if id == u64::max_value() {
-            bail!("id counter overflows i64");
+            coord_bail!("id counter overflows i64");
         }
         self.transient_id_counter += 1;
         Ok(GlobalId::Transient(id))
@@ -3236,7 +3353,7 @@ pub async fn serve<C>(
     // `Handle::current().block_in_place()` lands. See:
     // https://github.com/tokio-rs/tokio/pull/3097.
     runtime: Arc<Runtime>,
-) -> Result<(JoinHandle<()>, Uuid), anyhow::Error>
+) -> Result<(JoinHandle<()>, Uuid), CoordError>
 where
     C: comm::Connection,
 {
@@ -3384,6 +3501,7 @@ fn auto_generate_primary_idx(
     on_name: FullName,
     on_id: GlobalId,
     on_desc: &RelationDesc,
+    conn_id: Option<u32>,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
 
@@ -3391,7 +3509,11 @@ fn auto_generate_primary_idx(
         create_sql: index_sql(index_name, on_name, &on_desc, &default_key),
         plan_cx: PlanContext::default(),
         on: on_id,
-        keys: default_key.iter().map(|k| ScalarExpr::Column(*k)).collect(),
+        keys: default_key
+            .iter()
+            .map(|k| MirScalarExpr::Column(*k))
+            .collect(),
+        conn_id,
     }
 }
 
@@ -3444,7 +3566,7 @@ pub fn describe(
     stmt: Statement<Raw>,
     param_types: &[Option<pgrepr::Type>],
     session: Option<&Session>,
-) -> Result<StatementDesc, anyhow::Error> {
+) -> Result<StatementDesc, CoordError> {
     match stmt {
         // FETCH's description depends on the current session, which describe_statement
         // doesn't (and shouldn't?) have access to, so intercept it here.
@@ -3454,11 +3576,9 @@ pub fn describe(
                 .flatten()
             {
                 Some(desc) => Ok(desc),
-                // TODO(mjibson): return a correct error code here (34000) once our error
-                // system supports it.
-                None => bail!("cursor {} does not exist", name.to_ast_string_stable()),
+                None => Err(CoordError::UnknownCursor(name.to_string())),
             }
         }
-        _ => sql::plan::describe(catalog, stmt, param_types),
+        _ => Ok(sql::plan::describe(catalog, stmt, param_types)?),
     }
 }

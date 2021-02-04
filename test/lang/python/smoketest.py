@@ -13,7 +13,7 @@ import psycopg3
 import sqlalchemy
 import unittest
 
-MATERIALIZED_URL = "postgresql://materialized:6875/materialize"
+MATERIALIZED_URL = "postgresql://materialize@materialized:6875/materialize"
 
 
 class SmokeTest(unittest.TestCase):

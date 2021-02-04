@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! This module houses a pretty printer for the SQL-specific version of
-//! [`RelationExpr`]. See also [`expr::explain`].
+//! This module houses a pretty printer for [`HirRelationExpr`],
+//! which is the SQL-specific relation expression (as opposed to [`expr::MirRelationExpr`]).
+//! See also [`expr::explain`].
 //!
 //! The format is the same, except for the following extensions:
 //!
@@ -24,9 +25,9 @@ use expr::explain::{bracketed, separated, Indices};
 use expr::{ExprHumanizer, Id, IdGen, RowSetFinishing};
 use repr::{RelationType, ScalarType};
 
-use crate::plan::expr::{AggregateExpr, RelationExpr, ScalarExpr};
+use crate::plan::expr::{AggregateExpr, HirRelationExpr, HirScalarExpr};
 
-/// An `Explanation` facilitates pretty-printing of a [`RelationExpr`].
+/// An `Explanation` facilitates pretty-printing of a [`HirRelationExpr`].
 ///
 /// By default, the [`fmt::Display`] implementation renders the expression as
 /// described in the module docs. Additional information may be attached to the
@@ -34,13 +35,13 @@ use crate::plan::expr::{AggregateExpr, RelationExpr, ScalarExpr};
 #[derive(Debug)]
 pub struct Explanation<'a> {
     expr_humanizer: &'a dyn ExprHumanizer,
-    /// One `ExplanationNode` for each `RelationExpr` in the plan, in
+    /// One `ExplanationNode` for each `HirRelationExpr` in the plan, in
     /// left-to-right post-order.
     nodes: Vec<ExplanationNode<'a>>,
     /// An optional `RowSetFinishing` to mention at the end.
     finishing: Option<RowSetFinishing>,
     /// Records the chain ID that was assigned to each expression.
-    expr_chains: HashMap<*const RelationExpr, u64>,
+    expr_chains: HashMap<*const HirRelationExpr, u64>,
     /// The ID of the current chain. Incremented while constructing the
     /// `Explanation`.
     chain: u64,
@@ -49,7 +50,7 @@ pub struct Explanation<'a> {
 #[derive(Debug)]
 pub struct ExplanationNode<'a> {
     /// The expression being explained.
-    pub expr: &'a RelationExpr,
+    pub expr: &'a HirRelationExpr,
     /// The type of the expression, if desired.
     pub typ: Option<RelationType>,
     /// The ID of the linear chain to which this node belongs.
@@ -93,23 +94,30 @@ impl<'a> fmt::Display for Explanation<'a> {
 }
 
 impl<'a> Explanation<'a> {
-    /// Creates an explanation for a [`RelationExpr`].
-    pub fn new(expr: &'a RelationExpr, expr_humanizer: &'a dyn ExprHumanizer) -> Explanation<'a> {
+    /// Creates an explanation for a [`HirRelationExpr`].
+    pub fn new(
+        expr: &'a HirRelationExpr,
+        expr_humanizer: &'a dyn ExprHumanizer,
+    ) -> Explanation<'a> {
         Self::new_internal(expr, expr_humanizer, &mut IdGen::default())
     }
 
     pub fn new_internal(
-        expr: &'a RelationExpr,
+        expr: &'a HirRelationExpr,
         expr_humanizer: &'a dyn ExprHumanizer,
         id_gen: &mut IdGen,
     ) -> Explanation<'a> {
-        use RelationExpr::*;
+        use HirRelationExpr::*;
 
         // Do a post-order traversal of the expression, grouping "chains" of
         // nodes together as we go. We have to break the chain whenever we
         // encounter a node with multiple inputs, like a join.
 
-        fn walk<'a>(expr: &'a RelationExpr, explanation: &mut Explanation<'a>, id_gen: &mut IdGen) {
+        fn walk<'a>(
+            expr: &'a HirRelationExpr,
+            explanation: &mut Explanation<'a>,
+            id_gen: &mut IdGen,
+        ) {
             // First, walk the children, in order to perform a post-order
             // traversal.
             match expr {
@@ -167,11 +175,11 @@ impl<'a> Explanation<'a> {
             let mut subqueries = vec![];
             for scalar in scalars {
                 scalar.visit(&mut |scalar| match scalar {
-                    ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
+                    HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
                         let subquery =
                             Explanation::new_internal(expr, explanation.expr_humanizer, id_gen);
                         explanation.expr_chains.insert(
-                            &**expr as *const RelationExpr,
+                            &**expr as *const HirRelationExpr,
                             subquery.nodes.last().unwrap().chain,
                         );
                         subqueries.push(subquery);
@@ -189,7 +197,7 @@ impl<'a> Explanation<'a> {
             });
             explanation
                 .expr_chains
-                .insert(expr as *const RelationExpr, explanation.chain);
+                .insert(expr as *const HirRelationExpr, explanation.chain);
         }
 
         let mut explanation = Explanation {
@@ -231,7 +239,7 @@ impl<'a> Explanation<'a> {
     }
 
     fn fmt_node(&self, f: &mut fmt::Formatter, node: &ExplanationNode) -> fmt::Result {
-        use RelationExpr::*;
+        use HirRelationExpr::*;
 
         match node.expr {
             Constant { rows, .. } => {
@@ -373,8 +381,8 @@ impl<'a> Explanation<'a> {
         Ok(())
     }
 
-    fn fmt_scalar_expr(&self, f: &mut fmt::Formatter, expr: &ScalarExpr) -> fmt::Result {
-        use ScalarExpr::*;
+    fn fmt_scalar_expr(&self, f: &mut fmt::Formatter, expr: &HirScalarExpr) -> fmt::Result {
+        use HirScalarExpr::*;
 
         match expr {
             Column(i) => write!(
@@ -444,7 +452,7 @@ impl<'a> Explanation<'a> {
     ///
     /// The `ExplanationNode` for `expr` must have already been inserted into
     /// the explanation.
-    fn expr_chain(&self, expr: &RelationExpr) -> u64 {
-        self.expr_chains[&(expr as *const RelationExpr)]
+    fn expr_chain(&self, expr: &HirRelationExpr) -> u64 {
+        self.expr_chains[&(expr as *const HirRelationExpr)]
     }
 }

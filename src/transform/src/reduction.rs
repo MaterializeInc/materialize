@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::iter;
 
-use expr::RelationExpr;
+use expr::MirRelationExpr;
 use repr::{Datum, RowArena};
 
 use crate::{TransformArgs, TransformError};
@@ -28,7 +28,7 @@ pub struct FoldConstants;
 impl crate::Transform for FoldConstants {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
         relation.try_visit_mut(&mut |e| self.action(e))
@@ -37,13 +37,13 @@ impl crate::Transform for FoldConstants {
 
 impl FoldConstants {
     /// Replace operators on constants collections with constant collections.
-    pub fn action(&self, relation: &mut RelationExpr) -> Result<(), TransformError> {
+    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
         let relation_type = relation.typ();
         match relation {
-            RelationExpr::Constant { .. } => { /* handled after match */ }
-            RelationExpr::Get { .. } => {}
-            RelationExpr::Let { .. } => { /* constant prop done in InlineLet */ }
-            RelationExpr::Reduce {
+            MirRelationExpr::Constant { .. } => { /* handled after match */ }
+            MirRelationExpr::Get { .. } => {}
+            MirRelationExpr::Let { .. } => { /* constant prop done in InlineLet */ }
+            MirRelationExpr::Reduce {
                 input,
                 group_key,
                 aggregates,
@@ -53,7 +53,7 @@ impl FoldConstants {
                 for aggregate in aggregates.iter_mut() {
                     aggregate.expr.reduce(&input.typ());
                 }
-                if let RelationExpr::Constant { rows, .. } = &**input {
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
                     // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
                     // where `an` is the input to the nth aggregate function in
                     // `aggregates`.
@@ -123,28 +123,28 @@ impl FoldConstants {
                         })
                         .collect();
 
-                    *relation = RelationExpr::Constant {
+                    *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation.typ(),
                     };
                 }
             }
-            RelationExpr::TopK { .. } => { /*too complicated*/ }
-            RelationExpr::Negate { input } => {
-                if let RelationExpr::Constant { rows, .. } = &mut **input {
+            MirRelationExpr::TopK { .. } => { /*too complicated*/ }
+            MirRelationExpr::Negate { input } => {
+                if let MirRelationExpr::Constant { rows, .. } = &mut **input {
                     for (_row, diff) in rows {
                         *diff *= -1;
                     }
                     *relation = input.take_dangerous();
                 }
             }
-            RelationExpr::Threshold { input } => {
-                if let RelationExpr::Constant { rows, .. } = &mut **input {
+            MirRelationExpr::Threshold { input } => {
+                if let MirRelationExpr::Constant { rows, .. } = &mut **input {
                     rows.retain(|(_, diff)| *diff > 0);
                     *relation = input.take_dangerous();
                 }
             }
-            RelationExpr::Map { input, scalars } => {
+            MirRelationExpr::Map { input, scalars } => {
                 // Before reducing the scalar expressions, we need to form an appropriate
                 // RelationType to provide to each. Each expression needs a different
                 // relation type; although we could in principle use `relation_type` here,
@@ -163,7 +163,7 @@ impl FoldConstants {
                     scalar.reduce(&current_type);
                 }
 
-                if let RelationExpr::Constant { rows, .. } = &**input {
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let mut row_packer = repr::RowPacker::new();
                     let new_rows = rows
                         .iter()
@@ -177,13 +177,13 @@ impl FoldConstants {
                             Ok::<_, TransformError>((row_packer.pack(unpacked), diff))
                         })
                         .collect::<Result<_, _>>()?;
-                    *relation = RelationExpr::Constant {
+                    *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation.typ(),
                     };
                 }
             }
-            RelationExpr::FlatMap {
+            MirRelationExpr::FlatMap {
                 input,
                 func,
                 exprs,
@@ -193,7 +193,7 @@ impl FoldConstants {
                     expr.reduce(&input.typ());
                 }
 
-                if let RelationExpr::Constant { rows, .. } = &**input {
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let mut new_rows = Vec::new();
                     let mut row_packer = repr::RowPacker::new();
                     for (input_row, diff) in rows {
@@ -212,13 +212,13 @@ impl FoldConstants {
                             new_rows.push((row, diff2 * *diff))
                         }
                     }
-                    *relation = RelationExpr::Constant {
+                    *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation.typ(),
                     };
                 }
             }
-            RelationExpr::Filter { input, predicates } => {
+            MirRelationExpr::Filter { input, predicates } => {
                 for predicate in predicates.iter_mut() {
                     predicate.reduce(&input.typ());
                 }
@@ -230,7 +230,7 @@ impl FoldConstants {
                     .any(|p| p.is_literal_false() || p.is_literal_null())
                 {
                     relation.take_safely();
-                } else if let RelationExpr::Constant { rows, .. } = &**input {
+                } else if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let mut new_rows = Vec::new();
                     'outer: for (row, diff) in rows {
                         let datums = row.unpack();
@@ -242,14 +242,14 @@ impl FoldConstants {
                         }
                         new_rows.push((row.clone(), *diff))
                     }
-                    *relation = RelationExpr::Constant {
+                    *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation.typ(),
                     };
                 }
             }
-            RelationExpr::Project { input, outputs } => {
-                if let RelationExpr::Constant { rows, .. } = &**input {
+            MirRelationExpr::Project { input, outputs } => {
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let mut row_packer = repr::RowPacker::new();
                     let new_rows = rows
                         .iter()
@@ -258,13 +258,13 @@ impl FoldConstants {
                             (row_packer.pack(outputs.iter().map(|i| &datums[*i])), *diff)
                         })
                         .collect();
-                    *relation = RelationExpr::Constant {
+                    *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation.typ(),
                     };
                 }
             }
-            RelationExpr::Join {
+            MirRelationExpr::Join {
                 inputs,
                 equivalences,
                 ..
@@ -273,14 +273,14 @@ impl FoldConstants {
                     relation.take_safely();
                 } else if inputs
                     .iter()
-                    .all(|i| matches!(i, RelationExpr::Constant { .. }))
+                    .all(|i| matches!(i, MirRelationExpr::Constant { .. }))
                 {
                     // We can fold all constant inputs together, but must apply the constraints to restrict them.
                     // We start with a single 0-ary row.
                     let mut old_rows = vec![(repr::Row::pack::<_, Datum>(None), 1)];
                     let mut row_packer = repr::RowPacker::new();
                     for input in inputs.iter() {
-                        if let RelationExpr::Constant { rows, .. } = input {
+                        if let MirRelationExpr::Constant { rows, .. } = input {
                             let mut next_rows = Vec::new();
                             for (old_row, old_count) in old_rows {
                                 for (new_row, new_count) in rows.iter() {
@@ -312,34 +312,34 @@ impl FoldConstants {
                     });
 
                     let typ = relation.typ();
-                    *relation = RelationExpr::Constant {
+                    *relation = MirRelationExpr::Constant {
                         rows: old_rows,
                         typ,
                     };
                 }
                 // TODO: General constant folding for all constant inputs.
             }
-            RelationExpr::Union { base, inputs } => {
+            MirRelationExpr::Union { base, inputs } => {
                 let mut rows = vec![];
                 let mut new_inputs = vec![];
 
                 for input in iter::once(&mut **base).chain(&mut *inputs) {
                     match input.take_dangerous() {
-                        RelationExpr::Constant { rows: rs, typ: _ } => rows.extend(rs),
+                        MirRelationExpr::Constant { rows: rs, typ: _ } => rows.extend(rs),
                         input => new_inputs.push(input),
                     }
                 }
                 if !rows.is_empty() {
-                    new_inputs.push(RelationExpr::Constant {
+                    new_inputs.push(MirRelationExpr::Constant {
                         rows,
                         typ: relation_type.clone(),
                     });
                 }
 
-                *relation = RelationExpr::union_many(new_inputs, relation_type);
+                *relation = MirRelationExpr::union_many(new_inputs, relation_type);
             }
-            RelationExpr::ArrangeBy { input, .. } => {
-                if let RelationExpr::Constant { .. } = &**input {
+            MirRelationExpr::ArrangeBy { input, .. } => {
+                if let MirRelationExpr::Constant { .. } = &**input {
                     *relation = input.take_dangerous();
                 }
             }
@@ -349,7 +349,7 @@ impl FoldConstants {
         // will be consolidated. We have to make a separate check for constant
         // nodes here, since the match arm above might install new constant
         // nodes.
-        if let RelationExpr::Constant { rows, typ } = relation {
+        if let MirRelationExpr::Constant { rows, typ } = relation {
             // Reduce down to canonical representation.
             let mut accum = HashMap::new();
             for (row, cnt) in rows.iter() {
@@ -381,7 +381,7 @@ impl FoldConstants {
 /// Transforms !(a && b) into !a || !b and !(a || b) into !a && !b
 pub mod demorgans {
 
-    use expr::{BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc};
+    use expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 
     use crate::{TransformArgs, TransformError};
 
@@ -391,7 +391,7 @@ pub mod demorgans {
     impl crate::Transform for DeMorgans {
         fn transform(
             &self,
-            relation: &mut RelationExpr,
+            relation: &mut MirRelationExpr,
             _: TransformArgs,
         ) -> Result<(), TransformError> {
             relation.visit_mut_pre(&mut |e| {
@@ -403,8 +403,8 @@ pub mod demorgans {
 
     impl DeMorgans {
         /// Transforms !(a && b) into !a || !b and !(a || b) into !a && !b
-        pub fn action(&self, relation: &mut RelationExpr) {
-            if let RelationExpr::Filter {
+        pub fn action(&self, relation: &mut MirRelationExpr) {
+            if let MirRelationExpr::Filter {
                 input: _,
                 predicates,
             } = relation
@@ -417,39 +417,39 @@ pub mod demorgans {
     }
 
     /// Transforms !(a && b) into !a || !b and !(a || b) into !a && !b
-    pub fn demorgans(expr: &mut ScalarExpr) {
-        if let ScalarExpr::CallUnary {
+    pub fn demorgans(expr: &mut MirScalarExpr) {
+        if let MirScalarExpr::CallUnary {
             expr: inner,
             func: UnaryFunc::Not,
         } = expr
         {
-            if let ScalarExpr::CallBinary { expr1, expr2, func } = &mut **inner {
+            if let MirScalarExpr::CallBinary { expr1, expr2, func } = &mut **inner {
                 match func {
                     BinaryFunc::And => {
-                        let inner0 = ScalarExpr::CallUnary {
+                        let inner0 = MirScalarExpr::CallUnary {
                             expr: Box::new(expr1.take()),
                             func: UnaryFunc::Not,
                         };
-                        let inner1 = ScalarExpr::CallUnary {
+                        let inner1 = MirScalarExpr::CallUnary {
                             expr: Box::new(expr2.take()),
                             func: UnaryFunc::Not,
                         };
-                        *expr = ScalarExpr::CallBinary {
+                        *expr = MirScalarExpr::CallBinary {
                             expr1: Box::new(inner0),
                             expr2: Box::new(inner1),
                             func: BinaryFunc::Or,
                         }
                     }
                     BinaryFunc::Or => {
-                        let inner0 = ScalarExpr::CallUnary {
+                        let inner0 = MirScalarExpr::CallUnary {
                             expr: Box::new(expr1.take()),
                             func: UnaryFunc::Not,
                         };
-                        let inner1 = ScalarExpr::CallUnary {
+                        let inner1 = MirScalarExpr::CallUnary {
                             expr: Box::new(expr2.take()),
                             func: UnaryFunc::Not,
                         };
-                        *expr = ScalarExpr::CallBinary {
+                        *expr = MirScalarExpr::CallBinary {
                             expr1: Box::new(inner0),
                             expr2: Box::new(inner1),
                             func: BinaryFunc::And,
@@ -465,7 +465,7 @@ pub mod demorgans {
 /// Transforms predicates from (a && b) || (a && c) into a && (b || c).
 pub mod undistribute_and {
 
-    use expr::{BinaryFunc, RelationExpr, ScalarExpr};
+    use expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
     use repr::{Datum, ScalarType};
 
     use crate::{TransformArgs, TransformError};
@@ -477,7 +477,7 @@ pub mod undistribute_and {
     impl crate::Transform for UndistributeAnd {
         fn transform(
             &self,
-            relation: &mut RelationExpr,
+            relation: &mut MirRelationExpr,
             _: TransformArgs,
         ) -> Result<(), TransformError> {
             relation.visit_mut(&mut |e| {
@@ -489,8 +489,8 @@ pub mod undistribute_and {
 
     impl UndistributeAnd {
         /// Transforms predicates from (a && b) || (a && c) into a && (b || c).
-        pub fn action(&self, relation: &mut RelationExpr) {
-            if let RelationExpr::Filter {
+        pub fn action(&self, relation: &mut MirRelationExpr) {
+            if let MirRelationExpr::Filter {
                 input: _,
                 predicates,
             } = relation
@@ -503,8 +503,8 @@ pub mod undistribute_and {
     }
 
     /// Collects undistributable terms from AND expressions.
-    fn harvest_ands(expr: &ScalarExpr, ands: &mut Vec<ScalarExpr>) {
-        if let ScalarExpr::CallBinary {
+    fn harvest_ands(expr: &MirScalarExpr, ands: &mut Vec<MirScalarExpr>) {
+        if let MirScalarExpr::CallBinary {
             expr1,
             expr2,
             func: BinaryFunc::And,
@@ -518,8 +518,8 @@ pub mod undistribute_and {
     }
 
     /// Removes undistributed terms from AND expressions.
-    fn suppress_ands(expr: &mut ScalarExpr, ands: &[ScalarExpr]) {
-        if let ScalarExpr::CallBinary {
+    fn suppress_ands(expr: &mut MirScalarExpr, ands: &[MirScalarExpr]) {
+        if let MirScalarExpr::CallBinary {
             expr1,
             expr2,
             func: BinaryFunc::And,
@@ -530,7 +530,7 @@ pub mod undistribute_and {
             suppress_ands(expr2, ands);
 
             // If either argument is in our list, replace it by `true`.
-            let tru = ScalarExpr::literal_ok(Datum::True, ScalarType::Bool.nullable(false));
+            let tru = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool.nullable(false));
             if ands.contains(expr1) {
                 *expr = std::mem::replace(expr2, tru);
             } else if ands.contains(expr2) {
@@ -540,13 +540,13 @@ pub mod undistribute_and {
     }
 
     /// Transforms (a && b) || (a && c) into a && (b || c)
-    pub fn undistribute_and(expr: &mut ScalarExpr) {
+    pub fn undistribute_and(expr: &mut MirScalarExpr) {
         expr.visit_mut(&mut |x| undistribute_and_helper(x));
     }
 
     /// AND undistribution to apply at each `ScalarExpr`.
-    pub fn undistribute_and_helper(expr: &mut ScalarExpr) {
-        if let ScalarExpr::CallBinary {
+    pub fn undistribute_and_helper(expr: &mut MirScalarExpr) {
+        if let MirScalarExpr::CallBinary {
             expr1,
             expr2,
             func: BinaryFunc::Or,
@@ -571,7 +571,7 @@ pub mod undistribute_and {
             }
 
             for and_term in intersection.into_iter() {
-                *expr = ScalarExpr::CallBinary {
+                *expr = MirScalarExpr::CallBinary {
                     expr1: Box::new(expr.take()),
                     expr2: Box::new(and_term),
                     func: BinaryFunc::And,
@@ -583,7 +583,7 @@ pub mod undistribute_and {
 
 /// Transforms `NOT(a <op> b)` to `a negate(<op>) b` if it exists.
 pub mod negate_predicate {
-    use expr::{BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc};
+    use expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 
     use crate::{TransformArgs, TransformError};
 
@@ -594,7 +594,7 @@ pub mod negate_predicate {
     impl crate::Transform for NegatePredicate {
         fn transform(
             &self,
-            relation: &mut RelationExpr,
+            relation: &mut MirRelationExpr,
             _: TransformArgs,
         ) -> Result<(), TransformError> {
             self.action(relation);
@@ -617,29 +617,29 @@ pub mod negate_predicate {
 
     impl NegatePredicate {
         /// Transforms `NOT(a <op> b)` to `a negate(<op>) b` if it exists.
-        pub fn action(&self, relation: &mut RelationExpr) {
+        pub fn action(&self, relation: &mut MirRelationExpr) {
             relation.visit_scalars_mut(&mut |x| x.visit_mut(&mut negate_predicate))
         }
     }
 
     /// Transforms `NOT(a <op> b)` to `a negate(<op>) b` if it exists.
-    pub fn negate_predicate(expr: &mut ScalarExpr) {
-        if let ScalarExpr::CallUnary {
+    pub fn negate_predicate(expr: &mut MirScalarExpr) {
+        if let MirScalarExpr::CallUnary {
             expr: not_input,
             func: UnaryFunc::Not,
         } = expr
         {
             match &mut **not_input {
-                ScalarExpr::CallBinary { expr1, expr2, func } => {
+                MirScalarExpr::CallBinary { expr1, expr2, func } => {
                     if let Some(negated_func) = negate(func) {
-                        *expr = ScalarExpr::CallBinary {
+                        *expr = MirScalarExpr::CallBinary {
                             expr1: Box::new(expr1.take()),
                             expr2: Box::new(expr2.take()),
                             func: negated_func,
                         }
                     }
                 }
-                ScalarExpr::CallUnary {
+                MirScalarExpr::CallUnary {
                     expr: inner_expr,
                     func: UnaryFunc::Not,
                 } => *expr = inner_expr.take(),

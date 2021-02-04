@@ -32,10 +32,10 @@ pub use expr::{BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, Varia
 use repr::adt::array::ArrayDimension;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// Just like expr::RelationExpr, except where otherwise noted below.
+/// Just like MirRelationExpr, except where otherwise noted below.
 ///
-/// - There is no equivalent to `expr::RelationExpr::Let`.
-pub enum RelationExpr {
+/// - There is no equivalent to `MirRelationExpr::Let`.
+pub enum HirRelationExpr {
     Constant {
         rows: Vec<Row>,
         typ: RelationType,
@@ -45,45 +45,45 @@ pub enum RelationExpr {
         typ: RelationType,
     },
     Project {
-        input: Box<RelationExpr>,
+        input: Box<HirRelationExpr>,
         outputs: Vec<usize>,
     },
     Map {
-        input: Box<RelationExpr>,
-        scalars: Vec<ScalarExpr>,
+        input: Box<HirRelationExpr>,
+        scalars: Vec<HirScalarExpr>,
     },
     CallTable {
         func: TableFunc,
-        exprs: Vec<ScalarExpr>,
+        exprs: Vec<HirScalarExpr>,
     },
     Filter {
-        input: Box<RelationExpr>,
-        predicates: Vec<ScalarExpr>,
+        input: Box<HirRelationExpr>,
+        predicates: Vec<HirScalarExpr>,
     },
-    /// Unlike expr::RelationExpr, we haven't yet compiled LeftOuter/RightOuter/FullOuter
+    /// Unlike MirRelationExpr, we haven't yet compiled LeftOuter/RightOuter/FullOuter
     /// joins away into more primitive exprs
     Join {
-        left: Box<RelationExpr>,
-        right: Box<RelationExpr>,
-        on: ScalarExpr,
+        left: Box<HirRelationExpr>,
+        right: Box<HirRelationExpr>,
+        on: HirScalarExpr,
         kind: JoinKind,
     },
-    /// Unlike expr::RelationExpr, when `key` is empty AND `input` is empty this returns
+    /// Unlike MirRelationExpr, when `key` is empty AND `input` is empty this returns
     /// a single row with the aggregates evaluated over empty groups, rather than returning zero
     /// rows
     Reduce {
-        input: Box<RelationExpr>,
+        input: Box<HirRelationExpr>,
         group_key: Vec<usize>,
         aggregates: Vec<AggregateExpr>,
         expected_group_size: Option<usize>,
     },
     Distinct {
-        input: Box<RelationExpr>,
+        input: Box<HirRelationExpr>,
     },
     /// Groups and orders within each group, limiting output.
     TopK {
         /// The source collection.
-        input: Box<RelationExpr>,
+        input: Box<HirRelationExpr>,
         /// Column indices used to form groups.
         group_key: Vec<usize>,
         /// Column indices used to order rows within groups.
@@ -94,21 +94,21 @@ pub enum RelationExpr {
         offset: usize,
     },
     Negate {
-        input: Box<RelationExpr>,
+        input: Box<HirRelationExpr>,
     },
     Threshold {
-        input: Box<RelationExpr>,
+        input: Box<HirRelationExpr>,
     },
     Union {
-        base: Box<RelationExpr>,
-        inputs: Vec<RelationExpr>,
+        base: Box<HirRelationExpr>,
+        inputs: Vec<HirRelationExpr>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-/// Just like expr::ScalarExpr, except where otherwise noted below.
-pub enum ScalarExpr {
-    /// Unlike expr::ScalarExpr, we can nest RelationExprs via eg Exists. This means that a
+/// Just like expr::MirScalarExpr, except where otherwise noted below.
+pub enum HirScalarExpr {
+    /// Unlike expr::MirScalarExpr, we can nest HirRelationExprs via eg Exists. This means that a
     /// variable could refer to a column of the current input, or to a column of an outer relation.
     /// We use ColumnRef to denote the difference.
     Column(ColumnRef),
@@ -117,24 +117,24 @@ pub enum ScalarExpr {
     CallNullary(NullaryFunc),
     CallUnary {
         func: UnaryFunc,
-        expr: Box<ScalarExpr>,
+        expr: Box<HirScalarExpr>,
     },
     CallBinary {
         func: BinaryFunc,
-        expr1: Box<ScalarExpr>,
-        expr2: Box<ScalarExpr>,
+        expr1: Box<HirScalarExpr>,
+        expr2: Box<HirScalarExpr>,
     },
     CallVariadic {
         func: VariadicFunc,
-        exprs: Vec<ScalarExpr>,
+        exprs: Vec<HirScalarExpr>,
     },
     If {
-        cond: Box<ScalarExpr>,
-        then: Box<ScalarExpr>,
-        els: Box<ScalarExpr>,
+        cond: Box<HirScalarExpr>,
+        then: Box<HirScalarExpr>,
+        els: Box<HirScalarExpr>,
     },
     /// Returns true if `expr` returns any rows
-    Exists(Box<RelationExpr>),
+    Exists(Box<HirRelationExpr>),
     /// Given `expr` with arity 1. If expr returns:
     /// * 0 rows, return NULL
     /// * 1 row, return the value of that row
@@ -144,7 +144,7 @@ pub enum ScalarExpr {
     ///   If there are multiple `Select` expressions in a single SQL query, the result is that we take the product of all of them.
     ///   This is counter to the spec, but is consistent with eg postgres' treatment of multiple set-returning-functions
     ///   (see https://tapoueh.org/blog/2017/10/set-returning-functions-and-postgresql-10/).
-    Select(Box<RelationExpr>),
+    Select(Box<HirRelationExpr>),
 }
 
 /// A `CoercibleScalarExpr` is a [`ScalarExpr`] whose type is not fully
@@ -173,7 +173,7 @@ pub enum ScalarExpr {
 /// `$1` to have type bool.
 #[derive(Clone, Debug)]
 pub enum CoercibleScalarExpr {
-    Coerced(ScalarExpr),
+    Coerced(HirScalarExpr),
     Parameter(usize),
     LiteralNull,
     LiteralString(String),
@@ -181,7 +181,11 @@ pub enum CoercibleScalarExpr {
 }
 
 impl CoercibleScalarExpr {
-    pub fn type_as(self, ecx: &ExprContext, ty: &ScalarType) -> Result<ScalarExpr, anyhow::Error> {
+    pub fn type_as(
+        self,
+        ecx: &ExprContext,
+        ty: &ScalarType,
+    ) -> Result<HirScalarExpr, anyhow::Error> {
         let expr = typeconv::plan_coerce(ecx, self, ty)?;
         let expr_ty = ecx.scalar_type(&expr);
         if ty != &expr_ty {
@@ -195,7 +199,7 @@ impl CoercibleScalarExpr {
         Ok(expr)
     }
 
-    pub fn type_as_any(self, ecx: &ExprContext) -> Result<ScalarExpr, anyhow::Error> {
+    pub fn type_as_any(self, ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
         typeconv::plan_coerce(ecx, self, &ScalarType::String)
     }
 
@@ -205,7 +209,7 @@ impl CoercibleScalarExpr {
         ecx: &ExprContext,
         ccx: CastContext,
         ty: &ScalarType,
-    ) -> Result<ScalarExpr, anyhow::Error> {
+    ) -> Result<HirScalarExpr, anyhow::Error> {
         let expr = typeconv::plan_coerce(ecx, self, ty)?;
         typeconv::plan_cast(op, ecx, ccx, expr, ty)
     }
@@ -270,8 +274,8 @@ impl AbstractColumnType for Option<ColumnType> {
     }
 }
 
-impl From<ScalarExpr> for CoercibleScalarExpr {
-    fn from(expr: ScalarExpr) -> CoercibleScalarExpr {
+impl From<HirScalarExpr> for CoercibleScalarExpr {
+    fn from(expr: HirScalarExpr) -> CoercibleScalarExpr {
         CoercibleScalarExpr::Coerced(expr)
     }
 }
@@ -335,7 +339,7 @@ impl JoinKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AggregateExpr {
     pub func: AggregateFunc,
-    pub expr: Box<ScalarExpr>,
+    pub expr: Box<HirScalarExpr>,
     pub distinct: bool,
 }
 
@@ -460,16 +464,16 @@ impl AggregateFunc {
     }
 }
 
-impl RelationExpr {
+impl HirRelationExpr {
     pub fn typ(
         &self,
         outers: &[RelationType],
         params: &BTreeMap<usize, ScalarType>,
     ) -> RelationType {
         match self {
-            RelationExpr::Constant { typ, .. } => typ.clone(),
-            RelationExpr::Get { typ, .. } => typ.clone(),
-            RelationExpr::Project { input, outputs } => {
+            HirRelationExpr::Constant { typ, .. } => typ.clone(),
+            HirRelationExpr::Get { typ, .. } => typ.clone(),
+            HirRelationExpr::Project { input, outputs } => {
                 let input_typ = input.typ(outers, params);
                 RelationType::new(
                     outputs
@@ -478,18 +482,18 @@ impl RelationExpr {
                         .collect(),
                 )
             }
-            RelationExpr::Map { input, scalars } => {
+            HirRelationExpr::Map { input, scalars } => {
                 let mut typ = input.typ(outers, params);
                 for scalar in scalars {
                     typ.column_types.push(scalar.typ(outers, &typ, params));
                 }
                 typ
             }
-            RelationExpr::CallTable { func, exprs: _ } => func.output_type(),
-            RelationExpr::Filter { input, .. } | RelationExpr::TopK { input, .. } => {
+            HirRelationExpr::CallTable { func, exprs: _ } => func.output_type(),
+            HirRelationExpr::Filter { input, .. } | HirRelationExpr::TopK { input, .. } => {
                 input.typ(outers, params)
             }
-            RelationExpr::Join {
+            HirRelationExpr::Join {
                 left, right, kind, ..
             } => {
                 let left_nullable = matches!(kind, JoinKind::RightOuter | JoinKind::FullOuter);
@@ -516,7 +520,7 @@ impl RelationExpr {
                     });
                 RelationType::new(lt.chain(rt).collect())
             }
-            RelationExpr::Reduce {
+            HirRelationExpr::Reduce {
                 input,
                 group_key,
                 aggregates,
@@ -534,10 +538,10 @@ impl RelationExpr {
                 RelationType::new(column_types)
             }
             // TODO(frank): check for removal; add primary key information.
-            RelationExpr::Distinct { input }
-            | RelationExpr::Negate { input }
-            | RelationExpr::Threshold { input } => input.typ(outers, params),
-            RelationExpr::Union { base, inputs } => {
+            HirRelationExpr::Distinct { input }
+            | HirRelationExpr::Negate { input }
+            | HirRelationExpr::Threshold { input } => input.typ(outers, params),
+            HirRelationExpr::Union { base, inputs } => {
                 let mut base_cols = base.typ(outers, params).column_types;
                 for input in inputs {
                     for (base_col, col) in base_cols
@@ -554,19 +558,19 @@ impl RelationExpr {
 
     pub fn arity(&self) -> usize {
         match self {
-            RelationExpr::Constant { typ, .. } => typ.column_types.len(),
-            RelationExpr::Get { typ, .. } => typ.column_types.len(),
-            RelationExpr::Project { outputs, .. } => outputs.len(),
-            RelationExpr::Map { input, scalars } => input.arity() + scalars.len(),
-            RelationExpr::CallTable { func, .. } => func.output_arity(),
-            RelationExpr::Filter { input, .. }
-            | RelationExpr::TopK { input, .. }
-            | RelationExpr::Distinct { input }
-            | RelationExpr::Negate { input }
-            | RelationExpr::Threshold { input } => input.arity(),
-            RelationExpr::Join { left, right, .. } => left.arity() + right.arity(),
-            RelationExpr::Union { base, .. } => base.arity(),
-            RelationExpr::Reduce {
+            HirRelationExpr::Constant { typ, .. } => typ.column_types.len(),
+            HirRelationExpr::Get { typ, .. } => typ.column_types.len(),
+            HirRelationExpr::Project { outputs, .. } => outputs.len(),
+            HirRelationExpr::Map { input, scalars } => input.arity() + scalars.len(),
+            HirRelationExpr::CallTable { func, .. } => func.output_arity(),
+            HirRelationExpr::Filter { input, .. }
+            | HirRelationExpr::TopK { input, .. }
+            | HirRelationExpr::Distinct { input }
+            | HirRelationExpr::Negate { input }
+            | HirRelationExpr::Threshold { input } => input.arity(),
+            HirRelationExpr::Join { left, right, .. } => left.arity() + right.arity(),
+            HirRelationExpr::Union { base, .. } => base.arity(),
+            HirRelationExpr::Reduce {
                 group_key,
                 aggregates,
                 ..
@@ -576,7 +580,7 @@ impl RelationExpr {
 
     pub fn is_join_identity(&self) -> bool {
         match self {
-            RelationExpr::Constant { rows, .. } => rows.len() == 1 && self.arity() == 0,
+            HirRelationExpr::Constant { rows, .. } => rows.len() == 1 && self.arity() == 0,
             _ => false,
         }
     }
@@ -586,18 +590,18 @@ impl RelationExpr {
             // The projection is trivial. Suppress it.
             self
         } else {
-            RelationExpr::Project {
+            HirRelationExpr::Project {
                 input: Box::new(self),
                 outputs,
             }
         }
     }
 
-    pub fn map(mut self, scalars: Vec<ScalarExpr>) -> Self {
+    pub fn map(mut self, scalars: Vec<HirScalarExpr>) -> Self {
         if scalars.is_empty() {
             // The map is trivial. Suppress it.
             self
-        } else if let RelationExpr::Map {
+        } else if let HirRelationExpr::Map {
             scalars: old_scalars,
             input: _,
         } = &mut self
@@ -606,15 +610,15 @@ impl RelationExpr {
             old_scalars.extend(scalars);
             self
         } else {
-            RelationExpr::Map {
+            HirRelationExpr::Map {
                 input: Box::new(self),
                 scalars,
             }
         }
     }
 
-    pub fn filter(self, predicates: Vec<ScalarExpr>) -> Self {
-        RelationExpr::Filter {
+    pub fn filter(self, predicates: Vec<HirScalarExpr>) -> Self {
+        HirRelationExpr::Filter {
             input: Box::new(self),
             predicates,
         }
@@ -626,7 +630,7 @@ impl RelationExpr {
         aggregates: Vec<AggregateExpr>,
         expected_group_size: Option<usize>,
     ) -> Self {
-        RelationExpr::Reduce {
+        HirRelationExpr::Reduce {
             input: Box::new(self),
             group_key,
             aggregates,
@@ -642,7 +646,7 @@ impl RelationExpr {
         limit: Option<usize>,
         offset: usize,
     ) -> Self {
-        RelationExpr::TopK {
+        HirRelationExpr::TopK {
             input: Box::new(self),
             group_key,
             order_key,
@@ -652,42 +656,42 @@ impl RelationExpr {
     }
 
     pub fn negate(self) -> Self {
-        RelationExpr::Negate {
+        HirRelationExpr::Negate {
             input: Box::new(self),
         }
     }
 
     pub fn distinct(self) -> Self {
-        RelationExpr::Distinct {
+        HirRelationExpr::Distinct {
             input: Box::new(self),
         }
     }
 
     pub fn threshold(self) -> Self {
-        RelationExpr::Threshold {
+        HirRelationExpr::Threshold {
             input: Box::new(self),
         }
     }
 
     pub fn union(self, other: Self) -> Self {
-        RelationExpr::Union {
+        HirRelationExpr::Union {
             base: Box::new(self),
             inputs: vec![other],
         }
     }
 
-    pub fn exists(self) -> ScalarExpr {
-        ScalarExpr::Exists(Box::new(self))
+    pub fn exists(self) -> HirScalarExpr {
+        HirScalarExpr::Exists(Box::new(self))
     }
 
-    pub fn select(self) -> ScalarExpr {
-        ScalarExpr::Select(Box::new(self))
+    pub fn select(self) -> HirScalarExpr {
+        HirScalarExpr::Select(Box::new(self))
     }
 
-    pub fn take(&mut self) -> RelationExpr {
+    pub fn take(&mut self) -> HirRelationExpr {
         mem::replace(
             self,
-            RelationExpr::Constant {
+            HirRelationExpr::Constant {
                 rows: vec![],
                 typ: RelationType::new(Vec::new()),
             },
@@ -701,7 +705,7 @@ impl RelationExpr {
     where
         F: FnMut(&'a Self),
     {
-        self.visit1(|e: &RelationExpr| e.visit(f));
+        self.visit1(|e: &HirRelationExpr| e.visit(f));
         f(self);
     }
 
@@ -710,38 +714,38 @@ impl RelationExpr {
         F: FnMut(&'a Self),
     {
         match self {
-            RelationExpr::Constant { .. }
-            | RelationExpr::Get { .. }
-            | RelationExpr::CallTable { .. } => (),
-            RelationExpr::Project { input, .. } => {
+            HirRelationExpr::Constant { .. }
+            | HirRelationExpr::Get { .. }
+            | HirRelationExpr::CallTable { .. } => (),
+            HirRelationExpr::Project { input, .. } => {
                 f(input);
             }
-            RelationExpr::Map { input, .. } => {
+            HirRelationExpr::Map { input, .. } => {
                 f(input);
             }
-            RelationExpr::Filter { input, .. } => {
+            HirRelationExpr::Filter { input, .. } => {
                 f(input);
             }
-            RelationExpr::Join { left, right, .. } => {
+            HirRelationExpr::Join { left, right, .. } => {
                 f(left);
                 f(right);
             }
-            RelationExpr::Reduce { input, .. } => {
+            HirRelationExpr::Reduce { input, .. } => {
                 f(input);
             }
-            RelationExpr::Distinct { input } => {
+            HirRelationExpr::Distinct { input } => {
                 f(input);
             }
-            RelationExpr::TopK { input, .. } => {
+            HirRelationExpr::TopK { input, .. } => {
                 f(input);
             }
-            RelationExpr::Negate { input } => {
+            HirRelationExpr::Negate { input } => {
                 f(input);
             }
-            RelationExpr::Threshold { input } => {
+            HirRelationExpr::Threshold { input } => {
                 f(input);
             }
-            RelationExpr::Union { base, inputs } => {
+            HirRelationExpr::Union { base, inputs } => {
                 f(base);
                 for input in inputs {
                     f(input);
@@ -754,7 +758,7 @@ impl RelationExpr {
     where
         F: FnMut(&mut Self),
     {
-        self.visit1_mut(|e: &mut RelationExpr| e.visit_mut(f));
+        self.visit1_mut(|e: &mut HirRelationExpr| e.visit_mut(f));
         f(self);
     }
 
@@ -763,38 +767,38 @@ impl RelationExpr {
         F: FnMut(&'a mut Self),
     {
         match self {
-            RelationExpr::Constant { .. }
-            | RelationExpr::Get { .. }
-            | RelationExpr::CallTable { .. } => (),
-            RelationExpr::Project { input, .. } => {
+            HirRelationExpr::Constant { .. }
+            | HirRelationExpr::Get { .. }
+            | HirRelationExpr::CallTable { .. } => (),
+            HirRelationExpr::Project { input, .. } => {
                 f(input);
             }
-            RelationExpr::Map { input, .. } => {
+            HirRelationExpr::Map { input, .. } => {
                 f(input);
             }
-            RelationExpr::Filter { input, .. } => {
+            HirRelationExpr::Filter { input, .. } => {
                 f(input);
             }
-            RelationExpr::Join { left, right, .. } => {
+            HirRelationExpr::Join { left, right, .. } => {
                 f(left);
                 f(right);
             }
-            RelationExpr::Reduce { input, .. } => {
+            HirRelationExpr::Reduce { input, .. } => {
                 f(input);
             }
-            RelationExpr::Distinct { input } => {
+            HirRelationExpr::Distinct { input } => {
                 f(input);
             }
-            RelationExpr::TopK { input, .. } => {
+            HirRelationExpr::TopK { input, .. } => {
                 f(input);
             }
-            RelationExpr::Negate { input } => {
+            HirRelationExpr::Negate { input } => {
                 f(input);
             }
-            RelationExpr::Threshold { input } => {
+            HirRelationExpr::Threshold { input } => {
                 f(input);
             }
-            RelationExpr::Union { base, inputs } => {
+            HirRelationExpr::Union { base, inputs } => {
                 f(base);
                 for input in inputs {
                     f(input);
@@ -813,7 +817,7 @@ impl RelationExpr {
         F: FnMut(usize, &mut ColumnRef),
     {
         match self {
-            RelationExpr::Join {
+            HirRelationExpr::Join {
                 kind,
                 on,
                 left,
@@ -824,24 +828,24 @@ impl RelationExpr {
                 right.visit_columns(depth, f);
                 on.visit_columns(depth, f);
             }
-            RelationExpr::Map { scalars, input } => {
+            HirRelationExpr::Map { scalars, input } => {
                 for scalar in scalars {
                     scalar.visit_columns(depth, f);
                 }
                 input.visit_columns(depth, f);
             }
-            RelationExpr::CallTable { exprs, .. } => {
+            HirRelationExpr::CallTable { exprs, .. } => {
                 for expr in exprs {
                     expr.visit_columns(depth, f);
                 }
             }
-            RelationExpr::Filter { predicates, input } => {
+            HirRelationExpr::Filter { predicates, input } => {
                 for predicate in predicates {
                     predicate.visit_columns(depth, f);
                 }
                 input.visit_columns(depth, f);
             }
-            RelationExpr::Reduce {
+            HirRelationExpr::Reduce {
                 aggregates, input, ..
             } => {
                 for aggregate in aggregates {
@@ -849,20 +853,20 @@ impl RelationExpr {
                 }
                 input.visit_columns(depth, f);
             }
-            RelationExpr::Union { base, inputs } => {
+            HirRelationExpr::Union { base, inputs } => {
                 base.visit_columns(depth, f);
                 for input in inputs {
                     input.visit_columns(depth, f);
                 }
             }
-            RelationExpr::Project { input, .. }
-            | RelationExpr::Distinct { input }
-            | RelationExpr::TopK { input, .. }
-            | RelationExpr::Negate { input }
-            | RelationExpr::Threshold { input } => {
+            HirRelationExpr::Project { input, .. }
+            | HirRelationExpr::Distinct { input }
+            | HirRelationExpr::TopK { input, .. }
+            | HirRelationExpr::Negate { input }
+            | HirRelationExpr::Threshold { input } => {
                 input.visit_columns(depth, f);
             }
-            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
+            HirRelationExpr::Constant { .. } | HirRelationExpr::Get { .. } => (),
         }
     }
 
@@ -870,32 +874,32 @@ impl RelationExpr {
     /// corresponding datum from `params`.
     pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
         match self {
-            RelationExpr::Join {
+            HirRelationExpr::Join {
                 on, left, right, ..
             } => {
                 on.bind_parameters(params)?;
                 left.bind_parameters(params)?;
                 right.bind_parameters(params)
             }
-            RelationExpr::Map { scalars, input } => {
+            HirRelationExpr::Map { scalars, input } => {
                 for scalar in scalars {
                     scalar.bind_parameters(params)?;
                 }
                 input.bind_parameters(params)
             }
-            RelationExpr::CallTable { exprs, .. } => {
+            HirRelationExpr::CallTable { exprs, .. } => {
                 for expr in exprs {
                     expr.bind_parameters(params)?;
                 }
                 Ok(())
             }
-            RelationExpr::Filter { predicates, input } => {
+            HirRelationExpr::Filter { predicates, input } => {
                 for predicate in predicates {
                     predicate.bind_parameters(params)?;
                 }
                 input.bind_parameters(params)
             }
-            RelationExpr::Reduce {
+            HirRelationExpr::Reduce {
                 aggregates, input, ..
             } => {
                 for aggregate in aggregates {
@@ -903,25 +907,25 @@ impl RelationExpr {
                 }
                 input.bind_parameters(params)
             }
-            RelationExpr::Union { base, inputs } => {
+            HirRelationExpr::Union { base, inputs } => {
                 for input in inputs {
                     input.bind_parameters(params)?;
                 }
                 base.bind_parameters(params)
             }
-            RelationExpr::Project { input, .. }
-            | RelationExpr::Distinct { input, .. }
-            | RelationExpr::TopK { input, .. }
-            | RelationExpr::Negate { input, .. }
-            | RelationExpr::Threshold { input, .. } => input.bind_parameters(params),
-            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => Ok(()),
+            HirRelationExpr::Project { input, .. }
+            | HirRelationExpr::Distinct { input, .. }
+            | HirRelationExpr::TopK { input, .. }
+            | HirRelationExpr::Negate { input, .. }
+            | HirRelationExpr::Threshold { input, .. } => input.bind_parameters(params),
+            HirRelationExpr::Constant { .. } | HirRelationExpr::Get { .. } => Ok(()),
         }
     }
 
     /// See the documentation for [`ScalarExpr::splice_parameters`].
-    pub fn splice_parameters(&mut self, params: &[ScalarExpr], depth: usize) {
+    pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
         match self {
-            RelationExpr::Join {
+            HirRelationExpr::Join {
                 kind,
                 on,
                 left,
@@ -932,24 +936,24 @@ impl RelationExpr {
                 right.splice_parameters(params, depth);
                 on.splice_parameters(params, depth);
             }
-            RelationExpr::Map { scalars, input } => {
+            HirRelationExpr::Map { scalars, input } => {
                 for scalar in scalars {
                     scalar.splice_parameters(params, depth);
                 }
                 input.splice_parameters(params, depth);
             }
-            RelationExpr::CallTable { exprs, .. } => {
+            HirRelationExpr::CallTable { exprs, .. } => {
                 for expr in exprs {
                     expr.splice_parameters(params, depth);
                 }
             }
-            RelationExpr::Filter { predicates, input } => {
+            HirRelationExpr::Filter { predicates, input } => {
                 for predicate in predicates {
                     predicate.splice_parameters(params, depth);
                 }
                 input.splice_parameters(params, depth);
             }
-            RelationExpr::Reduce {
+            HirRelationExpr::Reduce {
                 aggregates, input, ..
             } => {
                 for aggregate in aggregates {
@@ -957,20 +961,20 @@ impl RelationExpr {
                 }
                 input.splice_parameters(params, depth);
             }
-            RelationExpr::Union { base, inputs } => {
+            HirRelationExpr::Union { base, inputs } => {
                 base.splice_parameters(params, depth);
                 for input in inputs {
                     input.splice_parameters(params, depth);
                 }
             }
-            RelationExpr::Project { input, .. }
-            | RelationExpr::Distinct { input }
-            | RelationExpr::TopK { input, .. }
-            | RelationExpr::Negate { input }
-            | RelationExpr::Threshold { input } => {
+            HirRelationExpr::Project { input, .. }
+            | HirRelationExpr::Distinct { input }
+            | HirRelationExpr::TopK { input, .. }
+            | HirRelationExpr::Negate { input }
+            | HirRelationExpr::Threshold { input } => {
                 input.splice_parameters(params, depth);
             }
-            RelationExpr::Constant { .. } | RelationExpr::Get { .. } => (),
+            HirRelationExpr::Constant { .. } | HirRelationExpr::Get { .. } => (),
         }
     }
 
@@ -981,16 +985,16 @@ impl RelationExpr {
             .into_iter()
             .map(move |datums| row_packer.pack(datums))
             .collect();
-        RelationExpr::Constant { rows, typ }
+        HirRelationExpr::Constant { rows, typ }
     }
 
     pub fn finish(&mut self, finishing: expr::RowSetFinishing) {
         if !finishing.is_trivial(self.arity()) {
-            *self = RelationExpr::Project {
-                input: Box::new(RelationExpr::TopK {
+            *self = HirRelationExpr::Project {
+                input: Box::new(HirRelationExpr::TopK {
                     input: Box::new(std::mem::replace(
                         self,
-                        RelationExpr::Constant {
+                        HirRelationExpr::Constant {
                             rows: vec![],
                             typ: RelationType::new(Vec::new()),
                         },
@@ -1006,15 +1010,15 @@ impl RelationExpr {
     }
 }
 
-impl ScalarExpr {
+impl HirScalarExpr {
     /// Replaces any parameter references in the expression with the
     /// corresponding datum in `params`.
     pub fn bind_parameters(&mut self, params: &Params) -> Result<(), anyhow::Error> {
         match self {
-            ScalarExpr::Literal(_, _) | ScalarExpr::Column(_) | ScalarExpr::CallNullary(_) => {
-                Ok(())
-            }
-            ScalarExpr::Parameter(n) => {
+            HirScalarExpr::Literal(_, _)
+            | HirScalarExpr::Column(_)
+            | HirScalarExpr::CallNullary(_) => Ok(()),
+            HirScalarExpr::Parameter(n) => {
                 let datum = match params.datums.iter().nth(*n - 1) {
                     None => bail!("there is no parameter ${}", n),
                     Some(datum) => datum,
@@ -1022,26 +1026,28 @@ impl ScalarExpr {
                 let scalar_type = &params.types[*n - 1];
                 let row = Row::pack(&[datum]);
                 let column_type = scalar_type.clone().nullable(datum.is_null());
-                *self = ScalarExpr::Literal(row, column_type);
+                *self = HirScalarExpr::Literal(row, column_type);
                 Ok(())
             }
-            ScalarExpr::CallUnary { expr, .. } => expr.bind_parameters(params),
-            ScalarExpr::CallBinary { expr1, expr2, .. } => {
+            HirScalarExpr::CallUnary { expr, .. } => expr.bind_parameters(params),
+            HirScalarExpr::CallBinary { expr1, expr2, .. } => {
                 expr1.bind_parameters(params)?;
                 expr2.bind_parameters(params)
             }
-            ScalarExpr::CallVariadic { exprs, .. } => {
+            HirScalarExpr::CallVariadic { exprs, .. } => {
                 for expr in exprs {
                     expr.bind_parameters(params)?;
                 }
                 Ok(())
             }
-            ScalarExpr::If { cond, then, els } => {
+            HirScalarExpr::If { cond, then, els } => {
                 cond.bind_parameters(params)?;
                 then.bind_parameters(params)?;
                 els.bind_parameters(params)
             }
-            ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => expr.bind_parameters(params),
+            HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
+                expr.bind_parameters(params)
+            }
         }
     }
 
@@ -1055,36 +1061,38 @@ impl ScalarExpr {
     ///
     /// Column references in parameters will be corrected to account for the
     /// depth at which they are spliced.
-    pub fn splice_parameters(&mut self, params: &[ScalarExpr], depth: usize) {
+    pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
         self.visit_mut(&mut |e| match e {
-            ScalarExpr::Parameter(i) => {
+            HirScalarExpr::Parameter(i) => {
                 *e = params[*i - 1].clone();
                 // Correct any column references in the parameter expression for
                 // its new depth.
                 e.visit_columns(0, &mut |_, col| col.level += depth);
             }
-            ScalarExpr::Exists(e) | ScalarExpr::Select(e) => e.splice_parameters(params, depth + 1),
+            HirScalarExpr::Exists(e) | HirScalarExpr::Select(e) => {
+                e.splice_parameters(params, depth + 1)
+            }
             _ => (),
         })
     }
 
-    pub fn literal(datum: Datum, scalar_type: ScalarType) -> ScalarExpr {
+    pub fn literal(datum: Datum, scalar_type: ScalarType) -> HirScalarExpr {
         let row = Row::pack(&[datum]);
-        ScalarExpr::Literal(row, scalar_type.nullable(datum.is_null()))
+        HirScalarExpr::Literal(row, scalar_type.nullable(datum.is_null()))
     }
 
-    pub fn literal_true() -> ScalarExpr {
-        ScalarExpr::literal(Datum::True, ScalarType::Bool)
+    pub fn literal_true() -> HirScalarExpr {
+        HirScalarExpr::literal(Datum::True, ScalarType::Bool)
     }
 
-    pub fn literal_null(scalar_type: ScalarType) -> ScalarExpr {
-        ScalarExpr::literal(Datum::Null, scalar_type)
+    pub fn literal_null(scalar_type: ScalarType) -> HirScalarExpr {
+        HirScalarExpr::literal(Datum::Null, scalar_type)
     }
 
     pub fn literal_1d_array(
         datums: Vec<Datum>,
         element_scalar_type: ScalarType,
-    ) -> Result<ScalarExpr, anyhow::Error> {
+    ) -> Result<HirScalarExpr, anyhow::Error> {
         let scalar_type = match element_scalar_type {
             ScalarType::Array(_) => {
                 return Err(anyhow::anyhow!("cannot build array from array type"))
@@ -1102,18 +1110,18 @@ impl ScalarExpr {
         )?;
         let row = packer.finish();
 
-        Ok(ScalarExpr::Literal(row, scalar_type))
+        Ok(HirScalarExpr::Literal(row, scalar_type))
     }
 
     pub fn call_unary(self, func: UnaryFunc) -> Self {
-        ScalarExpr::CallUnary {
+        HirScalarExpr::CallUnary {
             func,
             expr: Box::new(self),
         }
     }
 
     pub fn call_binary(self, other: Self, func: BinaryFunc) -> Self {
-        ScalarExpr::CallBinary {
+        HirScalarExpr::CallBinary {
             func,
             expr1: Box::new(self),
             expr2: Box::new(other),
@@ -1121,14 +1129,14 @@ impl ScalarExpr {
     }
 
     pub fn take(&mut self) -> Self {
-        mem::replace(self, ScalarExpr::literal_null(ScalarType::String))
+        mem::replace(self, HirScalarExpr::literal_null(ScalarType::String))
     }
 
     pub fn visit<'a, F>(&'a self, f: &mut F)
     where
         F: FnMut(&'a Self),
     {
-        self.visit1(|e: &ScalarExpr| e.visit(f));
+        self.visit1(|e: &HirScalarExpr| e.visit(f));
         f(self);
     }
 
@@ -1136,7 +1144,7 @@ impl ScalarExpr {
     where
         F: FnMut(&'a Self),
     {
-        use ScalarExpr::*;
+        use HirScalarExpr::*;
         match self {
             Column(..) | Parameter(..) | Literal(..) | CallNullary(..) => (),
             CallUnary { expr, .. } => f(expr),
@@ -1162,7 +1170,7 @@ impl ScalarExpr {
     where
         F: FnMut(&mut Self),
     {
-        self.visit1_mut(|e: &mut ScalarExpr| e.visit_mut(f));
+        self.visit1_mut(|e: &mut HirScalarExpr| e.visit_mut(f));
         f(self);
     }
 
@@ -1171,14 +1179,14 @@ impl ScalarExpr {
         F: FnMut(&mut Self),
     {
         f(self);
-        self.visit1_mut(|e: &mut ScalarExpr| e.visit_mut(f));
+        self.visit1_mut(|e: &mut HirScalarExpr| e.visit_mut(f));
     }
 
     pub fn visit1_mut<F>(&mut self, mut f: F)
     where
         F: FnMut(&mut Self),
     {
-        use ScalarExpr::*;
+        use HirScalarExpr::*;
         match self {
             Column(..) | Parameter(..) | Literal(..) | CallNullary(..) => (),
             CallUnary { expr, .. } => f(expr),
@@ -1210,24 +1218,26 @@ impl ScalarExpr {
         F: FnMut(usize, &mut ColumnRef),
     {
         match self {
-            ScalarExpr::Literal(_, _) | ScalarExpr::Parameter(_) | ScalarExpr::CallNullary(_) => (),
-            ScalarExpr::Column(col_ref) => f(depth, col_ref),
-            ScalarExpr::CallUnary { expr, .. } => expr.visit_columns(depth, f),
-            ScalarExpr::CallBinary { expr1, expr2, .. } => {
+            HirScalarExpr::Literal(_, _)
+            | HirScalarExpr::Parameter(_)
+            | HirScalarExpr::CallNullary(_) => (),
+            HirScalarExpr::Column(col_ref) => f(depth, col_ref),
+            HirScalarExpr::CallUnary { expr, .. } => expr.visit_columns(depth, f),
+            HirScalarExpr::CallBinary { expr1, expr2, .. } => {
                 expr1.visit_columns(depth, f);
                 expr2.visit_columns(depth, f);
             }
-            ScalarExpr::CallVariadic { exprs, .. } => {
+            HirScalarExpr::CallVariadic { exprs, .. } => {
                 for expr in exprs {
                     expr.visit_columns(depth, f);
                 }
             }
-            ScalarExpr::If { cond, then, els } => {
+            HirScalarExpr::If { cond, then, els } => {
                 cond.visit_columns(depth, f);
                 then.visit_columns(depth, f);
                 els.visit_columns(depth, f);
             }
-            ScalarExpr::Exists(expr) | ScalarExpr::Select(expr) => {
+            HirScalarExpr::Exists(expr) | HirScalarExpr::Select(expr) => {
                 expr.visit_columns(depth + 1, f);
             }
         }
@@ -1237,7 +1247,7 @@ impl ScalarExpr {
         let mut expr = self.lower_uncorrelated().ok()?;
         expr.reduce(&repr::RelationType::empty());
         match expr {
-            expr::ScalarExpr::Literal(Ok(row), _) => Some(row),
+            expr::MirScalarExpr::Literal(Ok(row), _) => Some(row),
             _ => None,
         }
     }
@@ -1281,7 +1291,7 @@ impl ScalarExpr {
     }
 }
 
-impl AbstractExpr for ScalarExpr {
+impl AbstractExpr for HirScalarExpr {
     type Type = ColumnType;
 
     fn typ(
@@ -1291,33 +1301,33 @@ impl AbstractExpr for ScalarExpr {
         params: &BTreeMap<usize, ScalarType>,
     ) -> Self::Type {
         match self {
-            ScalarExpr::Column(ColumnRef { level, column }) => {
+            HirScalarExpr::Column(ColumnRef { level, column }) => {
                 if *level == 0 {
                     inner.column_types[*column].clone()
                 } else {
                     outers[outers.len() - *level].column_types[*column].clone()
                 }
             }
-            ScalarExpr::Parameter(n) => params[&n].clone().nullable(true),
-            ScalarExpr::Literal(_, typ) => typ.clone(),
-            ScalarExpr::CallNullary(func) => func.output_type(),
-            ScalarExpr::CallUnary { expr, func } => {
+            HirScalarExpr::Parameter(n) => params[&n].clone().nullable(true),
+            HirScalarExpr::Literal(_, typ) => typ.clone(),
+            HirScalarExpr::CallNullary(func) => func.output_type(),
+            HirScalarExpr::CallUnary { expr, func } => {
                 func.output_type(expr.typ(outers, inner, params))
             }
-            ScalarExpr::CallBinary { expr1, expr2, func } => func.output_type(
+            HirScalarExpr::CallBinary { expr1, expr2, func } => func.output_type(
                 expr1.typ(outers, inner, params),
                 expr2.typ(outers, inner, params),
             ),
-            ScalarExpr::CallVariadic { exprs, func } => {
+            HirScalarExpr::CallVariadic { exprs, func } => {
                 func.output_type(exprs.iter().map(|e| e.typ(outers, inner, params)).collect())
             }
-            ScalarExpr::If { cond: _, then, els } => {
+            HirScalarExpr::If { cond: _, then, els } => {
                 let then_type = then.typ(outers, inner, params);
                 let else_type = els.typ(outers, inner, params);
                 then_type.union(&else_type).unwrap()
             }
-            ScalarExpr::Exists(_) => ScalarType::Bool.nullable(true),
-            ScalarExpr::Select(expr) => {
+            HirScalarExpr::Exists(_) => ScalarType::Bool.nullable(true),
+            HirScalarExpr::Select(expr) => {
                 let mut outers = outers.to_vec();
                 outers.push(inner.clone());
                 expr.typ(&outers, params)

@@ -24,7 +24,7 @@ shorthand for performing the query. For more information, see [API Components: S
 
 Field | Use
 ------|-----
-**TEMP** / **TEMPORARY** | Mark the view as temporary.
+**TEMP** / **TEMPORARY** | Mark the view as [temporary](#temporary-views).
 **OR REPLACE** | If a view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views or sinks depend on, nor can you replace a non-view object with a view.
 **IF NOT EXISTS** | If specified, _do not_ generate an error if a view of the same name already exists. <br/><br/>If _not_ specified, throw an error if a view of the same name already exists. _(Default)_
 _view&lowbar;name_ | A name for the view.
@@ -82,10 +82,8 @@ The `TEMP`/`TEMPORARY` keyword creates a temporary view. Temporary views are
 automatically dropped at the end of the SQL session and are not visible to other
 connections. They are always created in the special `mz_temp` schema.
 
-Temporary views may depend upon other temporary views, but non-temporary views
-may not depend on a temporary view.
-
-Materialize does not yet support creating indexes on temporary views.
+Temporary views may depend upon other temporary database objects, but non-temporary
+views may not depend on temporary objects.
 
 ## Examples
 

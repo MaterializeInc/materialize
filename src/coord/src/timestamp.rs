@@ -50,7 +50,7 @@ use crate::coord;
 lazy_static! {
     /// Value schema for Avro-formatted BYO consistency sources.
     static ref BYO_CONSISTENCY_SCHEMA: Schema = {
-        Schema::parse_str(r#"{
+        r#"{
           "name": "materialize.byo.consistency",
           "type": "record",
           "fields": [
@@ -60,21 +60,21 @@ lazy_static! {
             {"name": "timestamp", "type": "long"},
             {"name": "offset", "type": "long"}
           ]
-        }"#).unwrap()
+        }"#.parse().unwrap()
     };
 
     /// Key schema for Debezium consistency sources.
     static ref DEBEZIUM_TRX_SCHEMA_KEY: Schema = {
-        Schema::parse_str(r#"{
+        r#"{
           "name": "io.debezium.connector.common.TransactionMetadataKey",
           "type": "record",
           "fields": [{"name": "id", "type": "string"}]
-        }"#).unwrap()
+        }"#.parse().unwrap()
     };
 
     /// Value schema for Debezium consistency sources.
     static ref DEBEZIUM_TRX_SCHEMA_VALUE: Schema = {
-        Schema::parse_str(r#"{
+        r#"{
           "type": "record",
           "name": "TransactionMetadataValue",
           "namespace": "io.debezium.connector.common",
@@ -103,7 +103,7 @@ lazy_static! {
             }
           ],
           "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
-        }"#).unwrap()
+        }"#.parse().unwrap()
     };
 
     static ref MAX_AVAILABLE_OFFSET: IntGaugeVec = register_int_gauge_vec!(

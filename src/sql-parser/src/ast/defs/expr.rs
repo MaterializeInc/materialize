@@ -99,6 +99,14 @@ pub enum Expr<T: AstInfo> {
     /// While COALESCE has the same syntax as a function call, its semantics are
     /// extremely unusual, and are better captured with a dedicated AST node.
     Coalesce { exprs: Vec<Expr<T>> },
+    /// NULLIF(expr, expr)
+    ///
+    /// While NULLIF has the same syntax as a function call, it is not evaluated
+    /// as a function within Postgres.
+    NullIf {
+        l_expr: Box<Expr<T>>,
+        r_expr: Box<Expr<T>>,
+    },
     /// Nested expression e.g. `(foo > bar)` or `(1)`
     Nested(Box<Expr<T>>),
     /// A row constructor like `ROW(<expr>...)` or `(<expr>, <expr>...)`.
@@ -278,7 +286,8 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     | Expr::Function { .. }
                     | Expr::Identifier { .. }
                     | Expr::Collate { .. }
-                    | Expr::Coalesce { .. });
+                    | Expr::Coalesce { .. }
+                    | Expr::NullIf{ .. });
                 if needs_wrap {
                     f.write_str('(');
                 }
@@ -297,6 +306,11 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
             Expr::Coalesce { exprs } => {
                 f.write_str("COALESCE(");
                 f.write_node(&display::comma_separated(&exprs));
+                f.write_str(")");
+            }
+            Expr::NullIf { l_expr, r_expr } => {
+                f.write_str("COALESCE(");
+                f.write_node(&display::comma_separated(&[l_expr, r_expr]));
                 f.write_str(")");
             }
             Expr::Nested(ast) => {

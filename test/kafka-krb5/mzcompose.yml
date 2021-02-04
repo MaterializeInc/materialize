@@ -101,7 +101,7 @@ services:
         --kafka-option=sasl.kerberos.service.name=kafka
         --kafka-option=sasl.kerberos.principal=testdrive@CI.MATERIALIZE.IO
         --schema-registry-url=http://schema-registry:8081
-        --materialized-url=postgres://ignored@materialized:6875
+        --materialized-url=postgres://materialize@materialized:6875
         $$*
       - bash
     command: test/kafka-krb5/smoketest.td

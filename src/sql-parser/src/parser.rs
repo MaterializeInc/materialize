@@ -321,6 +321,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(CASE) => self.parse_case_expr(),
             Token::Keyword(CAST) => self.parse_cast_expr(),
             Token::Keyword(COALESCE) => self.parse_coalesce_expr(),
+            Token::Keyword(NULLIF) => self.parse_nullif_expr(),
             Token::Keyword(EXISTS) => self.parse_exists_expr(),
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
             Token::Keyword(INTERVAL) => self.parse_literal_interval(),
@@ -638,6 +639,15 @@ impl<'a> Parser<'a> {
         let exprs = self.parse_comma_separated(Parser::parse_expr)?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Coalesce { exprs })
+    }
+
+    fn parse_nullif_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let l_expr = Box::new(self.parse_expr()?);
+        self.expect_token(&Token::Comma)?;
+        let r_expr = Box::new(self.parse_expr()?);
+        self.expect_token(&Token::RParen)?;
+        Ok(Expr::NullIf { l_expr, r_expr })
     }
 
     fn parse_extract_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
@@ -1317,10 +1327,15 @@ impl<'a> Parser<'a> {
                 self.prev_token();
                 self.prev_token();
                 self.parse_create_view()
+            } else if self.parse_keyword(MATERIALIZED) && self.parse_keyword(VIEW) {
+                self.prev_token();
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_view()
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "VIEW after CREATE TEMPORARY",
+                    "VIEW or MATERIALIZED VIEW after CREATE TEMPORARY",
                     self.peek_token(),
                 )
             }
@@ -1652,13 +1667,27 @@ impl<'a> Parser<'a> {
                 // FROM S3 BUCKET '<bucket>' OBJECTS FROM SCAN MATCHING '<pattern>'
                 self.expect_keyword(BUCKET)?;
                 let bucket = self.parse_literal_string()?;
-                self.expect_keywords(&[OBJECTS, FROM, SCAN])?;
+                self.expect_keywords(&[OBJECTS, FROM])?;
+                let mut key_sources = Vec::new();
+                while let Some(keyword) = self.parse_one_of_keywords(&[SCAN]) {
+                    match keyword {
+                        SCAN => key_sources.push(S3KeySource::Scan),
+                        key => unreachable!("Keyword {} is not expected after OBJECTS FROM", key),
+                    }
+                    if !self.consume_token(&Token::Comma) {
+                        break;
+                    }
+                }
                 let pattern = if self.parse_keyword(MATCHING) {
                     Some(self.parse_literal_string()?)
                 } else {
                     None
                 };
-                Ok(Connector::S3 { bucket, pattern })
+                Ok(Connector::S3 {
+                    bucket,
+                    key_sources,
+                    pattern,
+                })
             }
             _ => unreachable!(),
         }
@@ -1826,7 +1855,7 @@ impl<'a> Parser<'a> {
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
         let object_type = match self.parse_one_of_keywords(&[
-            DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, VIEW,
+            DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
         ]) {
             Some(DATABASE) => {
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
@@ -2234,6 +2263,10 @@ impl<'a> Parser<'a> {
                         format!("No value parser for keyword {}", kw)
                     );
                 }
+                Token::Op(ref op) if op == "-" => match self.next_token() {
+                    Some(Token::Number(n)) => Ok(Value::Number(format!("-{}", n))),
+                    other => self.expected(self.peek_prev_pos(), "literal int", other),
+                },
                 Token::Number(ref n) => Ok(Value::Number(n.to_string())),
                 Token::String(ref s) => Ok(Value::String(s.to_string())),
                 Token::HexString(ref s) => Ok(Value::HexString(s.to_string())),
@@ -2402,6 +2435,7 @@ impl<'a> Parser<'a> {
                 // Misc.
                 BOOLEAN => other("bool"),
                 BYTES => other("bytea"),
+                JSON => other("jsonb"),
                 REGCLASS => other("oid"),
 
                 _ => {

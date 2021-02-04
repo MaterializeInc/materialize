@@ -14,6 +14,7 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::error::Error;
 use std::fmt;
@@ -414,11 +415,11 @@ where
         VERSION_SSL => FrontendStartupMessage::SslRequest,
         VERSION_GSSENC => FrontendStartupMessage::GssEncRequest,
         _ => {
-            let mut params = vec![];
+            let mut params = HashMap::new();
             while buf.peek_byte()? != 0 {
                 let name = buf.read_cstr()?.to_owned();
                 let value = buf.read_cstr()?.to_owned();
-                params.push((name, value));
+                params.insert(name, value);
             }
             FrontendStartupMessage::Startup { version, params }
         }

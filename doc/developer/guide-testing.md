@@ -214,6 +214,8 @@ that inhibits syncing with upstream.
 
 ### testdrive
 
+#### Overview
+
 Testdrive is a Materialize invention that feels a lot like sqllogictest, except
 it supports pluggable commands for interacting with external systems, like
 Kafka. Here's a representative snippet of a testdrive file:
@@ -260,11 +262,55 @@ provide most of the coverage, but it's worth adding some (*very*) basic
 testdrive tests (e.g., `> SELECT DATE '1999-01-01'`) to ensure that our pgwire
 implementation is properly serializing dates.
 
-Like the [Unit Tests](#unitintegration-tests), many testdrive tests require
-Zookeeper, Kafka, and the Confluent Schema Registry.
+#### Usage via mzcompose
 
-For testdrive tests that interacts with Amazon Kinesis, you will need to be
-running [LocalStack](https://github.com/localstack/localstack). To install and
+The easiest way to run testdrive tests is via mzcompose.
+
+The mzcompose configuration will automatically set up all of testdrive's dependencies, including
+Zookeeper, Kafka, the Confluent Schema Registry, and mock versions of AWS S3 and Kinesis. From the
+`test/testdrive` directory:
+
+```
+BUILD_MODE=debug TD_TEST=*.td ./mzcompose run testdrive
+```
+
+Supported **environment variables** (in addition to `BUILD_MODE` documented elsewhere):
+
+* `TD_TEST` (default `*.td`) is a glob of tests to run from the test/testdrive directory. The
+  default is to not run any of the "esoteric" tests.
+
+  ```
+  TD_TEST=joins.td BUILD_MODE=debug ./mzcompose run testdrive
+  ```
+
+* `AWS_REGION`/`AWS_ENDPOINT`: will be supplied to the testdrive `--aws-region`/`--aws-endpoint`
+  command line options, respectively.
+
+Supported **workflows** (target of `mzcompose run <workflow>`):
+
+* `testdrive`: Run tests with [LocalStack][] stubbing out AWS services. This allows you to run all
+  tests without needing to configure AWS credentials:
+
+  ```console
+  $ TD_TEST=*.td ./mzcompose run testdrive
+  ```
+
+* `ci`: Expect actual AWS credentials to be available (q.v. [our documentation][aws-creds-docs]),
+  either in the process environment or via AWS EC2 Profiles:
+
+  ```console
+  $ aws-vault exec scratch -- env TD_TEST=**/*.td ./mzcompose run local-aws
+  ```
+
+[aws-creds-docs]: https://handbook.dev.i.mtrlz.dev/setup/#configure-aws-vault
+
+#### Usage without mzcompose
+
+Like the [Unit Tests](#unitintegration-tests), many testdrive tests require Zookeeper, Kafka, and
+the Confluent Schema Registry, see the unit tests docs for starting them.
+
+For testdrive tests that interacts with Amazon AWS, you will need to be
+running [LocalStack][]. To install and
 run LocalStack:
 
 ```shell
@@ -302,35 +348,7 @@ Testdrive is the preferred system test framework when testing:
 * interactions between objects in the catalog,
 * serialization of data types over the PostgreSQL wire protocol.
 
-#### Docker Compose
-
-Testdrive comes with a Docker Compose environment that can set all
-of this up for you, including re-building and running the testdrive
-and materialized binaries if you have changed them locally. From the
-`test/testdrive` directory:
-
-```
-./mzcompose down -v
-AWS_REGION= ./mzcompose run testdrive --build-mode=debug
-```
-
-The `down` subcommand is needed to destroy any existing materialize
-containers with possibly old binaries. If this is not run, then even
-though a new materialize binary is built, it will not be used if there's
-an existing container.
-
-Supported environment variables (in addition to `BUILD_MODE` documented
-elsewhere):
-
-* `TD_TEST` (default `*.td`) is a glob of tests to run from the test/testdrive directory.
-```
-TD_TEST=joins.td BUILD_MODE=debug ./mzcompose run testdrive
-```
-* `AWS_REGION` (default `us-east-2`) is passed as the `--aws-region`
-  argument. Use an empty string for local testing.
-```
-AWS_REGION= BUILD_MODE=debug ./mzcompose run testdrive
-```
+[LocalStack]: https://github.com/localstack/localstack
 
 ## Long-running tests
 

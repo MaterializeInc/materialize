@@ -19,7 +19,7 @@ say() {
 }
 
 run_sql() {
-    psql -h localhost -p 6875 materialize -c "\pset footer off" -c "$1" "$@"
+    psql -U materialize -h localhost -p 6875 materialize -c "\pset footer off" -c "$1" "$@"
 }
 
 launch_materialized() {

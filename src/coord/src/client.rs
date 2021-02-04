@@ -15,6 +15,7 @@ use sql::plan::Params;
 use crate::command::{
     Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
+use crate::error::CoordError;
 use crate::session::{EndTransactionAction, Session};
 
 /// A client for a [`Coordinator`](crate::Coordinator).
@@ -53,7 +54,7 @@ impl Client {
         &mut self,
         stmt: Statement<Raw>,
         params: Params,
-    ) -> Result<NoSessionExecuteResponse, anyhow::Error> {
+    ) -> Result<NoSessionExecuteResponse, CoordError> {
         self.send(|tx| Command::NoSessionExecute { stmt, params, tx })
             .await
     }
@@ -92,7 +93,7 @@ impl SessionClient {
     ///
     /// Returns a list of messages that are intended to be displayed to the
     /// user.
-    pub async fn startup(&mut self) -> Result<Vec<StartupMessage>, anyhow::Error> {
+    pub async fn startup(&mut self) -> Result<Vec<StartupMessage>, CoordError> {
         self.send(|tx, session| Command::Startup { session, tx })
             .await
     }
@@ -106,7 +107,7 @@ impl SessionClient {
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), CoordError> {
         self.send(|tx, session| Command::Describe {
             name,
             stmt,
@@ -123,7 +124,7 @@ impl SessionClient {
         name: String,
         stmt: Statement<Raw>,
         param_types: Vec<Option<pgrepr::Type>>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), CoordError> {
         self.send(|tx, session| Command::Declare {
             name,
             stmt,
@@ -135,7 +136,7 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
-    pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, anyhow::Error> {
+    pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, CoordError> {
         self.send(|tx, session| Command::Execute {
             portal_name,
             session,
@@ -147,7 +148,7 @@ impl SessionClient {
     pub async fn end_transaction(
         &mut self,
         action: EndTransactionAction,
-    ) -> Result<ExecuteResponse, anyhow::Error> {
+    ) -> Result<ExecuteResponse, CoordError> {
         self.send(|tx, session| Command::Commit {
             action,
             session,
@@ -174,7 +175,7 @@ impl SessionClient {
         self.session.as_mut().unwrap()
     }
 
-    async fn send<T, F>(&mut self, f: F) -> Result<T, anyhow::Error>
+    async fn send<T, F>(&mut self, f: F) -> Result<T, CoordError>
     where
         F: FnOnce(futures::channel::oneshot::Sender<Response<T>>, Session) -> Command,
     {

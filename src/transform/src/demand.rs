@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use expr::{AggregateExpr, AggregateFunc, Id, JoinInputMapper, RelationExpr, ScalarExpr};
+use expr::{AggregateExpr, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 use repr::Datum;
 
 use crate::TransformArgs;
@@ -34,7 +34,7 @@ pub struct Demand;
 impl crate::Transform for Demand {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         self.action(
@@ -50,19 +50,19 @@ impl Demand {
     /// Columns to be produced.
     pub fn action(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         mut columns: HashSet<usize>,
         gets: &mut HashMap<Id, HashSet<usize>>,
     ) {
         let relation_type = relation.typ();
         match relation {
-            RelationExpr::Constant { .. } => {
+            MirRelationExpr::Constant { .. } => {
                 // Nothing clever to do with constants, that I can think of.
             }
-            RelationExpr::Get { id, .. } => {
+            MirRelationExpr::Get { id, .. } => {
                 gets.entry(*id).or_insert_with(HashSet::new).extend(columns);
             }
-            RelationExpr::Let { id, value, body } => {
+            MirRelationExpr::Let { id, value, body } => {
                 // Let harvests any requirements of get from its body,
                 // and pushes the union of the requirements at its value.
                 let id = Id::Local(*id);
@@ -75,14 +75,14 @@ impl Demand {
 
                 self.action(value, needs, gets);
             }
-            RelationExpr::Project { input, outputs } => {
+            MirRelationExpr::Project { input, outputs } => {
                 self.action(
                     input,
                     columns.into_iter().map(|c| outputs[c]).collect(),
                     gets,
                 );
             }
-            RelationExpr::Map { input, scalars } => {
+            MirRelationExpr::Map { input, scalars } => {
                 let arity = input.arity();
                 // contains columns whose supports have yet to be explored
                 let mut new_columns = columns.clone();
@@ -106,8 +106,10 @@ impl Demand {
                         // Leave literals as they are, to benefit explain.
                         if !scalar.is_literal() {
                             let typ = relation_type.column_types[arity + index].clone();
-                            *scalar =
-                                ScalarExpr::Literal(Ok(row_packer.pack(Some(Datum::Dummy))), typ);
+                            *scalar = MirScalarExpr::Literal(
+                                Ok(row_packer.pack(Some(Datum::Dummy))),
+                                typ,
+                            );
                         }
                     }
                 }
@@ -115,7 +117,7 @@ impl Demand {
                 columns.retain(|c| *c < arity);
                 self.action(input, columns, gets);
             }
-            RelationExpr::FlatMap {
+            MirRelationExpr::FlatMap {
                 input,
                 func: _,
                 exprs,
@@ -132,7 +134,7 @@ impl Demand {
                 columns.retain(|c| *c < input.arity());
                 self.action(input, columns, gets);
             }
-            RelationExpr::Filter { input, predicates } => {
+            MirRelationExpr::Filter { input, predicates } => {
                 for predicate in predicates {
                     for column in predicate.support() {
                         columns.insert(column);
@@ -140,7 +142,7 @@ impl Demand {
                 }
                 self.action(input, columns, gets);
             }
-            RelationExpr::Join {
+            MirRelationExpr::Join {
                 inputs,
                 equivalences,
                 demand,
@@ -157,7 +159,7 @@ impl Demand {
                 for equivalence in equivalences.iter() {
                     let mut first_column = None;
                     for expr in equivalence.iter() {
-                        if let ScalarExpr::Column(c) = expr {
+                        if let MirScalarExpr::Column(c) = expr {
                             if let Some(prior) = &first_column {
                                 permutation[*c] = *prior;
                             } else {
@@ -195,7 +197,7 @@ impl Demand {
                     *relation = relation.take_dangerous().project(permutation);
                 }
             }
-            RelationExpr::Reduce {
+            MirRelationExpr::Reduce {
                 input,
                 group_key,
                 aggregates,
@@ -222,7 +224,7 @@ impl Demand {
                         let typ = aggregates[index].typ(&input_type);
                         aggregates[index] = AggregateExpr {
                             func: AggregateFunc::Dummy,
-                            expr: ScalarExpr::literal_ok(Datum::Dummy, typ),
+                            expr: MirScalarExpr::literal_ok(Datum::Dummy, typ),
                             distinct: false,
                         };
                     }
@@ -230,7 +232,7 @@ impl Demand {
 
                 self.action(input, new_columns, gets);
             }
-            RelationExpr::TopK {
+            MirRelationExpr::TopK {
                 input,
                 group_key,
                 order_key,
@@ -242,23 +244,23 @@ impl Demand {
                 columns.extend(order_key.iter().map(|o| o.column));
                 self.action(input, columns, gets);
             }
-            RelationExpr::Negate { input } => {
+            MirRelationExpr::Negate { input } => {
                 self.action(input, columns, gets);
             }
-            RelationExpr::Threshold { input } => {
+            MirRelationExpr::Threshold { input } => {
                 // Threshold requires all columns, as collapsing any distinct values
                 // has the potential to change how it thresholds counts. This could
                 // be improved with reasoning about distinctness or non-negativity.
                 let arity = input.arity();
                 self.action(input, (0..arity).collect(), gets);
             }
-            RelationExpr::Union { base, inputs } => {
+            MirRelationExpr::Union { base, inputs } => {
                 self.action(base, columns.clone(), gets);
                 for input in inputs {
                     self.action(input, columns.clone(), gets);
                 }
             }
-            RelationExpr::ArrangeBy { input, keys } => {
+            MirRelationExpr::ArrangeBy { input, keys } => {
                 for key_set in keys {
                     for key in key_set {
                         columns.extend(key.support());

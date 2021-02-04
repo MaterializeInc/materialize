@@ -1403,11 +1403,11 @@ impl_display_t!(Assignment);
 /// Specifies what [Statement::Explain] is actually explaining
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExplainStage {
-    /// The sql::RelationExpr after parsing
+    /// The sql::HirRelationExpr after parsing
     RawPlan,
-    /// The expr::RelationExpr after decorrelation
+    /// The expr::MirRelationExpr after decorrelation
     DecorrelatedPlan,
-    /// The expr::RelationExpr after optimization
+    /// The expr::MirRelationExpr after optimization
     OptimizedPlan,
 }
 
