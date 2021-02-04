@@ -668,7 +668,6 @@ pub struct FileSourceConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct S3SourceConnector {
-    pub bucket: String,
     pub key_sources: Vec<S3KeySource>,
     pub pattern: Option<Glob>,
     pub aws_info: aws::ConnectInfo,
@@ -677,8 +676,8 @@ pub struct S3SourceConnector {
 /// A Source of Object Key names, the argument of the `OBJECTS FROM` clause
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum S3KeySource {
-    /// Scan the S3 Bucket in the S3 source connector to discover keys to download
-    Scan,
+    /// Scan the S3 Bucket to discover keys to download
+    Scan { bucket: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
