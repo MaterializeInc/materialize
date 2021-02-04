@@ -8,11 +8,11 @@
 -- by the Apache License, Version 2.0.
 
 CREATE SOURCE source_upsertavrotest
-FROM KAFKA BROKER 'kafka:9092'
+FROM KAFKA BROKER 'localhost:9092'
 TOPIC 'upsertavrotest'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
 ENVELOPE UPSERT
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
 
 CREATE VIEW upsertavrotest AS SELECT
     -- cast("BookId" AS bigint) AS "BookId",

@@ -14,7 +14,7 @@ import multiprocessing
 import pathlib
 import subprocess
 
-DISTRIBUTIONS = "/usr/share/generator/distributions"
+DISTRIBUTIONS = "./distributions/"
 
 
 def run(args: argparse.Namespace) -> None:
@@ -36,13 +36,10 @@ def run(args: argparse.Namespace) -> None:
     )
 
     kafka_gen = [
-        "/usr/local/bin/kgen",
-        "--quiet",
+        "../../../../target/release/kgen",
         "--bootstrap-server",
-        "kafka:9092",
-        "--schema-registry-url",
-        "http://schema-registry:8081",
-        "--num-records",
+        "localhost:9092",
+        "--num-messages",
         str(records_per_process),
         "--topic",
         "upsertavrotest",
@@ -94,7 +91,7 @@ if __name__ == "__main__":
         "-p",
         "--parallelism",
         type=int,
-        default=multiprocessing.cpu_count(),
+        default=1,
         help="Number of processes to spawn",
     )
 
