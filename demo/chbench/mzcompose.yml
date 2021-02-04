@@ -343,7 +343,6 @@ mzworkflows:
       service: peeker
       command: >-
         --only-initialize
-        -c /etc/peeker/materialized-sources.toml
         -q loadtest
 
   # Run a test that populates Kafka with data from chbench for a set amount of time
