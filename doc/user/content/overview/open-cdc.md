@@ -11,7 +11,7 @@ Change data capture (CDC) tools provide feeds that record any changes to a datab
 
 However, sometimes the stream can have missing or duplicate records, or send records out of order. For example, if a CDC tool crashes while writing a record, it may retry and write the record again, resulting in a duplicate entry.
 
-To prevent this kind of error, Materialize has developed the **Open CDC format**, a format for the updates that CDC tools propagate to other systems.  The Open CDC format carries enough information for a downstream data consumer (like Materialize) to recognize when records are missing, duplicated, or out of order. Each record contains:
+To prevent this kind of error, Materialize has developed the **Open CDC format**, a format for the updates that CDC tools propagate to other systems.  The Open CDC format is designed especially to prevent record duplication or missequencing by including enough information for a downstream data consumer (like Materialize) to recognize when records are missing, duplicated, or out of order. Each record contains:
 
 - the changes in a record (the updated fields or the deletion or addition of a new record)
 - the timestamp for the change
