@@ -3189,7 +3189,10 @@ where
         expr.visit_mut(&mut |e| {
             if let MirScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
                 observes_ts = true;
-                *e = MirScalarExpr::literal_ok(Datum::from(i128::from(ts)), f.output_type());
+                *e = MirScalarExpr::literal_ok(
+                    Datum::from(i128::from(ts)),
+                    f.output_type().scalar_type,
+                );
             }
         });
         if observes_ts && matches!(style, ExprPrepStyle::Static) {

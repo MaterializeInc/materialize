@@ -352,7 +352,7 @@ pub fn optimize(
                 expr.reduce(input_type);
                 optimize(expr, input_type, column_knowledge)?
             } else if func == &UnaryFunc::IsNull && !knowledge.nullable {
-                *expr = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool.nullable(false));
+                *expr = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
                 optimize(expr, input_type, column_knowledge)?
             } else {
                 DatumKnowledge::default()
