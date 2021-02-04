@@ -136,7 +136,10 @@ impl ConnectionHandler for pgwire::Server {
     }
 
     async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
-        self.handle_connection(conn).await
+        // Using fully-qualified syntax means we won't accidentally call
+        // ourselves (i.e., silently infinitely recurse) if the name or type of
+        // `pgwire::Server::handle_connection` changes.
+        pgwire::Server::handle_connection(self, conn).await
     }
 }
 
@@ -151,7 +154,10 @@ impl ConnectionHandler for http::Server {
     }
 
     async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
-        self.handle_connection(conn).await
+        // Using fully-qualified syntax means we won't accidentally call
+        // ourselves (i.e., silently infinitely recurse) if the name or type of
+        // `http::Server::handle_connection` changes.
+        http::Server::handle_connection(self, conn).await
     }
 }
 
@@ -166,6 +172,11 @@ impl ConnectionHandler for comm::Switchboard<SniffedStream<TcpStream>> {
     }
 
     async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
-        self.handle_connection(conn).err_into().await
+        // Using fully-qualified syntax means we won't accidentally call
+        // ourselves (i.e., silently infinitely recurse) if the name or type of
+        // `comm::Switchboard::handle_connection` changes.
+        comm::Switchboard::handle_connection(self, conn)
+            .err_into()
+            .await
     }
 }
