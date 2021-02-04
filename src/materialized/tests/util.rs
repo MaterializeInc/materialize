@@ -22,6 +22,7 @@ use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
 use openssl::x509::extension::SubjectAlternativeName;
 use openssl::x509::{X509NameBuilder, X509};
+use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
 use postgres::Socket;
@@ -228,5 +229,30 @@ impl<'a> FromSql<'a> for MzTimestamp {
 
     fn accepts(ty: &Type) -> bool {
         pgrepr::Numeric::accepts(ty)
+    }
+}
+
+pub trait PostgresErrorExt {
+    fn unwrap_db_error(self) -> DbError;
+}
+
+impl PostgresErrorExt for postgres::Error {
+    fn unwrap_db_error(self) -> DbError {
+        match self.source().and_then(|e| e.downcast_ref::<DbError>()) {
+            Some(e) => e.clone(),
+            None => panic!("expected DbError, but got: {:?}", self),
+        }
+    }
+}
+
+impl<T, E> PostgresErrorExt for Result<T, E>
+where
+    E: PostgresErrorExt,
+{
+    fn unwrap_db_error(self) -> DbError {
+        match self {
+            Ok(_) => panic!("expected Err(DbError), but got Ok(_)"),
+            Err(e) => e.unwrap_db_error(),
+        }
     }
 }
