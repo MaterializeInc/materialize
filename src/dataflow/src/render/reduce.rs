@@ -31,8 +31,110 @@ use super::context::Context;
 use crate::render::context::Arrangement;
 use crate::render::datum_vec::DatumVec;
 
+// Top level object for the Reduce lower-level IR
+#[derive(Clone, Debug)]
+enum ReduceExpr {
+    // No aggregations, just distinct
+    Distinct,
+    // Aggregations that can be computed in place
+    Accumulable(AccumulableExpr),
+    // Aggregations that can be computed hierarchically
+    Hierarchical(HierarchicalExpr),
+    // Aggregations that cannot be computed in place
+    // or hierarchically.
+    Basic(BasicExpr),
+    // A mix of multiple types of aggregates that need
+    // to be combined together.
+    Collation(CollationExpr),
+}
+
+// LIR node for accumulable reductions
+#[derive(Clone, Debug)]
+struct AccumulableExpr {
+    // All of the accumulable aggregations, ordered according to
+    // the output of the accumulable dataflow.
+    full_aggrs: Vec<AggregateExpr>,
+    // All of the non-distinct accumulable aggregates.
+    // Each element represents:
+    // (index of the aggregation among accumulable aggregations,
+    //   index of the datum among inputs, aggregation expr)
+    // These will all be rendered together in one dataflow fragment.
+    simple_aggrs: Vec<(usize, usize, AggregateExpr)>,
+    // Same as above but for all of the `DISTINCT` accumulable aggregations.
+    distinct_aggrs: Vec<(usize, usize, AggregateExpr)>,
+    // Total number of accumulable aggregations.
+    num_accumulable: usize,
+}
+
+// LIR node for hierarchical reductions
+#[derive(Clone, Debug)]
+enum HierarchicalExpr {
+    // LIR node for hierarchical, monotonic reductions
+    Monotonic(MonotonicExpr),
+    // LIR node for hierarchical reductions that are not
+    // monotonic and thus have to be rendered via a reduction
+    // tree that partitions reductions into fine and then coarser
+    // buckets.
+    Bucketed(BucketedExpr),
+}
+
+// LIR node for reductions that are hierarchical but presented with a monotonic
+// input stream.
+#[derive(Clone, Debug)]
+struct MonotonicExpr {
+    // Aggregations being computed monotonically.
+    aggr_funcs: Vec<AggregateFunc>,
+    // Set of "skips" or calls to `nth()` an iterator needs to do over
+    // the input to extract the relevant datums.
+    skips: Vec<usize>,
+}
+
+// LIR node for hierarchical reductions that are not
+// monotonic. This gets rendered with a series of reduce
+// operators that serve as a min / max heap
+#[derive(Clone, Debug)]
+struct BucketedExpr {
+    // Aggregations being computed hierarchically
+    aggr_funcs: Vec<AggregateFunc>,
+    // Set of "skips" or calls to `nth()` an iterator needs to do over
+    // the input to extract the relevant datums.
+    skips: Vec<usize>,
+    // Sequence of bitshifts for each key sub-division expression.
+    // To perform a large hierarchical reduction with stable runtimes
+    // under updates we'll subdivide the group key into buckets, compute
+    // the reduction in each of those buckets and then combine into a
+    // coarser bucket and redo the reduction in another layer.
+    // These shifts denote the log_base_2 of the number of
+    // buckets in each layer.
+    shifts: Vec<usize>,
+}
+
+// LIR node for basic reductions - those that are neither
+// computed in place nor computed hierarchically.
+#[derive(Clone, Debug)]
+enum BasicExpr {
+    // LIR node for reductions with only a single basic reduction
+    Single(usize, AggregateExpr),
+    // LIR node for reductions with multiple basic reductions
+    // These need to then be collated together in an additional
+    // reduction.
+    Multiple(Vec<(usize, AggregateExpr)>),
+}
+
+// LIR for reduce collation. We use this when the underlying
+// list of aggregates contains more than one type of reduction
+// to stitch answers together in the order requested by the user
+// TODO: could we express this as a delta join
+#[derive(Clone, Debug, Default)]
+struct CollationExpr {
+    accumulable: Option<AccumulableExpr>,
+    hierarchical: Option<HierarchicalExpr>,
+    basic: Option<BasicExpr>,
+    aggregate_types: Vec<ReductionType>,
+}
+
 // This enum indicates what class of reduction each aggregate function is.
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 enum ReductionType {
     // Accumulable functions can be subtracted from (are invertible), and associative.
     // We can compute these results by moving some data to the diff field under arbitrary
@@ -56,7 +158,7 @@ where
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
-    pub fn render_reduce(&mut self, relation_expr: &MirRelationExpr, scope: &mut G) {
+    pub fn render_reduce(&mut self, relation_expr: &MirRelationExpr) {
         if let MirRelationExpr::Reduce {
             input,
             group_key,
@@ -122,13 +224,7 @@ where
             val_mfp.permute(&demand_map, demand_map.len());
             val_mfp.optimize();
 
-            // transform `demand` into "skips" we'll do on an iterator.
-            for index in (1..demand.len()).rev() {
-                demand[index] -= demand[index - 1];
-                demand[index] -= 1;
-            }
-            // rename as skips to reflect their new role.
-            let skips = demand;
+            let skips = convert_indexes_to_skips(demand);
 
             let mut row_packer = RowPacker::new();
             let mut datums = DatumVec::new();
@@ -208,147 +304,318 @@ where
             // Distinct is a special case, as there are no aggregates to aggregate.
             // In this case, we use a special implementation that does not rely on
             // collating aggregates.
-            if aggregates.is_empty() {
-                let (oks, errs) = (
-                    ok_input.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
-                        |key, _input, output| {
-                            output.push((key.clone(), 1));
-                        }
-                    }),
-                    err_input,
-                );
-                let index = (0..group_key.len()).collect::<Vec<_>>();
-                self.set_local_columns(relation_expr, &index[..], (oks, errs.arrange()));
-            } else {
-                let mut reduction_types = BTreeMap::new();
-                // We need to make sure that each list of aggregates by type forms
-                // a subsequence of the overall sequence of aggregates.
-                for index in 0..aggregates.len() {
-                    let typ = reduction_type(&aggregates[index].func);
-                    let aggregates_list = reduction_types.entry(typ).or_insert_with(Vec::new);
-                    aggregates_list.push((index, aggregates[index].clone()));
-                }
 
-                // If we only have a single reduction type present we can render it on its own.
-                let arrangement = if reduction_types.len() == 1 {
-                    let (typ, aggregates_list) = reduction_types.into_iter().next().unwrap();
-                    match typ {
-                        ReductionType::Accumulable => {
-                            build_accumulables(ok_input, aggregates_list, true)
-                        }
-                        ReductionType::Hierarchical => build_hierarchical(
-                            ok_input,
-                            aggregates_list,
-                            true,
-                            *monotonic,
-                            *expected_group_size,
-                        ),
-                        ReductionType::Basic => build_basic(ok_input, aggregates_list, true),
-                    }
-                } else {
-                    // Otherwise we need to stitch things together.
-                    let mut to_collect = Vec::new();
-                    for (typ, aggregates_list) in reduction_types.into_iter() {
-                        let collection = match typ {
-                            ReductionType::Accumulable => {
-                                build_accumulables(ok_input.clone(), aggregates_list, false)
-                                    .as_collection(|key, val| {
-                                        (key.clone(), (ReductionType::Accumulable, val.clone()))
-                                    })
-                            }
-                            ReductionType::Hierarchical => build_hierarchical(
-                                ok_input.clone(),
-                                aggregates_list,
-                                false,
-                                *monotonic,
-                                *expected_group_size,
-                            )
-                            .as_collection(|key, val| {
-                                (key.clone(), (ReductionType::Hierarchical, val.clone()))
-                            }),
-                            ReductionType::Basic => {
-                                build_basic(ok_input.clone(), aggregates_list, false).as_collection(
-                                    |key, val| (key.clone(), (ReductionType::Basic, val.clone())),
-                                )
-                            }
-                        };
-                        to_collect.push(collection);
-                    }
-                    let aggregate_types = aggregates
-                        .iter()
-                        .map(|a| reduction_type(&a.func))
-                        .collect::<Vec<_>>();
-
-                    differential_dataflow::collection::concatenate(scope, to_collect)
-                        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
-                            let mut row_packer = RowPacker::new();
-                            move |key, input, output| {
-                                // The inputs are pairs of a reduction type, and a row consisting of densely packed fused
-                                // aggregate values.
-                                // We need to reconstitute the final value by:
-                                // 1. Extracting out the fused rows by type
-                                // 2. For each aggregate, figure out what type it is, and grab the relevant value
-                                //    from the corresponding fused row.
-                                // 3. Stitch all the values together into one row.
-
-                                let mut accumulable = DatumList::empty().iter();
-                                let mut hierarchical = DatumList::empty().iter();
-                                let mut basic = DatumList::empty().iter();
-
-                                // We expect not to have any negative multiplicities, but are not 100% sure it will
-                                // never happen so for now just log an error if it does.
-                                for (val, cnt) in input.iter() {
-                                    if cnt < &0 {
-                                        log::error!("[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?}", val, cnt);
-                                    }
-                                }
-
-                                for ((reduction_type, row), _) in input.iter() {
-                                    match reduction_type {
-                                        ReductionType::Accumulable => {
-                                            accumulable = row.iter();
-                                        }
-                                        ReductionType::Hierarchical => {
-                                            hierarchical = row.iter();
-                                        }
-                                        ReductionType::Basic => {
-                                            basic = row.iter();
-                                        }
-                                    }
-                                }
-
-                                // First, fill our output row with key information.
-                                row_packer.extend(key.iter());
-                                // Next merge results into the order they were asked for.
-                                for typ in aggregate_types.iter() {
-                                    match typ {
-                                        ReductionType::Accumulable => {
-                                            row_packer.push(accumulable.next().unwrap())
-                                        }
-                                        ReductionType::Hierarchical => {
-                                            row_packer.push(hierarchical.next().unwrap())
-                                        }
-                                        ReductionType::Basic => {
-                                            row_packer.push(basic.next().unwrap())
-                                        }
-                                    }
-                                }
-                                output.push((row_packer.finish_and_reuse(), 1));
-                            }
-                        })
-                };
-                let index = (0..group_key.len()).collect::<Vec<_>>();
-                self.set_local_columns(
-                    relation_expr,
-                    &index[..],
-                    (arrangement, err_input.arrange()),
-                );
-            }
+            // First, let's plan out what we are going to do with this reduce
+            let lir = plan_reduce(aggregates.clone(), *monotonic, *expected_group_size);
+            let arrangement = build_reduce(ok_input, lir);
+            let index = (0..group_key.len()).collect::<Vec<_>>();
+            self.set_local_columns(
+                relation_expr,
+                &index[..],
+                (arrangement, err_input.arrange()),
+            );
         }
     }
 }
 
-fn build_basic<G>(
+// Generate a lower-level IR node for the supplied aggregations that
+// describes what the resulting dataflow will look like.
+fn plan_reduce(
+    aggregates: Vec<AggregateExpr>,
+    monotonic: bool,
+    expected_group_size: Option<usize>,
+) -> ReduceExpr {
+    let lower = move |typ: ReductionType, aggregates_list: Vec<(usize, AggregateExpr)>| {
+        assert!(
+            aggregates_list.len() > 0,
+            "error: tried to render a reduce dataflow with no aggregates"
+        );
+        match typ {
+            ReductionType::Accumulable => {
+                let mut simple_aggrs = vec![];
+                let mut distinct_aggrs = vec![];
+                let num_accumulable = aggregates_list.len();
+                let full_aggrs: Vec<_> = aggregates_list
+                    .iter()
+                    .cloned()
+                    .map(|(_, aggr)| aggr)
+                    .collect();
+                for (accumulable_index, (datum_index, aggr)) in
+                    aggregates_list.into_iter().enumerate()
+                {
+                    if aggr.distinct {
+                        distinct_aggrs.push((accumulable_index, datum_index, aggr));
+                    } else {
+                        simple_aggrs.push((accumulable_index, datum_index, aggr));
+                    };
+                }
+                ReduceExpr::Accumulable(AccumulableExpr {
+                    full_aggrs,
+                    simple_aggrs,
+                    distinct_aggrs,
+                    num_accumulable,
+                })
+            }
+            ReductionType::Hierarchical => {
+                let aggr_funcs: Vec<_> = aggregates_list
+                    .iter()
+                    .cloned()
+                    .map(|(_, aggr)| aggr.func)
+                    .collect();
+                let indexes: Vec<_> = aggregates_list
+                    .into_iter()
+                    .map(|(index, _)| index)
+                    .collect();
+
+                let skips = convert_indexes_to_skips(indexes);
+                if monotonic {
+                    let monotonic = MonotonicExpr { aggr_funcs, skips };
+                    ReduceExpr::Hierarchical(HierarchicalExpr::Monotonic(monotonic))
+                } else {
+                    let mut shifts = vec![];
+                    let mut current = 4usize;
+
+                    // Plan for 4B records in the expected case
+                    let limit = expected_group_size.unwrap_or(4_000_000_000);
+
+                    while (1 << current) < limit {
+                        shifts.push(current);
+                        current += 4;
+                    }
+
+                    shifts.reverse();
+
+                    let bucketed = BucketedExpr {
+                        aggr_funcs,
+                        skips,
+                        shifts,
+                    };
+
+                    ReduceExpr::Hierarchical(HierarchicalExpr::Bucketed(bucketed))
+                }
+            }
+            ReductionType::Basic => {
+                if aggregates_list.len() == 1 {
+                    ReduceExpr::Basic(BasicExpr::Single(
+                        aggregates_list[0].0,
+                        aggregates_list[0].1.clone(),
+                    ))
+                } else {
+                    ReduceExpr::Basic(BasicExpr::Multiple(aggregates_list))
+                }
+            }
+        }
+    };
+
+    // If we don't have any aggregations we are just computing a distinct.
+    if aggregates.is_empty() {
+        return ReduceExpr::Distinct;
+    }
+
+    // Otherwise, we need to group aggregations according to their
+    // reduction type (accumulable, hierarchical, or basic)
+    let mut reduction_types = BTreeMap::new();
+    // We need to make sure that each list of aggregates by type forms
+    // a subsequence of the overall sequence of aggregates.
+    for index in 0..aggregates.len() {
+        let typ = reduction_type(&aggregates[index].func);
+        let aggregates_list = reduction_types.entry(typ).or_insert_with(Vec::new);
+        aggregates_list.push((index, aggregates[index].clone()));
+    }
+
+    // Convert each grouped list of reductions into a LIR node.
+    let lir: Vec<_> = reduction_types
+        .into_iter()
+        .map(|(typ, aggregates_list)| lower(typ, aggregates_list))
+        .collect();
+
+    // If we only have a single type of aggregation present we can
+    // render that directly
+    if lir.len() == 1 {
+        return lir[0].clone();
+    }
+
+    // Otherwise, we have to stitch reductions together.
+    assert!(lir.len() <= 3);
+    let mut collation: CollationExpr = Default::default();
+    let aggregate_types = aggregates
+        .iter()
+        .map(|a| reduction_type(&a.func))
+        .collect::<Vec<_>>();
+
+    collation.aggregate_types = aggregate_types;
+
+    for expr in lir.into_iter() {
+        match expr {
+            ReduceExpr::Accumulable(e) => {
+                assert!(collation.accumulable.is_none());
+                collation.accumulable = Some(e);
+            }
+            ReduceExpr::Hierarchical(e) => {
+                assert!(collation.hierarchical.is_none());
+                collation.hierarchical = Some(e);
+            }
+            ReduceExpr::Basic(e) => {
+                assert!(collation.basic.is_none());
+                collation.basic = Some(e);
+            }
+            _ => panic!("Inner reduce LIR expr was unsupported type!"),
+        }
+    }
+
+    ReduceExpr::Collation(collation)
+}
+
+// Render a dataflow based on the provided LIR node.
+fn build_reduce<G>(collection: Collection<G, (Row, Row)>, lir: ReduceExpr) -> Arrangement<G, Row>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    let build_hierarchical = |collection: Collection<G, (Row, Row)>,
+                              expr: HierarchicalExpr,
+                              top_level: bool| match expr {
+        HierarchicalExpr::Monotonic(expr) => build_monotonic(collection, expr, top_level),
+        HierarchicalExpr::Bucketed(expr) => build_bucketed(collection, expr, top_level),
+    };
+
+    let build_basic =
+        |collection: Collection<G, (Row, Row)>, expr: BasicExpr, top_level: bool| match expr {
+            BasicExpr::Single(index, aggr) => {
+                build_basic_aggregate(collection, index, &aggr, top_level)
+            }
+            BasicExpr::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
+        };
+
+    match lir {
+        ReduceExpr::Distinct => build_distinct(collection),
+        ReduceExpr::Accumulable(expr) => build_accumulable(collection, expr, true),
+        ReduceExpr::Hierarchical(expr) => build_hierarchical(collection, expr, true),
+        ReduceExpr::Basic(expr) => build_basic(collection, expr, true),
+        ReduceExpr::Collation(expr) => {
+            // First, we need to render our constituent aggregations.
+            let mut to_collate = vec![];
+
+            if let Some(accumulable) = expr.accumulable {
+                to_collate.push((
+                    ReductionType::Accumulable,
+                    build_accumulable(collection.clone(), accumulable, false),
+                ));
+            }
+            if let Some(hierarchical) = expr.hierarchical {
+                to_collate.push((
+                    ReductionType::Hierarchical,
+                    build_hierarchical(collection.clone(), hierarchical, false),
+                ));
+            }
+            if let Some(basic) = expr.basic {
+                to_collate.push((
+                    ReductionType::Basic,
+                    build_basic(collection.clone(), basic, false),
+                ));
+            }
+            // Now we need to collate them together.
+            build_collation(to_collate, expr.aggregate_types, &mut collection.scope())
+        }
+    }
+}
+
+// Collate multiple arrangements together into a single arrangement. This
+// is basically the same thing as a join on the group key followed by
+// shuffling the values into the correct order.
+// This implementation assumes that all input arrangements
+// present values in a way thats respects the desired output order,
+// so we can do a linear merge to form the output.
+fn build_collation<G>(
+    arrangements: Vec<(ReductionType, Arrangement<G, Row>)>,
+    aggregate_types: Vec<ReductionType>,
+    scope: &mut G,
+) -> Arrangement<G, Row>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    let mut to_concat = vec![];
+
+    for (reduction_type, arrangement) in arrangements.into_iter() {
+        let collection =
+            arrangement.as_collection(move |key, val| (key.clone(), (reduction_type, val.clone())));
+        to_concat.push(collection);
+    }
+
+    use differential_dataflow::collection::concatenate;
+    concatenate(scope, to_concat)
+        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
+            let mut row_packer = RowPacker::new();
+            move |key, input, output| {
+                // The inputs are pairs of a reduction type, and a row consisting of densely packed fused
+                // aggregate values.
+                // We need to reconstitute the final value by:
+                // 1. Extracting out the fused rows by type
+                // 2. For each aggregate, figure out what type it is, and grab the relevant value
+                //    from the corresponding fused row.
+                // 3. Stitch all the values together into one row.
+
+                let mut accumulable = DatumList::empty().iter();
+                let mut hierarchical = DatumList::empty().iter();
+                let mut basic = DatumList::empty().iter();
+
+                // We expect not to have any negative multiplicities, but are not 100% sure it will
+                // never happen so for now just log an error if it does.
+                for (val, cnt) in input.iter() {
+                    if cnt < &0 {
+                        log::error!("[customer-data] Negative accumulation in ReduceCollation: {:?} with count {:?}", val, cnt);
+                    }
+                }
+
+                for ((reduction_type, row), _) in input.iter() {
+                    match reduction_type {
+                        ReductionType::Accumulable => {
+                            accumulable = row.iter();
+                        }
+                        ReductionType::Hierarchical => {
+                            hierarchical = row.iter();
+                        }
+                        ReductionType::Basic => {
+                            basic = row.iter();
+                        }
+                    }
+                }
+
+                // First, fill our output row with key information.
+                row_packer.extend(key.iter());
+                // Next merge results into the order they were asked for.
+                for typ in aggregate_types.iter() {
+                    match typ {
+                        ReductionType::Accumulable => {
+                            row_packer.push(accumulable.next().unwrap())
+                        }
+                        ReductionType::Hierarchical => {
+                            row_packer.push(hierarchical.next().unwrap())
+                        }
+                        ReductionType::Basic => {
+                            row_packer.push(basic.next().unwrap())
+                        }
+                    }
+                }
+                output.push((row_packer.finish_and_reuse(), 1));
+            }
+        })
+}
+
+fn build_distinct<G>(collection: Collection<G, (Row, Row)>) -> Arrangement<G, Row>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    collection.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
+        |key, _input, output| {
+            output.push((key.clone(), 1));
+        }
+    })
+}
+
+fn build_basic_aggregates<G>(
     collection: Collection<G, (Row, Row)>,
     aggrs: Vec<(usize, AggregateExpr)>,
     prepend_key: bool,
@@ -357,13 +624,9 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    if aggrs.len() == 1 {
-        // If we just have a single basic aggregation we can just arrange that without doing
-        // any fusion.
-        return build_basic_aggregate(collection, aggrs[0].0, &aggrs[0].1, prepend_key);
-    }
-
-    // Otherwise we need to render each individually and stitch them together.
+    // We are only using this function to render multiple basic aggregates and
+    // stitch them together
+    assert!(aggrs.len() > 1);
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
         let result = build_basic_aggregate(collection.clone(), index, &aggr, false);
@@ -460,108 +723,36 @@ where
 // aggregates are min / max which efficiently suppress updates for non-distinct
 // items. If we add more hierarchical aggregates we will have to revise this
 // implementation.
-fn build_hierarchical<G>(
+fn build_bucketed<G>(
     collection: Collection<G, (Row, Row)>,
-    aggrs: Vec<(usize, AggregateExpr)>,
+    BucketedExpr {
+        aggr_funcs,
+        skips,
+        shifts,
+    }: BucketedExpr,
     prepend_key: bool,
-    monotonic: bool,
-    expected_group_size: Option<usize>,
 ) -> Arrangement<G, Row>
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    let aggr_funcs: Vec<_> = aggrs.iter().cloned().map(|(_, expr)| expr.func).collect();
     // Gather the relevant values into a vec of rows ordered by aggregation_index
     let mut packer = RowPacker::new();
     let collection = collection.map(move |(key, row)| {
-        let mut values = Vec::with_capacity(aggrs.len());
-        let mut row_iter = row.iter().enumerate();
-        // Go through all the elements of the row with one iterator
-        for (aggr_index, _) in aggrs.iter() {
-            let mut index_datum = row_iter.next().unwrap();
-            // Skip over the ones we don't care about
-            while *aggr_index != index_datum.0 {
-                index_datum = row_iter.next().unwrap();
-            }
-            let datum = index_datum.1;
-            packer.push(datum);
+        let mut values = Vec::with_capacity(skips.len());
+        let mut row_iter = row.iter();
+        for skip in skips.iter() {
+            packer.push((&mut row_iter).nth(*skip).unwrap());
             values.push(packer.finish_and_reuse());
         }
 
         (key, values)
     });
 
-    if monotonic {
-        // We can place our rows directly into the diff field, and only keep the
-        // relevant one corresponding to evaluating our aggregate, instead of having
-        // to do a hierarchical reduction.
-        use timely::dataflow::operators::Map;
-
-        // We arrange the inputs ourself to force it into a leaner structure because we know we
-        // won't care about values.
-        let partial = collection
-            .consolidate()
-            .inner
-            .map(move |((key, values), time, diff)| {
-                assert!(diff > 0);
-                let mut output = Vec::new();
-                for (row, func) in values.into_iter().zip(aggr_funcs.iter()) {
-                    output.push(monoids::get_monoid(row, func).expect(
-                        "hierarchical aggregations are expected to have monoid implementations",
-                    ));
-                }
-
-                (key, time, DiffVector::new(output))
-            })
-            .as_collection();
-        return partial
-            .arrange_by_self()
-            .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceMonotonicHierarchical", {
-                let mut row_packer = RowPacker::new();
-                move |key, input, output| {
-                    let accum = &input[0].1;
-                    // Pack the value with the key as the result.
-                    if prepend_key {
-                        row_packer.extend(key.iter());
-                    }
-
-                    for monoid in accum.iter() {
-                        match monoid {
-                            monoids::ReductionMonoid::Min(row) => row_packer.extend(row.iter()),
-                            monoids::ReductionMonoid::Max(row) => row_packer.extend(row.iter()),
-                        }
-                    }
-                    output.push((row_packer.finish_and_reuse(), 1));
-                }
-            });
-    }
-
-    // Plan a fused hierarchical reduction
-    let mut shifts = vec![];
-    let mut current = 4u64;
-
-    // We'll plan for an expected 4B records / key in the absense of hints.
-    // Note that here we will render what is essentially a 16-ary heap. At each reduce "layer",
-    // the reduce operator will take up to 16 inputs, and produce one output. We use the `expected_group_size` hint
-    // to figure out how deep we need to make this heap, but the renderer currently locks in the choice of arity.
-    // Making the heap wider (higher-arity) reduces the total number of layers we need, which shrinks the
-    // memory usage. However, that increases the worst and average case latencies to update results given new inputs.
-    // TODO(rkhaitan): move this decision making logic (choosing the overall depth and width of the reduction tree) to
-    // the optimizer.
-    let limit = expected_group_size.unwrap_or(4_000_000_000);
-
-    while (1 << current) < limit {
-        shifts.push(current);
-        current += 4;
-    }
-
-    shifts.reverse();
-
     // Repeatedly apply hierarchical reduction with a progressively coarser key.
     let mut stage = collection.map(move |(key, values)| ((key, values.hashed()), values));
     for log_modulus in shifts.iter() {
-        stage = build_hierarchical_stage(stage, aggr_funcs.clone(), 1u64 << log_modulus);
+        stage = build_bucketed_stage(stage, aggr_funcs.clone(), 1u64 << log_modulus);
     }
 
     // Discard the hash from the key and return to the format of the input data.
@@ -598,7 +789,7 @@ where
 }
 
 // Renders one stage of a fused reduction tree for a set of hierarchical aggregations.
-fn build_hierarchical_stage<G>(
+fn build_bucketed_stage<G>(
     collection: Collection<G, ((Row, u64), Vec<Row>)>,
     aggrs: Vec<AggregateFunc>,
     modulus: u64,
@@ -642,6 +833,72 @@ where
     negated_output.negate().concat(&input).consolidate()
 }
 
+fn build_monotonic<G>(
+    collection: Collection<G, (Row, Row)>,
+    MonotonicExpr { aggr_funcs, skips }: MonotonicExpr,
+    prepend_key: bool,
+) -> Arrangement<G, Row>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+{
+    // Gather the relevant values into a vec of rows ordered by aggregation_index
+    let mut packer = RowPacker::new();
+    let collection = collection.map(move |(key, row)| {
+        let mut values = Vec::with_capacity(skips.len());
+        let mut row_iter = row.iter();
+        for skip in skips.iter() {
+            packer.push((&mut row_iter).nth(*skip).unwrap());
+            values.push(packer.finish_and_reuse());
+        }
+
+        (key, values)
+    });
+
+    // We can place our rows directly into the diff field, and only keep the
+    // relevant one corresponding to evaluating our aggregate, instead of having
+    // to do a hierarchical reduction.
+    use timely::dataflow::operators::Map;
+
+    // We arrange the inputs ourself to force it into a leaner structure because we know we
+    // won't care about values.
+    let partial = collection
+        .consolidate()
+        .inner
+        .map(move |((key, values), time, diff)| {
+            assert!(diff > 0);
+            let mut output = Vec::new();
+            for (row, func) in values.into_iter().zip(aggr_funcs.iter()) {
+                output.push(monoids::get_monoid(row, func).expect(
+                    "hierarchical aggregations are expected to have monoid implementations",
+                ));
+            }
+
+            (key, time, DiffVector::new(output))
+        })
+        .as_collection();
+    partial
+        .arrange_by_self()
+        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceMonotonic", {
+            let mut row_packer = RowPacker::new();
+            move |key, input, output| {
+                let accum = &input[0].1;
+                // Pack the value with the key as the result.
+                if prepend_key {
+                    row_packer.extend(key.iter());
+                }
+
+                for monoid in accum.iter() {
+                    match monoid {
+                        monoids::ReductionMonoid::Min(row) => row_packer.extend(row.iter()),
+                        monoids::ReductionMonoid::Max(row) => row_packer.extend(row.iter()),
+                    }
+                }
+                output.push((row_packer.finish_and_reuse(), 1));
+            }
+        })
+}
+
 /// Builds the dataflow for reductions that can be performed in-place.
 ///
 /// The incoming values are moved to the update's "difference" field, at which point
@@ -651,9 +908,14 @@ where
 ///
 /// If `prepend_key` is specified, the key is prepended to the arranged values, making
 /// the arrangement suitable for publication itself.
-fn build_accumulables<G>(
+fn build_accumulable<G>(
     collection: Collection<G, (Row, Row)>,
-    aggrs: Vec<(usize, AggregateExpr)>,
+    AccumulableExpr {
+        full_aggrs,
+        simple_aggrs,
+        distinct_aggrs,
+        num_accumulable,
+    }: AccumulableExpr,
     prepend_key: bool,
 ) -> Arrangement<G, Row>
 where
@@ -714,14 +976,13 @@ where
     };
 
     let mut to_aggregate = Vec::new();
-    let diffs_len = aggrs.len() * 3;
+    let diffs_len = num_accumulable * 3;
     // First, collect all non-distinct aggregations in one pass.
     let easy_cases = collection
         .inner
         .map(|(d, t, r)| (d, t, r as i128))
         .as_collection()
         .explode({
-            let aggrs = aggrs.clone();
             move |(key, row)| {
                 let mut diffs = vec![0i128; diffs_len];
                 // Try to unpack only the datums we need. Unfortunately, since we
@@ -730,18 +991,16 @@ where
                 // everything that we don't care about, and it might be worth it to extend the
                 // Row API to do that.
                 let mut row_iter = row.iter().enumerate();
-                for (index, (datum_index, aggr)) in aggrs.iter().enumerate() {
+                for (accumulable_index, datum_index, aggr) in simple_aggrs.iter() {
                     let mut datum = row_iter.next().unwrap();
                     while datum_index != &datum.0 {
                         datum = row_iter.next().unwrap();
                     }
                     let datum = datum.1;
-                    if !aggr.distinct {
-                        let (agg1, agg2) = datum_aggr_values(datum, &aggr.func);
-                        diffs[3 * index] = 1i128;
-                        diffs[3 * index + 1] = agg1;
-                        diffs[3 * index + 2] = agg2;
-                    }
+                    let (agg1, agg2) = datum_aggr_values(datum, &aggr.func);
+                    diffs[3 * accumulable_index] = 1i128;
+                    diffs[3 * accumulable_index + 1] = agg1;
+                    diffs[3 * accumulable_index + 2] = agg2;
                 }
                 Some((key, DiffVector::new(diffs)))
             }
@@ -749,32 +1008,30 @@ where
     to_aggregate.push(easy_cases);
 
     // Next, collect all aggregations that require distinctness.
-    for (idx, (datum_index, aggr)) in aggrs.iter().cloned().enumerate() {
-        if aggr.distinct {
-            let mut packer = RowPacker::new();
-            let collection = collection
-                .map(move |(key, row)| {
-                    let value = row.iter().nth(datum_index).unwrap();
-                    packer.push(value);
-                    (key, packer.finish_and_reuse())
-                })
-                .distinct()
-                .inner
-                .map(|(d, t, r)| (d, t, r as i128))
-                .as_collection()
-                .explode({
-                    move |(key, row)| {
-                        let datum = row.iter().next().unwrap();
-                        let mut diffs = vec![0i128; diffs_len];
-                        let (agg1, agg2) = datum_aggr_values(datum, &aggr.func);
-                        diffs[3 * idx] = 1i128;
-                        diffs[3 * idx + 1] = agg1;
-                        diffs[3 * idx + 2] = agg2;
-                        Some((key, DiffVector::new(diffs)))
-                    }
-                });
-            to_aggregate.push(collection);
-        }
+    for (accumulable_index, datum_index, aggr) in distinct_aggrs.into_iter() {
+        let mut packer = RowPacker::new();
+        let collection = collection
+            .map(move |(key, row)| {
+                let value = row.iter().nth(datum_index).unwrap();
+                packer.push(value);
+                (key, packer.finish_and_reuse())
+            })
+            .distinct()
+            .inner
+            .map(|(d, t, r)| (d, t, r as i128))
+            .as_collection()
+            .explode({
+                move |(key, row)| {
+                    let datum = row.iter().next().unwrap();
+                    let mut diffs = vec![0i128; diffs_len];
+                    let (agg1, agg2) = datum_aggr_values(datum, &aggr.func);
+                    diffs[3 * accumulable_index] = 1i128;
+                    diffs[3 * accumulable_index + 1] = agg1;
+                    diffs[3 * accumulable_index + 2] = agg2;
+                    Some((key, DiffVector::new(diffs)))
+                }
+            });
+        to_aggregate.push(collection);
     }
     let collection =
         differential_dataflow::collection::concatenate(&mut collection.scope(), to_aggregate);
@@ -791,7 +1048,7 @@ where
                     row_packer.extend(key.iter());
                 }
 
-                for (index, (_, aggr)) in aggrs.iter().enumerate() {
+                for (index, aggr) in full_aggrs.iter().enumerate() {
                     // For most aggregations, the first aggregate is the "data" and the second is the number
                     // of non-null elements (so that we can determine if we should produce 0 or a Null).
                     // For Any and All, the two aggregates are the numbers of true and false records, resp.
@@ -851,6 +1108,20 @@ where
                 output.push((row_packer.finish_and_reuse(), 1));
             }},
         )
+}
+
+// Transforms a vector containing indexes of needed columns
+// into a vector containing the "skips" an iterator over a Row would
+// need to perform to see those values
+// E.g. [3, 6, 10, 15] turns into [3, 3, 4, 5]
+fn convert_indexes_to_skips(mut demand: Vec<usize>) -> Vec<usize> {
+    // transform `demand` into "skips"
+    for index in (1..demand.len()).rev() {
+        demand[index] -= demand[index - 1];
+        demand[index] -= 1;
+    }
+
+    demand
 }
 
 /// Determines whether a function can be accumulated in an update's "difference" field,
