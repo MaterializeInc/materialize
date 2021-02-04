@@ -39,6 +39,7 @@ create_sink ::=
     sink_kafka_connector |
    'AVRO OCF' path-prefix
    )
+   ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
    ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
    ('AS OF' timestamp_expression)?
 create_source_avro_file ::=
@@ -250,9 +251,9 @@ join_type ::=
     ( 'FULL' ( 'OUTER' |  ) | 'LEFT' ( 'OUTER' |  ) | 'RIGHT' ( 'OUTER' |  ) | 'INNER' | )
 sink_kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
+    ('KEY' '(' key_column ( ',' key_column )* ')')?
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
     'FORMAT' 'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url
-    ('KEY' '(' key_column ( ',' key_column )* ')')?
 lit_cast ::=
   type val
 op_cast ::=
