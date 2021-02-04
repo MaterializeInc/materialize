@@ -1112,7 +1112,7 @@ where
 
                 MirRelationExpr::Reduce { input, .. } => {
                     self.ensure_rendered(input, scope, worker_index);
-                    self.render_reduce(relation_expr, scope);
+                    self.render_reduce(relation_expr);
                 }
 
                 MirRelationExpr::TopK { input, .. } => {
