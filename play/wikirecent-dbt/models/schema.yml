@@ -15,31 +15,18 @@
 
 version: 2
 
+sources:
+  - name: wikimedia
+    description: https://stream.wikimedia.org/?doc
+    tables:
+      - name: wikirecent
+        description: >
+          Streaming event data of [recent Wikipedia changes](https://stream.wikimedia.org/v2/stream/recentchange)
+
 models:
   - name: recentchanges
-    description: "Streaming Wikimedia event data"
-    columns:
-      - name: r_schema
-      - name: bot
-      - name: comment
-      - name: id
-      - name: length_new
-      - name: length_old
-      - name: meta_uri,
-      - name: meta_id
-      - name: minor
-      - name: namespace
-      - name: parsedcomment
-      - name: revision_new
-      - name: revision_old
-      - name: server_name
-      - name: server_script_path
-      - name: server_url
-      - name: r_ts
-      - name: title
-      - name: type
-      - name: user
-      - name: wiki
+    description: "Event data, unnested and cast to columns"
+
   - name: useredits
     description: "Edit counts per user"
     columns:
@@ -49,6 +36,7 @@ models:
           - not_null
       - name: changes
         description: "The number of edits made by the user"
+
   - name: top10
     description: "Top 10 Wikipedia editors since the stream started"
     columns:

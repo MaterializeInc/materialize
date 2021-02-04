@@ -435,11 +435,30 @@ pub fn plan_create_source(
             let encoding = get_encoding(format)?;
             (connector, encoding)
         }
-        Connector::S3 { bucket, pattern } => {
+        Connector::S3 {
+            bucket,
+            key_sources,
+            pattern,
+        } => {
             scx.require_experimental_mode("S3 Sources")?;
             let aws_info = normalize::aws_connect_info(&mut with_options, None)?;
+            let mut converted_sources = Vec::new();
+            let mut parsed_scan = false;
+            for ks in key_sources {
+                let dtks = match ks {
+                    sql_parser::ast::S3KeySource::Scan => {
+                        if parsed_scan {
+                            bail!("SCAN may only be specified once");
+                        }
+                        parsed_scan = true;
+                        dataflow_types::S3KeySource::Scan
+                    }
+                };
+                converted_sources.push(dtks);
+            }
             let connector = ExternalSourceConnector::S3(S3SourceConnector {
                 bucket: bucket.clone(),
+                key_sources: converted_sources,
                 pattern: pattern
                     .as_ref()
                     .map(|p| {

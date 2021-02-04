@@ -120,9 +120,33 @@ mzworkflows:
       port: 8081
     - step: run
       service: avro-upsert-generator
+      command: >-
+        --parallelism=40
       # No command needed, defaults to benchmark distribution
     - step: run
       service: create-views
+
+  benchmark-insert-with-filter:
+    steps:
+    - step: start-services
+      services: [dashboard]
+    - step: start-services
+      services: [kafka, schema-registry, materialized]
+    - step: wait-for-tcp
+      host: kafka
+      port: 9092
+    - step: wait-for-tcp
+      host: schema-registry
+      port: 8081
+    - step: run
+      service: avro-upsert-generator
+      command: >-
+        --parallelism=40
+      # No command needed, defaults to benchmark distribution
+    - step: run
+      service: create-views
+      command: >-
+        insert_views.sql
 
   ci:
     steps:
