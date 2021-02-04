@@ -183,9 +183,6 @@ services:
   cli:
     mzbuild: cli
     init: true
-    # if you run the terminal with a dark background uncomment these lines
-    # environment:
-    #   MZCLI_PROMPT: DARK_MODE
     depends_on:
       - materialized
   inspect:
