@@ -1,0 +1,68 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+add-table
+foo
+----
+u1
+
+resolve
+SELECT 1 FROM mz_catalog.mz_columns
+----
+SELECT 1 FROM [s4013: mz_catalog.mz_columns]
+
+resolve
+SELECT 1 FROM foo
+----
+SELECT 1 FROM [u1: foo]
+
+resolve
+SELECT 1 FROM bar
+----
+error: unknown catalog item 'bar'
+
+resolve
+SELECT 1 FROM materialize.public.foo
+----
+SELECT 1 FROM [u1: materialize.public.foo]
+
+resolve
+WITH foo AS (SELECT 1)
+SELECT 1 FROM foo
+----
+WITH foo AS (SELECT 1) SELECT 1 FROM [l0: foo]
+
+resolve
+WITH bar AS (SELECT 1), bar AS (SELECT 2)
+SELECT 1 FROM foo
+----
+error: WITH query name "bar" specified more than once
+
+resolve
+WITH bar AS (SELECT 1)
+SELECT 1 FROM foo CROSS JOIN bar
+----
+WITH bar AS (SELECT 1) SELECT 1 FROM [u1: foo] CROSS JOIN [l0: bar]
+
+resolve
+WITH bar AS (SELECT 1), baz AS (SELECT 2)
+SELECT 1 FROM foo CROSS JOIN bar CROSS JOIN baz
+----
+WITH bar AS (SELECT 1), baz AS (SELECT 2) SELECT 1 FROM [u1: foo] CROSS JOIN [l0: bar] CROSS JOIN [l1: baz]
+
+resolve
+WITH outermost(x) AS (
+    SELECT 1
+    UNION (WITH innermost as (SELECT 2)
+            SELECT * FROM outermost  -- fail
+            UNION SELECT * FROM innermost)
+)
+SELECT * FROM outermost ORDER BY 1;
+----
+error: unknown catalog item 'outermost'

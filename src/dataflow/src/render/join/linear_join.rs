@@ -60,7 +60,7 @@ where
                         demand_projection.push(column);
                     } else {
                         demand_projection.push(output_arity + dummies.len());
-                        dummies.push(MirScalarExpr::literal_ok(Datum::Dummy, typ));
+                        dummies.push(MirScalarExpr::literal_ok(Datum::Dummy, typ.scalar_type));
                     }
                 }
                 (dummies, demand_projection)

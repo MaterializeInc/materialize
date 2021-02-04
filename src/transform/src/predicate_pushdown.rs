@@ -35,7 +35,7 @@
 //! let predicate0 = MirScalarExpr::column(0);
 //! let predicate1 = MirScalarExpr::column(1);
 //! let predicate01 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(2), BinaryFunc::AddInt64);
-//! let predicate012 = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool.nullable(false));
+//! let predicate012 = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
 //!
 //! let mut expr = join.filter(
 //!    vec![
@@ -335,10 +335,8 @@ impl PredicatePushdown {
                                     && aggregates[0].func == AggregateFunc::Any
                                 {
                                     push_down.push(aggregates[0].expr.clone());
-                                    aggregates[0].expr = MirScalarExpr::literal_ok(
-                                        Datum::True,
-                                        ScalarType::Bool.nullable(false),
-                                    );
+                                    aggregates[0].expr =
+                                        MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
                                 } else {
                                     retain.push(predicate);
                                 }

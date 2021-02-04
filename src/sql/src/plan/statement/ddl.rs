@@ -129,6 +129,7 @@ pub fn plan_create_table(
         constraints,
         with_options,
         if_not_exists,
+        temporary,
     } = &stmt;
 
     if !with_options.is_empty() {
@@ -177,7 +178,12 @@ pub fn plan_create_table(
 
     let typ = RelationType::new(column_types);
 
-    let name = scx.allocate_name(normalize::object_name(name.clone())?);
+    let temporary = *temporary;
+    let name = if temporary {
+        scx.allocate_temporary_name(normalize::object_name(name.to_owned())?)
+    } else {
+        scx.allocate_name(normalize::object_name(name.to_owned())?)
+    };
     let desc = RelationDesc::new(typ, names.into_iter().map(Some));
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateTable(stmt.clone()))?;
@@ -185,6 +191,7 @@ pub fn plan_create_table(
         create_sql,
         desc,
         defaults,
+        temporary,
     };
     Ok(Plan::CreateTable {
         name,

@@ -34,7 +34,11 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
         | Statement::CreateSource(CreateSourceStatement { name, .. })
         | Statement::CreateView(CreateViewStatement { name, .. })
         | Statement::CreateTable(CreateTableStatement { name, .. }) => {
-            name.0[2] = Ident::new(to_item_name);
+            // The last name in an ObjectName is the item name. The item name
+            // does not have a fixed index.
+            // TODO: https://github.com/MaterializeInc/materialize/issues/5591
+            let object_name_len = name.0.len() - 1;
+            name.0[object_name_len] = Ident::new(to_item_name);
         }
         _ => unreachable!("Internal error: only catalog items can be renamed"),
     }
@@ -60,7 +64,11 @@ pub fn create_stmt_rename_refs(
     let from_object = ObjectName::from(from_name.clone());
     let maybe_update_object_name = |object_name: &mut ObjectName| {
         if object_name.0 == from_object.0 {
-            object_name.0[2] = Ident::new(to_item_name.clone());
+            // The last name in an ObjectName is the item name. The item name
+            // does not have a fixed index.
+            // TODO: https://github.com/MaterializeInc/materialize/issues/5591
+            let object_name_len = object_name.0.len() - 1;
+            object_name.0[object_name_len] = Ident::new(to_item_name.clone());
         }
     };
 

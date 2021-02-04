@@ -224,7 +224,7 @@ impl Demand {
                         let typ = aggregates[index].typ(&input_type);
                         aggregates[index] = AggregateExpr {
                             func: AggregateFunc::Dummy,
-                            expr: MirScalarExpr::literal_ok(Datum::Dummy, typ),
+                            expr: MirScalarExpr::literal_ok(Datum::Dummy, typ.scalar_type),
                             distinct: false,
                         };
                     }
