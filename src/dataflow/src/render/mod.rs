@@ -133,7 +133,7 @@ use ore::iter::IteratorExt;
 use repr::adt::decimal::Significand;
 use repr::{Datum, RelationType, Row, RowArena, RowPacker, Timestamp};
 
-use crate::decode::{decode_avro_values, decode_values};
+use crate::decode::{decode_avro_values, decode_upsert_collection, decode_values};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::server::{CacheMessage, LocalInput, TimestampDataUpdates, TimestampMetadataUpdates};
@@ -154,6 +154,8 @@ mod reduce;
 mod threshold;
 mod top_k;
 mod upsert;
+
+pub use self::upsert::no_arrangement_upsert;
 
 /// Worker-local state used during rendering.
 pub struct RenderState {
@@ -340,7 +342,20 @@ where
                                 connector,
                             );
 
-                            let (transformed, new_err_collection) =
+                            let stream = upsert::apply_as_of_frontier(
+                                &source.0,
+                                self.as_of_frontier.clone(),
+                            );
+
+                            let stream = decode_upsert_collection(
+                                &stream,
+                                encoding,
+                                key_encoding,
+                                &self.debug_name,
+                                scope.index(),
+                            );
+                            let collection = stream.as_collection();
+                            /*let (transformed, new_err_collection) =
                                 upsert::pre_arrange_from_upsert_transforms(
                                     &source.0,
                                     encoding,
@@ -367,9 +382,11 @@ where
                                 .iter()
                                 .map(|k| MirScalarExpr::Column(*k))
                                 .collect::<Vec<_>>();
+                            self.set_local(&get_expr, &keys, (arranged, err_collection.arrange())); */
                             let get_expr =
-                                MirRelationExpr::global_get(src_id, src.bare_desc.typ().clone());
-                            self.set_local(&get_expr, &keys, (arranged, err_collection.arrange()));
+                            MirRelationExpr::global_get(src_id, src.bare_desc.typ().clone());
+                            self.collections
+                                .insert(get_expr, (collection, err_collection));
                             capability
                         }
                         _ => unreachable!("Upsert envelope unsupported for non-Kafka sources"),

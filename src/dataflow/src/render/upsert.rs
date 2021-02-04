@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -19,9 +19,11 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use dataflow_types::{DataEncoding, DataflowError, LinearOperator};
-use repr::{RelationType, Row, Timestamp};
+use log::error;
+use repr::{Datum, Diff, RelationType, Row, RowArena, Timestamp};
 
-use crate::decode::decode_upsert;
+use crate::decode::{decode_upsert, DecoderState};
+use crate::operator::StreamExt;
 use crate::source::{SourceData, SourceOutput};
 
 /// Entrypoint to the upsert-specific transformations involved
@@ -72,19 +74,7 @@ where
     // and applies `as_of` frontier compaction. The compaction is important as
     // downstream upsert preparation can compact away updates for the same keys
     // at the same times, and by advancing times we make more of them the same.
-    let stream = stream.unary(Pipeline, "AppendTimestamp", move |_, _| {
-        let mut vector = Vec::new();
-        move |input, output| {
-            input.for_each(|cap, data| {
-                data.swap(&mut vector);
-                let mut time = cap.time().clone();
-                time.advance_by(as_of_frontier.borrow());
-                output
-                    .session(&cap)
-                    .give_iterator(vector.drain(..).map(|x| (x, time.clone())));
-            });
-        }
-    });
+    let stream = apply_as_of_frontier(&stream, as_of_frontier);
 
     // Deduplicate records by key
     let deduplicated = prepare_upsert_by_max_offset(&stream);
@@ -99,6 +89,28 @@ where
     );
 
     apply_linear_operators(&decoded, linear_operator, src_type)
+}
+
+pub fn apply_as_of_frontier<G>(
+    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
+    as_of_frontier: Antichain<Timestamp>,
+) -> Stream<G, (SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    stream.unary(Pipeline, "AppendTimestamp", move |_, _| {
+        let mut vector = Vec::new();
+        move |input, output| {
+            input.for_each(|cap, data| {
+                data.swap(&mut vector);
+                let mut time = cap.time().clone();
+                time.advance_by(as_of_frontier.borrow());
+                output
+                    .session(&cap)
+                    .give_iterator(vector.drain(..).map(|x| (x, time.clone())));
+            });
+        }
+    })
 }
 
 /// Produces at most one entry for each `(key, time)` pair.
@@ -209,4 +221,126 @@ where
     });
     let scope = &prepended.scope();
     (prepended, operator::empty(scope))
+}
+
+pub fn no_arrangement_upsert<G, K, V>(
+    stream: &Stream<G, (SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)>,
+    mut key_decoder_state: K,
+    mut value_decoder_state: V,
+) -> Stream<G, (Row, Timestamp, Diff)>
+where
+    G: Scope<Timestamp = Timestamp>,
+    K: DecoderState + 'static,
+    V: DecoderState + 'static,
+{
+    stream.unary_frontier(Pipeline, "LightUpsert", |_cap, _info| {
+        // to_send
+        // this is a map of (time) -> (capability, ((key) -> (value with max offset)))
+        let mut to_send = BTreeMap::<_, (_, HashMap<_, SourceData>)>::new();
+        let mut current_values = HashMap::new();
+        let mut vector = Vec::new();
+        let mut row_packer = repr::RowPacker::new();
+
+        move |input, output| {
+            // Digest each input, reduce by presented timestamp.
+            input.for_each(|cap, data| {
+                data.swap(&mut vector);
+                for (
+                    SourceOutput {
+                        key,
+                        value: new_value,
+                        position: new_position,
+                        upstream_time_millis: new_upstream_time_millis,
+                    },
+                    time,
+                ) in vector.drain(..)
+                {
+                    if key.is_empty() {
+                        error!("{}", "Encountered empty key");
+                        continue;
+                    }
+                    let entry = to_send
+                        .entry(time)
+                        .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
+                        .1
+                        .entry(key)
+                        .or_insert_with(Default::default);
+
+                    let new_entry = SourceData {
+                        value: new_value,
+                        position: new_position,
+                        upstream_time_millis: new_upstream_time_millis,
+                    };
+
+                    // if the time is equal, toss out the row with the
+                    // lower offset
+                    if let Some(new_offset) = new_position {
+                        if let Some(offset) = entry.position {
+                            if offset < new_offset {
+                                *entry = new_entry;
+                            }
+                        } else {
+                            *entry = new_entry;
+                        }
+                    }
+                }
+            });
+
+            let mut removed_times = Vec::new();
+            for (time, (cap, map)) in to_send.iter_mut() {
+                if !input.frontier.less_equal(time) {
+                    let mut session = output.session(cap);
+                    removed_times.push(time.clone());
+                    for (key, data) in map.drain() {
+                        // decode key and value
+                        match key_decoder_state.decode_key(&key) {
+                            Ok(decoded_key) => {
+                                let decoded_value = if data.value.is_empty() {
+                                    Ok(None)
+                                } else if let Ok(value) = value_decoder_state.decode_upsert_value(
+                                    &data.value,
+                                    data.position,
+                                    data.upstream_time_millis,
+                                ) {
+                                    if let Some(value) = value {
+                                        // prepend key to row
+                                        row_packer.extend_by_row(&decoded_key);
+                                        row_packer.extend_by_row(&value);
+                                        Ok(Some(row_packer.finish_and_reuse()))
+                                    } else {
+                                        Ok(None)
+                                    }
+                                } else {
+                                    Err(())
+                                };
+                                if let Ok(decoded_value) = decoded_value {
+                                    // TODO: apply linear operator
+                                    let old_value = if let Some(new_value) = &decoded_value {
+                                        current_values.insert(decoded_key, new_value.clone())
+                                    } else {
+                                        current_values.remove(&decoded_key)
+                                    };
+                                    if let Some(old_value) = old_value {
+                                        session.give((old_value, cap.time().clone(), -1));
+                                    }
+                                    if let Some(new_value) = decoded_value {
+                                        session.give((new_value, cap.time().clone(), 1));
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                error!("{}", err);
+                            }
+                        }
+                    }
+                } else {
+                    break;
+                }
+            }
+            // Discard entries, capabilities for complete times.
+            for time in removed_times {
+                to_send.remove(&time);
+            }
+        }
+    })
 }
