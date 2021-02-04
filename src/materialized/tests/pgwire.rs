@@ -9,11 +9,14 @@
 
 //! Integration tests for pgwire functionality.
 
+use std::convert::TryInto;
 use std::error::Error;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use ore::collections::CollectionExt;
 use pgrepr::{Numeric, Record};
@@ -142,7 +145,7 @@ fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_conn_params() -> Result<(), Box<dyn Error>> {
+fn test_conn_startup() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let (server, mut client) = util::start_server(util::Config::default())?;
@@ -219,6 +222,49 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
                 .query_one("SHOW application_name", &[])?
                 .get::<_, String>(0),
             "hello",
+        );
+    }
+
+    // Test that connecting with an old protocol version is gracefully rejected.
+    // This used to crash the coordinator.
+    {
+        use postgres_protocol::message::backend::Message;
+
+        let mut stream = TcpStream::connect(server.inner.local_addr())?;
+
+        // Send a startup packet for protocol version two, which Materialize
+        // does not support.
+        let mut buf = vec![];
+        buf.extend(&0_i32.to_be_bytes()); // frame length, corrected below
+        buf.extend(&0x20000_i32.to_be_bytes()); // protocol version two
+        buf.extend(b"user\0ignored\0\0"); // dummy user parameter
+        let len: i32 = buf.len().try_into()?;
+        buf[0..4].copy_from_slice(&len.to_be_bytes());
+        stream.write_all(&buf)?;
+
+        // Verify the server sends back an error and closes the connection.
+        buf.clear();
+        stream.read_to_end(&mut buf)?;
+        let message = Message::parse(&mut BytesMut::from(&*buf))?;
+        let error = match message {
+            Some(Message::ErrorResponse(error)) => error,
+            _ => panic!("did not receive expected error response"),
+        };
+        let mut fields: Vec<_> = error
+            .fields()
+            .map(|f| Ok((f.type_(), f.value().to_owned())))
+            .collect()?;
+        fields.sort_by_key(|(ty, _value)| *ty);
+        assert_eq!(
+            fields,
+            &[
+                (b'C', "08004".into()),
+                (
+                    b'M',
+                    "server does not support the client's requested protocol version".into()
+                ),
+                (b'S', "FATAL".into()),
+            ]
         );
     }
 
