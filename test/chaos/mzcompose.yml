@@ -257,4 +257,4 @@ mzworkflows:
           --run-seconds=864000
           -l /dev/stdout
           --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
-          --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+          --mz-url=postgresql://materialize@materialized:6875/materialize?sslmode=disable

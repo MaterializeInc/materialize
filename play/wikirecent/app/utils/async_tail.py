@@ -24,7 +24,7 @@ import psycopg3
 
 async def tail_view(args):
     """Continuously print changes to a Materialize View."""
-    dsn = f"postgresql://{args.host}:{args.port}/materialize"
+    dsn = f"postgresql://materialize@{args.host}:{args.port}/materialize"
     async with await psycopg3.AsyncConnection.connect(dsn) as conn:
         async with await conn.cursor() as cursor:
             query = f"DECLARE cur CURSOR FOR TAIL {args.view} WITH (PROGRESS)"
