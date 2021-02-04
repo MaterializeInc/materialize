@@ -22,7 +22,9 @@ use openssl::pkey::PKey;
 use openssl::rsa::Rsa;
 use openssl::x509::extension::SubjectAlternativeName;
 use openssl::x509::{X509NameBuilder, X509};
+use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
+use postgres::Socket;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -81,7 +83,7 @@ impl Config {
     }
 }
 
-pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
+pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
     let runtime = Arc::new(Runtime::new()?);
     let (data_directory, temp_dir) = match config.data_directory {
         None => {
@@ -123,8 +125,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         runtime,
         _temp_dir: temp_dir,
     };
-    let client = server.connect()?;
-    Ok((server, client))
+    Ok(server)
 }
 
 pub struct Server {
@@ -154,17 +155,27 @@ impl Server {
         config
     }
 
-    pub fn connect(&self) -> Result<postgres::Client, Box<dyn Error>> {
-        Ok(self.pg_config().connect(postgres::NoTls)?)
+    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, Box<dyn Error>>
+    where
+        T: MakeTlsConnect<Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    {
+        Ok(self.pg_config().connect(tls)?)
     }
 
-    pub async fn connect_async(
+    pub async fn connect_async<T>(
         &self,
-    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), Box<dyn Error>> {
-        let (client, conn) = self
-            .pg_config_async()
-            .connect(tokio_postgres::NoTls)
-            .await?;
+        tls: T,
+    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), Box<dyn Error>>
+    where
+        T: MakeTlsConnect<Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    {
+        let (client, conn) = self.pg_config_async().connect(tls).await?;
         let handle = tokio::spawn(async move {
             if let Err(err) = conn.await {
                 panic!("connection error: {}", err);

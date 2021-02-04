@@ -37,7 +37,8 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default().experimental_mode();
-    let (_server, mut client) = util::start_server(config)?;
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     match client.query("SELECT ROW(1, 2) = $1", &[&42_i32]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),
@@ -99,7 +100,8 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
 fn test_partial_read() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
     let query = "VALUES ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7')";
 
     let simpler = client.query(query, &[])?;
@@ -128,7 +130,8 @@ fn test_partial_read() -> Result<(), Box<dyn Error>> {
 fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
     let query = "VALUES (1), (2), (3)";
 
     let max_rows = 10_000;
@@ -145,7 +148,8 @@ fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
 fn test_conn_params() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     // The default database should be `materialize`.
     assert_eq!(
@@ -229,7 +233,8 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
 fn test_conn_user() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     // Attempting to connect as a nonexistent user should fail.
     match server.pg_config().user("rj").connect(postgres::NoTls) {
@@ -262,7 +267,8 @@ fn test_conn_user() -> Result<(), Box<dyn Error>> {
 fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
     assert!(client.simple_query("asdfjkl;").is_err());
     // This will hang if #2880 is not fixed.
     assert!(client.simple_query("SELECT 1").is_ok());
@@ -274,7 +280,8 @@ fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
 fn test_copy() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     // Ensure empty COPY result sets work. We used to mishandle this with binary
     // COPY.
@@ -337,8 +344,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
 
     // Test TLS modes with a server that does not support TLS.
     {
-        let config = util::Config::default();
-        let (server, _client) = util::start_server(config)?;
+        let server = util::start_server(util::Config::default())?;
 
         // Explicitly disabling TLS should succeed.
         smoke_test(
@@ -378,7 +384,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
         util::generate_certs(&cert_path, &key_path)?;
 
         let config = util::Config::default().enable_tls(cert_path.clone(), key_path);
-        let (server, _client) = util::start_server(config)?;
+        let server = util::start_server(config)?;
 
         // Disabling TLS should succeed.
         smoke_test(
@@ -432,7 +438,8 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
 fn test_arrays() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default().experimental_mode())?;
+    let server = util::start_server(util::Config::default().experimental_mode())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     let row = client.query_one("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]", &[])?;
     let array: Array<Option<i32>> = row.get(0);
@@ -468,7 +475,8 @@ fn test_arrays() -> Result<(), Box<dyn Error>> {
 fn test_record_types() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     let row = client.query_one("SELECT ROW()", &[])?;
     let _: Record<()> = row.get(0);
@@ -496,7 +504,7 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
 
     // We want a new server per file, so we can't use pgtest::walk.
     datadriven::walk(dir.to_str().unwrap(), |tf| {
-        let (server, _client) = util::start_server(util::Config::default()).unwrap();
+        let server = util::start_server(util::Config::default()).unwrap();
         let config = server.pg_config();
         let addr = match &config.get_hosts()[0] {
             tokio_postgres::config::Host::Tcp(host) => {
