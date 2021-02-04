@@ -341,6 +341,8 @@ where
             for time in removed_times {
                 to_send.remove(&time);
             }
+            key_decoder_state.log_error_count();
+            value_decoder_state.log_error_count();
         }
     })
 }
