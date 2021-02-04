@@ -1318,6 +1318,7 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(SCHEMA) {
             self.parse_create_schema()
         } else if self.parse_keyword(TABLE) {
+            self.prev_token();
             self.parse_create_table()
         } else if self.parse_keyword(OR) || self.parse_keyword(VIEW) {
             self.prev_token();
@@ -1332,6 +1333,10 @@ impl<'a> Parser<'a> {
                 self.prev_token();
                 self.prev_token();
                 self.parse_create_view()
+            } else if self.parse_keyword(TABLE) {
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_table()
             } else {
                 self.expected(
                     self.peek_pos(),
@@ -1899,6 +1904,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_table(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
+        self.expect_keyword(TABLE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
@@ -1911,6 +1918,7 @@ impl<'a> Parser<'a> {
             constraints,
             with_options,
             if_not_exists,
+            temporary,
         }))
     }
 

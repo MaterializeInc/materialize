@@ -67,6 +67,131 @@ catalog item 'foo' already exists
 
 > CREATE OR REPLACE TEMPORARY MATERIALIZED VIEW foo AS SELECT * FROM v
 
+# A temporary view should mask a normal view with the same name
+
+> CREATE VIEW v1 AS SELECT 1 AS f1;
+
+> CREATE TEMPORARY VIEW v1 AS SELECT 2 AS f2;
+
+> SELECT * FROM v1;
+ f2
+----
+  2
+
+> DROP VIEW v1;
+
+> SELECT * FROM v1;
+ f1
+----
+  1
+
+> DROP VIEW v1;
+
+! SELECT * FROM v1;
+unknown catalog item 'v1'
+
+# Rename temporary view
+
+> CREATE TEMPORARY VIEW v1 AS SELECT 1 AS f1;
+
+> ALTER VIEW v1 RENAME TO v2;
+
+! SELECT * FROM v1;
+unknown catalog item 'v1'
+
+> SELECT * FROM v2;
+ f1
+----
+  1
+
+> DROP VIEW v2;
+
+#####################################################################
+# Temporary tables
+
+> CREATE TEMPORARY TABLE temp_t (a int, b text NOT NULL)
+
+! CREATE TEMP TABLE temp_t (a int, b text NOT NULL)
+catalog item 'temp_t' already exists
+
+> INSERT INTO temp_t VALUES (1, 'testing')
+
+> SHOW INDEXES FROM temp_t
+ on_name    key_name            seq_in_index  column_name  expression  nullable
+---------------------------------------------------------------------------
+ temp_t     temp_t_primary_idx  1             a            <null>      true
+ temp_t     temp_t_primary_idx  2             b            <null>      false
+
+> DROP TABLE temp_t
+
+# A temporary table should mask a normal table with the same name
+
+> CREATE TABLE t1 (f1 INTEGER);
+
+> INSERT INTO t1 VALUES (1);
+
+> CREATE TEMPORARY TABLE t1 (f2 INTEGER);
+
+> INSERT INTO t1 VALUES (2);
+
+> SELECT * FROM t1;
+ f2
+----
+  2
+
+> SELECT * FROM public.t1;
+ f1
+----
+  1
+
+> DROP TABLE t1;
+
+> SELECT * FROM t1;
+ f1
+----
+  1
+
+> DROP TABLE t1;
+
+# Rename temporary table
+
+> CREATE TEMPORARY TABLE t1 (f1 INTEGER);
+
+> INSERT INTO t1 VALUES (1);
+
+> ALTER TABLE t1 RENAME TO t2;
+
+! SELECT * FROM t1;
+unknown catalog item 't1'
+
+> SELECT * FROM t2;
+ f1
+----
+  1
+
+> DROP TABLE t2;
+
+# A non-temporary view can not depend on a temporary table
+
+> CREATE TEMPORARY TABLE t1 (f1 INTEGER);
+
+! CREATE VIEW non_temp AS SELECT * FROM t1;
+non-temporary items cannot depend on temporary item
+
+! CREATE VIEW non_temp AS SELECT (SELECT * FROM t1);
+non-temporary items cannot depend on temporary item
+
+> DROP TABLE t1;
+
+#####################################################################
+# Make sure the mz_temp schema is protected
+
+! DROP SCHEMA mz_temp
+cannot drop schema mz_temp because it is required by the database system
+
+! CREATE TABLE mz_temp.table_in_mz_temp (f1 INTEGER)
+unknown schema 'mz_temp'
+
 #####################################################################
 # Test things we shouldn't be able to make temporary.
 
@@ -103,6 +228,8 @@ unknown catalog item 'double_temp_v'
 > DISCARD TEMP
 
 > SELECT * FROM mz_indexes WHERE name = 'foo_primary_idx'
+
+> SELECT * FROM mz_indexes WHERE name = 'temp_t_primary_idx'
 
 ! SELECT * FROM temp_v;
 unknown catalog item 'temp_v'

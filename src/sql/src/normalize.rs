@@ -269,8 +269,13 @@ pub fn create_statement(
             constraints: _,
             with_options: _,
             if_not_exists,
+            temporary,
         }) => {
-            *name = allocate_name(name)?;
+            *name = if *temporary {
+                allocate_temporary_name(name)?
+            } else {
+                allocate_name(name)?
+            };
             let mut normalizer = QueryNormalizer::new(scx);
             for c in columns {
                 normalizer.visit_column_def_mut(c);
