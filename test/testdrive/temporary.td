@@ -74,16 +74,16 @@ catalog item 'foo' already exists
 > CREATE TEMPORARY VIEW v1 AS SELECT 2 AS f2;
 
 > SELECT * FROM v1;
- f2 
+ f2
 ----
-  2 
+  2
 
 > DROP VIEW v1;
 
 > SELECT * FROM v1;
- f1 
+ f1
 ----
-  1 
+  1
 
 > DROP VIEW v1;
 
@@ -135,21 +135,21 @@ catalog item 'temp_t' already exists
 > INSERT INTO t1 VALUES (2);
 
 > SELECT * FROM t1;
- f2 
+ f2
 ----
-  2 
+  2
 
 > SELECT * FROM public.t1;
  f1
 ----
-  1 
+  1
 
 > DROP TABLE t1;
 
 > SELECT * FROM t1;
- f1 
+ f1
 ----
-  1 
+  1
 
 > DROP TABLE t1;
 
