@@ -240,7 +240,7 @@ def run():
         template_path=template_path,
         debug=True,
         configured_views=["counter", "top10"],
-        dsn="postgresql://materialized:6875/materialize",
+        dsn="postgresql://materialize@materialized:6875/materialize",
     )
 
     port = 8875
