@@ -14,12 +14,34 @@ import sys
 import time
 
 import prometheus_api_client
+import prometheus_api_client.utils
 
 def run(args: argparse.Namespace) -> int:
-    """Run the generator, inserting args.num_records number of messages."""
+    """Wait for the query to settle or timeout and then dump ingest metrics."""
 
     prom = prometheus_api_client.PrometheusConnect(f'http://{args.host}:{args.port}')
 
+    step = '1s'
+    start = prometheus_api_client.utils.parse_datetime('now')
+    print(start)
+
+    # Actually await on the metric
+    res = wait_metric(args, prom)
+
+    # Wait an extra second to make sure that the sum query includes all metrics
+    # TODO: replace with a loop until the final point matches the number of messages inserted
+    time.sleep(1)
+
+    end = prometheus_api_client.utils.parse_datetime('now')
+    print(end)
+    metrics = prom.custom_query_range("sum by (job) (mz_messages_ingested)", start_time = start, end_time = end, step = step)
+    prometheus_api_client.utils.pretty_print_metric(metrics)
+
+    return res
+
+
+def wait_metric(args: argparse.Namespace, prom: prometheus_api_client.PrometheusConnect) -> int:
+    """Wait for the given metric, returning desired exit code (0 is success)."""
     time_so_far = 0
     start = int(time.monotonic())
     while time_so_far < args.timeout_seconds:
@@ -27,15 +49,17 @@ def run(args: argparse.Namespace) -> int:
         if args.verbose:
             print(current_values)
 
-        if len(current_values) != 1:
-            print('ERROR: Prometheus query must only return a single result!')
+        if len(current_values) > 1:
+            print('ERROR: Prometheus query must only return a zero or one results!')
+            prometheus_api_client.utils.pretty_print_metric(current_values)
             return 1
 
         # We aren't running query_range, so there should only be a single timestamp and point in the reponse
-        (ts, point) = current_values[0]['value']
-        if point == args.expected_value:
-            print(f"SUCCESS! Query settled in {time_so_far} seconds")
-            return 0
+        if current_values:
+            (ts, point) = current_values[0]['value']
+            if point == args.expected_value:
+                print(f"SUCCESS! Query settled in {time_so_far} seconds")
+                return 0
 
         time.sleep(1)
         time_so_far = int(time.monotonic()) - start
