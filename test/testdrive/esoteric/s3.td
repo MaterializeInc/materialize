@@ -22,7 +22,7 @@ b2
 b3
 
 > CREATE MATERIALIZED SOURCE s3_all
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -41,7 +41,7 @@ b2 5
 b3 6
 
 > CREATE MATERIALIZED SOURCE s3_glob_a
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN MATCHING '**/a'
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}' MATCHING '**/a'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -57,7 +57,7 @@ a2 2
 a3 3
 
 > CREATE MATERIALIZED SOURCE s3_just_a
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN MATCHING 'short/a'
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}' MATCHING 'short/a'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -78,7 +78,7 @@ c,8
 c,9
 
 > CREATE MATERIALIZED SOURCE csv_example (name, counts)
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN MATCHING '*.csv'
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}' MATCHING '*.csv'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -119,7 +119,7 @@ $ s3-put-object bucket=${bucket} key=logs/2021/01/01/frontend.log
 173.203.139.108 - - [01/01/2021:00:00:39] "GET /downloads/materialized HTTP/1.1" 404 335 "-" "Python/Requests_22"
 
 > CREATE MATERIALIZED SOURCE frontend_logs
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN MATCHING 'logs/**/*.log'
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}' MATCHING 'logs/**/*.log'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -138,7 +138,18 @@ $ s3-put-object bucket=${bucket} key=logs/2021/01/01/frontend.log
 12/31/2020:23:55:52 37.26.93.214 Go_1.1_package_http
 12/31/2020:23:55:59 99.99.44.44 Python/Requests_22
 
-! CREATE SOURCE err FROM S3 BUCKET 'dog' OBJECTS FROM SCAN, SCAN
+$ set otherbucket=materialize-ci-td-other-${testdrive.seed}
+
+$ s3-create-bucket bucket=${otherbucket}
+
+$ s3-put-object bucket=${otherbucket} key=short/c
+c1
+c2
+c3
+
+> CREATE MATERIALIZED SOURCE s3_multi
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}', SCAN BUCKET '${otherbucket}'
+  MATCHING 'short/*'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -146,5 +157,15 @@ $ s3-put-object bucket=${bucket} key=logs/2021/01/01/frontend.log
     secret_access_key = '${testdrive.aws-secret-access-key}',
     token = '${testdrive.aws-token}'
   )
-  FORMAT TEXT
-SCAN may only be specified once
+  FORMAT TEXT;
+
+> SELECT text FROM s3_multi ORDER BY text;
+a1
+a2
+a3
+b1
+b2
+b3
+c1
+c2
+c3

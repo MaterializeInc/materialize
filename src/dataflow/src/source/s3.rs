@@ -35,13 +35,15 @@ use crate::source::{
 };
 
 type Out = Vec<u8>;
+struct InternalMessage {
+    bucket: String,
+    record: Out,
+}
 
 /// Information required to load data from S3
 pub struct S3SourceInfo {
     /// The name of the source that the user entered
     source_name: String,
-    /// The name of the S3 bucket we are pulling from
-    bucket: String,
 
     // differential control
     /// Unique source ID
@@ -49,7 +51,7 @@ pub struct S3SourceInfo {
     /// Field is set if this operator is responsible for ingesting data
     is_activated_reader: bool,
     /// Receiver channel that ingests records
-    receiver_stream: Receiver<Result<Out, Error>>,
+    receiver_stream: Receiver<Result<InternalMessage, Error>>,
     /// Buffer: store message that cannot yet be timestamped
     buffer: Option<SourceMessage<Out>>,
     /// BucketOffset
@@ -93,10 +95,8 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
 
         // a single arbitrary worker is responsible for scanning the bucket
         let receiver = if active {
-            log::debug!("reading bucket={} worker={}", s3_conn.bucket, worker_id);
             let (dataflow_tx, dataflow_rx) = std::sync::mpsc::sync_channel(10_000);
             let (keys_tx, keys_rx) = tokio_mpsc::channel(10_000);
-            let bucket = s3_conn.bucket.clone();
             let glob = s3_conn.pattern.map(|g| g.compile_matcher());
             let aws_info = s3_conn.aws_info;
             tokio::spawn(download_objects_task(
@@ -107,9 +107,20 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             ));
             for key_source in s3_conn.key_sources {
                 match key_source {
-                    S3KeySource::Scan => {
+                    S3KeySource::Scan { bucket } => {
+                        log::debug!("reading s3 bucket={} worker={}", bucket, worker_id);
+
+                        let pid = PartitionId::S3 {
+                            bucket: bucket.clone(),
+                        };
+                        consistency_info.partition_metrics.insert(
+                            pid.clone(),
+                            PartitionMetrics::new(&source_name, source_id, &bucket, logger.clone()),
+                        );
+                        consistency_info.update_partition_metadata(pid);
+
                         tokio::spawn(scan_bucket_task(
-                            bucket.clone(),
+                            bucket,
                             glob.clone(),
                             aws_info.clone(),
                             keys_tx.clone(),
@@ -123,15 +134,8 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             rx
         };
 
-        consistency_info.partition_metrics.insert(
-            PartitionId::S3,
-            PartitionMetrics::new(&source_name, source_id, &s3_conn.bucket, logger),
-        );
-        consistency_info.update_partition_metadata(PartitionId::S3);
-
         Ok(S3SourceInfo {
             source_name,
-            bucket: s3_conn.bucket,
             id: source_id,
             is_activated_reader: active,
             receiver_stream: receiver,
@@ -148,7 +152,7 @@ struct KeyInfo {
 
 async fn download_objects_task(
     mut rx: tokio_mpsc::Receiver<anyhow::Result<KeyInfo>>,
-    tx: SyncSender<anyhow::Result<Vec<u8>>>,
+    tx: SyncSender<anyhow::Result<InternalMessage>>,
     aws_info: aws::ConnectInfo,
     activator: SyncActivator,
 ) {
@@ -163,9 +167,11 @@ async fn download_objects_task(
         }
     };
 
-    while let Some(msg) = rx.recv().await {
-        match msg {
-            Ok(msg) => download_object(&tx, &activator, &client, msg.bucket, msg.key).await,
+    while let Some(record) = rx.recv().await {
+        match record {
+            Ok(record) => {
+                download_object(&tx, &activator, &client, record.bucket, record.key).await
+            }
             Err(e) => tx
                 .send(Err(e))
                 .unwrap_or_else(|e| log::debug!("unable to send error: {}", e)),
@@ -254,7 +260,7 @@ async fn scan_bucket_task(
 }
 
 async fn download_object(
-    tx: &SyncSender<anyhow::Result<Vec<u8>>>,
+    tx: &SyncSender<anyhow::Result<InternalMessage>>,
     activator: &SyncActivator,
     client: &S3Client,
     bucket: String,
@@ -262,7 +268,7 @@ async fn download_object(
 ) {
     let obj = match client
         .get_object(GetObjectRequest {
-            bucket,
+            bucket: bucket.clone(),
             key,
             ..Default::default()
         })
@@ -285,7 +291,10 @@ async fn download_object(
                 let activate = !buf.is_empty();
                 let mut lines = 0;
                 for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
-                    if let Err(e) = tx.send(Ok(line)) {
+                    if let Err(e) = tx.send(Ok(InternalMessage {
+                        bucket: bucket.clone(),
+                        record: line,
+                    })) {
                         log::debug!("unable to send read line on stream: {}", e);
                         break;
                     } else {
@@ -346,10 +355,10 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
             return Ok(NextMessage::Ready(message));
         }
         match self.receiver_stream.try_recv() {
-            Ok(Ok(record)) => {
+            Ok(Ok(InternalMessage { bucket, record })) => {
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessage {
-                    partition: PartitionId::S3,
+                    partition: PartitionId::S3 { bucket },
                     offset: self.offset.into(),
                     upstream_time_millis: None,
                     key: None,
@@ -358,8 +367,7 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
             }
             Ok(Err(e)) => {
                 log::warn!(
-                    "when reading bucket '{}' for source '{}' ({}): {}",
-                    self.bucket,
+                    "when reading source '{}' ({}): {}",
                     self.source_name,
                     self.id,
                     e

@@ -15,7 +15,7 @@ the list of objects to download.
 The **OBJECTS FROM** clause describes how `materialized` will load objects, and so its parameters
 will determine what permissions `materialized` requires.. For example, since the **SCAN** key name
 source (as in **OBJECTS FORM SCAN**) must perform repeated `ListObjects` actions to create a list
-of key names to download, specifying **OBJECTS FROM SCAN** means that **MATERIALIZED** requires
+of key names to download, specifying **OBJECTS FROM SCAN BUCKET** means that **MATERIALIZED** requires
 the `ListObjects` permission.
 
 | Key Name Source | Permissions Required                                                        |

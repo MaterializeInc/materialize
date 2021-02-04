@@ -1669,14 +1669,16 @@ impl<'a> Parser<'a> {
                 Ok(Connector::AvroOcf { path })
             }
             S3 => {
-                // FROM S3 BUCKET '<bucket>' OBJECTS FROM SCAN MATCHING '<pattern>'
-                self.expect_keyword(BUCKET)?;
-                let bucket = self.parse_literal_string()?;
+                // FROM S3 OBJECTS FROM (SCAN '<bucket>')+ MATCHING '<pattern>'
                 self.expect_keywords(&[OBJECTS, FROM])?;
                 let mut key_sources = Vec::new();
                 while let Some(keyword) = self.parse_one_of_keywords(&[SCAN]) {
                     match keyword {
-                        SCAN => key_sources.push(S3KeySource::Scan),
+                        SCAN => {
+                            self.expect_keyword(BUCKET)?;
+                            let bucket = self.parse_literal_string()?;
+                            key_sources.push(S3KeySource::Scan { bucket });
+                        }
                         key => unreachable!("Keyword {} is not expected after OBJECTS FROM", key),
                     }
                     if !self.consume_token(&Token::Comma) {
@@ -1689,7 +1691,6 @@ impl<'a> Parser<'a> {
                     None
                 };
                 Ok(Connector::S3 {
-                    bucket,
                     key_sources,
                     pattern,
                 })

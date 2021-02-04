@@ -315,7 +315,7 @@ run LocalStack:
 
 ```shell
 $ pip install localstack
-$ START_WEB=false SERVICES=kinesis localstack start
+$ START_WEB=false SERVICES=iam,sts,kinesis,s3 localstack start
 ```
 
 If you've previously installed LocalStack, be sure it is v0.11 or later.
