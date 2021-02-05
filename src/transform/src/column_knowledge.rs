@@ -337,10 +337,7 @@ pub fn optimize(
                 Err(_) => false,
             },
         },
-        MirScalarExpr::CallNullary(_) => {
-            expr.reduce(input_type);
-            optimize(expr, input_type, column_knowledge)
-        }
+        MirScalarExpr::CallNullary(_) => DatumKnowledge::default(),
         MirScalarExpr::CallUnary { func, expr: inner } => {
             let knowledge = optimize(inner, input_type, column_knowledge);
             if knowledge.value.is_some() {
