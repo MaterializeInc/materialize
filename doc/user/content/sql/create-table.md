@@ -9,6 +9,7 @@ menu:
 {{< version-added v0.5.0 >}}
 
 `CREATE TABLE` creates a non-streaming, in-memory data source.
+If you're planning to create views for streaming data or if you find that your materialized views on static data are taking up more than ten percent of the available RAM, you are better off creating a source instead of a table. See [Create Source](../create-source) for more information.
 
 {{< warning >}}
 At the moment, tables do not persist any data that is inserted. This means that restarting a
