@@ -20,7 +20,9 @@ Flag | Default | Modifies
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
 [`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
+[`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA) {{< version-added v0.7.1 />}}
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
+[`--tls-mode`](#tls-encryption) | N/A | How stringently to demand TLS authentication and encryption {{< version-added v0.7.1 />}}
 [`--tls-key`](#tls-encryption) | N/A | Path to TLS private key file
 [`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
 [`-w`](#worker-threads) | REQ |  Dataflow worker threads
@@ -124,28 +126,46 @@ the compaction window.
 
 ### TLS encryption
 
-Materialize can use Transport Layer Security (TLS) to encrypt traffic between
-SQL and HTTP clients and the `materialized` server.
+Materialize can use Transport Layer Security (TLS) to:
+
+ * Encrypt traffic between SQL and HTTP clients and the `materialized` server
+ * Authenticate SQL and HTTP clients
+
+{{< version-added v0.7.1 >}}
+The `--tls-mode` and `--tls-ca` options.
+
+Prior versions of Materialize implicitly operated in `disable` mode if no
+`--tls-cert` was specified or in `allow` mode if a `--tls-cert` was specified.
+{{< /version-changed >}}
 
 #### Configuration
 
-To enable TLS, you will need to supply two files, one containing a TLS
-certificate and one containing the corresponding private key. Point
-`materialized` at these files using the `--tls-cert` and `--tls-key` options,
-respectively:
+Whether Materialize requires TLS encryption or authentication is determined by
+the value of the `--tls-mode` option:
+
+Value         | Description
+--------------|------------
+`disable`     | Disables TLS.<br><br>Materialize will reject HTTPS connections and SQL connections that negotiate TLS. This is the default mode if `--tls-cert` is not specified.
+`allow`       | Permits TLS encryption at the client's option.<br><br>Materialize serves both unencrypted and encrypted traffic over the same TCP port, as specified by [`--listen-addr`](#listen-address). The web UI will be served over HTTPS in addition to HTTP. Incoming SQL connections can negotiate TLS encryption; consult your SQL client's documentation for details.
+`require`     | Requires TLS encryption.<br><br>Materialize will reject HTTP connections and SQL connections that do not negotiate TLS.
+`verify-ca`   | Like `require`, but additionally requires that clients present a certificate.<br><br>Materialize verifies that the client certificate is issued by the certificate authority (CA) specified by the `--tls-ca` option.
+`verify-full` | Like `verify-ca`, but the Common Name (CN) field of the client certificate additionally determines the user who is connecting.<br><br>For HTTPS connections, this user is taken directly from the CN field. For SQL connections, the name of the user in the connection parameters must match the name specified in the CN field.<br><br>This is the default mode if `--tls-cert` is specified.
+
+In all TLS modes but `disable`, you will need to supply two files, one
+containing a TLS certificate and one containing the corresponding private key.
+Point `materialized` at these files using the `--tls-cert` and `--tls-key`
+options, respectively.
+
+If the TLS mode is `verify-ca` or `verify-full`, you will additionally need to
+supply the path to a TLS certificate authority (CA) via the `--tls-ca` flag.
+Client certificates will be verified using this CA.
+
+The following example demonstrates how to configure a server in `verify-full`
+mode:
 
 ```shell
-$ materialized -w1 --tls-cert=server.crt --tls-key=server.key
+$ materialized -w1 --tls-cert=server.crt --tls-key=server.key --tls-ca=root.crt
 ```
-
-When TLS is enabled, Materialize serves both unencrypted and encrypted traffic
-over the same TCP port, as specified by [`--listen-addr`](#listen-address). The
-web UI will be served over HTTPS in addition to HTTP. Incoming SQL connections
-can negotiate TLS encryption at the client's option; consult your SQL client's
-documentation for details.
-
-It is not currently possible to configure Materialize to reject unencrypted
-connections.
 
 Materialize statically links against a vendored copy of [OpenSSL]. It does *not*
 use any SSL library that may be provided by your system. To see the version of

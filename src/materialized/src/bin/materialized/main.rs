@@ -43,6 +43,8 @@ use log::{info, warn};
 use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
 
+use materialized::TlsMode;
+
 mod sys;
 mod tracing;
 
@@ -118,6 +120,7 @@ struct Args {
     /// Where materialized will emit log messages.
     #[structopt(long, env = "MZ_LOG_FILE", value_name = "PATH")]
     log_file: Option<String>,
+
     // == Connection options.
     /// The address on which to listen for connections.
     #[structopt(
@@ -127,11 +130,65 @@ struct Args {
         default_value = "0.0.0.0:6875"
     )]
     listen_addr: SocketAddr,
+    /// How stringently to demand TLS authentication and encryption.
+    ///
+    /// If set to "disable", then materialized rejects HTTP and PostgreSQL
+    /// connections that negotiate TLS.
+    ///
+    /// If set to "allow", then materialized allows HTTP and PostgreSQL
+    /// connections to negotiate TLS, but does not require that they do so.
+    ///
+    /// If set to "require", then materialized requires that all HTTP and
+    /// PostgreSQL connections negotiate TLS. Unencrypted connections will be
+    /// rejected.
+    ///
+    /// If set to "verify-ca", then materialized requires that all HTTP and
+    /// PostgreSQL connections negotiate TLS and supply a certificate signed by
+    /// a trusted certificate authority (CA). HTTP connections will operate as
+    /// the system user in this mode, while PostgreSQL connections will assume
+    /// the name of whatever user is specified in the handshake.
+    ///
+    /// The "verify-full" mode is like "verify-ca", except that the Common Name
+    /// (CN) field of the certificate must match the name of a valid user. HTTP
+    /// and PostgreSQL connections will operate as this user. PostgreSQL
+    /// connections must additionally specify the same username in the
+    /// connection parameters.
+    ///
+    /// The most secure mode is "verify-full". This is the default mode when
+    /// the --tls-cert option is specified. Otherwise the default is "disable".
+    #[structopt(
+        long, env = "MZ_TLS_MODE",
+        possible_values = &["disable", "allow", "require", "verify-ca", "verify-full"],
+        default_value = "disable",
+        default_value_if("tls-cert", None, "verify-full"),
+        value_name = "MODE",
+    )]
+    tls_mode: String,
+    #[structopt(
+        long,
+        env = "MZ_TLS_CA",
+        required_if("tls-mode", "verify-ca"),
+        required_if("tls-mode", "verify-full"),
+        value_name = "PATH"
+    )]
+    tls_ca: Option<PathBuf>,
     /// Certificate file for TLS connections.
-    #[structopt(long, env = "MZ_TLS_CERT", requires = "tls-key", value_name = "PATH")]
+    #[structopt(
+        long,
+        env = "MZ_TLS_CERT",
+        requires = "tls-key",
+        required_ifs(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
+        value_name = "PATH"
+    )]
     tls_cert: Option<PathBuf>,
     /// Private key file for TLS connections.
-    #[structopt(long, env = "MZ_TLS_KEY", requires = "tls-cert", value_name = "PATH")]
+    #[structopt(
+        long,
+        env = "MZ_TLS_KEY",
+        requires = "tls-cert",
+        required_ifs(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
+        value_name = "PATH"
+    )]
     tls_key: Option<PathBuf>,
 
     // === Storage options. ===
@@ -233,12 +290,42 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     }
 
     // Configure connections.
-    let tls = match (args.tls_cert, args.tls_key) {
-        (None, None) => None,
-        (None, Some(_)) | (Some(_), None) => {
-            unreachable!("clap ensures --tls-cert and --tls-key are specified together");
+    let tls = if args.tls_mode == "disable" {
+        if args.tls_ca.is_some() {
+            bail!("cannot specify --tls-mode=disable and --tls-ca simultaneously");
         }
-        (Some(cert), Some(key)) => Some(materialized::TlsConfig { cert, key }),
+        if args.tls_cert.is_some() {
+            bail!("cannot specify --tls-mode=disable and --tls-cert simultaneously");
+        }
+        if args.tls_key.is_some() {
+            bail!("cannot specify --tls-mode=disable and --tls-key simultaneously");
+        }
+        None
+    } else {
+        let mode = match args.tls_mode.as_str() {
+            "allow" => {
+                if args.tls_ca.is_some() {
+                    bail!("cannot specify --tls-mode=allow and --tls-ca simultaneously");
+                }
+                TlsMode::Allow
+            }
+            "require" => {
+                if args.tls_ca.is_some() {
+                    bail!("cannot specify --tls-mode=require and --tls-ca simultaneously");
+                }
+                TlsMode::Require
+            }
+            "verify-ca" => TlsMode::VerifyCa {
+                ca: args.tls_ca.unwrap(),
+            },
+            "verify-full" => TlsMode::VerifyFull {
+                ca: args.tls_ca.unwrap(),
+            },
+            _ => unreachable!(),
+        };
+        let cert = args.tls_cert.unwrap();
+        let key = args.tls_key.unwrap();
+        Some(materialized::TlsConfig { mode, cert, key })
     };
 
     // Configure storage.

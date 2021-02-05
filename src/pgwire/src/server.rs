@@ -27,23 +27,60 @@ use crate::message::FrontendStartupMessage;
 use crate::protocol::StateMachine;
 use crate::secrets::SecretManager;
 
+/// Configures a [`Server`].
+#[derive(Debug)]
+pub struct Config {
+    /// A client for the coordinator with which the server will communicate.
+    pub coord_client: coord::Client,
+    /// The TLS configuration for the server.
+    ///
+    /// If not present, then TLS is not enabled, and clients requests to
+    /// negotiate TLS will be rejected.
+    pub tls: Option<TlsConfig>,
+}
+
+/// Configures a server's TLS encryption and authentication.
+#[derive(Debug)]
+pub struct TlsConfig {
+    /// The SSL context used to manage incoming TLS negotiations.
+    pub context: SslContext,
+    /// The TLS mode.
+    pub mode: TlsMode,
+}
+
+/// Specifies how strictly to enforce TLS encryption and authentication.
+#[derive(Debug, Clone, Copy)]
+pub enum TlsMode {
+    /// Clients may negotiate TLS encryption, but the server will not require
+    /// that they do so.
+    Allow,
+    /// Clients must negotiate TLS encryption.
+    Require,
+    /// Clients must negotiate TLS encryption and supply a certificate whose
+    /// Common Name (CN) field matches the user name they connect as.
+    VerifyUser,
+}
+
+/// A server that communicates with clients via the pgwire protocol.
 pub struct Server {
     id_alloc: IdAllocator,
     secrets: SecretManager,
-    tls: Option<SslContext>,
+    tls: Option<TlsConfig>,
     coord_client: coord::Client,
 }
 
 impl Server {
-    pub fn new(tls: Option<SslContext>, coord_client: coord::Client) -> Server {
+    /// Constructs a new server.
+    pub fn new(config: Config) -> Server {
         Server {
             id_alloc: IdAllocator::new(1, 1 << 16),
             secrets: SecretManager::new(),
-            tls,
-            coord_client,
+            tls: config.tls,
+            coord_client: config.coord_client,
         }
     }
 
+    /// Handles an incoming pgwire connection.
     pub async fn handle_connection<A>(&self, conn: A) -> Result<(), anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
@@ -66,11 +103,7 @@ impl Server {
         res
     }
 
-    pub async fn handle_connection_inner<A>(
-        &self,
-        conn_id: u32,
-        conn: A,
-    ) -> Result<(), anyhow::Error>
+    async fn handle_connection_inner<A>(&self, conn_id: u32, conn: A) -> Result<(), anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
     {
@@ -99,6 +132,7 @@ impl Server {
                         conn: FramedConn::new(conn_id, conn),
                         conn_id,
                         secret_key: self.secrets.get(conn_id).unwrap(),
+                        tls_mode: self.tls.as_ref().map(|tls| tls.mode),
                         coord_client,
                     };
                     machine.run(version, params).await?;
@@ -121,7 +155,7 @@ impl Server {
                     (Conn::Unencrypted(mut conn), Some(tls)) => {
                         trace!("cid={} send=AcceptSsl", conn_id);
                         conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                        let mut ssl_stream = SslStream::new(Ssl::new(tls)?, conn)?;
+                        let mut ssl_stream = SslStream::new(Ssl::new(&tls.context)?, conn)?;
                         Pin::new(&mut ssl_stream).accept().await?;
                         Conn::Ssl(ssl_stream)
                     }
@@ -143,7 +177,7 @@ impl Server {
 }
 
 #[derive(Debug)]
-enum Conn<A> {
+pub enum Conn<A> {
     Unencrypted(A),
     Ssl(SslStream<A>),
 }
