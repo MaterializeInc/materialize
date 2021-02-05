@@ -38,6 +38,7 @@ impl Client {
         SessionClient {
             inner: self.clone(),
             session: Some(session),
+            started_up: false,
         }
     }
 
@@ -86,6 +87,9 @@ pub struct SessionClient {
     // Invariant: session may only be `None` during a method call. Every public
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
+    /// Whether the coordinator has been notified of this `SessionClient` via
+    /// a call to `startup`.
+    started_up: bool,
 }
 
 impl SessionClient {
@@ -93,15 +97,32 @@ impl SessionClient {
     ///
     /// Returns a list of messages that are intended to be displayed to the
     /// user.
+    ///
+    /// Once you observe a successful response to this method, you must not call
+    /// it again. You must observe a successful response to this method before
+    /// calling any other method on the client, besides
+    /// [`SessionClient::terminate`].
     pub async fn startup(&mut self) -> Result<Vec<StartupMessage>, CoordError> {
-        self.send(|tx, session| Command::Startup { session, tx })
+        assert!(!self.started_up);
+        match self
+            .send(|tx, session| Command::Startup { session, tx })
             .await
+        {
+            Ok(messages) => {
+                self.started_up = true;
+                Ok(messages)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Saves the specified statement as a prepared statement.
     ///
     /// The prepared statement is saved in the connection's [`sql::Session`]
     /// under the specified name.
+    ///
+    /// You must have observed a successful response to
+    /// [`SessionClient::startup`] before calling this method.
     pub async fn describe(
         &mut self,
         name: String,
@@ -119,6 +140,9 @@ impl SessionClient {
     }
 
     /// Binds a statement to a portal.
+    ///
+    /// You must have observed a successful response to
+    /// [`SessionClient::startup`] before calling this method.
     pub async fn declare(
         &mut self,
         name: String,
@@ -136,6 +160,9 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
+    ///
+    /// You must have observed a successful response to
+    /// [`SessionClient::startup`] before calling this method.
     pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, CoordError> {
         self.send(|tx, session| Command::Execute {
             portal_name,
@@ -145,6 +172,10 @@ impl SessionClient {
         .await
     }
 
+    /// Ends a transaction.
+    ///
+    /// You must have observed a successful response to
+    /// [`SessionClient::startup`] before calling this method.
     pub async fn end_transaction(
         &mut self,
         action: EndTransactionAction,
@@ -159,15 +190,18 @@ impl SessionClient {
 
     /// Terminates this client session.
     ///
-    /// This both consumes this `SessionClient` and cleans up any state
-    /// associated with the session on stored by the coordinator.
+    /// This consumes this `SessionClient`. If the coordinator was notified of
+    /// this client session by `startup`, then this method will clean up any
+    /// state on the coordinator about this session.
     pub async fn terminate(mut self) {
         let session = self.session.take().expect("session invariant violated");
-        self.inner
-            .cmd_tx
-            .send(Command::Terminate { session })
-            .await
-            .expect("coordinator unexpectedly gone");
+        if self.started_up {
+            self.inner
+                .cmd_tx
+                .send(Command::Terminate { session })
+                .await
+                .expect("coordinator unexpectedly gone");
+        }
     }
 
     /// Returns a mutable reference to the session bound to this client.
