@@ -33,7 +33,7 @@ impl AvroDecoderState {
         debug_name: String,
         worker_index: usize,
         dedup_strat: Option<DebeziumDeduplicationStrategy>,
-        key_indices: Option<Vec<usize>>,
+        dbz_key_indices: Option<Vec<usize>>,
     ) -> Result<Self, anyhow::Error> {
         Ok(AvroDecoderState {
             decoder: Decoder::new(
@@ -43,7 +43,7 @@ impl AvroDecoderState {
                 debug_name,
                 worker_index,
                 dedup_strat,
-                key_indices,
+                dbz_key_indices,
             )?,
             events_success: 0,
             events_error: 0,
