@@ -195,7 +195,29 @@ where
     for predicate in predicates {
         if !predicate.contains_temporal() {
             normal.push(predicate);
-        } else if let MirScalarExpr::CallBinary { func, expr1, expr2 } = predicate {
+        } else if let MirScalarExpr::CallBinary {
+            mut func,
+            mut expr1,
+            mut expr2,
+        } = predicate
+        {
+            // Attempt to put `MzLogicalTimestamp` in the first argument position.
+            if !expr1.contains_temporal()
+                && *expr2 != MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
+            {
+                std::mem::swap(&mut expr1, &mut expr2);
+                func = match func {
+                    BinaryFunc::Eq => BinaryFunc::Eq,
+                    BinaryFunc::Lt => BinaryFunc::Gt,
+                    BinaryFunc::Lte => BinaryFunc::Gte,
+                    BinaryFunc::Gt => BinaryFunc::Lt,
+                    BinaryFunc::Gte => BinaryFunc::Lte,
+                    _ => {
+                        return Err("Unsupported binary temporal operation".to_string());
+                    }
+                };
+            }
+
             // Error if MLT is referenced in an unsuppported position.
             if expr2.contains_temporal()
                 || *expr1 != MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
