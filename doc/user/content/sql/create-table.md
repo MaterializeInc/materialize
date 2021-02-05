@@ -1,6 +1,6 @@
 ---
 title: "CREATE TABLE"
-description: "`CREATE TABLE` creates a non-streaming, in-memory data source."
+description: "`CREATE TABLE` creates an in-memory table."
 menu:
   main:
     parent: 'sql'
@@ -8,24 +8,35 @@ menu:
 
 {{< version-added v0.5.0 >}}
 
-`CREATE TABLE` creates a non-streaming, in-memory data source.
-
-{{< warning >}}
-At the moment, tables do not persist any data that is inserted. This means that restarting a
-Materialize instance will lose any data that was previously stored in a table.
-{{< /warning >}}
-
+`CREATE TABLE` creates an in-memory table.
 
 ## Conceptual framework
 
-Tables store non-streaming data that is inserted via [INSERT](../insert) statements.
+Tables in Materialize are similar to tables in standard relational databases:
+they consist of rows and columns where the columns are fixed when the table is
+created but rows can be added to at will via [INSERT](../insert) statements.
 
-### When to create a table
+You can seamlessly join tables with other tables, views, and sources in the
+system.
 
-You might want to create a table when...
+{{< warning >}}
+At the moment, tables serve a niche use case. They are lacking many features
+that are standard in relational databases. In most situations you should use
+[sources](/sql/create-source) instead.
+{{< /warning >}}
 
-- Manually inserting rows of data into Materialize.
-- Testing Materialize's features without setting up a data stream.
+### When to use a table
+
+Using a table can be more convenient than using a source, but only if all of
+the following statements are true:
+
+1. Your dataset is either static or append only.
+2. You do not need the dataset to survive reboots of Materialize.
+3. Your dataset is several times smaller than the available memory on your
+   machine. See the [memory usage](#memory-usage) section below for details.
+
+If any of the above do not hold, we recommend that you use a
+[source](/sql/create-source) instead.
 
 ## Syntax
 
@@ -48,8 +59,10 @@ _col&lowbar;type_ | The data type of the column indicated by _col&lowbar;name_.
 
 ### Restrictions
 
+{{< warning >}}
 Tables do not persist any data that is inserted. This means that restarting a
 Materialize instance will lose any data that was previously stored in a table.
+{{< /warning >}}
 
 Additionally, tables do not currently support:
 - Primary keys
@@ -69,6 +82,20 @@ connections. They are always created in the special `mz_temp` schema.
 
 Temporary tables may depend upon other temporary database objects, but non-temporary
 tables may not depend on temporary objects.
+
+### Memory usage
+
+Every table is backed by an [index](/overview/api-components/#indexes) that
+materializes all of the data in the table. Unlike sources, you cannot create an
+"unmaterialized" table. Therefore you must ensure that the data you store in
+tables fits in the amount of memory you have available on your system. Remember
+that any additional indexes or derived materialized views will count against
+your memory budget.
+
+If your dataset is too large to fit in memory, consider using an unmaterialized
+[source](/sql/create-source) instead. This lets you defer materialization to
+views derived from this source, which can aggregate or filter the data down to a
+manageable size.
 
 ## Examples
 
