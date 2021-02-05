@@ -339,10 +339,22 @@ impl DataEncoding {
         Ok(match self {
             DataEncoding::Bytes => key_desc.with_column("data", ScalarType::Bytes.nullable(false)),
             DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
-                avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
-                    .context("validating avro ocf reader schema")?
-                    .into_iter()
-                    .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty))
+                let desc =
+                    avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
+                        .context("validating avro ocf reader schema")?
+                        .into_iter()
+                        .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
+                if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
+                    desc.with_column(
+                        "diff",
+                        ColumnType {
+                            nullable: false,
+                            scalar_type: ScalarType::Int64,
+                        },
+                    )
+                } else {
+                    desc
+                }
             }
             DataEncoding::Avro(AvroEncoding {
                 value_schema,
