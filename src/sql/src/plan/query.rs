@@ -3166,6 +3166,10 @@ impl<'a> QueryContext<'a> {
 
                 Ok((expr, scope))
             }
+            Id::BareSource(_) | Id::LocalBareSource => {
+                // These are never introduced except when planning source transformations.
+                unreachable!()
+            }
         }
     }
 
