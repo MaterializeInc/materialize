@@ -553,6 +553,7 @@ dependencies = [
  "ccsr",
  "chrono",
  "comm",
+ "datadriven",
  "dataflow",
  "dataflow-types",
  "derivative",
@@ -577,6 +578,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sql",
+ "sql-parser",
  "symbiosis",
  "tempfile",
  "timely",
@@ -1932,7 +1934,7 @@ checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
 
 [[package]]
 name = "materialized"
-version = "0.6.2-dev"
+version = "0.7.1-dev"
 dependencies = [
  "anyhow",
  "askama",
@@ -1941,6 +1943,7 @@ dependencies = [
  "async-trait",
  "backtrace",
  "build-info",
+ "bytes",
  "cfg-if 1.0.0",
  "chrono",
  "clap",
@@ -1977,6 +1980,7 @@ dependencies = [
  "pgwire",
  "postgres",
  "postgres-openssl",
+ "postgres-protocol",
  "postgres_array",
  "predicates",
  "prof",
@@ -3830,6 +3834,7 @@ dependencies = [
  "build-info",
  "ccsr",
  "chrono",
+ "datadriven",
  "dataflow-types",
  "expr",
  "futures",

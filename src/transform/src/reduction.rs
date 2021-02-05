@@ -530,7 +530,7 @@ pub mod undistribute_and {
             suppress_ands(expr2, ands);
 
             // If either argument is in our list, replace it by `true`.
-            let tru = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool.nullable(false));
+            let tru = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
             if ands.contains(expr1) {
                 *expr = std::mem::replace(expr2, tru);
             } else if ands.contains(expr2) {

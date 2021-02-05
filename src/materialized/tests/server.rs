@@ -27,7 +27,8 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     let source_file = NamedTempFile::new()?;
 
     {
-        let (_server, mut client) = util::start_server(config.clone())?;
+        let server = util::start_server(config.clone())?;
+        let mut client = server.connect(postgres::NoTls)?;
         client.batch_execute(&format!(
             "CREATE SOURCE src FROM FILE '{}' FORMAT BYTES",
             source_file.path().display()
@@ -45,7 +46,8 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
     }
 
     {
-        let (_server, mut client) = util::start_server(config.clone())?;
+        let server = util::start_server(config.clone())?;
+        let mut client = server.connect(postgres::NoTls)?;
         assert_eq!(
             client
                 .query("SHOW VIEWS", &[])?
@@ -122,12 +124,12 @@ fn test_experimental_mode_reboot() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().data_directory(data_dir.path());
 
     {
-        let (_server, _) = util::start_server(config.clone().experimental_mode())?;
+        let _ = util::start_server(config.clone().experimental_mode())?;
     }
 
     {
         match util::start_server(config.clone()) {
-            Ok((_server, _)) => panic!("unexpected success"),
+            Ok(_) => panic!("unexpected success"),
             Err(e) => {
                 if !e
                     .to_string()
@@ -140,7 +142,7 @@ fn test_experimental_mode_reboot() -> Result<(), Box<dyn Error>> {
     }
 
     {
-        let (_server, _) = util::start_server(config.experimental_mode())?;
+        let _ = util::start_server(config.experimental_mode())?;
     }
 
     Ok(())
@@ -153,12 +155,12 @@ fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
     let config = util::Config::default().data_directory(data_dir.path());
 
     {
-        let (_server, _) = util::start_server(config.clone())?;
+        let _ = util::start_server(config.clone())?;
     }
 
     {
         match util::start_server(config.experimental_mode()) {
-            Ok((_server, _)) => panic!("unexpected success"),
+            Ok(_) => panic!("unexpected success"),
             Err(e) => {
                 if !e
                     .to_string()
@@ -176,7 +178,7 @@ fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
 // Test the /sql POST endpoint of the HTTP server.
 #[test]
 fn test_http_sql() -> Result<(), Box<dyn Error>> {
-    let (server, _client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
     let url = Url::parse(&format!("http://{}/sql", server.inner.local_addr()))?;
     let mut params = HashMap::new();
 

@@ -7,8 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# https://github.com/MaterializeInc/mzcli
-FROM materialize/mzcli
+FROM ubuntu:focal
 
 RUN apt-get update -o Acquire::Languages=none \
     && apt-get install -qy --no-install-recommends \
@@ -20,3 +19,4 @@ RUN apt-get update -o Acquire::Languages=none \
     ;
 
 COPY watch-sql /usr/local/bin/watch-sql
+ENTRYPOINT ["psql", "-U", "materialize", "-h", "materialized", "-p", "6875", "materialize"]

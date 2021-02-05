@@ -506,11 +506,16 @@ pub struct CreateTableStatement<T: AstInfo> {
     pub constraints: Vec<TableConstraint<T>>,
     pub with_options: Vec<SqlOption>,
     pub if_not_exists: bool,
+    pub temporary: bool,
 }
 
 impl<T: AstInfo> AstDisplay for CreateTableStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
-        f.write_str("CREATE TABLE ");
+        f.write_str("CREATE ");
+        if self.temporary {
+            f.write_str("TEMPORARY ");
+        }
+        f.write_str("TABLE ");
         if self.if_not_exists {
             f.write_str("IF NOT EXISTS ");
         }

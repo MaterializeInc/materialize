@@ -105,7 +105,7 @@ fn scalar_nonnullable(expr: &mut MirScalarExpr, metadata: &RelationType) {
         {
             if let MirScalarExpr::Column(c) = &**expr {
                 if !metadata.column_types[*c].nullable {
-                    *e = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool.nullable(false));
+                    *e = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
                 }
             }
         }
@@ -118,7 +118,7 @@ fn aggregate_nonnullable(expr: &mut AggregateExpr, metadata: &RelationType) {
     // count(true).
     if let (AggregateFunc::Count, MirScalarExpr::Column(c)) = (&expr.func, &expr.expr) {
         if !metadata.column_types[*c].nullable && !expr.distinct {
-            expr.expr = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool.nullable(false));
+            expr.expr = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
         }
     }
 }

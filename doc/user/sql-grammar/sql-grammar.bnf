@@ -39,6 +39,7 @@ create_sink ::=
     sink_kafka_connector |
    'AVRO OCF' path-prefix
    )
+   ('ENVELOPE' ('DEBEZIUM'|'UPSERT'))?
    ('WITH SNAPSHOT' | 'WITHOUT SNAPSHOT')?
    ('AS OF' timestamp_expression)?
 create_source_avro_file ::=
@@ -104,8 +105,12 @@ create_source_protobuf_kinesis ::=
   'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
 create_source_s3_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  'FROM S3 BUCKET' bucket_name
-  'OBJECTS FROM SCAN'
+  'FROM S3 OBJECTS FROM ' (
+      'SCAN BUCKET' bucket_name
+  )
+  (
+    ',' 'SCAN BUCKET' bucket_name
+  )*
   ('MATCHING' pattern)?
   'WITH' '('
       'region =' region
@@ -118,8 +123,12 @@ create_source_s3_text ::=
   )
 create_source_s3_json ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  'FROM S3 BUCKET' bucket_name
-  'OBJECTS FROM SCAN'
+  'FROM S3 OBJECTS FROM ' (
+      'SCAN BUCKET' bucket_name
+  )
+  (
+    ',' 'SCAN BUCKET' bucket_name
+  )*
   ('MATCHING' pattern)?
   'WITH' '('
       'region =' region
@@ -129,8 +138,12 @@ create_source_s3_json ::=
 create_source_s3_csv ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')?
   src_name ( '(' col_name (',' col_name)* ')' )?
-  'FROM S3 BUCKET' bucket_name
-  'OBJECTS FROM SCAN'
+  'FROM S3 OBJECTS FROM ' (
+      'SCAN BUCKET' bucket_name
+  )
+  (
+    ',' 'SCAN BUCKET' bucket_name
+  )*
   ('MATCHING' pattern)?
   'WITH' '('
       'region =' region
@@ -178,7 +191,7 @@ create_view ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'VIEW' view_name 'AS' select_stmt
 create_table ::=
-  'CREATE' 'TABLE' table_name
+  'CREATE' ('TEMP' | 'TEMPORARY')? 'TABLE' table_name
   '(' ((col_name col_type col_option*) (',' col_name col_type col_option*)*)? ')'
 declare ::=
   'DECLARE' cursor_name 'CURSOR' ('WITHOUT' 'HOLD')? 'FOR' query
@@ -250,9 +263,9 @@ join_type ::=
     ( 'FULL' ( 'OUTER' |  ) | 'LEFT' ( 'OUTER' |  ) | 'RIGHT' ( 'OUTER' |  ) | 'INNER' | )
 sink_kafka_connector ::=
     'KAFKA BROKER' host 'TOPIC' topic-prefix
+    ('KEY' '(' key_column ( ',' key_column )* ')')?
     ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
     'FORMAT' 'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' url
-    ('KEY' '(' key_column ( ',' key_column )* ')')?
 lit_cast ::=
   type val
 op_cast ::=

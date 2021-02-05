@@ -9,11 +9,14 @@
 
 //! Integration tests for pgwire functionality.
 
+use std::convert::TryInto;
 use std::error::Error;
-use std::io::Read;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
 use ore::collections::CollectionExt;
 use pgrepr::{Numeric, Record};
@@ -23,12 +26,13 @@ use repr::adt::decimal::Significand;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
 use postgres::config::SslMode;
-use postgres::error::{DbError, SqlState};
+use postgres::error::SqlState;
 use postgres::types::Type;
 use postgres::SimpleQueryMessage;
 use postgres_array::{Array, Dimension};
 use postgres_openssl::MakeTlsConnector;
 use tokio::runtime::Runtime;
+use util::PostgresErrorExt;
 
 pub mod util;
 
@@ -37,7 +41,8 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default().experimental_mode();
-    let (_server, mut client) = util::start_server(config)?;
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     match client.query("SELECT ROW(1, 2) = $1", &[&42_i32]) {
         Ok(_) => panic!("query with invalid parameters executed successfully"),
@@ -74,15 +79,13 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
     }
 
     // A `CREATE` statement with parameters should be rejected.
-    match client.query_one("CREATE VIEW v AS SELECT $3", &[]) {
-        Ok(_) => panic!("query with invalid parameters executed successfully"),
-        Err(err) => {
-            assert!(err.to_string().contains("there is no parameter $3"));
-            // TODO(benesch): this should be `UNDEFINED_PARAMETER`, but blocked
-            // on #3147.
-            assert_eq!(err.code(), Some(&SqlState::INTERNAL_ERROR));
-        }
-    }
+    let err = client
+        .query_one("CREATE VIEW v AS SELECT $3", &[])
+        .unwrap_db_error();
+    // TODO(benesch): this should be `UNDEFINED_PARAMETER`, but blocked
+    // on #3147.
+    assert_eq!(err.message(), "there is no parameter $3");
+    assert_eq!(err.code(), &SqlState::INTERNAL_ERROR);
 
     // Test that `INSERT` statements support prepared statements.
     {
@@ -99,7 +102,8 @@ fn test_bind_params() -> Result<(), Box<dyn Error>> {
 fn test_partial_read() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
     let query = "VALUES ('1'), ('2'), ('3'), ('4'), ('5'), ('6'), ('7')";
 
     let simpler = client.query(query, &[])?;
@@ -128,7 +132,8 @@ fn test_partial_read() -> Result<(), Box<dyn Error>> {
 fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
     let query = "VALUES (1), (2), (3)";
 
     let max_rows = 10_000;
@@ -142,10 +147,11 @@ fn test_read_many_rows() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_conn_params() -> Result<(), Box<dyn Error>> {
+fn test_conn_startup() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     // The default database should be `materialize`.
     assert_eq!(
@@ -222,6 +228,49 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
         );
     }
 
+    // Test that connecting with an old protocol version is gracefully rejected.
+    // This used to crash the coordinator.
+    {
+        use postgres_protocol::message::backend::Message;
+
+        let mut stream = TcpStream::connect(server.inner.local_addr())?;
+
+        // Send a startup packet for protocol version two, which Materialize
+        // does not support.
+        let mut buf = vec![];
+        buf.extend(&0_i32.to_be_bytes()); // frame length, corrected below
+        buf.extend(&0x20000_i32.to_be_bytes()); // protocol version two
+        buf.extend(b"user\0ignored\0\0"); // dummy user parameter
+        let len: i32 = buf.len().try_into()?;
+        buf[0..4].copy_from_slice(&len.to_be_bytes());
+        stream.write_all(&buf)?;
+
+        // Verify the server sends back an error and closes the connection.
+        buf.clear();
+        stream.read_to_end(&mut buf)?;
+        let message = Message::parse(&mut BytesMut::from(&*buf))?;
+        let error = match message {
+            Some(Message::ErrorResponse(error)) => error,
+            _ => panic!("did not receive expected error response"),
+        };
+        let mut fields: Vec<_> = error
+            .fields()
+            .map(|f| Ok((f.type_(), f.value().to_owned())))
+            .collect()?;
+        fields.sort_by_key(|(ty, _value)| *ty);
+        assert_eq!(
+            fields,
+            &[
+                (b'C', "08004".into()),
+                (
+                    b'M',
+                    "server does not support the client's requested protocol version".into()
+                ),
+                (b'S', "FATAL".into()),
+            ]
+        );
+    }
+
     Ok(())
 }
 
@@ -229,25 +278,22 @@ fn test_conn_params() -> Result<(), Box<dyn Error>> {
 fn test_conn_user() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     // Attempting to connect as a nonexistent user should fail.
-    match server.pg_config().user("rj").connect(postgres::NoTls) {
-        Ok(_) => panic!("connection with bad user unexpectedly succeeded"),
-        Err(e) => {
-            let e = e
-                .source()
-                .and_then(|e| e.downcast_ref::<DbError>())
-                .unwrap();
-            assert_eq!(e.severity(), "FATAL");
-            assert_eq!(*e.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
-            assert_eq!(e.message(), "role \"rj\" does not exist");
-            assert_eq!(
-                e.hint(),
-                Some("Try connecting as the \"materialize\" user.")
-            );
-        }
-    }
+    let err = server
+        .pg_config()
+        .user("rj")
+        .connect(postgres::NoTls)
+        .unwrap_db_error();
+    assert_eq!(err.severity(), "FATAL");
+    assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
+    assert_eq!(err.message(), "role \"rj\" does not exist");
+    assert_eq!(
+        err.hint(),
+        Some("Try connecting as the \"materialize\" user.")
+    );
 
     // But should succeed after that user comes into existence.
     client.batch_execute("CREATE ROLE rj LOGIN SUPERUSER")?;
@@ -262,7 +308,8 @@ fn test_conn_user() -> Result<(), Box<dyn Error>> {
 fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
     assert!(client.simple_query("asdfjkl;").is_err());
     // This will hang if #2880 is not fixed.
     assert!(client.simple_query("SELECT 1").is_ok());
@@ -274,7 +321,8 @@ fn test_simple_query_no_hang() -> Result<(), Box<dyn Error>> {
 fn test_copy() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     // Ensure empty COPY result sets work. We used to mishandle this with binary
     // COPY.
@@ -337,8 +385,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
 
     // Test TLS modes with a server that does not support TLS.
     {
-        let config = util::Config::default();
-        let (server, _client) = util::start_server(config)?;
+        let server = util::start_server(util::Config::default())?;
 
         // Explicitly disabling TLS should succeed.
         smoke_test(
@@ -378,7 +425,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
         util::generate_certs(&cert_path, &key_path)?;
 
         let config = util::Config::default().enable_tls(cert_path.clone(), key_path);
-        let (server, _client) = util::start_server(config)?;
+        let server = util::start_server(config)?;
 
         // Disabling TLS should succeed.
         smoke_test(
@@ -432,7 +479,8 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
 fn test_arrays() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default().experimental_mode())?;
+    let server = util::start_server(util::Config::default().experimental_mode())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     let row = client.query_one("SELECT ARRAY[ARRAY[1], ARRAY[NULL::int], ARRAY[2]]", &[])?;
     let array: Array<Option<i32>> = row.get(0);
@@ -468,7 +516,8 @@ fn test_arrays() -> Result<(), Box<dyn Error>> {
 fn test_record_types() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     let row = client.query_one("SELECT ROW()", &[])?;
     let _: Record<()> = row.get(0);
@@ -496,7 +545,7 @@ fn test_pgtest() -> Result<(), Box<dyn Error>> {
 
     // We want a new server per file, so we can't use pgtest::walk.
     datadriven::walk(dir.to_str().unwrap(), |tf| {
-        let (server, _client) = util::start_server(util::Config::default()).unwrap();
+        let server = util::start_server(util::Config::default()).unwrap();
         let config = server.pg_config();
         let addr = match &config.get_hosts()[0] {
             tokio_postgres::config::Host::Tcp(host) => {

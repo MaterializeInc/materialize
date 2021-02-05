@@ -1,8 +1,8 @@
 {
     "com.acme.avro.upsertavrotest::BookIdUnused": [0, 100],
     "com.acme.avro.upsertavrotest::SecurityIdUnused": [0, 250000],
-    "com.acme.avro.Long2::Exposure": [0, 64000],
-    "com.acme.avro.Short2::Exposure": [0, 64000],
-    "com.acme.avro.Long::Exposure": [0, 64000],
-    "com.acme.avro.Short::Exposure": [0, 64000]
+    "com.acme.avro.Long2::Exposure": [10000, 1000000000],
+    "com.acme.avro.Short2::Exposure": [10000, 1000000000],
+    "com.acme.avro.Long::Exposure": [10000, 1000000000],
+    "com.acme.avro.Short::Exposure": [10000, 10000000000]
 }
