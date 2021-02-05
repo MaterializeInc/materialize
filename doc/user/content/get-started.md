@@ -39,7 +39,7 @@ We also highly recommend checking out [What is Materialize?](/overview/what-is-m
 1. Connect to `materialized` through your Materialize CLI, e.g.:
 
     ```shell
-    psql -h localhost -p 6875 materialize
+    psql -U materialize -h localhost -p 6875 materialize
     ```
 
 ## Explore Materialize's API
