@@ -30,4 +30,4 @@ mod secrets;
 mod server;
 
 pub use protocol::match_handshake;
-pub use server::Server;
+pub use server::{Config, Server, TlsConfig, TlsMode};
