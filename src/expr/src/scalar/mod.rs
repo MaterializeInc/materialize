@@ -634,6 +634,17 @@ impl MirScalarExpr {
             },
         }
     }
+
+    /// True iff the expression contains `NullaryFunc::MzLogicalTimestamp`.
+    pub fn contains_temporal(&self) -> bool {
+        let mut contains = false;
+        self.visit(&mut |e| {
+            if let MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp) = e {
+                contains = true;
+            }
+        });
+        contains
+    }
 }
 
 impl fmt::Display for MirScalarExpr {
