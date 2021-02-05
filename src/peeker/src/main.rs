@@ -142,7 +142,11 @@ fn spawn_query_thread(
             let mut counter = 0u64;
             let mut err_count = 0u64;
             let mut last_log = Instant::now();
-            let end_at = Utc::now() + run_dur;
+            let end_at = if run_dur > chrono::Duration::seconds(0) {
+                Utc::now() + run_dur
+            } else {
+                chrono::MAX_DATETIME
+            };
             info!(
                 "Will terminate thread {}.{} at {:?}",
                 group_id, thread_id, end_at
