@@ -12,7 +12,7 @@
 //! There are restricted options for how one can reference this term in
 //! a maintained dataflow. Specifically, all predicates need to be of the
 //! form
-//! ```
+//! ```ignore
 //! mz_logical_timestamp cmp_op expr
 //! ```
 //! where `cmp_op` is a comparison operator (e.g. <, >, =, >=, or <=) and
@@ -45,7 +45,7 @@ where
     /// There are restricted options for how one can reference this term in
     /// a maintained dataflow. Specifically, all predicates need to be of the
     /// form
-    /// ```
+    /// ```ignore
     /// mz_logical_timestamp cmp_op expr
     /// ```
     /// where `cmp_op` is a comparison operator (e.g. <, >, =, >=, or <=) and
@@ -175,7 +175,7 @@ where
 /// The second and third returned lists contain expressions that, once evaluated, lower
 /// and upper bound the validity interval of a record, respectively. These second two
 /// lists are populared only by binary expressions of the form
-/// ```
+/// ```ignore
 /// mz_logical_timestamp cmp_op expr
 /// ```
 /// where `cmp_op` is a comparison operator and `expr` does not contain `mz_logical_timestamp`.
