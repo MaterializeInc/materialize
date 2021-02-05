@@ -182,11 +182,11 @@ where
     let mut upper = Vec::new();
 
     for predicate in predicates {
-        if !contains_mlt(&predicate) {
+        if !predicate.contains_temporal() {
             normal.push(predicate);
         } else if let MirScalarExpr::CallBinary { func, expr1, expr2 } = predicate {
             // Error if MLT is referenced in an unsuppported position.
-            if contains_mlt(&expr2)
+            if expr2.contains_temporal()
                 || *expr1 != MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
             {
                 return Err("MzLogicalTimestamp in unsupported position".to_string());
@@ -240,15 +240,4 @@ where
     }
 
     Ok((normal, lower, upper))
-}
-
-/// True iff the expression contains `NullaryFunc::MzLogicalTimestamp`.
-fn contains_mlt(expr: &MirScalarExpr) -> bool {
-    let mut contains = false;
-    expr.visit(&mut |e| {
-        if let MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp) = e {
-            contains = true;
-        }
-    });
-    contains
 }
