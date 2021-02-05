@@ -132,7 +132,7 @@ Putting this all together, our deployment looks like this:
 
    ```shell
    cd demo/chbench
-   ./mzcompose run demo-load
+   ./mzcompose run demo
    ```
 
    Note that downloading the Docker images necessary for the demo can take quite

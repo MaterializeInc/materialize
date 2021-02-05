@@ -15,15 +15,12 @@ ENVELOPE UPSERT
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
 
 CREATE VIEW upsertavrotest AS SELECT
-    -- cast("BookId" AS bigint) AS "BookId",
-    -- cast("SecurityId" AS bigint) AS "SecurityId",
-    -- cast("TradingBookId" AS int) AS "TradingBookId",
-    "BookId" AS BookId, -- retaining AS long
-    "SecurityId" AS SecurityId, -- retaining AS long
-    (("Exposure")."Current"."Long2"."Exposure")::float AS "CurrentLongExposure", -- converting long to float
-    (("Exposure")."Current"."Short2"."Exposure")::float AS "CurrentShortExposure", -- converting long to float
-    (("Exposure")."Target"."Long"."Exposure")::float AS "TargetLongExposure", -- converting long to float
-    (("Exposure")."Target"."Short"."Exposure")::float AS "TargetShortExposure" -- converting long to float
+    "Key1" AS Key1, -- retaining AS long
+    "Key2" AS Key2, -- retaining AS long
+    (("OuterRecord")."Record1"."InnerRecord1"."Point")::float AS "Point1", -- converting long to float
+    (("OuterRecord")."Record1"."InnerRecord2"."Point")::float AS "Point2", -- converting long to float
+    (("OuterRecord")."Record2"."InnerRecord3"."Point")::float AS "Point3", -- converting long to float
+    (("OuterRecord")."Record2"."InnerRecord4"."Point")::float AS "Point4" -- converting long to float
 FROM source_upsertavrotest;
 
-CREATE INDEX upsertavrotest_index ON upsertavrotest(BookId, SecurityId);
+CREATE INDEX upsertavrotest_index ON upsertavrotest(Key1, Key2);
