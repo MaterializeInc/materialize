@@ -147,6 +147,7 @@ use crate::{
 
 mod arrange_by;
 mod context;
+mod filter;
 mod flat_map;
 mod join;
 mod reduce;
