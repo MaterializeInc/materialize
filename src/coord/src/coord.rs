@@ -3169,6 +3169,7 @@ where
         mut expr: MirRelationExpr,
         style: ExprPrepStyle,
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
+        expr = self.optimizer.optimize(expr, self.catalog.indexes())?.0;
         expr.try_visit_mut(&mut |e| {
             if let (
                 expr::MirRelationExpr::Filter {
@@ -3178,10 +3179,9 @@ where
                 ExprPrepStyle::Static,
             ) = (&*e, style)
             {
-                if !dataflow::extract_temporal(predicates.iter().cloned()).is_ok() {
-                    coord_bail!("unsupported temporal filter");
-                } else {
-                    Ok(())
+                match dataflow::extract_temporal(predicates.iter().cloned()) {
+                    Err(e) => coord_bail!("{:?}", e),
+                    Ok(_) => Ok(()),
                 }
             } else {
                 e.try_visit_scalars_mut1(&mut |s| Self::prep_scalar_expr(s, style))
