@@ -26,3 +26,5 @@ pub use server::{
     serve, BroadcastToken, CacheMessage, Config, SequencedCommand, WorkerFeedback,
     WorkerFeedbackWithMeta,
 };
+
+pub use render::filter::extract_temporal;

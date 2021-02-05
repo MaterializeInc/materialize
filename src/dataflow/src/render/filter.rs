@@ -7,6 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Renders a filter expression that may reference `mz_logical_timestamp`.
+//!
+//! There are restricted options for how one can reference this term in
+//! a maintained dataflow. Specifically, all predicates need to be of the
+//! form
+//! ```
+//! mz_logical_timestamp cmp_op expr
+//! ```
+//! where `cmp_op` is a comparison operator (e.g. <, >, =, >=, or <=) and
+//! `expr` is an expression that does not contain `mz_logical_timestamp`.
+
 use std::convert::TryFrom;
 
 use differential_dataflow::lattice::Lattice;
@@ -171,7 +182,7 @@ where
 ///
 /// If any unsupported expression is found, for example one that uses `mz_logical_timestamp`
 /// in an unsupported position, an error is returned.
-fn extract_temporal<I>(
+pub fn extract_temporal<I>(
     predicates: I,
 ) -> Result<(Vec<MirScalarExpr>, Vec<MirScalarExpr>, Vec<MirScalarExpr>), String>
 where
