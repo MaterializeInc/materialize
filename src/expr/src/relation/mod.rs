@@ -920,7 +920,16 @@ impl MirRelationExpr {
         // Match written out explicitly to reduce the possibility of adding a
         // new field with a `MirScalarExpr` within and forgetting to account for it
         // here.
-        self.try_visit_mut(&mut |e| match e {
+        self.try_visit_mut(&mut |e| e.try_visit_scalars_mut1(f))
+    }
+
+    /// Fallible visitor for the [`MirScalarExpr`]s directly owned by this relation expression.
+    /// This does not recursively descend into owned [`MirRelationExpr`]s.
+    pub fn try_visit_scalars_mut1<F, E>(&mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
+    {
+        match self {
             MirRelationExpr::Map { scalars, input: _ }
             | MirRelationExpr::Filter {
                 predicates: scalars,
@@ -991,7 +1000,7 @@ impl MirRelationExpr {
             | MirRelationExpr::Negate { input: _ }
             | MirRelationExpr::Threshold { input: _ }
             | MirRelationExpr::Union { base: _, inputs: _ } => Ok(()),
-        })
+        }
     }
 
     /// Like `try_visit_scalars_mut`, but the closure must be infallible.

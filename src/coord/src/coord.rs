@@ -3169,7 +3169,24 @@ where
         mut expr: MirRelationExpr,
         style: ExprPrepStyle,
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
-        expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
+        expr.try_visit_mut(&mut |e| {
+            if let (
+                expr::MirRelationExpr::Filter {
+                    input: _,
+                    predicates,
+                },
+                ExprPrepStyle::Static,
+            ) = (&*e, style)
+            {
+                if !dataflow::extract_temporal(predicates.iter().cloned()).is_ok() {
+                    coord_bail!("unsupported temporal filter");
+                } else {
+                    Ok(())
+                }
+            } else {
+                e.try_visit_scalars_mut1(&mut |s| Self::prep_scalar_expr(s, style))
+            }
+        })?;
 
         // TODO (wangandi): Is there anything that optimizes to a
         // constant expression that originally contains a global get? Is

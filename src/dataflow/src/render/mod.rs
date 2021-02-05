@@ -147,7 +147,7 @@ use crate::{
 
 mod arrange_by;
 mod context;
-mod filter;
+pub(crate) mod filter;
 mod flat_map;
 mod join;
 mod reduce;
@@ -175,6 +175,7 @@ pub struct RenderState {
     pub caching_tx: Option<comm::mpsc::Sender<CacheMessage>>,
 }
 
+/// Build a dataflow from a description.
 pub fn build_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     render_state: &mut RenderState,
