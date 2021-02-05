@@ -497,10 +497,11 @@ where
 {
     let op_name = format!("{}Decode", encoding.op_name());
     let worker_index = stream.scope().index();
-    let key_indices = encoding
+    let dbz_key_indices = encoding
         .desc(envelope)
         .ok()
-        .and_then(|desc| desc.typ().keys.get(0).cloned());
+        .and_then(|desc| desc.typ().group_sum_keys.get(0).cloned())
+        .map(|(key, _diff_col)| key);
     match (encoding, envelope) {
         (_, SourceEnvelope::Upsert(_)) => {
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
@@ -534,7 +535,7 @@ where
                         debug_name.to_string(),
                         worker_index,
                         Some(dedup_strat),
-                        key_indices,
+                        dbz_key_indices,
                     )
                     .expect("Failed to create Avro decoder"),
                     &op_name,
@@ -554,7 +555,7 @@ where
                     debug_name.to_string(),
                     worker_index,
                     None,
-                    key_indices,
+                    None,
                 )
                 .expect("Failed to create Avro decoder"),
                 &op_name,
