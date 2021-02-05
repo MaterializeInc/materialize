@@ -1854,6 +1854,10 @@ impl Coordinator {
         if_not_exists: bool,
         materialized: bool,
     ) -> Result<ExecuteResponse, CoordError> {
+        let optimized_expr = self
+            .optimizer
+            .optimize(source.expr, self.catalog.indexes())?;
+        let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
         let source = catalog::Source {
             create_sql: source.create_sql,
             plan_cx: pcx,
