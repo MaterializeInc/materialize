@@ -4,46 +4,46 @@
   "namespace": "com.acme.avro",
   "fields": [
     {
-      "name": "BookIdUnused",
+      "name": "Key1Unused",
       "type": "long"
     },
     {
-      "name": "SecurityIdUnused",
+      "name": "Key2Unused",
       "type": "long"
     },
     {
-      "name": "Exposure",
+      "name": "OuterRecord",
       "type": {
-        "name": "Exposure",
+        "name": "OuterRecord",
         "type": "record",
         "fields": [
           {
-            "name": "Current",
+            "name": "Record1",
             "type": {
-              "name": "Current",
+              "name": "Record1",
               "type": "record",
               "fields": [
                 {
-                  "name": "Long2",
+                  "name": "InnerRecord1",
                   "type": {
-                    "name": "Long2",
+                    "name": "InnerRecord1",
                     "type": "record",
                     "fields": [
                       {
-                        "name": "Exposure",
+                        "name": "Point",
                         "type": "long"
                       }
                     ]
                   }
                 },
                 {
-                  "name": "Short2",
+                  "name": "InnerRecord2",
                   "type": {
-                    "name": "Short2",
+                    "name": "InnerRecord2",
                     "type": "record",
                     "fields": [
                       {
-                        "name": "Exposure",
+                        "name": "Point",
                         "type": "long"
                       }
                     ]
@@ -53,32 +53,32 @@
             }
           },
           {
-            "name": "Target",
+            "name": "Record2",
             "type": {
-              "name": "Target",
+              "name": "Record2",
               "type": "record",
               "fields": [
                 {
-                  "name": "Long",
+                  "name": "InnerRecord3",
                   "type": {
-                    "name": "Long",
+                    "name": "InnerRecord3",
                     "type": "record",
                     "fields": [
                       {
-                        "name": "Exposure",
+                        "name": "Point",
                         "type": "long"
                       }
                     ]
                   }
                 },
                 {
-                  "name": "Short",
+                  "name": "InnerRecord4",
                   "type": {
-                    "name": "Short",
+                    "name": "InnerRecord4",
                     "type": "record",
                     "fields": [
                       {
-                        "name": "Exposure",
+                        "name": "Point",
                         "type": "long"
                       }
                     ]

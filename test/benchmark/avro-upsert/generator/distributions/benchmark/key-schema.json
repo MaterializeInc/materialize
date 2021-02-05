@@ -4,11 +4,11 @@
     "namespace": "com.acme.avro",
     "fields": [
      {
-       "name": "BookId",
+       "name": "Key1",
        "type": "long"
      },
      {
-         "name": "SecurityId",
+         "name": "Key2",
          "type": "long"
      }
     ]
