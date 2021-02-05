@@ -71,6 +71,7 @@ pub enum Command {
     NoSessionExecute {
         stmt: Statement<Raw>,
         params: sql::plan::Params,
+        user: String,
         tx: futures::channel::oneshot::Sender<Result<NoSessionExecuteResponse, CoordError>>,
     },
 }

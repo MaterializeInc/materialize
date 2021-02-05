@@ -25,7 +25,7 @@ use async_stream::try_stream;
 use compile_time_run::run_command_str;
 use futures::channel::mpsc;
 use futures::StreamExt;
-use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::io;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
@@ -141,19 +141,35 @@ impl Config {
 /// Configures TLS encryption for connections.
 #[derive(Debug, Clone)]
 pub struct TlsConfig {
+    /// The TLS mode to use.
+    pub mode: TlsMode,
     /// The path to the TLS certificate.
     pub cert: PathBuf,
     /// The path to the TLS key.
     pub key: PathBuf,
 }
 
-impl TlsConfig {
-    fn validate(&self) -> Result<SslContext, anyhow::Error> {
-        let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
-        builder.set_certificate_file(&self.cert, SslFiletype::PEM)?;
-        builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
-        Ok(builder.build().into_context())
-    }
+/// Configures how strictly to enforce TLS encryption and authentication.
+#[derive(Debug, Clone)]
+pub enum TlsMode {
+    /// Permit clients to connect with or without TLS, at their option.
+    Allow,
+    /// Require that all clients connect with TLS, but do not require that they
+    /// present a client certificate.
+    Require,
+    /// Require that clients connect with TLS and present a certificate that
+    /// is signed by the specified CA.
+    VerifyCa {
+        /// The path to a TLS certificate authority.
+        ca: PathBuf,
+    },
+    /// Like [`TlsMode::VerifyCA`], but the `cn` (Common Name) field of the
+    /// certificate must additionally match the user named in the connection
+    /// request.
+    VerifyFull {
+        /// The path to a TLS certificate authority.
+        ca: PathBuf,
+    },
 }
 
 /// Start a `materialized` server.
@@ -176,9 +192,37 @@ pub async fn serve(
     let total_workers = config.total_workers();
 
     // Validate TLS configuration, if present.
-    let tls = match &config.tls {
-        None => None,
-        Some(tls_config) => Some(tls_config.validate()?),
+    let (pgwire_tls, http_tls) = match &config.tls {
+        None => (None, None),
+        Some(tls_config) => {
+            let context = {
+                let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
+                if let TlsMode::VerifyCa { ca } | TlsMode::VerifyFull { ca } = &tls_config.mode {
+                    builder.set_ca_file(ca)?;
+                    builder.set_verify(SslVerifyMode::PEER | SslVerifyMode::FAIL_IF_NO_PEER_CERT);
+                }
+                builder.set_certificate_file(&tls_config.cert, SslFiletype::PEM)?;
+                builder.set_private_key_file(&tls_config.key, SslFiletype::PEM)?;
+                builder.build().into_context()
+            };
+            let pgwire_tls = pgwire::TlsConfig {
+                context: context.clone(),
+                mode: match tls_config.mode {
+                    TlsMode::Allow => pgwire::TlsMode::Allow,
+                    TlsMode::Require | TlsMode::VerifyCa { .. } => pgwire::TlsMode::Require,
+                    TlsMode::VerifyFull { .. } => pgwire::TlsMode::VerifyUser,
+                },
+            };
+            let http_tls = http::TlsConfig {
+                context,
+                mode: match tls_config.mode {
+                    TlsMode::Allow => http::TlsMode::Allow,
+                    TlsMode::Require | TlsMode::VerifyCa { .. } => http::TlsMode::Require,
+                    TlsMode::VerifyFull { .. } => http::TlsMode::AssumeUser,
+                },
+            };
+            (Some(pgwire_tls), Some(http_tls))
+        }
     };
 
     // Initialize network listener.
@@ -225,16 +269,19 @@ pub async fn serve(
             if is_primary {
                 let mut mux = Mux::new();
                 mux.add_handler(switchboard.clone());
-                mux.add_handler(pgwire::Server::new(tls.clone(), coord_client.clone()));
-                mux.add_handler(http::Server::new(
-                    tls,
+                mux.add_handler(pgwire::Server::new(pgwire::Config {
+                    tls: pgwire_tls,
+                    coord_client: coord_client.clone(),
+                }));
+                mux.add_handler(http::Server::new(http::Config {
+                    tls: http_tls,
                     coord_client,
                     start_time,
                     // TODO(benesch): passing this to `http::Server::new` just
                     // so it can set a static metric is silly. We should just
                     // set the metric directly here.
-                    total_workers,
-                ));
+                    worker_count: total_workers,
+                }));
                 mux.serve(incoming.by_ref().take_until(drain_tripwire))
                     .await;
             }

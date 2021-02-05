@@ -38,6 +38,7 @@ use crate::message::{
     BackendMessage, ErrorResponse, FrontendMessage, FrontendStartupMessage, TransactionStatus,
     VERSION_CANCEL, VERSION_GSSENC, VERSION_SSL,
 };
+use crate::server::Conn;
 
 lazy_static! {
     static ref BYTES_SENT: UIntCounter = register_uint_counter!(
@@ -68,7 +69,7 @@ impl fmt::Display for CodecError {
 /// A connection that manages the encoding and decoding of pgwire frames.
 pub struct FramedConn<A> {
     conn_id: u32,
-    inner: sink::Buffer<Framed<A, Codec>, BackendMessage>,
+    inner: sink::Buffer<Framed<Conn<A>, Codec>, BackendMessage>,
 }
 
 impl<A> FramedConn<A>
@@ -83,7 +84,7 @@ where
     ///
     /// The supplied `conn_id` is used to identify the connection in logging
     /// messages.
-    pub fn new(conn_id: u32, inner: A) -> FramedConn<A> {
+    pub fn new(conn_id: u32, inner: Conn<A>) -> FramedConn<A> {
         FramedConn {
             conn_id,
             inner: Framed::new(inner, Codec::new()).buffer(32),
@@ -147,6 +148,15 @@ where
     /// performance.
     pub fn set_encode_state(&mut self, encode_state: Vec<(pgrepr::Type, pgrepr::Format)>) {
         self.inner.get_mut().codec_mut().encode_state = encode_state;
+    }
+}
+
+impl<A> FramedConn<A>
+where
+    A: AsyncRead + AsyncWrite + Unpin,
+{
+    pub fn inner(&self) -> &Conn<A> {
+        self.inner.get_ref().get_ref()
     }
 }
 
