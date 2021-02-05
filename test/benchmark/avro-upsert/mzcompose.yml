@@ -127,6 +127,8 @@ mzworkflows:
       service: create-views
 
   benchmark-medium:
+    env:
+      MZ_WORKERS: 8
     steps:
     - step: start-services
       services: [dashboard]
@@ -141,7 +143,7 @@ mzworkflows:
     - step: run
       service: avro-upsert-generator
       command: >-
-        --parallelism=40
+        --parallelism=8
         --num-records=20000000
         --distribution=medium
       # No command needed, defaults to benchmark distribution
