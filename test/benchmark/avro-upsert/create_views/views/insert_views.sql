@@ -14,16 +14,13 @@ FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
 ENVELOPE NONE;
 
 CREATE VIEW insertavrotest AS SELECT
-    -- cast("BookId" AS bigint) AS "BookId",
-    -- cast("SecurityId" AS bigint) AS "SecurityId",
-    -- cast("TradingBookId" AS int) AS "TradingBookId",
-    "BookIdUnused" AS BookIdUnused, -- retaining AS long
-    "SecurityIdUnused" AS SecurityIdUnused, -- retaining AS long
-    (("Exposure")."Current"."Long2"."Exposure")::float AS "CurrentLongExposure", -- converting long to float
-    (("Exposure")."Current"."Short2"."Exposure")::float AS "CurrentShortExposure", -- converting long to float
-    (("Exposure")."Target"."Long"."Exposure")::float AS "TargetLongExposure", -- converting long to float
-    (("Exposure")."Target"."Short"."Exposure")::float AS "TargetShortExposure" -- converting long to float
+    "Key1Unused" AS Key1Unused, -- retaining AS long
+    "Key2Unused" AS Key2Unused, -- retaining AS long
+    (("OuterRecord")."Record1"."InnerRecord1"."Point")::float AS "Point1", -- converting long to float
+    (("OuterRecord")."Record1"."InnerRecord2"."Point")::float AS "Point2", -- converting long to float
+    (("OuterRecord")."Record2"."InnerRecord3"."Point")::float AS "Point3", -- converting long to float
+    (("OuterRecord")."Record2"."InnerRecord4"."Point")::float AS "Point4" -- converting long to float
 FROM source_insertavrotest
-WHERE "BookIdUnused" = 0;
+WHERE "Key1Unused" = 0;
 
-CREATE INDEX insertavrotest_index ON insertavrotest(BookIdUnused, SecurityIdUnused);
+CREATE INDEX insertavrotest_index ON insertavrotest(Key1Unused, Key2Unused);

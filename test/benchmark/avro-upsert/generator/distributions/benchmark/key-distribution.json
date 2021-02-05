@@ -1,4 +1,4 @@
 {
-    "com.acme.avro.upsertavrotestkey::BookId": [0, 100],
-    "com.acme.avro.upsertavrotestkey::SecurityId": [0, 250000]
+    "com.acme.avro.upsertavrotestkey::Key1": [0, 100],
+    "com.acme.avro.upsertavrotestkey::Key2": [0, 250000]
 }
