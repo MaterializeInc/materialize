@@ -3162,30 +3162,33 @@ where
         mut expr: MirRelationExpr,
         style: ExprPrepStyle,
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
-        expr = self.optimizer.optimize(expr, self.catalog.indexes())?.0;
-        expr.try_visit_mut(&mut |e| {
-            if let (
-                expr::MirRelationExpr::Filter {
-                    input: _,
-                    predicates,
-                },
-                ExprPrepStyle::Static,
-            ) = (&*e, style)
-            {
-                match dataflow::extract_temporal(predicates.iter().cloned()) {
-                    Err(e) => coord_bail!("{:?}", e),
-                    Ok(_) => Ok(()),
+        if let ExprPrepStyle::Static = style {
+            let mut opt_expr = self.optimizer.optimize(expr, self.catalog.indexes())?;
+            opt_expr.0.try_visit_mut(&mut |e| {
+                if let
+                    expr::MirRelationExpr::Filter {
+                        input: _,
+                        predicates,
+                    }
+                 = &*e
+                {
+                    match dataflow::extract_temporal(predicates.iter().cloned()) {
+                        Err(e) => coord_bail!("{:?}", e),
+                        Ok(_) => Ok(()),
+                    }
+                } else {
+                    e.try_visit_scalars_mut1(&mut |s| Self::prep_scalar_expr(s, style))
                 }
-            } else {
-                e.try_visit_scalars_mut1(&mut |s| Self::prep_scalar_expr(s, style))
-            }
-        })?;
-
-        // TODO (wangandi): Is there anything that optimizes to a
-        // constant expression that originally contains a global get? Is
-        // there anything not containing a global get that cannot be
-        // optimized to a constant expression?
-        Ok(self.optimizer.optimize(expr, self.catalog.indexes())?)
+            })?;
+            Ok(opt_expr)
+        } else {
+            expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
+            // TODO (wangandi): Is there anything that optimizes to a
+            // constant expression that originally contains a global get? Is
+            // there anything not containing a global get that cannot be
+            // optimized to a constant expression?
+            Ok(self.optimizer.optimize(expr, self.catalog.indexes())?)
+        }
     }
 
     /// Prepares a scalar expression for execution by replacing any placeholders
