@@ -36,6 +36,7 @@ use repr::Timestamp;
 use timely::dataflow::Scope;
 use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
+use tokio::sync::mpsc;
 
 use super::source::util::source;
 use crate::logging::materialized::{Logger, MaterializedEvent};
@@ -43,7 +44,7 @@ use crate::operator::StreamExt;
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
 };
-use crate::source::cache::CacheSender;
+use crate::CacheMessage;
 
 mod file;
 mod kafka;
@@ -89,7 +90,7 @@ pub struct SourceConfig<'a, G> {
     /// Data encoding
     pub encoding: DataEncoding,
     /// Channel to send source caching information to cacher thread
-    pub caching_tx: Option<CacheSender>,
+    pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// Timely worker logger for source events
     pub logger: Option<Logger>,
 }
@@ -355,7 +356,7 @@ pub(crate) trait SourceInfo<Out> {
     /// Cache a message
     fn cache_message(
         &self,
-        _caching_tx: &mut Option<CacheSender>,
+        _caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
         _message: &SourceMessage<Out>,
         _timestamp: Timestamp,
         _offset: Option<MzOffset>,

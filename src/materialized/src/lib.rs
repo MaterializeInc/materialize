@@ -13,26 +13,21 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
-use std::any::Any;
 use std::env;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::anyhow;
 use async_stream::try_stream;
 use compile_time_run::run_command_str;
-use futures::channel::mpsc;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
-use tokio::io;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use build_info::BuildInfo;
-use comm::Switchboard;
 use coord::{CacheConfig, LoggingConfig};
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 
@@ -84,12 +79,6 @@ pub struct Config {
     // === Timely and Differential worker options. ===
     /// The number of Timely worker threads that this process should host.
     pub workers: usize,
-    /// The ID of this process in the cluster. IDs must be contiguously
-    /// allocated, starting at zero.
-    pub process: usize,
-    /// The addresses of each process in the cluster, including this node,
-    /// in order of process ID.
-    pub addresses: Vec<SocketAddr>,
     /// The Timely worker configuration.
     pub timely_worker: timely::WorkerConfig,
 
@@ -111,9 +100,8 @@ pub struct Config {
     pub timestamp_frequency: Duration,
 
     // === Connection options. ===
-    /// The IP address and port to listen on -- defaults to 0.0.0.0:<addr_port>,
-    /// where <addr_port> is the address of this process's entry in `addresses`.
-    pub listen_addr: Option<SocketAddr>,
+    /// The IP address and port to listen on.
+    pub listen_addr: SocketAddr,
     /// TLS encryption configuration.
     pub tls: Option<TlsConfig>,
 
@@ -128,14 +116,6 @@ pub struct Config {
     pub experimental_mode: bool,
     /// An optional telemetry endpoint. Use None to disable telemetry.
     pub telemetry_url: Option<String>,
-}
-
-impl Config {
-    /// The total number of Timely workers, across all processes, described by
-    /// the configuration.
-    pub fn total_workers(&self) -> usize {
-        self.workers * self.addresses.len()
-    }
 }
 
 /// Configures TLS encryption for connections.
@@ -164,22 +144,19 @@ impl TlsConfig {
 
 /// Start a `materialized` server.
 pub async fn serve(
-    mut config: Config,
+    config: Config,
     // TODO(benesch): Don't pass runtime explicitly when
     // `Handle::current().block_in_place()` lands. See:
     // https://github.com/tokio-rs/tokio/pull/3097.
     runtime: Arc<Runtime>,
 ) -> Result<Server, anyhow::Error> {
     let start_time = Instant::now();
+    let workers = config.workers;
 
     // Construct shared channels for SQL command and result exchange, and
     // dataflow command and result exchange.
-    let (cmdq_tx, cmd_rx) = mpsc::unbounded();
+    let (cmdq_tx, cmd_rx) = mpsc::unbounded_channel();
     let coord_client = coord::Client::new(cmdq_tx);
-
-    // Extract timely dataflow parameters.
-    let is_primary = config.process == 0;
-    let total_workers = config.total_workers();
 
     // Validate TLS configuration, if present.
     let tls = match &config.tls {
@@ -188,34 +165,18 @@ pub async fn serve(
     };
 
     // Initialize network listener.
-    let listen_addr = config.listen_addr.unwrap_or_else(|| {
-        SocketAddr::new(
-            match config.addresses[config.process].ip() {
-                IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-                IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
-            },
-            config.addresses[config.process].port(),
-        )
-    });
-    let listener = TcpListener::bind(&listen_addr).await?;
+    let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
-    config.addresses[config.process].set_port(local_addr.port());
-
-    let switchboard = Switchboard::new(config.addresses, config.process);
 
     // Launch task to serve connections.
     //
-    // The lifetime of this task is controlled by two triggers that activate on
+    // The lifetime of this task is controlled by a trigger that activates on
     // drop. Draining marks the beginning of the server shutdown process and
     // indicates that new user connections (i.e., pgwire and HTTP connections)
-    // should be rejected. Gracefully handling existing user connections
-    // requires that new system (i.e., switchboard) connections continue to be
-    // routed whiles draining. The shutdown trigger indicates that draining is
-    // complete, so switchboard traffic can cease and the task can exit.
+    // should be rejected. Once all existing user connections have gracefully
+    // terminated, this task exits.
     let (drain_trigger, drain_tripwire) = oneshot::channel();
-    let (shutdown_trigger, shutdown_tripwire) = oneshot::channel();
     tokio::spawn({
-        let switchboard = switchboard.clone();
         async move {
             // TODO(benesch): replace with `listener.incoming()` if that is
             // restored when the `Stream` trait stabilizes.
@@ -226,106 +187,56 @@ pub async fn serve(
                 }
             });
 
-            // The primary is responsible for pgwire and HTTP traffic in
-            // addition to switchboard traffic until draining starts.
-            if is_primary {
-                let mut mux = Mux::new();
-                mux.add_handler(switchboard.clone());
-                mux.add_handler(pgwire::Server::new(tls.clone(), coord_client.clone()));
-                mux.add_handler(http::Server::new(
-                    tls,
-                    coord_client,
-                    start_time,
-                    // TODO(benesch): passing this to `http::Server::new` just
-                    // so it can set a static metric is silly. We should just
-                    // set the metric directly here.
-                    total_workers,
-                ));
-                mux.serve(incoming.by_ref().take_until(drain_tripwire))
-                    .await;
-            }
-
-            // Draining primaries and non-primary servers are only responsible
-            // for switchboard traffic.
             let mut mux = Mux::new();
-            mux.add_handler(switchboard.clone());
-            mux.serve(incoming.take_until(shutdown_tripwire)).await
+            mux.add_handler(pgwire::Server::new(tls.clone(), coord_client.clone()));
+            mux.add_handler(http::Server::new(
+                tls,
+                coord_client,
+                start_time,
+                // TODO(benesch): passing this to `http::Server::new` just
+                // so it can set a static metric is silly. We should just
+                // set the metric directly here.
+                workers,
+            ));
+            mux.serve(incoming.by_ref().take_until(drain_tripwire))
+                .await;
         }
     });
 
-    let dataflow_conns = switchboard
-        .rendezvous(Duration::from_secs(30))
-        .await?
-        .into_iter()
-        .map(|conn| match conn {
-            None => Ok(None),
-            Some(conn) => {
-                let conn = conn.into_inner().into_std()?;
-                // Tokio will have put the stream into non-blocking mode.
-                // Undo that, since Timely wants blocking TCP streams.
-                conn.set_nonblocking(false)?;
-                Ok(Some(conn))
-            }
-        })
-        .collect::<Result<_, io::Error>>()?;
-
-    // Launch dataflow workers.
-    let dataflow_guard = dataflow::serve(
-        dataflow::Config {
-            workers: config.workers,
-            process: config.process,
+    // Initialize coordinator.
+    let (coord_thread, cluster_id) = coord::serve(
+        coord::Config {
+            cmd_rx,
+            workers,
             timely_worker: config.timely_worker,
-        },
-        dataflow_conns,
-        switchboard.clone(),
-    )
-    .map_err(|s| anyhow!("{}", s))?;
-
-    // Initialize coordinator, but only on the primary.
-    //
-    // Note that the coordinator must be initialized *after* launching the
-    // dataflow workers, as booting the coordinator can involve sending enough
-    // data to workers to fill up a `comm` channel buffer (#3280).
-    let coord_thread = if is_primary {
-        let (handle, cluster_id) = coord::serve(
-            coord::Config {
-                switchboard,
-                cmd_rx,
-                total_workers,
-                symbiosis_url: config.symbiosis_url.as_deref(),
-                logging: config.logging,
-                data_directory: &config.data_directory,
-                timestamp: coord::TimestampConfig {
-                    frequency: config.timestamp_frequency,
-                },
-                cache: config.cache,
-                logical_compaction_window: config.logical_compaction_window,
-                experimental_mode: config.experimental_mode,
-                build_info: &BUILD_INFO,
+            symbiosis_url: config.symbiosis_url.as_deref(),
+            logging: config.logging,
+            data_directory: &config.data_directory,
+            timestamp: coord::TimestampConfig {
+                frequency: config.timestamp_frequency,
             },
-            runtime,
-        )
-        .await?;
+            cache: config.cache,
+            logical_compaction_window: config.logical_compaction_window,
+            experimental_mode: config.experimental_mode,
+            build_info: &BUILD_INFO,
+        },
+        runtime,
+    )
+    .await?;
 
-        // Start a task that checks for the latest version and prints a warning if it
-        // finds a different version than currently running.
-        if let Some(telemetry_url) = config.telemetry_url {
-            tokio::spawn(version_check::check_version_loop(
-                telemetry_url,
-                cluster_id.to_string(),
-            ));
-        }
-        Some(handle.join_on_drop())
-    } else {
-        None
-    };
+    // Start a task that checks for the latest version and prints a warning if
+    // it finds a different version than currently running.
+    if let Some(telemetry_url) = config.telemetry_url {
+        tokio::spawn(version_check::check_version_loop(
+            telemetry_url,
+            cluster_id.to_string(),
+        ));
+    }
 
     Ok(Server {
         local_addr,
         _drain_trigger: drain_trigger,
-        _dataflow_guard: Box::new(dataflow_guard),
-        _coord_thread: coord_thread,
-        _shutdown_trigger: shutdown_trigger,
+        _coord_thread: coord_thread.join_on_drop(),
     })
 }
 
@@ -334,9 +245,7 @@ pub struct Server {
     local_addr: SocketAddr,
     // Drop order matters for these fields.
     _drain_trigger: oneshot::Sender<()>,
-    _dataflow_guard: Box<dyn Any>,
-    _coord_thread: Option<JoinOnDropHandle<()>>,
-    _shutdown_trigger: oneshot::Sender<()>,
+    _coord_thread: JoinOnDropHandle<()>,
 }
 
 impl Server {

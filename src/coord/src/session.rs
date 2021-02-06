@@ -309,7 +309,7 @@ pub enum PortalState {
     NotStarted,
     /// Portal is a rows-returning statement in progress with 0 or more rows
     /// remaining.
-    InProgress(Option<Box<RowBatchStream>>),
+    InProgress(Option<RowBatchStream>),
     /// Portal has completed and should not be re-executed. If the optional string
     /// is present, it is returned as a CommandComplete tag, otherwise an error
     /// is sent.
@@ -317,7 +317,7 @@ pub enum PortalState {
 }
 
 /// A stream of batched rows.
-pub type RowBatchStream = Box<dyn Stream<Item = Result<Vec<Row>, comm::Error>> + Send + Unpin>;
+pub type RowBatchStream = Box<dyn Stream<Item = Vec<Row>> + Send + Unpin>;
 
 /// The transaction status of a session. Postgres' transaction states are in
 /// backend/access/transam/xact.c.

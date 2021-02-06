@@ -18,13 +18,9 @@ use std::time::Duration;
 
 use bytes::BytesMut;
 use fallible_iterator::FallibleIterator;
-use ore::collections::CollectionExt;
-use pgrepr::{Numeric, Record};
-use postgres::binary_copy::BinaryCopyOutIter;
-use repr::adt::decimal::Significand;
-
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::future;
 use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
+use postgres::binary_copy::BinaryCopyOutIter;
 use postgres::config::SslMode;
 use postgres::error::SqlState;
 use postgres::types::Type;
@@ -32,7 +28,13 @@ use postgres::SimpleQueryMessage;
 use postgres_array::{Array, Dimension};
 use postgres_openssl::MakeTlsConnector;
 use tokio::runtime::Runtime;
-use util::PostgresErrorExt;
+use tokio::sync::mpsc;
+
+use ore::collections::CollectionExt;
+use pgrepr::{Numeric, Record};
+use repr::adt::decimal::Significand;
+
+use crate::util::PostgresErrorExt;
 
 pub mod util;
 
@@ -170,12 +172,15 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
             .dbname("newdb")
             .connect(postgres::NoTls)
             .await?;
-        let (notice_tx, mut notice_rx) = futures::channel::mpsc::unbounded();
-        tokio::spawn(
-            stream::poll_fn(move |cx| conn.poll_message(cx))
-                .map_err(|e| panic!(e))
-                .forward(notice_tx),
-        );
+        let (notice_tx, mut notice_rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(msg) = future::poll_fn(|cx| conn.poll_message(cx)).await {
+                match msg {
+                    Ok(msg) => notice_tx.send(msg).unwrap(),
+                    Err(e) => panic!(e),
+                }
+            }
+        });
 
         assert_eq!(
             client
@@ -188,7 +193,7 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
         client.batch_execute("CREATE TABLE v (i INT)").await?;
         client.batch_execute("INSERT INTO v VALUES (1)").await?;
 
-        match notice_rx.next().await {
+        match notice_rx.recv().await {
             Some(tokio_postgres::AsyncMessage::Notice(n)) => {
                 assert_eq!(*n.code(), SqlState::SUCCESSFUL_COMPLETION);
                 assert_eq!(n.message(), "session database \'newdb\' does not exist");

@@ -20,27 +20,29 @@ use std::cmp;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::{TryFrom, TryInto};
 use std::iter;
+use std::mem;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
-use anyhow::Context;
-use dataflow_types::SinkEnvelope;
+use anyhow::{anyhow, Context};
+use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::future::{self, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::future::{self, FutureExt, TryFutureExt};
+use futures::stream::{self, StreamExt};
+use timely::communication::WorkerGuards;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::{Handle, Runtime};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use uuid::Uuid;
 
 use build_info::BuildInfo;
-use dataflow::source::cache::CacheSender;
 use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
+use dataflow_types::SinkEnvelope;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, SinkConnector,
     SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
@@ -93,6 +95,7 @@ use crate::util::ClientTransmitter;
 mod arrangement_state;
 mod dataflow_builder;
 
+#[derive(Debug)]
 pub enum Message {
     Command(Command),
     Worker(WorkerFeedbackWithMeta),
@@ -102,20 +105,27 @@ pub enum Message {
     Shutdown,
 }
 
+#[derive(Debug)]
 pub struct AdvanceSourceTimestamp {
     pub id: SourceInstanceId,
     pub update: TimestampSourceUpdate,
 }
 
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct StatementReady {
     pub session: Session,
+    #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub result: Result<sql::ast::Statement<Raw>, CoordError>,
     pub params: Params,
 }
 
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct SinkConnectorReady {
     pub session: Session,
+    #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub id: GlobalId,
     pub oid: u32,
@@ -128,13 +138,10 @@ pub struct LoggingConfig {
     pub log_logging: bool,
 }
 
-pub struct Config<'a, C>
-where
-    C: comm::Connection,
-{
-    pub switchboard: comm::Switchboard<C>,
-    pub cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>,
-    pub total_workers: usize,
+pub struct Config<'a> {
+    pub workers: usize,
+    pub timely_worker: timely::WorkerConfig,
+    pub cmd_rx: mpsc::UnboundedReceiver<Command>,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
@@ -146,13 +153,9 @@ where
 }
 
 /// Glues the external world to the Timely workers.
-pub struct Coordinator<C>
-where
-    C: comm::Connection,
-{
-    switchboard: comm::Switchboard<C>,
-    broadcast_tx: comm::broadcast::Sender<SequencedCommand>,
-    total_workers: usize,
+pub struct Coordinator {
+    worker_guards: WorkerGuards<()>,
+    worker_txs: Vec<crossbeam_channel::Sender<SequencedCommand>>,
     optimizer: Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
@@ -167,7 +170,7 @@ where
     logging_granularity: Option<u64>,
     // Channel to communicate source status updates and shutdown notifications to the cacher
     // thread.
-    cache_tx: Option<CacheSender>,
+    cache_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -183,10 +186,11 @@ where
     cancel: HashMap<u32, Arc<watch::Sender<Cancelled>>>,
 }
 
-impl<C> Coordinator<C>
-where
-    C: comm::Connection,
-{
+impl Coordinator {
+    fn num_workers(&self) -> usize {
+        self.worker_txs.len()
+    }
+
     /// Assign a timestamp for a read.
     fn get_read_ts(&mut self) -> Timestamp {
         let ts = self.get_ts();
@@ -271,7 +275,7 @@ where
                         // Should it not be the same logical compaction window
                         // that everything else uses?
                         self.indexes
-                            .insert(*id, Frontiers::new(self.total_workers, Some(1_000)));
+                            .insert(*id, Frontiers::new(self.num_workers(), Some(1_000)));
                     } else {
                         self.ship_dataflow(self.dataflow_builder().build_index_dataflow(*id))
                             .await?;
@@ -365,19 +369,16 @@ where
     /// You must call `bootstrap` before calling this method.
     async fn serve(
         mut self,
-        cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>,
-        feedback_rx: comm::mpsc::Receiver<WorkerFeedbackWithMeta>,
+        cmd_rx: mpsc::UnboundedReceiver<Command>,
+        feedback_rx: mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
     ) {
-        let (internal_cmd_tx, internal_cmd_stream) = futures::channel::mpsc::unbounded();
+        let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
 
-        let cmd_stream = cmd_rx
+        let cmd_stream = UnboundedReceiverStream::new(cmd_rx)
             .map(Message::Command)
             .chain(stream::once(future::ready(Message::Shutdown)));
 
-        let feedback_stream = feedback_rx.map(|r| match r {
-            Ok(m) => Message::Worker(m),
-            Err(e) => panic!("coordinator feedback receiver failed: {}", e),
-        });
+        let feedback_stream = UnboundedReceiverStream::new(feedback_rx).map(Message::Worker);
 
         let (ts_tx, ts_rx) = std::sync::mpsc::channel();
         let mut timestamper =
@@ -391,9 +392,9 @@ where
 
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
-            // (`internal_cmd_stream` and `feedback_stream`) before processing
+            // (`internal_cmd_rx` and `feedback_stream`) before processing
             // external commands (`cmd_stream`).
-            internal_cmd_stream.boxed(),
+            UnboundedReceiverStream::new(internal_cmd_rx).boxed(),
             feedback_stream.boxed(),
             cmd_stream.boxed(),
         ]);
@@ -431,13 +432,9 @@ where
                         > self.closed_up_to / self.logging_granularity.unwrap()
             {
                 if next_ts > self.closed_up_to {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::AdvanceAllLocalInputs {
-                            advance_to: next_ts,
-                        },
-                    )
-                    .await;
+                    self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
+                        advance_to: next_ts,
+                    });
                     self.closed_up_to = next_ts;
                 }
             }
@@ -494,7 +491,7 @@ where
             result,
             params,
         }: StatementReady,
-        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
+        internal_cmd_tx: &mpsc::UnboundedSender<Message>,
     ) {
         match future::ready(result)
             .and_then(|stmt| self.handle_statement(&session, stmt, &params))
@@ -552,31 +549,20 @@ where
 
     async fn message_shutdown(&mut self, ts_tx: &std::sync::mpsc::Sender<TimestampMessage>) {
         ts_tx.send(TimestampMessage::Shutdown).unwrap();
-
-        if let Some(cache_tx) = &mut self.cache_tx {
-            cache_tx
-                .send(CacheMessage::Shutdown)
-                .await
-                .expect("failed to send shutdown message to caching thread");
-        }
-        broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown).await;
+        self.broadcast(SequencedCommand::Shutdown);
     }
 
     async fn message_advance_source_timestamp(
         &mut self,
         AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
     ) {
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::AdvanceSourceTimestamp { id, update },
-        )
-        .await;
+        self.broadcast(SequencedCommand::AdvanceSourceTimestamp { id, update });
     }
 
     async fn message_command(
         &mut self,
         cmd: Command,
-        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
+        internal_cmd_tx: &mpsc::UnboundedSender<Message>,
     ) {
         match cmd {
             Command::Startup {
@@ -750,7 +736,7 @@ where
                             },
                         }
 
-                        let mut internal_cmd_tx = internal_cmd_tx.clone();
+                        let internal_cmd_tx = internal_cmd_tx.clone();
                         tokio::spawn(async move {
                             let result = sql::pure::purify(stmt).await.map_err(|e| e.into());
                             internal_cmd_tx
@@ -760,7 +746,6 @@ where
                                     result,
                                     params,
                                 }))
-                                .await
                                 .expect("sending to internal_cmd_tx cannot fail");
                         });
                     }
@@ -907,14 +892,8 @@ where
         self.since_updates
             .retain(|(_, frontier)| frontier != &Antichain::new());
         if !self.since_updates.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::AllowCompaction(std::mem::replace(
-                    &mut self.since_updates,
-                    Vec::new(),
-                )),
-            )
-            .await;
+            let since_updates = mem::take(&mut self.since_updates);
+            self.broadcast(SequencedCommand::AllowCompaction(since_updates));
         }
     }
 
@@ -1023,11 +1002,7 @@ where
     /// the named `conn_id`.
     async fn handle_cancel(&mut self, conn_id: u32) {
         // Tell dataflow to cancel any pending peeks.
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::CancelPeek { conn_id },
-        )
-        .await;
+        self.broadcast(SequencedCommand::CancelPeek { conn_id });
 
         // Inform the session (if it asks) about the cancellation.
         if let Some(cancel) = self.cancel.get_mut(&conn_id) {
@@ -1107,14 +1082,10 @@ where
                 timestamp,
             })
             .collect();
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::Insert {
-                id: index_id,
-                updates,
-            },
-        )
-        .await;
+        self.broadcast(SequencedCommand::Insert {
+            id: index_id,
+            updates,
+        });
     }
 
     async fn report_database_update(
@@ -1492,7 +1463,7 @@ where
 
     async fn sequence_plan(
         &mut self,
-        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
+        internal_cmd_tx: &mpsc::UnboundedSender<Message>,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         pcx: PlanContext,
@@ -1945,7 +1916,7 @@ where
     async fn sequence_create_sink(
         &mut self,
         pcx: PlanContext,
-        mut internal_cmd_tx: futures::channel::mpsc::UnboundedSender<Message>,
+        internal_cmd_tx: mpsc::UnboundedSender<Message>,
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
         name: FullName,
@@ -2023,7 +1994,6 @@ where
                     result: sink_connector::build(connector_builder, with_snapshot, frontier, id)
                         .await,
                 }))
-                .await
                 .expect("sending to internal_cmd_tx cannot fail");
         });
     }
@@ -2201,8 +2171,7 @@ where
                     if let Some(cache_tx) = &mut self.cache_tx {
                         cache_tx
                             .send(CacheMessage::DropSource(*id))
-                            .await
-                            .expect("failed to send DROP SOURCE to cache thread");
+                            .expect("cache receiver should not drop first");
                     }
                 }
                 ExecuteResponse::DroppedSource
@@ -2288,11 +2257,7 @@ where
                                 })
                                 .collect();
 
-                            broadcast(
-                                &mut self.broadcast_tx,
-                                SequencedCommand::Insert { id, updates },
-                            )
-                            .await;
+                            self.broadcast(SequencedCommand::Insert { id, updates });
                         }
                     }
                 }
@@ -2351,7 +2316,7 @@ where
             // Choose a timestamp for all workers to use in the peek.
             // We minimize over all participating views, to ensure that the query will not
             // need to block on the arrival of further input data.
-            let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.total_workers);
+            let (rows_tx, rows_rx) = mpsc::unbounded_channel();
 
             // Extract any surrounding linear operators to determine if we can simply read
             // out the contents from an existing arrangement.
@@ -2414,46 +2379,41 @@ where
                 self.ship_dataflow(dataflow).await?;
             }
 
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::Peek {
-                    id: index_id,
-                    key: literal_row,
-                    conn_id,
-                    tx: rows_tx,
-                    timestamp,
-                    finishing: finishing.clone(),
-                    map_filter_project,
-                },
-            )
-            .await;
+            self.broadcast(SequencedCommand::Peek {
+                id: index_id,
+                key: literal_row,
+                conn_id,
+                tx: rows_tx,
+                timestamp,
+                finishing: finishing.clone(),
+                map_filter_project,
+            });
 
             if !fast_path {
                 self.drop_indexes(vec![index_id]).await;
             }
 
-            let rows_rx = rows_rx
-                .try_fold(PeekResponse::Rows(vec![]), |memo, resp| {
+            let rows_rx = UnboundedReceiverStream::new(rows_rx)
+                .fold(PeekResponse::Rows(vec![]), |memo, resp| async {
                     match (memo, resp) {
                         (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
                             memo.extend(rows);
-                            future::ok(PeekResponse::Rows(memo))
+                            PeekResponse::Rows(memo)
                         }
                         (PeekResponse::Error(e), _) | (_, PeekResponse::Error(e)) => {
-                            future::ok(PeekResponse::Error(e))
+                            PeekResponse::Error(e)
                         }
                         (PeekResponse::Canceled, _) | (_, PeekResponse::Canceled) => {
-                            future::ok(PeekResponse::Canceled)
+                            PeekResponse::Canceled
                         }
                     }
                 })
-                .map_ok(move |mut resp| {
+                .map(move |mut resp| {
                     if let PeekResponse::Rows(rows) = &mut resp {
                         finishing.finish(rows)
                     }
                     resp
-                })
-                .err_into();
+                });
 
             ExecuteResponse::SendingRows(Box::pin(rows_rx))
         };
@@ -2491,7 +2451,7 @@ where
         );
         let sink_id = self.catalog.allocate_id()?;
         session.add_drop_sink(sink_id);
-        let (tx, rx) = self.switchboard.mpsc_limited(self.total_workers);
+        let (tx, rx) = mpsc::unbounded_channel();
 
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
             sink_name,
@@ -3115,18 +3075,10 @@ where
         }
 
         if !sources_to_drop.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::DropSources(sources_to_drop),
-            )
-            .await;
+            self.broadcast(SequencedCommand::DropSources(sources_to_drop));
         }
         if !sinks_to_drop.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::DropSinks(sinks_to_drop),
-            )
-            .await;
+            self.broadcast(SequencedCommand::DropSinks(sinks_to_drop));
         }
         if !indexes_to_drop.is_empty() {
             self.drop_indexes(indexes_to_drop).await;
@@ -3137,11 +3089,7 @@ where
 
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
         if !dataflow_names.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::DropSinks(dataflow_names),
-            )
-            .await
+            self.broadcast(SequencedCommand::DropSinks(dataflow_names));
         }
     }
 
@@ -3153,11 +3101,7 @@ where
             }
         }
         if !trace_keys.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::DropIndexes(trace_keys),
-            )
-            .await
+            self.broadcast(SequencedCommand::DropIndexes(trace_keys))
         }
     }
 
@@ -3244,7 +3188,7 @@ where
         // a compaction frontier of at least `since`.
         for (global_id, _description, _typ) in dataflow.index_exports.iter() {
             let mut frontiers =
-                Frontiers::new(self.total_workers, self.logical_compaction_window_ms);
+                Frontiers::new(self.num_workers(), self.logical_compaction_window_ms);
             frontiers.advance_since(&since);
             self.indexes.insert(*global_id, frontiers);
         }
@@ -3299,12 +3243,18 @@ where
         transform::optimize_dataflow(&mut dataflow);
 
         // Finalize the dataflow by broadcasting its construction to all workers.
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::CreateDataflows(vec![dataflow]),
-        )
-        .await;
+        self.broadcast(SequencedCommand::CreateDataflows(vec![dataflow]));
         Ok(())
+    }
+
+    fn broadcast(&self, cmd: SequencedCommand) {
+        for tx in &self.worker_txs {
+            tx.send(cmd.clone())
+                .expect("worker command receiver should not drop first")
+        }
+        for handle in self.worker_guards.guards() {
+            handle.thread().unpark()
+        }
     }
 
     // Tell the cacher to start caching data for `id` if that source
@@ -3320,8 +3270,7 @@ where
                             self.catalog.config().cluster_id,
                             id,
                         ))
-                        .await
-                        .expect("failed to send CREATE SOURCE notification to caching thread");
+                        .expect("caching receiver should not drop first");
                 } else {
                     log::error!(
                         "trying to create a cached source ({}) but caching is disabled.",
@@ -3348,11 +3297,11 @@ where
 ///
 /// To gracefully shut down the coordinator, send a `Message::Shutdown` to the
 /// `cmd_rx` in the configuration, then join on the thread.
-pub async fn serve<C>(
+pub async fn serve(
     Config {
-        switchboard,
+        workers,
+        timely_worker,
         cmd_rx,
-        total_workers,
         symbiosis_url,
         logging,
         data_directory,
@@ -3361,124 +3310,90 @@ pub async fn serve<C>(
         logical_compaction_window,
         experimental_mode,
         build_info,
-    }: Config<'_, C>,
+    }: Config<'_>,
     // TODO(benesch): Don't pass runtime explicitly when
     // `Handle::current().block_in_place()` lands. See:
     // https://github.com/tokio-rs/tokio/pull/3097.
     runtime: Arc<Runtime>,
-) -> Result<(JoinHandle<()>, Uuid), CoordError>
-where
-    C: comm::Connection,
-{
-    let mut broadcast_tx = switchboard.broadcast_tx(dataflow::BroadcastToken);
-
-    // First, configure the dataflow workers as directed by our configuration.
-    // These operations must all be infallible.
-
-    let (feedback_tx, feedback_rx) = switchboard.mpsc_limited(total_workers);
-    broadcast(
-        &mut broadcast_tx,
-        SequencedCommand::EnableFeedback(feedback_tx),
-    )
-    .await;
-
-    if let Some(config) = &logging {
-        broadcast(
-            &mut broadcast_tx,
-            SequencedCommand::EnableLogging(DataflowLoggingConfig {
-                granularity_ns: config.granularity.as_nanos(),
-                active_logs: BUILTINS
-                    .logs()
-                    .map(|src| (src.variant.clone(), src.index_id))
-                    .collect(),
-                log_logging: config.log_logging,
-            }),
-        )
-        .await;
-    }
-
+) -> Result<(JoinHandle<()>, Uuid), CoordError> {
+    let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
     let cache_tx = if let Some(cache_config) = &cache_config {
-        let (cache_tx, cache_rx) = switchboard.mpsc();
-        broadcast(
-            &mut broadcast_tx,
-            SequencedCommand::EnableCaching(cache_tx.clone()),
-        )
-        .await;
-        let cache_tx = cache_tx
-            .connect()
-            .await
-            .expect("failed to connect cache tx");
-
+        let (cache_tx, cache_rx) = mpsc::unbounded_channel();
         let mut cacher = Cacher::new(cache_rx, cache_config.clone());
         tokio::spawn(async move { cacher.run().await });
-
         Some(cache_tx)
     } else {
         None
     };
 
-    // Then perform fallible operations, like opening the catalog. If these
-    // fail, we are careful to tell the dataflow layer to shutdown.
-    let coord = async {
-        let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
-            Some(symbiosis::Postgres::open_and_erase(symbiosis_url).await?)
-        } else {
-            None
-        };
-
-        let path = data_directory.join("catalog");
-        let (catalog, initial_catalog_events) = Catalog::open(&catalog::Config {
-            path: &path,
-            experimental_mode: Some(experimental_mode),
-            enable_logging: logging.is_some(),
-            cache_directory: cache_config.map(|c| c.path),
-            build_info,
-        })?;
-        let cluster_id = catalog.config().cluster_id;
-
-        let mut coord = Coordinator {
-            broadcast_tx: switchboard.broadcast_tx(dataflow::BroadcastToken),
-            switchboard: switchboard.clone(),
-            total_workers,
-            optimizer: Default::default(),
-            catalog,
-            symbiosis,
-            indexes: ArrangementFrontiers::default(),
-            since_updates: Vec::new(),
-            logging_granularity: logging.and_then(|c| c.granularity.as_millis().try_into().ok()),
-            timestamp_config,
-            logical_compaction_window_ms: logical_compaction_window
-                .map(duration_to_timestamp_millis),
-            cache_tx,
-            closed_up_to: 1,
-            read_lower_bound: 1,
-            last_op_was_read: false,
-            need_advance: true,
-            transient_id_counter: 1,
-            cancel: HashMap::new(),
-        };
-        coord.bootstrap(initial_catalog_events).await?;
-        Ok((coord, cluster_id))
+    let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
+        Some(symbiosis::Postgres::open_and_erase(symbiosis_url).await?)
+    } else {
+        None
     };
-    let (coord, cluster_id) = match coord.await {
-        Ok((coord, cluster_id)) => (coord, cluster_id),
-        Err(e) => {
-            broadcast(&mut broadcast_tx, SequencedCommand::Shutdown).await;
-            return Err(e);
+
+    let path = data_directory.join("catalog");
+    let (catalog, initial_catalog_events) = Catalog::open(&catalog::Config {
+        path: &path,
+        experimental_mode: Some(experimental_mode),
+        enable_logging: logging.is_some(),
+        cache_directory: cache_config.map(|c| c.path),
+        build_info,
+    })?;
+    let cluster_id = catalog.config().cluster_id;
+
+    let (worker_txs, worker_rxs): (Vec<_>, Vec<_>) =
+        (0..workers).map(|_| crossbeam_channel::unbounded()).unzip();
+    let worker_guards = dataflow::serve(dataflow::Config {
+        command_receivers: worker_rxs,
+        timely_worker,
+    })
+    .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
+    let mut coord = Coordinator {
+        worker_guards,
+        worker_txs,
+        optimizer: Default::default(),
+        catalog,
+        symbiosis,
+        indexes: ArrangementFrontiers::default(),
+        since_updates: Vec::new(),
+        logging_granularity: logging
+            .as_ref()
+            .and_then(|c| c.granularity.as_millis().try_into().ok()),
+        timestamp_config,
+        logical_compaction_window_ms: logical_compaction_window.map(duration_to_timestamp_millis),
+        cache_tx,
+        closed_up_to: 1,
+        read_lower_bound: 1,
+        last_op_was_read: false,
+        need_advance: true,
+        transient_id_counter: 1,
+        cancel: HashMap::new(),
+    };
+    coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
+    if let Some(config) = &logging {
+        coord.broadcast(SequencedCommand::EnableLogging(DataflowLoggingConfig {
+            granularity_ns: config.granularity.as_nanos(),
+            active_logs: BUILTINS
+                .logs()
+                .map(|src| (src.variant.clone(), src.index_id))
+                .collect(),
+            log_logging: config.log_logging,
+        }));
+    }
+    if let Some(cache_tx) = &coord.cache_tx {
+        coord.broadcast(SequencedCommand::EnableCaching(cache_tx.clone()));
+    }
+    match coord.bootstrap(initial_catalog_events).await {
+        Ok(()) => {
+            let coord = thread::spawn(move || runtime.block_on(coord.serve(cmd_rx, feedback_rx)));
+            Ok((coord, cluster_id))
         }
-    };
-
-    // From this point on, this function must not fail! If you add a new
-    // fallible operation, ensure it is in the async block above.
-
-    // The future returned by `Coordinator::serve` does not implement `Send` as
-    // it holds various non-thread-safe state across await points. This means we
-    // can't use `tokio::spawn`, but instead have to spawn a dedicated thread to
-    // run the future.
-    Ok((
-        thread::spawn(move || runtime.block_on(coord.serve(cmd_rx, feedback_rx))),
-        cluster_id,
-    ))
+        Err(e) => {
+            coord.broadcast(SequencedCommand::Shutdown);
+            Err(e)
+        }
+    }
 }
 
 /// The styles in which an expression can be prepared.
@@ -3495,18 +3410,11 @@ enum ExprPrepStyle {
     OneShot { logical_time: u64 },
 }
 
-async fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedCommand) {
-    // TODO(benesch): avoid flushing after every send.
-    tx.send(cmd).await.unwrap();
-}
-
 /// Constructs an [`ExecuteResponse`] that that will send some rows to the
 /// client immediately, as opposed to asking the dataflow layer to send along
 /// the rows after some computation.
 fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
-    let (tx, rx) = futures::channel::oneshot::channel();
-    tx.send(PeekResponse::Rows(rows)).unwrap();
-    ExecuteResponse::SendingRows(Box::pin(rx.err_into()))
+    ExecuteResponse::SendingRows(Box::pin(async { PeekResponse::Rows(rows) }))
 }
 
 fn auto_generate_primary_idx(

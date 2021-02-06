@@ -22,10 +22,7 @@ pub struct DataflowBuilder<'a> {
     indexes: &'a ArrangementFrontiers<Timestamp>,
 }
 
-impl<C> Coordinator<C>
-where
-    C: comm::Connection,
-{
+impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
     pub fn dataflow_builder(&self) -> DataflowBuilder {
         DataflowBuilder {

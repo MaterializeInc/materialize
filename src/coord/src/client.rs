@@ -10,8 +10,7 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use futures::SinkExt;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, oneshot, watch};
 
 use sql::ast::{Raw, Statement};
 use sql::plan::Params;
@@ -28,12 +27,12 @@ use crate::session::{EndTransactionAction, Session};
 /// They can be cheaply cloned.
 #[derive(Debug, Clone)]
 pub struct Client {
-    cmd_tx: futures::channel::mpsc::UnboundedSender<Command>,
+    cmd_tx: mpsc::UnboundedSender<Command>,
 }
 
 impl Client {
     /// Constructs a new client.
-    pub fn new(cmd_tx: futures::channel::mpsc::UnboundedSender<Command>) -> Client {
+    pub fn new(cmd_tx: mpsc::UnboundedSender<Command>) -> Client {
         Client { cmd_tx }
     }
 
@@ -79,18 +78,16 @@ impl Client {
     pub async fn cancel_request(&mut self, conn_id: u32) {
         self.cmd_tx
             .send(Command::CancelRequest { conn_id })
-            .await
             .expect("coordinator unexpectedly canceled request")
     }
 
     async fn send<T, F>(&mut self, f: F) -> T
     where
-        F: FnOnce(futures::channel::oneshot::Sender<T>) -> Command,
+        F: FnOnce(oneshot::Sender<T>) -> Command,
     {
-        let (tx, rx) = futures::channel::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(f(tx))
-            .await
             .expect("coordinator unexpectedly gone");
         rx.await.expect("coordinator unexpectedly canceled request")
     }
@@ -243,7 +240,6 @@ impl SessionClient {
             self.inner
                 .cmd_tx
                 .send(Command::Terminate { session })
-                .await
                 .expect("coordinator unexpectedly gone");
         }
     }
@@ -255,7 +251,7 @@ impl SessionClient {
 
     async fn send<T, F>(&mut self, f: F) -> Result<T, CoordError>
     where
-        F: FnOnce(futures::channel::oneshot::Sender<Response<T>>, Session) -> Command,
+        F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
     {
         let session = self.session.take().expect("session invariant violated");
         let res = self.inner.send(|tx| f(tx, session)).await;

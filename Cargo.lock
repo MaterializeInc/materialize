@@ -488,28 +488,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "comm"
-version = "0.0.0"
-dependencies = [
- "assert_cmd",
- "backtrace",
- "bincode",
- "bytes",
- "futures",
- "log",
- "num_enum",
- "ore",
- "predicates",
- "rand 0.8.3",
- "serde",
- "structopt",
- "tokio",
- "tokio-serde",
- "tokio-util",
- "uuid",
-]
-
-[[package]]
 name = "compile-time-run"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -553,7 +531,7 @@ dependencies = [
  "byteorder",
  "ccsr",
  "chrono",
- "comm",
+ "crossbeam-channel",
  "datadriven",
  "dataflow",
  "dataflow-types",
@@ -585,6 +563,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-postgres",
+ "tokio-stream",
  "transform",
  "unicase",
  "url",
@@ -774,7 +753,7 @@ dependencies = [
  "bincode",
  "byteorder",
  "ccsr",
- "comm",
+ "crossbeam-channel",
  "csv-core",
  "dataflow-types",
  "differential-dataflow",
@@ -827,7 +806,6 @@ dependencies = [
  "anyhow",
  "aws-util",
  "ccsr",
- "comm",
  "expr",
  "globset",
  "interchange",
@@ -840,6 +818,7 @@ dependencies = [
  "serde_json",
  "serde_regex",
  "timely",
+ "tokio",
  "url",
  "uuid",
 ]
@@ -944,18 +923,6 @@ dependencies = [
  "once_cell",
  "os_pipe",
  "shared_child",
-]
-
-[[package]]
-name = "educe"
-version = "0.4.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7260c7e6e656fc7702a1aa8d5b498a1a69aa84ac4ffcd5501b7d26939f368a93"
-dependencies = [
- "enum-ordinalize",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -1069,19 +1036,6 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c30ea541ff8aec761976f2eadf20371fa06fbc0f2cb2f8fb505a7f1340d459a0"
 dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "enum-ordinalize"
-version = "3.1.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1676e1daadfd216bda88d3a6fedd1bf53b829a085f5cc4d81c6f3054f50ef983"
-dependencies = [
- "num-bigint 0.3.1",
- "num-traits",
  "proc-macro2",
  "quote",
  "syn",
@@ -1948,9 +1902,9 @@ dependencies = [
  "cfg-if 1.0.0",
  "chrono",
  "clap",
- "comm",
  "compile-time-run",
  "coord",
+ "crossbeam-channel",
  "datadriven",
  "dataflow",
  "dataflow-types",
@@ -2234,7 +2188,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf4825417e1e1406b3782a8ce92f4d53f26ec055e3622e1881ca8e9f5f9e08db"
 dependencies = [
- "num-bigint 0.2.6",
+ "num-bigint",
  "num-complex",
  "num-integer",
  "num-iter",
@@ -2247,17 +2201,6 @@ name = "num-bigint"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "090c7f9998ee0ff65aa5b723e4009f7b217707f1fb5ea551329cc4d6231fb304"
-dependencies = [
- "autocfg",
- "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "num-bigint"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e9a41747ae4633fce5adffb4d2e81ffc5e89593cb19917f8fb2cc5ff76507bf"
 dependencies = [
  "autocfg",
  "num-integer",
@@ -2302,7 +2245,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da4dc79f9e6c81bef96148c8f6b8e72ad4541caa4a24373e900a36da07de03a3"
 dependencies = [
  "autocfg",
- "num-bigint 0.2.6",
+ "num-bigint",
  "num-integer",
  "num-traits",
 ]
@@ -2663,7 +2606,6 @@ dependencies = [
  "byteorder",
  "bytes",
  "chrono",
- "comm",
  "coord",
  "dataflow-types",
  "expr",
@@ -2682,6 +2624,7 @@ dependencies = [
  "sql",
  "tokio",
  "tokio-openssl",
+ "tokio-stream",
  "tokio-util",
 ]
 
@@ -3890,7 +3833,6 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "chrono",
- "comm",
  "expr",
  "fallible-iterator",
  "futures",
@@ -4392,21 +4334,6 @@ dependencies = [
  "socket2",
  "tokio",
  "tokio-util",
-]
-
-[[package]]
-name = "tokio-serde"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "911a61637386b789af998ee23f50aa30d5fd7edcec8d6d3dedae5e5815205466"
-dependencies = [
- "bincode",
- "bytes",
- "educe",
- "futures-core",
- "futures-sink",
- "pin-project 1.0.1",
- "serde",
 ]
 
 [[package]]

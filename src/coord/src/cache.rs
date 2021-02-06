@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use futures::stream::StreamExt;
 use log::{error, info, trace};
 use tokio::select;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use dataflow::source::cache::RecordFileMetadata;
@@ -185,16 +185,16 @@ impl Source {
 }
 
 pub struct Cacher {
-    rx: Option<comm::mpsc::Receiver<CacheMessage>>,
+    rx: mpsc::UnboundedReceiver<CacheMessage>,
     sources: HashMap<GlobalId, Source>,
     disabled_sources: HashSet<GlobalId>,
     pub config: CacheConfig,
 }
 
 impl Cacher {
-    pub fn new(rx: comm::mpsc::Receiver<CacheMessage>, config: CacheConfig) -> Self {
+    pub fn new(rx: mpsc::UnboundedReceiver<CacheMessage>, config: CacheConfig) -> Self {
         Cacher {
-            rx: Some(rx),
+            rx,
             sources: HashMap::new(),
             disabled_sources: HashSet::new(),
             config,
@@ -204,31 +204,15 @@ impl Cacher {
     async fn cache(&mut self) -> Result<(), anyhow::Error> {
         // We need to bound the amount of time spent reading from the data channel to ensure we
         // don't neglect our other tasks of writing the data down.
-        let mut rx_stream = self
-            .rx
-            .take()
-            .unwrap()
-            .map(|m| match m {
-                Ok(m) => m,
-                Err(_) => panic!("cacher thread failed to read from channel"),
-            })
-            .fuse();
-
         let mut interval = tokio::time::interval(CACHE_FLUSH_INTERVAL);
         loop {
             select! {
-                data = rx_stream.next() => {
-                    let shutdown = if let Some(data) = data {
+                data = self.rx.recv() => {
+                    if let Some(data) = data {
                         self.handle_cache_message(data)?
                     } else {
-                        // TODO not sure if this should be a stronger error
-                        error!("Source caching thread receiver hung up. Shutting down caching.");
                         break;
-                   };
-
-                   if shutdown {
-                       break;
-                   }
+                    }
                 }
                 _ = interval.tick() => {
                     for (_, s) in self.sources.iter_mut() {
@@ -242,8 +226,8 @@ impl Cacher {
         Ok(())
     }
 
-    /// Process a new CacheMessage and return true if we should halt processing.
-    fn handle_cache_message(&mut self, data: CacheMessage) -> Result<bool, anyhow::Error> {
+    /// Process a new CacheMessage.
+    fn handle_cache_message(&mut self, data: CacheMessage) -> Result<(), anyhow::Error> {
         match data {
             CacheMessage::Data(data) => {
                 if !self.sources.contains_key(&data.source_id) {
@@ -267,7 +251,7 @@ impl Cacher {
                         );
                     }
 
-                    return Ok(false);
+                    return Ok(());
                 }
 
                 if let Some(source) = self.sources.get_mut(&data.source_id) {
@@ -281,12 +265,12 @@ impl Cacher {
                             "Received signal to enable caching for {} but it is already cached. Ignoring.",
                             source_id
                         );
-                    return Ok(false);
+                    return Ok(());
                 }
 
                 if self.disabled_sources.contains(&source_id) {
                     error!("Received signal to enable caching for {} but it has already been disabled. Ignoring.", source_id);
-                    return Ok(false);
+                    return Ok(());
                 }
 
                 // Create a new subdirectory to store this source's data.
@@ -324,12 +308,8 @@ impl Cacher {
                     info!("Disabled caching for source: {}", id);
                 }
             }
-            CacheMessage::Shutdown => {
-                return Ok(true);
-            }
-        };
-
-        Ok(false)
+        }
+        Ok(())
     }
 
     pub async fn run(&mut self) {

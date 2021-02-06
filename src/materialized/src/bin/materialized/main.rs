@@ -21,12 +21,12 @@ use std::cmp;
 use std::env;
 use std::ffi::CStr;
 use std::fmt;
-use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::fs;
+use std::io;
+use std::net::SocketAddr;
 use std::panic;
 use std::panic::PanicInfo;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use backtrace::Backtrace;
 use clap::AppSettings;
 use itertools::Itertools;
@@ -80,29 +80,6 @@ struct Args {
     /// Number of dataflow worker threads.
     #[structopt(short, long, env = "MZ_WORKERS", value_name = "N", default_value)]
     workers: WorkerCount,
-    /// Identity of this node in the cluster.
-    #[structopt(
-        short,
-        long,
-        env = "MZ_PROCESS",
-        value_name = "INDEX",
-        default_value = "0"
-    )]
-    process: usize,
-    /// Total number of nodes in the cluster.
-    #[structopt(
-        short = "n",
-        long,
-        env = "MZ_PROCESSES",
-        value_name = "N",
-        default_value = "1"
-    )]
-    processes: usize,
-    /// Text file containing the addresses of the nodes in the cluster.
-    ///
-    /// The addresses should be specified one per line.
-    #[structopt(short, long, env = "MZ_ADDRESSES", value_name = "PATH")]
-    addresses: Option<PathBuf>,
     /// Log Timely logging itself.
     #[structopt(long, hidden = true)]
     debug_timely_logging: bool,
@@ -143,8 +120,13 @@ struct Args {
     log_file: Option<String>,
     // == Connection options.
     /// The address on which to listen for connections.
-    #[structopt(long, env = "MZ_LISTEN_ADDR", value_name = "HOST:PORT")]
-    listen_addr: Option<SocketAddr>,
+    #[structopt(
+        long,
+        env = "MZ_LISTEN_ADDR",
+        value_name = "HOST:PORT",
+        default_value = "0.0.0.0:6875"
+    )]
+    listen_addr: SocketAddr,
     /// Certificate file for TLS connections.
     #[structopt(long, env = "MZ_TLS_CERT", requires = "tls-key", value_name = "PATH")]
     tls_cert: Option<PathBuf>,
@@ -239,19 +221,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     }
 
     // Configure Timely and Differential workers.
-    if args.process >= args.processes {
-        bail!(
-            "process ID {} is not between 0 and {}",
-            args.process,
-            args.processes
-        );
-    }
-    let addresses = match &args.addresses {
-        None => (0..args.processes)
-            .map(|i| SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6875 + i as u16))
-            .collect(),
-        Some(addresses) => read_address_file(addresses, args.processes)?,
-    };
     let log_logging = args.debug_timely_logging;
     let logging = args
         .logging_granularity
@@ -442,8 +411,6 @@ swap: {swap_total}KB total, {swap_used}KB used",
     let server = runtime.block_on(materialized::serve(
         materialized::Config {
             workers: args.workers.0,
-            process: args.process,
-            addresses,
             timely_worker,
             logging,
             logical_compaction_window: args.logical_compaction_window,
@@ -524,28 +491,6 @@ For more details, see https://materialize.com/docs/cli#experimental-mode
     loop {
         thread::park();
     }
-}
-
-fn read_address_file(path: &Path, n: usize) -> Result<Vec<SocketAddr>, anyhow::Error> {
-    let file =
-        File::open(path).with_context(|| format!("opening address file {}", path.display()))?;
-    let mut lines = BufReader::new(file).lines();
-    let addrs = lines.by_ref().take(n).collect::<Result<Vec<_>, _>>()?;
-    if addrs.len() < n || lines.next().is_some() {
-        bail!("address file does not contain exactly {} lines", n);
-    }
-    Ok(addrs
-        .into_iter()
-        .map(|addr| match addr.to_socket_addrs() {
-            // TODO(benesch): we should try all possible addresses, not just the
-            // first (#502).
-            Ok(mut addrs) => match addrs.next() {
-                Some(addr) => Ok(addr),
-                None => Err(anyhow!("{} did not resolve to any addresses", addr)),
-            },
-            Err(err) => Err(anyhow!("error resolving {}: {}", addr, err)),
-        })
-        .collect::<Result<Vec<_>, _>>()?)
 }
 
 lazy_static! {
