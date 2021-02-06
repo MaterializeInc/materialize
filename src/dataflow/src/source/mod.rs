@@ -541,8 +541,13 @@ impl ConsistencyInfo {
                         for (pid, entries) in entries {
                             source.ensure_has_partition(self, pid.clone());
 
+                            let existing_ts = self.partition_metadata.get(pid).unwrap().ts;
                             // Check whether timestamps can be closed on this partition
-                            while let Some((partition_count, ts, offset)) = entries.front() {
+                            for (partition_count, ts, offset) in entries {
+                                if existing_ts >= *ts {
+                                    //skip old records
+                                    continue;
+                                }
                                 let partition_start_offset = self.get_partition_start_offset(pid);
                                 assert!(
                                     *offset >= partition_start_offset,
