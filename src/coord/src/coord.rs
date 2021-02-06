@@ -3165,12 +3165,10 @@ where
         if let ExprPrepStyle::Static = style {
             let mut opt_expr = self.optimizer.optimize(expr, self.catalog.indexes())?;
             opt_expr.0.try_visit_mut(&mut |e| {
-                if let
-                    expr::MirRelationExpr::Filter {
-                        input: _,
-                        predicates,
-                    }
-                 = &*e
+                if let expr::MirRelationExpr::Filter {
+                    input: _,
+                    predicates,
+                } = &*e
                 {
                     match dataflow::extract_temporal(predicates.iter().cloned()) {
                         Err(e) => coord_bail!("{:?}", e),

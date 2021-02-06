@@ -60,7 +60,9 @@ impl FoldConstants {
                 }
 
                 // Guard against evaluating expression that may contain temporal expressions.
-                if group_key.iter().any(|e| e.contains_temporal()) || aggregates.iter().any(|a| a.expr.contains_temporal()) {
+                if group_key.iter().any(|e| e.contains_temporal())
+                    || aggregates.iter().any(|a| a.expr.contains_temporal())
+                {
                     return Ok(());
                 }
 
@@ -302,7 +304,10 @@ impl FoldConstants {
                     .all(|i| matches!(i, MirRelationExpr::Constant { .. }))
                 {
                     // Guard against evaluating expression that may contain temporal expressions.
-                    if equivalences.iter().any(|equiv| equiv.iter().any(|e| e.contains_temporal())) {
+                    if equivalences
+                        .iter()
+                        .any(|equiv| equiv.iter().any(|e| e.contains_temporal()))
+                    {
                         return Ok(());
                     }
 
