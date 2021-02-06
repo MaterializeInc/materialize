@@ -43,4 +43,3 @@ select * from intervals where mz_logical_timestamp() between a and b AS OF 11;
 query II rowsort
 select * from intervals where mz_logical_timestamp() between a and b AS OF 14;
 ----
-
