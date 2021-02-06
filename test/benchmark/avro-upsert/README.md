@@ -5,55 +5,30 @@ assumes that Kafka topics should have 30 partitions and that you want 16 worker 
 
 ## Running the Avro Upsert Test
 
-Download `genavro_400m_v2_out.gz`, unzip it, and copy it into the directory called `data` in the
-current directory. Then run:
+To run the spec benchmark, please ensure that your machine has 16 cores and at least 96GB of
+memory. Then run the following command:
 
-    ./mzcompose run test-upsert-performance
+    ./mzcompose run benchmark
 
-Navigate to `http://localhost:3000` to see the Kafka ingest performance.
+There is also a version of this benchmark that uses the same load generator, but a different set
+of views that avoid exercising the upsert operator. This gives a good comparative benchmark to see
+how much slower the upsert operator is:
 
-## Analyzing Ingest Performance
+    ./mzcompose run benchmark-insert-filter
 
-Create a Python script that knows how many messages are in the Kafka Topics. Record the initial
-time when the benchmark starts. Wait until `mz_kafka_messages_ingested` is equal to the total
-number of messages in Kafka. Record the end time. Run a query to get the time-series data for
-dataflow events read over time and consumer lag by partition over time.
+If you're running on a smaller machine, such as a laptop with 8 cores / 32GB of memory, you can
+run the version of this benchmark designed for smaller machines:
 
-Print a summary total time taken and messages ingested per second.
+    ./mzcompose run benchmark-medium
 
-Dump these into a format where we can compare them against previous runs.
+## Looking at Performance
 
-Initially, only compare runs on the same machine (or machine type). Gather num processors, amount
-of memory and other metrics. Gather the host name. Assign each run a unique identifier.
+Each benchmark will output something like the following:
 
-Create a loop to vary parameters of interest, including:
-
-    Number of worker threads **** Do this one first
-    Number of unique keys in the dataset
-    Number of messages inserted into the topic
-    Number of partitions in the topic
-    Size of messages, by varying the number of fields in the payload
-
-### Metrics to gather
-
-#### Kafka Messages Ingested
-
-To grab the total number of messages ingested, run:
-
-```
-curl 'http://localhost:49226/api/v1/query?query=sum(mz_kafka_messages_ingested)'
+```sh
+SUCCESS! Benchmark finished in settled 766 seconds, 522193.21148825064 rows/sec
+View performance metrics here: http://localhost:3000/d/materialize-overview/materialize-overview?from=1612572459000&to=1612573285000&tz=UTC
 ```
 
-#### Consumer Lag
-
-```
-topk(50, clamp_min(
-            mz_kafka_partition_offset_max - mz_kafka_partition_offset_ingested,
-    0))
-```
-
-#### Messages Ingested by Format
-
-```
-rate(mz_dataflow_events_read_total[$__interval])
-```
+The Grafana link will display performance metrics for materialize during the entirety of the
+benchmark run.

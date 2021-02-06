@@ -135,6 +135,7 @@ mzworkflows:
     - step: wait
       service: metric-verifier
       expected_return_code: 0
+      print_logs: true
 
   benchmark-medium:
     env:
@@ -169,6 +170,7 @@ mzworkflows:
     - step: wait
       service: metric-verifier
       expected_return_code: 0
+      print_logs: true
 
   benchmark-insert-with-filter:
     steps:
@@ -201,6 +203,7 @@ mzworkflows:
     - step: wait
       service: metric-verifier
       expected_return_code: 0
+      print_logs: true
 
   ci:
     steps:
@@ -232,6 +235,9 @@ mzworkflows:
     - step: wait
       service: metric-verifier
       expected_return_code: 0
+      print_logs: true
+    - step: down
+      destroy_volumes: true
 
   run-generator:
     steps:
