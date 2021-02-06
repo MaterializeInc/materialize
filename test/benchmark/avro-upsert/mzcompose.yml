@@ -124,7 +124,17 @@ mzworkflows:
         --parallelism=40
       # No command needed, defaults to benchmark distribution
     - step: run
+      service: metric-verifier
+      daemon: true
+      command: >-
+        --timeout-seconds=900
+        "sum(mz_messages_ingested)"
+        "400000000"
+    - step: run
       service: create-views
+    - step: wait
+      service: metric-verifier
+      expected_return_code: 0
 
   benchmark-medium:
     env:
@@ -148,13 +158,17 @@ mzworkflows:
         --distribution=medium
       # No command needed, defaults to benchmark distribution
     - step: run
-      service: create-views
-    - step: run
       service: metric-verifier
+      daemon: true
       command: >-
         --timeout-seconds=900
         "sum(mz_messages_ingested)"
         "20000000"
+    - step: run
+      service: create-views
+    - step: wait
+      service: metric-verifier
+      expected_return_code: 0
 
   benchmark-insert-with-filter:
     steps:
@@ -174,9 +188,19 @@ mzworkflows:
         --parallelism=40
       # No command needed, defaults to benchmark distribution
     - step: run
+      service: metric-verifier
+      daemon: true
+      command: >-
+        --timeout-seconds=900
+        "sum(mz_messages_ingested)"
+        "400000000"
+    - step: run
       service: create-views
       command: >-
         insert_views.sql
+    - step: wait
+      service: metric-verifier
+      expected_return_code: 0
 
   ci:
     steps:
