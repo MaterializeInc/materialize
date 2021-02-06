@@ -127,8 +127,6 @@ pub enum TimestampMessage {
 /// Timestamp consumer: wrapper around source consumers that stores necessary information
 /// about topics and offset for real-time consistency
 struct RtTimestampConsumer {
-    // The connector field is never read back because we dont currently delete consumers
-    #[allow(dead_code)]
     connector: RtTimestampConnector,
 }
 
@@ -824,11 +822,17 @@ impl Timestamper {
                 }
                 TimestampMessage::Drop(id) => {
                     info!("Dropping Timestamping for Source {}.", id);
-
-                    // TODO: we can only remove the consumer when we actually drop the source
-                    // TODO: not going to bother keeping track of source instances rn
-                    // The proper fix is to delete when we drop the source
-                    // self.byo_sources.remove(&id);
+                    if let Some(RtTimestampConsumer {
+                        connector:
+                            RtTimestampConnector::Kafka(RtKafkaConnector {
+                                coordination_state, ..
+                            }),
+                        ..
+                    }) = self.rt_sources.remove(&id)
+                    {
+                        coordination_state.stop.store(true, Ordering::SeqCst);
+                    }
+                    self.byo_sources.remove(&id);
                 }
                 TimestampMessage::Shutdown => return true,
             }

@@ -3313,7 +3313,12 @@ where
         } else {
             ts_tx
                 .send(TimestampMessage::Drop(source_id))
-                .expect("Failed to send Drop Instance notice to timestamper");
+                .expect("Failed to send DROP Instance notice to timestamper");
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::DropSourceTimestamping { id: source_id },
+            )
+            .await;
         }
     }
 

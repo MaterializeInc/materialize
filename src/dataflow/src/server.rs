@@ -142,6 +142,11 @@ pub enum SequencedCommand {
         /// The associated update (RT or BYO)
         update: TimestampSourceUpdate,
     },
+    /// Drop all timestamping info for a source
+    DropSourceTimestamping {
+        /// The ID id of the formerly timestamped source.
+        id: GlobalId,
+    },
     /// Advance all local inputs to the given timestamp.
     AdvanceAllLocalInputs {
         /// The timestamp to advance to.
@@ -820,6 +825,14 @@ where
                             }
                         }
                     }
+                }
+            }
+            SequencedCommand::DropSourceTimestamping { id } => {
+                let mut timestamps = self.render_state.ts_histories.borrow_mut();
+                let prev = timestamps.remove(&id);
+
+                if prev.is_none() {
+                    log::debug!("Attempted to drop timestamping for source {} that was not previously known", id);
                 }
             }
         }
