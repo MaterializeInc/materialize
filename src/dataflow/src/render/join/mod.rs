@@ -84,7 +84,7 @@ impl JoinClosure {
         equivalences: &mut Vec<Vec<MirScalarExpr>>,
         mfp: &mut MapFilterProject,
     ) -> Self {
-        // First, determine which columns should be compare due to `equivalences`.
+        // First, determine which columns should be compared due to `equivalences`.
         let mut ready_equivalences = Vec::new();
         for equivalence in equivalences.iter_mut() {
             if let Some(pos) = equivalence
@@ -164,6 +164,7 @@ impl JoinClosure {
             && mfp.predicates.is_empty()
             && mfp.projection.len() == columns.len()
             && mfp.projection.iter().all(|col| columns.contains_key(col))
+            && columns.keys().all(|col| mfp.projection.contains(col))
         {
             // The projection we want to apply to `before`  comes to us from `mfp` in the
             // extended output column reckoning.
