@@ -276,7 +276,10 @@
 
   - signature: mz_logical_timestamp() -> numeric
     description: 'The logical time at which a query executes.<br/><br/>**NOTE**: Users
-      cannot define views with queries containing `mz_logical_timestamp()`.'
+      cannot generally define views with queries containing `mz_logical_timestamp()`.
+      The use of `mz_logical_timestamp()`is permitted only if it occurs in WHERE clauses,
+      and only in certain inequalities. For more information, consult the documentation
+      for [temporal filters](/doc/developer/temporal-filters.md)'
 
   - signature: now() -> timestamptz
     description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
