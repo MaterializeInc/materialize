@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+
+import itertools
+import os
+import subprocess
+
+def rev_parse(git_ref):
+    if not git_ref:
+        return git_ref
+    return subprocess.check_output(['git', 'rev-parse', git_ref]).strip().decode()
+
+def run_matrix(worker_counts, git_revisions):
+
+    subprocess.check_call(['./mzcompose', 'run', 'setup-benchmark'])
+
+    for (worker_count, git_revision) in itertools.product(worker_counts, git_revisions):
+
+        child_env = os.environ.copy()
+        child_env['MZ_WORKERS'] = str(worker_count)
+        child_env['MZ_QUIET'] = "true"
+        if git_revision:
+            child_env['MZBUILD_MATERIALIZED_TAG'] = f'unstable-{git_revision}'
+
+        print(f'Run experiment: {worker_count} workers, {git_revision} git_revision')
+        output = subprocess.check_output(['./mzcompose', 'run', 'run-benchmark'], env=child_env,
+                stderr=subprocess.STDOUT)
+        for line in output.decode().splitlines():
+            if line.startswith("SUCCESS!"):
+                print(line)
+
+if __name__ == '__main__':
+
+    worker_counts = [24, 20, 16, 15, 12, 10, 8, 4, 2, 1]
+    git_revisions = [rev_parse(ref) for ref in ['origin/main', None]]
+
+    run_matrix(worker_counts, git_revisions)

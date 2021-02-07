@@ -239,12 +239,51 @@ mzworkflows:
     - step: down
       destroy_volumes: true
 
+  setup-benchmark:
+    steps:
+    - step: start-services
+      services: [dashboard]
+    - step: start-services
+      services: [kafka, schema-registry]
+    - step: wait-for-tcp
+      host: kafka
+      port: 9092
+    - step: wait-for-tcp
+      host: schema-registry
+      port: 8081
+    - step: run
+      service: avro-upsert-generator
+      command: >-
+        --parallelism=40
+        --num-records=400000000
+
+  run-benchmark:
+    steps:
+    - step: remove-services
+      services: [materialized]
+      destroy_volumes: true
+    - step: start-services
+      services: [materialized]
+    - step: run
+      service: metric-verifier
+      daemon: true
+      command: >-
+        --timeout-seconds=3600
+        "sum(mz_messages_ingested)"
+        "400000000"
+    - step: run
+      service: create-views
+    - step: wait
+      service: metric-verifier
+      expected_return_code: 0
+      print_logs: true
+
   run-generator:
     steps:
     - step: run
       service: avro-upsert-generator
 
-  restart-materialized:
+  rerun-benchmark:
     steps:
     - step: remove-services
       services: [materialized]

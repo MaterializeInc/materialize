@@ -32,3 +32,19 @@ View performance metrics here: http://localhost:3000/d/materialize-overview/mate
 
 The Grafana link will display performance metrics for materialize during the entirety of the
 benchmark run.
+
+## Running Many Benchmarks
+
+There is a script, `./matrix_bench`, that will repeatedly run the benchmark most suitable
+for your machine (either `benchmark` or `benchmark-medium`), starting from 1 worker thread, to 16
+worker threads. You can also supply multiple git revisions if you want to compare builds against
+each other. This will take quite some time to run, but at the end, it will produce a CSV that
+looks like the following:
+
+    GIT_REVISION,MZ_WORKERS,INGEST_RATE,GRAFANA_DASHBOARD
+    HEAD,16,522193,http://localhost:3000/d/materialize-overview/materialize-overview?from=1612572459000&to=1612573285000&tz=UTC
+
+If you prefer to run with a different configuration, such as number of workers, you can provide
+the `--worker-values` argument:
+
+    ./matrix_bench --worker-values=16,8,4,2,1 --git-revisions=HEAD,origin/main
