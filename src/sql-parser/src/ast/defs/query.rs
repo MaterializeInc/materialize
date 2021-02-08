@@ -51,8 +51,28 @@ pub trait AstInfo: Clone {
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
 pub struct Raw;
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum RawName {
+    Name(ObjectName),
+    Id(u64, ObjectName),
+}
+
+impl AstDisplay for RawName {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            RawName::Name(o) => f.write_node(o),
+            RawName::Id(id, o) => {
+                f.write_str(format!("[{} AS", id));
+                f.write_node(o);
+                f.write_str("]");
+            }
+        }
+    }
+}
+impl_display!(RawName);
+
 impl AstInfo for Raw {
-    type Table = ObjectName;
+    type Table = RawName;
     type Id = ();
 }
 

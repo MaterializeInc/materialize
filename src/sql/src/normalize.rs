@@ -26,7 +26,7 @@ use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType, Function,
-    FunctionArgs, Ident, IfExistsBehavior, ObjectName, Query, Raw, SqlOption, Statement,
+    FunctionArgs, Ident, IfExistsBehavior, ObjectName, Query, Raw, RawName, SqlOption, Statement,
     TableFactor, Value,
 };
 
@@ -186,8 +186,8 @@ pub fn create_statement(
 
         fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Raw>) {
             match table_factor {
-                TableFactor::Table { name, alias } => {
-                    self.visit_object_name_mut(name);
+                TableFactor::Table { name, alias, .. } => {
+                    self.visit_table_mut(name);
                     if let Some(alias) = alias {
                         self.visit_table_alias_mut(alias);
                     }
@@ -236,7 +236,9 @@ pub fn create_statement(
         }
 
         fn visit_table_mut(&mut self, table: &'ast mut <Raw as AstInfo>::Table) {
-            self.visit_object_name_mut(table);
+            match table {
+                RawName::Name(n) | RawName::Id(_, n) => self.visit_object_name_mut(n),
+            }
         }
 
         fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType) {

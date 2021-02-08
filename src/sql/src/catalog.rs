@@ -109,6 +109,9 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
     ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a>;
 
     /// Gets an item by its ID.
+    fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
+
+    /// Gets an item by its ID.
     ///
     /// Panics if `id` does not specify a valid item.
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem;
@@ -376,6 +379,10 @@ impl Catalog for DummyCatalog {
     }
 
     fn get_item_by_id(&self, _: &GlobalId) -> &dyn CatalogItem {
+        unimplemented!();
+    }
+
+    fn try_get_item_by_id(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
         unimplemented!();
     }
 
