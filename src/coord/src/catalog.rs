@@ -1013,6 +1013,48 @@ impl Catalog {
         }
     }
 
+    pub fn custom_oid_dependencies(&self, item: &CatalogItem) -> Option<Vec<u32>> {
+        match item {
+            CatalogItem::Table(Table { desc, .. }) | CatalogItem::Source(Source { desc, .. }) => {
+                Some(desc.typ().custom_type_oids())
+            }
+            CatalogItem::View(View { optimized_expr, .. }) => {
+                Some(optimized_expr.clone().into_inner().typ().custom_type_oids())
+            }
+            CatalogItem::Index(Index { on, keys, .. }) => {
+                let typ = self
+                    .by_id
+                    .get(on)
+                    .expect("index missing underlying object")
+                    .desc()
+                    .expect("catalog entry missing description")
+                    .typ();
+                Some(
+                    keys.iter()
+                        .filter_map(|k| k.typ(typ).custom_type_oid())
+                        .collect(),
+                )
+            }
+            CatalogItem::Func(Func { inner, .. }) => Some(inner.custom_type_oid()),
+            CatalogItem::Sink(Sink { from, .. }) => {
+                let from_entry = self.by_id.get(&from).expect("missing upstream");
+                self.custom_oid_dependencies(&from_entry.item)
+            }
+            _ => None, // CatalogItem::Type always has GlobalId references to its dependencies.
+        }
+    }
+
+    pub fn entry_dependencies(&self, entry: &CatalogEntry) -> Vec<GlobalId> {
+        let mut dependencies = entry.uses();
+        if let Some(custom_oids) = self.custom_oid_dependencies(&entry.item) {
+            for oid in custom_oids {
+                let id = self.by_oid.get(&oid).expect("missing");
+                dependencies.push(id.clone())
+            }
+        }
+        dependencies
+    }
+
     #[must_use]
     pub fn insert_item(
         &mut self,
@@ -1032,7 +1074,7 @@ impl Catalog {
             oid,
             used_by: Vec::new(),
         };
-        for u in entry.uses() {
+        for u in self.entry_dependencies(&entry) {
             match self.by_id.get_mut(&u) {
                 Some(metadata) => metadata.used_by.push(entry.id),
                 None => panic!(
@@ -1558,7 +1600,7 @@ impl Catalog {
                     if !metadata.item.is_placeholder() {
                         info!("drop {} {} ({})", metadata.item_type(), metadata.name, id);
                     }
-                    for u in metadata.uses() {
+                    for u in self.entry_dependencies(&metadata) {
                         if let Some(dep_metadata) = self.by_id.get_mut(&u) {
                             dep_metadata.used_by.retain(|u| *u != metadata.id)
                         }

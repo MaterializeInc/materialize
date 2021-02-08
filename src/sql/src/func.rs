@@ -682,6 +682,19 @@ impl ParamList {
         }
     }
 
+    fn custom_arg_oids(&self) -> Vec<u32> {
+        match self {
+            ParamList::Exact(p) => p.iter().filter_map(|p| p.custom_oid()).collect::<Vec<_>>(),
+            ParamList::Variadic(p) => {
+                if let Some(custom_oid) = p.custom_oid() {
+                    vec![custom_oid]
+                } else {
+                    vec![]
+                }
+            }
+        }
+    }
+
     /// Generates values for `mz_catalog.mz_functions.variadic_id`.
     fn variadic_oid(&self) -> Option<u32> {
         match self {
@@ -809,6 +822,18 @@ impl ParamType {
             ParamType::ListElementAny => postgres_types::Type::ANYELEMENT.oid(),
             ParamType::MapAny => pgrepr::MAP.oid(),
             ParamType::NonVecAny => postgres_types::Type::ANYNONARRAY.oid(),
+        }
+    }
+
+    fn custom_oid(&self) -> Option<u32> {
+        match self {
+            ParamType::Plain(ScalarType::List { custom_oid, .. })
+            | ParamType::Plain(ScalarType::Map { custom_oid, .. })
+                if custom_oid.is_some() =>
+            {
+                *custom_oid
+            }
+            _ => None,
         }
     }
 }
@@ -1242,6 +1267,23 @@ impl Func {
             Func::Scalar(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
             Func::Aggregate(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
             Func::Table(impls) => impls.iter().map(|f| f.details()).collect::<Vec<_>>(),
+        }
+    }
+
+    pub fn custom_type_oid(&self) -> Vec<u32> {
+        match self {
+            Func::Scalar(impls) => impls
+                .iter()
+                .flat_map(|i| i.params.custom_arg_oids())
+                .collect(),
+            Func::Aggregate(impls) => impls
+                .iter()
+                .flat_map(|i| i.params.custom_arg_oids())
+                .collect(),
+            Func::Table(impls) => impls
+                .iter()
+                .flat_map(|i| i.params.custom_arg_oids())
+                .collect(),
         }
     }
 }

@@ -820,6 +820,21 @@ impl<'a> ScalarType {
             _ => false,
         }
     }
+
+    pub fn custom_type_oid(&self) -> Option<u32> {
+        use ScalarType::*;
+        match self {
+            List {
+                element_type: _,
+                custom_oid,
+            }
+            | Map {
+                value_type: _,
+                custom_oid,
+            } => custom_oid.clone(),
+            _ => None,
+        }
+    }
 }
 
 // TODO(benesch): the implementations of PartialEq and Hash for ScalarType can

@@ -332,6 +332,25 @@ unknown catalog item 'j2'
 
 > DROP SOURCE s5;
 
+# https://github.com/MaterializeInc/materialize/issues/5577
+> CREATE TYPE int4_list AS LIST (element_type=int4)
+
+> CREATE VIEW v1 AS SELECT CAST('{2}' AS int4_list);
+
+! DROP TYPE int4_list
+cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+
+> DROP VIEW v1
+
+> CREATE TABLE t1 (custom int4_list)
+
+! DROP TYPE int4_list
+cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.t1'
+
+> DROP TABLE t1
+
+> DROP TYPE int4_list
+
 #cleanup
 > DROP SINK s1;
 

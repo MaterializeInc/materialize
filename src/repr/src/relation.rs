@@ -52,6 +52,10 @@ impl ColumnType {
         self.nullable = nullable;
         self
     }
+
+    pub fn custom_type_oid(&self) -> Option<u32> {
+        self.scalar_type.custom_type_oid()
+    }
 }
 
 /// The type of a relation.
@@ -113,6 +117,13 @@ impl RelationType {
         } else {
             (0..self.column_types.len()).collect()
         }
+    }
+
+    pub fn custom_type_oids(&self) -> Vec<u32> {
+        self.column_types
+            .iter()
+            .filter_map(|ct| ct.custom_type_oid())
+            .collect()
     }
 }
 
