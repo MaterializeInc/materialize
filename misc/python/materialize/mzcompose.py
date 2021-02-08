@@ -1190,7 +1190,9 @@ class DownStep(WorkflowStep):
 
 @Steps.register("wait")
 class WaitStep(WorkflowStep):
-    def __init__(self, *, service: str, expected_return_code: int, print_logs: bool = False) -> None:
+    def __init__(
+        self, *, service: str, expected_return_code: int, print_logs: bool = False
+    ) -> None:
         """Wait for the container with name service to exit"""
         self._expected_return_code = expected_return_code
         self._service = service
