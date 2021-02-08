@@ -41,7 +41,7 @@ rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
 serde = { version = "1.0.123", features = ["derive"] }
-serde_json = "1.0.60"
+serde_json = "1.0.62"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.2.0", features = ["fs", "rt"] }
 tokio-util = { version = "0.6.3", features = ["codec"] }
