@@ -65,6 +65,7 @@ fn datadriven() {
                                 Vec::<Option<String>>::new(),
                             ),
                             defaults: vec![Expr::null(); 0],
+                            conn_id: None,
                         }),
                     );
                     id += 1;

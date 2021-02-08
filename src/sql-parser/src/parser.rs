@@ -3308,6 +3308,24 @@ impl<'a> Parser<'a> {
                 join: Box::new(table_and_joins),
                 alias: self.parse_optional_table_alias()?,
             })
+        } else if self.consume_token(&Token::LBracket) {
+            let id = self.parse_literal_uint()?;
+            self.expect_keyword(AS)?;
+            let name = self.parse_object_name()?;
+            // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
+            if name.0.len() != 3 {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "name in square brackets must be fully qualified"
+                );
+            }
+            self.expect_token(&Token::RBracket)?;
+
+            Ok(TableFactor::Table {
+                name: RawName::Id(id, name),
+                alias: self.parse_optional_table_alias()?,
+            })
         } else {
             let name = self.parse_object_name()?;
             if self.consume_token(&Token::LParen) {
@@ -3318,7 +3336,7 @@ impl<'a> Parser<'a> {
                 })
             } else {
                 Ok(TableFactor::Table {
-                    name,
+                    name: RawName::Name(name),
                     alias: self.parse_optional_table_alias()?,
                 })
             }

@@ -85,7 +85,7 @@ impl From<FullName> for ObjectName {
 }
 
 /// A partial name of an item in the catalog.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Hash, Eq)]
 pub struct PartialName {
     pub database: Option<String>,
     pub schema: Option<String>,

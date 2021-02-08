@@ -2177,6 +2177,13 @@ impl SqlCatalog for ConnCatalog<'_> {
         )
     }
 
+    fn try_get_item_by_id(&self, id: &GlobalId) -> Option<Box<dyn sql::catalog::CatalogItem>> {
+        match self.catalog.try_get_by_id(*id) {
+            Some(item) => Some(Box::new(item.clone())),
+            None => None,
+        }
+    }
+
     fn get_item_by_id(&self, id: &GlobalId) -> &dyn sql::catalog::CatalogItem {
         self.catalog.get_by_id(id)
     }
