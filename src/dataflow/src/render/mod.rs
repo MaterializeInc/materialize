@@ -969,18 +969,33 @@ where
                     let rows = if worker_index == 0 {
                         rows.clone()
                     } else {
-                        vec![]
+                        Ok(vec![])
                     };
 
-                    let collection = rows
-                        .to_stream(scope)
-                        .map(|(x, diff)| (x, timely::progress::Timestamp::minimum(), diff))
-                        .as_collection();
-
-                    let err_collection = Collection::empty(scope);
+                    let (ok_collection, err_collection) = match rows {
+                        Ok(rows) => {
+                            let oks = rows
+                                .to_stream(scope)
+                                .map(|(x, diff)| (x, timely::progress::Timestamp::minimum(), diff))
+                                .as_collection();
+                            let errs = Collection::empty(scope);
+                            (oks, errs)
+                        }
+                        Err(e) => {
+                            let oks = Collection::empty(scope);
+                            let errs = vec![(
+                                DataflowError::from(e),
+                                timely::progress::Timestamp::minimum(),
+                                1,
+                            )]
+                            .to_stream(scope)
+                            .as_collection();
+                            (oks, errs)
+                        }
+                    };
 
                     self.collections
-                        .insert(relation_expr.clone(), (collection, err_collection));
+                        .insert(relation_expr.clone(), (ok_collection, err_collection));
                 }
 
                 // A get should have been loaded into the context, and it is surprising to

@@ -350,7 +350,7 @@ mod tests {
                     .collect::<Vec<(Row, isize)>>();
 
                 Ok(MirRelationExpr::Constant {
-                    rows,
+                    rows: Ok(rows),
                     typ: parse_type_list(nth(&s, 2)?)?,
                 })
             }

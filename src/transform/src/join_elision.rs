@@ -45,7 +45,11 @@ impl JoinElision {
         } = relation
         {
             inputs.retain(|input| {
-                if let MirRelationExpr::Constant { rows, typ } = &input {
+                if let MirRelationExpr::Constant {
+                    rows: Ok(rows),
+                    typ,
+                } = &input
+                {
                     !(rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1)
                 } else {
                     true

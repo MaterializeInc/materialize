@@ -156,7 +156,7 @@ impl HirRelationExpr {
             Constant { rows, typ } => {
                 // Constant expressions are not correlated with `get_outer`, and should be cross-products.
                 get_outer.product(SR::Constant {
-                    rows: rows.into_iter().map(|row| (row, 1)).collect(),
+                    rows: Ok(rows.into_iter().map(|row| (row, 1)).collect()),
                     typ,
                 })
             }

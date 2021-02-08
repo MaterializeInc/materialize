@@ -10,6 +10,7 @@
 use std::error::Error;
 use std::fmt;
 
+use expr::EvalError;
 use ore::str::StrExt;
 use transform::TransformError;
 
@@ -23,6 +24,8 @@ pub enum CoordError {
     Catalog(catalog::Error),
     /// The specified session parameter is constrained to its current value.
     ConstrainedParameter(&'static (dyn Var + Send + Sync)),
+    /// An error while evaluating an expression.
+    Eval(EvalError),
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
     /// The named operation cannot be run in a transaction.
@@ -89,6 +92,7 @@ impl fmt::Display for CoordError {
                 p.name().quoted(),
                 p.value().quoted()
             ),
+            CoordError::Eval(e) => e.fmt(f),
             CoordError::InvalidParameterType(p) => write!(
                 f,
                 "parameter {} requires a {} value",

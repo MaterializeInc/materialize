@@ -320,7 +320,9 @@ pub mod monotonic {
                 }
                 monotonic
             }
-            MirRelationExpr::Constant { rows, .. } => rows.iter().all(|(_, diff)| diff > &0),
+            MirRelationExpr::Constant { rows: Ok(rows), .. } => {
+                rows.iter().all(|(_, diff)| diff > &0)
+            }
             MirRelationExpr::Threshold { input } => is_monotonic(input, sources),
             // Let and Negate remain
             _ => {
