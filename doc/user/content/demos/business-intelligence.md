@@ -335,7 +335,6 @@ Materialize to maintain for us.
     alt="Materialize real-time business intelligence dashboard in metabase"
 >}}
 
-
 If you want to see more chBench queries, you can repeat these steps for the view
 `query07` or any of the queries listed in our [chBench query index](https://github.com/MaterializeInc/materialize/blob/main/demo/chbench/chbench/mz-default.cfg).
 
