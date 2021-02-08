@@ -331,7 +331,7 @@ Materialize to maintain for us.
    every second.
 
 {{< figure
-    src="/images/demos/materialize_realtime_bi_demo_metabase_700x15.gif"
+    src="https://user-images.githubusercontent.com/11527560/107248709-8f339a00-6a00-11eb-81b5-beb01a95156c.gif"
     alt="Materialize real-time business intelligence dashboard in metabase"
 >}}
 
