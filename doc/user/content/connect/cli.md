@@ -22,7 +22,7 @@ Materialize instances have a user named `materialize` installed, unless you drop
 this user with [`DROP USER`](/sql/drop-user). You can add additional users with
 [`CREATE ROLE`](/sql/create-role).
 
-{{< version-changed v0.6.2 >}}
+{{< version-changed v0.7.0 >}}
 Materialize requires that you name a valid user when you connect. Previously,
 Materialize did not support the concept of roles, so it accepted all user names.
 {{< /version-changed >}}
