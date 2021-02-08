@@ -41,6 +41,7 @@ use repr::{Datum, Row, RowArena, RowPacker};
 /// as there is a relationship between the borrowed lifetime of the closed-over
 /// state and the arguments it takes when invoked. It was not clear how to do
 /// this with a Rust closure (glorious battle was waged, but ultimately lost).
+#[derive(Debug)]
 struct JoinClosure {
     ready_equivalences: Vec<Vec<MirScalarExpr>>,
     before: MapFilterProject,
@@ -206,6 +207,7 @@ impl JoinClosure {
 /// filtering, expressions, projection) and the physical organization of the current stream
 /// of data, which columns may be partially assembled in non-standard locations and which
 /// may already have been partially subjected to logic we need to apply.
+#[derive(Debug)]
 struct JoinBuildState {
     /// Map from expected locations in extended output column reckoning to physical locations.
     column_map: HashMap<usize, usize>,

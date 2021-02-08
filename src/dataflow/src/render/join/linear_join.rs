@@ -120,7 +120,7 @@ where
                         }
                     });
                     joined = j;
-                    errs.concat(&es);
+                    errs = errs.concat(&es);
                 }
             }
 
