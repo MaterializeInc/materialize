@@ -30,7 +30,7 @@ ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 postgres-types = "0.2.0"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
-rand = "0.8.2"
+rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.4.3"
 repr = { path = "../repr" }
