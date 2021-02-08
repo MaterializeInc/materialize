@@ -249,7 +249,7 @@ Materialize to maintain for us.
 1. Check the results of this query:
 
     ```sql
-    SELECT * FROM query07 ORDER BY revenue DESC LIMIT 10;
+    SELECT * FROM query07;
     ```
 
     It can take a few minutes to begin producing answers. Running
