@@ -67,7 +67,7 @@ reqwest = { version = "0.11.0", features = ["json"] }
 rlimit = "0.5.3"
 semver = "0.11.0"
 serde = { version = "1.0.123", features = ["derive"] }
-serde_json = "1.0.0"
+serde_json = "1.0.62"
 shell-words = "1.0.0"
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
@@ -108,7 +108,7 @@ postgres_array = "0.11.0"
 predicates = "1.0.7"
 repr = { path = "../repr" }
 reqwest = { version = "0.11.0", features = ["blocking"] }
-serde_json = "1.0.0"
+serde_json = "1.0.62"
 tokio-postgres = { version = "0.7.0", features = ["with-chrono-0_4"] }
 
 [build-dependencies]

@@ -33,7 +33,7 @@ repr = { path = "../repr" }
 serde = { version = "1.0.123", features = ["derive"] }
 serde-protobuf = { git = "https://github.com/MaterializeInc/serde-protobuf.git", branch = "add-iter-messages" }
 serde-value = "0.7.0"
-serde_json = "1.0.60"
+serde_json = "1.0.62"
 sha2 = "0.9.3"
 smallvec = "1.5.1"
 url = "2.2.0"

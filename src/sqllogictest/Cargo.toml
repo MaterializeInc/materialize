@@ -20,7 +20,7 @@ pgrepr = { path = "../pgrepr" }
 postgres-protocol = "0.6.0"
 regex = "1.4.3"
 repr = { path = "../repr" }
-serde_json = "1.0.0"
+serde_json = "1.0.62"
 sql = { path = "../sql" }
 structopt = "0.3.21"
 tempfile = "3.2.0"
