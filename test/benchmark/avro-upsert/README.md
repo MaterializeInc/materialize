@@ -26,7 +26,7 @@ run the version of this benchmark designed for smaller machines:
 Each benchmark will output something like the following:
 
 ```sh
-SUCCESS! Benchmark finished in settled 766 seconds, 522193.21148825064 rows/sec
+SUCCESS! Benchmark took 766s, 522193 rows/sec
 View performance metrics here: http://localhost:3000/d/materialize-overview/materialize-overview?from=1612572459000&to=1612573285000&tz=UTC
 ```
 
