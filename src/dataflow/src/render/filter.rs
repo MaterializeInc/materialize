@@ -203,7 +203,7 @@ where
         {
             // Attempt to put `MzLogicalTimestamp` in the first argument position.
             if !expr1.contains_temporal()
-                && *expr2 != MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
+                && *expr2 == MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
             {
                 std::mem::swap(&mut expr1, &mut expr2);
                 func = match func {
