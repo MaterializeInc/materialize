@@ -34,6 +34,7 @@ use futures::sink::SinkExt;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::{Handle, Runtime};
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use build_info::BuildInfo;
@@ -79,7 +80,7 @@ use crate::catalog::{
     self, Catalog, CatalogItem, Func, Index, SinkConnectorState, Type, TypeInner,
 };
 use crate::command::{
-    Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
+    Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
 use crate::error::CoordError;
 use crate::session::{
@@ -158,10 +159,6 @@ where
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
     since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
-    /// For each connection running a TAIL command, the name of the dataflow
-    /// that is servicing the TAIL. A connection can only run one TAIL at a
-    /// time.
-    active_tails: HashMap<u32, GlobalId>,
     timestamp_config: TimestampConfig,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
@@ -181,6 +178,9 @@ where
     /// TODO(justin): this is a hack, and does not work right with TAIL.
     need_advance: bool,
     transient_id_counter: u64,
+    /// Map from connection id to a tokio::sync::watch sender that can be used to
+    /// signal to the receiver end that a cancel message has been sent.
+    cancel: HashMap<u32, Arc<watch::Sender<Cancelled>>>,
 }
 
 impl<C> Coordinator<C>
@@ -579,7 +579,11 @@ where
         internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
     ) {
         match cmd {
-            Command::Startup { session, tx } => {
+            Command::Startup {
+                session,
+                cancel_tx,
+                tx,
+            } => {
                 if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
                     let _ = tx.send(Response {
                         result: Err(e.into()),
@@ -604,6 +608,8 @@ where
                 {
                     messages.push(StartupMessage::UnknownSessionDatabase);
                 }
+
+                self.cancel.insert(session.conn_id(), cancel_tx);
 
                 ClientTransmitter::new(tx).send(Ok(messages), session)
             }
@@ -1014,27 +1020,18 @@ where
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
-    /// the named `conn_id`. This means canceling the active PEEK or TAIL, if
-    /// one exists.
-    ///
-    /// NOTE(benesch): this function makes the assumption that a connection can
-    /// only have one active query at a time. This is true today, but will not
-    /// be true once we have full support for portals.
+    /// the named `conn_id`.
     async fn handle_cancel(&mut self, conn_id: u32) {
-        if let Some(name) = self.active_tails.remove(&conn_id) {
-            // A TAIL is known to be active, so drop the dataflow that is
-            // servicing it. No need to try to cancel PEEKs in this case,
-            // because if a TAIL is active, a PEEK cannot be.
-            self.drop_sinks(vec![name]).await;
-        } else {
-            // No TAIL is known to be active, so drop the PEEK that may be
-            // active on this connection. This is a no-op if no PEEKs are
-            // active.
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::CancelPeek { conn_id },
-            )
-            .await;
+        // Tell dataflow to cancel any pending peeks.
+        broadcast(
+            &mut self.broadcast_tx,
+            SequencedCommand::CancelPeek { conn_id },
+        )
+        .await;
+
+        // Inform the session (if it asks) about the cancellation.
+        if let Some(cancel) = self.cancel.get_mut(&conn_id) {
+            let _ = cancel.send(Cancelled::Cancelled);
         }
     }
 
@@ -1042,13 +1039,14 @@ where
     ///
     // This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
-        if let Some(name) = self.active_tails.remove(&session.conn_id()) {
-            self.drop_sinks(vec![name]).await;
-        }
+        let (drop_sinks, _) = session.clear_transaction();
+        self.drop_sinks(drop_sinks).await;
+
         self.drop_temp_items(session.conn_id()).await;
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
+        self.cancel.remove(&session.conn_id());
     }
 
     // Removes all temporary items created by the specified connection, though
@@ -1662,7 +1660,7 @@ where
                 desc,
             } => tx.send(
                 self.sequence_tail(
-                    &session,
+                    &mut session,
                     id,
                     with_snapshot,
                     ts,
@@ -1734,7 +1732,8 @@ where
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
                     self.drop_temp_items(session.conn_id()).await;
-                    session.reset();
+                    let drop_sinks = session.reset();
+                    self.drop_sinks(drop_sinks).await;
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
                     Err(CoordError::OperationProhibitsTransaction(
@@ -2268,7 +2267,8 @@ where
             TransactionStatus::InTransactionImplicit(_)
         );
 
-        let txn = session.clear_transaction();
+        let (drop_sinks, txn) = session.clear_transaction();
+        self.drop_sinks(drop_sinks).await;
 
         if let EndTransactionAction::Commit = action {
             match txn {
@@ -2466,7 +2466,7 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn sequence_tail(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         source_id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
@@ -2486,7 +2486,7 @@ where
                 .expect("Source id is known to exist in catalog")
         );
         let sink_id = self.catalog.allocate_id()?;
-        self.active_tails.insert(session.conn_id(), sink_id);
+        session.add_drop_sink(sink_id);
         let (tx, rx) = self.switchboard.mpsc_limited(self.total_workers);
 
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
@@ -3131,11 +3131,13 @@ where
     }
 
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::DropSinks(dataflow_names),
-        )
-        .await
+        if !dataflow_names.is_empty() {
+            broadcast(
+                &mut self.broadcast_tx,
+                SequencedCommand::DropSinks(dataflow_names),
+            )
+            .await
+        }
     }
 
     async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
@@ -3438,7 +3440,6 @@ where
             symbiosis,
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
-            active_tails: HashMap::new(),
             logging_granularity: logging.and_then(|c| c.granularity.as_millis().try_into().ok()),
             timestamp_config,
             logical_compaction_window_ms: logical_compaction_window
@@ -3449,6 +3450,7 @@ where
             last_op_was_read: false,
             need_advance: true,
             transient_id_counter: 1,
+            cancel: HashMap::new(),
         };
         coord.bootstrap(initial_catalog_events).await?;
         Ok((coord, cluster_id))
