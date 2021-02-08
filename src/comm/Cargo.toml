@@ -13,7 +13,7 @@ futures = "0.3.12"
 log = "0.4.13"
 num_enum = "0.5.1"
 ore = { path = "../ore" }
-rand = "0.8.2"
+rand = "0.8.3"
 serde = { version = "1.0.123", features = ["derive"] }
 tokio = { version = "1.2.0", features = ["macros", "net", "rt", "time"] }
 tokio-serde = { version = "0.8.0", features = ["bincode"] }
