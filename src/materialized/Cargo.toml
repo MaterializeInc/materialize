@@ -31,7 +31,7 @@ anyhow = "1.0.38"
 askama = { version = "0.10.5", features = ["serde-json"] }
 async-stream = "0.3.0"
 async-trait = "0.1.42"
-backtrace = "0.3.55"
+backtrace = "0.3.56"
 build-info = { path = "../build-info" }
 cfg-if = "1.0.0"
 clap = "2.33.0"
@@ -48,7 +48,7 @@ include_dir = "0.6.0"
 itertools = "0.9.0"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
-libc = "0.2.84"
+libc = "0.2.85"
 log = "0.4.13"
 mz-process-collector = { path = "../mz-process-collector" }
 nix = "0.19.1"
@@ -73,12 +73,12 @@ sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
 structopt = "0.3.21"
 sysctl = "0.4.0"
-sysinfo = "0.16.0"
+sysinfo = "0.16.1"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.1.0", features = ["sync"] }
+tokio = { version = "1.2.0", features = ["sync"] }
 tokio-openssl = "0.6.1"
-tracing = "0.1.21"
+tracing = "0.1.23"
 # TODO(benesch): we can use the default features here once tracing-subscriber
 # does not enable chrono's "oldtime" feature.
 tracing-subscriber = { version = "0.2.7", default-features = false, features = ["ansi", "env-filter", "fmt", "tracing-log"] }
@@ -93,7 +93,7 @@ url = "2.0.0"
 jemallocator = { version = "0.3.0", features = ["profiling", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
-assert_cmd = "1.0.2"
+assert_cmd = "1.0.3"
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 datadriven = "0.5.0"
