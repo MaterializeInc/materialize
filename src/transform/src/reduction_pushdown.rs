@@ -103,11 +103,35 @@ impl ReductionPushdown {
                     inputs,
                     equivalences,
                     implementation,
+                    &[],
                 ) {
                     if let Some(new_relation_expr) = red_pusher
                         .get_relation_with_reduction_pushed(monotonic, expected_group_size)
                     {
                         *relation = new_relation_expr;
+                    }
+                }
+            } else if let MirRelationExpr::Filter { input, predicates } = &mut **input {
+                if let MirRelationExpr::Join {
+                    inputs,
+                    equivalences,
+                    demand: _,
+                    implementation,
+                } = &mut **input
+                {
+                    if let Some(red_pusher) = ReductionPusher::try_new(
+                        group_key,
+                        aggregates,
+                        inputs,
+                        equivalences,
+                        implementation,
+                        predicates,
+                    ) {
+                        if let Some(new_relation_expr) = red_pusher
+                            .get_relation_with_reduction_pushed(monotonic, expected_group_size)
+                        {
+                            *relation = new_relation_expr;
+                        }
                     }
                 }
             }
@@ -176,9 +200,9 @@ struct ReductionPusher<'a> {
     evaluated_expressions: HashMap<MirScalarExpr, MirScalarExpr>,
 
     // Aggregations to try to push down
-    /// For each input, the aggregations that involve just that input.
-    /// Contains (position of aggregation, the aggregation)
-    single_input_aggs_to_push: Vec<Vec<(usize, AggregateExpr)>>,
+    /// For each input, the aggregations and filters that involve just that input.
+    /// Contains ((position of aggregation, the aggregation), filters)
+    single_input_aggs_to_push: Vec<(Vec<(usize, AggregateExpr)>, Vec<MirScalarExpr>)>,
     /// Aggregations involving no inputs. They can be partially pushed down to
     /// any input as long as the join key is not a primary key
     /// Contains (position of aggregation, the aggregation)
@@ -194,8 +218,8 @@ struct ReductionPusher<'a> {
     old_input_keys: Vec<Vec<Vec<usize>>>,
 
     // Other helper fields
-    /// A reference to the equivalences of the old join
-    equivalences: &'a [Vec<MirScalarExpr>],
+    /// The equivalences of the old join, with all single-input filters removed
+    equivalences: Vec<Vec<MirScalarExpr>>,
     /// The support of aggregations that we do not try to push down, sorted by
     /// input. Inner reduces must not cause these columns to be removed from
     /// the join.
@@ -218,6 +242,7 @@ impl<'a> ReductionPusher<'a> {
         inputs: &[MirRelationExpr],
         equivalences: &'a [Vec<MirScalarExpr>],
         implementation: &expr::JoinImplementation,
+        predicates: &[MirScalarExpr],
     ) -> Option<Self> {
         let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
         let old_join_mapper = JoinInputMapper::new_from_input_types(&input_types);
@@ -229,9 +254,10 @@ impl<'a> ReductionPusher<'a> {
         // from by rewriting aggregations on join keys in terms of the
         // equivalent expression from the other input
         let mut outer_aggs = Vec::new();
-        let mut single_input_aggs_to_push = vec![Vec::new(); inputs.len()];
+        let mut single_input_aggs_to_push = vec![(Vec::new(), Vec::new()); inputs.len()];
         let mut no_input_aggs_to_push = Vec::new();
 
+        // classify the aggregations by how many inputs each aggregation references
         for (agg_num, agg) in aggregates.iter().enumerate() {
             let mut expr_inputs = old_join_mapper.lookup_inputs(&agg.expr);
             if let AggregateFunc::JsonbAgg = agg.func {
@@ -265,7 +291,9 @@ impl<'a> ReductionPusher<'a> {
                             continue;
                         }
                     }
-                    single_input_aggs_to_push[expr_input].push((agg_num, localized_agg));
+                    single_input_aggs_to_push[expr_input]
+                        .0
+                        .push((agg_num, localized_agg));
                 }
             } else {
                 // an aggregation involving no inputs
@@ -283,6 +311,23 @@ impl<'a> ReductionPusher<'a> {
             }
         }
 
+        // Classify predicates by how many inputs the predicate references
+        for predicate in predicates {
+            let mut expr_inputs = old_join_mapper.lookup_inputs(predicate);
+            if let Some(expr_input) = expr_inputs.next() {
+                if expr_inputs.next().is_some() {
+                    // TODO: support multi-input predicates
+                    // TODO: attempt to rewrite multi-input predicates in terms of a
+                    // single input
+                    return None;
+                } else {
+                    single_input_aggs_to_push[expr_input]
+                        .1
+                        .push(old_join_mapper.map_expr_to_local(predicate.clone()))
+                }
+            }
+        }
+
         // Union together the supports of all outer aggs, which will become
         // `aggs_not_pushed_support`.
         let mut outer_agg_support_iter = outer_aggs.iter().map(|(_, agg)| agg.expr.support());
@@ -294,13 +339,25 @@ impl<'a> ReductionPusher<'a> {
 
         // skip reduction pushdown if there are no eligible aggregations to push
         // down
-        if single_input_aggs_to_push.iter().all(|aggs| aggs.is_empty())
+        if single_input_aggs_to_push
+            .iter()
+            .all(|(aggs, _)| aggs.is_empty())
             && no_input_aggs_to_push.is_empty()
         {
             return None;
         }
 
-        let join_graph = create_join_graph(&old_join_mapper, equivalences)?;
+        let mut equivalences = equivalences.to_vec();
+
+        let (join_graph, single_input_filters) =
+            create_join_graph(&old_join_mapper, &mut equivalences);
+        let join_graph = join_graph?;
+
+        for (filter, idx) in single_input_filters {
+            single_input_aggs_to_push[idx]
+                .1
+                .push(old_join_mapper.map_expr_to_local(filter));
+        }
 
         Some(Self {
             new_inputs: inputs.to_vec(),
@@ -341,7 +398,7 @@ impl<'a> ReductionPusher<'a> {
         if self
             .single_input_aggs_to_push
             .iter()
-            .any(|aggs| !aggs.is_empty())
+            .any(|(aggs, _)| !aggs.is_empty())
         {
             for idx in 0..self.new_inputs.len() {
                 self.try_pushdown(idx, true);
@@ -366,24 +423,17 @@ impl<'a> ReductionPusher<'a> {
             // construct the new join
             let mut new_inputs = Vec::new();
             std::mem::swap(&mut new_inputs, &mut self.new_inputs);
-            let new_equivalences = self
-                .equivalences
-                .iter()
-                .map(|equivalence| {
-                    equivalence
-                        .iter()
-                        .map(|expr| {
-                            if let Some(new_expr) = self.evaluated_expressions.get(expr) {
-                                new_expr.clone()
-                            } else {
-                                let mut new_expr = expr.clone();
-                                new_expr.permute_map(&self.permutation);
-                                new_expr
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
+            let mut new_equivalences = Vec::new();
+            std::mem::swap(&mut new_equivalences, &mut self.equivalences);
+            for equivalence in new_equivalences.iter_mut() {
+                for expr in equivalence.iter_mut() {
+                    if let Some(new_expr) = self.evaluated_expressions.get(expr) {
+                        *expr = new_expr.clone();
+                    } else {
+                        expr.permute_map(&self.permutation);
+                    }
+                }
+            }
 
             // construct the new outer reduce
             let mut outer_group_key = self.outer_group_key.to_vec();
@@ -408,8 +458,26 @@ impl<'a> ReductionPusher<'a> {
 
             let total_column_after_outer_reduce = outer_group_key.len() + outer_aggs.len();
 
-            let mut new_relation_expr = MirRelationExpr::Reduce {
-                input: Box::new(MirRelationExpr::join_scalars(new_inputs, new_equivalences)),
+            let mut new_relation_expr = MirRelationExpr::join_scalars(new_inputs, new_equivalences);
+
+            let mut outer_predicates = Vec::new();
+            for (idx, (_, predicates)) in self.single_input_aggs_to_push.iter_mut().enumerate() {
+                for predicate in predicates.drain(0..) {
+                    let mut global_predicate =
+                        self.old_join_mapper.map_expr_to_global(predicate, idx);
+                    global_predicate.permute_map(&self.permutation);
+                    outer_predicates.push(global_predicate);
+                }
+            }
+            if !outer_predicates.is_empty() {
+                new_relation_expr = MirRelationExpr::Filter {
+                    input: Box::new(new_relation_expr),
+                    predicates: outer_predicates,
+                }
+            }
+
+            new_relation_expr = MirRelationExpr::Reduce {
+                input: Box::new(new_relation_expr),
                 group_key: outer_group_key,
                 aggregates: outer_aggs,
                 monotonic: *monotonic,
@@ -446,7 +514,7 @@ impl<'a> ReductionPusher<'a> {
     /// new join already.
     fn try_pushdown(&mut self, idx: usize, single_input_aggs_exist: bool) {
         if (self.is_delta && self.join_graph[idx].len() > 1)
-            || (single_input_aggs_exist && self.single_input_aggs_to_push[idx].is_empty())
+            || (single_input_aggs_exist && self.single_input_aggs_to_push[idx].0.is_empty())
             || (!single_input_aggs_exist && self.no_input_aggs_to_push.is_empty())
         {
             self.skip_pushdown_on_input(idx);
@@ -482,6 +550,19 @@ impl<'a> ReductionPusher<'a> {
                 }
             })
             .collect::<Vec<_>>();
+
+        // add the support of aggregations we are not trying to push down to the
+        // group keys of the inner reduce
+        for col in self.aggs_not_pushed_support[idx].iter() {
+            if inner_group_keys
+                .iter()
+                .find(|k| k == &&MirScalarExpr::Column(*col))
+                .is_none()
+            {
+                inner_group_keys.push(MirScalarExpr::Column(*col));
+            }
+        }
+
         // add the join keys to input group keys if not done so already
         for (_, join_keys) in self.join_graph[idx].iter() {
             for join_key in join_keys {
@@ -494,18 +575,17 @@ impl<'a> ReductionPusher<'a> {
                     inner_group_keys.push(localized_join_key);
                 }
             }
-        }
-        // add the support of aggregations we are not trying to push down to the
-        // group keys of the inner reduce
-        for col in self.aggs_not_pushed_support[idx].iter() {
-            if inner_group_keys
-                .iter()
-                .find(|k| k == &&MirScalarExpr::Column(*col))
-                .is_none()
-            {
-                inner_group_keys.push(MirScalarExpr::Column(*col));
+            if self.is_delta && inner_group_keys.len() > join_keys.len() {
+                // If we are checking if we can do a reduction pushdown on an
+                // input when the join is a delta query, the outer loop only
+                // runs once. Also, if we reduce on anything on other then the
+                // join keys, then the delta query will be invalidated. Abort
+                // pushdown to avoid invalidating the delta query.
+                self.skip_pushdown_on_input(idx);
+                return;
             }
         }
+
         // check if a key of the input is a subset of the group keys for the
         // inner reduce. If yes, abort pushdown
         for key_set in self.old_input_keys[idx].iter() {
@@ -522,14 +602,12 @@ impl<'a> ReductionPusher<'a> {
         self.partial_pushdown(idx, inner_group_keys);
     }
 
-    /// Do a partial reduction pushdown on input `idx` with the inner reduce
-    /// having group key `inner_group_keys` and aggs as whatever is left in
-    /// `self.no_input_aggs_to_push` and `self.single_input_aggs_to_push[idx]`
+    /// Add input `idx` to the new join without pushing any aggregations down.
     /// Assumes that inputs `0..idx` have all been added to the new join
     /// already.
     fn skip_pushdown_on_input(&mut self, idx: usize) {
         // add single input aggs to outer reduce
-        for (agg_num, mut agg) in self.single_input_aggs_to_push[idx].drain(0..) {
+        for (agg_num, mut agg) in self.single_input_aggs_to_push[idx].0.drain(0..) {
             agg.expr = self.old_join_mapper.map_expr_to_global(agg.expr, idx);
             self.outer_aggs.push((agg_num, agg));
         }
@@ -542,18 +620,30 @@ impl<'a> ReductionPusher<'a> {
 
     /// Do a partial reduction pushdown on input `idx` with the inner reduce
     /// having group key `inner_group_keys` and aggs as whatever is left in
-    /// `self.no_input_aggs_to_push` and `self.single_input_aggs_to_push[idx]`
+    /// `self.no_input_aggs_to_push` and `self.single_input_aggs_to_push[idx].0`
     /// Assumes that inputs `0..idx` have all been added to the new join
     /// already.
     fn partial_pushdown(&mut self, idx: usize, inner_group_keys: Vec<MirScalarExpr>) {
         // calculate inner_aggs
         let mut inner_aggs = Vec::new();
-        inner_aggs.extend(self.single_input_aggs_to_push[idx].drain(0..));
+        inner_aggs.extend(self.single_input_aggs_to_push[idx].0.drain(0..));
         inner_aggs.extend(self.no_input_aggs_to_push.drain(0..));
         assert_eq!(inner_aggs.is_empty(), false);
         while let MirRelationExpr::ArrangeBy { input: inner, .. } = &mut self.new_inputs[idx] {
             self.new_inputs[idx] = inner.take_dangerous();
         }
+
+        let mut inner_predicates = Vec::new();
+        std::mem::swap(
+            &mut inner_predicates,
+            &mut self.single_input_aggs_to_push[idx].1,
+        );
+
+        let new_input = if inner_predicates.is_empty() {
+            self.new_inputs[idx].clone()
+        } else {
+            self.new_inputs[idx].clone().filter(inner_predicates)
+        };
         // Open question: is it useful to propagate the expected group size from
         // the outer reduce?
         // Is it worthwhile to propagate monotonicity from the outer reduce?
@@ -561,7 +651,7 @@ impl<'a> ReductionPusher<'a> {
         // or not monotonic, so there should be a separate pass to check
         // monotonicity or inner reduces anyway.
         self.new_inputs[idx] = MirRelationExpr::Reduce {
-            input: Box::new(self.new_inputs[idx].clone()),
+            input: Box::new(new_input),
             group_key: inner_group_keys.clone(),
             aggregates: inner_aggs.iter().map(|(_, agg)| agg.clone()).collect(),
             monotonic: false,
@@ -607,7 +697,7 @@ impl<'a> ReductionPusher<'a> {
     }
 }
 
-/// Construct a graph showing, for each input, which other inputs it is joined
+/// 1) Construct a graph showing, for each input, which other inputs it is joined
 /// to and on which join keys.
 /// Example:
 /// For the query
@@ -621,13 +711,20 @@ impl<'a> ReductionPusher<'a> {
 /// The corresponding graph will be
 /// "foo" -> ["bar" -> ["a", "c"]]
 /// "bar" -> ["foo" -> ["b", "d"], "baz" -> ["e"]]
-/// "baz" -> ["baz" -> ["f"]]
+/// "baz" -> ["bar" -> ["f"]]
+/// 2) extracts single-input equivalence classes from `equivalences` and returns
+///    them as equality filter predicates
 fn create_join_graph(
     old_join_mapper: &JoinInputMapper,
-    equivalences: &[Vec<MirScalarExpr>],
-) -> Option<Vec<HashMap<usize, Vec<MirScalarExpr>>>> {
+    equivalences: &mut Vec<Vec<MirScalarExpr>>,
+) -> (
+    Option<Vec<HashMap<usize, Vec<MirScalarExpr>>>>,
+    Vec<(MirScalarExpr, usize)>,
+) {
     let mut join_keys_by_input = vec![HashMap::new(); old_join_mapper.total_inputs()];
-    for equivalence in equivalences.iter() {
+    let mut single_input_filters = Vec::new();
+    let mut equivalences_to_remove = Vec::new();
+    for (idx, equivalence) in equivalences.iter().enumerate() {
         // track all inputs referenced in the equivalence class
         let mut inputs_in_equivalence = Vec::new();
         // localize each expression in equivalence to its respective input
@@ -642,24 +739,45 @@ fn create_join_graph(
                     // there is an expression in a join equivalence class that
                     // spans multiple inputs. For now, skip reduction pushdown
                     // in this case.
-                    return None;
+                    return (None, single_input_filters);
                 }
             }
         }
-        if inputs_in_equivalence.len() > 1 {
-            // for each input referenced in an equivalence class,
-            // jot down the other inputs in the same equivalence class.
-            for (expr_input, expr) in expr_with_inputs {
-                for other_input in inputs_in_equivalence.iter() {
-                    if *other_input != expr_input {
-                        join_keys_by_input[expr_input]
-                            .entry(*other_input)
-                            .or_insert(Vec::new())
-                            .push(expr.clone());
+        match inputs_in_equivalence.len() {
+            0 => {}
+            1 => {
+                //
+                equivalences_to_remove.push(idx);
+                let (_, first_expr) = expr_with_inputs.pop().unwrap();
+                for (expr_input, expr) in expr_with_inputs {
+                    single_input_filters.push((
+                        MirScalarExpr::CallBinary {
+                            func: expr::BinaryFunc::Eq,
+                            expr1: Box::new(first_expr.clone()),
+                            expr2: Box::new(old_join_mapper.map_expr_to_local(expr)),
+                        },
+                        expr_input,
+                    ))
+                }
+            }
+            _ => {
+                // for each input referenced in an equivalence class,
+                // jot down the other inputs in the same equivalence class.
+                for (expr_input, expr) in expr_with_inputs {
+                    for other_input in inputs_in_equivalence.iter() {
+                        if *other_input != expr_input {
+                            join_keys_by_input[expr_input]
+                                .entry(*other_input)
+                                .or_insert(Vec::new())
+                                .push(expr.clone());
+                        }
                     }
                 }
             }
         }
     }
-    Some(join_keys_by_input)
+    for idx in equivalences_to_remove.into_iter().rev() {
+        equivalences.remove(idx);
+    }
+    (Some(join_keys_by_input), single_input_filters)
 }
