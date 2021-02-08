@@ -83,7 +83,7 @@ generator's continued activity.
 
 With that data available, you can perform complex queries, and Materialize
 maintains their results, even as the underlying data changes. This means that
-you can get answers to your queries in real-time, rather than relying on day-old
+you can get answers to your queries in real time, rather than relying on day-old
 answers from your data warehouse.
 
 ### BI Tool (Metabase)
@@ -148,13 +148,13 @@ Now that our deployment is running (and looks like the diagram shown above), we
 can get Materialize to read data from Kafka and define the views we want
 Materialize to maintain for us.
 
-1. In the same terminal, launch the Materialize CLI (`mzcli`) by running:
+1. In the same terminal, launch the Materialize CLI by running:
 
     ```shell
     ./mzcompose run cli
     ```
 
-1. Within `mzcli`, ensure you have all of the necessary sources, which represent
+1. Within the CLI, ensure you have all of the necessary sources, which represent
    all of the tables from MySQL:
 
     ```sql
@@ -203,7 +203,7 @@ Materialize to maintain for us.
 
     If you run this query multiple times, you should see the results change,
     and the answers should come back pretty quickly. (How quickly depends on
-    the speed of your computer, but it should be in milliseconds.)
+    the speed of your computer, but sub-second responses are typical.)
 
 1. Define another view for "Query 07", which involves a complex 11-way `JOIN`
    across 6 tables:
@@ -323,10 +323,12 @@ Materialize to maintain for us.
 
 1. Modify the size of the **query01** card, and then click **Save**.
 
-1. Click **Auto-refresh**, and then select **1 minute.** (60 seconds is the
-   fastest refresh rate you can select in the UI, but if you copy the URL,
-   open a new tab and edit the end of the url to change the `refresh=60`
-   parameter to `refresh=1` you can force metabase to update every second.)
+1. Click **Auto-refresh**, and then select **1 minute.** 
+
+   60 seconds is the fastest refresh rate selectable in the UI, but if you
+   copy the URL, open a new tab and edit the end of the url to change the
+   `refresh=60` anchor to `refresh=1` you can force metabase to update
+   every second.
 
 {{< figure
     src="/images/demos/materialize_realtime_bi_demo_metabase_700x15.gif"
