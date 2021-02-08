@@ -8,7 +8,7 @@ on Materialize and others interested in improving the performance of materialize
 
 ### Prometheus Metrics
 
-Operational metrics can be scraped by Prometheus from port `6875` under the `/metrics` URL. For
+Operational metrics can be scraped by Prometheus from port `6875` under the `/metrics` path. For
 example, if you are running a materialized instance on your local machine, you can run:
 
     curl http://localhost:6875/metrics
