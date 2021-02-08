@@ -10,16 +10,44 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import dateparser
+import datetime
 import sys
 import time
+import urllib
 
 import prometheus_api_client
+import prometheus_api_client.utils
 
 def run(args: argparse.Namespace) -> int:
-    """Run the generator, inserting args.num_records number of messages."""
+    """Wait for the query to settle or timeout and then dump ingest metrics."""
 
+    try:
+        start = dateparser.parse('30 seconds ago')
+        return wait_metric(args)
+    finally:
+        print_dashboard_url(args, start)
+
+
+def print_dashboard_url(args: argparse.Namespace, start: datetime.datetime):
+    """Print the URL to see the metrics for this test"""
+
+    # Create parameters to see a dashboard with the metrics from this benchmark run
+    # Add padding to make the charts nicer to read
+    # Grafana expects timestamps with milliseconds
+    path = '/d/materialize-overview/materialize-overview'
+    query = urllib.parse.urlencode( {
+              "from": round(start.timestamp()) * 1000,
+                "to": round(dateparser.parse('in 30 seconds').timestamp()) * 1000,
+                "tz": "UTC"
+             })
+    dashboard_url = urllib.parse.urlunparse(('http', args.grafana_location, path, '', query, ''))
+    print(f'View performance metrics here: {dashboard_url}')
+
+
+def wait_metric(args: argparse.Namespace) -> int:
+    """Wait for the given metric, returning desired exit code (0 is success)."""
     prom = prometheus_api_client.PrometheusConnect(f'http://{args.host}:{args.port}')
-
     time_so_far = 0
     start = int(time.monotonic())
     while time_so_far < args.timeout_seconds:
@@ -27,15 +55,18 @@ def run(args: argparse.Namespace) -> int:
         if args.verbose:
             print(current_values)
 
-        if len(current_values) != 1:
-            print('ERROR: Prometheus query must only return a single result!')
+        if len(current_values) > 1:
+            print('ERROR: Prometheus query must only return a zero or one results!')
+            prometheus_api_client.utils.pretty_print_metric(current_values)
             return 1
 
         # We aren't running query_range, so there should only be a single timestamp and point in the reponse
-        (ts, point) = current_values[0]['value']
-        if point == args.expected_value:
-            print(f"SUCCESS! Query settled in {time_so_far} seconds")
-            return 0
+        if current_values:
+            (ts, point) = [float(i) for i in current_values[0]['value']]
+            if point == args.expected_value:
+                rate = round(point / max(time_so_far, 1))
+                print(f"SUCCESS! Benchmark took {time_so_far}s, {rate} rows/sec")
+                return 0
 
         time.sleep(1)
         time_so_far = int(time.monotonic()) - start
@@ -54,6 +85,13 @@ if __name__ == "__main__":
         "--verbose",
         action="store_true",
         help="Enable verbose logging to print the results of each prometheus query",
+    )
+
+    parser.add_argument(
+        "--grafana-location",
+        type=str,
+        default='localhost:3000',
+        help="Default URL net location (host and port) for Grafana",
     )
 
     parser.add_argument(
@@ -87,7 +125,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "expected_value",
-        type=str,
+        type=float,
         help="Expected value of the metric queried",
     )
 

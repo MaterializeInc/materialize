@@ -85,7 +85,7 @@ impl LiteralLifting {
                         the_same.pop();
                         let datum = data.pop().unwrap();
                         let typum = typ.column_types.pop().unwrap();
-                        literals.push(MirScalarExpr::literal_ok(datum, typum));
+                        literals.push(MirScalarExpr::literal_ok(datum, typum.scalar_type));
                     }
                     literals.reverse();
 
@@ -362,7 +362,8 @@ impl LiteralLifting {
                         // This type information should be available in the `a.expr` literal,
                         // but extracting it with pattern matching seems awkward.
                         aggr.func
-                            .output_type(aggr.expr.typ(&repr::RelationType::empty())),
+                            .output_type(aggr.expr.typ(&repr::RelationType::empty()))
+                            .scalar_type,
                     ));
                 }
                 result.reverse();

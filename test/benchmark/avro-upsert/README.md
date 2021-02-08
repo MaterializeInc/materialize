@@ -5,9 +5,30 @@ assumes that Kafka topics should have 30 partitions and that you want 16 worker 
 
 ## Running the Avro Upsert Test
 
-Download `genavro_400m_v2_out.gz`, unzip it, and copy it into the directory called `data` in the
-current directory. Then run:
+To run the spec benchmark, please ensure that your machine has 16 cores and at least 96GB of
+memory. Then run the following command:
 
-    ./mzcompose run test-upsert-performance
+    ./mzcompose run benchmark
 
-Navigate to `http://localhost:3000` to see the Kafka ingest performance.
+There is also a version of this benchmark that uses the same load generator, but a different set
+of views that avoid exercising the upsert operator. This gives a good comparative benchmark to see
+how much slower the upsert operator is:
+
+    ./mzcompose run benchmark-insert-filter
+
+If you're running on a smaller machine, such as a laptop with 8 cores / 32GB of memory, you can
+run the version of this benchmark designed for smaller machines:
+
+    ./mzcompose run benchmark-medium
+
+## Looking at Performance
+
+Each benchmark will output something like the following:
+
+```sh
+SUCCESS! Benchmark took 766s, 522193 rows/sec
+View performance metrics here: http://localhost:3000/d/materialize-overview/materialize-overview?from=1612572459000&to=1612573285000&tz=UTC
+```
+
+The Grafana link will display performance metrics for materialize during the entirety of the
+benchmark run.

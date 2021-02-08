@@ -7,11 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM ubuntu:eoan
+FROM ubuntu:focal
 
 COPY mysql.asc .
 COPY odbc.ini /etc/odbc.ini
 COPY . workdir/
+
+ARG DEBIAN_FRONTEND="noninteractive"
 
 RUN apt-get update && apt-get install -qy curl gnupg2 \
     && curl -s 'https://packages.confluent.io/deb/5.3/archive.key' | apt-key add - \
@@ -25,12 +27,12 @@ RUN apt-get update && apt-get install -qy curl gnupg2 \
         jq \
         libconfig++-dev \
         libconfig++9v5 \
-        libpqxx-6.2 \
+        libpqxx-6.4 \
         libpqxx-dev \
         locales \
         odbc-postgresql \
         openjdk-8-jre \
-        postgresql-server-dev-11 \
+        postgresql-server-dev-12 \
         unixodbc \
         unixodbc-dev \
     && locale-gen en_US.UTF-8 \
@@ -63,7 +65,7 @@ RUN apt-get update && apt-get install -qy curl gnupg2 \
         libpqxx-dev \
         locales \
         openjdk-8-jre \
-        postgresql-server-dev-11 \
+        postgresql-server-dev-12 \
     && apt-get autoremove -y \
     ;
 

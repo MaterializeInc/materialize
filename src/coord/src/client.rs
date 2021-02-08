@@ -7,13 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::future::Future;
+use std::sync::Arc;
+
 use futures::SinkExt;
+use tokio::sync::watch;
 
 use sql::ast::{Raw, Statement};
 use sql::plan::Params;
 
 use crate::command::{
-    Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
+    Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
 use crate::error::CoordError;
 use crate::session::{EndTransactionAction, Session};
@@ -35,9 +39,21 @@ impl Client {
 
     /// Binds this client to a session.
     pub fn for_session(&self, session: Session) -> SessionClient {
+        // Cancellation works by creating a watch channel (which remembers only
+        // the last value sent to it) and sharing it between the coordinator and
+        // connection. The coordinator will send a cancelled message on it if a
+        // cancellation request comes. The connection will reset that on every message
+        // it receives and then check for it where we want to add the ability to cancel
+        // an in-progress statement.
+        let (cancel_tx, cancel_rx) = watch::channel(Cancelled::NotCancelled);
+        let cancel_tx = Arc::new(cancel_tx);
+
         SessionClient {
             inner: self.clone(),
             session: Some(session),
+            started_up: false,
+            cancel_tx,
+            cancel_rx,
         }
     }
 
@@ -86,22 +102,71 @@ pub struct SessionClient {
     // Invariant: session may only be `None` during a method call. Every public
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
+    /// Whether the coordinator has been notified of this `SessionClient` via
+    /// a call to `startup`.
+    started_up: bool,
+
+    pub cancel_tx: Arc<watch::Sender<Cancelled>>,
+    pub cancel_rx: watch::Receiver<Cancelled>,
 }
 
 impl SessionClient {
+    pub fn canceled(&self) -> impl Future<Output = ()> + Send {
+        let mut cancel_rx = self.cancel_rx.clone();
+        async move {
+            loop {
+                let _ = cancel_rx.changed().await;
+                if let Cancelled::Cancelled = *cancel_rx.borrow() {
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn reset_canceled(&mut self) {
+        // Clear any cancellation message.
+        // TODO(mjibson): This makes the use of .changed annoying since it will
+        // generally always have a NotCancelled message first that needs to be ignored,
+        // and thus run in a loop. Figure out a way to have the future only resolve on
+        // a Cancelled message.
+        let _ = self.cancel_tx.send(Cancelled::NotCancelled);
+    }
+
     /// Notifies the coordinator of a new client session.
     ///
     /// Returns a list of messages that are intended to be displayed to the
     /// user.
+    ///
+    /// Once you observe a successful response to this method, you must not call
+    /// it again. You must observe a successful response to this method before
+    /// calling any other method on the client, besides
+    /// [`SessionClient::terminate`].
     pub async fn startup(&mut self) -> Result<Vec<StartupMessage>, CoordError> {
-        self.send(|tx, session| Command::Startup { session, tx })
+        assert!(!self.started_up);
+        let cancel_tx = Arc::clone(&self.cancel_tx);
+        match self
+            .send(|tx, session| Command::Startup {
+                session,
+                cancel_tx,
+                tx,
+            })
             .await
+        {
+            Ok(messages) => {
+                self.started_up = true;
+                Ok(messages)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Saves the specified statement as a prepared statement.
     ///
     /// The prepared statement is saved in the connection's [`sql::Session`]
     /// under the specified name.
+    ///
+    /// You must have observed a successful response to
+    /// [`SessionClient::startup`] before calling this method.
     pub async fn describe(
         &mut self,
         name: String,
@@ -119,6 +184,9 @@ impl SessionClient {
     }
 
     /// Binds a statement to a portal.
+    ///
+    /// You must have observed a successful response to
+    /// [`SessionClient::startup`] before calling this method.
     pub async fn declare(
         &mut self,
         name: String,
@@ -136,6 +204,9 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
+    ///
+    /// You must have observed a successful response to
+    /// [`SessionClient::startup`] before calling this method.
     pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, CoordError> {
         self.send(|tx, session| Command::Execute {
             portal_name,
@@ -145,6 +216,10 @@ impl SessionClient {
         .await
     }
 
+    /// Ends a transaction.
+    ///
+    /// You must have observed a successful response to
+    /// [`SessionClient::startup`] before calling this method.
     pub async fn end_transaction(
         &mut self,
         action: EndTransactionAction,
@@ -159,15 +234,18 @@ impl SessionClient {
 
     /// Terminates this client session.
     ///
-    /// This both consumes this `SessionClient` and cleans up any state
-    /// associated with the session on stored by the coordinator.
+    /// This consumes this `SessionClient`. If the coordinator was notified of
+    /// this client session by `startup`, then this method will clean up any
+    /// state on the coordinator about this session.
     pub async fn terminate(mut self) {
         let session = self.session.take().expect("session invariant violated");
-        self.inner
-            .cmd_tx
-            .send(Command::Terminate { session })
-            .await
-            .expect("coordinator unexpectedly gone");
+        if self.started_up {
+            self.inner
+                .cmd_tx
+                .send(Command::Terminate { session })
+                .await
+                .expect("coordinator unexpectedly gone");
+        }
     }
 
     /// Returns a mutable reference to the session bound to this client.

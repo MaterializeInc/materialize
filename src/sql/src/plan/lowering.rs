@@ -585,10 +585,7 @@ impl HirScalarExpr {
                             expr1: Box::new(SS::CallBinary {
                                 func: expr::BinaryFunc::Eq,
                                 expr1: Box::new(cond_expr.clone()),
-                                expr2: Box::new(SS::literal_ok(
-                                    Datum::False,
-                                    ScalarType::Bool.nullable(false),
-                                )),
+                                expr2: Box::new(SS::literal_ok(Datum::False, ScalarType::Bool)),
                             }),
                             expr2: Box::new(SS::CallUnary {
                                 func: expr::UnaryFunc::IsNull,
@@ -993,7 +990,7 @@ fn attempt_outer_join(
                             .column_types
                             .into_iter()
                             .skip(oa)
-                            .map(|typ| expr::MirScalarExpr::literal_null(typ.nullable(true)))
+                            .map(|typ| expr::MirScalarExpr::literal_null(typ.scalar_type))
                             .collect();
 
                         // Add to `result` absent elements, filled with typed nulls.
@@ -1021,7 +1018,7 @@ fn attempt_outer_join(
                             .column_types
                             .into_iter()
                             .skip(oa)
-                            .map(|typ| expr::MirScalarExpr::literal_null(typ.nullable(true)))
+                            .map(|typ| expr::MirScalarExpr::literal_null(typ.scalar_type))
                             .collect();
 
                         // Add to `result` absent elemetns, prepended with typed nulls.

@@ -60,12 +60,9 @@ impl ReduceElision {
                             a.expr.clone().call_unary(UnaryFunc::IsNull).if_then_else(
                                 MirScalarExpr::literal_ok(
                                     Datum::Int64(0),
-                                    column_type.scalar_type.clone().nullable(false),
+                                    column_type.scalar_type.clone(),
                                 ),
-                                MirScalarExpr::literal_ok(
-                                    Datum::Int64(1),
-                                    column_type.scalar_type.nullable(false),
-                                ),
+                                MirScalarExpr::literal_ok(Datum::Int64(1), column_type.scalar_type),
                             )
                         }
 

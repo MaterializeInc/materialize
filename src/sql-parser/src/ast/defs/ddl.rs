@@ -264,7 +264,6 @@ pub enum Connector {
         path: String,
     },
     S3 {
-        bucket: String,
         /// The list of places that we will look for object keys
         key_sources: Vec<S3KeySource>,
         /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
@@ -308,16 +307,11 @@ impl AstDisplay for Connector {
                 f.write_str("'");
             }
             Connector::S3 {
-                bucket,
                 key_sources,
                 pattern,
             } => {
-                f.write_str("S3 BUCKET '");
-                f.write_str(&display::escape_single_quote_string(bucket));
-                f.write_str("' OBJECTS FROM");
-                for ks in key_sources {
-                    ks.fmt(f);
-                }
+                f.write_str("S3 OBJECTS FROM");
+                f.write_node(&display::comma_separated(key_sources));
                 if let Some(pattern) = pattern {
                     f.write_str(" MATCHING '");
                     f.write_str(&display::escape_single_quote_string(pattern));
@@ -332,14 +326,18 @@ impl_display!(Connector);
 /// The key sources specified in the `OBJECTS FROM` clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum S3KeySource {
-    /// `OBJECTS FROM SCAN`
-    Scan,
+    /// `OBJECTS FROM SCAN BUCKET '<bucket>'`
+    Scan { bucket: String },
 }
 
 impl AstDisplay for S3KeySource {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            S3KeySource::Scan => f.write_str(" SCAN"),
+            S3KeySource::Scan { bucket } => {
+                f.write_str(" SCAN BUCKET '");
+                f.write_str(&display::escape_single_quote_string(bucket));
+                f.write_str("'");
+            }
         }
     }
 }

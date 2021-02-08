@@ -32,7 +32,7 @@ ore = { path = "../ore" }
 pdqselect = "0.1.0"
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prometheus.git" }
-rand = "0.8.2"
+rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
 regex = "1.4.3"
 repr = { path = "../repr" }
@@ -41,9 +41,9 @@ rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
 serde = { version = "1.0.123", features = ["derive"] }
-serde_json = "1.0.60"
+serde_json = "1.0.62"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.1.0", features = ["fs", "rt"] }
-tokio-util = { version = "0.6.2", features = ["codec"] }
+tokio = { version = "1.2.0", features = ["fs", "rt"] }
+tokio-util = { version = "0.6.3", features = ["codec"] }
 url = { version = "2.2.0", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }

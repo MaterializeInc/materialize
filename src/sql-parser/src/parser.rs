@@ -1318,6 +1318,7 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(SCHEMA) {
             self.parse_create_schema()
         } else if self.parse_keyword(TABLE) {
+            self.prev_token();
             self.parse_create_table()
         } else if self.parse_keyword(OR) || self.parse_keyword(VIEW) {
             self.prev_token();
@@ -1332,6 +1333,10 @@ impl<'a> Parser<'a> {
                 self.prev_token();
                 self.prev_token();
                 self.parse_create_view()
+            } else if self.parse_keyword(TABLE) {
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_table()
             } else {
                 self.expected(
                     self.peek_pos(),
@@ -1664,14 +1669,16 @@ impl<'a> Parser<'a> {
                 Ok(Connector::AvroOcf { path })
             }
             S3 => {
-                // FROM S3 BUCKET '<bucket>' OBJECTS FROM SCAN MATCHING '<pattern>'
-                self.expect_keyword(BUCKET)?;
-                let bucket = self.parse_literal_string()?;
+                // FROM S3 OBJECTS FROM (SCAN '<bucket>')+ MATCHING '<pattern>'
                 self.expect_keywords(&[OBJECTS, FROM])?;
                 let mut key_sources = Vec::new();
                 while let Some(keyword) = self.parse_one_of_keywords(&[SCAN]) {
                     match keyword {
-                        SCAN => key_sources.push(S3KeySource::Scan),
+                        SCAN => {
+                            self.expect_keyword(BUCKET)?;
+                            let bucket = self.parse_literal_string()?;
+                            key_sources.push(S3KeySource::Scan { bucket });
+                        }
                         key => unreachable!("Keyword {} is not expected after OBJECTS FROM", key),
                     }
                     if !self.consume_token(&Token::Comma) {
@@ -1684,7 +1691,6 @@ impl<'a> Parser<'a> {
                     None
                 };
                 Ok(Connector::S3 {
-                    bucket,
                     key_sources,
                     pattern,
                 })
@@ -1899,6 +1905,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_table(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
+        self.expect_keyword(TABLE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
@@ -1911,6 +1919,7 @@ impl<'a> Parser<'a> {
             constraints,
             with_options,
             if_not_exists,
+            temporary,
         }))
     }
 
@@ -2810,7 +2819,11 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::LParen)?;
         let query = self.parse_query()?;
         self.expect_token(&Token::RParen)?;
-        Ok(Cte { alias, query })
+        Ok(Cte {
+            alias,
+            query,
+            id: (),
+        })
     }
 
     /// Parse a "query body", which is an expression with roughly the

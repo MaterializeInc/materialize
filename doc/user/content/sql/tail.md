@@ -263,7 +263,7 @@ FETCH ALL c WITH (timeout='0s');
 import psycopg2
 import sys
 
-dsn = "postgresql://localhost:6875/materialize?sslmode=disable"
+dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
 conn = psycopg2.connect(dsn)
 
 with conn.cursor() as cur:
@@ -290,7 +290,7 @@ it also has a `stream` feature where rows are not buffered and we can thus use `
 import psycopg3
 import sys
 
-dsn = "postgresql://localhost:6875/materialize?sslmode=disable"
+dsn = "postgresql://materialize@localhost:6875/materialize?sslmode=disable"
 conn = psycopg3.connect(dsn)
 
 conn = psycopg3.connect(dsn)

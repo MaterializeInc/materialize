@@ -114,7 +114,7 @@ services:
   localstack:
     image: localstack/localstack:0.12.5
     environment:
-    - SERVICES=kinesis,s3
+    - SERVICES=sts,iam,kinesis,s3
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 

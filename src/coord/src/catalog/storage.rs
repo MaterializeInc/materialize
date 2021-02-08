@@ -94,7 +94,7 @@ const MIGRATIONS: &[&str] = &[
     );",
     // Creates the roles table and a default "materialize" user.
     //
-    // Introduced in v0.6.2.
+    // Introduced in v0.7.0.
     "CREATE TABLE roles (
         id   integer PRIMARY KEY,
         name text NOT NULL UNIQUE
@@ -102,7 +102,7 @@ const MIGRATIONS: &[&str] = &[
     INSERT INTO roles VALUES (1, 'materialize');",
     // Makes the mz_internal schema literal so it can store functions.
     //
-    // Introduced in v0.6.2.
+    // Introduced in v0.7.0.
     "INSERT INTO schemas (database_id, name) VALUES
         (NULL, 'mz_internal');",
     // Add new migrations here.
