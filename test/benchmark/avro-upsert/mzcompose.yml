@@ -124,7 +124,18 @@ mzworkflows:
         --parallelism=40
       # No command needed, defaults to benchmark distribution
     - step: run
+      service: metric-verifier
+      daemon: true
+      command: >-
+        --timeout-seconds=900
+        "sum(mz_messages_ingested)"
+        "400000000"
+    - step: run
       service: create-views
+    - step: wait
+      service: metric-verifier
+      expected_return_code: 0
+      print_logs: true
 
   benchmark-medium:
     env:
@@ -148,13 +159,18 @@ mzworkflows:
         --distribution=medium
       # No command needed, defaults to benchmark distribution
     - step: run
-      service: create-views
-    - step: run
       service: metric-verifier
+      daemon: true
       command: >-
         --timeout-seconds=900
         "sum(mz_messages_ingested)"
         "20000000"
+    - step: run
+      service: create-views
+    - step: wait
+      service: metric-verifier
+      expected_return_code: 0
+      print_logs: true
 
   benchmark-insert-with-filter:
     steps:
@@ -174,9 +190,20 @@ mzworkflows:
         --parallelism=40
       # No command needed, defaults to benchmark distribution
     - step: run
+      service: metric-verifier
+      daemon: true
+      command: >-
+        --timeout-seconds=900
+        "sum(mz_messages_ingested)"
+        "400000000"
+    - step: run
       service: create-views
       command: >-
         insert_views.sql
+    - step: wait
+      service: metric-verifier
+      expected_return_code: 0
+      print_logs: true
 
   ci:
     steps:
@@ -197,13 +224,20 @@ mzworkflows:
         --num-records=100000
         --distribution=small
     - step: run
-      service: create-views
-    - step: run
       service: metric-verifier
+      daemon: true
       command: >-
         --timeout-seconds=30
         "sum(mz_messages_ingested)"
         "100000"
+    - step: run
+      service: create-views
+    - step: wait
+      service: metric-verifier
+      expected_return_code: 0
+      print_logs: true
+    - step: down
+      destroy_volumes: true
 
   run-generator:
     steps:

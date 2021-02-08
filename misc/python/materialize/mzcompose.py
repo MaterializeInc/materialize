@@ -1190,13 +1190,16 @@ class DownStep(WorkflowStep):
 
 @Steps.register("wait")
 class WaitStep(WorkflowStep):
-    def __init__(self, *, service: str, expected_return_code: int) -> None:
+    def __init__(
+        self, *, service: str, expected_return_code: int, print_logs: bool = False
+    ) -> None:
         """Wait for the container with name service to exit"""
         self._expected_return_code = expected_return_code
         self._service = service
+        self._print_logs = print_logs
 
     def run(self, workflow: Workflow) -> None:
-        say("Wait for the specified service to exit")
+        say(f"Waiting for the service {self._service} to exit")
         ps_proc = workflow.run_compose(["ps", "-q", self._service], capture=True)
         container_ids = [c for c in ps_proc.stdout.decode("utf-8").strip().split("\n")]
         if len(container_ids) > 1:
@@ -1222,6 +1225,9 @@ class WaitStep(WorkflowStep):
             raise errors.Failed(
                 f"Expected exit code {self._expected_return_code} for {container_id}; got: {return_code}"
             )
+
+        if self._print_logs:
+            spawn.runv(["docker", "logs", container_id])
 
 
 def print_docker_logs(pattern: str, tail: int = 0) -> None:
