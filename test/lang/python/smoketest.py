@@ -104,8 +104,16 @@ class SmokeTest(unittest.TestCase):
 
                     # The tail won't end until we send a cancel request.
                     conn.cancel()
-                    self.assertEqual(copy.read_row(), None)
+                    with self.assertRaises(Exception) as context:
+                        copy.read_row()
+                    self.assertTrue(
+                        "canceling statement due to user request"
+                        in str(context.exception)
+                    )
 
+    # There might be problem with stream and the cancellation message. Skip until
+    # resolved.
+    @unittest.skip("https://github.com/psycopg/psycopg3/issues/30")
     def test_psycopg3_tail_stream(self):
         """Test tail with psycopg3 via its new streaming query support."""
         with psycopg3.connect(MATERIALIZED_URL) as conn:

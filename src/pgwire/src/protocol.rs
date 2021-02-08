@@ -139,6 +139,8 @@ where
             None => "eof",
         };
 
+        self.coord_client.reset_canceled();
+
         let next_state = match message {
             Some(FrontendMessage::Query { sql }) => self.query(sql).await?,
             Some(FrontendMessage::Parse {
@@ -1045,8 +1047,6 @@ where
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
     ) -> Result<State, comm::Error> {
-        let session = self.coord_client.session();
-
         // If this portal is being executed from a FETCH then we need to use the result
         // format type of the outer portal.
         let result_format_portal_name: &str = if let Some(ref name) = fetch_portal_name {
@@ -1054,15 +1054,13 @@ where
         } else {
             &portal_name
         };
-        let result_formats = session
+        let result_formats = self
+            .coord_client
+            .session()
             .get_portal(result_format_portal_name)
             .expect("valid fetch portal name for send rows")
             .result_formats
             .clone();
-
-        let portal = session
-            .get_portal_mut(&portal_name)
-            .expect("valid portal name for send rows");
 
         let (mut wait_once, mut deadline) = match timeout {
             ExecuteTimeout::None => (false, None),
@@ -1074,30 +1072,20 @@ where
         // fetch_batch is a helper function that fetches the next row batch and
         // implements timeout deadlines if they were requested.
         async fn fetch_batch(
-            wait_once: &mut bool,
-            deadline: &mut Option<Instant>,
+            deadline: Option<Instant>,
             rows: &mut RowBatchStream,
-        ) -> Result<Option<Vec<Row>>, comm::Error> {
-            let res = match deadline {
-                None => rows.try_next().await,
-                Some(deadline) => match time::timeout_at(*deadline, rows.try_next()).await {
-                    Ok(batch) => batch,
-                    Err(_elapsed) => Ok(None),
-                },
-            };
-            // If wait_once is true: the first time this fn is called it blocks (same as
-            // deadline == None). The second time this fn is called it should behave the
-            // same a 0s timeout.
-            if *wait_once {
-                *deadline = Some(Instant::now());
-                *wait_once = false;
-            }
-            res
+            canceled: impl Future<Output = ()>,
+        ) -> Result<FetchResult, comm::Error> {
+            Ok(tokio::select! {
+                _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
+                _ = canceled => FetchResult::Cancelled,
+                batch = rows.try_next() => FetchResult::Rows(batch?),
+            })
         };
 
-        let mut batch: Option<Vec<Row>> =
-            fetch_batch(&mut wait_once, &mut deadline, &mut rows).await?;
-        if let Some([row, ..]) = batch.as_deref() {
+        let canceled = self.coord_client.canceled();
+        let mut batch = fetch_batch(deadline, &mut rows, canceled).await?;
+        if let Some([row, ..]) = batch.as_rows() {
             let datums = row.unpack();
             let col_types = &row_desc.typ().column_types;
             if datums.len() != col_types.len() {
@@ -1145,28 +1133,56 @@ where
         };
 
         // Send rows while the client still wants them and there are still rows to send.
-        while let Some(batch_rows) = batch {
-            let mut batch_rows = batch_rows;
-            // Drain panics if it's > len, so cap it.
-            let drain_rows = cmp::min(want_rows, batch_rows.len());
-            self.conn
-                .send_all(batch_rows.drain(..drain_rows).map(|row| {
-                    BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
-                }))
-                .await?;
-            total_sent_rows += drain_rows;
-            want_rows -= drain_rows;
-            // If we have sent the number of requested rows, put the remainder of the batch
-            // back and stop sending.
-            if want_rows == 0 {
-                rows = Box::new(stream::iter(vec![Ok(batch_rows)]).chain(rows));
-                break;
+        loop {
+            match batch {
+                FetchResult::Rows(None) => break,
+                FetchResult::Rows(Some(mut batch_rows)) => {
+                    // If wait_once is true: the first time this fn is called it blocks (same as
+                    // deadline == None). The second time this fn is called it should behave the
+                    // same a 0s timeout.
+                    if wait_once && !batch_rows.is_empty() {
+                        deadline = Some(Instant::now());
+                        wait_once = false;
+                    }
+
+                    //  let mut batch_rows = batch_rows;
+                    // Drain panics if it's > len, so cap it.
+                    let drain_rows = cmp::min(want_rows, batch_rows.len());
+                    self.conn
+                        .send_all(batch_rows.drain(..drain_rows).map(|row| {
+                            BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
+                        }))
+                        .await?;
+                    total_sent_rows += drain_rows;
+                    want_rows -= drain_rows;
+                    // If we have sent the number of requested rows, put the remainder of the batch
+                    // back and stop sending.
+                    if want_rows == 0 && !batch_rows.is_empty() {
+                        rows = Box::new(stream::iter(vec![Ok(batch_rows)]).chain(rows));
+                        break;
+                    }
+                    self.conn.flush().await?;
+                    let canceled = self.coord_client.canceled();
+                    batch = fetch_batch(deadline, &mut rows, canceled).await?;
+                }
+                FetchResult::Cancelled => {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::QUERY_CANCELED,
+                            "canceling statement due to user request",
+                        ))
+                        .await;
+                }
             }
-            self.conn.flush().await?;
-            batch = fetch_batch(&mut wait_once, &mut deadline, &mut rows).await?;
         }
 
         ROWS_RETURNED.inc_by(u64::cast_from(total_sent_rows));
+
+        let portal = self
+            .coord_client
+            .session()
+            .get_portal_mut(&portal_name)
+            .expect("valid portal name for send rows");
 
         // Always return rows back, even if it's empty. This prevents an unclosed
         // portal from re-executing after it has been emptied.
@@ -1233,19 +1249,8 @@ where
 
         let mut count = 0;
         loop {
-            match time::timeout(Duration::from_secs(1), stream.next()).await {
-                Ok(None) => break,
-                Ok(Some(rows)) => {
-                    let rows = rows?;
-                    count += rows.len();
-                    for row in rows {
-                        encode_fn(row, typ, &mut out)?;
-                        self.conn
-                            .send(BackendMessage::CopyData(mem::take(&mut out)))
-                            .await?;
-                    }
-                }
-                Err(time::error::Elapsed { .. }) => {
+            tokio::select! {
+                _ = time::sleep_until(Instant::now() + Duration::from_secs(1)) => {
                     // It's been a while since we've had any data to send, and
                     // the client may have disconnected. Check whether the
                     // socket is no longer readable and error if so. Otherwise
@@ -1266,8 +1271,30 @@ where
                             ))
                             .await;
                     }
-                }
+                },
+                _ = self.coord_client.canceled() => {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::QUERY_CANCELED,
+                            "canceling statement due to user request",
+                        ))
+                    .await;
+                },
+                batch = stream.next() => match batch {
+                    None => break,
+                    Some(rows) => {
+                        let rows = rows?;
+                        count += rows.len();
+                        for row in rows {
+                            encode_fn(row, typ, &mut out)?;
+                            self.conn
+                                .send(BackendMessage::CopyData(mem::take(&mut out)))
+                                .await?;
+                        }
+                    }
+                },
             }
+
             self.conn.flush().await?;
         }
         // Send required trailers.
@@ -1424,5 +1451,20 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
         // Add PREPARE to this if we ever support it.
         Some(stmt) => matches!(stmt, Statement::Commit(_) | Statement::Rollback(_)),
         None => false,
+    }
+}
+
+#[derive(Debug)]
+enum FetchResult {
+    Rows(Option<Vec<Row>>),
+    Cancelled,
+}
+
+impl FetchResult {
+    fn as_rows(&self) -> Option<&[Row]> {
+        match self {
+            FetchResult::Rows(rows) => rows.as_deref(),
+            _ => None,
+        }
     }
 }

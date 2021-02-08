@@ -39,6 +39,7 @@ pub struct Session {
     transaction: TransactionStatus,
     user: String,
     vars: Vars,
+    drop_sinks: Vec<GlobalId>,
 }
 
 impl Session {
@@ -64,6 +65,7 @@ impl Session {
             portals: HashMap::new(),
             user,
             vars: Vars::default(),
+            drop_sinks: vec![],
         }
     }
 
@@ -105,16 +107,19 @@ impl Session {
     }
 
     /// Clears a transaction, setting its state to Default and destroying all
-    /// portals. The cleared transaction is returned so its operations can be
-    /// handled.
+    /// portals. Returned are:
+    /// - sinks that were started in this transaction and need to be dropped
+    /// - the cleared transaction so its operations can be handled
     ///
     /// The [Postgres protocol docs](https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY) specify:
     /// > a named portal object lasts till the end of the current transaction
     /// and
     /// > An unnamed portal is destroyed at the end of the transaction
-    pub fn clear_transaction(&mut self) -> TransactionStatus {
+    pub fn clear_transaction(&mut self) -> (Vec<GlobalId>, TransactionStatus) {
         self.portals.clear();
-        mem::replace(&mut self.transaction, TransactionStatus::Default)
+        let drop_sinks = mem::take(&mut self.drop_sinks);
+        let txn = mem::take(&mut self.transaction);
+        (drop_sinks, txn)
     }
 
     /// Marks the current transaction as failed.
@@ -153,6 +158,12 @@ impl Session {
             }
         }
         Ok(())
+    }
+
+    /// Adds a sink that will need to be dropped when the current transaction is
+    /// cleared.
+    pub fn add_drop_sink(&mut self, name: GlobalId) {
+        self.drop_sinks.push(name);
     }
 
     /// Registers the prepared statement under `name`.
@@ -225,12 +236,13 @@ impl Session {
         self.portals.get_mut(portal_name)
     }
 
-    /// Resets the session to its initial state.
-    pub fn reset(&mut self) {
-        self.transaction = TransactionStatus::Default;
+    /// Resets the session to its initial state. Returns sinks that need to be
+    /// dropped.
+    pub fn reset(&mut self) -> Vec<GlobalId> {
+        let (drop_sinks, _) = self.clear_transaction();
         self.prepared_statements.clear();
-        self.portals.clear();
         self.vars = Vars::default();
+        drop_sinks
     }
 
     /// Returns the name of the user who owns this session.
@@ -324,6 +336,12 @@ pub enum TransactionStatus {
     /// InTransaction). We do not use Failed for implicit transactions because
     /// those cleanup after themselves. Matches TBLOCK_ABORT.
     Failed,
+}
+
+impl Default for TransactionStatus {
+    fn default() -> Self {
+        TransactionStatus::Default
+    }
 }
 
 /// The type of operation being performed by the transaction. This is
