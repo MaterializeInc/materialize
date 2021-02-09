@@ -323,6 +323,7 @@ impl ErrorResponse {
             CoordError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             CoordError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
             CoordError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
+            CoordError::TailOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             CoordError::Transform(_) => SqlState::INTERNAL_ERROR,
             CoordError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,
             CoordError::UnknownParameter(_) => SqlState::UNDEFINED_OBJECT,
