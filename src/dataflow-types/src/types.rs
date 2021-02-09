@@ -350,28 +350,27 @@ impl DataEncoding {
                         .context("validating avro ocf reader schema")?
                         .into_iter()
                         .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
-                if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
-                    desc.with_column(
-                        "diff",
-                        ColumnType {
-                            nullable: false,
-                            scalar_type: ScalarType::Int64,
-                        },
-                    )
-                } else {
-                    desc
-                }
+                desc
             }
             DataEncoding::Avro(AvroEncoding {
                 value_schema,
                 key_schema,
                 ..
             }) => {
-                let desc =
+                let mut columns =
                     avro::validate_value_schema(value_schema, envelope.get_avro_envelope_type())
                         .context("validating avro value schema")?
                         .into_iter()
-                        .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
+                        .collect::<Vec<_>>();
+                if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
+                    // TODO [btv] - Get rid of this, when we can. Right now source processing is still not fully orthogonal,
+                    // so we have some special logic in the debezium processor that only passes on
+                    // the first two columns ("before" and "after"), and uses the information in the other ones itself
+                    columns.truncate(2);
+                }
+                let desc = columns
+                    .into_iter()
+                    .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
                 let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
                     avro::validate_key_schema(key_schema, &desc)
                         .map(Some)
@@ -381,13 +380,7 @@ impl DataEncoding {
                         })
                 });
                 if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
-                    desc.with_column(
-                        "diff",
-                        ColumnType {
-                            nullable: false,
-                            scalar_type: ScalarType::Int64,
-                        },
-                    )
+                    desc
                 } else {
                     if let Some(key) = key_schema_indices {
                         desc.with_key(key)

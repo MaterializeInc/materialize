@@ -138,7 +138,7 @@ where
                         for (key, data) in map.drain() {
                             // decode key and value
                             match key_decoder_state.decode_key(&key) {
-                                Ok(decoded_key) => {
+                                Ok(Some(decoded_key)) => {
                                     let decoded_value = if data.value.is_empty() {
                                         Ok(None)
                                     } else {
@@ -178,6 +178,7 @@ where
                                         }
                                     }
                                 }
+                                Ok(None) => {}
                                 Err(err) => {
                                     error!("{}", err);
                                 }
