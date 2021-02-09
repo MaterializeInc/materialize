@@ -13,11 +13,8 @@
 //! `ALTER`, `CREATE`, and `DROP`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::convert::TryFrom;
-use std::iter;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
-use std::u64;
 
 use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
@@ -25,11 +22,10 @@ use expr::MirRelationExpr;
 use expr::TableFunc;
 use globset::GlobBuilder;
 use itertools::Itertools;
+use log::warn;
 use ore::str::StrExt;
 use repr::ColumnName;
-use repr::ColumnType;
-use repr::Datum;
-use repr::Row;
+
 use reqwest::Url;
 
 use dataflow_types::{
@@ -60,12 +56,9 @@ use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
-use crate::plan::expr::ColumnRef;
-use crate::plan::expr::HirScalarExpr;
-use crate::plan::expr::JoinKind;
+use crate::plan::expr::{ColumnRef, HirScalarExpr, JoinKind};
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::HirRelationExpr;
 use crate::plan::{
     self, plan_utils, query, Index, IndexOption, IndexOptionName, Params, Plan, Sink, Source,
     Table, Type, TypeInner, View,
@@ -223,6 +216,7 @@ pub fn describe_create_source(
 fn plan_source_envelope(
     bare_desc: &RelationDesc,
     envelope: &SourceEnvelope,
+    post_transform_key: Option<Vec<usize>>,
 ) -> (MirRelationExpr, Vec<Option<ColumnName>>) {
     let get_expr = HirRelationExpr::Get {
         id: expr::Id::LocalBareSource,
@@ -248,17 +242,15 @@ fn plan_source_envelope(
                     column: diff_col,
                 })],
             }),
-            on: HirScalarExpr::Literal(
-                Row::pack(iter::once(Datum::True)),
-                ColumnType {
-                    nullable: false,
-                    scalar_type: ScalarType::Bool,
-                },
-            ),
+            on: HirScalarExpr::literal_true(),
             kind: JoinKind::Inner { lateral: true },
         }
         .project((0..diff_col).collect());
-        expr
+        if let Some(post_transform_key) = post_transform_key {
+            expr.declare_key(post_transform_key)
+        } else {
+            expr
+        }
     } else {
         get_expr
     };
@@ -703,9 +695,30 @@ pub fn plan_create_source(
         Some(_) => bail!("ignore_source_keys must be a boolean"),
     };
     if ignore_source_keys {
-        bare_desc = bare_desc.without_keys().without_group_sum_keys();
+        bare_desc = bare_desc.without_keys();
     }
 
+    let post_transform_key = if let SourceEnvelope::Debezium(_) = &envelope {
+        if let DataEncoding::Avro(AvroEncoding { key_schema, .. }) = &encoding {
+            if ignore_source_keys {
+                None
+            } else {
+                let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
+                    avro::validate_key_schema(key_schema, &bare_desc)
+                        .map(Some)
+                        .unwrap_or_else(|e| {
+                            warn!("Not using key due to error: {}", e);
+                            None
+                        })
+                });
+                key_schema_indices
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     bare_desc =
         plan_utils::maybe_rename_columns(format!("source {}", name), bare_desc, &col_names)?;
 
@@ -730,7 +743,7 @@ pub fn plan_create_source(
     let name = scx.allocate_name(normalize::object_name(name.clone())?);
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
-    let (expr, column_names) = plan_source_envelope(&bare_desc, &envelope);
+    let (expr, column_names) = plan_source_envelope(&bare_desc, &envelope, post_transform_key);
     let source = Source {
         create_sql,
         connector: SourceConnector::External {

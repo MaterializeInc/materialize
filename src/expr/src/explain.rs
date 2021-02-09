@@ -132,6 +132,7 @@ impl<'a> Explanation<'a> {
                 | TopK { input, .. }
                 | Negate { input, .. }
                 | Threshold { input, .. }
+                | DeclareKey { input, .. }
                 | ArrangeBy { input, .. } => walk(input, explanation),
                 // For join and union, each input may need to go in its own
                 // chain.
@@ -355,6 +356,11 @@ impl<'a> Explanation<'a> {
             }
             Negate { .. } => writeln!(f, "| Negate")?,
             Threshold { .. } => write!(f, "| Threshold")?,
+            DeclareKey { input: _, key } => write!(
+                f,
+                "| Declare primary key={}",
+                bracketed("(", ")", separated(", ", key))
+            )?,
             Union { base, inputs } => writeln!(
                 f,
                 "| Union %{} {}",
@@ -377,12 +383,7 @@ impl<'a> Explanation<'a> {
             )?,
         }
 
-        if let Some(RelationType {
-            column_types,
-            keys,
-            group_sum_keys: _, /*  These are a bit hard to describe, so don't bother trying to explain them */
-        }) = &node.typ
-        {
+        if let Some(RelationType { column_types, keys }) = &node.typ {
             let column_types: Vec<_> = column_types
                 .iter()
                 .map(|c| self.expr_humanizer.humanize_column_type(c))

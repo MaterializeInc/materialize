@@ -132,12 +132,14 @@ impl DataflowDesc {
         connector: SourceConnector,
         bare_desc: RelationDesc,
         optimized_expr: OptimizedMirRelationExpr,
+        desc: RelationDesc,
     ) {
         let source_description = SourceDesc {
             connector,
             operators: None,
             bare_desc,
             optimized_expr,
+            desc,
         };
         self.source_imports.insert(id, source_description);
     }
@@ -376,19 +378,13 @@ impl DataEncoding {
                         })
                 });
                 if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
-                    let desc = desc.with_column(
+                    desc.with_column(
                         "diff",
                         ColumnType {
                             nullable: false,
                             scalar_type: ScalarType::Int64,
                         },
-                    );
-                    if let Some(key) = key_schema_indices {
-                        let diff_column = desc.arity() - 1;
-                        desc.with_group_sum_key(key, diff_column)
-                    } else {
-                        desc
-                    }
+                    )
                 } else {
                     if let Some(key) = key_schema_indices {
                         desc.with_key(key)
@@ -489,6 +485,7 @@ pub struct SourceDesc {
     pub operators: Option<LinearOperator>,
     pub bare_desc: RelationDesc,
     pub optimized_expr: OptimizedMirRelationExpr,
+    pub desc: RelationDesc,
 }
 
 impl SourceDesc {

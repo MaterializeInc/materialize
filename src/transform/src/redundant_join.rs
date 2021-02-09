@@ -207,6 +207,7 @@ impl RedundantJoin {
             }
 
             MirRelationExpr::Map { input, .. } => self.action(input, lets),
+            MirRelationExpr::DeclareKey { input, .. } => self.action(input, lets),
 
             MirRelationExpr::Union { base, inputs } => {
                 let mut prov = self.action(base, lets);
