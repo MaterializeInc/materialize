@@ -27,7 +27,7 @@ RowDescription {"fields":[{"name":"?column?"}]}
 DataRow {"fields":["1"]}
 CommandComplete {"tag":"SELECT 1"}
 RowDescription {"fields":[{"name":"?column?"}]}
-ErrorResponse {"fields":[{"typ":"M","value":"Evaluation error: division by zero"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"I"}
 
 # There are two transactions here, the first (explicit) succeeds and
@@ -45,7 +45,7 @@ DataRow {"fields":["1"]}
 CommandComplete {"tag":"SELECT 1"}
 CommandComplete {"tag":"COMMIT"}
 RowDescription {"fields":[{"name":"?column?"}]}
-ErrorResponse {"fields":[{"typ":"M","value":"Evaluation error: division by zero"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"I"}
 
 # The transaction fails, so statements after it should not be executed,
@@ -61,7 +61,7 @@ ReadyForQuery
 ----
 CommandComplete {"tag":"BEGIN"}
 RowDescription {"fields":[{"name":"?column?"}]}
-ErrorResponse {"fields":[{"typ":"M","value":"Evaluation error: division by zero"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"E"}
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
@@ -122,7 +122,7 @@ ReadyForQuery
 ----
 CommandComplete {"tag":"BEGIN"}
 RowDescription {"fields":[{"name":"?column?"}]}
-ErrorResponse {"fields":[{"typ":"M","value":"Evaluation error: division by zero"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"E"}
 ErrorResponse {"fields":[{"typ":"M","value":"current transaction is aborted, commands ignored until end of transaction block"}]}
 ReadyForQuery {"status":"E"}
@@ -175,7 +175,7 @@ until err_field_typs=M
 ReadyForQuery
 ----
 RowDescription {"fields":[{"name":"?column?"}]}
-ErrorResponse {"fields":[{"typ":"M","value":"Evaluation error: division by zero"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"I"}
 
 # Test DISCARD ALL, which "cannot be executed inside a transaction
@@ -311,7 +311,7 @@ DataRow {"fields":["1"]}
 CommandComplete {"tag":"SELECT 1"}
 ParseComplete
 BindComplete
-ErrorResponse {"fields":[{"typ":"M","value":"Evaluation error: division by zero"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"I"}
 
 # A ROLLBACK must be the first message in a new extended session.
@@ -360,7 +360,7 @@ DataRow {"fields":["1"]}
 CommandComplete {"tag":"SELECT 1"}
 ParseComplete
 BindComplete
-ErrorResponse {"fields":[{"typ":"M","value":"Evaluation error: division by zero"}]}
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
 ReadyForQuery {"status":"E"}
 ErrorResponse {"fields":[{"typ":"M","value":"current transaction is aborted, commands ignored until end of transaction block"}]}
 ReadyForQuery {"status":"E"}
