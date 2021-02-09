@@ -7,7 +7,7 @@ menu:
         weight: 4
 ---
 
-**tl;dr** Materialize can enable real-time data dashboards within business
+**tl;dr** Materialize can enable real-time monitoring within business
 intelligence tools, and we have a [demo](#run-the-demo) showing you that it's
 feasible.
 
@@ -242,7 +242,7 @@ Materialize to maintain for us.
             extract('year' FROM o_entry_d)
         ORDER BY su_nationkey, cust_nation, l_year;
     ```
-    This query sums up revenue (`ol_amount`) from the fast-changing
+    This query sums revenue (`ol_amount`) from the fast-changing
     `orderline` table and joins it with several other tables to show
     the total revenue between any two nations in a given year.
 
