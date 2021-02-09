@@ -18,7 +18,7 @@ use derivative::Derivative;
 use futures::Stream;
 
 use expr::GlobalId;
-use repr::{Datum, Row, ScalarType};
+use repr::{Datum, Row, ScalarType, Timestamp};
 use sql::ast::{Raw, Statement};
 use sql::plan::{Params, StatementDesc};
 
@@ -136,10 +136,13 @@ impl Session {
             | TransactionStatus::InTransaction(txn_ops)
             | TransactionStatus::InTransactionImplicit(txn_ops) => match txn_ops {
                 TransactionOps::None => *txn_ops = add_ops,
-                TransactionOps::Reads => match add_ops {
-                    TransactionOps::Reads => {}
+                TransactionOps::Peeks(txn_ts) => match add_ops {
+                    TransactionOps::Peeks(add_ts) => {
+                        assert_eq!(*txn_ts, add_ts);
+                    }
                     _ => return Err(CoordError::ReadOnlyTransaction),
                 },
+                TransactionOps::Tail => return Err(CoordError::TailOnlyTransaction),
                 TransactionOps::Writes(txn_writes) => match add_ops {
                     TransactionOps::Writes(mut add_writes) => {
                         txn_writes.append(&mut add_writes);
@@ -160,6 +163,27 @@ impl Session {
     /// cleared.
     pub fn add_drop_sink(&mut self, name: GlobalId) {
         self.drop_sinks.push(name);
+    }
+
+    /// Assumes an active transaction. Returns its read timestamp. Errors if not
+    /// a read transaction. Calls get_ts to get a timestamp if the transaction
+    /// doesn't have an operation yet, converting the transaction to a read.
+    pub fn get_transaction_timestamp<F: FnMut() -> Result<Timestamp, CoordError>>(
+        &mut self,
+        mut get_ts: F,
+    ) -> Result<Timestamp, CoordError> {
+        // If the transaction already has a peek timestamp, use it. Otherwise generate
+        // one. We generate one even though we could check here that the transaction
+        // isn't in some other conflicting state because we want all of that logic to
+        // reside in add_transaction_ops.
+        let ts = match self.transaction {
+            TransactionStatus::Started(TransactionOps::Peeks(ts))
+            | TransactionStatus::InTransaction(TransactionOps::Peeks(ts))
+            | TransactionStatus::InTransactionImplicit(TransactionOps::Peeks(ts)) => ts,
+            _ => get_ts()?,
+        };
+        self.add_transaction_ops(TransactionOps::Peeks(ts))?;
+        Ok(ts)
     }
 
     /// Registers the prepared statement under `name`.
@@ -356,8 +380,10 @@ pub enum TransactionOps {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
     None,
-    /// This transaction has had a read (`SELECT`, `TAIL`) and must only do other reads.
-    Reads,
+    /// This transaction has had a peek (`SELECT`, `TAIL`) and must only do other peeks.
+    Peeks(Timestamp),
+    /// This transaction has done a TAIL and must do nothing else.
+    Tail,
     /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must only do
     /// other writes.
     Writes(Vec<WriteOp>),

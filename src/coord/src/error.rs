@@ -44,6 +44,8 @@ pub enum CoordError {
     SafeModeViolation(String),
     /// An error occurred in a SQL catalog operation.
     SqlCatalog(sql::catalog::CatalogError),
+    /// The transaction is in single-tail mode.
+    TailOnlyTransaction,
     /// An error occurred in the optimizer.
     Transform(TransformError),
     /// The named cursor does not exist.
@@ -130,6 +132,9 @@ impl fmt::Display for CoordError {
                 write!(f, "cannot create {} in safe mode", feature)
             }
             CoordError::SqlCatalog(e) => e.fmt(f),
+            CoordError::TailOnlyTransaction => {
+                f.write_str("TAIL in transactions must be the only read statement")
+            }
             CoordError::Transform(e) => e.fmt(f),
             CoordError::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())

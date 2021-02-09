@@ -187,3 +187,84 @@ simple
 COMMIT
 ----
 db error: ERROR: unknown catalog item 'u1'
+
+# Verify TAIL must be only read statement in a transaction.
+# We use FETCH 0 with TAIL below so that we don't need to worry about
+# timestamps in this slt file.
+
+statement ok
+CREATE TABLE t (a int)
+
+statement ok
+INSERT INTO t VALUES (1)
+
+simple
+DECLARE c CURSOR FOR TAIL t;
+FETCH 0 c;
+DECLARE d CURSOR FOR TAIL t;
+FETCH 0 d;
+----
+db error: ERROR: TAIL in transactions must be the only read statement
+
+simple
+DECLARE c CURSOR FOR TAIL t;
+FETCH 0 c;
+SELECT * FROM t LIMIT 0;
+----
+db error: ERROR: TAIL in transactions must be the only read statement
+
+simple
+SELECT * FROM t LIMIT 0;
+DECLARE c CURSOR FOR TAIL t;
+FETCH 0 c;
+----
+db error: ERROR: transaction in read-only mode
+
+# Using an AS OF in the SELECT or TAIL allows lifting that restriction.
+
+simple
+DECLARE c CURSOR FOR TAIL t AS OF 1;
+FETCH 0 c;
+DECLARE d CURSOR FOR TAIL t;
+FETCH 0 d;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+
+simple
+DECLARE c CURSOR FOR TAIL t AS OF 1;
+FETCH 0 c;
+SELECT * FROM t LIMIT 0;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+
+simple
+SELECT * FROM t LIMIT 0;
+DECLARE c CURSOR FOR TAIL t AS OF 1;
+FETCH 0 c;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+
+simple
+DECLARE c CURSOR FOR TAIL t;
+FETCH 0 c;
+SELECT * FROM t LIMIT 0 AS OF 1;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
+
+simple
+SELECT * FROM t LIMIT 0 AS OF 1;
+DECLARE c CURSOR FOR TAIL t;
+FETCH 0 c;
+----
+COMPLETE 0
+COMPLETE 0
+COMPLETE 0
