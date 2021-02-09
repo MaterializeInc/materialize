@@ -25,7 +25,7 @@ the time required to provide fresh answers.
 
 ## Overview
 
-In this demo, we'll take the role of a business that has a transactional
+In this demo, we'll take the role of a business with a transactional
 workload running against our servers. To support the business' goals, we'll
 stand up a BI tool to perform analytic-style queries over that transactional
 data.
@@ -36,13 +36,13 @@ without an enormous investment of time, we've built out a Docker Compose file
 that can take care of the entire deployment for you.
 
 In this section, we'll cover the "what" and "why" of our proposed deployment
-using Materialize to provide real-time analytics within Metabase, an open source
+using Materialize to provide real-time analytics within Metabase, an open-source
 business intelligence tool.
 
 ### Dataset & load generator
 
 For this demo, Materialize uses a custom benchmark called chBench that is really
-just a concatenation of two well known database benchmarking tools, TPC-C and
+just a concatenation of two well-known database benchmarking tools, TPC-C and
 TPC-H.
 
 [TPC-C](http://www.tpc.org/tpcc/detail.asp) is an industry-standard benchmark
@@ -54,13 +54,13 @@ complex analytic style queries. This includes large aggregations, many
 groupings, and complex multi-way joins.
 
 [CH-benCHmark](https://db.in.tum.de/research/projects/CHbenCHmark/?lang=en)
-brings together the a TPC-C-like dataset, with TPC-H's analytical queries. This
+brings together a TPC-C-like dataset with TPC-H's analytical queries. This
 is a great approximation for how many businesses perform OLAP queries over OLTP
 data.
 
 ### Database (MySQL)
 
-This demo relies on MySQL, which is a stable, well supported platform with good
+This demo relies on MySQL, which is a stable, well-supported platform with good
 performance.
 
 ### Change Data Capture & Streaming (Debezium & Kafka)
@@ -88,7 +88,7 @@ answers from your data warehouse.
 
 ### BI Tool (Metabase)
 
-Metabase is an open source tool to create visualizations of SQL queries'
+Metabase is an open-source tool to create visualizations of SQL queries'
 results, and then group them into dashboards. For instance, teams might use
 Metabase to monitor purchasing geographic purchasing patterns from their stores.
 
@@ -136,23 +136,25 @@ Putting this all together, our deployment looks like this:
    ```
 
    Note that downloading the Docker images necessary for the demo can take quite
-   a bit of time (upwards of 10 minutes, even on very fast connections).
+   a bit of time (upwards of 10 minutes, even on fast connections).
+
+   When the script exits successfully, all components from the diagram above are
+   active in Docker containers, and the chBench client is rapidly pushing data
+   and transactions to the MySQL database.
 
 ### Define sources & views
 
 Now that our deployment is running (and looks like the diagram shown above), we
-can get Materialize to read data from Kafka, and define the views we want
+can get Materialize to read data from Kafka and define the views we want
 Materialize to maintain for us.
 
-1. Launch a new terminal window and `cd <path to materialize>/demo/chbench`.
-
-1. Launch the Materialize CLI (`mzcli`) by running:
+1. In the same terminal, launch the Materialize CLI by running:
 
     ```shell
     ./mzcompose run cli
     ```
 
-1. Within `mzcli`, ensure you have all of the necessary sources, which represent
+1. Within the CLI, ensure you have all of the necessary sources, which represent
    all of the tables from MySQL:
 
     ```sql
@@ -199,9 +201,9 @@ Materialize to maintain for us.
     SELECT * FROM query01;
     ```
 
-    If you run this query multiple times, you should see the results change, and
-    the answers should come back pretty quickly. (How quickly depends on the
-    speed of your computer, but it should be some small fraction of a second.)
+    If you run this query multiple times, you should see the results change,
+    and the answers should come back pretty quickly. (How quickly depends on
+    the speed of your computer, but sub-second responses are typical.)
 
 1. Define another view for "Query 07", which involves a complex 11-way `JOIN`
    across 6 tables:
@@ -240,6 +242,9 @@ Materialize to maintain for us.
             extract('year' FROM o_entry_d)
         ORDER BY su_nationkey, cust_nation, l_year;
     ```
+    This query sums revenue (`ol_amount`) from the fast-changing
+    `orderline` table and joins it with several other tables to show
+    the total revenue between any two nations in a given year.
 
 1. Check the results of this query:
 
@@ -247,19 +252,12 @@ Materialize to maintain for us.
     SELECT * FROM query07;
     ```
 
-    This query can take a few minutes to begin producing answers. Before answers
-    are produced, you will see the following error:
+    It can take a few minutes to begin producing answers. Running
+    the query while it is initializing will produce an empty set of
+    results.
 
-    ```sql
-    SELECT * FROM query07;
-    ```
-    ```nofmt
-    At least one input has no complete timestamps yet: { .. }
-    ```
-
-    If you receive an empty set of results, either wait or disconnect from `mzcli`
-    and relaunch it. Just like the prior reads from the materialized view, you
-    should see these results update, and the response times should be quick!
+    Once initialized, re-running the query should show updated values in
+    the `revenue` column and the response times should be quick!
 
 ### Set up Metabase
 
@@ -267,8 +265,8 @@ Materialize to maintain for us.
 
 1. Click **Let's get started**.
 
-1. Complete first set of fields asking for your email address. This information
-   isn't crucial for anything but does have to be filled in.
+1. Complete the first set of fields asking for your email address. This
+   information isn't crucial for anything but does have to be filled in.
 
 1. On the **Add your data** page, fill in the following information:
 
@@ -279,7 +277,7 @@ Materialize to maintain for us.
     Host              | **materialized**
     Port              | **6875**
     Database name     | **materialize**
-    Database username | **root**
+    Database username | **materialize**
     Database password | Leave empty.
 
 1. Proceed past the screens until you reach your primary dashboard.
@@ -325,15 +323,20 @@ Materialize to maintain for us.
 
 1. Modify the size of the **query01** card, and then click **Save**.
 
-1. Click **Auto-refresh**, and then select **1 minute** (which is the fastest
-   refresh rate that the tool offers; Materialize can reasonably support 1
-   second refreshes for many query types).
+1. Click **Auto-refresh**, and then select **1 minute.**
 
-At this point, Metabase will now automatically refresh this analysis for you
-every 1 minute.
+   60 seconds is the fastest refresh rate selectable in the UI, but if you
+   copy the URL, open a new tab and edit the end of the url to change the
+   `refresh=60` anchor to `refresh=1` you can force metabase to update
+   every second.
+
+{{< figure
+    src="https://user-images.githubusercontent.com/11527560/107248709-8f339a00-6a00-11eb-81b5-beb01a95156c.gif"
+    alt="Materialize real-time business intelligence dashboard in metabase"
+>}}
 
 If you want to see more chBench queries, you can repeat these steps for the view
-`query07` or any of the queries listed in our [chBench query index](https://github.com/MaterializeInc/materialize/blob/main/demo/chbench/chbench/mz-default.cfg).
+`query07` or any of the queries listed in our [chBench query index](https://github.com/MaterializeInc/materialize/blob/main/demo/chbench/chbench/mz-default-mysql.cfg).
 
 ## Recap
 
