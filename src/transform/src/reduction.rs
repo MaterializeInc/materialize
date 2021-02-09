@@ -53,8 +53,11 @@ impl FoldConstants {
                 for aggregate in aggregates.iter_mut() {
                     aggregate.expr.reduce(&input.typ());
                 }
-                if let MirRelationExpr::Constant { rows: Ok(rows), .. } = &**input {
-                    let new_rows = Self::fold_reduce_constant(group_key, aggregates, rows);
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
+                    let new_rows = match rows {
+                        Ok(rows) => Self::fold_reduce_constant(group_key, aggregates, rows),
+                        Err(e) => Err(e.clone()),
+                    };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation.typ(),
@@ -63,16 +66,20 @@ impl FoldConstants {
             }
             MirRelationExpr::TopK { .. } => { /*too complicated*/ }
             MirRelationExpr::Negate { input } => {
-                if let MirRelationExpr::Constant { rows: Ok(rows), .. } = &mut **input {
-                    for (_row, diff) in rows {
-                        *diff *= -1;
+                if let MirRelationExpr::Constant { rows, .. } = &mut **input {
+                    if let Ok(rows) = rows {
+                        for (_row, diff) in rows {
+                            *diff *= -1;
+                        }
                     }
                     *relation = input.take_dangerous();
                 }
             }
             MirRelationExpr::Threshold { input } => {
-                if let MirRelationExpr::Constant { rows: Ok(rows), .. } = &mut **input {
-                    rows.retain(|(_, diff)| *diff > 0);
+                if let MirRelationExpr::Constant { rows, .. } = &mut **input {
+                    if let Ok(rows) = rows {
+                        rows.retain(|(_, diff)| *diff > 0);
+                    }
                     *relation = input.take_dangerous();
                 }
             }
@@ -95,20 +102,23 @@ impl FoldConstants {
                     scalar.reduce(&current_type);
                 }
 
-                if let MirRelationExpr::Constant { rows: Ok(rows), .. } = &**input {
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let mut row_packer = repr::RowPacker::new();
-                    let new_rows = rows
-                        .iter()
-                        .cloned()
-                        .map(|(input_row, diff)| {
-                            let mut unpacked = input_row.unpack();
-                            let temp_storage = RowArena::new();
-                            for scalar in scalars.iter() {
-                                unpacked.push(scalar.eval(&unpacked, &temp_storage)?)
-                            }
-                            Ok::<_, EvalError>((row_packer.pack(unpacked), diff))
-                        })
-                        .collect::<Result<_, _>>();
+                    let new_rows = match rows {
+                        Ok(rows) => rows
+                            .iter()
+                            .cloned()
+                            .map(|(input_row, diff)| {
+                                let mut unpacked = input_row.unpack();
+                                let temp_storage = RowArena::new();
+                                for scalar in scalars.iter() {
+                                    unpacked.push(scalar.eval(&unpacked, &temp_storage)?)
+                                }
+                                Ok::<_, EvalError>((row_packer.pack(unpacked), diff))
+                            })
+                            .collect::<Result<_, _>>(),
+                        Err(e) => Err(e.clone()),
+                    };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation.typ(),
@@ -124,8 +134,11 @@ impl FoldConstants {
                 for expr in exprs.iter_mut() {
                     expr.reduce(&input.typ());
                 }
-                if let MirRelationExpr::Constant { rows: Ok(rows), .. } = &**input {
-                    let new_rows = Self::fold_flat_map_constant(func, exprs, rows);
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
+                    let new_rows = match rows {
+                        Ok(rows) => Self::fold_flat_map_constant(func, exprs, rows),
+                        Err(e) => Err(e.clone()),
+                    };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation.typ(),
@@ -144,8 +157,11 @@ impl FoldConstants {
                     .any(|p| p.is_literal_false() || p.is_literal_null())
                 {
                     relation.take_safely();
-                } else if let MirRelationExpr::Constant { rows: Ok(rows), .. } = &**input {
-                    let new_rows = Self::fold_filter_constant(predicates, rows);
+                } else if let MirRelationExpr::Constant { rows, .. } = &**input {
+                    let new_rows = match rows {
+                        Ok(rows) => Self::fold_filter_constant(predicates, rows),
+                        Err(e) => Err(e.clone()),
+                    };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
                         typ: relation.typ(),
@@ -153,17 +169,20 @@ impl FoldConstants {
                 }
             }
             MirRelationExpr::Project { input, outputs } => {
-                if let MirRelationExpr::Constant { rows: Ok(rows), .. } = &**input {
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let mut row_packer = repr::RowPacker::new();
-                    let new_rows = rows
-                        .iter()
-                        .map(|(input_row, diff)| {
-                            let datums = input_row.unpack();
-                            (row_packer.pack(outputs.iter().map(|i| &datums[*i])), *diff)
-                        })
-                        .collect();
+                    let new_rows = match rows {
+                        Ok(rows) => Ok(rows
+                            .iter()
+                            .map(|(input_row, diff)| {
+                                let datums = input_row.unpack();
+                                (row_packer.pack(outputs.iter().map(|i| &datums[*i])), *diff)
+                            })
+                            .collect()),
+                        Err(e) => Err(e.clone()),
+                    };
                     *relation = MirRelationExpr::Constant {
-                        rows: Ok(new_rows),
+                        rows: new_rows,
                         typ: relation.typ(),
                     };
                 }
@@ -175,6 +194,14 @@ impl FoldConstants {
             } => {
                 if inputs.iter().any(|e| e.is_empty()) {
                     relation.take_safely();
+                } else if let Some(e) = inputs.iter().find_map(|i| match i {
+                    MirRelationExpr::Constant { rows: Err(e), .. } => Some(e),
+                    _ => None,
+                }) {
+                    *relation = MirRelationExpr::Constant {
+                        rows: Err(e.clone()),
+                        typ: relation.typ(),
+                    };
                 } else if inputs
                     .iter()
                     .all(|i| matches!(i, MirRelationExpr::Constant { rows: Ok(_), .. }))
@@ -224,26 +251,39 @@ impl FoldConstants {
                 // TODO: General constant folding for all constant inputs.
             }
             MirRelationExpr::Union { base, inputs } => {
-                let mut rows = vec![];
-                let mut new_inputs = vec![];
+                if let Some(e) = iter::once(&mut **base)
+                    .chain(&mut *inputs)
+                    .find_map(|i| match i {
+                        MirRelationExpr::Constant { rows: Err(e), .. } => Some(e),
+                        _ => None,
+                    })
+                {
+                    *relation = MirRelationExpr::Constant {
+                        rows: Err(e.clone()),
+                        typ: relation.typ(),
+                    };
+                } else {
+                    let mut rows = vec![];
+                    let mut new_inputs = vec![];
 
-                for input in iter::once(&mut **base).chain(&mut *inputs) {
-                    match input.take_dangerous() {
-                        MirRelationExpr::Constant {
-                            rows: Ok(rs),
-                            typ: _,
-                        } => rows.extend(rs),
-                        input => new_inputs.push(input),
+                    for input in iter::once(&mut **base).chain(&mut *inputs) {
+                        match input.take_dangerous() {
+                            MirRelationExpr::Constant {
+                                rows: Ok(rs),
+                                typ: _,
+                            } => rows.extend(rs),
+                            input => new_inputs.push(input),
+                        }
                     }
-                }
-                if !rows.is_empty() {
-                    new_inputs.push(MirRelationExpr::Constant {
-                        rows: Ok(rows),
-                        typ: relation_type.clone(),
-                    });
-                }
+                    if !rows.is_empty() {
+                        new_inputs.push(MirRelationExpr::Constant {
+                            rows: Ok(rows),
+                            typ: relation_type.clone(),
+                        });
+                    }
 
-                *relation = MirRelationExpr::union_many(new_inputs, relation_type);
+                    *relation = MirRelationExpr::union_many(new_inputs, relation_type);
+                }
             }
             MirRelationExpr::ArrangeBy { input, .. } => {
                 if let MirRelationExpr::Constant { .. } = &**input {

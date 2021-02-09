@@ -23,7 +23,9 @@
 //!
 //! At the moment, only *scalar* expression evaluation can fail, so only
 //! operators that evaluate scalar expressions can fail. At the time of writing,
-//! that includes map, filter, reduce, and join operators.
+//! that includes map, filter, reduce, and join operators. Constants are a bit
+//! of a special case: they can be either a constant vector of rows *or* a
+//! constant, singular error.
 //!
 //! The approach taken is to build two parallel trees of computation: one for
 //! the rows that have been successfully evaluated (the "oks tree"), and one for
