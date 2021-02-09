@@ -39,6 +39,7 @@ use repr::adt::datetime::{DateTimeUnits, Timezone};
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
+use repr::adt::rdn;
 use repr::adt::regex::Regex;
 use repr::{strconv, ColumnName, ColumnType, Datum, RowArena, RowPacker, ScalarType};
 
@@ -4158,6 +4159,13 @@ where
         Float32 => strconv::format_float32(buf, d.unwrap_float32()),
         Float64 => strconv::format_float64(buf, d.unwrap_float64()),
         Decimal(_, s) => strconv::format_decimal(buf, &d.unwrap_decimal().with_scale(*s)),
+        Numeric { scale } => {
+            let mut s = d.unwrap_numeric();
+            if let Some(scale) = scale {
+                rdn::rescale(&mut s, *scale).unwrap();
+            }
+            strconv::format_numeric(buf, &s)
+        }
         Date => strconv::format_date(buf, d.unwrap_date()),
         Time => strconv::format_time(buf, d.unwrap_time()),
         Timestamp => strconv::format_timestamp(buf, d.unwrap_timestamp()),
