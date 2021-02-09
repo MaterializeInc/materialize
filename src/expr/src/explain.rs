@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::iter;
 
+use ore::str::StrExt;
 use repr::RelationType;
 
 use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, MirRelationExpr, RowSetFinishing};
@@ -213,15 +214,21 @@ impl<'a> Explanation<'a> {
         use MirRelationExpr::*;
 
         match node.expr {
-            Constant { rows, .. } => writeln!(
-                f,
-                "| Constant {}",
-                separated(
-                    " ",
-                    rows.iter()
-                        .flat_map(|(row, count)| (0..*count).map(move |_| row))
-                )
-            )?,
+            Constant { rows, .. } => {
+                write!(f, "| Constant ")?;
+                match rows {
+                    Ok(rows) => writeln!(
+                        f,
+                        "{}",
+                        separated(
+                            " ",
+                            rows.iter()
+                                .flat_map(|(row, count)| (0..*count).map(move |_| row))
+                        )
+                    )?,
+                    Err(e) => writeln!(f, "Err({})", e.to_string().quoted())?,
+                }
+            }
             Get { id, .. } => match id {
                 Id::Local(local_id) => writeln!(
                     f,

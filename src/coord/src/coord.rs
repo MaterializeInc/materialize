@@ -2324,6 +2324,10 @@ where
 
         // If this optimizes to a constant expression, we can immediately return the result.
         let resp = if let MirRelationExpr::Constant { rows, typ: _ } = source.as_ref() {
+            let rows = match rows {
+                Ok(rows) => rows,
+                Err(e) => return Err(e.clone().into()),
+            };
             let mut results = Vec::new();
             for &(ref row, count) in rows {
                 assert!(
@@ -2756,6 +2760,7 @@ where
         };
         match self.prep_relation_expr(values, prep_style)?.into_inner() {
             MirRelationExpr::Constant { rows, typ: _ } => {
+                let rows = rows?;
                 let desc = self.catalog.get_by_id(&id).desc()?;
                 for (row, _) in &rows {
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {

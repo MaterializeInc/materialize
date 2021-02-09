@@ -27,7 +27,7 @@ use std::fmt;
 
 use expr::MirRelationExpr;
 use expr::MirScalarExpr;
-use expr::{EvalError, GlobalId, IdGen};
+use expr::{GlobalId, IdGen};
 
 pub mod column_knowledge;
 pub mod cse;
@@ -84,8 +84,6 @@ pub trait Transform: std::fmt::Debug {
 /// Errors that can occur during a transformation.
 #[derive(Debug, Clone)]
 pub enum TransformError {
-    /// An error resulting from evaluation of a `ScalarExpr`.
-    Eval(EvalError),
     /// An unstructured error.
     Internal(String),
 }
@@ -93,19 +91,12 @@ pub enum TransformError {
 impl fmt::Display for TransformError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TransformError::Eval(e) => write!(f, "{}", e),
             TransformError::Internal(msg) => write!(f, "internal transform error: {}", msg),
         }
     }
 }
 
 impl Error for TransformError {}
-
-impl From<EvalError> for TransformError {
-    fn from(e: EvalError) -> TransformError {
-        TransformError::Eval(e)
-    }
-}
 
 /// A sequence of transformations iterated some number of times.
 #[derive(Debug)]
