@@ -35,12 +35,12 @@ pub enum Statement<T: AstInfo> {
     Delete(DeleteStatement<T>),
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
-    CreateSource(CreateSourceStatement),
+    CreateSource(CreateSourceStatement<T>),
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateTable(CreateTableStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
-    CreateType(CreateTypeStatement),
+    CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndexOptions(AlterIndexOptionsStatement),
@@ -344,8 +344,8 @@ impl_display!(CreateSchemaStatement);
 
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateSourceStatement {
-    pub name: ObjectName,
+pub struct CreateSourceStatement<T: AstInfo> {
+    pub name: T::CatalogItem,
     pub col_names: Vec<Ident>,
     pub connector: Connector,
     pub with_options: Vec<SqlOption>,
@@ -355,7 +355,7 @@ pub struct CreateSourceStatement {
     pub materialized: bool,
 }
 
-impl AstDisplay for CreateSourceStatement {
+impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("CREATE ");
         if self.materialized {
@@ -389,13 +389,13 @@ impl AstDisplay for CreateSourceStatement {
         }
     }
 }
-impl_display!(CreateSourceStatement);
+impl_display_t!(CreateSourceStatement);
 
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
-    pub name: ObjectName,
-    pub from: ObjectName,
+    pub name: T::CatalogItem,
+    pub from: T::CatalogItem,
     pub connector: Connector,
     pub with_options: Vec<SqlOption>,
     pub format: Option<Format>,
@@ -447,7 +447,7 @@ impl_display_t!(CreateSinkStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateViewStatement<T: AstInfo> {
     /// View name
-    pub name: ObjectName,
+    pub name: T::CatalogItem,
     pub columns: Vec<Ident>,
     pub with_options: Vec<SqlOption>,
     pub query: Query<T>,
@@ -500,7 +500,7 @@ impl_display_t!(CreateViewStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateTableStatement<T: AstInfo> {
     /// Table name
-    pub name: ObjectName,
+    pub name: T::CatalogItem,
     /// Optional schema
     pub columns: Vec<ColumnDef<T>>,
     pub constraints: Vec<TableConstraint<T>>,
@@ -543,7 +543,7 @@ pub struct CreateIndexStatement<T: AstInfo> {
     /// Optional index name.
     pub name: Option<Ident>,
     /// `ON` table or view name
-    pub on_name: ObjectName,
+    pub on_name: T::CatalogItem,
     /// Expressions that form part of the index key. If not included, the
     /// key_parts will be inferred from the named object.
     pub key_parts: Option<Vec<Expr<T>>>,
@@ -630,9 +630,9 @@ impl_display!(CreateRoleOption);
 
 /// `CREATE TYPE ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateTypeStatement {
+pub struct CreateTypeStatement<T: AstInfo> {
     /// Name of the created type.
-    pub name: ObjectName,
+    pub name: T::CatalogItem,
     /// The new type's "base type".
     pub as_type: CreateTypeAs,
     /// Provides the name and type for the key
@@ -640,7 +640,7 @@ pub struct CreateTypeStatement {
     pub with_options: Vec<SqlOption>,
 }
 
-impl AstDisplay for CreateTypeStatement {
+impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("CREATE TYPE ");
         f.write_node(&self.name);
@@ -653,7 +653,7 @@ impl AstDisplay for CreateTypeStatement {
         f.write_str(" )");
     }
 }
-impl_display!(CreateTypeStatement);
+impl_display_t!(CreateTypeStatement);
 
 /// `CREATE TYPE .. AS <TYPE>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

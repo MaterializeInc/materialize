@@ -202,14 +202,14 @@ pub fn plan_create_table(
 
 pub fn describe_create_source(
     _: &StatementContext,
-    _: CreateSourceStatement,
+    _: CreateSourceStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_source(
     scx: &StatementContext,
-    stmt: CreateSourceStatement,
+    stmt: CreateSourceStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateSourceStatement {
         name,
@@ -1130,14 +1130,14 @@ pub fn plan_create_index(
 
 pub fn describe_create_type(
     _: &StatementContext,
-    _: CreateTypeStatement,
+    _: CreateTypeStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_type(
     scx: &StatementContext,
-    stmt: CreateTypeStatement,
+    stmt: CreateTypeStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
     let CreateTypeStatement {
