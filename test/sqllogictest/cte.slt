@@ -47,13 +47,8 @@ SELECT * FROM x WHERE a IN
 2
 3
 
-# Ensure trivial nesting doesn't crash
-query I rowsort
+statement error more than one record produced in subquery
 WITH c AS (SELECT a + 1 FROM x) SELECT (SELECT * FROM c);
-----
-2
-3
-4
 
 # Allow re-using names laterally.
 query I rowsort
