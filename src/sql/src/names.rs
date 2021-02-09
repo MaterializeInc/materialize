@@ -85,15 +85,17 @@ impl From<FullName> for ObjectName {
 }
 
 /// A partial name of an item in the catalog.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PartialName {
     pub database: Option<String>,
     pub schema: Option<String>,
     pub item: String,
 }
 
-impl PartialEq for PartialName {
-    fn eq(&self, other: &Self) -> bool {
+impl PartialName {
+    // Whether either self or other might be a (possibly differently qualified)
+    // version of the other.
+    pub fn matches(&self, other: &Self) -> bool {
         match (&self.database, &other.database) {
             (Some(d1), Some(d2)) if d1 != d2 => return false,
             _ => (),
