@@ -159,12 +159,15 @@ where
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
     since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
-    timestamp_config: TimestampConfig,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
     /// Instance count: number of times sources have been instantiated in views. This is used
     /// to associate each new instance of a source with a unique instance id (iid)
     logging_granularity: Option<u64>,
+    // Channel to manange internal commands from the coordinator to itself.
+    internal_cmd_tx: futures::channel::mpsc::UnboundedSender<Message>,
+    // Channel to communicate source status updates to the timestamper thread.
+    ts_tx: std::sync::mpsc::Sender<TimestampMessage>,
     // Channel to communicate source status updates and shutdown notifications to the cacher
     // thread.
     cache_tx: Option<CacheSender>,
@@ -365,11 +368,10 @@ where
     /// You must call `bootstrap` before calling this method.
     async fn serve(
         mut self,
+        internal_cmd_stream: futures::channel::mpsc::UnboundedReceiver<Message>,
         cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>,
         feedback_rx: comm::mpsc::Receiver<WorkerFeedbackWithMeta>,
     ) {
-        let (internal_cmd_tx, internal_cmd_stream) = futures::channel::mpsc::unbounded();
-
         let cmd_stream = cmd_rx
             .map(Message::Command)
             .chain(stream::once(future::ready(Message::Shutdown)));
@@ -378,16 +380,6 @@ where
             Ok(m) => Message::Worker(m),
             Err(e) => panic!("coordinator feedback receiver failed: {}", e),
         });
-
-        let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-        let mut timestamper =
-            Timestamper::new(&self.timestamp_config, internal_cmd_tx.clone(), ts_rx);
-        let executor = Handle::current();
-        let _timestamper_thread = thread::spawn(move || {
-            let _executor_guard = executor.enter();
-            timestamper.update()
-        })
-        .join_on_drop();
 
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
@@ -400,11 +392,9 @@ where
 
         while let Some(msg) = messages.next().await {
             match msg {
-                Message::Command(cmd) => self.message_command(cmd, &internal_cmd_tx).await,
-                Message::Worker(worker) => self.message_worker(worker, &ts_tx).await,
-                Message::StatementReady(ready) => {
-                    self.message_statement_ready(ready, &internal_cmd_tx).await
-                }
+                Message::Command(cmd) => self.message_command(cmd).await,
+                Message::Worker(worker) => self.message_worker(worker).await,
+                Message::StatementReady(ready) => self.message_statement_ready(ready).await,
                 Message::SinkConnectorReady(ready) => {
                     self.message_sink_connector_ready(ready).await
                 }
@@ -412,7 +402,7 @@ where
                     self.message_advance_source_timestamp(advance).await
                 }
                 Message::Shutdown => {
-                    self.message_shutdown(&ts_tx).await;
+                    self.message_shutdown().await;
                     break;
                 }
             }
@@ -445,7 +435,7 @@ where
 
         // Cleanly drain any pending messages from the worker before shutting
         // down.
-        drop(internal_cmd_tx);
+        drop(self.internal_cmd_tx);
         while messages.next().await.is_some() {}
     }
 
@@ -455,7 +445,6 @@ where
             worker_id: _,
             message,
         }: WorkerFeedbackWithMeta,
-        ts_tx: &std::sync::mpsc::Sender<TimestampMessage>,
     ) {
         match message {
             WorkerFeedback::FrontierUppers(updates) => {
@@ -466,14 +455,14 @@ where
             }
             WorkerFeedback::DroppedSource(source_id) => {
                 // Notify timestamping thread that source has been dropped
-                ts_tx
+                self.ts_tx
                     .send(TimestampMessage::DropInstance(source_id))
                     .expect("Failed to send Drop Instance notice to timestamper");
             }
             WorkerFeedback::CreateSource(src_instance_id) => {
                 if let Some(entry) = self.catalog.try_get_by_id(src_instance_id.source_id) {
                     if let CatalogItem::Source(s) = entry.item() {
-                        ts_tx
+                        self.ts_tx
                             .send(TimestampMessage::Add(src_instance_id, s.connector.clone()))
                             .expect("Failed to send CREATE Instance notice to timestamper");
                     } else {
@@ -494,16 +483,12 @@ where
             result,
             params,
         }: StatementReady,
-        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
     ) {
         match future::ready(result)
             .and_then(|stmt| self.handle_statement(&session, stmt, &params))
             .await
         {
-            Ok((pcx, plan)) => {
-                self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan)
-                    .await
-            }
+            Ok((pcx, plan)) => self.sequence_plan(tx, session, pcx, plan).await,
             Err(e) => tx.send(Err(e), session),
         }
     }
@@ -550,8 +535,8 @@ where
         }
     }
 
-    async fn message_shutdown(&mut self, ts_tx: &std::sync::mpsc::Sender<TimestampMessage>) {
-        ts_tx.send(TimestampMessage::Shutdown).unwrap();
+    async fn message_shutdown(&mut self) {
+        self.ts_tx.send(TimestampMessage::Shutdown).unwrap();
 
         if let Some(cache_tx) = &mut self.cache_tx {
             cache_tx
@@ -573,11 +558,7 @@ where
         .await;
     }
 
-    async fn message_command(
-        &mut self,
-        cmd: Command,
-        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
-    ) {
+    async fn message_command(&mut self, cmd: Command) {
         match cmd {
             Command::Startup {
                 session,
@@ -750,7 +731,7 @@ where
                             },
                         }
 
-                        let mut internal_cmd_tx = internal_cmd_tx.clone();
+                        let mut internal_cmd_tx = self.internal_cmd_tx.clone();
                         tokio::spawn(async move {
                             let result = sql::pure::purify(stmt).await.map_err(|e| e.into());
                             internal_cmd_tx
@@ -1492,7 +1473,6 @@ where
 
     async fn sequence_plan(
         &mut self,
-        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         pcx: PlanContext,
@@ -1549,7 +1529,6 @@ where
             } => {
                 self.sequence_create_sink(
                     pcx,
-                    internal_cmd_tx.clone(),
                     tx,
                     session,
                     name,
@@ -1945,7 +1924,6 @@ where
     async fn sequence_create_sink(
         &mut self,
         pcx: PlanContext,
-        mut internal_cmd_tx: futures::channel::mpsc::UnboundedSender<Message>,
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
         name: FullName,
@@ -2013,6 +1991,7 @@ where
         // Now we're ready to create the sink connector. Arrange to notify the
         // main coordinator thread when the future completes.
         let connector_builder = sink.connector_builder;
+        let mut internal_cmd_tx = self.internal_cmd_tx.clone();
         tokio::spawn(async move {
             internal_cmd_tx
                 .send(Message::SinkConnectorReady(SinkConnectorReady {
@@ -3417,6 +3396,16 @@ where
         None
     };
 
+    let (internal_cmd_tx, internal_cmd_rx) = futures::channel::mpsc::unbounded();
+    let (ts_tx, ts_rx) = std::sync::mpsc::channel();
+    let mut timestamper = Timestamper::new(&timestamp_config, internal_cmd_tx.clone(), ts_rx);
+    let executor = Handle::current();
+    let _timestamper_thread = thread::spawn(move || {
+        let _executor_guard = executor.enter();
+        timestamper.update()
+    })
+    .join_on_drop();
+
     // Then perform fallible operations, like opening the catalog. If these
     // fail, we are careful to tell the dataflow layer to shutdown.
     let coord = async {
@@ -3446,9 +3435,10 @@ where
             indexes: ArrangementFrontiers::default(),
             since_updates: Vec::new(),
             logging_granularity: logging.and_then(|c| c.granularity.as_millis().try_into().ok()),
-            timestamp_config,
             logical_compaction_window_ms: logical_compaction_window
                 .map(duration_to_timestamp_millis),
+            internal_cmd_tx,
+            ts_tx,
             cache_tx,
             closed_up_to: 1,
             read_lower_bound: 1,
@@ -3476,7 +3466,7 @@ where
     // can't use `tokio::spawn`, but instead have to spawn a dedicated thread to
     // run the future.
     Ok((
-        thread::spawn(move || runtime.block_on(coord.serve(cmd_rx, feedback_rx))),
+        thread::spawn(move || runtime.block_on(coord.serve(internal_cmd_rx, cmd_rx, feedback_rx))),
         cluster_id,
     ))
 }
