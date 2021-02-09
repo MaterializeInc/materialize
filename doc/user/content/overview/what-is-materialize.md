@@ -70,12 +70,14 @@ Ultimately, this lets you refresh answers to your queries very quickly because M
 
 While we've covered the high-level details above, this section gives some of the more specific details about Materialize itself.
 
-Materialize ingests streams of data from Kafka, which are publishing a CDC stream from an upstream relational database (e.g. MySQL or PostgreSQL). In its current iteration, the only CDC tool known to work with Materialize is Debezium.
+Materialize ingests streams of data from Kafka, Kinesis, or local files that you
+declare as "sources". These sources monitor changes in the upstream data and
+automatically pull new records into your Materialize instance. You can interact
+with this data in Materialize as if it were in a SQL table.
 
-Using a familiar SQL interface, you can define which tables from Kafka you want
-Materialize to monitor (known as "sources"), as well as which queries you want
-answer (known as "views"). Materialize then creates a dataflow for your views
-using a Differential dataflow.
+Using these sources, you can define "views". Views represent those queries to which
+you continually want an up-to-date answer. Your view definitions are transformed by
+our query engine to create Differential dataflows.
 
 Like we mentioned above, a dataflow is a set of connected operators that each
 both consume and produce streams of data, creating a network of computation that
