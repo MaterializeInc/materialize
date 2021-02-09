@@ -149,6 +149,12 @@ pub struct TlsConfig {
 
 impl TlsConfig {
     fn validate(&self) -> Result<SslContext, anyhow::Error> {
+        // Mozilla publishes three presets: old, intermediate, and modern. They
+        // recommend the intermediate preset for general purpose servers, which
+        // is what we use, as it is compatible with nearly every client released
+        // in the last five years but does not include any known-problematic
+        // ciphers. We once tried to use the modern preset, but it was
+        // incompatible with Fivetran, and presumably other JDBC-based tools.
         let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
         builder.set_certificate_file(&self.cert, SslFiletype::PEM)?;
         builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
