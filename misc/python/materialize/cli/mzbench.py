@@ -69,7 +69,11 @@ def main(
     results_writer.writeheader()
 
     # We use check_output because check_call does not capture output
-    subprocess.check_output(setup_benchmark, stderr=subprocess.STDOUT)
+    try:
+        subprocess.check_output(setup_benchmark, stderr=subprocess.STDOUT)
+    except (subprocess.CalledProcessError,) as e:
+        print(f"Setup benchmark failed! Output from failed command:\n{e.output}")
+        raise
 
     for (worker_count, git_revision) in itertools.product(worker_counts, git_revisions):
 
@@ -79,9 +83,13 @@ def main(
         if git_revision:
             child_env["MZBUILD_MATERIALIZED_TAG"] = f"unstable-{git_revision}"
 
-        output = subprocess.check_output(
-            run_benchmark, env=child_env, stderr=subprocess.STDOUT
-        )
+        try:
+            output = subprocess.check_output(
+                run_benchmark, env=child_env, stderr=subprocess.STDOUT
+            )
+        except (subprocess.CalledProcessError,) as e:
+            print(f"Setup benchmark failed! Output from failed command:\n{e.output}")
+            raise
 
         # TODO: Replace parsing output from mzcompose with reading from a well known file or topic
         for line in output.decode().splitlines():
