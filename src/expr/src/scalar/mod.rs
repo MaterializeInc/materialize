@@ -967,6 +967,9 @@ impl fmt::Display for EvalError {
                 write!(f, "function {} is not defined for zero", s)
             }
             EvalError::TooManyDamnRecords => write!(f, "more than one record produced in subquery"),
+            EvalError::MultipleRowsFromSubquery => {
+                write!(f, "more than one record produced in subquery")
+            }
         }
     }
 }
