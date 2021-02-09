@@ -68,7 +68,7 @@ if __name__ == '__main__':
                         help="Name of the mzcompose composition to run",
                        )
 
-    worker_counts = [24, 20, 16, 15, 12, 10, 8, 4, 2, 1]
+    worker_counts = [24, 20, 16, 12, 8]
     git_revisions = [rev_parse(ref) for ref in ['origin/main', None]]
 
     args = parser.parse_args()
