@@ -20,23 +20,23 @@ You can seamlessly join tables with other tables, views, and sources in the
 system.
 
 {{< warning >}}
-At the moment, tables serve a niche use case. They are lacking many features
-that are standard in relational databases. In most situations you should use
+At the moment, tables serve a niche use case. They lack many features that are
+standard in relational databases. In most situations you should use
 [sources](/sql/create-source) instead.
 {{< /warning >}}
 
 ### When to use a table
 
-Using a table can be more convenient than using a source, but only if all of
-the following statements are true:
+A table can be more convenient than a source, but only if all of the following
+statements are true:
 
 1. Your dataset is either static or append only.
 2. You do not need the dataset to survive reboots of Materialize.
 3. Your dataset is several times smaller than the available memory on your
    machine. See the [memory usage](#memory-usage) section below for details.
 
-If any of the above do not hold, we recommend that you use a
-[source](/sql/create-source) instead.
+If any of those statements do not describe your situation, we recommend that you
+use a [source](/sql/create-source) instead.
 
 ## Syntax
 
@@ -86,11 +86,11 @@ tables may not depend on temporary objects.
 ### Memory usage
 
 Every table is backed by an [index](/overview/api-components/#indexes) that
-materializes all of the data in the table. Unlike sources, you cannot create an
-"unmaterialized" table. Therefore you must ensure that the data you store in
-tables fits in the amount of memory you have available on your system. Remember
-that any additional indexes or derived materialized views will count against
-your memory budget.
+materializes all of the data in the table. Unlike sources, tables cannot be
+"unmaterialized". Therefore you must ensure that the data you store in tables
+fits in the amount of memory you have available on your system. Remember that
+any additional indexes or derived materialized views will count against your
+memory budget.
 
 If your dataset is too large to fit in memory, consider using an unmaterialized
 [source](/sql/create-source) instead. This lets you defer materialization to
