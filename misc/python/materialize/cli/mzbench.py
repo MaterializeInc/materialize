@@ -1,4 +1,13 @@
-#!/usr/bin/env python3
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# mzbuild.py -- script to run materialized benchmarks
 
 import argparse
 import csv
@@ -8,30 +17,54 @@ import subprocess
 import sys
 import typing
 
-import psutil
+import psutil  # type: ignore
+
 
 def rev_parse(git_ref: str) -> str:
     if not git_ref:
         return git_ref
-    return subprocess.check_output(['git', 'rev-parse', git_ref]).strip().decode()
+    return subprocess.check_output(["git", "rev-parse", git_ref]).strip().decode()
 
-def main(composition: str, worker_counts: typing.List[int], git_revisions: typing.Union[str, None]) -> None:
+
+def main(
+    composition: str,
+    worker_counts: typing.List[int],
+    git_revisions: typing.List[typing.Union[str, None]],
+) -> None:
 
     # This includes hypercores
-    physical_cpus = psutil.cpu_count(logical = False)
+    physical_cpus = psutil.cpu_count(logical=False)
     if physical_cpus < 4:
         # Explicitly override the worker counts for the CI benchmark
-        benchmark = 'benchmark-ci'
+        benchmark = "benchmark-ci"
         worker_counts = [1]
     elif physical_cpus < 8:
-        benchmark = 'benchmark-medium'
+        benchmark = "benchmark-medium"
     else:
-        benchmark = 'benchmark'
+        benchmark = "benchmark"
 
-    setup_benchmark = ['./bin/mzcompose', '--mz-find', composition, 'run', f'setup-{benchmark}']
-    run_benchmark = ['./bin/mzcompose', '--mz-find', composition, 'run', f'run-{benchmark}']
+    setup_benchmark = [
+        "./bin/mzcompose",
+        "--mz-find",
+        composition,
+        "run",
+        f"setup-{benchmark}",
+    ]
+    run_benchmark = [
+        "./bin/mzcompose",
+        "--mz-find",
+        composition,
+        "run",
+        f"run-{benchmark}",
+    ]
 
-    field_names = ["git_revision", "num_workers", "seconds_taken", "rows_per_second", "grafana_url"]
+    field_names = [
+        "git_revision",
+        "num_workers",
+        "seconds_taken",
+        "rows_per_second",
+        "grafana_url",
+    ]
     results_writer = csv.DictWriter(sys.stdout, field_names)
     results_writer.writeheader()
 
@@ -41,29 +74,36 @@ def main(composition: str, worker_counts: typing.List[int], git_revisions: typin
     for (worker_count, git_revision) in itertools.product(worker_counts, git_revisions):
 
         child_env = os.environ.copy()
-        child_env['MZ_WORKERS'] = str(worker_count)
-        child_env['MZ_QUIET'] = "true"
+        child_env["MZ_WORKERS"] = str(worker_count)
+        child_env["MZ_QUIET"] = "true"
         if git_revision:
-            child_env['MZBUILD_MATERIALIZED_TAG'] = f'unstable-{git_revision}'
+            child_env["MZBUILD_MATERIALIZED_TAG"] = f"unstable-{git_revision}"
 
-        output = subprocess.check_output(run_benchmark, env=child_env, stderr=subprocess.STDOUT)
+        output = subprocess.check_output(
+            run_benchmark, env=child_env, stderr=subprocess.STDOUT
+        )
 
         # TODO: Replace parsing output from mzcompose with reading from a well known file or topic
         for line in output.decode().splitlines():
             if line.startswith("SUCCESS!"):
-                for token in line.split(' '):
-                    if token.startswith('seconds_taken='):
-                        seconds_taken = token[len('seconds_taken=')]
-                    elif token.startswith('rows_per_sec='):
-                        rows_per_second = token[len('rows_per_sec=')]
+                for token in line.split(" "):
+                    if token.startswith("seconds_taken="):
+                        seconds_taken = token[len("seconds_taken=")]
+                    elif token.startswith("rows_per_sec="):
+                        rows_per_second = token[len("rows_per_sec=")]
             elif line.startswith("Grafana URL: "):
-                grafana_url = line[len("Grafana URL: "):]
+                grafana_url = line[len("Grafana URL: ") :]
 
-        results_writer.writerow({'git_revision': git_revision if git_revision else 'NONE',
-                                  'num_workers': worker_count,
-                                  'seconds_taken': seconds_taken,
-                                  'rows_per_second': rows_per_second,
-                                  'grafana_url': grafana_url})
+        results_writer.writerow(
+            {
+                "git_revision": git_revision if git_revision else "NONE",
+                "num_workers": worker_count,
+                "seconds_taken": seconds_taken,
+                "rows_per_second": rows_per_second,
+                "grafana_url": grafana_url,
+            }
+        )
+
 
 def enumerate_cpu_counts() -> typing.List[int]:
     """This program prints the number of CPU counts to benchmark on this machine.
@@ -81,7 +121,7 @@ def enumerate_cpu_counts() -> typing.List[int]:
     """
 
     # 15% overhead, divide by 2 because we assume half are hyperthreads
-    max_cpus = round(psutil.cpu_count(logical = False) * .85)
+    max_cpus = round(psutil.cpu_count(logical=False) * 0.85)
     num_trials = 4
 
     # Yield the fractional points (4/4, 3/4, ...) between max and 0, not including 0
@@ -89,20 +129,21 @@ def enumerate_cpu_counts() -> typing.List[int]:
 
     return list(reversed(sorted(set(worker_counts))))
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("composition",
-                        type=str,
-                        help="Name of the mzcompose composition to run",
-                       )
+    parser.add_argument(
+        "composition", type=str, help="Name of the mzcompose composition to run",
+    )
 
-    parser.add_argument("git_references",
-                        type=str,
-                        nargs="+",
-                        help="Materialized builds to test as well, identified by git reference",
-                       )
+    parser.add_argument(
+        "git_references",
+        type=str,
+        nargs="+",
+        help="Materialized builds to test as well, identified by git reference",
+    )
 
     args = parser.parse_args()
     worker_counts = enumerate_cpu_counts()
