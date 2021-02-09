@@ -966,33 +966,35 @@ where
             match relation_expr {
                 // The constant collection is instantiated only on worker zero.
                 MirRelationExpr::Constant { rows, .. } => {
-                    let rows = if worker_index == 0 {
+                    // Determine what this worker will contribute.
+                    let locally = if worker_index == 0 {
                         rows.clone()
                     } else {
                         Ok(vec![])
                     };
+                    // Produce both rows and errs to avoid conditional dataflow construction.
+                    let (rows, errs) = match locally {
+                        Ok(rows) => (rows, Vec::new()),
+                        Err(e) => (Vec::new(), vec![e]),
+                    };
 
-                    let (ok_collection, err_collection) = match rows {
-                        Ok(rows) => {
-                            let oks = rows
-                                .to_stream(scope)
-                                .map(|(x, diff)| (x, timely::progress::Timestamp::minimum(), diff))
-                                .as_collection();
-                            let errs = Collection::empty(scope);
-                            (oks, errs)
-                        }
-                        Err(e) => {
-                            let oks = Collection::empty(scope);
-                            let errs = vec![(
+                    let ok_collection = rows
+                        .into_iter()
+                        .map(|(x, diff)| (x, timely::progress::Timestamp::minimum(), diff))
+                        .to_stream(scope)
+                        .as_collection();
+
+                    let err_collection = errs
+                        .into_iter()
+                        .map(|e| {
+                            (
                                 DataflowError::from(e),
                                 timely::progress::Timestamp::minimum(),
                                 1,
-                            )]
-                            .to_stream(scope)
-                            .as_collection();
-                            (oks, errs)
-                        }
-                    };
+                            )
+                        })
+                        .to_stream(scope)
+                        .as_collection();
 
                     self.collections
                         .insert(relation_expr.clone(), (ok_collection, err_collection));
