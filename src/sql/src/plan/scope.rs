@@ -50,7 +50,7 @@ use crate::plan::error::PlanError;
 use crate::plan::expr::ColumnRef;
 use crate::plan::query::Aug;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ScopeItemName {
     pub table_name: Option<PartialName>,
     pub column_name: Option<ColumnName>,
@@ -80,7 +80,7 @@ pub struct ScopeItemName {
     pub priority: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ScopeItem {
     // The canonical name should appear first in the list (e.g., the name
     // assigned by an alias.) Similarly, the name that specifies the canonical
@@ -96,7 +96,7 @@ pub struct ScopeItem {
     pub nameable: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Scope {
     // items in this query
     pub items: Vec<ScopeItem>,
@@ -122,7 +122,11 @@ impl ScopeItem {
         // Even though there may be a later name that matches the table, the
         // column is not actually considered to come from that table; it is just
         // known to be equivalent to the *real* column from that table.
-        self.names.iter().find_map(|n| n.table_name.as_ref()) == Some(table_name)
+        self.names
+            .iter()
+            .find_map(|n| n.table_name.as_ref())
+            .map(|n| n.matches(table_name))
+            .unwrap_or(false)
     }
 
     pub fn short_display_name(&self) -> String {
@@ -265,7 +269,10 @@ impl Scope {
     ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
         self.resolve(
             |item: &ScopeItemName| {
-                item.table_name.as_ref() == Some(table_name)
+                item.table_name
+                    .as_ref()
+                    .map(|n| n.matches(table_name))
+                    .unwrap_or(false)
                     && item.column_name.as_ref() == Some(column_name)
             },
             &format!("{}.{}", table_name, column_name),
