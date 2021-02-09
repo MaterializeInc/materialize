@@ -13,7 +13,7 @@
 //! * absorbs Map operators into Reduce operators.
 //! * partially pushes Reduce operators into joins.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::TransformArgs;
 use expr::{AggregateExpr, AggregateFunc, JoinInputMapper, MirRelationExpr, MirScalarExpr};
@@ -227,8 +227,9 @@ struct ReductionPusher<'a> {
     /// The mapping of global to local columns in the old join
     old_join_mapper: JoinInputMapper,
     /// For each input, stores the inputs it is bound to and the (global) join
-    /// keys that bind it to the particular input
-    join_graph: Vec<HashMap<usize, Vec<MirScalarExpr>>>,
+    /// keys that bind it to the particular input. This is a `BTreeMap` so that
+    /// the resulting plan is deterministic.
+    join_graph: Vec<BTreeMap<usize, Vec<MirScalarExpr>>>,
     /// whether aggregations were pushed down to any input
     pushdown_succeeded: bool,
 }
@@ -718,10 +719,10 @@ fn create_join_graph(
     old_join_mapper: &JoinInputMapper,
     equivalences: &mut Vec<Vec<MirScalarExpr>>,
 ) -> (
-    Option<Vec<HashMap<usize, Vec<MirScalarExpr>>>>,
+    Option<Vec<BTreeMap<usize, Vec<MirScalarExpr>>>>,
     Vec<(MirScalarExpr, usize)>,
 ) {
-    let mut join_keys_by_input = vec![HashMap::new(); old_join_mapper.total_inputs()];
+    let mut join_keys_by_input = vec![BTreeMap::new(); old_join_mapper.total_inputs()];
     let mut single_input_filters = Vec::new();
     let mut equivalences_to_remove = Vec::new();
     for (idx, equivalence) in equivalences.iter().enumerate() {
