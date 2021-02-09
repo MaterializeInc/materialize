@@ -7,6 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! SQL normalization routines.
+//!
+//! Normalization is the process of taking relatively unstructured types from
+//! the [`ast`] module and converting them to more structured types.
+//!
+//! [`ast`]: crate::ast
+
 use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Context};
@@ -28,14 +35,17 @@ use crate::plan::error::PlanError;
 use crate::plan::query;
 use crate::plan::statement::StatementContext;
 
+/// Normalizes a single identifier.
 pub fn ident(ident: Ident) -> String {
     ident.as_str().into()
 }
 
+/// Normalizes an identifier that represents a column name.
 pub fn column_name(id: Ident) -> ColumnName {
     ColumnName::from(ident(id))
 }
 
+/// Normalizes an object name.
 pub fn object_name(mut name: ObjectName) -> Result<PartialName, PlanError> {
     if name.0.len() < 1 || name.0.len() > 3 {
         return Err(PlanError::MisqualifiedName(name.to_string()));
@@ -53,6 +63,7 @@ pub fn object_name(mut name: ObjectName) -> Result<PartialName, PlanError> {
     Ok(out)
 }
 
+/// Normalizes a list of `WITH` options.
 pub fn options(options: &[SqlOption]) -> BTreeMap<String, Value> {
     options
         .iter()
@@ -70,6 +81,8 @@ pub fn options(options: &[SqlOption]) -> BTreeMap<String, Value> {
         .collect()
 }
 
+/// Normalizes `WITH` option keys without normalizing their corresponding
+/// values.
 pub fn option_objects(options: &[SqlOption]) -> BTreeMap<String, SqlOption> {
     options
         .iter()
@@ -77,6 +90,9 @@ pub fn option_objects(options: &[SqlOption]) -> BTreeMap<String, SqlOption> {
         .collect()
 }
 
+/// Unnormalizes an object name.
+///
+/// This is the inverse of the [`object_name`] function.
 pub fn unresolve(name: FullName) -> ObjectName {
     let mut out = vec![];
     if let DatabaseSpecifier::Name(n) = name.database {
@@ -87,9 +103,10 @@ pub fn unresolve(name: FullName) -> ObjectName {
     ObjectName(out)
 }
 
-/// Normalizes a `CREATE { SOURCE | VIEW | INDEX | SINK }` statement so that the
-/// statement does not depend upon any session parameters, nor specify any
-/// non-default options (like `MATERIALIZED`, `IF NOT EXISTS`, etc).
+/// Normalizes a `CREATE` statement.
+///
+/// The resulting statement will not depend upon any session parameters, nor
+/// specify any non-default options (like `MATERIALIZED`, `IF NOT EXISTS`, etc).
 ///
 /// The goal is to construct a backwards-compatible description of the object.
 /// SQL is the most stable part of Materialize, so SQL is used to describe the
@@ -447,6 +464,7 @@ macro_rules! with_options {
     }
 }
 
+/// Normalizes option values that contain AWS connection parameters.
 pub fn aws_connect_info(
     options: &mut BTreeMap<String, Value>,
     region: Option<String>,
