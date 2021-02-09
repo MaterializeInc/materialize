@@ -138,6 +138,12 @@ impl From<catalog::Error> for CoordError {
     }
 }
 
+impl From<EvalError> for CoordError {
+    fn from(e: EvalError) -> CoordError {
+        CoordError::Eval(e)
+    }
+}
+
 impl From<sql::catalog::CatalogError> for CoordError {
     fn from(e: sql::catalog::CatalogError) -> CoordError {
         CoordError::SqlCatalog(e)
