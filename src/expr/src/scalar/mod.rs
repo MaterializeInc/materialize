@@ -893,13 +893,10 @@ pub enum EvalError {
     Parse(ParseError),
     ParseHex(ParseHexError),
     Internal(String),
-<<<<<<< HEAD
     InfinityOutOfDomain(String),
     NegativeOutOfDomain(String),
     ZeroOutOfDomain(String),
-=======
     TooManyDamnRecords,
->>>>>>> ad2034333 (error if subqueries contain more than one result)
 }
 
 impl fmt::Display for EvalError {
@@ -960,7 +957,6 @@ impl fmt::Display for EvalError {
             EvalError::Parse(e) => e.fmt(f),
             EvalError::ParseHex(e) => e.fmt(f),
             EvalError::Internal(s) => write!(f, "internal error: {}", s),
-<<<<<<< HEAD
             EvalError::InfinityOutOfDomain(s) => {
                 write!(f, "function {} is only defined for finite arguments", s)
             }
@@ -970,6 +966,7 @@ impl fmt::Display for EvalError {
             EvalError::ZeroOutOfDomain(s) => {
                 write!(f, "function {} is not defined for zero", s)
             }
+            EvalError::TooManyDamnRecords => write!(f, "more than one record produced in subquery"),
         }
     }
 }
@@ -985,9 +982,6 @@ impl EvalError {
                 "Input data is missing padding, is truncated, or is otherwise corrupted.".into(),
             ),
             _ => None,
-=======
-            EvalError::TooManyDamnRecords => write!(f, "more than one record produced in subquery"),
->>>>>>> ad2034333 (error if subqueries contain more than one result)
         }
     }
 }
