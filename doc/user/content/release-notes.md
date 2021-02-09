@@ -48,8 +48,8 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.7.1 %}}
 
-- Support [multi-partition](/sql/create-sink/#with-options) kafka sinks {{% gh 5537 %}}.
-- Support [gzip-compressed](/sql/create-source/text-file/#compression) file sources {{% gh 5392 %}}.
+- Multipartition Kafka sinks with consistency enabled will create single-partition
+  consistency topics.
 
 {{% version-header v0.7.0 %}}
 
@@ -85,6 +85,10 @@ Wrap your release notes at the 80 character mark.
   authentication in a later release.
 
 - Functions can now be resolved as schema-qualified objects, e.g. `SELECT pg_catalog.abs(-1);`.
+
+- Support [multi-partition](/sql/create-sink/#with-options) Kafka sinks {{% gh 5537 %}}.
+
+- Support [gzip-compressed](/sql/create-source/text-file/#compression) file sources {{% gh 5392 %}}.
 
 {{% version-header v0.6.1 %}}
 
