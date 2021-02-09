@@ -60,7 +60,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
@@ -121,7 +121,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
@@ -141,7 +141,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
@@ -164,7 +164,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
@@ -183,7 +183,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
@@ -200,7 +200,7 @@ impl FoldConstants {
                 }) {
                     *relation = MirRelationExpr::Constant {
                         rows: Err(e.clone()),
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 } else if inputs
                     .iter()
@@ -242,10 +242,9 @@ impl FoldConstants {
                         })
                     });
 
-                    let typ = relation.typ();
                     *relation = MirRelationExpr::Constant {
                         rows: Ok(old_rows),
-                        typ,
+                        typ: relation_type,
                     };
                 }
                 // TODO: General constant folding for all constant inputs.
@@ -260,7 +259,7 @@ impl FoldConstants {
                 {
                     *relation = MirRelationExpr::Constant {
                         rows: Err(e.clone()),
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 } else {
                     let mut rows = vec![];
