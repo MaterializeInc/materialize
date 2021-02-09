@@ -22,4 +22,4 @@ COPY src /app
 COPY utils /usr/local/bin
 
 WORKDIR /app
-CMD python3 serve.py
+ENTRYPOINT ["python3", "serve.py"]
