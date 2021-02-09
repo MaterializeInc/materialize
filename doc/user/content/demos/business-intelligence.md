@@ -139,7 +139,7 @@ Putting this all together, our deployment looks like this:
    a bit of time (upwards of 10 minutes, even on fast connections).
 
    When the script exits successfully, all components from the diagram above are
-   active in Docker containers, and the chBench client is rapidly pushing data 
+   active in Docker containers, and the chBench client is rapidly pushing data
    and transactions to the MySQL database.
 
 ### Define sources & views
@@ -255,7 +255,7 @@ Materialize to maintain for us.
     It can take a few minutes to begin producing answers. Running
     the query while it is initializing will produce an empty set of
     results.
-    
+
     Once initialized, re-running the query should show updated values in
     the `revenue` column and the response times should be quick!
 
@@ -323,7 +323,7 @@ Materialize to maintain for us.
 
 1. Modify the size of the **query01** card, and then click **Save**.
 
-1. Click **Auto-refresh**, and then select **1 minute.** 
+1. Click **Auto-refresh**, and then select **1 minute.**
 
    60 seconds is the fastest refresh rate selectable in the UI, but if you
    copy the URL, open a new tab and edit the end of the url to change the
