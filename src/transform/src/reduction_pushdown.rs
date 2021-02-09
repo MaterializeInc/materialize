@@ -348,6 +348,9 @@ impl<'a> ReductionPusher<'a> {
             return None;
         }
 
+        // Create join graph. While creating the join graph, extract
+        // single-input filters from equivalences and move them to
+        // `single_input_aggs_to_push`.
         let mut equivalences = equivalences.to_vec();
 
         let (join_graph, single_input_filters) =
@@ -360,8 +363,17 @@ impl<'a> ReductionPusher<'a> {
                 .push(old_join_mapper.map_expr_to_local(filter));
         }
 
+        // If the reduction pushdown is a success, we will want to remove all
+        // `ArrangeBys` from the original inputs so that join can plan anew.
+        let mut new_inputs = inputs.to_vec();
+        for new_input in new_inputs.iter_mut() {
+            if let MirRelationExpr::ArrangeBy{input:inner , ..} = new_input {
+                *new_input = inner.take_dangerous();
+            }
+        }
+
         Some(Self {
-            new_inputs: inputs.to_vec(),
+            new_inputs,
             outer_group_key: group_key,
             outer_aggs,
             downcast_partial_reduce: Vec::new(),
