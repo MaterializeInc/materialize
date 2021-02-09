@@ -18,6 +18,7 @@ anyhow = "1.0.38"
 byteorder = "1.4.2"
 chrono = { version = "0.4.0", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.5.0", features = ["serde"] }
+dec = "0.3.3"
 enum-kinds = "0.5.0"
 fast-float = "0.2.0"
 hex = "0.4.3"
