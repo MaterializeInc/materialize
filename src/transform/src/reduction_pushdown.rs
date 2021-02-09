@@ -367,7 +367,7 @@ impl<'a> ReductionPusher<'a> {
         // `ArrangeBys` from the original inputs so that join can plan anew.
         let mut new_inputs = inputs.to_vec();
         for new_input in new_inputs.iter_mut() {
-            if let MirRelationExpr::ArrangeBy{input:inner , ..} = new_input {
+            if let MirRelationExpr::ArrangeBy { input: inner, .. } = new_input {
                 *new_input = inner.take_dangerous();
             }
         }
@@ -781,7 +781,7 @@ fn create_join_graph(
                         if *other_input != expr_input {
                             join_keys_by_input[expr_input]
                                 .entry(*other_input)
-                                .or_insert(Vec::new())
+                                .or_insert_with(Vec::new)
                                 .push(expr.clone());
                         }
                     }

@@ -535,44 +535,44 @@ impl AggregateFunc {
     /// returns true for a function f if
     /// f({f(distinct A), f(distinct B)}) = f(distinct (A union B))
     pub fn hierarchical_when_distinct(&self) -> bool {
-        match self {
-            AggregateFunc::MaxInt32 => true,
-            AggregateFunc::MaxInt64 => true,
-            AggregateFunc::MaxFloat32 => true,
-            AggregateFunc::MaxFloat64 => true,
-            AggregateFunc::MaxDecimal => true,
-            AggregateFunc::MaxBool => true,
-            AggregateFunc::MaxString => true,
-            AggregateFunc::MaxDate => true,
-            AggregateFunc::MaxTimestamp => true,
-            AggregateFunc::MaxTimestampTz => true,
-            AggregateFunc::MinInt32 => true,
-            AggregateFunc::MinInt64 => true,
-            AggregateFunc::MinFloat32 => true,
-            AggregateFunc::MinFloat64 => true,
-            AggregateFunc::MinDecimal => true,
-            AggregateFunc::MinBool => true,
-            AggregateFunc::MinString => true,
-            AggregateFunc::MinDate => true,
-            AggregateFunc::MinTimestamp => true,
-            AggregateFunc::MinTimestampTz => true,
-            AggregateFunc::Dummy => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            AggregateFunc::MaxInt32
+                | AggregateFunc::MaxInt64
+                | AggregateFunc::MaxFloat32
+                | AggregateFunc::MaxFloat64
+                | AggregateFunc::MaxDecimal
+                | AggregateFunc::MaxBool
+                | AggregateFunc::MaxString
+                | AggregateFunc::MaxDate
+                | AggregateFunc::MaxTimestamp
+                | AggregateFunc::MaxTimestampTz
+                | AggregateFunc::MinInt32
+                | AggregateFunc::MinInt64
+                | AggregateFunc::MinFloat32
+                | AggregateFunc::MinFloat64
+                | AggregateFunc::MinDecimal
+                | AggregateFunc::MinBool
+                | AggregateFunc::MinString
+                | AggregateFunc::MinDate
+                | AggregateFunc::MinTimestamp
+                | AggregateFunc::MinTimestampTz
+                | AggregateFunc::Dummy
+        )
     }
 
     /// returns true for a function f if the result of aggregating
     /// f(literal) depends on the row count of the set being aggregated on
     pub fn row_count_dependent(&self) -> bool {
-        match self {
-            AggregateFunc::SumInt32 => true,
-            AggregateFunc::SumInt64 => true,
-            AggregateFunc::SumFloat32 => true,
-            AggregateFunc::SumFloat64 => true,
-            AggregateFunc::SumDecimal => true,
-            AggregateFunc::Count => true,
-            _ => false,
-        }
+        matches!(
+            self,
+            AggregateFunc::SumInt32
+                | AggregateFunc::SumInt64
+                | AggregateFunc::SumFloat32
+                | AggregateFunc::SumFloat64
+                | AggregateFunc::SumDecimal
+                | AggregateFunc::Count
+        )
     }
 }
 
