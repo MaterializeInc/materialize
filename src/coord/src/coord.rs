@@ -17,7 +17,7 @@
 //! must accumulate to the same value as would an un-compacted trace.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::mem;
@@ -55,13 +55,13 @@ use ore::collections::CollectionExt;
 use ore::str::StrExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::adt::array::ArrayDimension;
-use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timestamp};
+use repr::{ColumnName, Datum, RelationDesc, Row, RowPacker, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
     FetchStatement, Ident, ObjectType, Raw, Statement,
 };
-use sql::catalog::{Catalog as _, CatalogError};
+use sql::catalog::{Catalog as _, CatalogError, CatalogItem as _, CatalogItemType};
 use sql::names::{DatabaseSpecifier, FullName, SchemaName};
 use sql::plan::StatementDesc;
 use sql::plan::{
@@ -601,7 +601,7 @@ impl Coordinator {
 
             Command::Execute {
                 portal_name,
-                mut session,
+                session,
                 tx,
             } => {
                 let result = session
@@ -661,11 +661,14 @@ impl Coordinator {
                                 // don't interleave reads and writes since we can't perform those serializably.
                                 Statement::Close(_)
                                 | Statement::Commit(_)
+                                | Statement::Copy(_)
                                 | Statement::Declare(_)
                                 | Statement::Discard(_)
                                 | Statement::Explain(_)
                                 | Statement::Fetch(_)
+                                | Statement::Insert(_)
                                 | Statement::Rollback(_)
+                                | Statement::Select(_)
                                 | Statement::SetTransaction(_)
                                 | Statement::ShowColumns(_)
                                 | Statement::ShowCreateIndex(_)
@@ -677,34 +680,9 @@ impl Coordinator {
                                 | Statement::ShowIndexes(_)
                                 | Statement::ShowObjects(_)
                                 | Statement::ShowVariable(_)
-                                | Statement::StartTransaction(_) => {
+                                | Statement::StartTransaction(_)
+                                | Statement::Tail(_) => {
                                     // Always safe.
-                                }
-
-                                Statement::Copy(_) | Statement::Select(_) | Statement::Tail(_) => {
-                                    if let Err(e) =
-                                        session.add_transaction_ops(TransactionOps::Reads)
-                                    {
-                                        let _ = tx.send(Response {
-                                            result: Err(e),
-                                            session,
-                                        });
-                                        return;
-                                    }
-                                }
-
-                                Statement::Insert(_) => {
-                                    // Insert will add the actual operations later. We can still do a check to
-                                    // early exit here before processing it.
-                                    if let Err(e) =
-                                        session.add_transaction_ops(TransactionOps::Writes(vec![]))
-                                    {
-                                        let _ = tx.send(Response {
-                                            result: Err(e),
-                                            session,
-                                        });
-                                        return;
-                                    }
                                 }
 
                                 // Statements below must by run singly (in Started).
@@ -1609,7 +1587,7 @@ impl Coordinator {
                 finishing,
                 copy_to,
             } => tx.send(
-                self.sequence_peek(session.conn_id(), source, when, finishing, copy_to)
+                self.sequence_peek(&mut session, source, when, finishing, copy_to)
                     .await,
                 session,
             ),
@@ -2305,13 +2283,55 @@ impl Coordinator {
 
     async fn sequence_peek(
         &mut self,
-        conn_id: u32,
+        session: &mut Session,
         source: MirRelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
         copy_to: Option<CopyFormat>,
     ) -> Result<ExecuteResponse, CoordError> {
-        let timestamp = self.determine_timestamp(&source, when)?;
+        let conn_id = session.conn_id();
+        let in_transaction = matches!(
+            session.transaction(),
+            &TransactionStatus::InTransaction(_) | &TransactionStatus::InTransactionImplicit(_)
+        );
+        // For explicit or implicit transactions that do not use AS OF, get the
+        // timestamp of the in-progress transaction or create one.
+        let timestamp = if in_transaction && when == PeekWhen::Immediately {
+            session.get_transaction_timestamp(|| {
+                // Determine a timestamp that will be valid for anything in any schema
+                // referenced by the first query. This is a first pass implementation of "time
+                // domains".
+
+                // Find all relations referenced by the expression. Find their parent schemas
+                // and add all tables and views in those schemas to a set.
+                let mut ids = HashSet::new();
+                for id in source.global_uses().iter() {
+                    let entry = self.catalog.get_by_id(&id);
+                    let name = entry.name();
+                    if let Some(schema) =
+                        self.catalog
+                            .get_schema(&name.database, &name.schema, conn_id)
+                    {
+                        for id in schema.items.values() {
+                            if let CatalogItemType::Table | CatalogItemType::View =
+                                self.catalog.get_by_id(id).item_type()
+                            {
+                                ids.insert(*id);
+                            }
+                        }
+                    }
+                }
+                let ids = ids.into_iter().collect::<Vec<_>>();
+
+                self.determine_timestamp(&ids, PeekWhen::Immediately)
+            })?
+        } else {
+            // If this is an AS OF query, we don't care about any possible
+            // transaction timestamp. If this is a single-statement transaction
+            // (TransactionStatus::Started), we don't need to worry about preventing
+            // compaction or choosing a valid timestamp for future queries.
+            self.determine_timestamp(&source.global_uses(), when)?
+        };
 
         let source = self.prep_relation_expr(
             source,
@@ -2472,6 +2492,11 @@ impl Coordinator {
         object_columns: usize,
         desc: RelationDesc,
     ) -> Result<ExecuteResponse, CoordError> {
+        // Ensure this is the only non AS OF TAIL.
+        if ts.is_none() {
+            session.add_transaction_ops(TransactionOps::Tail)?;
+        }
+
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
         let frontier = self.determine_frontier(ts, source_id)?;
@@ -2521,7 +2546,7 @@ impl Coordinator {
     /// not after `upper`).
     fn determine_timestamp(
         &mut self,
-        source: &MirRelationExpr,
+        uses_ids: &[GlobalId],
         when: PeekWhen,
     ) -> Result<Timestamp, CoordError> {
         // Each involved trace has a validity interval `[since, upper)`.
@@ -2535,8 +2560,7 @@ impl Coordinator {
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
-        let uses_ids = &source.global_uses();
-        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&uses_ids);
+        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(uses_ids);
 
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
@@ -2644,14 +2668,7 @@ impl Coordinator {
     ) -> Result<Antichain<u64>, CoordError> {
         let frontier = if let Some(ts) = as_of {
             // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(self.determine_timestamp(
-                &MirRelationExpr::Get {
-                    id: Id::Global(source_id),
-                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
-                    typ: RelationType::empty(),
-                },
-                PeekWhen::AtTimestamp(ts),
-            )?)
+            Antichain::from_elem(self.determine_timestamp(&[source_id], PeekWhen::AtTimestamp(ts))?)
         }
         // TODO: The logic that follows is at variance from PEEK logic which consults the
         // "queryable" state of its inputs. We might want those to line up, but it is only

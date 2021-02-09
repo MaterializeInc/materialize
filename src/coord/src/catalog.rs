@@ -999,7 +999,7 @@ impl Catalog {
     }
 
     /// Gets the schema map for the database matching `database_spec`.
-    fn get_schema(
+    pub fn get_schema(
         &self,
         database_spec: &DatabaseSpecifier,
         schema_name: &str,
