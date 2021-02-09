@@ -75,7 +75,7 @@ def main(
 
         child_env = os.environ.copy()
         child_env["MZ_WORKERS"] = str(worker_count)
-        child_env["MZ_QUIET"] = "true"
+        child_env["MZBUILD_WAIT_FOR_IMAGE"] = "true"
         if git_revision:
             child_env["MZBUILD_MATERIALIZED_TAG"] = f"unstable-{git_revision}"
 
