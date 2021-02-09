@@ -162,6 +162,10 @@ pub fn describe(
 /// Planning is a pure, synchronous function and so requires that the provided
 /// `stmt` does does not depend on any external state. To purify a statement,
 /// use [`crate::pure::purify`].
+///
+/// The returned plan is tied to the state of the provided catalog. If the state
+/// of the catalog changes after planning, the validity of the plan is not
+/// guaranteed.
 pub fn plan(
     pcx: &PlanContext,
     catalog: &dyn Catalog,

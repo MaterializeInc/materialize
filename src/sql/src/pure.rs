@@ -7,7 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Statement purification.
+//! SQL purification.
+//!
+//! See the [crate-level documentation](crate) for details.
 
 use std::collections::BTreeMap;
 
@@ -24,12 +26,15 @@ use sql_parser::ast::{
 use crate::kafka_util;
 use crate::normalize;
 
-/// Removes dependencies on external state from `stmt`: inlining schemas in
-/// files, fetching schemas from registries, and so on. The [`Statement`]
-/// returned from this function will be valid to pass to `Plan`.
+/// Purifies a statement, removing any dependencies on external state.
+///
+/// See the section on [purification](crate#purification) in the crate
+/// documentation for details.
 ///
 /// Note that purification is asynchronous, and may take an unboundedly long
-/// time to complete.
+/// time to complete. As a result purification does *not* have access to a
+/// [`Catalog`](crate::catalog::Catalog), as that would require locking access
+/// to the catalog for an unbounded amount of time.
 pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::Error> {
     if let Statement::CreateSource(CreateSourceStatement {
         col_names,

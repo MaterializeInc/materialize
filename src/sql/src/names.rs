@@ -7,20 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Structured name types for SQL objects.
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use sql_parser::ast::{Ident, ObjectName};
 
-/// The fully-qualified name of an item in the catalog.
+/// A fully-qualified name of an item in the catalog.
 ///
-/// Catalog names compare case sensitively. Normalization is the responsibility
-/// of the consumer (e.g., the SQL layer).
+/// Catalog names compare case sensitively. Use [`normalize::object_name`] to
+/// perform proper case folding if converting an [`ObjectName`] to a `FullName`.
+///
+/// [`normalize::object_name`]: crate::normalize::object_name
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct FullName {
+    /// The database name.
     pub database: DatabaseSpecifier,
+    /// The schema name.
     pub schema: String,
+    /// The item name.
     pub item: String,
 }
 
@@ -33,9 +40,13 @@ impl fmt::Display for FullName {
     }
 }
 
+/// A name of a database in a [`FullName`].
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum DatabaseSpecifier {
+    /// The "ambient" database, which is always present and is not named
+    /// explicitly, but by omission.
     Ambient,
+    /// A normal database with a name.
     Name(String),
 }
 
@@ -57,6 +68,7 @@ impl From<Option<String>> for DatabaseSpecifier {
     }
 }
 
+/// The fully-qualified name of a schema in the catalog.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SchemaName {
     pub database: DatabaseSpecifier,
@@ -84,7 +96,10 @@ impl From<FullName> for ObjectName {
     }
 }
 
-/// A partial name of an item in the catalog.
+/// An optionally-qualified name of an item in the catalog.
+///
+/// This is like a [`FullName`], but either the database or schema name may be
+/// omitted.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PartialName {
     pub database: Option<String>,
