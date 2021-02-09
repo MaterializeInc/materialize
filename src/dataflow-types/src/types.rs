@@ -100,9 +100,10 @@ pub struct DataflowDesc {
 
 impl DataflowDesc {
     pub fn new(name: String) -> Self {
-        let mut dd = DataflowDesc::default();
-        dd.debug_name = name;
-        dd
+        DataflowDesc {
+            debug_name: name,
+            ..Default::default()
+        }
     }
 
     pub fn add_index_import(

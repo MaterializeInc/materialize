@@ -1232,7 +1232,7 @@ impl Timestamper {
         } else {
             FileReadStyle::ReadOnce
         };
-        let (tx, rx) = std::sync::mpsc::sync_channel(10000 as usize);
+        let (tx, rx) = std::sync::mpsc::sync_channel(10000_usize);
         let compression = fc.compression.clone();
         std::thread::spawn(move || {
             read_file_task(
