@@ -208,6 +208,18 @@ pub enum MirRelationExpr {
         /// Columns to arrange `input` by, in order of decreasing primacy
         keys: Vec<Vec<MirScalarExpr>>,
     },
+    /// Declares that `key` is a primary key for `input`.
+    /// Should be used *very* sparingly, and only if there's no plausible
+    /// way to derive the key information from the underlying expression.
+    /// The result of declaring a key that isn't actually a key for the underlying expression is undefined.
+    ///
+    /// There is no operator rendered for this IR node; thus, its runtime memory footprint is zero.
+    DeclareKey {
+        /// The source collection
+        input: Box<MirRelationExpr>,
+        /// The set of columns in the source collection that form a key.
+        key: Vec<usize>,
+    },
 }
 
 impl MirRelationExpr {
@@ -319,7 +331,7 @@ impl MirRelationExpr {
             MirRelationExpr::FlatMap {
                 input,
                 func,
-                exprs,
+                exprs: _,
                 demand: _,
             } => {
                 let mut input_typ = input.typ();
@@ -327,18 +339,7 @@ impl MirRelationExpr {
                     .column_types
                     .extend(func.output_type().column_types);
                 // FlatMap can add duplicate rows, so input keys are no longer valid
-                let mut typ = RelationType::new(input_typ.column_types);
-                // But we might know that repeat'ing by a column causes another column to be a key:
-                // in particular, this is true for Debezium sources. Account for that possibility here.
-                if let TableFunc::Repeat = func {
-                    if let MirScalarExpr::Column(col) = &exprs[0] {
-                        for (group_indices, sum_column) in input_typ.group_sum_keys.iter() {
-                            if sum_column == col {
-                                typ = typ.with_key(group_indices.clone());
-                            }
-                        }
-                    }
-                }
+                let typ = RelationType::new(input_typ.column_types);
                 typ
             }
             MirRelationExpr::Filter { input, .. } => input.typ(),
@@ -371,46 +372,8 @@ impl MirRelationExpr {
                     equivalences,
                 );
 
-                let mut group_sum_keys = vec![];
-                for (input_index, input_typ) in input_types.iter().enumerate() {
-                    for (group_indices, column_index) in input_typ.group_sum_keys.iter() {
-                        // If the group key refines a key for every other input, it is a group key for the join.
-                        let group_indices_global = group_indices
-                            .iter()
-                            .map(|&group_index| {
-                                input_mapper.map_column_to_global(group_index, input_index)
-                            })
-                            .collect::<Vec<_>>();
-                        if input_types
-                            .iter()
-                            .enumerate()
-                            .all(|(input2_index, input2_typ)| {
-                                input_index == input2_index
-                                    || input2_typ.keys.iter().any(|input2_key| {
-                                        input2_key.iter().all(|&input2_key_index| {
-                                            group_indices_global.contains(
-                                                &input_mapper.map_column_to_global(
-                                                    input2_key_index,
-                                                    input2_index,
-                                                ),
-                                            )
-                                        })
-                                    })
-                            })
-                        {
-                            let column_index_global =
-                                input_mapper.map_column_to_global(*column_index, input_index);
-                            group_sum_keys.push((group_indices_global, column_index_global));
-                        }
-                    }
-                }
-
                 for keys in global_keys {
                     typ = typ.with_key(keys.clone());
-                }
-                for group_sum_key in group_sum_keys {
-                    let (group_indices, sum_column) = group_sum_key;
-                    typ = typ.with_group_sum_key(group_indices, sum_column);
                 }
                 typ
             }
@@ -482,6 +445,7 @@ impl MirRelationExpr {
                 // Important: do not inherit keys of either input, as not unique.
             }
             MirRelationExpr::ArrangeBy { input, .. } => input.typ(),
+            MirRelationExpr::DeclareKey { input, key } => input.typ().with_key(key.clone()),
         }
     }
 
@@ -832,6 +796,9 @@ impl MirRelationExpr {
             MirRelationExpr::ArrangeBy { input, .. } => {
                 f(input)?;
             }
+            MirRelationExpr::DeclareKey { input, .. } => {
+                f(input)?;
+            }
         }
         Ok(())
     }
@@ -909,6 +876,9 @@ impl MirRelationExpr {
                 }
             }
             MirRelationExpr::ArrangeBy { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::DeclareKey { input, .. } => {
                 f(input)?;
             }
         }
@@ -1042,6 +1012,7 @@ impl MirRelationExpr {
             }
             | MirRelationExpr::Negate { input: _ }
             | MirRelationExpr::Threshold { input: _ }
+            | MirRelationExpr::DeclareKey { input: _, key: _ }
             | MirRelationExpr::Union { base: _, inputs: _ } => Ok(()),
         })
     }
@@ -1183,6 +1154,14 @@ impl MirRelationExpr {
                 default,
             ))
         })
+    }
+
+    /// Passes the collection through unchanged, but informs the optimizer that `key` is a primary key.
+    pub fn declare_key(self, key: Vec<usize>) -> Self {
+        Self::DeclareKey {
+            input: Box::new(self),
+            key,
+        }
     }
 }
 

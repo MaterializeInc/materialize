@@ -131,6 +131,7 @@ impl<'a> Explanation<'a> {
                 | Distinct { input }
                 | TopK { input, .. }
                 | Negate { input, .. }
+                | DeclareKey { input, .. }
                 | Threshold { input, .. } => walk(input, explanation, id_gen),
                 // For join and union, each input needs to go in its own chain.
                 Join { left, right, .. } => {
@@ -159,6 +160,7 @@ impl<'a> Explanation<'a> {
                 | Negate { .. }
                 | Threshold { .. }
                 | Union { .. }
+                | DeclareKey { .. }
                 | TopK { .. } => (),
                 Map { scalars: exprs, .. }
                 | Filter {
@@ -253,9 +255,7 @@ impl<'a> Explanation<'a> {
                 Id::Local(_) => {
                     unreachable!("SQL expressions do not support Lets yet")
                 }
-                Id::LocalBareSource => {
-                    unreachable!("We do not yet support explaining complex sources")
-                }
+                Id::LocalBareSource => writeln!(f, "| Get Local Bare Source")?,
                 Id::Global(id) => writeln!(
                     f,
                     "| Get {} ({})",
@@ -355,6 +355,11 @@ impl<'a> Explanation<'a> {
             }
             Negate { .. } => writeln!(f, "| Negate")?,
             Threshold { .. } => write!(f, "| Threshold")?,
+            DeclareKey { input: _, key } => write!(
+                f,
+                "| Declare primary key={}",
+                bracketed("(", ")", separated(", ", key))
+            )?,
             Union { base, inputs } => writeln!(
                 f,
                 "| Union %{} {}",
@@ -368,12 +373,7 @@ impl<'a> Explanation<'a> {
             )?,
         }
 
-        if let Some(RelationType {
-            column_types,
-            keys,
-            group_sum_keys: _, /* It's hard to describe what these do, so don't explain them. TODO[btv]: come up with something? */
-        }) = &node.typ
-        {
+        if let Some(RelationType { column_types, keys }) = &node.typ {
             let column_types: Vec<_> = column_types
                 .iter()
                 .map(|c| self.expr_humanizer.humanize_column_type(c))

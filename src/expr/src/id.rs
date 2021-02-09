@@ -35,7 +35,7 @@ impl fmt::Display for Id {
             Id::Local(id) => id.fmt(f),
             Id::Global(id) => id.fmt(f),
             Id::BareSource(id) => write!(f, "{}(bare)", id),
-            Id::LocalBareSource => write!(f, "(bare source for this source"),
+            Id::LocalBareSource => write!(f, "(bare source for this source)"),
         }
     }
 }

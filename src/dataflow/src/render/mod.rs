@@ -448,6 +448,7 @@ where
                             &envelope,
                             &mut src.operators,
                             fast_forwarded,
+                            src.desc,
                         );
                         if let Some(tok) = extra_token {
                             self.additional_tokens
@@ -1190,6 +1191,13 @@ where
                         self.ensure_rendered(input, scope, worker_index);
                     }
                     self.render_arrangeby(relation_expr, None);
+                }
+
+                MirRelationExpr::DeclareKey { input, key: _ } => {
+                    // TODO - some kind of debug mode where we assert that the keys are truly keys?
+                    self.ensure_rendered(input, scope, worker_index);
+                    let collections = self.collection(input).unwrap();
+                    self.collections.insert(relation_expr.clone(), collections);
                 }
             };
         }

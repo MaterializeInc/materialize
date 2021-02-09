@@ -75,6 +75,7 @@ impl<'a> DataflowBuilder<'a> {
                         SourceConnector::Local,
                         table.desc.clone(),
                         optimized_expr,
+                        table.desc.clone(),
                     );
                 }
                 CatalogItem::Source(source) => {
@@ -113,6 +114,7 @@ impl<'a> DataflowBuilder<'a> {
                         connector,
                         source.bare_desc.clone(),
                         source.optimized_expr.clone(),
+                        source.desc.clone(),
                     );
                 }
                 CatalogItem::View(view) => {
