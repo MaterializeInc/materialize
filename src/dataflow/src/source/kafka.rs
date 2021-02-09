@@ -196,8 +196,6 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     }
     /// Returns the number of partitions expected *for this worker*. Partitions are assigned
     /// round-robin in worker id order offset by the hash of the source_id
-    /// Ex: a partition count of 4 for 3 workers will assign worker 0 with partitions 0,3,
-    /// worker 1 with partition 1, and worker 2 with partition 2
     fn get_worker_partition_count(&self) -> i32 {
         (0..self.known_partitions)
             .filter(|pid| has_partition(self.id.source_id, self.worker_id, self.worker_count, *pid))
@@ -205,8 +203,6 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     }
 
     /// Returns true if this worker is responsible for this partition
-    /// Ex: if pid=0 and worker_id = 0, then true
-    /// if pid=1 and worker_id = 0, then false
     fn has_partition(&self, partition_id: PartitionId) -> bool {
         let pid = match partition_id {
             PartitionId::Kafka(pid) => pid,
@@ -538,8 +534,6 @@ impl KafkaSourceInfo {
     }
 
     /// Returns true if this worker is responsible for this partition
-    /// Ex: if pid=0 and worker_id = 0, then true
-    /// if pid=1 and worker_id = 0, then false
     fn has_partition(&self, partition_id: i32) -> bool {
         has_partition(
             self.id.source_id,
@@ -810,6 +804,13 @@ impl ConsumerContext for GlueConsumerContext {
     }
 }
 
+// We want to distribute partitions across workers evenly, such that
+// - different partitions for the same source are uniformly distributed across workers
+// - the same partition id across different sources are uniformly distributed across workers
+// - the same partition id across different instances of the same source is sent to
+//   the same worker.
+// We achieve this by taking a hash of the `source_id` (not the source instance id) and using
+// that to offset distributing partitions round robin across workers.
 fn has_partition(
     source_id: GlobalId,
     worker_id: i32,
@@ -819,6 +820,9 @@ fn has_partition(
     assert!(worker_id >= 0);
     assert!(worker_count > worker_id);
     assert!(partition_id >= 0);
-    let hash = source_id.hashed() + partition_id as u64;
+
+    // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
+    // overflow.
+    let hash = (source_id.hashed() >> 32) + partition_id as u64;
     (hash % worker_count as u64) == worker_id as u64
 }
