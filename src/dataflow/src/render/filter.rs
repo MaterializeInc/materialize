@@ -222,8 +222,8 @@ where
                     BinaryFunc::Lte => BinaryFunc::Gte,
                     BinaryFunc::Gt => BinaryFunc::Lt,
                     BinaryFunc::Gte => BinaryFunc::Lte,
-                    _ => {
-                        return Err("Unsupported binary temporal operation".to_string());
+                    x => {
+                        return Err(format!("Unsupported binary temporal operation: {:?}", x));
                     }
                 };
             }
@@ -232,20 +232,7 @@ where
             if expr2.contains_temporal()
                 || *expr1 != MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
             {
-                return Err("MzLogicalTimestamp in unsupported position".to_string());
-            }
-
-            // The comparison operators. NotEq is not currently supported because wtfsrsly?
-            let operators = vec![
-                BinaryFunc::Eq,
-                BinaryFunc::Lt,
-                BinaryFunc::Lte,
-                BinaryFunc::Gt,
-                BinaryFunc::Gte,
-            ];
-
-            if !operators.contains(&func) {
-                return Err("Unsupported binary temporal operation".to_string());
+                return Err("Unsupported temporal predicate: `mz_logical_timestamp()` must be directly compared to a non-temporal expression ".to_string());
             }
 
             // We'll need to use this a fair bit.
@@ -254,7 +241,7 @@ where
                 ScalarType::Decimal(38, 0),
             );
 
-            // MzLogicalTimestamp <OP> <EXPR2>
+            // MzLogicalTimestamp <OP> <EXPR2> for several supported operators.
             match func {
                 BinaryFunc::Eq => {
                     // Lower bound of expr, upper bound of expr+1
@@ -274,11 +261,11 @@ where
                     lower.push(*expr2);
                 }
                 _ => {
-                    return Err("Unsupported binary temporal operation".to_string());
+                    return Err(format!("Unsupported binary temporal operation: {:?}", func));
                 }
             }
         } else {
-            return Err("Unsupported temporal operation".to_string());
+            return Err("Unsupported temporal predicate: `mz_logical_timestamp()` must be directly compared to a non-temporal expression ".to_string());
         }
     }
 
