@@ -48,3 +48,4 @@ tokio = { version = "1.2.0", features = ["fs", "rt"] }
 tokio-util = { version = "0.6.3", features = ["codec"] }
 url = { version = "2.2.0", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
+tracing = "0.1.23"

@@ -107,6 +107,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             let glob = s3_conn.pattern.map(|g| g.compile_matcher());
             let aws_info = s3_conn.aws_info;
             tokio::spawn(download_objects_task(
+                source_name.clone(),
                 keys_rx,
                 dataflow_tx,
                 aws_info.clone(),
@@ -127,6 +128,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
                         consistency_info.update_partition_metadata(pid);
 
                         tokio::spawn(scan_bucket_task(
+                            source_name.clone(),
                             bucket,
                             glob.clone(),
                             aws_info.clone(),
@@ -135,6 +137,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
                     }
                     S3KeySource::SqsNotifications { queue } => {
                         tokio::spawn(read_sqs_task(
+                            source_name.clone(),
                             glob.clone(),
                             queue,
                             aws_info.clone(),
@@ -166,6 +169,7 @@ struct KeyInfo {
 }
 
 async fn download_objects_task(
+    source_name: String,
     mut rx: tokio_mpsc::Receiver<anyhow::Result<KeyInfo>>,
     tx: SyncSender<anyhow::Result<InternalMessage>>,
     aws_info: aws::ConnectInfo,
@@ -192,6 +196,7 @@ async fn download_objects_task(
                     // common case, we should very rarely get duplicate keys
                     let is_new = keys.insert(msg.key.clone());
                     if !is_new {
+                        tracing::debug!(key = %msg.key, "skipping download of duplicate key");
                         continue;
                     }
                 } else {
@@ -200,16 +205,18 @@ async fn download_objects_task(
                     seen_buckets.insert(msg.bucket.clone(), keys);
                 }
 
-                download_object(&tx, &activator, &client, msg.bucket, msg.key).await;
+                download_object(&source_name, &tx, &activator, &client, msg.bucket, msg.key).await;
             }
             Err(e) => tx
                 .send(Err(e))
                 .unwrap_or_else(|e| log::debug!("unable to send error: {}", e)),
         }
     }
+    tracing::warn!(%source_name, "exiting download objects task, queue closed");
 }
 
 async fn scan_bucket_task(
+    source_name: String,
     bucket: String,
     glob: Option<GlobMatcher>,
     aws_info: aws::ConnectInfo,
@@ -253,14 +260,16 @@ async fn scan_bucket_task(
                         .filter(|k| glob.map(|g| g.is_match(k)).unwrap_or(true));
 
                     for key in keys {
-                        tx.send(Ok(KeyInfo {
-                            bucket: bucket.clone(),
-                            key,
-                        }))
-                        .await
-                        .unwrap_or_else(|e| {
-                            log::debug!("unable to send keys to downloader: {}", e)
-                        });
+                        if let Err(e) = tx
+                            .send(Ok(KeyInfo {
+                                bucket: bucket.clone(),
+                                key,
+                            }))
+                            .await
+                        {
+                            log::debug!("unable to send keys to downloader, exiting scan: {}", e);
+                            break;
+                        }
                     }
                 }
 
@@ -287,9 +296,12 @@ async fn scan_bucket_task(
             }
         }
     }
+
+    tracing::warn!(%source_name, "exiting scan bucket task, queue closed");
 }
 
 async fn read_sqs_task(
+    source_name: String,
     glob: Option<GlobMatcher>,
     queue: String,
     aws_info: aws::ConnectInfo,
@@ -298,11 +310,15 @@ async fn read_sqs_task(
     let client = match aws_util::sqs::client(aws_info).await {
         Ok(client) => client,
         Err(e) => {
-            tx.send(Err(anyhow!("Unable to create sqs client: {}", e)))
-                .await
-                .unwrap_or_else(|e| {
-                    log::debug!("unable to send error on stream creating sqs client: {}", e)
-                });
+            tx.send(Err(anyhow!(
+                "Unable to create sqs client for source {}: {}",
+                source_name,
+                e
+            )))
+            .await
+            .unwrap_or_else(|e| {
+                log::debug!("unable to send error on stream creating sqs client: {}", e)
+            });
             return;
         }
     };
@@ -322,20 +338,27 @@ async fn read_sqs_task(
     {
         Ok(response) => {
             if let Some(url) = response.queue_url {
+                tracing::trace!(%source_name, %url, "Got url for queue");
                 url
             } else {
-                log::error!("Empty queue url response for queue {}", queue);
+                tracing::error!(%source_name, %queue, "Empty queue url response");
                 return;
             }
         }
         Err(e) => {
-            log::error!("Unable to retrieve queue url for queue {}: {}", queue, e);
+            tracing::error!(%source_name, %queue, error = %e, "Unable to retrieve queue url");
             return;
         }
     };
 
     let mut allowed_errors = 10;
     loop {
+        if tx.is_closed() {
+            // we need to do this aggressively, because sqs queues require you
+            // to delete old messages to get new ones.
+            tracing::warn!(%source_name, "download queue is closed, shutting down sqs reader");
+            break;
+        }
         let response = client
             .receive_message(ReceiveMessageRequest {
                 max_number_of_messages: Some(10),
@@ -350,9 +373,15 @@ async fn read_sqs_task(
 
         match response {
             Ok(response) => {
+                let messages = if let Some(m) = response.messages {
+                    m
+                } else {
+                    continue;
+                };
+                tracing::trace!(%source_name, "successfully received {} sqs messages", messages.len());
                 allowed_errors = 10;
 
-                for message in response.messages.iter().flat_map(|ms| ms) {
+                for message in messages.iter().map(|ms| ms) {
                     if let Some(body) = message.body.as_ref() {
                         let event: Result<Event, _> = serde_json::from_str(body);
                         match event {
@@ -366,29 +395,36 @@ async fn read_sqs_task(
                                     ) {
                                         let key = record.s3.object.key;
                                         if glob.map(|g| g.is_match(&key)).unwrap_or(true) {
-                                            tx.send(Ok(KeyInfo {
-                                                bucket: record.s3.bucket.name,
-                                                key,
-                                            }))
-                                            .await
-                                            .unwrap_or_else(|e| {
-                                                log::debug!(
-                                                    "unable to send key from sqs to donloader: {}",
-                                                    e,
-                                                )
-                                            });
+                                            if let Err(e) = tx
+                                                .send(Ok(KeyInfo {
+                                                    bucket: record.s3.bucket.name,
+                                                    key,
+                                                }))
+                                                .await
+                                            {
+                                                tracing::debug!(
+                                                    error=%e,
+                                                    "unable to send key from sqs to downloader, exiting",
+                                                );
+                                                return;
+                                            }
                                         }
+                                    } else {
+                                        tracing::debug!(
+                                            ?record.event_type,
+                                            "record event type is not a create",
+                                        );
                                     }
                                 }
                             }
-                            Err(_) => {
+                            Err(e) => {
                                 let test: Result<TestEvent, _> = serde_json::from_str(&body);
                                 match test {
                                     Ok(_) => {} // expected when connecting to a new queue
                                     Err(_) => {
                                         log::error!(
-                                            "[customer-data] Unrecognized message from SQS queue {}: {}",
-                                            queue, body,
+                                            "[customer-data] Unrecognized message from SQS queue {}: {} error={}",
+                                            queue, body, e
                                         )
                                     }
                                 }
@@ -428,19 +464,23 @@ async fn read_sqs_task(
             }
         }
     }
+
+    tracing::warn!(%source_name, "exiting listen queue task")
 }
 
 async fn download_object(
+    source_name: &str,
     tx: &SyncSender<anyhow::Result<InternalMessage>>,
     activator: &SyncActivator,
     client: &S3Client,
     bucket: String,
     key: String,
 ) {
+    log::debug!("downloading s3 object {}/{}", bucket, key);
     let obj = match client
         .get_object(GetObjectRequest {
             bucket: bucket.clone(),
-            key,
+            key: key.clone(),
             ..Default::default()
         })
         .await
@@ -466,13 +506,13 @@ async fn download_object(
                         bucket: bucket.clone(),
                         record: line,
                     })) {
-                        log::debug!("unable to send read line on stream: {}", e);
+                        tracing::debug!(%source_name, "Source receiver has been closed, exiting ingest: {}", e);
                         break;
                     } else {
                         lines += 1;
                     }
                 }
-                log::trace!("sent {} lines to reader", lines);
+                log::trace!("sent {} lines to reader key={}", lines, key);
                 if activate {
                     activator.activate().expect("s3 reader activation failed");
                 }
@@ -584,14 +624,11 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
 
     fn update_partition_count(
         &mut self,
-        consistency_info: &mut ConsistencyInfo,
-        partition_count: i32,
+        _consistency_info: &mut ConsistencyInfo,
+        _partition_count: i32,
     ) {
-        log::debug!(
-            "ignoring partition count update type={:?} partition_count={}",
-            consistency_info.source_type,
-            partition_count,
-        )
+        // we don't do anything with this/there is no way to be updated from
+        // outside of something we don't already know about.
     }
 
     fn buffer_message(&mut self, message: SourceMessage<Out>) {

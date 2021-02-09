@@ -88,6 +88,8 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), Error> {
+    ore::test::init_logging_default("info");
+
     let (aws_region, aws_account, aws_credentials) =
         match (args.aws_region.parse(), args.aws_endpoint) {
             (Ok(region), None) => {

@@ -238,11 +238,17 @@ where
         config.timely_worker.clone(),
         move |timely_worker| {
             let _tokio_guard = tokio_executor.enter();
-            let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % config.workers]
-                .take()
-                .unwrap()
-                .request_unparks();
             let worker_idx = timely_worker.index();
+            let command_rx = command_rxs.lock().expect("mutex is not poisoned")
+                [worker_idx % config.workers]
+                .take()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "command_rxs missing worker_idx % config.workers = {} % {}",
+                        worker_idx, config.workers
+                    )
+                })
+                .request_unparks();
             Worker {
                 timely_worker,
                 render_state: RenderState {
@@ -408,7 +414,7 @@ where
             .timely_worker
             .log_register()
             .get("materialized")
-            .unwrap();
+            .expect("a valid logger");
 
         if logging.log_logging {
             // Create log processing dataflows after registering logging so we can log the

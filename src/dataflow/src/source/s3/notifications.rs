@@ -130,9 +130,9 @@ pub struct OwnerIdentity {
 #[serde(rename_all = "camelCase")]
 pub struct Object {
     pub key: String,
-    pub size: String,
+    pub size: usize,
     pub e_tag: String,
-    pub version_id: String,
+    pub version_id: Option<String>,
     pub sequencer: String,
 }
 
@@ -147,4 +147,88 @@ pub struct GlacierEventData {
 pub struct RestoreEventData {
     pub lifecycle_restoration_expiry_time: String,
     pub lifecycle_restore_storage_class: String,
+}
+
+#[test]
+fn can_deserialize() {
+    let _: Event = serde_json::from_str(r#"{
+  "Records": [
+    {
+      "eventVersion": "2.1",
+      "eventSource": "aws:s3",
+      "awsRegion": "us-east-2",
+      "eventTime": "2021-02-09T18:22:20.910Z",
+      "eventName": "ObjectCreated:Put",
+      "userIdentity": {
+        "principalId": "AWS:AROAV2KIV5LPU2NEHHVLJ:maister"
+      },
+      "requestParameters": {
+        "sourceIPAddress": "74.101.33.144"
+      },
+      "responseElements": {
+        "x-amz-request-id": "WNEGGBKBC2Z00TPT",
+        "x-amz-id-2": "KSu/nrcf5Uci4VwoGmWVY2C9EApJzwKcAGw1QKRJDuKlduEELM/LCosTygEqxt9hZHQz6SZiGNdbY7b4SDG+e8wM4LDALNh7"
+      },
+      "s3": {
+        "s3SchemaVersion": "1.0",
+        "configurationId": "NGQxMjYzYTktZDliZC00YmVhLWEyN2MtMDBlNzIxOTc2N2Rj",
+        "bucket": {
+          "name": "materialize-ci-testdrive-1383595544",
+          "ownerIdentity": {
+            "principalId": "A3HLZ28Y3OEX06"
+          },
+          "arn": "arn:aws:s3:::materialize-ci-testdrive-1383595544"
+        },
+        "object": {
+          "key": "short/z",
+          "size": 2,
+          "eTag": "a8a78d0ff555c931f045b6f448129846",
+          "sequencer": "006022D2E196B763B8"
+        }
+      }
+    }
+  ]
+}"#).unwrap();
+
+    let _: Event = serde_json::from_str(
+        r#"{
+  "Records": [
+    {
+      "eventVersion": "2.1",
+      "eventSource": "aws:s3",
+      "awsRegion": "us-east-2",
+      "eventTime": "2021-02-09T20:36:29.767Z",
+      "eventName": "ObjectCreated:Put",
+      "userIdentity": {
+        "principalId": "AWS:AROAV2KIV5LPU2NEHHVLJ:1612902961967847000"
+      },
+      "requestParameters": {
+        "sourceIPAddress": "74.101.33.144"
+      },
+      "responseElements": {
+        "x-amz-request-id": "HNRK42YE6BB9YG05",
+        "x-amz-id-2": "4b+BVPc9ddP8PqPQ/bWEzFKx75GHDRTGgXj2kzmUJn5Yg9xrWzhrdVQyALvHhCfxZ3DOimAXMGnEiNlLtF5y0lTkLVIIV1TX"
+      },
+      "s3": {
+        "s3SchemaVersion": "1.0",
+        "configurationId": "MmM1MGQ1MGUtYjA4NC00YmZiLWI1M2EtNDRlOTIzZTI4NDMw",
+        "bucket": {
+          "name": "materialize-ci-testdrive-3874882343",
+          "ownerIdentity": {
+            "principalId": "A3HLZ28Y3OEX06"
+          },
+          "arn": "arn:aws:s3:::materialize-ci-testdrive-3874882343"
+        },
+        "object": {
+          "key": "csv.csv",
+          "size": 11,
+          "eTag": "39753c6cef323ac27ad4da83b03a2e6f",
+          "sequencer": "006022F2503A80ED06"
+        }
+      }
+    }
+  ]
+}
+"#,
+    ).unwrap();
 }
