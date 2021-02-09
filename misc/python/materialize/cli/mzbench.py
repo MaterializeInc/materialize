@@ -3,24 +3,30 @@
 import argparse
 import csv
 import itertools
-import multiprocessing
 import os
 import subprocess
 import sys
+import typing
 
-def rev_parse(git_ref):
+import psutil
+
+def rev_parse(git_ref: str) -> str:
     if not git_ref:
         return git_ref
     return subprocess.check_output(['git', 'rev-parse', git_ref]).strip().decode()
 
-def main(composition, worker_counts, git_revisions):
+def main(composition: str, worker_counts: typing.List[int], git_revisions: typing.Union[str, None]) -> None:
 
-    if multiprocessing.cpu_count() > 8:
-        benchmark = 'benchmark'
-    elif multiprocessing.cpu_count() > 4:
+    # This includes hypercores
+    physical_cpus = psutil.cpu_count(logical = False)
+    if physical_cpus < 4:
+        # Explicitly override the worker counts for the CI benchmark
+        benchmark = 'benchmark-ci'
+        worker_counts = [1]
+    elif physical_cpus < 8:
         benchmark = 'benchmark-medium'
     else:
-        benchmark = 'benchmark-ci'
+        benchmark = 'benchmark'
 
     setup_benchmark = ['./bin/mzcompose', '--mz-find', composition, 'run', f'setup-{benchmark}']
     run_benchmark = ['./bin/mzcompose', '--mz-find', composition, 'run', f'run-{benchmark}']
@@ -59,6 +65,30 @@ def main(composition, worker_counts, git_revisions):
                                   'rows_per_second': rows_per_second,
                                   'grafana_url': grafana_url})
 
+def enumerate_cpu_counts() -> typing.List[int]:
+    """This program prints the number of CPU counts to benchmark on this machine.
+
+    We remove some percentage of CPU cores off the top for system / background processing. With
+    the CPUs that remain, we generate a list of evenly spaced worker counts. The list is limited
+    by the number of trials desired. This is meant to help us explore the number of CPUs that
+    should be dedicated to MZ_WORKERS, not as a prescription for the correct values to choose.
+
+    On a Macbook with 8 cores, this will return [3, 2, 1].
+
+    On a 56 core machine, this returns [24, 18, 12, 6].
+
+    On a 96 core machine, this returns [41, 30, 20, 10].
+    """
+
+    # 15% overhead, divide by 2 because we assume half are hyperthreads
+    max_cpus = round(psutil.cpu_count(logical = False) * .85)
+    num_trials = 4
+
+    # Yield the fractional points (4/4, 3/4, ...) between max and 0, not including 0
+    worker_counts = [round(i * max_cpus / num_trials) for i in range(num_trials, 0, -1)]
+
+    return list(reversed(sorted(set(worker_counts))))
+
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
@@ -68,8 +98,14 @@ if __name__ == '__main__':
                         help="Name of the mzcompose composition to run",
                        )
 
-    worker_counts = [24, 20, 16, 12, 8]
-    git_revisions = [rev_parse(ref) for ref in ['origin/main', None]]
+    parser.add_argument("git_references",
+                        type=str,
+                        nargs="+",
+                        help="Materialized builds to test as well, identified by git reference",
+                       )
 
     args = parser.parse_args()
+    worker_counts = enumerate_cpu_counts()
+    git_revisions = [None, *[rev_parse(ref) for ref in args.git_references]]
+
     main(args.composition, worker_counts, git_revisions)
