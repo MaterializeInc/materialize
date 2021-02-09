@@ -33,6 +33,7 @@ The following special syntax is permitted if _val_ is a string literal:
 
 Source type | Return type
 ------------|------------
+`bytea`  | `text`
 `int` | `boolean`
 `int` | `float`
 `int` | `decimal`
@@ -51,6 +52,7 @@ Source type | Return type
 `time` | `text`
 `interval` | `time`
 `interval` | `text`
+`text`  |  `bytea`
 `text` | `list`
 
 <sup>1</sup> Casting a `float` to a `decimal` can yield an imprecise result due to the floating point arithmetic involved in the conversion.
