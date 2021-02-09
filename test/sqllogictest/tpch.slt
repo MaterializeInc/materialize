@@ -404,7 +404,6 @@ Finish order_by=(#0 asc) limit=none offset=0 project=(#0, #1)
 
 EOF
 
-
 query T multiline
 -- Query 05
 EXPLAIN PLAN FOR SELECT
@@ -442,7 +441,7 @@ ORDER BY
 
 %2 =
 | Get materialize.public.lineitem (u21)
-| Reduce group=(#2, #0)
+| Reduce group=(#0, #2)
 | | agg sum((#5 * (100dec - #6)))
 | ArrangeBy (#0, #1)
 
@@ -459,7 +458,7 @@ ORDER BY
 | ArrangeBy (#0)
 
 %6 =
-| Join %0 %1 %2 %3 %4 %5 (= #0 #9) (= #3 #23 #27) (= #8 #18) (= #17 #20) (= #29 #31)
+| Join %0 %1 %2 %3 %4 %5 (= #0 #9) (= #3 #23 #27) (= #8 #17) (= #18 #20) (= #29 #31)
 | | implementation = DeltaQuery
 | |   delta %0 %4.(#0) %5.(#0) %1.(#1) %3.(#3) %2.(#0, #1)
 | |   delta %1 %0.(#0) %4.(#0) %5.(#0) %3.(#3) %2.(#0, #1)
