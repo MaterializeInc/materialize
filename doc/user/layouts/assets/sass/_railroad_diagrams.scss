@@ -1,0 +1,63 @@
+.rr-diagram {
+  margin: 1.5rem 0;
+
+  .line {
+    fill: none;
+    stroke: $off-black;
+  }
+
+  .bold-line {
+    stroke: $black;
+    shape-rendering: crispEdges;
+    stroke-width: 2;
+  }
+
+  .thin-line {
+    stroke: $black;
+    shape-rendering: crispEdges;
+  }
+
+  .filled {
+    fill: $off-black;
+    stroke: none;
+  }
+
+  text.terminal,
+  text.nonterminal,
+  text.regexp {
+    font-family: "RM Neue", sans-serif;
+    font-size: 14px;
+    fill: $black;
+  }
+
+  text.terminal {
+    font-weight: bold;
+  }
+
+  rect,
+  circle,
+  polygon {
+    fill: $off-black;
+    stroke: $off-black;
+  }
+
+  rect.terminal {
+    fill: scale-color($purple-40, $saturation: -50%);
+    stroke: $off-black;
+  }
+
+  rect.nonterminal {
+    fill: scale-color($purple-20, $saturation: -50%);
+    stroke: $off-black;
+  }
+
+  rect.text {
+    fill: none;
+    stroke: none;
+  }
+
+  polygon.regexp {
+    fill: scale-color($purple-10, $saturation: -50%);
+    stroke: $off-black;
+  }
+}

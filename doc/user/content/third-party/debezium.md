@@ -34,10 +34,6 @@ ALTER TABLE foo
 REPLICA IDENTITY FULL;
 ```
 
-### Open CDC format
-
-You can use Debezium's default CDC envelope or Materialize's Open CDC format, which has been designed to prevent record duplication and sequencing errors. For more information about Open CDC, see [Open CDC](/overview/open-cdc).
-
 ### Kafka-less setup
 
 Users who wish to connect a database to Materialize without having to use Kafka can
