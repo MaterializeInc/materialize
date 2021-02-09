@@ -31,7 +31,6 @@ impl crate::Transform for FoldConstants {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
-        println!("{:#?}", relation);
         relation.try_visit_mut(&mut |e| self.action(e))
     }
 }
