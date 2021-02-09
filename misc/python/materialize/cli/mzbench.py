@@ -88,9 +88,9 @@ def main(
             if line.startswith("SUCCESS!"):
                 for token in line.split(" "):
                     if token.startswith("seconds_taken="):
-                        seconds_taken = token[len("seconds_taken=")]
+                        seconds_taken = token[len("seconds_taken=") :]
                     elif token.startswith("rows_per_sec="):
-                        rows_per_second = token[len("rows_per_sec=")]
+                        rows_per_second = token[len("rows_per_sec=") :]
             elif line.startswith("Grafana URL: "):
                 grafana_url = line[len("Grafana URL: ") :]
 
