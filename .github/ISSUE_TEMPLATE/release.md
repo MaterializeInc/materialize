@@ -22,6 +22,7 @@ about: >
     a list here, or state that there are none:
 
   > unknown number of milestone blockers or release blockers
+- [ ] Link to this issue in the #marketing Slack channel.
 - [ ] Link to this issue in the #release Slack channel.
 
   If there are open blockers, clarify if they should block this release until they're
