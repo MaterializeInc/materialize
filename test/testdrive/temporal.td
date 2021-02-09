@@ -246,8 +246,6 @@ ts
       to_timestamp
 "2000-01-01 00:00:00 UTC" "2199-12-31 00:00:00 UTC"
 
-> SELECT * FROM both_ts AS OF 1
-
 > INSERT INTO first_ts VALUES (EXTRACT('epoch' FROM CAST('2000-01-01' AS TIMESTAMP))*1000)
 
 > INSERT INTO first_ts VALUES (NULL)
