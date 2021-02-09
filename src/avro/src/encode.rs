@@ -84,7 +84,8 @@ pub fn encode_ref(value: &Value, schema: SchemaNode, buffer: &mut Vec<u8>) {
             encode_long(ts, buffer)
         }
         Value::Double(x) => buffer.extend_from_slice(&unsafe { transmute::<f64, [u8; 8]>(*x) }),
-        Value::Decimal(DecimalValue { unscaled, .. }) => match schema.name {
+        Value::Decimal(DecimalValue { unscaled, .. })
+        | Value::RDN(DecimalValue { unscaled, .. }) => match schema.name {
             None => encode_bytes(unscaled, buffer),
             Some(_) => buffer.extend(unscaled),
         },

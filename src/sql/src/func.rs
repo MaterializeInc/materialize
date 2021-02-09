@@ -100,6 +100,7 @@ impl TypeCategory {
             | ScalarType::Float64
             | ScalarType::Int32
             | ScalarType::Int64
+            | ScalarType::Numeric { .. }
             | ScalarType::Oid => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
