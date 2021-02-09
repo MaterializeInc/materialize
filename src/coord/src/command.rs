@@ -9,6 +9,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use derivative::Derivative;
 
@@ -16,6 +17,7 @@ use dataflow_types::PeekResponse;
 use repr::Row;
 use sql::ast::{FetchDirection, ObjectType, Raw, Statement};
 use sql::plan::ExecuteTimeout;
+use tokio::sync::watch;
 
 use crate::error::CoordError;
 use crate::session::{EndTransactionAction, Session};
@@ -25,6 +27,7 @@ pub enum Command {
     /// Notify the coordinator of a new client session.
     Startup {
         session: Session,
+        cancel_tx: Arc<watch::Sender<Cancelled>>,
         tx: futures::channel::oneshot::Sender<Response<Vec<StartupMessage>>>,
     },
 
@@ -202,4 +205,14 @@ pub enum ExecuteResponse {
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
+}
+
+/// The state of a cancellation request.
+#[derive(Debug, Clone, Copy)]
+pub enum Cancelled {
+    /// A cancellation request has occurred.
+    Cancelled,
+    /// No cancellation request has yet occurred, or a previous request has been
+    /// cleared.
+    NotCancelled,
 }

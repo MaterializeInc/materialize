@@ -33,7 +33,7 @@ def print_dashboard_url(args: argparse.Namespace, start: datetime.datetime):
     """Print the URL to see the metrics for this test"""
 
     # Create parameters to see a dashboard with the metrics from this benchmark run
-    # Convert start and end to timestamps, with a little padding to make the dashboard look nicer
+    # Add padding to make the charts nicer to read
     # Grafana expects timestamps with milliseconds
     path = '/d/materialize-overview/materialize-overview'
     query = urllib.parse.urlencode( {
@@ -64,7 +64,7 @@ def wait_metric(args: argparse.Namespace) -> int:
         if current_values:
             (ts, point) = [float(i) for i in current_values[0]['value']]
             if point == args.expected_value:
-                rate = point / max(time_so_far, 1)
+                rate = round(point / max(time_so_far, 1))
                 print(f"SUCCESS! Benchmark took {time_so_far}s, {rate} rows/sec")
                 return 0
 
