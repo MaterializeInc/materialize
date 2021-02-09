@@ -662,9 +662,10 @@ impl HirScalarExpr {
                         let col_type = select.typ().column_types.into_last();
 
                         let inner_arity = get_inner.arity();
+                        // We must determine a count for each `get_inner` prefix,
+                        // and report an error if that count exceeds one.
                         let guarded = select.let_in(id_gen, |_id_gen, get_select| {
-                            // We must determine a count for each `get_inner` prefix,
-                            // and report an error if that count exceeds one.
+                            // Count for each `get_inner` prefix.
                             let counts = get_select.clone().reduce(
                                 (0..inner_arity).collect::<Vec<_>>(),
                                 vec![expr::AggregateExpr {
@@ -688,7 +689,7 @@ impl HirScalarExpr {
                                 )])
                                 .project((0..inner_arity).collect::<Vec<_>>())
                                 .map(vec![expr::MirScalarExpr::literal(
-                                    Err(expr::EvalError::TooManyDamnRecords),
+                                    Err(expr::EvalError::MultipleRowsFromSubquery),
                                     col_type.clone().scalar_type,
                                 )]);
                             // Return `get_select` and any errors added in.
