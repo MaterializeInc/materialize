@@ -20,7 +20,7 @@ use repr::{ColumnType, Datum, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::Explanation;
-use crate::{DummyHumanizer, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr};
+use crate::{DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr};
 
 pub mod func;
 pub mod join_input_mapper;
@@ -36,7 +36,7 @@ pub enum MirRelationExpr {
     /// The runtime memory footprint of this operator is zero.
     Constant {
         /// Rows of the constant collection and their multiplicities.
-        rows: Vec<(Row, isize)>,
+        rows: Result<Vec<(Row, isize)>, EvalError>,
         /// Schema of the collection.
         typ: RelationType,
     },
@@ -220,24 +220,27 @@ impl MirRelationExpr {
     pub fn typ(&self) -> RelationType {
         match self {
             MirRelationExpr::Constant { rows, typ } => {
-                for (row, _diff) in rows {
-                    for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
-                        // If the record will be observed, we should validate its type.
-                        if datum != Datum::Dummy {
-                            assert!(
-                                datum.is_instance_of(column_typ),
-                                "Expected datum of type {:?}, got value {:?}",
-                                column_typ,
-                                datum
-                            );
+                if let Ok(rows) = rows {
+                    for (row, _diff) in rows {
+                        for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
+                            // If the record will be observed, we should validate its type.
+                            if datum != Datum::Dummy {
+                                assert!(
+                                    datum.is_instance_of(column_typ),
+                                    "Expected datum of type {:?}, got value {:?}",
+                                    column_typ,
+                                    datum
+                                );
+                            }
                         }
                     }
-                }
-                let result = typ.clone();
-                if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
-                    result.with_key(Vec::new())
+                    if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
+                        typ.clone().with_key(Vec::new())
+                    } else {
+                        typ.clone()
+                    }
                 } else {
-                    result
+                    typ.clone()
                 }
             }
             MirRelationExpr::Get { typ, .. } => typ.clone(),
@@ -459,10 +462,10 @@ impl MirRelationExpr {
             }
         }
         let mut row_packer = repr::RowPacker::new();
-        let rows = rows
+        let rows = Ok(rows
             .into_iter()
             .map(move |(row, diff)| (row_packer.pack(row), diff))
-            .collect();
+            .collect());
         MirRelationExpr::Constant { rows, typ }
     }
 
@@ -664,7 +667,10 @@ impl MirRelationExpr {
     /// constructed.
     pub fn union_many(mut inputs: Vec<Self>, typ: RelationType) -> Self {
         if inputs.len() == 0 {
-            MirRelationExpr::Constant { rows: vec![], typ }
+            MirRelationExpr::Constant {
+                rows: Ok(vec![]),
+                typ,
+            }
         } else if inputs.len() == 1 {
             inputs.into_element()
         } else {
@@ -696,7 +702,7 @@ impl MirRelationExpr {
     /// A false value does not mean the collection is known to be non-empty,
     /// only that we cannot currently determine that it is statically empty.
     pub fn is_empty(&self) -> bool {
-        if let MirRelationExpr::Constant { rows, .. } = self {
+        if let MirRelationExpr::Constant { rows: Ok(rows), .. } = self {
             rows.is_empty()
         } else {
             false
@@ -1016,14 +1022,20 @@ impl MirRelationExpr {
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the correct type.
     pub fn take_safely(&mut self) -> MirRelationExpr {
         let typ = self.typ();
-        std::mem::replace(self, MirRelationExpr::Constant { rows: vec![], typ })
+        std::mem::replace(
+            self,
+            MirRelationExpr::Constant {
+                rows: Ok(vec![]),
+                typ,
+            },
+        )
     }
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with an **incorrect** type.
     ///
     /// This should only be used if `self` is about to be dropped or otherwise overwritten.
     pub fn take_dangerous(&mut self) -> MirRelationExpr {
         let empty = MirRelationExpr::Constant {
-            rows: vec![],
+            rows: Ok(vec![]),
             typ: RelationType::new(Vec::new()),
         };
         std::mem::replace(self, empty)
@@ -1035,7 +1047,7 @@ impl MirRelationExpr {
         F: FnOnce(MirRelationExpr) -> MirRelationExpr,
     {
         let empty = MirRelationExpr::Constant {
-            rows: vec![],
+            rows: Ok(vec![]),
             typ: RelationType::new(Vec::new()),
         };
         let expr = std::mem::replace(self, empty);

@@ -23,7 +23,9 @@
 //!
 //! At the moment, only *scalar* expression evaluation can fail, so only
 //! operators that evaluate scalar expressions can fail. At the time of writing,
-//! that includes map, filter, reduce, and join operators.
+//! that includes map, filter, reduce, and join operators. Constants are a bit
+//! of a special case: they can be either a constant vector of rows *or* a
+//! constant, singular error.
 //!
 //! The approach taken is to build two parallel trees of computation: one for
 //! the rows that have been successfully evaluated (the "oks tree"), and one for
@@ -966,21 +968,38 @@ where
             match relation_expr {
                 // The constant collection is instantiated only on worker zero.
                 MirRelationExpr::Constant { rows, .. } => {
-                    let rows = if worker_index == 0 {
+                    // Determine what this worker will contribute.
+                    let locally = if worker_index == 0 {
                         rows.clone()
                     } else {
-                        vec![]
+                        Ok(vec![])
+                    };
+                    // Produce both rows and errs to avoid conditional dataflow construction.
+                    let (rows, errs) = match locally {
+                        Ok(rows) => (rows, Vec::new()),
+                        Err(e) => (Vec::new(), vec![e]),
                     };
 
-                    let collection = rows
-                        .to_stream(scope)
+                    let ok_collection = rows
+                        .into_iter()
                         .map(|(x, diff)| (x, timely::progress::Timestamp::minimum(), diff))
+                        .to_stream(scope)
                         .as_collection();
 
-                    let err_collection = Collection::empty(scope);
+                    let err_collection = errs
+                        .into_iter()
+                        .map(|e| {
+                            (
+                                DataflowError::from(e),
+                                timely::progress::Timestamp::minimum(),
+                                1,
+                            )
+                        })
+                        .to_stream(scope)
+                        .as_collection();
 
                     self.collections
-                        .insert(relation_expr.clone(), (collection, err_collection));
+                        .insert(relation_expr.clone(), (ok_collection, err_collection));
                 }
 
                 // A get should have been loaded into the context, and it is surprising to

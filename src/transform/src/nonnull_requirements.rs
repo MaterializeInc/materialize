@@ -51,10 +51,14 @@ impl NonNullRequirements {
         gets: &mut HashMap<Id, Vec<HashSet<usize>>>,
     ) {
         match relation {
-            MirRelationExpr::Constant { rows, .. } => rows.retain(|(row, _)| {
-                let datums = row.unpack();
-                columns.iter().all(|c| datums[*c] != repr::Datum::Null)
-            }),
+            MirRelationExpr::Constant { rows, .. } => {
+                if let Ok(rows) = rows {
+                    rows.retain(|(row, _)| {
+                        let datums = row.unpack();
+                        columns.iter().all(|c| datums[*c] != repr::Datum::Null)
+                    })
+                }
+            }
             MirRelationExpr::Get { id, .. } => {
                 gets.entry(*id).or_insert_with(Vec::new).push(columns);
             }

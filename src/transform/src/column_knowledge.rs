@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use itertools::Itertools;
 
-use expr::{MirRelationExpr, MirScalarExpr, UnaryFunc};
+use expr::{EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc};
 use repr::Datum;
 use repr::{ColumnType, RelationType, ScalarType};
 
@@ -52,14 +52,12 @@ impl ColumnKnowledge {
                 .cloned()
                 .unwrap_or_else(|| typ.column_types.iter().map(DatumKnowledge::from).collect()),
             MirRelationExpr::Constant { rows, typ } => {
-                if rows.len() == 1 {
+                if let Ok([(row, _diff)]) = rows.as_deref() {
                     let mut row_packer = repr::RowPacker::new();
-                    rows[0]
-                        .0
-                        .iter()
+                    row.iter()
                         .zip(typ.column_types.iter())
                         .map(|(datum, typ)| DatumKnowledge {
-                            value: Some((row_packer.pack(Some(datum.clone())), typ.clone())),
+                            value: Some((Ok(row_packer.pack(Some(datum.clone()))), typ.clone())),
                             nullable: datum == Datum::Null,
                         })
                         .collect()
@@ -88,7 +86,7 @@ impl ColumnKnowledge {
             MirRelationExpr::Map { input, scalars } => {
                 let mut input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
                 for scalar in scalars.iter_mut() {
-                    let know = optimize(scalar, &input.typ(), &input_knowledge[..])?;
+                    let know = optimize(scalar, &input.typ(), &input_knowledge[..]);
                     input_knowledge.push(know);
                 }
                 input_knowledge
@@ -101,7 +99,7 @@ impl ColumnKnowledge {
             } => {
                 let mut input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
                 for expr in exprs {
-                    optimize(expr, &input.typ(), &input_knowledge[..])?;
+                    optimize(expr, &input.typ(), &input_knowledge[..]);
                 }
                 let func_typ = func.output_type();
                 input_knowledge.extend(func_typ.column_types.iter().map(DatumKnowledge::from));
@@ -110,7 +108,7 @@ impl ColumnKnowledge {
             MirRelationExpr::Filter { input, predicates } => {
                 let mut input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
                 for predicate in predicates.iter_mut() {
-                    optimize(predicate, &input.typ(), &input_knowledge[..])?;
+                    optimize(predicate, &input.typ(), &input_knowledge[..]);
                 }
                 // If any predicate tests a column for equality, truth, or is_null, we learn stuff.
                 for predicate in predicates.iter() {
@@ -199,11 +197,11 @@ impl ColumnKnowledge {
                 let mut output = group_key
                     .iter_mut()
                     .map(|k| optimize(k, &input.typ(), &input_knowledge[..]))
-                    .collect::<Result<Vec<_>, _>>()?;
+                    .collect::<Vec<_>>();
                 for aggregate in aggregates.iter_mut() {
                     use expr::AggregateFunc;
                     let knowledge =
-                        optimize(&mut aggregate.expr, &input.typ(), &input_knowledge[..])?;
+                        optimize(&mut aggregate.expr, &input.typ(), &input_knowledge[..]);
                     // This could be improved.
                     let knowledge = match aggregate.func {
                         AggregateFunc::MaxInt32
@@ -272,7 +270,7 @@ impl ColumnKnowledge {
 #[derive(Clone, Debug)]
 pub struct DatumKnowledge {
     /// If set, a specific value for the column.
-    value: Option<(repr::Row, ColumnType)>,
+    value: Option<(Result<repr::Row, EvalError>, ColumnType)>,
     /// If false, the value is not `Datum::Null`.
     nullable: bool,
 }
@@ -298,7 +296,7 @@ impl Default for DatumKnowledge {
 
 impl From<&MirScalarExpr> for DatumKnowledge {
     fn from(expr: &MirScalarExpr) -> Self {
-        if let MirScalarExpr::Literal(Ok(l), t) = expr {
+        if let MirScalarExpr::Literal(l, t) = expr {
             Self {
                 value: Some((l.clone(), t.clone())),
                 nullable: expr.is_literal_null(),
@@ -323,37 +321,34 @@ pub fn optimize(
     expr: &mut MirScalarExpr,
     input_type: &RelationType,
     column_knowledge: &[DatumKnowledge],
-) -> Result<DatumKnowledge, crate::TransformError> {
-    Ok(match expr {
+) -> DatumKnowledge {
+    match expr {
         MirScalarExpr::Column(index) => {
             let index = *index;
             if let Some((datum, typ)) = &column_knowledge[index].value {
-                *expr = MirScalarExpr::Literal(Ok(datum.clone()), typ.clone());
+                *expr = MirScalarExpr::Literal(datum.clone(), typ.clone());
             }
             column_knowledge[index].clone()
         }
-        MirScalarExpr::Literal(res, typ) => {
-            let row = match res {
-                Ok(row) => row,
-                Err(err) => return Err(err.clone().into()),
-            };
-            DatumKnowledge {
-                value: Some((row.clone(), typ.clone())),
-                nullable: row.unpack_first() == Datum::Null,
-            }
-        }
+        MirScalarExpr::Literal(row, typ) => DatumKnowledge {
+            value: Some((row.clone(), typ.clone())),
+            nullable: match row {
+                Ok(row) => row.unpack_first() == Datum::Null,
+                Err(_) => false,
+            },
+        },
         MirScalarExpr::CallNullary(_) => {
             expr.reduce(input_type);
-            optimize(expr, input_type, column_knowledge)?
+            optimize(expr, input_type, column_knowledge)
         }
         MirScalarExpr::CallUnary { func, expr: inner } => {
-            let knowledge = optimize(inner, input_type, column_knowledge)?;
+            let knowledge = optimize(inner, input_type, column_knowledge);
             if knowledge.value.is_some() {
                 expr.reduce(input_type);
-                optimize(expr, input_type, column_knowledge)?
+                optimize(expr, input_type, column_knowledge)
             } else if func == &UnaryFunc::IsNull && !knowledge.nullable {
                 *expr = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
-                optimize(expr, input_type, column_knowledge)?
+                optimize(expr, input_type, column_knowledge)
             } else {
                 DatumKnowledge::default()
             }
@@ -363,11 +358,11 @@ pub fn optimize(
             expr1,
             expr2,
         } => {
-            let knowledge1 = optimize(expr1, input_type, column_knowledge)?;
-            let knowledge2 = optimize(expr2, input_type, column_knowledge)?;
+            let knowledge1 = optimize(expr1, input_type, column_knowledge);
+            let knowledge2 = optimize(expr2, input_type, column_knowledge);
             if knowledge1.value.is_some() && knowledge2.value.is_some() {
                 expr.reduce(input_type);
-                optimize(expr, input_type, column_knowledge)?
+                optimize(expr, input_type, column_knowledge)
             } else {
                 DatumKnowledge::default()
             }
@@ -375,27 +370,27 @@ pub fn optimize(
         MirScalarExpr::CallVariadic { func: _, exprs } => {
             let mut knows = Vec::new();
             for expr in exprs.iter_mut() {
-                knows.push(optimize(expr, input_type, column_knowledge)?);
+                knows.push(optimize(expr, input_type, column_knowledge));
             }
 
             if knows.iter().all(|k| k.value.is_some()) {
                 expr.reduce(input_type);
-                optimize(expr, input_type, column_knowledge)?
+                optimize(expr, input_type, column_knowledge)
             } else {
                 DatumKnowledge::default()
             }
         }
         MirScalarExpr::If { cond, then, els } => {
-            if let Some((value, _typ)) = optimize(cond, input_type, column_knowledge)?.value {
+            if let Some((Ok(value), _typ)) = optimize(cond, input_type, column_knowledge).value {
                 match value.unpack_first() {
                     Datum::True => *expr = (**then).clone(),
                     Datum::False | Datum::Null => *expr = (**els).clone(),
                     d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
                 }
-                optimize(expr, input_type, column_knowledge)?
+                optimize(expr, input_type, column_knowledge)
             } else {
                 DatumKnowledge::default()
             }
         }
-    })
+    }
 }

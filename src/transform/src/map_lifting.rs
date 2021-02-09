@@ -70,10 +70,10 @@ impl LiteralLifting {
                 // From the back to the front, check if all values are identical.
                 // TODO(frank): any subset of constant values can be extracted with a permute.
                 let mut the_same = vec![true; typ.arity()];
-                if let Some((row, _cnt)) = rows.first() {
+                if let Ok([(row, _cnt), rows @ ..]) = rows.as_deref_mut() {
                     let mut data = row.unpack();
                     assert_eq!(the_same.len(), data.len());
-                    for (row, _cnt) in rows[1..].iter() {
+                    for (row, _cnt) in rows.iter() {
                         let other = row.unpack();
                         assert_eq!(the_same.len(), other.len());
                         for index in 0..the_same.len() {
@@ -98,8 +98,9 @@ impl LiteralLifting {
                         typ.keys.dedup();
 
                         let mut row_packer = repr::RowPacker::new();
+                        *row = row_packer.pack(row.iter().take(typ.arity()));
                         for (row, _cnt) in rows.iter_mut() {
-                            *row = row_packer.pack(row.unpack().into_iter().take(typ.arity()));
+                            *row = row_packer.pack(row.iter().take(typ.arity()));
                         }
                     }
                     literals
