@@ -104,7 +104,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
                 } else {
                     FileReadStyle::ReadOnce
                 };
-                let (tx, rx) = std::sync::mpsc::sync_channel(10000 as usize);
+                let (tx, rx) = std::sync::mpsc::sync_channel(10000_usize);
                 std::thread::spawn(move || {
                     read_file_task(
                         oc.path,

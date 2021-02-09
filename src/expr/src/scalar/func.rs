@@ -3461,7 +3461,7 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     // If the provided delimiter is the empty string,
     // PostgreSQL does not break the string into individual
     // characters. Instead, it generates the following parts: [string].
-    if delimiter == "" {
+    if delimiter.is_empty() {
         if index == 0 {
             return Ok(datums[0]);
         } else {
