@@ -480,7 +480,7 @@ impl<'a> Parser<'a> {
         Ok(parse(self)?.into_expr())
     }
 
-    fn parse_function(&mut self, name: ObjectName) -> Result<Expr<Raw>, ParserError> {
+    fn parse_function(&mut self, name: UnresolvedObjectName) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let all = self.parse_keyword(ALL);
         let distinct = self.parse_keyword(DISTINCT);
@@ -662,7 +662,7 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: ObjectName::unqualified("date_part"),
+            name: UnresolvedObjectName::unqualified("date_part"),
             args: FunctionArgs::Args(vec![Expr::Value(Value::String(field)), expr]),
             filter: None,
             over: None,
@@ -711,7 +711,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: ObjectName::unqualified(name),
+            name: UnresolvedObjectName::unqualified(name),
             args: FunctionArgs::Args(exprs),
             filter: None,
             over: None,
@@ -933,7 +933,7 @@ impl<'a> Parser<'a> {
                 AT => {
                     self.expect_keywords(&[TIME, ZONE])?;
                     Ok(Expr::Function(Function {
-                        name: ObjectName(vec!["timezone".into()]),
+                        name: UnresolvedObjectName(vec!["timezone".into()]),
                         args: FunctionArgs::Args(vec![self.parse_subexpr(precedence)?, expr]),
                         filter: None,
                         over: None,
@@ -2359,7 +2359,7 @@ impl<'a> Parser<'a> {
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
     fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
         let other = |name: &str| DataType::Other {
-            name: ObjectName::unqualified(name),
+            name: UnresolvedObjectName::unqualified(name),
             typ_mod: vec![],
         };
 
@@ -2373,7 +2373,7 @@ impl<'a> Parser<'a> {
                         "char"
                     };
                     DataType::Other {
-                        name: ObjectName::unqualified(name),
+                        name: UnresolvedObjectName::unqualified(name),
                         typ_mod: match self.parse_optional_precision()? {
                             Some(u) => vec![u],
                             None => vec![],
@@ -2381,7 +2381,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 VARCHAR => DataType::Other {
-                    name: ObjectName::unqualified("varchar"),
+                    name: UnresolvedObjectName::unqualified("varchar"),
                     typ_mod: match self.parse_optional_precision()? {
                         Some(u) => vec![u],
                         None => vec![],
@@ -2392,7 +2392,7 @@ impl<'a> Parser<'a> {
                 // Number-like types
                 BIGINT => other("int8"),
                 DEC | DECIMAL => DataType::Other {
-                    name: ObjectName::unqualified("numeric"),
+                    name: UnresolvedObjectName::unqualified("numeric"),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 DOUBLE => {
@@ -2554,7 +2554,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a possibly qualified, possibly quoted identifier, e.g.
     /// `foo` or `myschema."table"`
-    fn parse_object_name(&mut self) -> Result<ObjectName, ParserError> {
+    fn parse_object_name(&mut self) -> Result<UnresolvedObjectName, ParserError> {
         let mut idents = vec![];
         loop {
             idents.push(self.parse_identifier()?);
@@ -2562,7 +2562,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        Ok(ObjectName(idents))
+        Ok(UnresolvedObjectName(idents))
     }
 
     /// Parse a simple one-word identifier (possibly quoted, possibly a keyword)
@@ -2613,7 +2613,7 @@ impl<'a> Parser<'a> {
                     Ok(Expr::QualifiedWildcard(id_parts))
                 } else if self.consume_token(&Token::LParen) {
                     self.prev_token();
-                    self.parse_function(ObjectName(id_parts))
+                    self.parse_function(UnresolvedObjectName(id_parts))
                 } else {
                     Ok(Expr::Identifier(id_parts))
                 }

@@ -23,7 +23,7 @@ use std::fmt;
 use repr::adt::datetime::DateTimeField;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::ObjectName;
+use crate::ast::UnresolvedObjectName;
 
 #[derive(Debug)]
 pub struct ValueError(pub(crate) String);
@@ -188,7 +188,7 @@ pub enum DataType {
     },
     /// Types who don't embed other types, e.g. INT
     Other {
-        name: ObjectName,
+        name: UnresolvedObjectName,
         /// Typ modifiers appended to the type name, e.g. `numeric(38,0)`.
         typ_mod: Vec<u64>,
     },

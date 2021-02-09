@@ -117,7 +117,7 @@
 //!         self.idents.push(node);
 //!         visit::visit_ident(self, node);
 //!     }
-//!     fn visit_table(&mut self, name: &'ast <Raw as AstInfo>::Table) {
+//!     fn visit_object_name(&mut self, name: &'ast <Raw as AstInfo>::ObjectName) {
 //!         match name {
 //!             RawName::Name(n) | RawName::Id(_, n) => {
 //!                 for node in &n.0 {
