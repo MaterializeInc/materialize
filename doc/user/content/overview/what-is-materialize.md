@@ -70,7 +70,7 @@ Ultimately, this lets you refresh answers to your queries very quickly because M
 
 While we've covered the high-level details above, this section gives some of the more specific details about Materialize itself.
 
-Materialize ingests streams of data from Kafka, which are publishing a CDC stream from an upstream relational database (e.g. MySQL or PostgreSQL). In its current iteration, the only CDC tool known to work with Materialize is Debezium. You can use Debezium's default envelope format or use the [Open CDC format](../open-cdc) designed by Materialize to prevent record duplication and sequencing errors.
+Materialize ingests streams of data from Kafka, which are publishing a CDC stream from an upstream relational database (e.g. MySQL or PostgreSQL). In its current iteration, the only CDC tool known to work with Materialize is Debezium.
 
 Using a familiar SQL interface, you can define which tables from Kafka you want
 Materialize to monitor (known as "sources"), as well as which queries you want
@@ -107,4 +107,4 @@ To maintain materialized views, most RDBMSes occasionally re-run the view's unde
 
 - [Architecture overview](../architecture) to understand Materialize's internal architecture
 - [API overview](../api-components) to understand what Materialize's SQL API expresses
-- [Open CDC](../open-cdc) to understand the benefits of Materialize's Open CDC envelope format
+- [Materialize CDC](../materialize-cdc) to understand the benefits of the Materialize CDC envelope format
