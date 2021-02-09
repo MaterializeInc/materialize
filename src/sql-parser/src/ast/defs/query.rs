@@ -29,8 +29,8 @@ use crate::ast::{Expr, FunctionArgs, Ident, ObjectName, SqlOption};
 // This represents the metadata that lives next to an AST, as we take it through
 // various stages in the planning process.
 pub trait AstInfo: Clone {
-    // The type used for table references.
-    type Table: AstDisplay + Clone + Hash + Debug + Eq;
+    // The type used for catalog item references.
+    type CatalogItem: AstDisplay + Clone + Hash + Debug + Eq;
     // The type stored next to CTEs for their assigned ID.
     type Id: Clone + Hash + Debug + Eq;
 }
@@ -39,7 +39,7 @@ pub trait AstInfo: Clone {
 pub struct Raw;
 
 impl AstInfo for Raw {
-    type Table = ObjectName;
+    type CatalogItem = ObjectName;
     type Id = ();
 }
 
@@ -363,7 +363,7 @@ impl<T: AstInfo> TableWithJoins<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TableFactor<T: AstInfo> {
     Table {
-        name: T::Table,
+        name: T::CatalogItem,
         alias: Option<TableAlias>,
     },
     Function {

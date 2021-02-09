@@ -218,8 +218,11 @@ pub fn create_statement(
             };
         }
 
-        fn visit_table_mut(&mut self, table: &'ast mut <Raw as AstInfo>::Table) {
-            self.visit_object_name_mut(table);
+        fn visit_catalog_item_mut(
+            &mut self,
+            catalog_item: &'ast mut <Raw as AstInfo>::CatalogItem,
+        ) {
+            self.visit_object_name_mut(catalog_item);
         }
 
         fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType) {

@@ -69,12 +69,12 @@ use crate::plan::typeconv::{self, CastContext};
 pub struct Aug;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ResolvedTableName {
+pub struct ResolvedCatalogObjectName {
     id: Id,
     raw_name: ObjectName,
 }
 
-impl AstDisplay for ResolvedTableName {
+impl AstDisplay for ResolvedCatalogObjectName {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str(format!("[{}: ", self.id));
         separated(&self.raw_name.0, ".").fmt(f);
@@ -82,14 +82,14 @@ impl AstDisplay for ResolvedTableName {
     }
 }
 
-impl std::fmt::Display for ResolvedTableName {
+impl std::fmt::Display for ResolvedCatalogObjectName {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(self.to_ast_string().as_str())
     }
 }
 
 impl AstInfo for Aug {
-    type Table = ResolvedTableName;
+    type CatalogItem = ResolvedCatalogObjectName;
     type Id = Id;
 }
 
@@ -159,31 +159,34 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         panic!("this should have been handled when walking the CTE");
     }
 
-    fn fold_table(&mut self, table: <Raw as AstInfo>::Table) -> <Aug as AstInfo>::Table {
+    fn fold_catalog_item(
+        &mut self,
+        catalog_item: <Raw as AstInfo>::CatalogItem,
+    ) -> <Aug as AstInfo>::CatalogItem {
         // Check if unqualified name refers to a CTE.
-        if table.0.len() == 1 {
-            let norm_name = normalize::ident(table.0[0].clone());
+        if catalog_item.0.len() == 1 {
+            let norm_name = normalize::ident(catalog_item.0[0].clone());
             if let Some(id) = self.ctes.get(&norm_name) {
-                return ResolvedTableName {
+                return ResolvedCatalogObjectName {
                     id: Id::Local(id.clone()),
-                    raw_name: table,
+                    raw_name: catalog_item,
                 };
             }
         }
 
-        let name = normalize::object_name(table.clone()).unwrap();
+        let name = normalize::object_name(catalog_item.clone()).unwrap();
         return match self.catalog.resolve_item(&name) {
-            Ok(item) => ResolvedTableName {
+            Ok(item) => ResolvedCatalogObjectName {
                 id: Id::Global(item.id()),
-                raw_name: table,
+                raw_name: catalog_item,
             },
             Err(e) => {
                 if self.status.is_ok() {
                     self.status = Err(e.into());
                 }
-                ResolvedTableName {
+                ResolvedCatalogObjectName {
                     id: Id::Local(LocalId::new(0)),
-                    raw_name: table,
+                    raw_name: catalog_item,
                 }
             }
         };
@@ -3107,7 +3110,7 @@ impl<'a> QueryContext<'a> {
     /// inlining a CTE.
     pub fn resolve_table_name(
         &self,
-        object: ResolvedTableName,
+        object: ResolvedCatalogObjectName,
     ) -> Result<(HirRelationExpr, Scope), PlanError> {
         match object.id {
             Id::Local(id) => {

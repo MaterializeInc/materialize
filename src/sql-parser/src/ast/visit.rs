@@ -117,7 +117,7 @@
 //!         self.idents.push(node);
 //!         visit::visit_ident(self, node);
 //!     }
-//!     fn visit_table(&mut self, name: &'ast <Raw as AstInfo>::Table) {
+//!     fn visit_catalog_item(&mut self, name: &'ast <Raw as AstInfo>::CatalogItem) {
 //!         for node in &name.0 {
 //!             self.idents.push(node);
 //!             visit::visit_ident(self, node);

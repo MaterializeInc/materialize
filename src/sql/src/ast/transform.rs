@@ -255,8 +255,8 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
         }
     }
 
-    fn visit_table(&mut self, table: &'ast <Raw as AstInfo>::Table) {
-        self.visit_object_name(table);
+    fn visit_catalog_item(&mut self, catalog_item: &'ast <Raw as AstInfo>::CatalogItem) {
+        self.visit_object_name(catalog_item);
     }
 }
 
@@ -311,7 +311,10 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
     fn visit_object_name_mut(&mut self, object_name: &'ast mut ObjectName) {
         self.maybe_rewrite_idents(&mut object_name.0);
     }
-    fn visit_table_mut(&mut self, table_name: &'ast mut <sql_parser::ast::Raw as AstInfo>::Table) {
-        self.maybe_rewrite_idents(&mut table_name.0);
+    fn visit_catalog_item_mut(
+        &mut self,
+        catalog_item_name: &'ast mut <sql_parser::ast::Raw as AstInfo>::CatalogItem,
+    ) {
+        self.maybe_rewrite_idents(&mut catalog_item_name.0);
     }
 }
