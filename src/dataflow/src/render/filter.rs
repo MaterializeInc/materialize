@@ -87,6 +87,9 @@ where
                         // This is because our decimal type uses that representation, and going
                         // from i128 to u64 is even more painful.
                         let mut time_128 = i128::from(time);
+                        // Track whether we have seen a null in either bound, as this should
+                        // prevent the record from being produced at any time.
+                        let mut null_eval = false;
 
                         // If there is a lower bound, advance `time` to that lower bound.
                         // This decimal stuff is brittle; let's hope the scale never changes.
@@ -102,8 +105,11 @@ where
                                         time_128 = s.as_i128();
                                     }
                                 }
-                                _ => {
-                                    panic!("Non-decimal value in temporal predicate");
+                                Ok(Datum::Null) => {
+                                    null_eval = true;
+                                }
+                                x => {
+                                    panic!("Non-decimal value in temporal predicate: {:?}", x);
                                 }
                             }
                         }
@@ -123,8 +129,11 @@ where
                                         upper_bound = Some(s.as_i128());
                                     }
                                 }
-                                _ => {
-                                    panic!("Non-decimal value in temporal predicate");
+                                Ok(Datum::Null) => {
+                                    null_eval = true;
+                                }
+                                x => {
+                                    panic!("Non-decimal value in temporal predicate: {:?}", x);
                                 }
                             }
                         }
@@ -147,8 +156,9 @@ where
                             u64::try_from(time_128).unwrap()
                         };
 
-                        // Only proceed if the new time is not greater or equal to upper.
-                        if upper_bound.as_ref().map(|u| time < *u).unwrap_or(true) {
+                        // Only proceed if the new time is not greater or equal to upper,
+                        // and if no null values were encountered in bound evaluation.
+                        if upper_bound.as_ref().map(|u| time < *u).unwrap_or(true) && !null_eval {
                             Some(Ok((data.clone(), time, diff)))
                                 .into_iter()
                                 .chain(upper_bound.map(|u| Ok((data.clone(), u, -diff))))
