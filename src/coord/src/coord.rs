@@ -3200,27 +3200,21 @@ where
     /// with their correct values.
     ///
     /// Specifically, calls to the special function `MzLogicalTimestamp` are
-    /// replaced according to `style`:
-    ///
-    ///   * if `OneShot`, calls are replaced according to the logical time
-    ///     specified in the `OneShot` variant.
-    ///   * if `Explain`, calls are replaced with a dummy time.
-    ///   * if `Static`, calls trigger an error indicating that static queries
-    ///     are not permitted to observe their own timestamps.
+    /// replaced if `style` is `OneShot { logical_timestamp }`. Calls are not
+    /// replaced for the `Explain` style nor for `Static` which should not
+    /// reach this point if we have correctly validated the use of placeholders.
     fn prep_scalar_expr(expr: &mut MirScalarExpr, style: ExprPrepStyle) -> Result<(), CoordError> {
         // Replace calls to `MzLogicalTimestamp` as described above.
-        let ts = match style {
-            ExprPrepStyle::Explain | ExprPrepStyle::Static => 0, // dummy timestamp
-            ExprPrepStyle::OneShot { logical_time } => logical_time,
-        };
         let mut observes_ts = false;
         expr.visit_mut(&mut |e| {
             if let MirScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
                 observes_ts = true;
-                *e = MirScalarExpr::literal_ok(
-                    Datum::from(i128::from(ts)),
-                    f.output_type().scalar_type,
-                );
+                if let ExprPrepStyle::OneShot { logical_time } = style {
+                    *e = MirScalarExpr::literal_ok(
+                        Datum::from(i128::from(logical_time)),
+                        f.output_type().scalar_type,
+                    );
+                }
             }
         });
         if observes_ts && matches!(style, ExprPrepStyle::Static) {
