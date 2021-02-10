@@ -106,9 +106,9 @@ pub enum HirRelationExpr {
         base: Box<HirRelationExpr>,
         inputs: Vec<HirRelationExpr>,
     },
-    DeclareKey {
+    DeclareKeys {
         input: Box<HirRelationExpr>,
-        key: Vec<usize>,
+        keys: Vec<Vec<usize>>,
     },
 }
 
@@ -560,8 +560,8 @@ impl HirRelationExpr {
                 }
                 RelationType::new(base_cols)
             }
-            HirRelationExpr::DeclareKey { input, key } => {
-                input.typ(outers, params).with_key(key.clone())
+            HirRelationExpr::DeclareKeys { input, keys } => {
+                input.typ(outers, params).with_keys(keys.clone())
             }
         }
     }
@@ -577,7 +577,7 @@ impl HirRelationExpr {
             | HirRelationExpr::TopK { input, .. }
             | HirRelationExpr::Distinct { input }
             | HirRelationExpr::Negate { input }
-            | HirRelationExpr::DeclareKey { input, .. }
+            | HirRelationExpr::DeclareKeys { input, .. }
             | HirRelationExpr::Threshold { input } => input.arity(),
             HirRelationExpr::Join { left, right, .. } => left.arity() + right.arity(),
             HirRelationExpr::Union { base, .. } => base.arity(),
@@ -640,10 +640,10 @@ impl HirRelationExpr {
         }
     }
 
-    pub fn declare_key(self, key: Vec<usize>) -> Self {
-        HirRelationExpr::DeclareKey {
+    pub fn declare_keys(self, keys: Vec<Vec<usize>>) -> Self {
+        HirRelationExpr::DeclareKeys {
             input: Box::new(self),
-            key,
+            keys,
         }
     }
 
@@ -768,7 +768,7 @@ impl HirRelationExpr {
             HirRelationExpr::Threshold { input } => {
                 f(input);
             }
-            HirRelationExpr::DeclareKey { input, .. } => {
+            HirRelationExpr::DeclareKeys { input, .. } => {
                 f(input);
             }
             HirRelationExpr::Union { base, inputs } => {
@@ -824,7 +824,7 @@ impl HirRelationExpr {
             HirRelationExpr::Threshold { input } => {
                 f(input);
             }
-            HirRelationExpr::DeclareKey { input, .. } => {
+            HirRelationExpr::DeclareKeys { input, .. } => {
                 f(input);
             }
             HirRelationExpr::Union { base, inputs } => {
@@ -892,7 +892,7 @@ impl HirRelationExpr {
             | HirRelationExpr::Distinct { input }
             | HirRelationExpr::TopK { input, .. }
             | HirRelationExpr::Negate { input }
-            | HirRelationExpr::DeclareKey { input, .. }
+            | HirRelationExpr::DeclareKeys { input, .. }
             | HirRelationExpr::Threshold { input } => {
                 input.visit_columns(depth, f);
             }
@@ -947,7 +947,7 @@ impl HirRelationExpr {
             | HirRelationExpr::Distinct { input, .. }
             | HirRelationExpr::TopK { input, .. }
             | HirRelationExpr::Negate { input, .. }
-            | HirRelationExpr::DeclareKey { input, .. }
+            | HirRelationExpr::DeclareKeys { input, .. }
             | HirRelationExpr::Threshold { input, .. } => input.bind_parameters(params),
             HirRelationExpr::Constant { .. } | HirRelationExpr::Get { .. } => Ok(()),
         }
@@ -1002,7 +1002,7 @@ impl HirRelationExpr {
             | HirRelationExpr::Distinct { input }
             | HirRelationExpr::TopK { input, .. }
             | HirRelationExpr::Negate { input }
-            | HirRelationExpr::DeclareKey { input, .. }
+            | HirRelationExpr::DeclareKeys { input, .. }
             | HirRelationExpr::Threshold { input } => {
                 input.splice_parameters(params, depth);
             }

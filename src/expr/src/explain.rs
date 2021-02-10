@@ -132,7 +132,7 @@ impl<'a> Explanation<'a> {
                 | TopK { input, .. }
                 | Negate { input, .. }
                 | Threshold { input, .. }
-                | DeclareKey { input, .. }
+                | DeclareKeys { input, .. }
                 | ArrangeBy { input, .. } => walk(input, explanation),
                 // For join and union, each input may need to go in its own
                 // chain.
@@ -356,10 +356,14 @@ impl<'a> Explanation<'a> {
             }
             Negate { .. } => writeln!(f, "| Negate")?,
             Threshold { .. } => write!(f, "| Threshold")?,
-            DeclareKey { input: _, key } => write!(
+            DeclareKeys { input: _, keys } => write!(
                 f,
-                "| Declare primary key={}",
-                bracketed("(", ")", separated(", ", key))
+                "| Declare primary keys {}",
+                separated(
+                    " ",
+                    keys.iter()
+                        .map(|key| bracketed("(", ")", separated(", ", key)))
+                )
             )?,
             Union { base, inputs } => writeln!(
                 f,

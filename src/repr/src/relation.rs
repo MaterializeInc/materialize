@@ -97,6 +97,13 @@ impl RelationType {
         self
     }
 
+    pub fn with_keys(mut self, keys: Vec<Vec<usize>>) -> Self {
+        for key in keys {
+            self = self.with_key(key)
+        }
+        self
+    }
+
     /// Computes the number of columns in the relation.
     pub fn arity(&self) -> usize {
         self.column_types.len()

@@ -216,7 +216,7 @@ impl NonNullRequirements {
             MirRelationExpr::Threshold { input } => {
                 self.action(input, columns, gets);
             }
-            MirRelationExpr::DeclareKey { input, .. } => {
+            MirRelationExpr::DeclareKeys { input, .. } => {
                 self.action(input, columns, gets);
             }
             MirRelationExpr::Union { base, inputs } => {

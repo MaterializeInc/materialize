@@ -247,7 +247,7 @@ impl Demand {
             MirRelationExpr::Negate { input } => {
                 self.action(input, columns, gets);
             }
-            MirRelationExpr::DeclareKey { input, key: _ } => {
+            MirRelationExpr::DeclareKeys { input, keys: _ } => {
                 // TODO[btv] - If and when we add a "debug mode" that asserts whether this is truly a key,
                 // we will probably need to add the key to the set of demanded columns.
                 self.action(input, columns, gets);

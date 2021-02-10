@@ -264,7 +264,7 @@ impl ProjectionLifting {
                 // action on weights need to accumulate the restricted rows.
                 self.action(input, gets);
             }
-            MirRelationExpr::DeclareKey { input, .. } => {
+            MirRelationExpr::DeclareKeys { input, .. } => {
                 self.action(input, gets);
             }
             MirRelationExpr::Union { base, inputs } => {

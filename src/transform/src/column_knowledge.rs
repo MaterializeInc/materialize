@@ -244,7 +244,7 @@ impl ColumnKnowledge {
             MirRelationExpr::TopK { input, .. } => ColumnKnowledge::harvest(input, knowledge)?,
             MirRelationExpr::Negate { input } => ColumnKnowledge::harvest(input, knowledge)?,
             MirRelationExpr::Threshold { input } => ColumnKnowledge::harvest(input, knowledge)?,
-            MirRelationExpr::DeclareKey { input, .. } => {
+            MirRelationExpr::DeclareKeys { input, .. } => {
                 ColumnKnowledge::harvest(input, knowledge)?
             }
             MirRelationExpr::Union { base, inputs } => {

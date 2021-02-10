@@ -247,7 +247,7 @@ fn plan_source_envelope(
         }
         .project((0..diff_col).collect());
         if let Some(post_transform_key) = post_transform_key {
-            expr.declare_key(post_transform_key)
+            expr.declare_keys(vec![post_transform_key])
         } else {
             expr
         }
