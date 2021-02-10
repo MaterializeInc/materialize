@@ -130,9 +130,9 @@ pub struct OwnerIdentity {
 #[serde(rename_all = "camelCase")]
 pub struct Object {
     pub key: String,
-    pub size: String,
+    pub size: usize,
     pub e_tag: String,
-    pub version_id: String,
+    pub version_id: Option<String>,
     pub sequencer: String,
 }
 

@@ -43,7 +43,6 @@ mod notifications;
 
 type Out = Vec<u8>;
 struct InternalMessage {
-    bucket: String,
     record: Out,
 }
 
@@ -61,21 +60,25 @@ pub struct S3SourceInfo {
     receiver_stream: Receiver<Result<InternalMessage, Error>>,
     /// Buffer: store message that cannot yet be timestamped
     buffer: Option<SourceMessage<Out>>,
-    /// BucketOffset
-    offset: BucketOffset,
+    /// Total number of records that this source has read
+    offset: S3Offset,
 }
 
+/// Number of records This source has downloaded
+///
+/// Possibly this should be per-bucket or per-object, depending on the needs
+/// for deterministic timestamping on restarts: issue #5715
 #[derive(Clone, Copy, Debug)]
-struct BucketOffset(i64);
+struct S3Offset(i64);
 
-impl AddAssign<i64> for BucketOffset {
+impl AddAssign<i64> for S3Offset {
     fn add_assign(&mut self, other: i64) {
         self.0 += other;
     }
 }
 
-impl From<BucketOffset> for MzOffset {
-    fn from(offset: BucketOffset) -> MzOffset {
+impl From<S3Offset> for MzOffset {
+    fn from(offset: S3Offset) -> MzOffset {
         MzOffset { offset: offset.0 }
     }
 }
@@ -116,16 +119,6 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
                 match key_source {
                     S3KeySource::Scan { bucket } => {
                         log::debug!("reading s3 bucket={} worker={}", bucket, worker_id);
-
-                        let pid = PartitionId::S3 {
-                            bucket: bucket.clone(),
-                        };
-                        consistency_info.partition_metrics.insert(
-                            pid.clone(),
-                            PartitionMetrics::new(&source_name, source_id, &bucket, logger.clone()),
-                        );
-                        consistency_info.update_partition_metadata(pid);
-
                         tokio::spawn(scan_bucket_task(
                             bucket,
                             glob.clone(),
@@ -149,13 +142,20 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             rx
         };
 
+        let pid = PartitionId::S3;
+        consistency_info.partition_metrics.insert(
+            pid.clone(),
+            PartitionMetrics::new(&source_name, source_id, "s3", logger),
+        );
+        consistency_info.update_partition_metadata(pid);
+
         Ok(S3SourceInfo {
             source_name,
             id: source_id,
             is_activated_reader: active,
             receiver_stream: receiver,
             buffer: None,
-            offset: BucketOffset(0),
+            offset: S3Offset(0),
         })
     }
 }
@@ -458,10 +458,7 @@ async fn download_object(
                 let activate = !buf.is_empty();
                 let mut lines = 0;
                 for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
-                    if let Err(e) = tx.send(Ok(InternalMessage {
-                        bucket: bucket.clone(),
-                        record: line,
-                    })) {
+                    if let Err(e) = tx.send(Ok(InternalMessage { record: line })) {
                         log::debug!("unable to send read line on stream: {}", e);
                         break;
                     } else {
@@ -522,10 +519,10 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
             return Ok(NextMessage::Ready(message));
         }
         match self.receiver_stream.try_recv() {
-            Ok(Ok(InternalMessage { bucket, record })) => {
+            Ok(Ok(InternalMessage { record })) => {
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessage {
-                    partition: PartitionId::S3 { bucket },
+                    partition: PartitionId::S3,
                     offset: self.offset.into(),
                     upstream_time_millis: None,
                     key: None,
@@ -580,14 +577,14 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
 
     fn update_partition_count(
         &mut self,
-        consistency_info: &mut ConsistencyInfo,
-        partition_count: i32,
+        _consistency_info: &mut ConsistencyInfo,
+        _partition_count: i32,
     ) {
-        log::debug!(
-            "ignoring partition count update type={:?} partition_count={}",
-            consistency_info.source_type,
-            partition_count,
-        )
+        // We can't do anything with just the number of "partitions" that we
+        // know about, fundamentally we know more than the timestamper about
+        // how many partitions there are.
+        //
+        // https://github.com/MaterializeInc/materialize/issues/5715
     }
 
     fn buffer_message(&mut self, message: SourceMessage<Out>) {

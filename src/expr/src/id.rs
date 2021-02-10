@@ -125,20 +125,20 @@ impl fmt::Display for SourceInstanceId {
 ///     Kafka -> partition
 ///     Kinesis -> shard
 ///     File -> only one
-///     S3 -> bucket
+///     S3 -> https://github.com/MaterializeInc/materialize/issues/5715
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
     Kinesis(String),
     File,
-    S3 { bucket: String },
+    S3,
 }
 
 impl fmt::Display for PartitionId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PartitionId::Kafka(id) => write!(f, "{}", id.to_string()),
-            PartitionId::S3 { bucket } => write!(f, "{}", bucket),
+            PartitionId::S3 => write!(f, "s3"),
             _ => write!(f, "0"),
         }
     }
