@@ -1,6 +1,6 @@
 ---
 title: "Materialize CDC"
-description: "The Materialize CDC format is a format for change datafeeds that has been designed especially to prevent record duplication or mistaken missequencing."
+description: "The Materialize CDC format is a format for change datafeeds that has been designed especially to prevent errors resulting from record duplication or missequencing."
 menu:
   main:
     parent: "overview"
@@ -15,24 +15,22 @@ Currently, the Materialize CDC format is only supported for [Avro-formatted Kafk
 
 To use the Materialize CDC format, you must:
 
-1. Set up your CDC tool to emit its changefeed in the Materialize CDC format
-2. Define the Materialize CDC format in an Avro schema when you [create a source](../../sql/create-source/avro-kafka/) in Materialize
+1. Transform the changefeed produced by your CDC tool into the Materialize CDC format.
+2. Define the Materialize CDC format in an Avro schema when you [create a source](../../sql/create-source/avro-kafka/) in Materialize.
 
-## Materialize CDC JSON
+## Materialize CDC schema components
 
-You use a JSON document to define the format of the record updates transmitted in the changefeed and the format of the separate progress messages which tell the downstream consumer (Materialize) how many updates to expect for a particular logical timestamp. The downstream consumer will then compare the updates it has received to the expected updates and discard duplicates if there are too many.
+The Materialize CDC format has two components:
 
-### Update JSON array
+- Record updates, which include the record itself, a logical timestamp, and a description of type of update.
+- Separate progress updates, which tell the downstream consumer (Materialize) how many updates have been transmitted at timestamps during a specified period.
 
-Field | description
--------- | -----------
-data  | The array that represents the changed record. Each array is composed of objects that define the `name` and `type` of each field to be included in the changefeed.
-time  | The logical timestamp of the update. Materialize uses this to determine the order of updates and, in combination with the progress message, to determine whether there are duplicate updates to be disgarded.
-diff  | The type of update (`-1` for deletion, `1` for addition or upsert)
+Materialize compares the record updates it has received to the expected changes as described by the applicable progress update, and discards duplicates if there are too many identical record updates for a timestamp.
 
-#### Example update JSON definition
+## Example Materialize CDC Avro schema
 
-```[
+```json
+[
   {
     "type": "array",
     "items": {
@@ -47,12 +45,15 @@ diff  | The type of update (`-1` for deletion, `1` for addition or upsert)
             "name": "data",
             "fields": [
               {
-                "name": "COLUMNNAME1",
-                "type": "DATATYPE"
+                "name": "COLUMN_NAME1",
+                "type": "DATA_TYPE"
               },
               {
-                "name": "COLUMNAME2",
-                "type": "DATATYPE"
+                "name": "COLUMN_NAME2",
+                "type": [
+                  "DATA_TYPE1",
+                  "DATA_TYPE2"
+                ]
               }
             ]
           }
@@ -68,67 +69,62 @@ diff  | The type of update (`-1` for deletion, `1` for addition or upsert)
       ]
     }
   },
-```
+  {
+    "type": "record",
+    "name": "progress",
+    "namespace": "com.materialize.cdc",
+    "fields": [
+      {
+        "name": "lower",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
+      },
+      {
+        "name": "upper",
+        "type": {
+          "type": "array",
+          "items": "long"
+        }
+      },
+      {
+        "name": "counts",
+        "type": {
+          "type": "array",
+          "items": {
+            "type": "record",
+            "name": "counts",
+            "fields": [
+              {
+                "name": "time",
+                "type": "long"
+              },
+              {
+                "name": "count",
+                "type": "long"
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+  ]
+  ```
 
-### Progress JSON array
-
-The progress messages describe the number of updates transmitted at a particular timestamp or between specified times.
-
-Field | description
+Field | Description
 -------- | -----------
+data  | The array that represents the changed record. Each array is composed of objects that define the `name` and `type` (data type) of each field to be included in the changefeed. `type` supports multiple data types for a single object (for example, both `null` and `int` may be permissible for some fields).
+time  | The logical timestamp of the update. Materialize uses this to determine the order of updates and, in conjunction with the update count, to determine whether there are duplicate updates to be discarded.
+diff  | The type of update (`-1` for deletion, `1` for addition or upsert)
 lower  | The earliest logical timestamp for a set of updates
 upper  | The latest logical timestamp for a set of updates
 counts | The number of updates transmitted between `lower` and `upper`.
 
-#### Example progress message JSON
+## Example Materialize CDC workflow
 
-```
-{
-   "type": "record",
-   "name": "progress",
-   "namespace": "com.materialize.cdc",
-   "fields": [
-     {
-       "name": "lower",
-       "type": {
-         "type": "array",
-         "items": "long"
-       }
-     },
-     {
-       "name": "upper",
-       "type": {
-         "type": "array",
-         "items": "long"
-       }
-     },
-     {
-       "name": "counts",
-       "type": {
-         "type": "array",
-         "items": {
-           "type": "record",
-           "name": "counts",
-           "fields": [
-             {
-               "name": "time",
-               "type": "long"
-             },
-             {
-               "name": "count",
-               "type": "long"
-             }
-           ]
-         }
-       }
-     }
-   ]
- }
- ```
-
-### Example Materialize CDC schema
-
-You define the Materialize CDC format in the [Avro schema](../../sql/create-source/avro-kafka/#avro-format-details) when a source is created.
+You specify the use of the Materialize CDC format in the [Avro schema](../../sql/create-source/avro-kafka/#avro-format-details) when a source is created.
 
 ```sql
   CREATE MATERIALIZED SOURCE name_of_source
@@ -137,9 +133,10 @@ You define the Materialize CDC format in the [Avro schema](../../sql/create-sour
   ENVELOPE MATERIALIZE
 ```
 
-The following schema specifies that records will consist of `id` and `price` fields. Note that `price` object supports multiple datatypes: It can be null or `int`.
+The following example schema specifies that records will consist of `id` and `price` fields. Note that `price` object supports multiple datatypes: It can be null or `int`.
 
-```[
+```json
+[
   {
     "type": "array",
     "items": {
@@ -224,7 +221,7 @@ The following schema specifies that records will consist of `id` and `price` fie
 
 As an example, the schema above might produce this changefeed:
 
-```
+```json
 {{"array":[{"data":{"id":5,"price":{"int":10}},"time":5,"diff":1}]}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":4,"diff":1}]}
 {"array":[{"data":{"id":5,"price":{"int":12}},"time":5,"diff":-1}]}
@@ -234,4 +231,4 @@ As an example, the schema above might produce this changefeed:
 {"com.materialize.cdc.progress":{"lower":[3],"upper":[10],"counts":[{"time":4,"count":1},{"time":5,"count":2}, {"time": 6, "count": 1}]}}
 ```
 
-Even if Materializes receives the updates in an order different from the order in which they were transmitted, it will be able to reorder the updates by  `time`. Additionally, the progress messages tell Materialize to expect one update for timestamp `4`, two updates for timestamp `5`, and one update for timestamp `6`. If, for example, there are two identical updates for timestamp 4, Materializes determines that this is a duplicate entry and discards one update.
+Even if Materializes receives the updates in an order different from the order in which they were transmitted, it will be able to reorder the updates by  `time`. Additionally, the progress updates tell Materialize to expect one updated record for timestamp `4`, two updated records for timestamp `5`, and one updated record for timestamp `6`. If, for example, there are two identical updated records for timestamp 4, Materializes determines that this is a duplicate entry and discards one update.
