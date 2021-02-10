@@ -127,7 +127,7 @@ async fn build_kafka(
         let (_, consistency_schema_id) = register_kafka_topic(
             &client,
             &consistency_topic,
-            builder.partition_count,
+            1,
             builder.replication_factor,
             &ccsr,
             &consistency_value_schema,
