@@ -24,7 +24,7 @@ SELECT '63616665-6630-3064-6465-616462656568'::text::uuid
 ----
 63616665-6630-3064-6465-616462656568
 
-query error invalid input syntax for uuid
+query error invalid input syntax for type uuid
 SELECT 'Z3616665-6630-3064-6465-616462656568'::uuid
 
 query error does not support casting from uuid to bytea
