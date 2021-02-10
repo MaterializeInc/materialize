@@ -24,7 +24,7 @@
 use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, DataType, Expr, Ident, ObjectName, SqlOption};
+use crate::ast::{AstInfo, DataType, Expr, Ident, SqlOption, UnresolvedObjectName};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -359,7 +359,7 @@ pub enum TableConstraint<T: AstInfo> {
     ForeignKey {
         name: Option<Ident>,
         columns: Vec<Ident>,
-        foreign_table: ObjectName,
+        foreign_table: UnresolvedObjectName,
         referred_columns: Vec<Ident>,
     },
     /// `[ CONSTRAINT <name> ] CHECK (<expr>)`
@@ -418,7 +418,7 @@ impl_display_t!(TableConstraint);
 pub struct ColumnDef<T: AstInfo> {
     pub name: Ident,
     pub data_type: DataType,
-    pub collation: Option<ObjectName>,
+    pub collation: Option<UnresolvedObjectName>,
     pub options: Vec<ColumnOptionDef<T>>,
 }
 
@@ -482,7 +482,7 @@ pub enum ColumnOption<T: AstInfo> {
     /// A referential integrity constraint (`[FOREIGN KEY REFERENCES
     /// <foreign_table> (<referred_columns>)`).
     ForeignKey {
-        foreign_table: ObjectName,
+        foreign_table: UnresolvedObjectName,
         referred_columns: Vec<Ident>,
     },
     // `CHECK (<expr>)`

@@ -23,7 +23,7 @@ use lazy_static::lazy_static;
 use ore::collections::CollectionExt;
 use pgrepr::oid;
 use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
-use sql_parser::ast::{Expr, ObjectName, Raw};
+use sql_parser::ast::{Expr, Raw, UnresolvedObjectName};
 
 use crate::catalog::CatalogItemType;
 use crate::names::PartialName;
@@ -1816,7 +1816,7 @@ lazy_static! {
                         Some(id) => id,
                         None => bail!("source passed to internal_read_cached_data must be literal string"),
                     };
-                    let item = ecx.qcx.scx.resolve_item(ObjectName::unqualified(&source))?;
+                    let item = ecx.qcx.scx.resolve_item(UnresolvedObjectName::unqualified(&source))?;
                     match item.item_type() {
                         CatalogItemType::Source => {},
                         _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, item.item_type()),

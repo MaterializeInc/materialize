@@ -14,7 +14,7 @@ use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::VisitMut;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType,
-    Function, Ident, ObjectName, Raw, Statement, TableFactor,
+    Function, Ident, Raw, Statement, TableFactor, UnresolvedObjectName,
 };
 
 use crate::catalog::{Catalog, SerializedCatalogItem};
@@ -38,7 +38,10 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
             fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType) {
                 if let DataType::Other { name, .. } = data_type {
                     if name.0.len() == 1 {
-                        *name = ObjectName(vec![Ident::new(PG_CATALOG_SCHEMA), name.0.remove(0)]);
+                        *name = UnresolvedObjectName(vec![
+                            Ident::new(PG_CATALOG_SCHEMA),
+                            name.0.remove(0),
+                        ]);
                     }
                 }
             }
@@ -122,7 +125,7 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
         Ok(())
     },
     |catalog: &mut Catalog| {
-        fn normalize_function_name(name: &mut ObjectName) {
+        fn normalize_function_name(name: &mut UnresolvedObjectName) {
             if name.0.len() == 1 {
                 let func_name = name.to_string();
                 for (schema, funcs) in &[
@@ -131,7 +134,7 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                     (MZ_INTERNAL_SCHEMA, &*sql::func::MZ_INTERNAL_BUILTINS),
                 ] {
                     if funcs.contains_key(func_name.as_str()) {
-                        *name = ObjectName(vec![Ident::new(*schema), name.0.remove(0)]);
+                        *name = UnresolvedObjectName(vec![Ident::new(*schema), name.0.remove(0)]);
                         break;
                     }
                 }

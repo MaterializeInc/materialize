@@ -18,7 +18,8 @@ use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
     AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, CreateViewStatement, Expr, Ident, ObjectName, Query, Raw, Statement,
+    CreateTableStatement, CreateViewStatement, Expr, Ident, Query, Raw, Statement,
+    UnresolvedObjectName,
 };
 use crate::names::FullName;
 
@@ -62,8 +63,8 @@ pub fn create_stmt_rename_refs(
     from_name: FullName,
     to_item_name: String,
 ) -> Result<(), String> {
-    let from_object = ObjectName::from(from_name.clone());
-    let maybe_update_object_name = |object_name: &mut ObjectName| {
+    let from_object = UnresolvedObjectName::from(from_name.clone());
+    let maybe_update_object_name = |object_name: &mut UnresolvedObjectName| {
         if object_name.0 == from_object.0 {
             // The last name in an ObjectName is the item name. The item name
             // does not have a fixed index.
@@ -236,8 +237,8 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
         }
     }
 
-    fn visit_object_name(&mut self, object_name: &'ast ObjectName) {
-        let names = &object_name.0;
+    fn visit_unresolved_object_name(&mut self, unresolved_object_name: &'ast UnresolvedObjectName) {
+        let names = &unresolved_object_name.0;
         self.check_failure(names);
         // Every item is used as an `ObjectName` at least once, which
         // lets use track all items named `self.name`.
@@ -256,9 +257,9 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
         }
     }
 
-    fn visit_table(&mut self, table: &'ast <Raw as AstInfo>::Table) {
-        match table {
-            RawName::Name(n) | RawName::Id(_, n) => self.visit_object_name(n),
+    fn visit_object_name(&mut self, object_name: &'ast <Raw as AstInfo>::ObjectName) {
+        match object_name {
+            RawName::Name(n) | RawName::Id(_, n) => self.visit_unresolved_object_name(n),
         }
     }
 }
@@ -311,11 +312,17 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
             _ => visit_mut::visit_expr_mut(self, e),
         }
     }
-    fn visit_object_name_mut(&mut self, object_name: &'ast mut ObjectName) {
-        self.maybe_rewrite_idents(&mut object_name.0);
+    fn visit_unresolved_object_name_mut(
+        &mut self,
+        unresolved_object_name: &'ast mut UnresolvedObjectName,
+    ) {
+        self.maybe_rewrite_idents(&mut unresolved_object_name.0);
     }
-    fn visit_table_mut(&mut self, table_name: &'ast mut <sql_parser::ast::Raw as AstInfo>::Table) {
-        match table_name {
+    fn visit_object_name_mut(
+        &mut self,
+        object_name: &'ast mut <sql_parser::ast::Raw as AstInfo>::ObjectName,
+    ) {
+        match object_name {
             RawName::Name(n) | RawName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
         }
     }
