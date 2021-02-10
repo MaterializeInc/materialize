@@ -21,6 +21,10 @@ b1
 b2
 b3
 
+$ set queue-name=knots-${testdrive.seed}
+
+$ s3-add-notifications bucket=${bucket} queue=${queue-name}
+
 > CREATE MATERIALIZED SOURCE s3_all
   FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
   WITH (
@@ -169,3 +173,68 @@ b3
 c1
 c2
 c3
+
+# Check a source that has both SCAN and NOTIFICATIONS set up
+
+> CREATE MATERIALIZED SOURCE s3_scan_notifications
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}', SQS NOTIFICATIONS '${queue-name}'
+  MATCHING 'short/*'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT TEXT;
+
+> SELECT text FROM s3_scan_notifications ORDER BY text;
+a1
+a2
+a3
+b1
+b2
+b3
+
+$ s3-put-object bucket=${bucket} key=short/d
+d
+
+> SELECT text FROM s3_scan_notifications ORDER BY text;
+a1
+a2
+a3
+b1
+b2
+b3
+d
+
+# ensure that only the source we care about gets the notifications
+> DROP SOURCE s3_scan_notifications
+
+# check just pulling SQS
+
+# ensure that the old source doesn't read the notification queue
+$ sleep duration=1s
+
+# This section fails in localstack, but succeeds in AWS/CI
+$ s3-put-object bucket=${bucket} key=short/e
+fails
+in
+localstack
+
+> CREATE MATERIALIZED SOURCE s3_notifications
+  FROM S3 OBJECTS FROM SQS NOTIFICATIONS '${queue-name}'
+  MATCHING 'short/*'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT TEXT;
+
+> SELECT text FROM s3_notifications ORDER BY text;
+fails
+in
+localstack
