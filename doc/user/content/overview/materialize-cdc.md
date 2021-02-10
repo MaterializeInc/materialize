@@ -128,7 +128,7 @@ counts | The number of updates transmitted between `lower` and `upper`.
 
 ### Example Materialize CDC schema
 
-You define the Materialize CDC format in the Avro schema when a source is created.
+You define the Materialize CDC format in the [Avro schema](../../sql/create-source/avro-kafka/#avro-format-details) when a source is created.
 
 ```sql
   CREATE MATERIALIZED SOURCE name_of_source
