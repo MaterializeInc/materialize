@@ -21,6 +21,10 @@ b1
 b2
 b3
 
+$ set queue-name=knots-${testdrive.seed}
+
+$ s3-add-notifications bucket=${bucket} queue=${queue-name}
+
 > CREATE MATERIALIZED SOURCE s3_all
   FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
   WITH (
@@ -169,3 +173,82 @@ b3
 c1
 c2
 c3
+
+# Check a source that has both SCAN and NOTIFICATIONS set up
+
+> CREATE MATERIALIZED SOURCE s3_scan_notifications
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}', SQS NOTIFICATIONS '${queue-name}'
+  MATCHING 'short/*'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT TEXT;
+
+> SELECT text FROM s3_scan_notifications ORDER BY text;
+a1
+a2
+a3
+b1
+b2
+b3
+
+$ s3-put-object bucket=${bucket} key=short/d
+d
+
+# S3 has a very loose idea of how fast items should show up:
+# > Typically, event notifications are delivered in seconds but can sometimes take a minute or longer.
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/NotificationHowTo.html
+$ set-sql-timeout duration=1minutes
+
+> SELECT text FROM s3_scan_notifications ORDER BY text;
+a1
+a2
+a3
+b1
+b2
+b3
+d
+
+# ensure that only the source we care about gets the notifications
+> DROP SOURCE s3_scan_notifications
+
+# check just pulling SQS
+
+# ensure that the old source doesn't read the notification queue
+#
+# We need to ensure that the tokio subsystem gets around to (tokio) polling the
+# SQS reader, to allow it to shut down and stop listenting to SQS messages. The
+# SQS reader isn't part of the timely/dd infrastructure, it's not even really
+# exposed to the coordinator, so there is no way to observe whether or not it
+# is shut down with the current infrastructure.
+#
+# Conversation about making this observable happened here:
+# https://github.com/MaterializeInc/materialize/pull/5723#discussion_r574264439
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
+# This section fails in localstack, but succeeds in AWS/CI
+$ s3-put-object bucket=${bucket} key=short/e
+fails
+in
+localstack
+
+> CREATE MATERIALIZED SOURCE s3_notifications
+  FROM S3 OBJECTS FROM SQS NOTIFICATIONS '${queue-name}'
+  MATCHING 'short/*'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT TEXT;
+
+> SELECT text FROM s3_notifications ORDER BY text;
+fails
+in
+localstack
