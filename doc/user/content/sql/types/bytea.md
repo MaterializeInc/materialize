@@ -9,86 +9,61 @@ menu:
     parent: 'sql-types'
 ---
 
-The `bytea` data type allows the storage of [binary strings](https://www.postgresql.org/docs/9.0/datatype-binary.html) or what is typically thought of as "raw bytes". Materialize supports both the typical formats for input and output: PostgreSQL's escape format and the hex format.
+The `bytea` data type allows the storage of [binary strings](https://www.postgresql.org/docs/9.0/datatype-binary.html) or what is typically thought of as "raw bytes". Materialize supports both the typical formats for input and output: the hex format and the historical PostgreSQL escape format. The hex format is preferred.
 
-## Hex format
+Hex format strings are preceded by `\x` and escape format strings are preceded by `\`.
 
-The "hex" format encodes binary data as 2 hexadecimal digits per byte, most significant nibble first. The entire string is preceded by the sequence `\x` (to distinguish it from the escape format). The hexadecimal digits can be either upper or lower case, and whitespace is permitted between digit pairs (but not within a digit pair nor in the starting `\x` sequence). The hex format is compatible with a wide range of external applications and protocols, and it tends to be faster to convert than the escape format, so its use is preferred.
+For more information about `bytea`, see the [PostgreSQL binary data type documentation](https://www.postgresql.org/docs/13/datatype-binary.html#id-1.5.7.12.9).
 
-## PostgreSQL escape format
 
 Detail | Info
 -------|------
-**Quick Syntax** | ``
-**Aliases** |  ``
-**Size** | Variable
-**Catalog name** | ``
-**OID** |
+**Quick Syntax** | `'\xDEADBEEF'` (hex),  `'\000'` (escape)
+**Size** | 1 or 4 bytes plus the actual binary string
+**Catalog name** | `pg_catalog.bytea`
+**OID** | 17
 
 ## Syntax
 
-### Standard
+### Hex format
 
-{{< diagram "type-bytea.svg" >}}
+{{< diagram "type-bytea-hex.svg" >}}
 
-To escape a single quote character (`'`) in a standard string literal, write two
-adjacent single quotes:
+In some cases, the initial backslash may need to be escaped by doubling it (`\\`). For more information, see the PostgreSQL documentation on [string constants](https://www.postgresql.org/docs/13/sql-syntax-lexical.html#SQL-SYNTAX-STRINGS).
 
-```sql
-SELECT 'single''quote' AS output
-```
-```nofmt
-   output
-------------
-single'quote
-```
+### Escape format
 
-All other characters are taken literally.
+{{< diagram "type-bytea-esc.svg" >}}
 
-### Escape
+In the escape format, octet values can be escaped by converting them into their three-digit octal values and preceding them with backslashes; the backslash itself can be escaped as a double backslash. While any octet value *can* be escaped, the values in the table below *must* be escaped.
 
-A string literal that is preceded by an `e` or `E` is an "escape" string
-literal:
+Decimal octet value | Description | Escaped input representation | Example | Hex representation
+------------|--------|----|-----------|----
+0  | zero octet | `'\000'` | `'\000'::bytea` | `\x00`
+39  | single quote |`''''` or `'\047'` | `''''::bytea` | `\x27`
+92  | backslash | `'\\' or '\134'` | `'\\'::bytea` | `\x5c`
+0 to 31 and 127 to 255  | "non-printable" octets | `'\xxx'` (octal value) | `'\001'::bytea` | `\x01`
 
-{{< diagram "type-escape-text.svg" >}}
 
-Escape string literals follow the same rules as standard string literals, except
-that backslash character (`\`) starts an escape sequence. The following escape
-sequences are recognized:
 
-Escape sequence | Meaning
-----------------|--------
-`\b`  | Backspace
-`\f`  | Form feed
-`\n`  | Newline
-`\r`  | Carriage return
-`\t`  | Tab
-`\uXXXX`, `\UXXXXXXXX`  | Unicode codepoint, where `X` is a hexadecimal digit
-
-Any other character following a backslash is taken literally, so `\\` specifies
-a literal backslash, and `\'` is an alternate means of escaping the single quote
-character.
-
-Unlike in PostgreSQL, there are no escapes that produce arbitrary byte values,
-in order to ensure that escape string literals are always valid UTF-8.
 
 ## Details
 
 ### Valid casts
 
-#### From `text`
+#### From `bytea`
 
-You can [cast](../../functions/cast) `text` to [all types](../). Casts from text
+You can [cast](../../functions/cast) `bytea` to [text](../text). Casts from bytea
 will error if the string is not valid input for the destination type.
 
-#### To `text`
+#### To `bytea`
 
-You can [cast](../../functions/cast) [all types](../) to `text`.
+You can [cast](../../functions/cast) [text](../text) to `bytea`.
 
 ## Examples
 
 ```sql
-SELECT 'hello' AS text_val;
+SELECT '\xDEADBEEF' AS text_val;
 ```
 ```nofmt
  text_val

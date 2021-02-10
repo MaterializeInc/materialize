@@ -354,6 +354,10 @@ type_record ::=
   'ROW' '(' expr? (',' expr)* ')'
 type_text ::=
   "'" text "'"
+type_bytea_esc ::=
+  "'" "\" "binary string" "'"
+type_bytea_hex ::=
+  "'" "\x" "binary string" "'"
 type_uuid ::=
   UUID "'" uuid_str "'"
 type_escape_text ::=
