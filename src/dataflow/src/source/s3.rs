@@ -110,6 +110,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             let glob = s3_conn.pattern.map(|g| g.compile_matcher());
             let aws_info = s3_conn.aws_info;
             tokio::spawn(download_objects_task(
+                source_name.clone(),
                 keys_rx,
                 dataflow_tx,
                 aws_info.clone(),
@@ -166,6 +167,7 @@ struct KeyInfo {
 }
 
 async fn download_objects_task(
+    source_name: String,
     mut rx: tokio_mpsc::Receiver<anyhow::Result<KeyInfo>>,
     tx: SyncSender<anyhow::Result<InternalMessage>>,
     aws_info: aws::ConnectInfo,
@@ -200,7 +202,7 @@ async fn download_objects_task(
                     seen_buckets.insert(msg.bucket.clone(), keys);
                 }
 
-                download_object(&tx, &activator, &client, msg.bucket, msg.key).await;
+                download_object(&source_name, &tx, &activator, &client, msg.bucket, msg.key).await;
             }
             Err(e) => tx
                 .send(Err(e))
@@ -253,14 +255,20 @@ async fn scan_bucket_task(
                         .filter(|k| glob.map(|g| g.is_match(k)).unwrap_or(true));
 
                     for key in keys {
-                        tx.send(Ok(KeyInfo {
-                            bucket: bucket.clone(),
-                            key,
-                        }))
-                        .await
-                        .unwrap_or_else(|e| {
-                            log::debug!("unable to send keys to downloader: {}", e)
-                        });
+                        let res = tx
+                            .send(Ok(KeyInfo {
+                                bucket: bucket.clone(),
+                                key,
+                            }))
+                            .await;
+
+                        match res {
+                            Ok(_) => {}
+                            Err(e) => {
+                                log::debug!("unable to send keys to downloader: {}", e);
+                                break;
+                            }
+                        }
                     }
                 }
 
@@ -346,9 +354,15 @@ async fn read_sqs_task(
 
         match response {
             Ok(response) => {
+                let messages = if let Some(m) = response.messages {
+                    m
+                } else {
+                    continue;
+                };
+
                 allowed_errors = 10;
 
-                for message in response.messages.iter().flat_map(|ms| ms) {
+                for message in messages {
                     if let Some(body) = message.body.as_ref() {
                         let event: Result<Event, _> = serde_json::from_str(body);
                         match event {
@@ -362,17 +376,16 @@ async fn read_sqs_task(
                                     ) {
                                         let key = record.s3.object.key;
                                         if glob.map(|g| g.is_match(&key)).unwrap_or(true) {
-                                            tx.send(Ok(KeyInfo {
+                                            let ki = Ok(KeyInfo {
                                                 bucket: record.s3.bucket.name,
                                                 key,
-                                            }))
-                                            .await
-                                            .unwrap_or_else(|e| {
-                                                log::debug!(
-                                                    "unable to send key from sqs to donloader: {}",
-                                                    e,
-                                                )
                                             });
+                                            if tx.send(ki).await.is_err() {
+                                                log::debug!(
+                                                    "Downloader queue is closed, exiting sqs reader",
+                                                );
+                                                return;
+                                            }
                                         }
                                     }
                                 }
@@ -427,6 +440,7 @@ async fn read_sqs_task(
 }
 
 async fn download_object(
+    source_name: &str,
     tx: &SyncSender<anyhow::Result<InternalMessage>>,
     activator: &SyncActivator,
     client: &S3Client,
@@ -459,7 +473,11 @@ async fn download_object(
                 let mut lines = 0;
                 for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
                     if let Err(e) = tx.send(Ok(InternalMessage { record: line })) {
-                        log::debug!("unable to send read line on stream: {}", e);
+                        log::debug!(
+                            "Source receiver has been closed, exiting ingest source={}: {}",
+                            source_name,
+                            e
+                        );
                         break;
                     } else {
                         lines += 1;
