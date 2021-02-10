@@ -20,7 +20,6 @@ use std::cmp;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::{TryFrom, TryInto};
 use std::iter;
-use std::mem;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::sync::Arc;
@@ -34,6 +33,7 @@ use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
 use rand::Rng;
 use timely::communication::WorkerGuards;
+use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::{Handle as TokioHandle, Runtime};
 use tokio::sync::{mpsc, watch};
@@ -163,7 +163,6 @@ pub struct Coordinator {
     symbiosis: Option<symbiosis::Postgres>,
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
-    since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
     /// Instance count: number of times sources have been instantiated in views. This is used
@@ -189,6 +188,31 @@ pub struct Coordinator {
     /// A map from connection ID to metadata about that connection for all
     // active connections.
     active_conns: HashMap<u32, ConnMeta>,
+
+    // We need to track various frontiers.
+    // 1) `indexes` tracks the `upper` and computed `since` of the
+    // indexes. The `since` is the time at which we are willing to compact
+    // up to. `determine_timestamp()` uses this as part of its heuristic when
+    // determining a viable timestamp for queries.
+    // 2) `txn_reads` tracks active read transactions so that we don't compact any
+    // indexes beyond an in-progress transaction.
+    // 3) `compaction_frontiers` is a merged version of `indexes` and `txn_reads`
+    // that is used to inform the dataflow workers what they should compact.
+    // 4) `since_updates` holds pending compaction messages to be sent to the
+    // dataflow workers.
+    //
+    // How this should always work is that `determine_timestamp` will always
+    // return the least valid since of a query. Thus, any new transactions should
+    // always be >= the current compaction frontier and so should never change the
+    // frontier when being added to `compaction_frontiers`. The compaction frontier
+    // may change when a transaction ends (if it was the oldest transaction and
+    // the index's since was advanced after the transaction started) or when
+    // `update_upper` is run (if there are no in progress transactions before
+    // the new since). When it does, it is added to `since_updates` and will be
+    // processed during the next `maintenance` call.
+    txn_reads: HashMap<u32, TxnReads>,
+    compaction_frontiers: HashMap<GlobalId, MutableAntichain<Timestamp>>,
+    since_updates: HashMap<GlobalId, Antichain<Timestamp>>,
 }
 
 /// Metadata about an active connection.
@@ -205,6 +229,11 @@ struct ConnMeta {
     /// requests are required to authenticate with the secret of the connection
     /// that they are targeting.
     secret_key: u32,
+}
+
+pub struct TxnReads {
+    timestamp: Timestamp,
+    ids: Vec<GlobalId>,
 }
 
 impl Coordinator {
@@ -817,13 +846,57 @@ impl Coordinator {
                             );
                         }
                         if index_state.since != compaction_frontier {
+                            // Mark previous since for eviction.
+                            let mut updates: Vec<_> = index_state
+                                .since
+                                .elements()
+                                .iter()
+                                .map(|time| (*time, -1))
+                                .collect();
                             index_state.advance_since(&compaction_frontier);
-                            self.since_updates
-                                .push((name.clone(), index_state.since.clone()));
+                            // Mark new since for insertion.
+                            for time in index_state.since.elements() {
+                                updates.push((*time, 1));
+                            }
+                            // We always want `compaction_frontiers` to have exactly one timestamp tracking
+                            // the index's since, so send both the eviction and insertion in the same
+                            // update batch.
+                            self.update_compaction_frontier(*name, updates);
                         }
                     }
                 }
             }
+        }
+    }
+
+    /// Updates the tracked compaction frontier for an index.
+    ///
+    /// If the antichain progressed, it is added to the pending compactions.
+    fn update_compaction_frontier<I>(&mut self, name: GlobalId, updates: I)
+    where
+        I: IntoIterator<Item = (Timestamp, i64)>,
+    {
+        // Indexes are the only things that can be compacted.
+        assert!(self.catalog.get_by_id(&name).item_type() == CatalogItemType::Index);
+        // Indexes added via `Frontiers::new` get their `since` set to
+        // `Timestamp::minimum()`. Mirror that here when we encounter an unknown index.
+        let entry = self
+            .compaction_frontiers
+            .entry(name)
+            .or_insert_with(|| MutableAntichain::new_bottom(Timestamp::minimum()));
+        let before = entry.frontier().to_owned();
+        let changed = entry.update_iter(updates).next().is_some();
+        let after = entry.frontier().to_owned();
+        // If the antichain retreated, we've done something wrong.
+        assert!(
+            timely::order::PartialOrder::less_equal(&before, &after),
+            "{}: {:?} > {:?}",
+            self.catalog.get_by_id(&name).name(),
+            before,
+            after
+        );
+        if changed {
+            self.since_updates.insert(name, after);
         }
     }
 
@@ -832,14 +905,8 @@ impl Coordinator {
     /// Primarily, this involves sequencing compaction commands, which should be
     /// issued whenever available.
     async fn maintenance(&mut self) {
-        // Take this opportunity to drain `since_update` commands.
-        // Don't try to compact to an empty frontier. There may be a good reason to do this
-        // in principle, but not in any current Mz use case.
-        // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
-        self.since_updates
-            .retain(|(_, frontier)| frontier != &Antichain::new());
         if !self.since_updates.is_empty() {
-            let since_updates = mem::take(&mut self.since_updates);
+            let since_updates: Vec<_> = self.since_updates.drain().collect();
             self.broadcast(SequencedCommand::AllowCompaction(since_updates));
         }
     }
@@ -2249,27 +2316,41 @@ impl Coordinator {
                 TransactionStatus::Started(ops)
                 | TransactionStatus::InTransaction(ops)
                 | TransactionStatus::InTransactionImplicit(ops) => {
-                    if let TransactionOps::Writes(inserts) = ops {
-                        let timestamp = self.get_write_ts();
-                        for WriteOp { id, rows } in inserts {
-                            // Re-verify this id exists.
-                            if self.catalog.try_get_by_id(id).is_none() {
-                                return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
-                                    id.to_string(),
-                                )));
+                    match ops {
+                        TransactionOps::Peeks(_) => {
+                            // Allow compaction of sources from this transaction.
+                            if let Some(read) = self.txn_reads.remove(&session.conn_id()) {
+                                for id in read.ids {
+                                    self.update_compaction_frontier(id, vec![(read.timestamp, -1)]);
+                                }
                             }
-
-                            let updates = rows
-                                .into_iter()
-                                .map(|(row, diff)| Update {
-                                    row,
-                                    diff,
-                                    timestamp,
-                                })
-                                .collect();
-
-                            self.broadcast(SequencedCommand::Insert { id, updates });
+                            // Although the compaction frontier may have advanced, we do not need to
+                            // call `maintenance` here because it will soon be called after the next
+                            // `update_upper`.
                         }
+                        TransactionOps::Writes(inserts) => {
+                            let timestamp = self.get_write_ts();
+                            for WriteOp { id, rows } in inserts {
+                                // Re-verify this id exists.
+                                if self.catalog.try_get_by_id(id).is_none() {
+                                    return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                                        id.to_string(),
+                                    )));
+                                }
+
+                                let updates = rows
+                                    .into_iter()
+                                    .map(|(row, diff)| Update {
+                                        row,
+                                        diff,
+                                        timestamp,
+                                    })
+                                    .collect();
+
+                                self.broadcast(SequencedCommand::Insert { id, updates });
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -2323,14 +2404,23 @@ impl Coordinator {
                 }
                 let ids = ids.into_iter().collect::<Vec<_>>();
 
-                self.determine_timestamp(&ids, PeekWhen::Immediately)
+                // We want to prevent compaction of the indexes consulted by
+                // determine_timestamp, not the ones listed in the query, so replace ids with
+                // the index ids.
+                let (timestamp, ids) = self.determine_timestamp(&ids, PeekWhen::Immediately)?;
+                for id in ids.iter().cloned() {
+                    self.update_compaction_frontier(id, vec![(timestamp, 1i64)]);
+                }
+                self.txn_reads.insert(conn_id, TxnReads { timestamp, ids });
+
+                Ok(timestamp)
             })?
         } else {
             // If this is an AS OF query, we don't care about any possible
             // transaction timestamp. If this is a single-statement transaction
             // (TransactionStatus::Started), we don't need to worry about preventing
             // compaction or choosing a valid timestamp for future queries.
-            self.determine_timestamp(&source.global_uses(), when)?
+            self.determine_timestamp(&source.global_uses(), when)?.0
         };
 
         let source = self.prep_relation_expr(
@@ -2540,15 +2630,16 @@ impl Coordinator {
 
     /// A policy for determining the timestamp for a peek.
     ///
-    /// The result may be `None` in the case that the `when` policy cannot be satisfied,
-    /// which is possible due to the restricted validity of traces (each has a `since`
-    /// and `upper` frontier, and are only valid after `since` and sure to be available
-    /// not after `upper`).
+    /// The Timestamp result may be `None` in the case that the `when` policy
+    /// cannot be satisfied, which is possible due to the restricted validity of
+    /// traces (each has a `since` and `upper` frontier, and are only valid after
+    /// `since` and sure to be available not after `upper`). The set of indexes
+    /// used is also returned.
     fn determine_timestamp(
         &mut self,
         uses_ids: &[GlobalId],
         when: PeekWhen,
-    ) -> Result<Timestamp, CoordError> {
+    ) -> Result<(Timestamp, Vec<GlobalId>), CoordError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
         // accumulated at a time greater or equal to `since`, and they
@@ -2638,7 +2729,7 @@ impl Coordinator {
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
         if since.less_equal(&timestamp) {
-            Ok(timestamp)
+            Ok((timestamp, index_ids))
         } else {
             let invalid = index_ids
                 .iter()
@@ -2668,7 +2759,10 @@ impl Coordinator {
     ) -> Result<Antichain<u64>, CoordError> {
         let frontier = if let Some(ts) = as_of {
             // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(self.determine_timestamp(&[source_id], PeekWhen::AtTimestamp(ts))?)
+            Antichain::from_elem(
+                self.determine_timestamp(&[source_id], PeekWhen::AtTimestamp(ts))?
+                    .0,
+            )
         }
         // TODO: The logic that follows is at variance from PEEK logic which consults the
         // "queryable" state of its inputs. We might want those to line up, but it is only
@@ -3466,7 +3560,7 @@ pub async fn serve(
         catalog,
         symbiosis,
         indexes: ArrangementFrontiers::default(),
-        since_updates: Vec::new(),
+        since_updates: HashMap::new(),
         logging_granularity: logging
             .as_ref()
             .and_then(|c| c.granularity.as_millis().try_into().ok()),
@@ -3480,6 +3574,8 @@ pub async fn serve(
         need_advance: true,
         transient_id_counter: 1,
         active_conns: HashMap::new(),
+        txn_reads: HashMap::new(),
+        compaction_frontiers: HashMap::new(),
     };
     coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
     if let Some(config) = &logging {
