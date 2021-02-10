@@ -105,7 +105,7 @@
 //! ```
 //! use std::error::Error;
 //!
-//! use sql_parser::ast::{Ident, Raw, AstInfo};
+//! use sql_parser::ast::{Ident, Raw, AstInfo, RawName};
 //! use sql_parser::ast::visit::{self, Visit};
 //!
 //! struct IdentCollector<'ast> {
@@ -118,9 +118,13 @@
 //!         visit::visit_ident(self, node);
 //!     }
 //!     fn visit_table(&mut self, name: &'ast <Raw as AstInfo>::Table) {
-//!         for node in &name.0 {
-//!             self.idents.push(node);
-//!             visit::visit_ident(self, node);
+//!         match name {
+//!             RawName::Name(n) | RawName::Id(_, n) => {
+//!                 for node in &n.0 {
+//!                     self.idents.push(node);
+//!                     visit::visit_ident(self, node);
+//!                 }
+//!             }
 //!         }
 //!     }
 //! }

@@ -31,13 +31,13 @@ use expr::LocalId;
 use itertools::Itertools;
 use ore::iter::IteratorExt;
 use ore::str::StrExt;
-use sql_parser::ast::display::{separated, AstDisplay, AstFormatter};
+use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::ast::fold::Fold;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     AstInfo, Cte, DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource,
-    JoinConstraint, JoinOperator, Limit, ObjectName, OrderByExpr, Query, Raw, Select, SelectItem,
-    SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, Value, Values,
+    JoinConstraint, JoinOperator, Limit, ObjectName, OrderByExpr, Query, Raw, RawName, Select,
+    SelectItem, SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -71,14 +71,12 @@ pub struct Aug;
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ResolvedTableName {
     id: Id,
-    raw_name: ObjectName,
+    raw_name: PartialName,
 }
 
 impl AstDisplay for ResolvedTableName {
     fn fmt(&self, f: &mut AstFormatter) {
-        f.write_str(format!("[{}: ", self.id));
-        separated(&self.raw_name.0, ".").fmt(f);
-        f.write_str("]");
+        f.write_str(format!("[{}: {}]", self.id, self.raw_name));
     }
 }
 
@@ -160,33 +158,47 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     }
 
     fn fold_table(&mut self, table: <Raw as AstInfo>::Table) -> <Aug as AstInfo>::Table {
-        // Check if unqualified name refers to a CTE.
-        if table.0.len() == 1 {
-            let norm_name = normalize::ident(table.0[0].clone());
-            if let Some(id) = self.ctes.get(&norm_name) {
-                return ResolvedTableName {
-                    id: Id::Local(id.clone()),
-                    raw_name: table,
-                };
-            }
-        }
+        match table {
+            RawName::Name(raw_name) => {
+                // Check if unqualified name refers to a CTE.
+                if raw_name.0.len() == 1 {
+                    let norm_name = normalize::ident(raw_name.0[0].clone());
+                    if let Some(id) = self.ctes.get(&norm_name) {
+                        return ResolvedTableName {
+                            id: Id::Local(*id),
+                            raw_name: normalize::object_name(raw_name).unwrap(),
+                        };
+                    }
+                }
 
-        let name = normalize::object_name(table.clone()).unwrap();
-        return match self.catalog.resolve_item(&name) {
-            Ok(item) => ResolvedTableName {
-                id: Id::Global(item.id()),
-                raw_name: table,
-            },
-            Err(e) => {
-                if self.status.is_ok() {
-                    self.status = Err(e.into());
+                let name = normalize::object_name(raw_name).unwrap();
+                match self.catalog.resolve_item(&name) {
+                    Ok(item) => ResolvedTableName {
+                        id: Id::Global(item.id()),
+                        raw_name: name,
+                    },
+                    Err(e) => {
+                        if self.status.is_ok() {
+                            self.status = Err(e.into());
+                        }
+                        ResolvedTableName {
+                            id: Id::Local(LocalId::new(0)),
+                            raw_name: name,
+                        }
+                    }
+                }
+            }
+            RawName::Id(id, raw_name) => {
+                let gid = GlobalId::User(id);
+                if self.catalog.try_get_item_by_id(&gid).is_none() {
+                    self.status = Err(anyhow!("invalid id {}", &gid));
                 }
                 ResolvedTableName {
-                    id: Id::Local(LocalId::new(0)),
-                    raw_name: table,
+                    id: Id::Global(gid),
+                    raw_name: normalize::object_name(raw_name).unwrap(),
                 }
             }
-        };
+        }
     }
 }
 
@@ -3106,8 +3118,8 @@ impl<'a> QueryContext<'a> {
         }
     }
 
-    /// Resolves `name` to a table expr, i.e. getting a catalog table or
-    /// inlining a CTE.
+    /// Resolves `object` to a table expr, i.e. creating a `Get` or inlining a
+    /// CTE.
     pub fn resolve_table_name(
         &self,
         object: ResolvedTableName,
@@ -3122,12 +3134,6 @@ impl<'a> QueryContext<'a> {
                         col.level += cte.level_offset;
                     }
                 });
-
-                let name = PartialName {
-                    database: None,
-                    schema: None,
-                    item: normalize::ident(name.0[0].clone()),
-                };
 
                 let scope = Scope::from_source(
                     Some(name),
@@ -3149,7 +3155,7 @@ impl<'a> QueryContext<'a> {
                 };
 
                 let scope = Scope::from_source(
-                    Some(item.name().clone().into()),
+                    Some(object.raw_name),
                     desc.iter_names().map(|n| n.cloned()),
                     Some(self.outer_scope.clone()),
                 );

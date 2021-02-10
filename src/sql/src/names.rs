@@ -100,7 +100,7 @@ impl From<FullName> for ObjectName {
 ///
 /// This is like a [`FullName`], but either the database or schema name may be
 /// omitted.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PartialName {
     pub database: Option<String>,
     pub schema: Option<String>,

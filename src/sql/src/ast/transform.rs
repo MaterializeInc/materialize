@@ -12,6 +12,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ore::str::StrExt;
+use sql_parser::ast::RawName;
 
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
@@ -256,7 +257,9 @@ impl<'a, 'ast> Visit<'ast, Raw> for QueryIdentAgg<'a> {
     }
 
     fn visit_table(&mut self, table: &'ast <Raw as AstInfo>::Table) {
-        self.visit_object_name(table);
+        match table {
+            RawName::Name(n) | RawName::Id(_, n) => self.visit_object_name(n),
+        }
     }
 }
 
@@ -312,6 +315,8 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
         self.maybe_rewrite_idents(&mut object_name.0);
     }
     fn visit_table_mut(&mut self, table_name: &'ast mut <sql_parser::ast::Raw as AstInfo>::Table) {
-        self.maybe_rewrite_idents(&mut table_name.0);
+        match table_name {
+            RawName::Name(n) | RawName::Id(_, n) => self.maybe_rewrite_idents(&mut n.0),
+        }
     }
 }
