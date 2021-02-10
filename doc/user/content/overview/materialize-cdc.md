@@ -133,7 +133,7 @@ You specify the use of the Materialize CDC format in the [Avro schema](../../sql
   ENVELOPE MATERIALIZE
 ```
 
-The following example schema specifies that records will consist of `id` and `price` fields. Note that `price` object supports multiple datatypes: It can be null or `int`.
+The following example schema specifies that records will consist of `id` and `price` fields. Note that `price` object supports multiple datatypes: It can be `null` or `int`.
 
 ```json
 [
