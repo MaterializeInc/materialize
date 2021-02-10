@@ -3179,10 +3179,11 @@ where
                 {
                     match dataflow::extract_temporal(predicates.iter().cloned()) {
                         Err(e) => coord_bail!("{:?}", e),
-                        Ok(_) => {
+                        Ok((normal, lower, upper)) => {
                             // If we are in experimenal mode permit temporal filters.
                             // TODO(mcsherry): remove this gating eventually.
-                            if self.catalog.config().experimental_mode {
+                            let non_temporal = lower.is_empty() && upper.is_empty();
+                            if non_temporal || self.catalog.config().experimental_mode {
                                 Ok(())
                             } else {
                                 coord_bail!("temporal filters require the --experimental flag")
