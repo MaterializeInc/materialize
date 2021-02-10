@@ -106,28 +106,51 @@ volumes:
   prometheus:
 
 mzworkflows:
-  benchmark:
+
+  start-services:
     steps:
     - step: start-services
       services: [dashboard]
     - step: start-services
-      services: [kafka, schema-registry, materialized]
+      services: [kafka, schema-registry]
     - step: wait-for-tcp
       host: kafka
       port: 9092
     - step: wait-for-tcp
       host: schema-registry
       port: 8081
+
+  benchmark:
+    steps:
+    - step: workflow
+      workflow: setup-benchmark
+    - step: workflow
+      workflow: run-benchmark
+
+  setup-benchmark:
+    steps:
+    - step: workflow
+      workflow: start-services
     - step: run
       service: avro-upsert-generator
       command: >-
         --parallelism=40
-      # No command needed, defaults to benchmark distribution
+        --num-records=400000000
+
+  run-benchmark:
+    env:
+      MZ_WORKERS: ${MZ_WORKERS:-16}
+    steps:
+    - step: remove-services
+      services: [materialized]
+      destroy_volumes: true
+    - step: start-services
+      services: [materialized]
     - step: run
       service: metric-verifier
       daemon: true
       command: >-
-        --timeout-seconds=900
+        --timeout-seconds=3600
         "sum(mz_messages_ingested)"
         "400000000"
     - step: run
@@ -138,26 +161,32 @@ mzworkflows:
       print_logs: true
 
   benchmark-medium:
-    env:
-      MZ_WORKERS: 8
     steps:
-    - step: start-services
-      services: [dashboard]
-    - step: start-services
-      services: [kafka, schema-registry, materialized]
-    - step: wait-for-tcp
-      host: kafka
-      port: 9092
-    - step: wait-for-tcp
-      host: schema-registry
-      port: 8081
+    - step: workflow
+      workflow: setup-benchmark-medium
+    - step: workflow
+      workflow: run-benchmark-medium
+
+  setup-benchmark-medium:
+    steps:
+    - step: workflow
+      workflow: start-services
     - step: run
       service: avro-upsert-generator
       command: >-
         --parallelism=8
         --num-records=20000000
         --distribution=medium
-      # No command needed, defaults to benchmark distribution
+
+  run-benchmark-medium:
+    env:
+      MZ_WORKERS: ${MZ_WORKERS:-8}
+    steps:
+    - step: remove-services
+      services: [materialized]
+      destroy_volumes: true
+    - step: start-services
+      services: [materialized]
     - step: run
       service: metric-verifier
       daemon: true
@@ -174,21 +203,29 @@ mzworkflows:
 
   benchmark-insert-with-filter:
     steps:
-    - step: start-services
-      services: [dashboard]
-    - step: start-services
-      services: [kafka, schema-registry, materialized]
-    - step: wait-for-tcp
-      host: kafka
-      port: 9092
-    - step: wait-for-tcp
-      host: schema-registry
-      port: 8081
+    - step: workflow
+      workflow: setup-benchmark-insert-with-filter
+    - step: workflow
+      workflow: run-benchmark-insert-with-filter
+
+  setup-benchmark-insert-with-filter:
+    steps:
+    - step: workflow
+      workflow: start-services
     - step: run
       service: avro-upsert-generator
       command: >-
         --parallelism=40
-      # No command needed, defaults to benchmark distribution
+
+  run-benchmark-insert-with-filter:
+    env:
+      MZ_WORKERS: ${MZ_WORKERS:-16}
+    steps:
+    - step: remove-services
+      services: [materialized]
+      destroy_volumes: true
+    - step: start-services
+      services: [materialized]
     - step: run
       service: metric-verifier
       daemon: true
@@ -207,22 +244,31 @@ mzworkflows:
 
   ci:
     steps:
-    - step: start-services
-      services: [dashboard]
-    - step: start-services
-      services: [kafka, schema-registry, materialized]
-    - step: wait-for-tcp
-      host: kafka
-      port: 9092
-    - step: wait-for-tcp
-      host: schema-registry
-      port: 8081
+    - step: workflow
+      workflow: setup-ci
+    - step: workflow
+      workflow: run-ci
+
+  setup-ci:
+    steps:
+    - step: workflow
+      workflow: start-services
     - step: run
       service: avro-upsert-generator
       command: >-
         --parallelism=4
         --num-records=100000
         --distribution=small
+
+  run-ci:
+    env:
+      MZ_WORKERS: ${MZ_WORKERS:-1}
+    steps:
+    - step: remove-services
+      services: [materialized]
+      destroy_volumes: true
+    - step: start-services
+      services: [materialized]
     - step: run
       service: metric-verifier
       daemon: true
@@ -236,15 +282,13 @@ mzworkflows:
       service: metric-verifier
       expected_return_code: 0
       print_logs: true
-    - step: down
-      destroy_volumes: true
 
   run-generator:
     steps:
     - step: run
       service: avro-upsert-generator
 
-  restart-materialized:
+  rerun-benchmark:
     steps:
     - step: remove-services
       services: [materialized]
