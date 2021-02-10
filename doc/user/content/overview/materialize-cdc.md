@@ -222,7 +222,7 @@ The following schema specifies that records will consist of `id` and `price` fie
   ]
   ```
 
-The schema above produces this changefeed:
+As an example, the schema above might produce this changefeed:
 
 ```
 {{"array":[{"data":{"id":5,"price":{"int":10}},"time":5,"diff":1}]}
