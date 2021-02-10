@@ -332,8 +332,8 @@ impl MirScalarExpr {
                             Ok(regex) => expr1
                                 .take()
                                 .call_unary(UnaryFunc::IsRegexpMatch(Regex(regex))),
-                            Err(_) => {
-                                MirScalarExpr::literal_null(e.typ(&relation_type).scalar_type)
+                            Err(err) => {
+                                MirScalarExpr::literal(Err(err), e.typ(&relation_type).scalar_type)
                             }
                         };
                     }
@@ -356,7 +356,10 @@ impl MirScalarExpr {
                             func: UnaryFunc::DatePartInterval(units),
                             expr: Box::new(expr2.take()),
                         },
-                        Err(_) => MirScalarExpr::literal_null(e.typ(&relation_type).scalar_type),
+                        Err(_) => MirScalarExpr::literal(
+                            Err(EvalError::UnknownUnits(units.to_owned())),
+                            e.typ(&relation_type).scalar_type,
+                        ),
                     }
                 } else if *func == BinaryFunc::DatePartTimestamp && expr1.is_literal() {
                     let units = expr1.as_literal_str().unwrap();
@@ -365,7 +368,10 @@ impl MirScalarExpr {
                             func: UnaryFunc::DatePartTimestamp(units),
                             expr: Box::new(expr2.take()),
                         },
-                        Err(_) => MirScalarExpr::literal_null(e.typ(&relation_type).scalar_type),
+                        Err(_) => MirScalarExpr::literal(
+                            Err(EvalError::UnknownUnits(units.to_owned())),
+                            e.typ(&relation_type).scalar_type,
+                        ),
                     }
                 } else if *func == BinaryFunc::DatePartTimestampTz && expr1.is_literal() {
                     let units = expr1.as_literal_str().unwrap();
@@ -374,7 +380,10 @@ impl MirScalarExpr {
                             func: UnaryFunc::DatePartTimestampTz(units),
                             expr: Box::new(expr2.take()),
                         },
-                        Err(_) => MirScalarExpr::literal_null(e.typ(&relation_type).scalar_type),
+                        Err(_) => MirScalarExpr::literal(
+                            Err(EvalError::UnknownUnits(units.to_owned())),
+                            e.typ(&relation_type).scalar_type,
+                        ),
                     }
                 } else if *func == BinaryFunc::DateTruncTimestamp && expr1.is_literal() {
                     let units = expr1.as_literal_str().unwrap();
@@ -383,7 +392,10 @@ impl MirScalarExpr {
                             func: UnaryFunc::DateTruncTimestamp(units),
                             expr: Box::new(expr2.take()),
                         },
-                        Err(_) => MirScalarExpr::literal_null(e.typ(&relation_type).scalar_type),
+                        Err(_) => MirScalarExpr::literal(
+                            Err(EvalError::UnknownUnits(units.to_owned())),
+                            e.typ(&relation_type).scalar_type,
+                        ),
                     }
                 } else if *func == BinaryFunc::DateTruncTimestampTz && expr1.is_literal() {
                     let units = expr1.as_literal_str().unwrap();
@@ -392,7 +404,10 @@ impl MirScalarExpr {
                             func: UnaryFunc::DateTruncTimestampTz(units),
                             expr: Box::new(expr2.take()),
                         },
-                        Err(_) => MirScalarExpr::literal_null(e.typ(&relation_type).scalar_type),
+                        Err(_) => MirScalarExpr::literal(
+                            Err(EvalError::UnknownUnits(units.to_owned())),
+                            e.typ(&relation_type).scalar_type,
+                        ),
                     }
                 } else if *func == BinaryFunc::TimezoneTimestamp && expr1.is_literal() {
                     // If the timezone argument is a literal, and we're applying the function on many rows at the same
