@@ -55,6 +55,7 @@ def main(
     field_names = [
         "git_revision",
         "num_workers",
+        "iteration",
         "seconds_taken",
         "rows_per_second",
         "grafana_url",
@@ -71,7 +72,10 @@ def main(
         )
         raise
 
-    for (worker_count, git_revision) in itertools.product(worker_counts, git_revisions):
+    iterations = range(0, args.num_measurements)
+    for (iteration, worker_count, git_revision) in itertools.product(
+        iterations, worker_counts, git_revisions
+    ):
 
         child_env = os.environ.copy()
         child_env["MZ_WORKERS"] = str(worker_count)
@@ -104,6 +108,7 @@ def main(
             {
                 "git_revision": git_revision if git_revision else "NONE",
                 "num_workers": worker_count,
+                "iteration": iteration,
                 "seconds_taken": seconds_taken,
                 "rows_per_second": rows_per_second,
                 "grafana_url": grafana_url,
@@ -139,6 +144,14 @@ def enumerate_cpu_counts() -> typing.List[int]:
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "-n",
+        "--num-measurements",
+        type=int,
+        default=6,
+        help="Number of times to repeat each benchmark iteration",
+    )
 
     parser.add_argument(
         "-s",
