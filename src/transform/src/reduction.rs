@@ -60,7 +60,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
@@ -121,7 +121,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
@@ -141,7 +141,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
@@ -164,7 +164,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
@@ -183,7 +183,7 @@ impl FoldConstants {
                     };
                     *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
@@ -200,7 +200,7 @@ impl FoldConstants {
                 }) {
                     *relation = MirRelationExpr::Constant {
                         rows: Err(e.clone()),
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 } else if inputs
                     .iter()
@@ -215,10 +215,8 @@ impl FoldConstants {
                             let mut next_rows = Vec::new();
                             for (old_row, old_count) in old_rows {
                                 for (new_row, new_count) in rows.iter() {
-                                    let old_datums = old_row.unpack();
-                                    let new_datums = new_row.unpack();
                                     next_rows.push((
-                                        row_packer.pack(old_datums.iter().chain(new_datums.iter())),
+                                        row_packer.pack(old_row.iter().chain(new_row.iter())),
                                         old_count * *new_count,
                                     ));
                                 }
@@ -242,10 +240,9 @@ impl FoldConstants {
                         })
                     });
 
-                    let typ = relation.typ();
                     *relation = MirRelationExpr::Constant {
                         rows: Ok(old_rows),
-                        typ,
+                        typ: relation_type,
                     };
                 }
                 // TODO: General constant folding for all constant inputs.
@@ -260,7 +257,7 @@ impl FoldConstants {
                 {
                     *relation = MirRelationExpr::Constant {
                         rows: Err(e.clone()),
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 } else {
                     let mut rows = vec![];
@@ -316,8 +313,7 @@ impl FoldConstants {
                 col_type.nullable = false;
             }
             for (row, _) in rows.iter_mut() {
-                let datums = row.unpack();
-                for (index, datum) in datums.iter().enumerate() {
+                for (index, datum) in row.iter().enumerate() {
                     if datum.is_null() {
                         typ.column_types[index].nullable = true;
                     }

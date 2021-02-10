@@ -190,6 +190,9 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
     }
 }
 
+// Attaches additional information to a `Raw` AST, resulting in an `Aug` AST, by
+// resolving names and (aspirationally) performing semantic analysis such as
+// type-checking.
 pub fn resolve_names(
     qcx: &mut QueryContext,
     query: Query<Raw>,

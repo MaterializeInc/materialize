@@ -186,12 +186,12 @@ OpenSSL 1.1.1g  21 Apr 2020
 librdkafka v1.4.2
 ```
 
-Materialize configures OpenSSL according to Mozilla's [Modern
-compatibility][moz-modern] level, which requires TLS v1.3 and modern cipher
-suites. Using weaker cipher suites or older TLS protocol versions is not
+Materialize configures OpenSSL according to Mozilla's [Intermediate
+compatibility][moz-intermediate] level, which requires TLS v1.2+ and recent
+cipher suites. Using weaker cipher suites or older TLS protocol versions is not
 supported.
 
-[moz-modern]: https://wiki.mozilla.org/Security/Server_Side_TLS#Modern_compatibility
+[moz-intermediate]: https://wiki.mozilla.org/Security/Server_Side_TLS#Intermediate_compatibility_.28recommended.29
 
 #### Generating TLS certificates
 

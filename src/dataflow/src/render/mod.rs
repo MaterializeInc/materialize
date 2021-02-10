@@ -298,11 +298,13 @@ where
                 };
 
                 // All workers are responsible for reading in Kafka sources. Other sources
-                // support single-threaded ingestion only
+                // support single-threaded ingestion only. Note that in all cases we want all
+                // readers of the same source or same partition to reside on the same worker,
+                // and only load-balance responsibility across distinct sources.
                 let active_read_worker = if let ExternalSourceConnector::Kafka(_) = connector {
                     true
                 } else {
-                    (usize::cast_from(uid.hashed()) % scope.peers()) == scope.index()
+                    (usize::cast_from(src_id.hashed()) % scope.peers()) == scope.index()
                 };
 
                 let caching_tx = if let (true, Some(caching_tx)) =

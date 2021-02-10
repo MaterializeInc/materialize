@@ -28,6 +28,19 @@ use crate::ast::{Expr, FunctionArgs, Ident, ObjectName, SqlOption};
 
 // This represents the metadata that lives next to an AST, as we take it through
 // various stages in the planning process.
+//
+// Conceptually, when we first receive an AST from the parsing process, it only
+// represents the syntax that the user input, and has no semantic information
+// embedded in it. Later in this process, we want to be able to walk the tree
+// and add additional information to it piecemeal, perhaps without going down
+// the full planning pipeline. AstInfo represents various bits of information
+// that get stored in the tree: for instance, at first, table names are only
+// represented by the names the user input (in the `Raw` implementor of this
+// trait), but later on, we replace them with both the name along with the ID
+// that it gets resolved to.
+//
+// Currently this process brings an Ast<Raw> to Ast<Aug>, and lives in
+// sql/src/plan/query.rs:resolve_names.
 pub trait AstInfo: Clone {
     // The type used for table references.
     type Table: AstDisplay + Clone + Hash + Debug + Eq;

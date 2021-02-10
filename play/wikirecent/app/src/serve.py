@@ -27,6 +27,7 @@ This file is written in a bottom-up structure. The code flows as follows:
   internal copy of the view that can be used to initialize state for new listeners.
 """
 
+import argparse
 import collections
 import logging
 import os
@@ -217,7 +218,7 @@ def configure_logging():
     )
 
 
-def run():
+def run(dsn, views):
     """Create the Wikirecent Tornado Application.
 
     Create a Tornado application configured with our HTTP / Websocket handlers and start listening
@@ -239,8 +240,8 @@ def run():
         static_path=static_path,
         template_path=template_path,
         debug=True,
-        configured_views=["counter", "top10"],
-        dsn="postgresql://materialize@materialized:6875/materialize",
+        configured_views=views,
+        dsn=dsn,
     )
 
     port = 8875
@@ -255,4 +256,28 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--dbhost", help="materialized hostname", default="materialized", type=str
+    )
+    parser.add_argument(
+        "--dbname", help="materialized database name", default="materialize", type=str
+    )
+    parser.add_argument(
+        "--dbport", help="materialized port number", default=6875, type=int
+    )
+    parser.add_argument(
+        "--dbuser", help="materialized username", default="materialize", type=str
+    )
+
+    parser.add_argument(
+        "views", type=str, nargs="+", help="Views to expose as websockets"
+    )
+
+    args = parser.parse_args()
+
+    dsn = f"postgresql://{args.dbuser}@{args.dbhost}:{args.dbport}/{args.dbname}"
+
+    run(dsn, args.views)
