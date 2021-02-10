@@ -3179,7 +3179,7 @@ where
                 {
                     match dataflow::extract_temporal(predicates.iter().cloned()) {
                         Err(e) => coord_bail!("{:?}", e),
-                        Ok((normal, lower, upper)) => {
+                        Ok((_normal, lower, upper)) => {
                             // If we are in experimenal mode permit temporal filters.
                             // TODO(mcsherry): remove this gating eventually.
                             let non_temporal = lower.is_empty() && upper.is_empty();

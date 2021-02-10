@@ -309,6 +309,7 @@ query T multiline
 EXPLAIN SELECT mz_logical_timestamp()
 ----
 %0 =
-| Constant (0dec)
+| Constant ()
+| Map mz_logical_timestamp()
 
 EOF
