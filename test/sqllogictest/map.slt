@@ -68,7 +68,7 @@ SELECT ('{}'::map[text=>int])::text
 ----
 {}
 
-query error invalid input syntax for boolean: "2.0"
+query error invalid input syntax for type boolean: "2.0"
 SELECT ('{a=>1, b=>false, c=>2.0}'::map[text=>bool])::text
 
 query T
@@ -285,7 +285,7 @@ SELECT '{hello=>{world=>"2020-11-23"}}'::map[text=>map[text=>date]] -> 'hello'::
 false
 
 ## @>
-query error invalid input syntax for map: expected '\{', found c: "c"
+query error invalid input syntax for type map: expected '\{', found c: "c"
 SELECT '{a=>1, b=>2}'::map[text=>int] @> 'c'
 
 query error  arguments cannot be implicitly cast to any implementation's parameters
@@ -570,7 +570,7 @@ SELECT '{a=>\{\"1\":2\}}'::jsonb_map_c::text;
 statement ok
 CREATE TYPE bool AS MAP (key_type=text, value_type=int4)
 
-query error invalid input syntax for boolean: "\{a=>1\}"
+query error invalid input syntax for type boolean: "\{a=>1\}"
 SELECT '{a=>1}'::bool;
 
 query T

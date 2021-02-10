@@ -172,7 +172,7 @@ SELECT
 a     b     c      d
 true  NULL  false  NULL
 
-statement error invalid input syntax for integer
+statement error invalid input syntax for type integer
 SELECT (1, 2) > (1, 'hi') FROM tb
 
 statement error unequal number of entries in row expressions
@@ -238,7 +238,7 @@ SELECT (ROW(sqrt(100.0)), 'ab') = (ROW(1 + 9), 'a' || 'b') AS a
 a
 true
 
-query error invalid input syntax for integer
+query error invalid input syntax for type integer
 SELECT ((1, 2), 'equal') = ((1, 'huh'), 'equal') FROM tb
 
 # Issue #3568

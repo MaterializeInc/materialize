@@ -50,6 +50,17 @@ Wrap your release notes at the 80 character mark.
 
 - Multipartition Kafka sinks with consistency enabled will create single-partition
   consistency topics.
+- **Breaking change.** Change the behavior of the
+  [`round` function](/sql/functions/#numbers-func) when applied to a `real` or
+  `double precision` argument to round ties to the nearest even number,
+  rather than away from zero. When applied to `numeric`, ties are rounded away
+  from zero, as before.
+
+  The new behavior matches PostgreSQL.
+
+- Support [multi-partition](/sql/create-sink/#with-options) kafka sinks {{% gh 5537 %}}.
+
+- Support [gzip-compressed](/sql/create-source/text-file/#compression) file sources {{% gh 5392 %}}.
 
 {{% version-header v0.7.0 %}}
 
