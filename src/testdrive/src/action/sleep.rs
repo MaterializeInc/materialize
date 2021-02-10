@@ -16,13 +16,26 @@ use crate::action::{State, SyncAction};
 use crate::parser::BuiltinCommand;
 
 pub struct SleepAction {
-    time: Duration,
+    duration: Duration,
+    random: bool,
+}
+
+pub fn build_random_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, String> {
+    let arg = cmd.args.string("duration")?;
+    let duration = parse_duration::parse(&arg).map_err(|e| e.to_string())?;
+    Ok(SleepAction {
+        duration,
+        random: true,
+    })
 }
 
 pub fn build_sleep(mut cmd: BuiltinCommand) -> Result<SleepAction, String> {
     let arg = cmd.args.string("duration")?;
-    let time = parse_duration::parse(&arg).map_err(|e| e.to_string())?;
-    Ok(SleepAction { time })
+    let duration = parse_duration::parse(&arg).map_err(|e| e.to_string())?;
+    Ok(SleepAction {
+        duration,
+        random: false,
+    })
 }
 
 impl SyncAction for SleepAction {
@@ -31,8 +44,12 @@ impl SyncAction for SleepAction {
     }
 
     fn redo(&self, _: &mut State) -> Result<(), String> {
-        let mut rng = rand::thread_rng();
-        let sleep = rng.gen_range(Duration::from_secs(0)..self.time);
+        let sleep = if self.random {
+            let mut rng = rand::thread_rng();
+            rng.gen_range(Duration::from_secs(0)..self.duration)
+        } else {
+            self.duration
+        };
         println!("Sleeping for {:?}", sleep);
         thread::sleep(sleep);
         Ok(())

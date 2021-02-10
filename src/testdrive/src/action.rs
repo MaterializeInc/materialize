@@ -23,6 +23,7 @@ use regex::{Captures, Regex};
 use rusoto_credential::AwsCredentials;
 use rusoto_kinesis::{DeleteStreamInput, Kinesis, KinesisClient};
 use rusoto_s3::{DeleteBucketRequest, DeleteObjectRequest, ListObjectsV2Request, S3Client, S3};
+use rusoto_sqs::{DeleteQueueRequest, Sqs, SqsClient};
 use url::Url;
 
 use aws_util::aws;
@@ -99,6 +100,8 @@ pub struct State {
     kinesis_stream_names: Vec<String>,
     s3_client: S3Client,
     s3_buckets_created: BTreeSet<String>,
+    sqs_client: SqsClient,
+    sqs_queues_created: BTreeSet<String>,
 }
 
 impl State {
@@ -231,6 +234,22 @@ impl State {
                 }
                 continuation_token = response.next_continuation_token;
             }
+        })
+        .await
+    }
+
+    pub async fn reset_sqs(&self) -> Result<(), Error> {
+        ore::retry::retry_for(Duration::from_secs(5), |_| async {
+            for queue_url in &self.sqs_queues_created {
+                self.sqs_client
+                    .delete_queue(DeleteQueueRequest {
+                        queue_url: queue_url.clone(),
+                    })
+                    .await
+                    .with_err_ctx(|| format!("Deleting sqs queue: {}", queue_url))?
+            }
+
+            Ok(())
         })
         .await
     }
@@ -378,6 +397,9 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         Box::new(s3::build_create_bucket(builtin).map_err(wrap_err)?)
                     }
                     "s3-put-object" => Box::new(s3::build_put_object(builtin).map_err(wrap_err)?),
+                    "s3-add-notifications" => {
+                        Box::new(s3::build_add_notifications(builtin).map_err(wrap_err)?)
+                    }
                     "set-sql-timeout" => {
                         let duration = builtin.args.string("duration").map_err(wrap_err)?;
                         if duration.to_lowercase() == "default" {
@@ -392,7 +414,12 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         // Skip, has already been handled
                         continue;
                     }
-                    "random-sleep" => Box::new(sleep::build_sleep(builtin).map_err(wrap_err)?),
+                    "random-sleep" => {
+                        Box::new(sleep::build_random_sleep(builtin).map_err(wrap_err)?)
+                    }
+                    "sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment" => {
+                        Box::new(sleep::build_sleep(builtin).map_err(wrap_err)?)
+                    }
                     "set" => {
                         vars.extend(builtin.args);
                         continue;
@@ -593,6 +620,11 @@ pub async fn create_state(
         &[format!("region: {}", aws_info.region.name(),)],
     )?;
 
+    let sqs_client = aws_util::sqs::client(aws_info.clone()).await.err_hint(
+        "creating SQS client",
+        &[format!("region: {}", aws_info.region.name(),)],
+    )?;
+
     let state = State {
         seed,
         temp_dir,
@@ -618,6 +650,8 @@ pub async fn create_state(
         kinesis_stream_names: Vec::new(),
         s3_client,
         s3_buckets_created: BTreeSet::new(),
+        sqs_client,
+        sqs_queues_created: BTreeSet::new(),
     };
     Ok((state, pgconn_task))
 }
