@@ -18,8 +18,8 @@ use uuid::Uuid;
 
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    Expr, Function, FunctionArgs, Ident, ObjectName, Query, Raw, Select, SelectItem, TableAlias,
-    TableFactor, TableWithJoins, Value,
+    Expr, Function, FunctionArgs, Ident, Query, Raw, Select, SelectItem, TableAlias, TableFactor,
+    TableWithJoins, UnresolvedObjectName, Value,
 };
 
 use crate::normalize;
@@ -96,7 +96,7 @@ impl<'a> FuncRewriter<'a> {
     }
 
     fn plan_agg(
-        name: ObjectName,
+        name: UnresolvedObjectName,
         expr: Expr<Raw>,
         filter: Option<Box<Expr<Raw>>>,
         distinct: bool,
@@ -112,14 +112,14 @@ impl<'a> FuncRewriter<'a> {
 
     fn plan_avg(expr: Expr<Raw>, filter: Option<Box<Expr<Raw>>>, distinct: bool) -> Expr<Raw> {
         let sum = Self::plan_agg(
-            ObjectName::qualified(&["pg_catalog", "sum"]),
+            UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
             expr.clone(),
             filter.clone(),
             distinct,
         )
         .call_unary(vec!["mz_internal", "mz_avg_promotion"]);
         let count = Self::plan_agg(
-            ObjectName::qualified(&["pg_catalog", "count"]),
+            UnresolvedObjectName::qualified(&["pg_catalog", "count"]),
             expr,
             filter,
             distinct,
@@ -150,20 +150,20 @@ impl<'a> FuncRewriter<'a> {
         let expr = expr.call_unary(vec!["mz_internal", "mz_avg_promotion"]);
         let expr_squared = expr.clone().multiply(expr.clone());
         let sum_squares = Self::plan_agg(
-            ObjectName::qualified(&["pg_catalog", "sum"]),
+            UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
             expr_squared,
             filter.clone(),
             distinct,
         );
         let sum = Self::plan_agg(
-            ObjectName::qualified(&["pg_catalog", "sum"]),
+            UnresolvedObjectName::qualified(&["pg_catalog", "sum"]),
             expr.clone(),
             filter.clone(),
             distinct,
         );
         let sum_squared = sum.clone().multiply(sum);
         let count = Self::plan_agg(
-            ObjectName::qualified(&["pg_catalog", "count"]),
+            UnresolvedObjectName::qualified(&["pg_catalog", "count"]),
             expr,
             filter,
             distinct,
@@ -378,7 +378,10 @@ impl Desugarer {
                 Select::default()
                     .from(TableWithJoins {
                         relation: TableFactor::Function {
-                            name: ObjectName(vec![Ident::new("mz_catalog"), Ident::new("unnest")]),
+                            name: UnresolvedObjectName(vec![
+                                Ident::new("mz_catalog"),
+                                Ident::new("unnest"),
+                            ]),
                             args: FunctionArgs::Args(vec![right.take()]),
                             alias: Some(TableAlias {
                                 name: Ident::new("_"),

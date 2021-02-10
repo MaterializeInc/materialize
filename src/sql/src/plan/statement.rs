@@ -21,7 +21,7 @@ use expr::GlobalId;
 use ore::collections::CollectionExt;
 use repr::{ColumnType, RelationDesc, ScalarType};
 
-use crate::ast::{Ident, ObjectName, ObjectType, Raw, Statement};
+use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};
 use crate::catalog::{Catalog, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema};
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::normalize;
@@ -299,10 +299,13 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn resolve_default_schema(&self) -> Result<&dyn CatalogSchema, PlanError> {
-        self.resolve_schema(ObjectName::unqualified("public"))
+        self.resolve_schema(UnresolvedObjectName::unqualified("public"))
     }
 
-    pub fn resolve_database(&self, name: ObjectName) -> Result<&dyn CatalogDatabase, PlanError> {
+    pub fn resolve_database(
+        &self,
+        name: UnresolvedObjectName,
+    ) -> Result<&dyn CatalogDatabase, PlanError> {
         if name.0.len() != 1 {
             return Err(PlanError::OverqualifiedDatabaseName(name.to_string()));
         }
@@ -314,7 +317,10 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_database(&name)?)
     }
 
-    pub fn resolve_schema(&self, mut name: ObjectName) -> Result<&dyn CatalogSchema, PlanError> {
+    pub fn resolve_schema(
+        &self,
+        mut name: UnresolvedObjectName,
+    ) -> Result<&dyn CatalogSchema, PlanError> {
         if name.0.len() > 2 {
             return Err(PlanError::OverqualifiedSchemaName(name.to_string()));
         }
@@ -323,12 +329,15 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_schema(database_spec, &schema_name)?)
     }
 
-    pub fn resolve_item(&self, name: ObjectName) -> Result<&dyn CatalogItem, PlanError> {
+    pub fn resolve_item(&self, name: UnresolvedObjectName) -> Result<&dyn CatalogItem, PlanError> {
         let name = normalize::object_name(name)?;
         Ok(self.catalog.resolve_item(&name)?)
     }
 
-    pub fn resolve_function(&self, name: ObjectName) -> Result<&dyn CatalogItem, PlanError> {
+    pub fn resolve_function(
+        &self,
+        name: UnresolvedObjectName,
+    ) -> Result<&dyn CatalogItem, PlanError> {
         let name = normalize::object_name(name)?;
         Ok(self.catalog.resolve_function(&name)?)
     }

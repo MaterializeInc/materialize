@@ -45,7 +45,7 @@ use crate::ast::{
     CreateRoleStatement, CreateSchemaStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateTypeAs, CreateTypeStatement, CreateViewStatement, DataType,
     DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior,
-    ObjectName, ObjectType, Raw, SqlOption, Statement, Value,
+    ObjectType, Raw, SqlOption, Statement, UnresolvedObjectName, Value,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -1357,7 +1357,7 @@ pub fn plan_drop_objects(
 pub fn plan_drop_schema(
     scx: &StatementContext,
     if_exists: bool,
-    names: Vec<ObjectName>,
+    names: Vec<UnresolvedObjectName>,
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
     if names.len() != 1 {
@@ -1401,7 +1401,7 @@ pub fn plan_drop_schema(
 pub fn plan_drop_role(
     scx: &StatementContext,
     if_exists: bool,
-    names: Vec<ObjectName>,
+    names: Vec<UnresolvedObjectName>,
 ) -> Result<Plan, anyhow::Error> {
     let mut out = vec![];
     for name in names {
@@ -1429,7 +1429,7 @@ pub fn plan_drop_items(
     scx: &StatementContext,
     object_type: ObjectType,
     if_exists: bool,
-    names: Vec<ObjectName>,
+    names: Vec<UnresolvedObjectName>,
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
     let items = names
@@ -1590,7 +1590,10 @@ pub fn plan_alter_object_rename(
             let mut proposed_name = name.0;
             let last = proposed_name.last_mut().unwrap();
             *last = to_item_name.clone();
-            if scx.resolve_item(ObjectName(proposed_name)).is_ok() {
+            if scx
+                .resolve_item(UnresolvedObjectName(proposed_name))
+                .is_ok()
+            {
                 bail!("{} is already taken by item in schema", to_item_name)
             }
             Some(entry.id())
