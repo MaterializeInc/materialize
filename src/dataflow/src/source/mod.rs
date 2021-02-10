@@ -1011,7 +1011,9 @@ where
                         consistency_info
                             .partition_metrics
                             .get_mut(&partition)
-                            .unwrap()
+                            .unwrap_or_else(|| {
+                                panic!("partition metrics do not exist for partition {}", partition)
+                            })
                             .offset_received
                             .set(offset.offset);
 
