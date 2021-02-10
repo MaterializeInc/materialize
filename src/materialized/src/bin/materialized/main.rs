@@ -566,7 +566,13 @@ fn handle_panic(panic_info: &PanicInfo) {
         },
     };
 
-    log::error!(target: "panic", "{}: {}\n{:?}", thr_name, msg, Backtrace::new());
+    let location = if let Some(loc) = panic_info.location() {
+        format!("at {}:{}:{}", loc.file(), loc.line(), loc.column())
+    } else {
+        "(no location information)".to_string()
+    };
+
+    log::error!(target: "panic", "{} {}: {}\n{:?}", thr_name, location, msg, Backtrace::new());
     eprintln!(
         r#"materialized encountered an internal error and crashed.
 
