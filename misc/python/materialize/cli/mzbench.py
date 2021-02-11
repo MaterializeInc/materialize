@@ -13,6 +13,7 @@ import argparse
 import csv
 import itertools
 import os
+import pathlib
 import subprocess
 import sys
 import typing
@@ -22,6 +23,14 @@ def rev_parse(git_ref: str) -> str:
     if not git_ref:
         return git_ref
     return subprocess.check_output(["git", "rev-parse", git_ref]).strip().decode()
+
+
+def mzcompose_location() -> str:
+    """Return the absolute path to mzcompose.
+
+    MZ_ROOT is expected to be set via pyactivate.
+    """
+    return pathlib.Path(os.environ["MZ_ROOT"], "bin", "mzcompose")
 
 
 def main(
@@ -35,15 +44,16 @@ def main(
         # Explicitly override the worker counts for the CI benchmark
         worker_counts = [1]
 
+
     setup_benchmark = [
-        "./bin/mzcompose",
+        mzcompose_location(),
         "--mz-find",
         composition,
         "run",
         f"setup-{benchmark}",
     ]
     run_benchmark = [
-        "./bin/mzcompose",
+        mzcompose_location(),
         "--mz-find",
         composition,
         "run",
@@ -76,6 +86,7 @@ def main(
     ):
 
         child_env = os.environ.copy()
+        child_env["MZ_ROOT"] = os.environ["MZ_ROOT"]
         child_env["MZ_WORKERS"] = str(worker_count)
         child_env["MZBUILD_WAIT_FOR_IMAGE"] = "true"
         if git_revision:
