@@ -1,12 +1,8 @@
 ### Debezium envelope details
 
-The Debezium envelope provides a "diff envelope", which describes the decoded
-records' old and new values; this is roughly equivalent to the notion of Change
-Data Capture, or CDC. Materialize can use the data in this diff envelope to
-process data as representing inserts, updates, or deletes.
-
-This envelope is called the Debezium envelope because it's been developed to
-explicitly work with [Debezium].
+The Debezium envelope describes the decoded
+records' old and new values;  this is roughly equivalent to the notion of Change
+Data Capture, or CDC.
 
 To use the Debezium envelope with Materialize, you must configure Debezium with
 your database.
