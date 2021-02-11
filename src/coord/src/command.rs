@@ -75,6 +75,7 @@ pub enum Command {
     NoSessionExecute {
         stmt: Statement<Raw>,
         params: sql::plan::Params,
+        user: String,
         tx: oneshot::Sender<Result<NoSessionExecuteResponse, CoordError>>,
     },
 }

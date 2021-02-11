@@ -44,6 +44,7 @@ differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-
 futures = "0.3.12"
 hex = "0.4.0"
 hyper = { version = "0.14.0", features = ["http1", "server"] }
+hyper-openssl = "0.9.1"
 include_dir = "0.6.0"
 itertools = "0.9.0"
 krb5-src = { version = "0.2.3", features = ["binaries"] }

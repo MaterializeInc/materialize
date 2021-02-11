@@ -28,8 +28,10 @@ impl Server {
     pub fn handle_sql(
         &self,
         req: Request<Body>,
+        user: &str,
     ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
         let coord_client = self.coord_client.clone();
+        let user = user.to_owned();
         async move {
             let res = async {
                 let body = hyper::body::to_bytes(req).await?;
@@ -38,8 +40,7 @@ impl Server {
                     Some(sql) => sql,
                     None => bail!("expected `sql` parameter"),
                 };
-                let res =
-                    query_sql_as_system(coord_client, sql.to_string(), Params::empty()).await?;
+                let res = query_sql(coord_client, sql.to_string(), Params::empty(), user).await?;
                 Ok(Response::builder()
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(serde_json::to_string(&res)?))
@@ -54,18 +55,19 @@ impl Server {
     }
 }
 
-// Execute a single SQL statement as the system user.
-async fn query_sql_as_system(
+/// Executes a single SQL statement as the specified user.
+async fn query_sql(
     mut coord_client: coord::Client,
     sql: String,
     params: Params,
+    user: String,
 ) -> anyhow::Result<SqlResult> {
     let stmts = parse_statements(&sql)?;
     if stmts.len() != 1 {
         bail!("expected exactly 1 statement");
     }
     let stmt = stmts.into_element();
-    let res = coord_client.execute(stmt, params).await?;
+    let res = coord_client.execute(stmt, params, user).await?;
     let rows = match res.response {
         ExecuteResponse::SendingRows(rows) => {
             let response = rows.await;

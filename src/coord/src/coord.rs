@@ -762,10 +762,15 @@ impl Coordinator {
             // run as the system user and are not associated with a user session. Due to
             // that limitation, they do not support all plans (some of which require side
             // effects in the session).
-            Command::NoSessionExecute { stmt, params, tx } => {
+            Command::NoSessionExecute {
+                stmt,
+                params,
+                user,
+                tx,
+            } => {
                 let res = async {
                     let stmt = sql::pure::purify(stmt).await?;
-                    let catalog = self.catalog.for_system_session();
+                    let catalog = self.catalog.for_sessionless_user(user);
                     let desc = describe(&catalog, stmt.clone(), &[], None)?;
                     let pcx = PlanContext::default();
                     let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
