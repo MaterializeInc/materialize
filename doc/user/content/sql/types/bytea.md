@@ -15,7 +15,6 @@ Hex format strings are preceded by `\x` and escape format strings are preceded b
 
 For more information about `bytea`, see the [PostgreSQL binary data type documentation](https://www.postgresql.org/docs/13/datatype-binary.html#id-1.5.7.12.9).
 
-
 Detail | Info
 -------|------
 **Quick Syntax** | `'\xDEADBEEF'` (hex),  `'\000'` (escape)
@@ -43,9 +42,6 @@ Decimal octet value | Description | Escaped input representation | Example | Hex
 39  | single quote |`''''` or `'\047'` | `''''::bytea` | `\x27`
 92  | backslash | `'\\' or '\134'` | `'\\'::bytea` | `\x5c`
 0 to 31 and 127 to 255  | "non-printable" octets | `'\xxx'` (octal value) | `'\001'::bytea` | `\x01`
-
-
-
 
 ## Details
 
