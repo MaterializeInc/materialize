@@ -17,8 +17,6 @@ import subprocess
 import sys
 import typing
 
-import psutil  # type: ignore
-
 
 def rev_parse(git_ref: str) -> str:
     if not git_ref:
@@ -132,7 +130,7 @@ def enumerate_cpu_counts() -> typing.List[int]:
     """
 
     # 15% overhead and count physical cores only
-    max_cpus = round(psutil.cpu_count(logical=False) * 0.85)
+    max_cpus = round(os.cpu_count() * 0.425)
     num_trials = 4
 
     # Yield the fractional points (4/4, 3/4, ...) between max and 0, not including 0
