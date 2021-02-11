@@ -228,8 +228,6 @@ where
         match (&self.tls_mode, self.conn.inner()) {
             (None, Conn::Unencrypted(_)) => (),
             (None, Conn::Ssl(_)) => unreachable!(),
-            (Some(TlsMode::Allow), Conn::Unencrypted(_)) => (),
-            (Some(TlsMode::Allow), Conn::Ssl(_)) => (),
             (Some(TlsMode::Require), Conn::Ssl(_)) => (),
             (Some(TlsMode::Require), Conn::Unencrypted(_))
             | (Some(TlsMode::VerifyUser), Conn::Unencrypted(_)) => {

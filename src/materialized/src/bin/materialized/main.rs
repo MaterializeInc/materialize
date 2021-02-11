@@ -135,9 +135,6 @@ struct Args {
     /// If set to "disable", then materialized rejects HTTP and PostgreSQL
     /// connections that negotiate TLS.
     ///
-    /// If set to "allow", then materialized allows HTTP and PostgreSQL
-    /// connections to negotiate TLS, but does not require that they do so.
-    ///
     /// If set to "require", then materialized requires that all HTTP and
     /// PostgreSQL connections negotiate TLS. Unencrypted connections will be
     /// rejected.
@@ -158,7 +155,7 @@ struct Args {
     /// the --tls-cert option is specified. Otherwise the default is "disable".
     #[structopt(
         long, env = "MZ_TLS_MODE",
-        possible_values = &["disable", "allow", "require", "verify-ca", "verify-full"],
+        possible_values = &["disable", "require", "verify-ca", "verify-full"],
         default_value = "disable",
         default_value_if("tls-cert", None, "verify-full"),
         value_name = "MODE",
@@ -303,12 +300,6 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         None
     } else {
         let mode = match args.tls_mode.as_str() {
-            "allow" => {
-                if args.tls_ca.is_some() {
-                    bail!("cannot specify --tls-mode=allow and --tls-ca simultaneously");
-                }
-                TlsMode::Allow
-            }
             "require" => {
                 if args.tls_ca.is_some() {
                     bail!("cannot specify --tls-mode=require and --tls-ca simultaneously");

@@ -132,8 +132,6 @@ pub struct TlsConfig {
 /// Configures how strictly to enforce TLS encryption and authentication.
 #[derive(Debug, Clone)]
 pub enum TlsMode {
-    /// Permit clients to connect with or without TLS, at their option.
-    Allow,
     /// Require that all clients connect with TLS, but do not require that they
     /// present a client certificate.
     Require,
@@ -191,7 +189,6 @@ pub async fn serve(
             let pgwire_tls = pgwire::TlsConfig {
                 context: context.clone(),
                 mode: match tls_config.mode {
-                    TlsMode::Allow => pgwire::TlsMode::Allow,
                     TlsMode::Require | TlsMode::VerifyCa { .. } => pgwire::TlsMode::Require,
                     TlsMode::VerifyFull { .. } => pgwire::TlsMode::VerifyUser,
                 },
@@ -199,7 +196,6 @@ pub async fn serve(
             let http_tls = http::TlsConfig {
                 context,
                 mode: match tls_config.mode {
-                    TlsMode::Allow => http::TlsMode::Allow,
                     TlsMode::Require | TlsMode::VerifyCa { .. } => http::TlsMode::Require,
                     TlsMode::VerifyFull { .. } => http::TlsMode::AssumeUser,
                 },

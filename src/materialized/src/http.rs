@@ -62,7 +62,6 @@ pub struct TlsConfig {
 
 #[derive(Debug, Clone, Copy)]
 pub enum TlsMode {
-    Allow,
     Require,
     AssumeUser,
 }
@@ -127,8 +126,6 @@ impl Server {
         let user = match (self.tls_mode(), &conn) {
             (None, MaybeHttpsStream::Http(_)) => Ok(SYSTEM_USER.into()),
             (None, MaybeHttpsStream::Https(_)) => unreachable!(),
-            (Some(TlsMode::Allow), MaybeHttpsStream::Http(_)) => Ok(SYSTEM_USER.into()),
-            (Some(TlsMode::Allow), MaybeHttpsStream::Https(_)) => Ok(SYSTEM_USER.into()),
             (Some(TlsMode::Require), MaybeHttpsStream::Http(_)) => Err("HTTPS is required"),
             (Some(TlsMode::Require), MaybeHttpsStream::Https(_)) => Ok(SYSTEM_USER.into()),
             (Some(TlsMode::AssumeUser), MaybeHttpsStream::Http(_)) => Err("HTTPS is required"),

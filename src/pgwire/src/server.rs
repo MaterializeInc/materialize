@@ -51,9 +51,6 @@ pub struct TlsConfig {
 /// Specifies how strictly to enforce TLS encryption and authentication.
 #[derive(Debug, Clone, Copy)]
 pub enum TlsMode {
-    /// Clients may negotiate TLS encryption, but the server will not require
-    /// that they do so.
-    Allow,
     /// Clients must negotiate TLS encryption.
     Require,
     /// Clients must negotiate TLS encryption and supply a certificate whose

@@ -133,9 +133,6 @@ Materialize can use Transport Layer Security (TLS) to:
 
 {{< version-added v0.7.1 >}}
 The `--tls-mode` and `--tls-ca` options.
-
-Prior versions of Materialize implicitly operated in `disable` mode if no
-`--tls-cert` was specified or in `allow` mode if a `--tls-cert` was specified.
 {{< /version-changed >}}
 
 #### Configuration
@@ -146,7 +143,6 @@ the value of the `--tls-mode` option:
 Value         | Description
 --------------|------------
 `disable`     | Disables TLS.<br><br>Materialize will reject HTTPS connections and SQL connections that negotiate TLS. This is the default mode if `--tls-cert` is not specified.
-`allow`       | Permits TLS encryption at the client's option.<br><br>Materialize serves both unencrypted and encrypted traffic over the same TCP port, as specified by [`--listen-addr`](#listen-address). The web UI will be served over HTTPS in addition to HTTP. Incoming SQL connections can negotiate TLS encryption; consult your SQL client's documentation for details.
 `require`     | Requires TLS encryption.<br><br>Materialize will reject HTTP connections and SQL connections that do not negotiate TLS.
 `verify-ca`   | Like `require`, but additionally requires that clients present a certificate.<br><br>Materialize verifies that the client certificate is issued by the certificate authority (CA) specified by the `--tls-ca` option.
 `verify-full` | Like `verify-ca`, but the Common Name (CN) field of the client certificate additionally determines the user who is connecting.<br><br>For HTTPS connections, this user is taken directly from the CN field. For SQL connections, the name of the user in the connection parameters must match the name specified in the CN field.<br><br>This is the default mode if `--tls-cert` is specified.
