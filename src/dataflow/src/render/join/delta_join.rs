@@ -62,11 +62,16 @@ pub struct DeltaPathPlan {
 pub struct DeltaStagePlan {
     /// The relation index into which we will look up.
     lookup_relation: usize,
-    /// The key expressions to use for the stream source.
-    stream_keys: Vec<MirScalarExpr>,
-    /// The key expressions to use for the lookup source.
-    lookup_keys: Vec<MirScalarExpr>,
-    /// The closure to apply to the concatenation of stream and lookup columns.
+    /// The key expressions to use for the streamed relation.
+    ///
+    /// While this starts as a stream of the source relation,
+    /// it evolves through multiple lookups and ceases to be
+    /// the same thing, hence the different name.
+    stream_key: Vec<MirScalarExpr>,
+    /// The key expressions to use for the lookup relation.
+    lookup_key: Vec<MirScalarExpr>,
+    /// The closure to apply to the concatenation of columns
+    /// of the source and lookup relations.
     closure: JoinClosure,
 }
 
@@ -107,16 +112,19 @@ impl DeltaJoinPlan {
             // We use the order specified by the implementation.
             let order = &join_orders[source_relation];
 
-            for (lookup_relation, lookup_keys) in order.iter() {
+            for (lookup_relation, lookup_key) in order.iter() {
                 // rebase the intended key to use global column identifiers.
-                let lookup_keys_rebased = lookup_keys
+                let lookup_key_rebased = lookup_key
                     .iter()
                     .map(|k| input_mapper.map_expr_to_global(k.clone(), *lookup_relation))
                     .collect::<Vec<_>>();
 
-                // Keys for the incoming updates are determined by locating
-                // the elements of `next_keys` among the existing `columns`.
-                let stream_keys = lookup_keys_rebased
+                // Expressions to use as a key for the stream of incoming updates
+                // are determined by locating the elements of `lookup_key` among
+                // the existing bound `columns`. If that cannot be done, the plan
+                // is irrecoverably defective and we panic.
+                // TODO: explicitly validate this before rendering.
+                let stream_key = lookup_key_rebased
                     .iter()
                     .map(|expr| {
                         let mut bound_expr = input_mapper
@@ -131,15 +139,15 @@ impl DeltaJoinPlan {
                 // Introduce new columns and expressions they enable. Form a new closure.
                 let closure = join_build_state.add_columns(
                     input_mapper.global_columns(*lookup_relation),
-                    &lookup_keys_rebased,
+                    &lookup_key_rebased,
                 );
 
                 bound_inputs.push(*lookup_relation);
                 // record the stage plan as next in the path.
                 stage_plans.push(DeltaStagePlan {
                     lookup_relation: *lookup_relation,
-                    stream_keys,
-                    lookup_keys: lookup_keys.clone(),
+                    stream_key,
+                    lookup_key: lookup_key.clone(),
                     closure,
                 });
             }
@@ -230,25 +238,25 @@ where
                         let mut arrangements_neu = std::collections::HashMap::new();
                         for relation in 0..inputs.len() {
                             let order = &orders[relation];
-                            for (other, next_key) in order.iter() {
+                            for (other, lookup_key) in order.iter() {
                                 let subtract = subtract.clone();
                                 // Alt case
                                 if other > &relation {
                                     arrangements_alt
-                                        .entry((&inputs[*other], &next_key[..]))
+                                        .entry((&inputs[*other], &lookup_key[..]))
                                         .or_insert_with(|| {
                                             match self
-                                                .arrangement(&inputs[*other], &next_key[..])
+                                                .arrangement(&inputs[*other], &lookup_key[..])
                                                 .unwrap_or_else(|| {
                                                     panic!(
                                                         "Arrangement alarmingly absent!: {}, {:?}",
                                                         inputs[*other].pretty(),
-                                                        &next_key[..]
+                                                        &lookup_key[..]
                                                     )
                                                 }) {
                                                 ArrangementFlavor::Local(oks, errs) => {
                                                     if local_err_dedup
-                                                        .insert((&inputs[*other], &next_key[..]))
+                                                        .insert((&inputs[*other], &lookup_key[..]))
                                                     {
                                                         scope_errs.push(
                                                             errs.as_collection(|k, _v| k.clone()),
@@ -262,7 +270,7 @@ where
                                                 }
                                                 ArrangementFlavor::Trace(_gid, oks, errs) => {
                                                     if trace_err_dedup
-                                                        .insert((&inputs[*other], &next_key[..]))
+                                                        .insert((&inputs[*other], &lookup_key[..]))
                                                     {
                                                         scope_errs.push(
                                                             errs.as_collection(|k, _v| k.clone()),
@@ -278,20 +286,20 @@ where
                                         });
                                 } else {
                                     arrangements_neu
-                                        .entry((&inputs[*other], &next_key[..]))
+                                        .entry((&inputs[*other], &lookup_key[..]))
                                         .or_insert_with(|| {
                                             match self
-                                                .arrangement(&inputs[*other], &next_key[..])
+                                                .arrangement(&inputs[*other], &lookup_key[..])
                                                 .unwrap_or_else(|| {
                                                     panic!(
                                                         "Arrangement alarmingly absent!: {}, {:?}",
                                                         inputs[*other].pretty(),
-                                                        &next_key[..]
+                                                        &lookup_key[..]
                                                     )
                                                 }) {
                                                 ArrangementFlavor::Local(oks, errs) => {
                                                     if local_err_dedup
-                                                        .insert((&inputs[*other], &next_key[..]))
+                                                        .insert((&inputs[*other], &lookup_key[..]))
                                                     {
                                                         scope_errs.push(
                                                             errs.as_collection(|k, _v| k.clone()),
@@ -305,7 +313,7 @@ where
                                                 }
                                                 ArrangementFlavor::Trace(_gid, oks, errs) => {
                                                     if trace_err_dedup
-                                                        .insert((&inputs[*other], &next_key[..]))
+                                                        .insert((&inputs[*other], &lookup_key[..]))
                                                     {
                                                         scope_errs.push(
                                                             errs.as_collection(|k, _v| k.clone()),
@@ -403,8 +411,8 @@ where
                                 for stage_plan in stage_plans.into_iter() {
                                     let DeltaStagePlan {
                                         lookup_relation,
-                                        stream_keys,
-                                        lookup_keys,
+                                        stream_key,
+                                        lookup_key,
                                         closure,
                                     } = stage_plan;
 
@@ -413,37 +421,37 @@ where
                                     // arrangement, rather than re-wrap each time we use a thing.
                                     let (oks, errs) = if lookup_relation > source_relation {
                                         match arrangements_alt
-                                            .get(&(&inputs[lookup_relation], &lookup_keys[..]))
+                                            .get(&(&inputs[lookup_relation], &lookup_key[..]))
                                             .unwrap()
                                         {
                                             Ok(local) => build_lookup(
                                                 update_stream,
                                                 local.enter_region(region),
-                                                stream_keys,
+                                                stream_key,
                                                 closure,
                                             ),
                                             Err(trace) => build_lookup(
                                                 update_stream,
                                                 trace.enter_region(region),
-                                                stream_keys,
+                                                stream_key,
                                                 closure,
                                             ),
                                         }
                                     } else {
                                         match arrangements_neu
-                                            .get(&(&inputs[lookup_relation], &lookup_keys[..]))
+                                            .get(&(&inputs[lookup_relation], &lookup_key[..]))
                                             .unwrap()
                                         {
                                             Ok(local) => build_lookup(
                                                 update_stream,
                                                 local.enter_region(region),
-                                                stream_keys,
+                                                stream_key,
                                                 closure,
                                             ),
                                             Err(trace) => build_lookup(
                                                 update_stream,
                                                 trace.enter_region(region),
-                                                stream_keys,
+                                                stream_key,
                                                 closure,
                                             ),
                                         }
@@ -566,11 +574,11 @@ where
             key.clone_from(&row_key);
         },
         // TODO(mcsherry): consider `RefOrMut` in `lookup` interface to allow re-use.
-        move |(prev_row, _prev_row_key), diff1, next_row, diff2| {
+        move |(stream_row, _stream_row_key), diff1, lookup_row, diff2| {
             let temp_storage = RowArena::new();
             let mut datums_local = datums.borrow();
-            datums_local.extend(prev_row.iter());
-            datums_local.extend(next_row.iter());
+            datums_local.extend(stream_row.iter());
+            datums_local.extend(lookup_row.iter());
             (
                 closure.apply(&mut datums_local, &temp_storage, &mut row_packer),
                 diff1 * diff2,
