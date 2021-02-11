@@ -17,6 +17,7 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use anyhow::{anyhow, Error};
 use globset::GlobMatcher;
+use metrics::BucketMetrics;
 use notifications::Event;
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
 use rusoto_sqs::{DeleteMessageRequest, GetQueueUrlRequest, ReceiveMessageRequest, Sqs};
@@ -37,8 +38,10 @@ use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
 
+use self::metrics::ScanBucketMetrics;
 use self::notifications::{EventType, TestEvent};
 
+mod metrics;
 mod notifications;
 
 type Out = Vec<u8>;
@@ -111,6 +114,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             let aws_info = s3_conn.aws_info;
             tokio::spawn(download_objects_task(
                 source_name.clone(),
+                source_id.to_string(),
                 keys_rx,
                 dataflow_tx,
                 aws_info.clone(),
@@ -122,6 +126,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
                         log::debug!("reading s3 bucket={} worker={}", bucket, worker_id);
                         tokio::spawn(scan_bucket_task(
                             bucket,
+                            source_id.to_string(),
                             glob.clone(),
                             aws_info.clone(),
                             keys_tx.clone(),
@@ -129,6 +134,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
                     }
                     S3KeySource::SqsNotifications { queue } => {
                         tokio::spawn(read_sqs_task(
+                            source_id.to_string(),
                             glob.clone(),
                             queue,
                             aws_info.clone(),
@@ -168,6 +174,7 @@ struct KeyInfo {
 
 async fn download_objects_task(
     source_name: String,
+    source_id: String,
     mut rx: tokio_mpsc::Receiver<anyhow::Result<KeyInfo>>,
     tx: SyncSender<anyhow::Result<InternalMessage>>,
     aws_info: aws::ConnectInfo,
@@ -184,25 +191,48 @@ async fn download_objects_task(
         }
     };
 
-    let mut seen_buckets: HashMap<String, HashSet<String>> = HashMap::new();
+    struct BucketInfo {
+        keys: HashSet<String>,
+        metrics: BucketMetrics,
+    }
+    let mut seen_buckets: HashMap<String, BucketInfo> = HashMap::new();
 
     while let Some(msg) = rx.recv().await {
         match msg {
             Ok(msg) => {
-                if let Some(keys) = seen_buckets.get_mut(&msg.bucket) {
-                    // the insert by default is justified because that should be the
-                    // common case, we should very rarely get duplicate keys
-                    let is_new = keys.insert(msg.key.clone());
+                if let Some(bi) = seen_buckets.get_mut(&msg.bucket) {
+                    let is_new = bi.keys.insert(msg.key.clone());
                     if !is_new {
+                        bi.metrics.objects_duplicate.inc();
                         continue;
                     }
                 } else {
                     let mut keys = HashSet::new();
                     keys.insert(msg.key.clone());
-                    seen_buckets.insert(msg.bucket.clone(), keys);
-                }
+                    let bi = BucketInfo {
+                        keys,
+                        metrics: BucketMetrics::new(&source_id, &msg.bucket),
+                    };
+                    seen_buckets.insert(msg.bucket.clone(), bi);
+                };
 
-                download_object(&source_name, &tx, &activator, &client, msg.bucket, msg.key).await;
+                let update = download_object(
+                    &source_name,
+                    &tx,
+                    &activator,
+                    &client,
+                    msg.bucket.clone(),
+                    msg.key,
+                )
+                .await;
+
+                if let Some(update) = update {
+                    seen_buckets
+                        .get_mut(&msg.bucket)
+                        .expect("just inserted")
+                        .metrics
+                        .inc(1, update.bytes, update.messages)
+                }
             }
             Err(e) => tx
                 .send(Err(e))
@@ -213,6 +243,7 @@ async fn download_objects_task(
 
 async fn scan_bucket_task(
     bucket: String,
+    source_id: String,
     glob: Option<GlobMatcher>,
     aws_info: aws::ConnectInfo,
     tx: tokio_mpsc::Sender<anyhow::Result<KeyInfo>>,
@@ -231,6 +262,8 @@ async fn scan_bucket_task(
 
     let glob = glob.as_ref();
     let prefix = glob.map(|g| find_prefix(g.glob().glob()));
+
+    let scan_metrics = ScanBucketMetrics::new(&source_id, &bucket);
 
     let mut continuation_token = None;
     let mut allowed_errors = 10;
@@ -263,7 +296,7 @@ async fn scan_bucket_task(
                             .await;
 
                         match res {
-                            Ok(_) => {}
+                            Ok(_) => scan_metrics.objects_discovered.inc(),
                             Err(e) => {
                                 log::debug!("unable to send keys to downloader: {}", e);
                                 break;
@@ -298,6 +331,7 @@ async fn scan_bucket_task(
 }
 
 async fn read_sqs_task(
+    source_id: String,
     glob: Option<GlobMatcher>,
     queue: String,
     aws_info: aws::ConnectInfo,
@@ -339,6 +373,8 @@ async fn read_sqs_task(
         }
     };
 
+    let mut metrics: HashMap<String, ScanBucketMetrics> = HashMap::new();
+
     let mut allowed_errors = 10;
     loop {
         let response = client
@@ -376,6 +412,17 @@ async fn read_sqs_task(
                                     ) {
                                         let key = record.s3.object.key;
                                         if glob.map(|g| g.is_match(&key)).unwrap_or(true) {
+                                            if let Some(m) = metrics.get(&record.s3.bucket.name) {
+                                                m.objects_discovered.inc()
+                                            } else {
+                                                let m = ScanBucketMetrics::new(
+                                                    &source_id,
+                                                    &record.s3.bucket.name,
+                                                );
+                                                m.objects_discovered.inc();
+                                                metrics.insert(record.s3.bucket.name.clone(), m);
+                                            }
+
                                             let ki = Ok(KeyInfo {
                                                 bucket: record.s3.bucket.name,
                                                 key,
@@ -439,6 +486,12 @@ async fn read_sqs_task(
     }
 }
 
+#[derive(Debug)]
+struct DownloadMetricUpdate {
+    bytes: u64,
+    messages: u64,
+}
+
 async fn download_object(
     source_name: &str,
     tx: &SyncSender<anyhow::Result<InternalMessage>>,
@@ -446,7 +499,7 @@ async fn download_object(
     client: &S3Client,
     bucket: String,
     key: String,
-) {
+) -> Option<DownloadMetricUpdate> {
     let obj = match client
         .get_object(GetObjectRequest {
             bucket: bucket.clone(),
@@ -459,7 +512,7 @@ async fn download_object(
         Err(e) => {
             tx.send(Err(anyhow!("Unable to GET object: {}", e)))
                 .unwrap_or_else(|e| log::debug!("unable to send error on stream: {}", e));
-            return;
+            return None;
         }
     };
 
@@ -467,10 +520,11 @@ async fn download_object(
         let mut reader = body.into_async_read();
         // unwrap is safe because content length is not allowed to be negative
         let mut buf = Vec::with_capacity(obj.content_length.unwrap_or(1024).try_into().unwrap());
+        let mut messages = 0;
+
         match reader.read_to_end(&mut buf).await {
             Ok(_) => {
                 let activate = !buf.is_empty();
-                let mut lines = 0;
                 for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
                     if let Err(e) = tx.send(Ok(InternalMessage { record: line })) {
                         log::debug!(
@@ -480,10 +534,10 @@ async fn download_object(
                         );
                         break;
                     } else {
-                        lines += 1;
+                        messages += 1;
                     }
                 }
-                log::trace!("sent {} lines to reader", lines);
+                log::trace!("sent {} messages to reader", messages);
                 if activate {
                     activator.activate().expect("s3 reader activation failed");
                 }
@@ -493,8 +547,14 @@ async fn download_object(
                     .unwrap_or_else(|e| log::debug!("unable to send error on stream: {}", e));
             }
         }
+
+        Some(DownloadMetricUpdate {
+            bytes: buf.len() as u64,
+            messages,
+        })
     } else {
         log::warn!("get object response had no body");
+        None
     }
 }
 
