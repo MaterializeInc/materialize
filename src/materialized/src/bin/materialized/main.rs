@@ -567,12 +567,26 @@ fn handle_panic(panic_info: &PanicInfo) {
     };
 
     let location = if let Some(loc) = panic_info.location() {
-        format!("at '{}'", loc)
+        loc.to_string()
     } else {
-        "(no location information)".to_string()
+        "<unknown>".to_string()
     };
 
-    log::error!(target: "panic", "{}: {} {}\n{:?}", thr_name, msg, location, Backtrace::new());
+    log::error!(
+        target: "panic",
+        "{msg}
+thread: {thr_name}
+location: {location}
+version: {version} ({sha})
+backtrace:
+{backtrace:?}",
+        msg = msg,
+        thr_name = thr_name,
+        location = location,
+        version = materialized::BUILD_INFO.version,
+        sha = materialized::BUILD_INFO.sha,
+        backtrace = Backtrace::new(),
+    );
     eprintln!(
         r#"materialized encountered an internal error and crashed.
 
@@ -580,8 +594,7 @@ We rely on bug reports to diagnose and fix these errors. Please
 copy and paste the above details and file a report at:
 
     https://materialize.com/s/bug
-
-To protect your privacy, we do not collect crash reports automatically."#,
+"#,
     );
     process::exit(1);
 }
