@@ -74,7 +74,7 @@ impl DeltaJoinPlan {
     /// Create a new join plan from the required arguments.
     pub fn create_from(
         equivalences: &[Vec<MirScalarExpr>],
-        join_orders: &Vec<Vec<(usize, Vec<MirScalarExpr>)>>,
+        join_orders: &[Vec<(usize, Vec<MirScalarExpr>)>],
         input_mapper: JoinInputMapper,
         map_filter_project: MapFilterProject,
     ) -> Self {
@@ -186,8 +186,12 @@ where
         {
             // Step one is to plan the execution of the delta query.
             let input_mapper = JoinInputMapper::new(inputs);
-            let join_plan =
-                DeltaJoinPlan::create_from(equivalences, orders, input_mapper, map_filter_project);
+            let join_plan = DeltaJoinPlan::create_from(
+                equivalences,
+                &orders[..],
+                input_mapper,
+                map_filter_project,
+            );
 
             for input in inputs.iter() {
                 self.ensure_rendered(input, scope, worker_index);
