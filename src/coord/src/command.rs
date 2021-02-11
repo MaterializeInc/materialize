@@ -12,6 +12,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use derivative::Derivative;
+use tokio::sync::{mpsc, oneshot};
 
 use dataflow_types::PeekResponse;
 use repr::Row;
@@ -28,7 +29,7 @@ pub enum Command {
     Startup {
         session: Session,
         cancel_tx: Arc<watch::Sender<Cancelled>>,
-        tx: futures::channel::oneshot::Sender<Response<Vec<StartupMessage>>>,
+        tx: oneshot::Sender<Response<Vec<StartupMessage>>>,
     },
 
     Declare {
@@ -36,7 +37,7 @@ pub enum Command {
         stmt: Statement<Raw>,
         param_types: Vec<Option<pgrepr::Type>>,
         session: Session,
-        tx: futures::channel::oneshot::Sender<Response<()>>,
+        tx: oneshot::Sender<Response<()>>,
     },
 
     Describe {
@@ -44,19 +45,19 @@ pub enum Command {
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
         session: Session,
-        tx: futures::channel::oneshot::Sender<Response<()>>,
+        tx: oneshot::Sender<Response<()>>,
     },
 
     Execute {
         portal_name: String,
         session: Session,
-        tx: futures::channel::oneshot::Sender<Response<ExecuteResponse>>,
+        tx: oneshot::Sender<Response<ExecuteResponse>>,
     },
 
     Commit {
         action: EndTransactionAction,
         session: Session,
-        tx: futures::channel::oneshot::Sender<Response<ExecuteResponse>>,
+        tx: oneshot::Sender<Response<ExecuteResponse>>,
     },
 
     CancelRequest {
@@ -64,7 +65,7 @@ pub enum Command {
     },
 
     DumpCatalog {
-        tx: futures::channel::oneshot::Sender<String>,
+        tx: oneshot::Sender<String>,
     },
 
     Terminate {
@@ -74,7 +75,7 @@ pub enum Command {
     NoSessionExecute {
         stmt: Statement<Raw>,
         params: sql::plan::Params,
-        tx: futures::channel::oneshot::Sender<Result<NoSessionExecuteResponse, CoordError>>,
+        tx: oneshot::Sender<Result<NoSessionExecuteResponse, CoordError>>,
     },
 }
 
@@ -90,7 +91,7 @@ pub struct NoSessionExecuteResponse {
     pub response: ExecuteResponse,
 }
 
-pub type RowsFuture = Pin<Box<dyn Future<Output = Result<PeekResponse, comm::Error>> + Send>>;
+pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponse> + Send>>;
 
 /// Notifications that may be generated in response to [`Command::Startup`].
 #[derive(Debug)]
@@ -116,7 +117,6 @@ pub enum ExecuteResponse {
     ClosedCursor,
     CopyTo {
         format: sql::plan::CopyFormat,
-        #[derivative(Debug = "ignore")]
         resp: Box<ExecuteResponse>,
     },
     /// The requested database was created.
@@ -201,7 +201,7 @@ pub enum ExecuteResponse {
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
     Tailing {
-        rx: comm::mpsc::Receiver<Vec<Row>>,
+        rx: mpsc::UnboundedReceiver<Vec<Row>>,
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),

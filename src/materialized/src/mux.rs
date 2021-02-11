@@ -10,7 +10,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::future::TryFutureExt;
 use futures::stream::{Stream, StreamExt};
 use log::error;
 use tokio::io::{self, AsyncWriteExt};
@@ -158,25 +157,5 @@ impl ConnectionHandler for http::Server {
         // ourselves (i.e., silently infinitely recurse) if the name or type of
         // `http::Server::handle_connection` changes.
         http::Server::handle_connection(self, conn).await
-    }
-}
-
-#[async_trait]
-impl ConnectionHandler for comm::Switchboard<SniffedStream<TcpStream>> {
-    fn name(&self) -> &str {
-        "switchboard"
-    }
-
-    fn match_handshake(&self, buf: &[u8]) -> bool {
-        comm::protocol::match_handshake(buf)
-    }
-
-    async fn handle_connection(&self, conn: SniffedStream<TcpStream>) -> Result<(), anyhow::Error> {
-        // Using fully-qualified syntax means we won't accidentally call
-        // ourselves (i.e., silently infinitely recurse) if the name or type of
-        // `comm::Switchboard::handle_connection` changes.
-        comm::Switchboard::handle_connection(self, conn)
-            .err_into()
-            .await
     }
 }

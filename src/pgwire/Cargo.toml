@@ -11,7 +11,6 @@ async-trait = "0.1.42"
 byteorder = "1.4.2"
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-comm = { path = "../comm" }
 coord = { path = "../coord" }
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
@@ -30,4 +29,5 @@ repr = { path = "../repr" }
 sql = { path = "../sql" }
 tokio = "1.2.0"
 tokio-openssl = "0.6.1"
+tokio-stream = "0.1.3"
 tokio-util = { version = "0.6.3", features = ["codec"] }

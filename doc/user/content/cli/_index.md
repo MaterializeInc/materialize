@@ -11,7 +11,6 @@ The `materialized` binary supports the following command line flags:
 
 Flag | Default | Modifies
 -----|---------|----------
-[`--address-file`](#horizontally-scaled-clusters) | N/A |  Text file containing addresses of all coordinating Materialize nodes
 [`--cache-max-pending-records`](#source-cache) | 1000000 | Maximum number of input records buffered before flushing immediately to disk.
 [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted
 [`--differential-idle-merge-effort`](#dataflow-tuning) | N/A | *Advanced.* Amount of compaction to perform when idle.
@@ -20,8 +19,6 @@ Flag | Default | Modifies
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
-[`--process`](#horizontally-scaled-clusters) | 0 | This node's ID when coordinating with other Materialize nodes
-[`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
 [`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
 [`--tls-key`](#tls-encryption) | N/A | Path to TLS private key file
@@ -97,29 +94,6 @@ workers that have to fight for physical resources will only block each other.
 
 Example: an `r5d.4xlarge` instance has 16 VCPUs, or 8 physical cores. The
 recommended worker setting on this VM is `7`.
-
-### Horizontally scaled clusters
-
-{{< warning >}}
-Note that multi-node Materialize clusters are **not** supported by Materialize,
-and are not permitted in production under the free usage BSL license without a
-separate commercial agreement with Materialize.
-{{< /warning >}}
-
-`--processes` controls the total number of nodes in a horizontally-scaled
-Materialize cluster. The IP addresses of each node should be specified in a
-file, one per line, which is specified by the `--address-file` flag.
-
-When each node is started, it must additionally be told which `--process` it is,
-from `0` to `processes - 1`.
-
-You should not attempt running a horizontally-scaled Materialize cluster until
-you have maxed-out vertical-scaling. Multi-node clusters are not particulary
-efficient. An `x1.32xlarge` instance on AWS has 128 VCPUs, and will be superior
-in every way (reliability, cost, ease-of-use) to a multi-node Materialize
-cluster with the same total number of VCPUs. It is our performance goal that
-Materialize under that configuration be able to handle every conceivable
-streaming workload that you may wish to throw at it.
 
 ### Listen address
 

@@ -16,8 +16,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::hashable::Hashable;
-use futures::executor::block_on;
-use futures::sink::SinkExt;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -33,9 +31,10 @@ use expr::{GlobalId, PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{debug, error, info, log_enabled, warn};
 use repr::{CachedRecord, CachedRecordIter, Timestamp};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::source::cache::{CacheSender, RecordFileMetadata, WorkerCacheData};
+use crate::source::cache::{RecordFileMetadata, WorkerCacheData};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
@@ -407,7 +406,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
 
     fn cache_message(
         &self,
-        caching_tx: &mut Option<CacheSender>,
+        caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
         message: &SourceMessage<Vec<u8>>,
         timestamp: Timestamp,
         predecessor: Option<MzOffset>,
@@ -436,11 +435,11 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 },
             });
 
-            let mut connector = caching_tx.as_mut();
-
-            // TODO(rkhaitan): revisit whether this architecture of blocking
-            // within a dataflow operator makes sense.
-            block_on(connector.send(cache_data)).unwrap();
+            // TODO(benesch): the lack of backpressure here can result in
+            // unbounded memory usage.
+            caching_tx
+                .send(cache_data)
+                .expect("caching receiver should never drop first");
         }
     }
 }

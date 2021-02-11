@@ -9,7 +9,6 @@ publish = false
 anyhow = "1.0.38"
 aws-util = { path = "../aws-util" }
 ccsr = { path = "../ccsr" }
-comm = { path = "../comm" }
 expr = { path = "../expr" }
 globset = { version = "0.4.0", features = ["serde1"] }
 interchange = { path = "../interchange" }
@@ -21,6 +20,7 @@ rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 serde = { version = "1.0.123", features = ["derive"] }
 serde_regex = "1.1.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+tokio = { version = "1.1.0" }
 url = { version = "2.2.0", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 

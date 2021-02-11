@@ -112,7 +112,6 @@ use differential_dataflow::operators::arrange::arrangement::{Arrange, ArrangeByK
 use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
 use differential_dataflow::operators::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
-use futures::executor::block_on;
 use timely::communication::Allocate;
 use timely::dataflow::operators::exchange::Exchange;
 use timely::dataflow::operators::to_stream::ToStream;
@@ -121,6 +120,7 @@ use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc;
 
 use dataflow_types::*;
 use expr::{GlobalId, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, SourceInstanceId};
@@ -170,8 +170,8 @@ pub struct RenderState {
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
-    /// Sender to give data to be cahed.
-    pub caching_tx: Option<comm::mpsc::Sender<CacheMessage>>,
+    /// Sender to give data to be cached.
+    pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
 }
 
 pub fn build_dataflow<A: Allocate>(
@@ -310,7 +310,7 @@ where
                 let caching_tx = if let (true, Some(caching_tx)) =
                     (connector.caching_enabled(), render_state.caching_tx.clone())
                 {
-                    Some(block_on(caching_tx.connect()).expect("failed to connect caching tx"))
+                    Some(caching_tx)
                 } else {
                     None
                 };

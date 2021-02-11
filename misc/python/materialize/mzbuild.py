@@ -316,10 +316,6 @@ class CargoTest(CargoPreImage):
                 manifest.write(f"{slug} {crate_path}\n")
         shutil.move(str(self.path / "materialized"), self.path / "tests")
         shutil.move(str(self.path / "testdrive"), self.path / "tests")
-        shutil.copy(
-            self.rd.xcargo_target_dir() / "debug" / "examples" / "pingpong",
-            self.path / "tests" / "examples",
-        )
         shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")
 
     def inputs(self) -> Set[str]:

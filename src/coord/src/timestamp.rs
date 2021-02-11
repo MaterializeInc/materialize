@@ -33,6 +33,7 @@ use rdkafka::consumer::{BaseConsumer, Consumer};
 use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 use rusoto_kinesis::KinesisClient;
+use tokio::sync::mpsc;
 
 use aws_util::kinesis;
 use dataflow::source::read_file_task;
@@ -178,7 +179,7 @@ struct ByoTimestampConsumer {
 impl ByoTimestampConsumer {
     fn update_and_send(
         &mut self,
-        tx: &futures::channel::mpsc::UnboundedSender<coord::Message>,
+        tx: &mpsc::UnboundedSender<coord::Message>,
         sid: SourceInstanceId,
         partition_count: i32,
         partition: PartitionId,
@@ -195,7 +196,7 @@ impl ByoTimestampConsumer {
             // timestamp message to the coord/worker
 
             // This can only happen for Kafka sources
-            tx.unbounded_send(coord::Message::AdvanceSourceTimestamp(
+            tx.send(coord::Message::AdvanceSourceTimestamp(
                 coord::AdvanceSourceTimestamp {
                     id: sid,
                     update: TimestampSourceUpdate::BringYourOwn(
@@ -212,7 +213,7 @@ impl ByoTimestampConsumer {
         self.current_partition_count = partition_count;
         self.last_ts = timestamp;
         self.last_partition_ts.insert(partition.clone(), timestamp);
-        tx.unbounded_send(coord::Message::AdvanceSourceTimestamp(
+        tx.send(coord::Message::AdvanceSourceTimestamp(
             coord::AdvanceSourceTimestamp {
                 id: sid,
                 update: TimestampSourceUpdate::BringYourOwn(
@@ -259,7 +260,7 @@ struct TimestampingState {
     /// Flag is set when timestamping for this source has been dropped
     stop: AtomicBool,
     /// Channel through which messages can be sent to the coordinator
-    coordinator_channel: futures::channel::mpsc::UnboundedSender<coord::Message>,
+    coordinator_channel: mpsc::UnboundedSender<coord::Message>,
 }
 
 use std::fmt::Display;
@@ -460,7 +461,7 @@ pub struct Timestamper {
     byo_sources: HashMap<SourceInstanceId, ByoTimestampConsumer>,
 
     /// Channel through which timestamp data updates are communicated through the coordinator
-    tx: futures::channel::mpsc::UnboundedSender<coord::Message>,
+    tx: mpsc::UnboundedSender<coord::Message>,
     /// Channel through which to timestamp metadata updates are received from the coordinator
     /// (to add or remove the timestamping of a source)
     rx: std::sync::mpsc::Receiver<TimestampMessage>,
@@ -528,7 +529,7 @@ fn parse_byo(record: Vec<(String, Value)>) -> (String, i32, PartitionId, u64, Mz
 /// Extracts Materialize timestamp updates from a Debezium consistency record.
 fn generate_ts_updates_from_debezium(
     id: &SourceInstanceId,
-    tx: &futures::channel::mpsc::UnboundedSender<coord::Message>,
+    tx: &mpsc::UnboundedSender<coord::Message>,
     byo_consumer: &mut ByoTimestampConsumer,
     value: Value,
 ) {
@@ -548,7 +549,7 @@ fn generate_ts_updates_from_debezium(
                     byo_consumer.last_offset.offset += count;
                     // Debezium consistency topic should only work for single-partition
                     // topics
-                    tx.unbounded_send(coord::Message::AdvanceSourceTimestamp(
+                    tx.send(coord::Message::AdvanceSourceTimestamp(
                         coord::AdvanceSourceTimestamp {
                             id: *id,
                             update: TimestampSourceUpdate::BringYourOwn(
@@ -733,7 +734,7 @@ fn identify_consistency_format(enc: DataEncoding, env: SourceEnvelope) -> Consis
 impl Timestamper {
     pub fn new(
         config: &TimestampConfig,
-        tx: futures::channel::mpsc::UnboundedSender<coord::Message>,
+        tx: mpsc::UnboundedSender<coord::Message>,
         rx: std::sync::mpsc::Receiver<TimestampMessage>,
     ) -> Self {
         info!(
@@ -867,7 +868,7 @@ impl Timestamper {
                                         // This can currently only happen in Kafka streams as File/OCF sources
                                         // do not support partitions
                                         self.tx
-                                            .unbounded_send(coord::Message::AdvanceSourceTimestamp(
+                                            .send(coord::Message::AdvanceSourceTimestamp(
                                                 coord::AdvanceSourceTimestamp {
                                                     id: *id,
                                                     update: TimestampSourceUpdate::BringYourOwn(
@@ -887,7 +888,7 @@ impl Timestamper {
                                         .last_partition_ts
                                         .insert(partition.clone(), timestamp);
                                     self.tx
-                                        .unbounded_send(coord::Message::AdvanceSourceTimestamp(
+                                        .send(coord::Message::AdvanceSourceTimestamp(
                                             coord::AdvanceSourceTimestamp {
                                                 id: *id,
                                                 update: TimestampSourceUpdate::BringYourOwn(
@@ -1429,7 +1430,7 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
                         current_partition_count = new_partition_count;
                         c.coordination_state
                             .coordinator_channel
-                            .unbounded_send(coord::Message::AdvanceSourceTimestamp(
+                            .send(coord::Message::AdvanceSourceTimestamp(
                                 coord::AdvanceSourceTimestamp {
                                     id: c.id,
                                     update: TimestampSourceUpdate::RealTime(

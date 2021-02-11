@@ -68,7 +68,7 @@ async fn query_sql_as_system(
     let res = coord_client.execute(stmt, params).await?;
     let rows = match res.response {
         ExecuteResponse::SendingRows(rows) => {
-            let response = rows.await?;
+            let response = rows.await;
             response
         }
         _ => bail!("unexpected ExecuteResponse type"),

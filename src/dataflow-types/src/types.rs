@@ -24,7 +24,9 @@ use log::warn;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
+use tokio::sync::mpsc;
 use url::Url;
+use uuid::Uuid;
 
 use aws_util::aws;
 use expr::{GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, PartitionId};
@@ -32,7 +34,6 @@ use interchange::avro::{self, DebeziumDeduplicationStrategy};
 use interchange::protobuf::{decode_descriptors, validate_descriptors};
 use kafka_util::KafkaAddrs;
 use repr::{ColumnName, ColumnType, RelationDesc, RelationType, Row, ScalarType, Timestamp};
-use uuid::Uuid;
 
 /// The response from a `Peek`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -73,7 +74,7 @@ pub struct BuildDesc {
 }
 
 /// A description of a dataflow to construct and results to surface.
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct DataflowDesc {
     pub source_imports: BTreeMap<GlobalId, SourceDesc>,
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
@@ -465,7 +466,7 @@ impl SourceDesc {
 }
 
 /// A sink for updates to a relational collection.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct SinkDesc {
     pub from: GlobalId,
     pub from_desc: RelationDesc,
@@ -681,7 +682,7 @@ pub enum S3KeySource {
     Scan { bucket: String },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub enum SinkConnector {
     Kafka(KafkaSinkConnector),
     Tail(TailSinkConnector),
@@ -756,9 +757,10 @@ impl SinkConnector {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct TailSinkConnector {
-    pub tx: comm::mpsc::Sender<Vec<Row>>,
+    #[serde(skip)]
+    pub tx: mpsc::UnboundedSender<Vec<Row>>,
     pub frontier: Antichain<Timestamp>,
     pub strict: bool,
     pub emit_progress: bool,

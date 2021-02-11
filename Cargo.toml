@@ -8,7 +8,6 @@ members = [
     "src/aws-util",
     "src/build-info",
     "src/ccsr",
-    "src/comm",
     "src/coord",
     "src/dataflow-bin",
     "src/dataflow-types",
