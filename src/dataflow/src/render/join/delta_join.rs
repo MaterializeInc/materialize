@@ -51,10 +51,14 @@ pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     source_relation: usize,
     /// An initial closure to apply before any stages.
+    ///
+    /// Values of `None` indicate the identity closure.
     initial_closure: Option<JoinClosure>,
     /// A *sequence* of stages to apply one after the other.
     stage_plans: Vec<DeltaStagePlan>,
     /// A concluding closure to apply after the last stage.
+    ///
+    /// Values of `None` indicate the identity closure.
     final_closure: Option<JoinClosure>,
 }
 
@@ -71,7 +75,7 @@ pub struct DeltaStagePlan {
     /// The key expressions to use for the lookup relation.
     lookup_key: Vec<MirScalarExpr>,
     /// The closure to apply to the concatenation of columns
-    /// of the source and lookup relations.
+    /// of the stream and lookup relations.
     closure: JoinClosure,
 }
 
@@ -100,7 +104,7 @@ impl DeltaJoinPlan {
                 &map_filter_project,
             );
 
-            // Initial action we can take on the stream before joining.
+            // Initial action we can take on the source relation before joining.
             let initial_closure = join_build_state.extract_closure();
             let initial_closure = if initial_closure.is_identity() {
                 None
