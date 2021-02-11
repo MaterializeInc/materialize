@@ -13,12 +13,6 @@ $ set-sql-timeout duration=125ms
 # Using mz_logical_timestamp() with a VIEW source
 #
 
-> DROP VIEW IF EXISTS two_bounds_two_cols CASCADE
-
-> DROP VIEW IF EXISTS two_ts
-
-> DROP TABLE IF EXISTS two_ts
-
 > CREATE VIEW one_ts (ts) AS VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(NULL)
 
 > CREATE MATERIALIZED VIEW one_bound1 AS SELECT * FROM one_ts WHERE mz_logical_timestamp() >= ts
