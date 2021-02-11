@@ -51,11 +51,11 @@ pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     source_relation: usize,
     /// An initial closure to apply before any stages.
-    initial_closure: JoinClosure,
+    initial_closure: Option<JoinClosure>,
     /// A *sequence* of stages to apply one after the other.
     stage_plans: Vec<DeltaStagePlan>,
     /// A concluding closure to apply after the last stage.
-    final_closure: JoinClosure,
+    final_closure: Option<JoinClosure>,
 }
 
 /// A delta query stage performs a stream lookup into an arrangement.
@@ -102,6 +102,11 @@ impl DeltaJoinPlan {
 
             // Initial action we can take on the stream before joining.
             let initial_closure = join_build_state.extract_closure();
+            let initial_closure = if initial_closure.is_identity() {
+                None
+            } else {
+                Some(initial_closure)
+            };
 
             // Sequence of steps to apply.
             let mut stage_plans = Vec::with_capacity(number_of_inputs - 1);
@@ -153,6 +158,12 @@ impl DeltaJoinPlan {
             }
             // determine a final closure, and complete the path plan.
             let final_closure = join_build_state.complete();
+            let final_closure = if final_closure.is_identity() {
+                None
+            } else {
+                Some(final_closure)
+            };
+
             // Insert the path plan.
             join_plan.path_plans.push(DeltaPathPlan {
                 source_relation,
@@ -385,7 +396,7 @@ where
                                 };
 
                                 // Apply what `closure` we are able to, and record any errors.
-                                if !initial_closure.is_identity() {
+                                if let Some(initial_closure) = initial_closure {
                                     let (stream, errs) = update_stream.flat_map_fallible({
                                         let mut datums = DatumVec::new();
                                         let mut row_packer = RowPacker::new();
@@ -463,7 +474,7 @@ where
                                 // We have completed the join building, but may have work remaining.
                                 // For example, we may have expressions not pushed down (e.g. literals)
                                 // and projections that could not be applied (e.g. column repetition).
-                                if !final_closure.is_identity() {
+                                if let Some(final_closure) = final_closure {
                                     let (updates, errors) = update_stream.flat_map_fallible({
                                         // Reuseable allocation for unpacking.
                                         let mut datums = DatumVec::new();
