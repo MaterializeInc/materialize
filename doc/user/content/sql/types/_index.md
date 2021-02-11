@@ -21,6 +21,7 @@ Type | Aliases | Use | Size (bytes) | Catalog name | Syntax
 -----|---------|-----|--------------|----------------|-----
 [`bigint`](integer) | `int8` | Large signed integer | 8 | Named | `123`
 [`boolean`](boolean) | `bool` | State of `TRUE` or `FALSE` | 1 | Named | `TRUE`, `FALSE`
+[`bytea`](bytea) | `bytea` | Unicode string | Variable | Named | `'\xDEADBEEF'` or `'\\000'`
 [`date`](date) | | Date without a specified time | 4 | Named | `DATE '2007-02-01'`
 [`double precision`](float) | `float`, `float8`, `double` | Double precision floating-point number | 8 | Named | `1.23`
 [`integer`](integer) | `int`, `int4` | Signed integer | 4 | Named | `123`
