@@ -34,7 +34,7 @@ import os
 import pprint
 import sys
 
-import psycopg3
+import asyncpg
 import tornado.ioloop
 import tornado.platform.asyncio
 import tornado.web
@@ -84,10 +84,6 @@ class View:
         for closed_listener in closed_listeners:
             self.listeners.remove(closed_listener)
 
-    def mzql_connection(self):
-        """Return a psycopg3.AsyncConnection object to our Materialize database."""
-        return psycopg3.AsyncConnection.connect(self.dsn)
-
     def remove_listener(self, conn):
         """Remove this connection from the list that will be notified on new messages."""
         try:
@@ -101,38 +97,40 @@ class View:
         Delegates handling of the actual query / rows to `tail_view_inner`.
         """
         log.info('Spawning coroutine to TAIL VIEW "%s"', self.view_name)
-        async with await self.mzql_connection() as conn:
-            async with await conn.cursor() as cursor:
-                await self.tail_view_inner(cursor)
+        conn = await asyncpg.connect(self.dsn)
+        async with conn.transaction():
+            query = f"DECLARE cur CURSOR FOR TAIL {self.view_name} WITH (PROGRESS)"
+            await conn.execute(query)
+            await self.tail_view_inner(conn)
 
-    async def tail_view_inner(self, cursor):
+    async def tail_view_inner(self, conn):
         """Read rows from TAIL, converting them to updates and broadcasting to listeners.
 
         :Params:
-            - `cursor`: A psycopg3 cursor that is configured to read rows from a TAIL query.
+            - `conn`: An asyncpg cursor that is configured to read rows from a TAIL query.
         """
         inserted = []
         deleted = []
-        query = f"TAIL {self.view_name} WITH (PROGRESS)"
-        async for (timestamp, progressed, diff, *columns) in cursor.stream(query):
-            # The progressed column serves as a synchronization primitive indicating that all
-            # rows for an update have been read. We should publish this update.
-            if progressed:
-                self.update(deleted, inserted, timestamp)
-                inserted = []
-                deleted = []
-                continue
+        while True:
+            for (timestamp, progressed, diff, *columns) in await conn.fetch("FETCH ALL cur"):
+                # The progressed column serves as a synchronization primitive indicating that all
+                # rows for an update have been read. We should publish this update.
+                if progressed:
+                    self.update(deleted, inserted, timestamp)
+                    inserted = []
+                    deleted = []
+                    continue
 
-            # Simplify our implementation by creating "diff" copies of each row instead
-            # of tracking counts per row
-            if diff < 0:
-                deleted.extend([columns] * abs(diff))
-            elif diff > 0:
-                inserted.extend([columns] * diff)
-            else:
-                raise ValueError(
-                    f"Bad data in TAIL: {timestamp}, {progressed}, {diff}, {columns}"
-                )
+                # Simplify our implementation by creating "diff" copies of each row instead
+                # of tracking counts per row
+                if diff < 0:
+                    deleted.extend([columns] * abs(diff))
+                elif diff > 0:
+                    inserted.extend([columns] * diff)
+                else:
+                    raise ValueError(
+                        f"Bad data in TAIL: {timestamp}, {progressed}, {diff}, {columns}"
+                    )
 
     def update(self, deleted, inserted, timestamp):
         """Update our internal view based on this diff and broadcast the update to listeners.
