@@ -16,16 +16,17 @@ WORKDIR /scratch
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf \
+    automake \
+    bison \
     ca-certificates \
     curl \
     file \
     flex \
-    libc-dev \
     gawk \
     g++ \
     gcc \
-    gnupg2 \
     help2man \
+    libc-dev \
     libncurses-dev \
     libtool-bin \
     make \
@@ -34,18 +35,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     xz-utils
 
-COPY crosstool.defconfig crosstool.asc ./
+COPY crosstool.defconfig ./
 
-RUN gpg --import crosstool.asc \
-    && rm crosstool.asc \
-    && echo "trusted-key 7848649B11D618A4" >> ~/.gnupg/gpg.conf \
-    && mkdir crosstool \
-    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.24.0.tar.xz > crosstool.tar.xz \
-    && curl -fsSL http://crosstool-ng.org/download/crosstool-ng/crosstool-ng-1.24.0.tar.xz.sig > crosstool.sig \
-    && gpg --verify crosstool.sig crosstool.tar.xz \
-    && tar -xf crosstool.tar.xz -C crosstool --strip-components=1 \
-    && rm crosstool.sig crosstool.tar.xz \
-    && (cd crosstool && ./configure && make install) \
+# TODO(benesch): switch back to an official crosstool-NG release when the
+# official releases support GCC 9.0.
+
+RUN mkdir crosstool \
+    && curl -fsSL https://github.com/crosstool-ng/crosstool-ng/archive/5b0e0127e189c08e433ae25dbceead63da5ef2d7.tar.gz > crosstool.tar.gz \
+    && tar -xf crosstool.tar.gz -C crosstool --strip-components=1 \
+    && rm crosstool.tar.gz \
+    && (cd crosstool && ./bootstrap && ./configure && make install) \
     && rm -rf crosstool \
     && DEFCONFIG=crosstool.defconfig ct-ng defconfig \
     && rm crosstool.defconfig \
@@ -133,13 +132,19 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=1.28.0" cargo-deb \
     && cargo install --root /usr/local --version "=0.8.4" cargo-deny
 
-# Step 2d. Set LC_CTYPE to allow UTF-8, for Python 3.6. This will become
+# Step 2d. Link Rust's internal lld into the cross-compiling sysroot. This
+# avoids bringing in an extra copy of LLVM via `apt install lld`.
+
+RUN ln -s /usr/local/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld /opt/x-tools/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-ld.lld \
+    && ln -s /usr/local/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld /opt/x-tools/x86_64-unknown-linux-gnu/bin/x86_64-unknown-linux-gnu-lld
+
+# Step 2e. Set LC_CTYPE to allow UTF-8, for Python 3.6. This will become
 # unnecessary when we upgrade to Python 3.7+.
 # See: https://www.python.org/dev/peps/pep-0538/
 
 ENV LC_CTYPE=C.UTF-8
 
-# Step 2e. Install Python dependencies. These are so quick to install and change
+# Step 2f. Install Python dependencies. These are so quick to install and change
 # frequently enough that it makes sense to install them last.
 
 COPY requirements.txt requirements-dev.txt /workdir/
@@ -149,7 +154,7 @@ RUN pip3 install \
     -r /workdir/requirements-dev.txt \
     && rm /workdir/requirements*.txt
 
-# Step 2f. Install docs site dependencies. These are towards the end for the
+# Step 2g. Install docs site dependencies. These are towards the end for the
 # same reason as the Python dependencies.
 
 RUN curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.12.1/htmltest_0.12.1_linux_amd64.tar.gz > htmltest.tar.gz \
@@ -161,20 +166,22 @@ RUN curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.12.1/htmlte
     && tar -xzf hugo.tar.gz -C /usr/local/bin hugo \
     && rm hugo.tar.gz
 
-# Step 2g. Hardcode some known SSH hosts, or else SSH will ask whether the host
+# Step 2h. Hardcode some known SSH hosts, or else SSH will ask whether the host
 # is trustworthy on the first connection.
 
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 
-# Step 2h. Set the necessary environment variables to point Cargo and C/C++
+# Step 2i. Set the necessary environment variables to point Cargo and C/C++
 # build systems at our cross-compiling toolchain.
 
 ENV AR=x86_64-unknown-linux-gnu-ar
-ENV LD=x86_64-unknown-linux-gnu-ld
+ENV LD=x86_64-unknown-linux-gnu-lld
 ENV RANLIB=x86_64-unknown-linux-gnu-ranlib
 ENV CPP=x86_64-unknown-linux-gnu-cpp
 ENV CC=x86_64-unknown-linux-gnu-cc
 ENV CXX=x86_64-unknown-linux-gnu-c++
+ENV LDFLAGS=-fuse-ld=lld
+ENV RUSTFLAGS="-C link-arg=-Wl,--compress-debug-sections=zlib -C link-arg=-fuse-ld=lld"
 ENV TARGET_CC=$CC
 ENV TARGET_CXX=$CXX
 ENV PATH=/opt/x-tools/x86_64-unknown-linux-gnu/bin:$PATH
@@ -182,17 +189,17 @@ ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
 # https://github.com/rust-lang/cargo/issues/7529
 ENV RUSTDOCFLAGS="-C linker=x86_64-unknown-linux-gnu-cc"
 
-# Step 2i. Set a environment variable that tools can check to see if they're in
+# Step 2j. Set a environment variable that tools can check to see if they're in
 # the builder or not.
 
 ENV MZ_DEV_CI_BUILDER=1
 
-# Step 2j. Set up for a persistent volume to hold Cargo metadata, so that
+# Step 2k. Set up for a persistent volume to hold Cargo metadata, so that
 # crate metadata does not need to be refetched on every compile.
 
 ENV CARGO_HOME=/cargo
 RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
 
-# Step 2k. Make the image as small as possible.
+# Step 2l. Make the image as small as possible.
 RUN find /workdir /root -mindepth 1 -maxdepth 1 -exec rm -rf {} +
