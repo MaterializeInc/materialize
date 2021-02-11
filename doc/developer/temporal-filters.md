@@ -19,12 +19,12 @@ Understanding what Materialize does do may help you understand the behavior of a
 
 ## Manipulating timestamped updates
 
-Materialize records *changes* to collections of data.
-Each change occurs at some "logical timestamp", an explicit transcription of the time at which a change should occur.
-Generally, an update occurs at its logical timestamp and is then in effect indefinitely.
-To undo an update one issues a new update with a negated sign, at a future logical timestamp.
+Materialize records *updates* to collections of data.
+Each updates has the form `(data, time, diff)`, and indicates that the occurence count of `data` changes at "logical timestamp" `time` by `diff`.
+An update occurs at its logical timestamp and is then in effect indefinitely.
+To undo an update one issues a new update with the same `data` at a future logical timestamp with a negated `diff`.
 
-We can restrict the duration of an update, to any non-empty interval `[from, until]`, by
+We can restrict the duration of an update, from `[time, ..)` to any non-empty interval `[from, until]`, by
 1. advancing the update's timestamp to at least `from`, and
 2. introducing a new negated update at timestamp `until`.
 The first step ensures that the update does not happen until `from` and the second step ensures that the update is retracted at `until`.
@@ -60,6 +60,7 @@ This reduces the computational burden over a system whose values changed every m
 Temporal filters allow you to introduce updates with timestamps that do not otherwise exist in the input.
 If your `valid_from` and `valid_until` columns are arbitrary milliseconds not aligned to seconds, you may prompt many additional recomputations and substantially impair Materialize's performance.
 Please experiment with the performance, and consider coarsening your validity bounds if performance requires or if your query permits.
+For example, you could round your temporal bounds to multiples of your source timestamping frequency.
 
 Temporal filters allow you to introduce updates arbitrarily far in the future.
 Materialize is optimized to maintain collections and queries "now", and it is not optimized as a data store for far-future updates.
