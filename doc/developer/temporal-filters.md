@@ -41,6 +41,8 @@ WHERE mz_logical_timestamp() BETWEEN data.valid_from AND data.valid_until
 ```
 The `BETWEEN` expression simplifies to two inequalities, and the other two inequalities are one-sided bounds.
 The `mz_logical_timestamp()` call can appear on either side of the inequality, but it must occur by itself.
+Any set of these inequalities are valid, including just bounding `mz_logical_timestamp()` from above or below, rather than bound it on both sides.
+
 The inequality cannot be "not equal" (`!=` or `<>`) as this results in a "hole" rather than an upper and lower bound.
 
 ## Correctness
