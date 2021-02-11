@@ -63,22 +63,21 @@ You can [cast](../../functions/cast) [text](../text) to `bytea`.
 ## Examples
 
 ```sql
-SELECT '\xDEADBEEF' AS text_val;
+SELECT '\xDEADBEEF'::bytea AS bytea_val;
 ```
 ```nofmt
- text_val
+ bytea_val
 ---------
- hello
+ \xdeadbeef
 ```
 
 <hr>
 
 ```sql
-SELECT E'behold\nescape strings\U0001F632' AS escape_val;
+SELECT '\000'::bytea AS bytea_val;
 ```
 ```nofmt
-   escape_val
+   text_val
 -----------------
- behold         +
- escape strings😲
+ \x00
 ```
