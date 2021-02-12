@@ -256,6 +256,9 @@ impl MapFilterProject {
     /// The expression will be modified to extract any maps, filters, and
     /// projections, which will be return as `Self`. If there are no maps,
     /// filters, or projections the method will return an identity operator.
+    ///
+    /// This method needs to avoid extracting predicates that contain any
+    /// temporal operators, per `MirScalarExpr::contains_temporal()`.
     pub fn extract_from_expression(expr: &MirRelationExpr) -> (Self, &MirRelationExpr) {
         // TODO: This could become iterative rather than recursive if
         // we were able to fuse MFP operators from below, rather than
@@ -266,8 +269,12 @@ impl MapFilterProject {
                 (mfp.map(scalars.iter().cloned()), expr)
             }
             MirRelationExpr::Filter { input, predicates } => {
-                let (mfp, expr) = Self::extract_from_expression(input);
-                (mfp.filter(predicates.iter().cloned()), expr)
+                if predicates.iter().any(|p| p.contains_temporal()) {
+                    (Self::new(expr.arity()), expr)
+                } else {
+                    let (mfp, expr) = Self::extract_from_expression(input);
+                    (mfp.filter(predicates.iter().cloned()), expr)
+                }
             }
             MirRelationExpr::Project { input, outputs } => {
                 let (mfp, expr) = Self::extract_from_expression(input);

@@ -50,9 +50,22 @@ impl FoldConstants {
                 monotonic: _,
                 expected_group_size: _,
             } => {
-                for aggregate in aggregates.iter_mut() {
-                    aggregate.expr.reduce(&input.typ());
+                let input_typ = input.typ();
+                // Reduce expressions to their simplest form.
+                for key in group_key.iter_mut() {
+                    key.reduce(&input_typ);
                 }
+                for aggregate in aggregates.iter_mut() {
+                    aggregate.expr.reduce(&input_typ);
+                }
+
+                // Guard against evaluating expression that may contain temporal expressions.
+                if group_key.iter().any(|e| e.contains_temporal())
+                    || aggregates.iter().any(|a| a.expr.contains_temporal())
+                {
+                    return Ok(());
+                }
+
                 if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let new_rows = match rows {
                         Ok(rows) => Self::fold_reduce_constant(group_key, aggregates, rows),
@@ -102,6 +115,11 @@ impl FoldConstants {
                     scalar.reduce(&current_type);
                 }
 
+                // Guard against evaluating expression that may contain temporal expressions.
+                if scalars.iter().any(|e| e.contains_temporal()) {
+                    return Ok(());
+                }
+
                 if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let mut row_packer = repr::RowPacker::new();
                     let new_rows = match rows {
@@ -134,6 +152,12 @@ impl FoldConstants {
                 for expr in exprs.iter_mut() {
                     expr.reduce(&input.typ());
                 }
+
+                // Guard against evaluating expression that may contain temporal expressions.
+                if exprs.iter().any(|e| e.contains_temporal()) {
+                    return Ok(());
+                }
+
                 if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let new_rows = match rows {
                         Ok(rows) => Self::fold_flat_map_constant(func, exprs, rows),
@@ -150,6 +174,11 @@ impl FoldConstants {
                     predicate.reduce(&input.typ());
                 }
                 predicates.retain(|p| !p.is_literal_true());
+
+                // Guard against evaluating expression that may contain temporal expressions.
+                if predicates.iter().any(|e| e.contains_temporal()) {
+                    return Ok(());
+                }
 
                 // If any predicate is false, reduce to the empty collection.
                 if predicates
@@ -206,6 +235,14 @@ impl FoldConstants {
                     .iter()
                     .all(|i| matches!(i, MirRelationExpr::Constant { rows: Ok(_), .. }))
                 {
+                    // Guard against evaluating expression that may contain temporal expressions.
+                    if equivalences
+                        .iter()
+                        .any(|equiv| equiv.iter().any(|e| e.contains_temporal()))
+                    {
+                        return Ok(());
+                    }
+
                     // We can fold all constant inputs together, but must apply the constraints to restrict them.
                     // We start with a single 0-ary row.
                     let mut old_rows = vec![(repr::Row::pack::<_, Datum>(None), 1)];

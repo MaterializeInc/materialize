@@ -631,9 +631,10 @@ impl MirScalarExpr {
             // Nullary functions must be transformed away before evaluation.
             // Their purpose is as a placeholder for data that is not known at
             // plan time but can be inlined before runtime.
-            MirScalarExpr::CallNullary(_) => Err(EvalError::Internal(
-                "cannot evaluate nullary function".into(),
-            )),
+            MirScalarExpr::CallNullary(x) => Err(EvalError::Internal(format!(
+                "cannot evaluate nullary function: {:?}",
+                x
+            ))),
             MirScalarExpr::CallUnary { func, expr } => func.eval(datums, temp_storage, expr),
             MirScalarExpr::CallBinary { func, expr1, expr2 } => {
                 func.eval(datums, temp_storage, expr1, expr2)
@@ -648,6 +649,17 @@ impl MirScalarExpr {
                 ))),
             },
         }
+    }
+
+    /// True iff the expression contains `NullaryFunc::MzLogicalTimestamp`.
+    pub fn contains_temporal(&self) -> bool {
+        let mut contains = false;
+        self.visit(&mut |e| {
+            if let MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp) = e {
+                contains = true;
+            }
+        });
+        contains
     }
 }
 
