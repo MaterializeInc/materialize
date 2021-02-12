@@ -229,7 +229,7 @@ async fn download_objects_task(
                         .get_mut(&msg.bucket)
                         .expect("just inserted")
                         .metrics
-                        .inc(1, update.bytes, update.lines)
+                        .inc(1, update.bytes, update.messages)
                 }
             }
             Err(e) => tx
@@ -473,7 +473,7 @@ async fn read_sqs_task(
 #[derive(Debug)]
 struct DownloadMetricUpdate {
     bytes: u64,
-    lines: u64,
+    messages: u64,
 }
 
 async fn download_object(
@@ -504,7 +504,7 @@ async fn download_object(
         let mut reader = body.into_async_read();
         // unwrap is safe because content length is not allowed to be negative
         let mut buf = Vec::with_capacity(obj.content_length.unwrap_or(1024).try_into().unwrap());
-        let mut lines = 0;
+        let mut messages = 0;
 
         match reader.read_to_end(&mut buf).await {
             Ok(_) => {
@@ -518,10 +518,10 @@ async fn download_object(
                         );
                         break;
                     } else {
-                        lines += 1;
+                        messages += 1;
                     }
                 }
-                log::trace!("sent {} lines to reader", lines);
+                log::trace!("sent {} messages to reader", messages);
                 if activate {
                     activator.activate().expect("s3 reader activation failed");
                 }
@@ -534,7 +534,7 @@ async fn download_object(
 
         Some(DownloadMetricUpdate {
             bytes: buf.len() as u64,
-            lines,
+            messages,
         })
     } else {
         log::warn!("get object response had no body");

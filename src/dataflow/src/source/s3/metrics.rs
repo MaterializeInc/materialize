@@ -14,7 +14,7 @@ use prometheus::{register_uint_counter_vec, DeleteOnDropCounter, UIntCounterVec}
 pub(super) struct BucketMetrics {
     objects_downloaded: DeleteOnDropCounter<'static, AtomicU64>,
     bytes_downloaded: DeleteOnDropCounter<'static, AtomicU64>,
-    lines_ingested: DeleteOnDropCounter<'static, AtomicU64>,
+    messages_ingested: DeleteOnDropCounter<'static, AtomicU64>,
 }
 
 impl BucketMetrics {
@@ -33,8 +33,8 @@ impl BucketMetrics {
                 LABELS
             )
             .unwrap();
-            static ref LINES_INGESTED: UIntCounterVec = register_uint_counter_vec!(
-                "mz_s3_lines_ingested",
+            static ref MESSAGES_INGESTED: UIntCounterVec = register_uint_counter_vec!(
+                "mz_s3_messages_ingested",
                 "The number of messages ingested for this bucket.",
                 LABELS
             )
@@ -54,19 +54,19 @@ impl BucketMetrics {
                 &BYTES_DOWNLOADED,
                 |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
-            lines_ingested: DeleteOnDropCounter::new_with_error_handler(
-                LINES_INGESTED.with_label_values(labels),
-                &LINES_INGESTED,
+            messages_ingested: DeleteOnDropCounter::new_with_error_handler(
+                MESSAGES_INGESTED.with_label_values(labels),
+                &MESSAGES_INGESTED,
                 |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
         }
     }
 
     /// Increment counters
-    pub(super) fn inc(&self, objects: u64, bytes: u64, lines: u64) {
+    pub(super) fn inc(&self, objects: u64, bytes: u64, messages: u64) {
         self.objects_downloaded.inc_by(objects);
         self.bytes_downloaded.inc_by(bytes);
-        self.lines_ingested.inc_by(lines);
+        self.messages_ingested.inc_by(messages);
     }
 }
 
