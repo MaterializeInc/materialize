@@ -3118,40 +3118,61 @@ impl Coordinator {
         mut expr: MirRelationExpr,
         style: ExprPrepStyle,
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
-        expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
-
-        // TODO (wangandi): Is there anything that optimizes to a
-        // constant expression that originally contains a global get? Is
-        // there anything not containing a global get that cannot be
-        // optimized to a constant expression?
-        Ok(self.optimizer.optimize(expr, self.catalog.indexes())?)
+        if let ExprPrepStyle::Static = style {
+            let mut opt_expr = self.optimizer.optimize(expr, self.catalog.indexes())?;
+            opt_expr.0.try_visit_mut(&mut |e| {
+                if let expr::MirRelationExpr::Filter {
+                    input: _,
+                    predicates,
+                } = &*e
+                {
+                    match dataflow::extract_temporal(predicates.iter().cloned()) {
+                        Err(e) => coord_bail!("{:?}", e),
+                        Ok((_normal, lower, upper)) => {
+                            // If we are in experimenal mode permit temporal filters.
+                            // TODO(mcsherry): remove this gating eventually.
+                            let non_temporal = lower.is_empty() && upper.is_empty();
+                            if non_temporal || self.catalog.config().experimental_mode {
+                                Ok(())
+                            } else {
+                                coord_bail!("temporal filters require the --experimental flag")
+                            }
+                        }
+                    }
+                } else {
+                    e.try_visit_scalars_mut1(&mut |s| Self::prep_scalar_expr(s, style))
+                }
+            })?;
+            Ok(opt_expr)
+        } else {
+            expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
+            // TODO (wangandi): Is there anything that optimizes to a
+            // constant expression that originally contains a global get? Is
+            // there anything not containing a global get that cannot be
+            // optimized to a constant expression?
+            Ok(self.optimizer.optimize(expr, self.catalog.indexes())?)
+        }
     }
 
     /// Prepares a scalar expression for execution by replacing any placeholders
     /// with their correct values.
     ///
     /// Specifically, calls to the special function `MzLogicalTimestamp` are
-    /// replaced according to `style`:
-    ///
-    ///   * if `OneShot`, calls are replaced according to the logical time
-    ///     specified in the `OneShot` variant.
-    ///   * if `Explain`, calls are replaced with a dummy time.
-    ///   * if `Static`, calls trigger an error indicating that static queries
-    ///     are not permitted to observe their own timestamps.
+    /// replaced if `style` is `OneShot { logical_timestamp }`. Calls are not
+    /// replaced for the `Explain` style nor for `Static` which should not
+    /// reach this point if we have correctly validated the use of placeholders.
     fn prep_scalar_expr(expr: &mut MirScalarExpr, style: ExprPrepStyle) -> Result<(), CoordError> {
         // Replace calls to `MzLogicalTimestamp` as described above.
-        let ts = match style {
-            ExprPrepStyle::Explain | ExprPrepStyle::Static => 0, // dummy timestamp
-            ExprPrepStyle::OneShot { logical_time } => logical_time,
-        };
         let mut observes_ts = false;
         expr.visit_mut(&mut |e| {
             if let MirScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
                 observes_ts = true;
-                *e = MirScalarExpr::literal_ok(
-                    Datum::from(i128::from(ts)),
-                    f.output_type().scalar_type,
-                );
+                if let ExprPrepStyle::OneShot { logical_time } = style {
+                    *e = MirScalarExpr::literal_ok(
+                        Datum::from(i128::from(logical_time)),
+                        f.output_type().scalar_type,
+                    );
+                }
             }
         });
         if observes_ts && matches!(style, ExprPrepStyle::Static) {

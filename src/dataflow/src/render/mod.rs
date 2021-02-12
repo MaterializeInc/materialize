@@ -147,6 +147,7 @@ use crate::{
 
 mod arrange_by;
 mod context;
+pub(crate) mod filter;
 mod flat_map;
 mod join;
 mod reduce;
@@ -174,6 +175,7 @@ pub struct RenderState {
     pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
 }
 
+/// Build a dataflow from a description.
 pub fn build_dataflow<A: Allocate>(
     timely_worker: &mut TimelyWorker<A>,
     render_state: &mut RenderState,
@@ -1078,24 +1080,10 @@ where
                     self.collections.insert(relation_expr.clone(), (oks, err));
                 }
 
-                MirRelationExpr::Filter { input, predicates } => {
+                MirRelationExpr::Filter { input, .. } => {
                     if !self.try_render_map_filter_project(relation_expr, scope, worker_index) {
                         self.ensure_rendered(input, scope, worker_index);
-                        let temp_storage = RowArena::new();
-                        let predicates = predicates.clone();
-                        let (ok_collection, err_collection) = self.collection(input).unwrap();
-                        let (ok_collection, new_err_collection) =
-                            ok_collection.filter_fallible(move |input_row| {
-                                let datums = input_row.unpack();
-                                for p in &predicates {
-                                    if p.eval(&datums, &temp_storage)? != Datum::True {
-                                        return Ok(false);
-                                    }
-                                }
-                                Ok::<_, DataflowError>(true)
-                            });
-                        let err_collection = err_collection.concat(&new_err_collection);
-                        let collections = (ok_collection, err_collection);
+                        let collections = self.render_filter(relation_expr);
                         self.collections.insert(relation_expr.clone(), collections);
                     }
                 }
