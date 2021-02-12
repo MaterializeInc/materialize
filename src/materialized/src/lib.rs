@@ -35,6 +35,7 @@ use crate::mux::Mux;
 
 mod http;
 mod mux;
+mod server_metrics;
 mod version_check;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
