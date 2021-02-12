@@ -15,11 +15,8 @@ use uuid::Uuid;
 
 use ore::thread::JoinOnDropHandle;
 use sql::ast::{Raw, Statement};
-use sql::plan::Params;
 
-use crate::command::{
-    Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupResponse,
-};
+use crate::command::{Cancelled, Command, ExecuteResponse, Response, StartupResponse};
 use crate::error::CoordError;
 use crate::id_alloc::IdAllocator;
 use crate::session::{EndTransactionAction, Session};
@@ -135,30 +132,6 @@ impl ConnClient {
                 Err(e)
             }
         }
-    }
-
-    /// Dumps the catalog to a JSON string.
-    pub async fn dump_catalog(&mut self) -> String {
-        self.send(|tx| Command::DumpCatalog { tx }).await
-    }
-
-    /// Executes a statement as the specified user that is not tied to a session.
-    ///
-    /// This will execute in a pseudo session that is not able to create any
-    /// temporary resources that would normally need to be cleaned up by Terminate.
-    pub async fn execute(
-        &mut self,
-        stmt: Statement<Raw>,
-        params: Params,
-        user: String,
-    ) -> Result<NoSessionExecuteResponse, CoordError> {
-        self.send(|tx| Command::NoSessionExecute {
-            stmt,
-            params,
-            user,
-            tx,
-        })
-        .await
     }
 
     /// Cancels the query currently running on another connection.
@@ -286,6 +259,12 @@ impl SessionClient {
             tx,
         })
         .await
+    }
+
+    /// Dumps the catalog to a JSON string.
+    pub async fn dump_catalog(&mut self) -> Result<String, CoordError> {
+        self.send(|tx, session| Command::DumpCatalog { session, tx })
+            .await
     }
 
     /// Terminates this client session.

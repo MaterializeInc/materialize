@@ -205,7 +205,7 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCase {
             query: "create view v as select 1",
             status: StatusCode::BAD_REQUEST,
-            body: r#"unsupported plan"#,
+            body: r#"CREATE VIEW v AS SELECT 1 cannot be run inside a transaction block"#,
         },
     ];
 

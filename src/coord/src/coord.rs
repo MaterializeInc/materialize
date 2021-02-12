@@ -82,8 +82,7 @@ use crate::catalog::{
 };
 use crate::client::{Client, Handle};
 use crate::command::{
-    Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
-    StartupResponse,
+    Cancelled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::error::CoordError;
 use crate::session::{
@@ -774,50 +773,6 @@ impl Coordinator {
                 }
             }
 
-            // NoSessionExecute is designed to support a limited set of queries that
-            // run as the system user and are not associated with a user session. Due to
-            // that limitation, they do not support all plans (some of which require side
-            // effects in the session).
-            Command::NoSessionExecute {
-                stmt,
-                params,
-                user,
-                tx,
-            } => {
-                let res = async {
-                    let stmt = sql::pure::purify(stmt).await?;
-                    let catalog = self.catalog.for_sessionless_user(user);
-                    let desc = describe(&catalog, stmt.clone(), &[], None)?;
-                    let pcx = PlanContext::default();
-                    let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
-                    // At time of writing this comment, Peeks use the connection id only for
-                    // logging, so it is safe to reuse the system id, which is the conn_id from
-                    // for_system_session().
-                    let conn_id = catalog.conn_id();
-                    let response = match plan {
-                        Plan::Peek {
-                            source,
-                            when,
-                            finishing,
-                            copy_to,
-                        } => {
-                            self.sequence_peek(conn_id, source, when, finishing, copy_to)
-                                .await?
-                        }
-
-                        Plan::SendRows(rows) => send_immediate_rows(rows),
-
-                        _ => coord_bail!("unsupported plan"),
-                    };
-                    Ok(NoSessionExecuteResponse {
-                        desc: desc.relation_desc,
-                        response,
-                    })
-                }
-                .await;
-                let _ = tx.send(res);
-            }
-
             Command::Declare {
                 name,
                 stmt,
@@ -847,8 +802,14 @@ impl Coordinator {
                 self.handle_cancel(conn_id, secret_key).await;
             }
 
-            Command::DumpCatalog { tx } => {
-                let _ = tx.send(self.catalog.dump());
+            Command::DumpCatalog { session, tx } => {
+                // TODO(benesch): when we have RBAC, dumping the catalog should
+                // require superuser permissions.
+
+                let _ = tx.send(Response {
+                    result: Ok(self.catalog.dump()),
+                    session,
+                });
             }
 
             Command::Terminate { mut session } => {
@@ -1624,7 +1585,7 @@ impl Coordinator {
             ),
 
             Plan::StartTransaction => {
-                let session = session.start_transaction();
+                session.start_transaction();
                 tx.send(Ok(ExecuteResponse::StartedTransaction), session)
             }
 

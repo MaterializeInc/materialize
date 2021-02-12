@@ -67,18 +67,12 @@ pub enum Command {
     },
 
     DumpCatalog {
-        tx: oneshot::Sender<String>,
+        session: Session,
+        tx: oneshot::Sender<Response<String>>,
     },
 
     Terminate {
         session: Session,
-    },
-
-    NoSessionExecute {
-        stmt: Statement<Raw>,
-        params: sql::plan::Params,
-        user: String,
-        tx: oneshot::Sender<Result<NoSessionExecuteResponse, CoordError>>,
     },
 }
 
@@ -86,13 +80,6 @@ pub enum Command {
 pub struct Response<T> {
     pub result: Result<T, CoordError>,
     pub session: Session,
-}
-
-/// The response to [`Client::execute`](crate::Client::execute).
-#[derive(Debug)]
-pub struct NoSessionExecuteResponse {
-    pub desc: Option<repr::RelationDesc>,
-    pub response: ExecuteResponse,
 }
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponse> + Send>>;

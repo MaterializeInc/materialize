@@ -41,7 +41,8 @@ use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
 
 use crate::catalog::builtin::{
-    Builtin, BUILTINS, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA, PG_CATALOG_SCHEMA,
+    Builtin, BUILTINS, BUILTIN_ROLES, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
+    PG_CATALOG_SCHEMA,
 };
 use crate::catalog::error::ErrorKind;
 use crate::catalog::migrate::CONTENT_MIGRATIONS;
@@ -58,6 +59,7 @@ pub use crate::catalog::config::Config;
 pub use crate::catalog::error::Error;
 
 const SYSTEM_CONN_ID: u32 = 0;
+const SYSTEM_USER: &str = "mz_system";
 
 // TODO@jldlaughlin: Better assignment strategy for system type OIDs.
 // https://github.com/MaterializeInc/materialize/pull/4316#discussion_r496238962
@@ -521,7 +523,8 @@ impl Catalog {
         }
 
         let roles = catalog.storage().load_roles()?;
-        for (id, name) in roles {
+        let builtin_roles = BUILTIN_ROLES.iter().map(|b| (b.id, b.name.to_owned()));
+        for (id, name) in roles.into_iter().chain(builtin_roles) {
             let oid = catalog.allocate_oid()?;
             catalog.roles.insert(
                 name.clone(),
@@ -783,7 +786,7 @@ impl Catalog {
     // Leaving the system's search path empty allows us to catch issues
     // where catalog object names have not been normalized correctly.
     pub fn for_system_session(&self) -> ConnCatalog {
-        self.for_sessionless_user("mz_system".into())
+        self.for_sessionless_user(SYSTEM_USER.into())
     }
 
     fn storage(&self) -> MutexGuard<storage::Connection> {

@@ -128,7 +128,7 @@ impl State {
         if let Ok(rows) = self.pgclient.query("SELECT name FROM mz_roles", &[]).await {
             for row in rows {
                 let role_name: String = row.get(0);
-                if role_name == self.materialized_user {
+                if role_name == self.materialized_user || role_name.starts_with("mz_") {
                     continue;
                 }
                 let query = format!("DROP ROLE {}", role_name);

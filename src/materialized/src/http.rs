@@ -16,7 +16,8 @@
 use std::pin::Pin;
 use std::time::Instant;
 
-use futures::future::{FutureExt, TryFutureExt};
+use coord::session::Session;
+use futures::future::TryFutureExt;
 use hyper::{service, Method, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use openssl::nid::Nid;
@@ -140,30 +141,48 @@ impl Server {
         };
 
         let svc = service::service_fn(move |req| {
-            let user = match user {
-                Ok(ref user) => user,
-                Err(e) => {
-                    return async move { Ok(util::error_response(StatusCode::UNAUTHORIZED, e)) }
-                        .boxed()
-                }
-            };
+            let user = user.clone();
+            let coord_client = self.coord_client.clone();
+            let start_time = self.start_time;
+            async move {
+                let user = match user {
+                    Ok(user) => user,
+                    Err(e) => return Ok(util::error_response(StatusCode::UNAUTHORIZED, e)),
+                };
 
-            // TODO(benesch): we ought to verify that `user` actually exists and
-            // use a coordinator client that is associated with that user, to
-            // ensure that any coordinator operations performed by the HTTP
-            // layer are authenticated as that user. But right now all users are
-            // superusers so it doesn't actually matter.
+                let coord_client = coord_client.new_conn()?;
+                let session = Session::new(coord_client.conn_id(), user);
+                let (mut coord_client, _) = match coord_client.startup(session).await {
+                    Ok(coord_client) => coord_client,
+                    Err(e) => {
+                        return Ok(util::error_response(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            e.to_string(),
+                        ))
+                    }
+                };
 
-            match (req.method(), req.uri().path()) {
-                (&Method::GET, "/") => self.handle_home(req).boxed(),
-                (&Method::GET, "/metrics") => self.handle_prometheus(req).boxed(),
-                (&Method::GET, "/status") => self.handle_status(req).boxed(),
-                (&Method::GET, "/prof") => self.handle_prof(req).boxed(),
-                (&Method::GET, "/memory") => self.handle_memory(req).boxed(),
-                (&Method::POST, "/prof") => self.handle_prof(req).boxed(),
-                (&Method::POST, "/sql") => self.handle_sql(req, user).boxed(),
-                (&Method::GET, "/internal/catalog") => self.handle_internal_catalog(req).boxed(),
-                _ => self.handle_static(req).boxed(),
+                let res = match (req.method(), req.uri().path()) {
+                    (&Method::GET, "/") => root::handle_home(req, &mut coord_client).await,
+                    (&Method::GET, "/metrics") => {
+                        metrics::handle_prometheus(req, &mut coord_client, start_time).await
+                    }
+                    (&Method::GET, "/status") => {
+                        metrics::handle_status(req, &mut coord_client, start_time).await
+                    }
+                    (&Method::GET, "/prof") => prof::handle_prof(req, &mut coord_client).await,
+                    (&Method::GET, "/memory") => {
+                        memory::handle_memory(req, &mut coord_client).await
+                    }
+                    (&Method::POST, "/prof") => prof::handle_prof(req, &mut coord_client).await,
+                    (&Method::POST, "/sql") => sql::handle_sql(req, &mut coord_client).await,
+                    (&Method::GET, "/internal/catalog") => {
+                        catalog::handle_internal_catalog(req, &mut coord_client).await
+                    }
+                    _ => root::handle_static(req, &mut coord_client).await,
+                };
+                coord_client.terminate().await;
+                res
             }
         });
         let http = hyper::server::conn::Http::new();

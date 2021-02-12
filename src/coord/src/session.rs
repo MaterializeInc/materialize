@@ -54,7 +54,7 @@ impl Session {
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
     pub fn dummy() -> Session {
-        Self::new_internal(DUMMY_CONNECTION_ID, "system".into())
+        Self::new_internal(DUMMY_CONNECTION_ID, "mz_system".into())
     }
 
     fn new_internal(conn_id: u32, user: String) -> Session {
@@ -75,23 +75,17 @@ impl Session {
     }
 
     /// Starts a transaction.
-    ///
-    /// This needs to consume and return self because an
-    /// implicit transaction can be bumped up to an explicit transaction, and we
-    /// want to keep around the inner ops. In order to do this in Rust we have to
-    /// take ownership instead of borrow.
-    pub fn start_transaction(mut self) -> Self {
-        self.transaction = match self.transaction {
+    pub fn start_transaction(&mut self) {
+        self.transaction = match &mut self.transaction {
             TransactionStatus::Default | TransactionStatus::Started(_) => {
                 TransactionStatus::InTransaction(TransactionOps::None)
             }
             TransactionStatus::InTransaction(ops)
             | TransactionStatus::InTransactionImplicit(ops) => {
-                TransactionStatus::InTransaction(ops)
+                TransactionStatus::InTransaction(mem::replace(ops, TransactionOps::None))
             }
             TransactionStatus::Failed => unreachable!(),
-        };
-        self
+        }
     }
 
     /// Starts an implicit transaction.
