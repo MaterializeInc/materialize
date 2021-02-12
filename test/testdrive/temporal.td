@@ -68,7 +68,6 @@ ts
 > SELECT * FROM two_bounds2 AS OF 2
 ts
 ---
-1
 2
 3
 4

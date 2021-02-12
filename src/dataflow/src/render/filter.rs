@@ -146,9 +146,11 @@ where
                         // Doing it this way spares us some awkward option comparison logic.
                         // This also ensures that `upper_bound_u128` will be at least `time`,
                         // which means "non-negative" / not needing to be clamped from below.
-                        upper_bound_i128.as_mut().map(|u| if *u < lower_bound_i128 {
-                            *u = lower_bound_i128
-                        });
+                        if let Some(u) = upper_bound_i128.as_mut() {
+                            if *u < lower_bound_i128 {
+                                *u = lower_bound_i128;
+                            }
+                        }
 
                         // Convert both of our bounds to `Option<u64>`, where negative numbers
                         // are advanced up to `Some(0)` and numbers larger than `u64::MAX` are

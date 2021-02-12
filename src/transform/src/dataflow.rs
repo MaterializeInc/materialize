@@ -286,7 +286,7 @@ pub mod monotonic {
                 // TODO: this could be improved to only restrict if upper bounds
                 // are present, as temporal lower bounds only delay introduction.
                 is_monotonic && !predicates.iter().any(|p| p.contains_temporal())
-            },
+            }
             MirRelationExpr::Map { input, .. } => is_monotonic(input, sources),
             MirRelationExpr::TopK {
                 input, monotonic, ..
