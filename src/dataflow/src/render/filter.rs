@@ -153,7 +153,7 @@ impl FilterPlan {
     /// If `self` contains only non-temporal predicates, the result will either be `(time, diff)`,
     /// or an evaluation error. If `self contains temporal predicates, the results can be times
     /// that are greater than the input `time`, and may contain negated `diff` values.
-    fn evaluate(
+    pub fn evaluate(
         &self,
         datums: &mut Vec<Datum>,
         time: repr::Timestamp,
