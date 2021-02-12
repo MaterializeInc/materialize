@@ -2647,7 +2647,6 @@ dependencies = [
  "pgrepr",
  "postgres",
  "prometheus",
- "rand 0.8.3",
  "repr",
  "sql",
  "tokio",
