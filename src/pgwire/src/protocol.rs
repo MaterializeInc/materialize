@@ -177,8 +177,7 @@ where
     }
 
     // Register session with coordinator.
-    let mut coord_client = coord_client.for_session(session);
-    let startup_messages = match coord_client.startup().await {
+    let (mut coord_client, startup_messages) = match coord_client.startup(session).await {
         Ok(startup_messages) => startup_messages,
         Err(e) => {
             return conn
