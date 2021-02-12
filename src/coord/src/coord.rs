@@ -171,9 +171,6 @@ where
     // Channel to communicate source status updates and shutdown notifications to the cacher
     // thread.
     cache_tx: Option<CacheSender>,
-    // Handle to the timestamper thread that we retain so that we can join on the
-    // thread when the coordinator is dropped.
-    _timestamper_thread: JoinOnDropHandle<()>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -374,6 +371,7 @@ where
         internal_cmd_stream: futures::channel::mpsc::UnboundedReceiver<Message>,
         cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>,
         feedback_rx: comm::mpsc::Receiver<WorkerFeedbackWithMeta>,
+        _timestamper_thread_handle: JoinOnDropHandle<()>,
     ) {
         let cmd_stream = cmd_rx
             .map(Message::Command)
@@ -3403,7 +3401,7 @@ where
     let (ts_tx, ts_rx) = std::sync::mpsc::channel();
     let mut timestamper = Timestamper::new(&timestamp_config, internal_cmd_tx.clone(), ts_rx);
     let executor = Handle::current();
-    let _timestamper_thread = thread::spawn(move || {
+    let timestamper_thread_handle = thread::spawn(move || {
         let _executor_guard = executor.enter();
         timestamper.update()
     })
@@ -3441,9 +3439,8 @@ where
             logical_compaction_window_ms: logical_compaction_window
                 .map(duration_to_timestamp_millis),
             internal_cmd_tx,
-            ts_tx,
+            ts_tx: ts_tx.clone(),
             cache_tx,
-            _timestamper_thread,
             closed_up_to: 1,
             read_lower_bound: 1,
             last_op_was_read: false,
@@ -3457,6 +3454,11 @@ where
     let (coord, cluster_id) = match coord.await {
         Ok((coord, cluster_id)) => (coord, cluster_id),
         Err(e) => {
+            // Tell the timestamper thread to shut down.
+            ts_tx.send(TimestampMessage::Shutdown).unwrap();
+            // Explicitly drop the timestamper handle here so we can wait for
+            // the thread to return.
+            drop(timestamper_thread_handle);
             broadcast(&mut broadcast_tx, SequencedCommand::Shutdown).await;
             return Err(e);
         }
@@ -3470,7 +3472,14 @@ where
     // can't use `tokio::spawn`, but instead have to spawn a dedicated thread to
     // run the future.
     Ok((
-        thread::spawn(move || runtime.block_on(coord.serve(internal_cmd_rx, cmd_rx, feedback_rx))),
+        thread::spawn(move || {
+            runtime.block_on(coord.serve(
+                internal_cmd_rx,
+                cmd_rx,
+                feedback_rx,
+                timestamper_thread_handle,
+            ))
+        }),
         cluster_id,
     ))
 }
