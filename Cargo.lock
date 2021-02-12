@@ -3840,7 +3840,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "datadriven",
- "dataflow-types",
  "itertools",
  "lazy_static",
  "log",
