@@ -24,7 +24,7 @@ use std::mem;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, Context};
@@ -34,10 +34,9 @@ use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
 use timely::communication::WorkerGuards;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
-use tokio::runtime::{Handle, Runtime};
+use tokio::runtime::{Handle as TokioHandle, Runtime};
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use uuid::Uuid;
 
 use build_info::BuildInfo;
 use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
@@ -81,6 +80,7 @@ use crate::catalog::builtin::{
 use crate::catalog::{
     self, Catalog, CatalogItem, Func, Index, SinkConnectorState, Type, TypeInner,
 };
+use crate::client::{Handle, Client};
 use crate::command::{
     Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
@@ -89,7 +89,7 @@ use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::sink_connector;
-use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
+use crate::timestamp::{TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 
 mod arrangement_state;
@@ -132,20 +132,21 @@ pub struct SinkConnectorReady {
     pub result: Result<SinkConnector, CoordError>,
 }
 
+/// Configures dataflow worker logging.
 #[derive(Clone, Debug)]
 pub struct LoggingConfig {
     pub granularity: Duration,
     pub log_logging: bool,
 }
 
+/// Configures a coordinator.
 pub struct Config<'a> {
     pub workers: usize,
     pub timely_worker: timely::WorkerConfig,
-    pub cmd_rx: mpsc::UnboundedReceiver<Command>,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
-    pub timestamp: TimestampConfig,
+    pub timestamp_frequency: Duration,
     pub cache: Option<CacheConfig>,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
@@ -162,7 +163,7 @@ pub struct Coordinator {
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
     since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
-    timestamp_config: TimestampConfig,
+    timestamp_frequency: Duration,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
     /// Instance count: number of times sources have been instantiated in views. This is used
@@ -382,8 +383,8 @@ impl Coordinator {
 
         let (ts_tx, ts_rx) = std::sync::mpsc::channel();
         let mut timestamper =
-            Timestamper::new(&self.timestamp_config, internal_cmd_tx.clone(), ts_rx);
-        let executor = Handle::current();
+            Timestamper::new(self.timestamp_frequency, internal_cmd_tx.clone(), ts_rx);
+        let executor = TokioHandle::current();
         let _timestamper_thread = thread::spawn(move || {
             let _executor_guard = executor.enter();
             timestamper.update()
@@ -3317,21 +3318,21 @@ impl Coordinator {
     }
 }
 
-/// Begins coordinating user requests to the dataflow layer based on the
-/// provided configuration. Returns the thread that hosts the coordinator and
-/// the cluster ID.
+/// Serves the coordinator based on the provided configuration.
 ///
-/// To gracefully shut down the coordinator, send a `Message::Shutdown` to the
-/// `cmd_rx` in the configuration, then join on the thread.
+/// For a high-level description of the coordinator, see the [crate
+/// documentation](crate).
+///
+/// Returns a handle to the coordinator and a client to communicate with the
+/// coordinator.
 pub async fn serve(
     Config {
         workers,
         timely_worker,
-        cmd_rx,
         symbiosis_url,
         logging,
         data_directory,
-        timestamp: timestamp_config,
+        timestamp_frequency,
         cache: cache_config,
         logical_compaction_window,
         experimental_mode,
@@ -3341,7 +3342,8 @@ pub async fn serve(
     // `Handle::current().block_in_place()` lands. See:
     // https://github.com/tokio-rs/tokio/pull/3097.
     runtime: Arc<Runtime>,
-) -> Result<(JoinHandle<()>, Uuid), CoordError> {
+) -> Result<(Handle, Client), CoordError> {
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
     let cache_tx = if let Some(cache_config) = &cache_config {
         let (cache_tx, cache_rx) = mpsc::unbounded_channel();
@@ -3386,7 +3388,7 @@ pub async fn serve(
         logging_granularity: logging
             .as_ref()
             .and_then(|c| c.granularity.as_millis().try_into().ok()),
-        timestamp_config,
+        timestamp_frequency,
         logical_compaction_window_ms: logical_compaction_window.map(duration_to_timestamp_millis),
         cache_tx,
         closed_up_to: 1,
@@ -3412,8 +3414,13 @@ pub async fn serve(
     }
     match coord.bootstrap(initial_catalog_events).await {
         Ok(()) => {
-            let coord = thread::spawn(move || runtime.block_on(coord.serve(cmd_rx, feedback_rx)));
-            Ok((coord, cluster_id))
+            let thread = thread::spawn(move || runtime.block_on(coord.serve(cmd_rx, feedback_rx)));
+            let handle = Handle {
+                cluster_id,
+                _thread: thread.join_on_drop(),
+            };
+            let client = Client { cmd_tx };
+            Ok((handle, client))
         }
         Err(e) => {
             coord.broadcast(SequencedCommand::Shutdown);
