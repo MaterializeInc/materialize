@@ -14,7 +14,7 @@ use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::VisitMut;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType,
-    Function, Ident, Raw, Statement, TableFactor, UnresolvedObjectName,
+    Function, Ident, Raw, RawName, Statement, TableFactor, UnresolvedObjectName,
 };
 
 use crate::catalog::{Catalog, SerializedCatalogItem};
@@ -35,13 +35,18 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
         struct TypeNormalizer;
 
         impl<'ast> VisitMut<'ast, Raw> for TypeNormalizer {
-            fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType) {
+            fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType<Raw>) {
                 if let DataType::Other { name, .. } = data_type {
-                    if name.0.len() == 1 {
-                        *name = UnresolvedObjectName(vec![
+                    let mut unresolved_name = name.name().clone();
+                    if unresolved_name.0.len() == 1 {
+                        unresolved_name = UnresolvedObjectName(vec![
                             Ident::new(PG_CATALOG_SCHEMA),
-                            name.0.remove(0),
+                            unresolved_name.0.remove(0),
                         ]);
+                    }
+                    *name = match name {
+                        RawName::Name(_) => RawName::Name(unresolved_name),
+                        RawName::Id(id, _) => RawName::Id(*id, unresolved_name),
                     }
                 }
             }

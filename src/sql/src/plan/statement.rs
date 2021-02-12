@@ -330,7 +330,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn resolve_item(&self, name: UnresolvedObjectName) -> Result<&dyn CatalogItem, PlanError> {
-        let name = normalize::object_name(name)?;
+        let name = normalize::unresolved_object_name(name)?;
         Ok(self.catalog.resolve_item(&name)?)
     }
 
@@ -338,7 +338,7 @@ impl<'a> StatementContext<'a> {
         &self,
         name: UnresolvedObjectName,
     ) -> Result<&dyn CatalogItem, PlanError> {
-        let name = normalize::object_name(name)?;
+        let name = normalize::unresolved_object_name(name)?;
         Ok(self.catalog.resolve_function(&name)?)
     }
 

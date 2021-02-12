@@ -35,12 +35,12 @@ pub enum Statement<T: AstInfo> {
     Delete(DeleteStatement<T>),
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
-    CreateSource(CreateSourceStatement),
+    CreateSource(CreateSourceStatement<T>),
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateTable(CreateTableStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
-    CreateType(CreateTypeStatement),
+    CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterIndexOptions(AlterIndexOptionsStatement),
@@ -344,18 +344,18 @@ impl_display!(CreateSchemaStatement);
 
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateSourceStatement {
+pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
     pub connector: Connector,
-    pub with_options: Vec<SqlOption>,
-    pub format: Option<Format>,
-    pub envelope: Envelope,
+    pub with_options: Vec<SqlOption<T>>,
+    pub format: Option<Format<T>>,
+    pub envelope: Envelope<T>,
     pub if_not_exists: bool,
     pub materialized: bool,
 }
 
-impl AstDisplay for CreateSourceStatement {
+impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("CREATE ");
         if self.materialized {
@@ -383,13 +383,16 @@ impl AstDisplay for CreateSourceStatement {
             f.write_str(" FORMAT ");
             f.write_node(format);
         }
-        if self.envelope != Default::default() {
-            f.write_str(" ENVELOPE ");
-            f.write_node(&self.envelope);
+        match self.envelope {
+            Envelope::None => (),
+            _ => {
+                f.write_str(" ENVELOPE ");
+                f.write_node(&self.envelope);
+            }
         }
     }
 }
-impl_display!(CreateSourceStatement);
+impl_display_t!(CreateSourceStatement);
 
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -397,9 +400,9 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub from: UnresolvedObjectName,
     pub connector: Connector,
-    pub with_options: Vec<SqlOption>,
-    pub format: Option<Format>,
-    pub envelope: Option<Envelope>,
+    pub with_options: Vec<SqlOption<T>>,
+    pub format: Option<Format<T>>,
+    pub envelope: Option<Envelope<T>>,
     pub with_snapshot: bool,
     pub as_of: Option<Expr<T>>,
     pub if_not_exists: bool,
@@ -449,7 +452,7 @@ pub struct CreateViewStatement<T: AstInfo> {
     /// View name
     pub name: UnresolvedObjectName,
     pub columns: Vec<Ident>,
-    pub with_options: Vec<SqlOption>,
+    pub with_options: Vec<SqlOption<T>>,
     pub query: Query<T>,
     pub if_exists: IfExistsBehavior,
     pub temporary: bool,
@@ -504,7 +507,7 @@ pub struct CreateTableStatement<T: AstInfo> {
     /// Optional schema
     pub columns: Vec<ColumnDef<T>>,
     pub constraints: Vec<TableConstraint<T>>,
-    pub with_options: Vec<SqlOption>,
+    pub with_options: Vec<SqlOption<T>>,
     pub if_not_exists: bool,
     pub temporary: bool,
 }
@@ -636,17 +639,17 @@ impl_display!(CreateRoleOption);
 
 /// `CREATE TYPE ..`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateTypeStatement {
+pub struct CreateTypeStatement<T: AstInfo> {
     /// Name of the created type.
     pub name: UnresolvedObjectName,
     /// The new type's "base type".
     pub as_type: CreateTypeAs,
     /// Provides the name and type for the key
     /// and value.
-    pub with_options: Vec<SqlOption>,
+    pub with_options: Vec<SqlOption<T>>,
 }
 
-impl AstDisplay for CreateTypeStatement {
+impl<T: AstInfo> AstDisplay for CreateTypeStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("CREATE TYPE ");
         f.write_node(&self.name);
@@ -659,7 +662,7 @@ impl AstDisplay for CreateTypeStatement {
         f.write_str(" )");
     }
 }
-impl_display!(CreateTypeStatement);
+impl_display_t!(CreateTypeStatement);
 
 /// `CREATE TYPE .. AS <TYPE>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1239,7 +1242,7 @@ impl<T: AstInfo> AstDisplay for ShowStatementFilter<T> {
 impl_display_t!(ShowStatementFilter);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SqlOption {
+pub enum SqlOption<T: AstInfo> {
     Value {
         name: Ident,
         value: Value,
@@ -1250,11 +1253,11 @@ pub enum SqlOption {
     },
     DataType {
         name: Ident,
-        data_type: DataType,
+        data_type: DataType<T>,
     },
 }
 
-impl SqlOption {
+impl<T: AstInfo> SqlOption<T> {
     pub fn name(&self) -> &Ident {
         match self {
             SqlOption::Value { name, .. } => name,
@@ -1264,7 +1267,7 @@ impl SqlOption {
     }
 }
 
-impl AstDisplay for SqlOption {
+impl<T: AstInfo> AstDisplay for SqlOption<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             SqlOption::Value { name, value } => {
@@ -1285,7 +1288,7 @@ impl AstDisplay for SqlOption {
         }
     }
 }
-impl_display!(SqlOption);
+impl_display_t!(SqlOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WithOption {

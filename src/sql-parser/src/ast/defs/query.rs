@@ -57,6 +57,15 @@ pub enum RawName {
     Id(u64, UnresolvedObjectName),
 }
 
+impl RawName {
+    pub fn name(&self) -> &UnresolvedObjectName {
+        match self {
+            RawName::Name(name) => name,
+            RawName::Id(_, name) => name,
+        }
+    }
+}
+
 impl AstDisplay for RawName {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
@@ -241,7 +250,7 @@ pub struct Select<T: AstInfo> {
     /// HAVING
     pub having: Option<Expr<T>>,
     /// OPTION
-    pub options: Vec<SqlOption>,
+    pub options: Vec<SqlOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for Select<T> {

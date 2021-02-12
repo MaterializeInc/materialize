@@ -87,6 +87,12 @@ impl std::fmt::Display for ResolvedObjectName {
     }
 }
 
+impl ResolvedObjectName {
+    pub fn raw_name(&self) -> PartialName {
+        self.raw_name.clone()
+    }
+}
+
 impl AstInfo for Aug {
     type ObjectName = ResolvedObjectName;
     type Id = Id;
@@ -170,12 +176,12 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                     if let Some(id) = self.ctes.get(&norm_name) {
                         return ResolvedObjectName {
                             id: Id::Local(*id),
-                            raw_name: normalize::object_name(raw_name).unwrap(),
+                            raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
                         };
                     }
                 }
 
-                let name = normalize::object_name(raw_name).unwrap();
+                let name = normalize::unresolved_object_name(raw_name).unwrap();
                 match self.catalog.resolve_item(&name) {
                     Ok(item) => ResolvedObjectName {
                         id: Id::Global(item.id()),
@@ -199,7 +205,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 }
                 ResolvedObjectName {
                     id: Id::Global(gid),
-                    raw_name: normalize::object_name(raw_name).unwrap(),
+                    raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
                 }
             }
         }
@@ -233,6 +239,20 @@ pub fn resolve_names_expr(
         ctes: HashMap::new(),
     };
     let result = n.fold_expr(expr);
+    n.status?;
+    Ok(result)
+}
+
+pub fn resolve_names_data_type(
+    scx: &StatementContext,
+    data_type: DataType<Raw>,
+) -> Result<DataType<Aug>, anyhow::Error> {
+    let mut n = NameResolver {
+        status: Ok(()),
+        catalog: scx.catalog,
+        ctes: HashMap::new(),
+    };
+    let result = n.fold_data_type(data_type);
     n.status?;
     Ok(result)
 }
@@ -1568,7 +1588,7 @@ fn plan_table_function(
         FunctionArgs::Star => bail!("{} does not accept * as an argument", name),
         FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
-    let name = normalize::object_name(name.clone())?;
+    let name = normalize::unresolved_object_name(name.clone())?;
     let tf = func::select_impl(ecx, FuncSpec::Func(&name), impls, args)?;
     let call = HirRelationExpr::CallTable {
         func: tf.func,
@@ -1648,7 +1668,7 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ScopeItemNa
     let name = match expr {
         Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
         Expr::Function(func) => {
-            let name = normalize::object_name(func.name.clone()).ok()?;
+            let name = normalize::unresolved_object_name(func.name.clone()).ok()?;
             if name.schema.as_deref() == Some("mz_internal") {
                 None
             } else {
@@ -1696,7 +1716,8 @@ fn expand_select_item<'a>(
             expr: Expr::QualifiedWildcard(table_name),
             alias: _,
         } => {
-            let table_name = normalize::object_name(UnresolvedObjectName(table_name.clone()))?;
+            let table_name =
+                normalize::unresolved_object_name(UnresolvedObjectName(table_name.clone()))?;
             let out: Vec<_> = ecx
                 .scope
                 .items
@@ -2465,7 +2486,7 @@ fn plan_aggregate(
         unsupported!(213, "window functions");
     }
 
-    let name = normalize::object_name(sql_func.name.clone())?;
+    let name = normalize::unresolved_object_name(sql_func.name.clone())?;
 
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
     // generalized function selection framework. The rule is simple: the user
@@ -2534,7 +2555,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
-        let table_name = normalize::object_name(UnresolvedObjectName(names))?;
+        let table_name = normalize::unresolved_object_name(UnresolvedObjectName(names))?;
         let (i, _name) = ecx.scope.resolve_table_column(&table_name, &col_name)?;
         return Ok(HirScalarExpr::Column(i));
     }
@@ -2642,7 +2663,7 @@ fn plan_function<'a>(
         FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
 
-    let name = normalize::object_name(sql_func.name.clone())?;
+    let name = normalize::unresolved_object_name(sql_func.name.clone())?;
     func::select_impl(ecx, FuncSpec::Func(&name), impls, args)
 }
 
@@ -2816,7 +2837,7 @@ fn find_trivial_column_equivalences(expr: &HirScalarExpr) -> Vec<(usize, usize)>
 
 pub fn scalar_type_from_sql(
     scx: &StatementContext,
-    data_type: &DataType,
+    data_type: &DataType<Aug>,
 ) -> Result<ScalarType, anyhow::Error> {
     Ok(match data_type {
         DataType::Array(elem_type) => {
@@ -2844,11 +2865,12 @@ pub fn scalar_type_from_sql(
             }
         }
         DataType::Other { name, typ_mod } => {
-            let canonical_name = canonicalize_type_name_internal(name);
-            let canonical_name = normalize::object_name(canonical_name)?;
-            let item = match scx.catalog.resolve_item(&canonical_name) {
+            let item = match scx.catalog.resolve_item(&name.raw_name()) {
                 Ok(i) => i,
-                Err(_) => bail!("type {} does not exist", name.to_string().quoted()),
+                Err(_) => bail!(
+                    "type {} does not exist",
+                    name.raw_name().to_string().quoted()
+                ),
             };
             match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
                 Some(t) => match t {
@@ -2857,7 +2879,7 @@ pub fn scalar_type_from_sql(
                         ScalarType::Decimal(precision, scale)
                     }
                     ScalarType::String => {
-                        match name.to_string().as_str() {
+                        match name.raw_name().to_string().as_str() {
                             n @ "char" | n @ "varchar" => {
                                 validate_typ_mod(n, &typ_mod, &[("length", 1, 10_485_760)])?
                             }
@@ -2870,20 +2892,13 @@ pub fn scalar_type_from_sql(
                         t
                     }
                 },
-                None => bail!("type {} does not exist", name.to_string().quoted()),
+                None => bail!(
+                    "type {} does not exist",
+                    name.raw_name().to_string().quoted()
+                ),
             }
         }
     })
-}
-
-pub fn canonicalize_type_name_internal(name: &UnresolvedObjectName) -> UnresolvedObjectName {
-    // Rewrite some unqualified aliases to the name we know they should
-    // use in the catalog, i.e. canonicalize the catalog name.
-    match name.to_string().as_str() {
-        "char" | "varchar" => UnresolvedObjectName::unqualified("text"),
-        "smallint" => UnresolvedObjectName::unqualified("int4"),
-        _ => name.clone(),
-    }
 }
 
 /// Returns the first two values provided as typ_mods as `u8`, which are

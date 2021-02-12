@@ -22,8 +22,8 @@ use std::fmt;
 
 use repr::adt::datetime::DateTimeField;
 
+use crate::ast::defs::AstInfo;
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::UnresolvedObjectName;
 
 #[derive(Debug)]
 pub struct ValueError(pub(crate) String);
@@ -176,25 +176,25 @@ mod test {
 
 /// SQL data types
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum DataType {
+pub enum DataType<T: AstInfo> {
     /// Array
-    Array(Box<DataType>),
+    Array(Box<DataType<T>>),
     /// List
-    List(Box<DataType>),
+    List(Box<DataType<T>>),
     /// Map
     Map {
-        key_type: Box<DataType>,
-        value_type: Box<DataType>,
+        key_type: Box<DataType<T>>,
+        value_type: Box<DataType<T>>,
     },
     /// Types who don't embed other types, e.g. INT
     Other {
-        name: UnresolvedObjectName,
+        name: T::ObjectName,
         /// Typ modifiers appended to the type name, e.g. `numeric(38,0)`.
         typ_mod: Vec<u64>,
     },
 }
 
-impl AstDisplay for DataType {
+impl<T: AstInfo> AstDisplay for DataType<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             DataType::Array(ty) => {
@@ -226,4 +226,4 @@ impl AstDisplay for DataType {
         }
     }
 }
-impl_display!(DataType);
+impl_display_t!(DataType);

@@ -1405,7 +1405,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_format(&mut self) -> Result<Format, ParserError> {
+    fn parse_format(&mut self) -> Result<Format<Raw>, ParserError> {
         let format = if self.parse_keyword(AVRO) {
             self.expect_keyword(USING)?;
             Format::Avro(self.parse_avro_schema()?)
@@ -1461,7 +1461,7 @@ impl<'a> Parser<'a> {
         Ok(format)
     }
 
-    fn parse_avro_schema(&mut self) -> Result<AvroSchema, ParserError> {
+    fn parse_avro_schema(&mut self) -> Result<AvroSchema<Raw>, ParserError> {
         let avro_schema = if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
             let url = self.parse_literal_string()?;
 
@@ -1518,7 +1518,7 @@ impl<'a> Parser<'a> {
         Ok(schema)
     }
 
-    fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
+    fn parse_envelope(&mut self) -> Result<Envelope<Raw>, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
@@ -1831,7 +1831,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_data_type_option(&mut self) -> Result<SqlOption, ParserError> {
+    fn parse_data_type_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {
         let name = self.parse_identifier()?;
         self.expect_token(&Token::Eq)?;
         Ok(SqlOption::DataType {
@@ -2082,7 +2082,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_opt_with_sql_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
+    fn parse_opt_with_sql_options(&mut self) -> Result<Vec<SqlOption<Raw>>, ParserError> {
         if self.parse_keyword(WITH) {
             self.parse_options()
         } else {
@@ -2090,14 +2090,14 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
+    fn parse_options(&mut self) -> Result<Vec<SqlOption<Raw>>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let options = self.parse_comma_separated(Parser::parse_sql_option)?;
         self.expect_token(&Token::RParen)?;
         Ok(options)
     }
 
-    fn parse_sql_option(&mut self) -> Result<SqlOption, ParserError> {
+    fn parse_sql_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {
         let name = self.parse_identifier()?;
         self.expect_token(&Token::Eq)?;
         let token = self.peek_token();
@@ -2365,9 +2365,9 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
-    fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
+    fn parse_data_type(&mut self) -> Result<DataType<Raw>, ParserError> {
         let other = |name: &str| DataType::Other {
-            name: UnresolvedObjectName::unqualified(name),
+            name: RawName::Name(UnresolvedObjectName::unqualified(name)),
             typ_mod: vec![],
         };
 
@@ -2381,7 +2381,7 @@ impl<'a> Parser<'a> {
                         "char"
                     };
                     DataType::Other {
-                        name: UnresolvedObjectName::unqualified(name),
+                        name: RawName::Name(UnresolvedObjectName::unqualified(name)),
                         typ_mod: match self.parse_optional_precision()? {
                             Some(u) => vec![u],
                             None => vec![],
@@ -2389,7 +2389,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 VARCHAR => DataType::Other {
-                    name: UnresolvedObjectName::unqualified("varchar"),
+                    name: RawName::Name(UnresolvedObjectName::unqualified("varchar")),
                     typ_mod: match self.parse_optional_precision()? {
                         Some(u) => vec![u],
                         None => vec![],
@@ -2401,7 +2401,7 @@ impl<'a> Parser<'a> {
                 BIGINT => other("int8"),
                 SMALLINT => other("int2"),
                 DEC | DECIMAL => DataType::Other {
-                    name: UnresolvedObjectName::unqualified("numeric"),
+                    name: RawName::Name(UnresolvedObjectName::unqualified("numeric")),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 DOUBLE => {
@@ -2459,7 +2459,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.prev_token();
                     DataType::Other {
-                        name: self.parse_object_name()?,
+                        name: RawName::Name(self.parse_object_name()?),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
@@ -2467,7 +2467,7 @@ impl<'a> Parser<'a> {
             Some(Token::Ident(_)) => {
                 self.prev_token();
                 DataType::Other {
-                    name: self.parse_object_name()?,
+                    name: RawName::Name(self.parse_object_name()?),
                     typ_mod: self.parse_typ_mod()?,
                 }
             }
@@ -2661,7 +2661,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_map(&mut self) -> Result<DataType, ParserError> {
+    fn parse_map(&mut self) -> Result<DataType<Raw>, ParserError> {
         self.expect_token(&Token::LBracket)?;
         let key_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::Op("=>".to_owned()))?;

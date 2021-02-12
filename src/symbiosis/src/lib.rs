@@ -45,11 +45,13 @@ use sql::ast::{
 use sql::catalog::Catalog;
 use sql::names::FullName;
 use sql::normalize;
-use sql::plan::{MutationKind, Plan, PlanContext, StatementContext, Table};
+use sql::plan::{
+    resolve_names_data_type, Aug, MutationKind, Plan, PlanContext, StatementContext, Table,
+};
 
 pub struct Postgres {
     client: tokio_postgres::Client,
-    table_types: HashMap<FullName, (Vec<DataType>, RelationDesc)>,
+    table_types: HashMap<FullName, (Vec<DataType<Aug>>, RelationDesc)>,
 }
 
 impl Postgres {
@@ -133,11 +135,6 @@ END $$;
                 temporary,
                 ..
             }) => {
-                let sql_types: Vec<_> = columns
-                    .iter()
-                    .map(|column| column.data_type.clone())
-                    .collect();
-
                 let names: Vec<_> = columns
                     .iter()
                     .map(|c| Some(sql::normalize::column_name(c.name.clone())))
@@ -149,8 +146,11 @@ END $$;
                 let mut defaults = Vec::with_capacity(columns.len());
                 let mut keys = vec![];
 
+                let mut sql_types: Vec<_> = Vec::with_capacity(columns.len());
                 for (index, column) in columns.iter().enumerate() {
-                    let ty = sql::plan::scalar_type_from_sql(&scx, &column.data_type)?;
+                    let aug_data_type = resolve_names_data_type(&scx, column.data_type.clone())?;
+                    let ty = sql::plan::scalar_type_from_sql(&scx, &aug_data_type)?;
+                    sql_types.push(aug_data_type);
                     let mut nullable = true;
                     let mut default = Expr::null();
 
@@ -200,7 +200,7 @@ END $$;
                 }
 
                 self.client.execute(&*stmt.to_string(), &[]).await?;
-                let name = scx.allocate_name(normalize::object_name(name.clone())?);
+                let name = scx.allocate_name(normalize::unresolved_object_name(name.clone())?);
                 let desc = RelationDesc::new(typ, names);
                 self.table_types
                     .insert(name.clone(), (sql_types, desc.clone()));
@@ -342,15 +342,14 @@ fn push_column(
     mut row: RowPacker,
     postgres_row: &tokio_postgres::Row,
     i: usize,
-    sql_type: &DataType,
+    sql_type: &DataType<Aug>,
     nullable: bool,
 ) -> Result<RowPacker, anyhow::Error> {
     // NOTE this needs to stay in sync with materialize::sql::scalar_type_from_sql
     // in some cases, we use slightly different representations than postgres does for the same sql types, so we have to be careful about conversions
     match sql_type {
         DataType::Other { name, typ_mod } => {
-            let name = normalize::object_name(name.clone())?;
-            match name.to_string().as_str() {
+            match name.raw_name().to_string().as_str() {
                 "bool" => {
                     let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
                     row.push(bool.into());
