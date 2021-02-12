@@ -24,7 +24,6 @@ use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::message::FrontendStartupMessage;
 use crate::protocol;
-use crate::secrets::SecretManager;
 
 /// Configures a [`Server`].
 #[derive(Debug)]
@@ -60,7 +59,6 @@ pub enum TlsMode {
 /// A server that communicates with clients via the pgwire protocol.
 pub struct Server {
     id_alloc: IdAllocator,
-    secrets: SecretManager,
     tls: Option<TlsConfig>,
     coord_client: coord::Client,
 }
@@ -70,7 +68,6 @@ impl Server {
     pub fn new(config: Config) -> Server {
         Server {
             id_alloc: IdAllocator::new(1, 1 << 16),
-            secrets: SecretManager::new(),
             tls: config.tls,
             coord_client: config.coord_client,
         }
@@ -88,13 +85,11 @@ impl Server {
                 bail!("maximum number of connections reached");
             }
         };
-        self.secrets.generate(conn_id);
 
         let res = self.handle_connection_inner(conn_id, conn).await;
 
         // Clean up state tied to this specific connection.
         self.id_alloc.free(conn_id);
-        self.secrets.free(conn_id);
 
         Ok(res?)
     }
@@ -126,7 +121,6 @@ impl Server {
                         conn: &mut conn,
                         version,
                         params,
-                        secret_key: self.secrets.get(conn_id).unwrap(),
                     })
                     .await?;
                     conn.flush().await?;
@@ -137,9 +131,10 @@ impl Server {
                     conn_id,
                     secret_key,
                 }) => {
-                    if self.secrets.verify(conn_id, secret_key) {
-                        self.coord_client.clone().cancel_request(conn_id).await;
-                    }
+                    self.coord_client
+                        .clone()
+                        .cancel_request(conn_id, secret_key)
+                        .await;
                     // For security, the client is not told whether the cancel
                     // request succeeds or fails.
                     return Ok(());

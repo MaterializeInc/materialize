@@ -30,7 +30,7 @@ pub enum Command {
     Startup {
         session: Session,
         cancel_tx: Arc<watch::Sender<Cancelled>>,
-        tx: oneshot::Sender<Response<Vec<StartupMessage>>>,
+        tx: oneshot::Sender<Response<StartupResponse>>,
     },
 
     Declare {
@@ -63,6 +63,7 @@ pub enum Command {
 
     CancelRequest {
         conn_id: u32,
+        secret_key: u32,
     },
 
     DumpCatalog {
@@ -96,8 +97,16 @@ pub struct NoSessionExecuteResponse {
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponse> + Send>>;
 
-/// Notifications that may be generated in response to
-/// [`SessionClient::startup`](crate::SessionClient::startup).
+/// The response to [`Client::startup`](crate::Client::startup).
+#[derive(Debug)]
+pub struct StartupResponse {
+    /// An opaque secret associated with this session.
+    pub secret_key: u32,
+    /// Notifications associated with session startup.
+    pub messages: Vec<StartupMessage>,
+}
+
+/// Messages in a [`StartupResponse`].
 #[derive(Debug)]
 pub enum StartupMessage {
     /// The database specified in the initial session does not exist.
@@ -126,7 +135,9 @@ impl StartupMessage {
 impl fmt::Display for StartupMessage {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            StartupMessage::UnknownSessionDatabase(name) => write!(f, "session database {} does not exist", name.quoted())
+            StartupMessage::UnknownSessionDatabase(name) => {
+                write!(f, "session database {} does not exist", name.quoted())
+            }
         }
     }
 }

@@ -32,6 +32,7 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
+use rand::Rng;
 use timely::communication::WorkerGuards;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
 use tokio::runtime::{Handle as TokioHandle, Runtime};
@@ -82,6 +83,7 @@ use crate::catalog::{
 use crate::client::{Client, Handle};
 use crate::command::{
     Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
+    StartupResponse,
 };
 use crate::error::CoordError;
 use crate::session::{
@@ -184,9 +186,25 @@ pub struct Coordinator {
     /// TODO(justin): this is a hack, and does not work right with TAIL.
     need_advance: bool,
     transient_id_counter: u64,
-    /// Map from connection id to a tokio::sync::watch sender that can be used to
-    /// signal to the receiver end that a cancel message has been sent.
-    cancel: HashMap<u32, Arc<watch::Sender<Cancelled>>>,
+    /// A map from connection ID to metadata about that connection for all
+    // active connections.
+    active_conns: HashMap<u32, ConnMeta>,
+}
+
+/// Metadata about an active connection.
+struct ConnMeta {
+    /// A watch channel shared with the client to inform the client of
+    /// cancellation requests. The coordinator sets the contained value to
+    /// `Cancelled::Cancelled` whenever it receives a cancellation request that
+    /// targets this connection. It is the client's responsibility to check this
+    /// value when appropriate and to reset the value to
+    /// `Cancelled::NotCancelled` before starting a new operation.
+    cancel_tx: Arc<watch::Sender<Cancelled>>,
+    /// Pgwire specifies that every connection have a 32-bit secret associated
+    /// with it, that is known to both the client and the server. Cancellation
+    /// requests are required to authenticate with the secret of the connection
+    /// that they are targeting.
+    secret_key: u32,
 }
 
 impl Coordinator {
@@ -574,12 +592,28 @@ impl Coordinator {
                     .resolve_database(catalog.default_database())
                     .is_err()
                 {
-                    messages.push(StartupMessage::UnknownSessionDatabase(catalog.default_database().into()));
+                    messages.push(StartupMessage::UnknownSessionDatabase(
+                        catalog.default_database().into(),
+                    ));
                 }
 
-                self.cancel.insert(session.conn_id(), cancel_tx);
+                let secret_key = rand::thread_rng().gen();
 
-                ClientTransmitter::new(tx).send(Ok(messages), session)
+                self.active_conns.insert(
+                    session.conn_id(),
+                    ConnMeta {
+                        cancel_tx,
+                        secret_key,
+                    },
+                );
+
+                ClientTransmitter::new(tx).send(
+                    Ok(StartupResponse {
+                        messages,
+                        secret_key,
+                    }),
+                    session,
+                )
             }
 
             Command::Execute {
@@ -806,8 +840,11 @@ impl Coordinator {
                 let _ = tx.send(Response { result, session });
             }
 
-            Command::CancelRequest { conn_id } => {
-                self.handle_cancel(conn_id).await;
+            Command::CancelRequest {
+                conn_id,
+                secret_key,
+            } => {
+                self.handle_cancel(conn_id, secret_key).await;
             }
 
             Command::DumpCatalog { tx } => {
@@ -987,13 +1024,20 @@ impl Coordinator {
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`.
-    async fn handle_cancel(&mut self, conn_id: u32) {
-        // Tell dataflow to cancel any pending peeks.
-        self.broadcast(SequencedCommand::CancelPeek { conn_id });
+    async fn handle_cancel(&mut self, conn_id: u32, secret_key: u32) {
+        if let Some(conn_meta) = self.active_conns.get(&conn_id) {
+            // If the secret key specified by the client doesn't match the
+            // actual secret key for the target connection, we treat this as a
+            // rogue cancellation request and ignore it.
+            if conn_meta.secret_key != secret_key {
+                return;
+            }
 
-        // Inform the session (if it asks) about the cancellation.
-        if let Some(cancel) = self.cancel.get_mut(&conn_id) {
-            let _ = cancel.send(Cancelled::Cancelled);
+            // Tell dataflow to cancel any pending peeks.
+            self.broadcast(SequencedCommand::CancelPeek { conn_id });
+
+            // Inform the target session (if it asks) about the cancellation.
+            let _ = conn_meta.cancel_tx.send(Cancelled::Cancelled);
         }
     }
 
@@ -1008,7 +1052,7 @@ impl Coordinator {
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
-        self.cancel.remove(&session.conn_id());
+        self.active_conns.remove(&session.conn_id());
     }
 
     // Removes all temporary items created by the specified connection, though
@@ -3414,7 +3458,7 @@ pub async fn serve(
         last_op_was_read: false,
         need_advance: true,
         transient_id_counter: 1,
-        cancel: HashMap::new(),
+        active_conns: HashMap::new(),
     };
     coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
     if let Some(config) = &logging {

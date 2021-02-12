@@ -93,8 +93,6 @@ pub struct RunParams<'a, A> {
     pub version: i32,
     /// The parameters that the client provided in the startup message.
     pub params: HashMap<String, String>,
-    /// An opaque secret key assigned to this connection.
-    pub secret_key: u32,
 }
 
 /// Runs a pgwire connection to completion.
@@ -113,7 +111,6 @@ pub async fn run<'a, A>(
         conn,
         version,
         mut params,
-        secret_key,
     }: RunParams<'a, A>,
 ) -> Result<(), io::Error>
 where
@@ -177,8 +174,8 @@ where
     }
 
     // Register session with coordinator.
-    let (mut coord_client, startup_messages) = match coord_client.startup(session).await {
-        Ok(startup_messages) => startup_messages,
+    let (mut coord_client, startup) = match coord_client.startup(session).await {
+        Ok(startup) => startup,
         Err(e) => {
             return conn
                 .send(ErrorResponse::from_coord(Severity::Fatal, e))
@@ -196,9 +193,9 @@ where
         }
         buf.push(BackendMessage::BackendKeyData {
             conn_id: session.conn_id(),
-            secret_key,
+            secret_key: startup.secret_key,
         });
-        for startup_message in startup_messages {
+        for startup_message in startup.messages {
             buf.push(ErrorResponse::from_startup_message(startup_message).into());
         }
         buf.push(BackendMessage::ReadyForQuery(session.transaction().into()));

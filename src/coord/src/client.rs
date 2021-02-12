@@ -18,7 +18,7 @@ use sql::ast::{Raw, Statement};
 use sql::plan::Params;
 
 use crate::command::{
-    Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
+    Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupResponse,
 };
 use crate::error::CoordError;
 use crate::session::{EndTransactionAction, Session};
@@ -59,9 +59,11 @@ impl Client {
     /// Starts a new session with the coordinator.
     ///
     /// Consumes this client, returning a new client that is bound to the
-    /// session and a list of messages that are intended to be displayed to the
-    /// user.
-    pub async fn startup(self, session: Session) -> Result<(SessionClient, Vec<StartupMessage>), CoordError> {
+    /// session and a response containing various details about the startup.
+    pub async fn startup(
+        self,
+        session: Session,
+    ) -> Result<(SessionClient, StartupResponse), CoordError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
         // connection. The coordinator will send a cancelled message on it if a
@@ -76,12 +78,23 @@ impl Client {
             cancel_tx: cancel_tx.clone(),
             cancel_rx,
         };
-        let messages = client.send(|tx, session| Command::Startup {
-            session,
-            cancel_tx,
-            tx,
-        }).await?;
-        Ok((client, messages))
+        let response = client
+            .send(|tx, session| Command::Startup {
+                session,
+                cancel_tx,
+                tx,
+            })
+            .await;
+        match response {
+            Ok(response) => Ok((client, response)),
+            Err(e) => {
+                // When startup fails, no need to call terminate. Remove the
+                // session from the client to sidestep the panic in the `Drop`
+                // implementation.
+                client.session.take();
+                Err(e)
+            }
+        }
     }
 
     /// Dumps the catalog to a JSON string.
@@ -109,9 +122,12 @@ impl Client {
     }
 
     /// Cancel the query currently running on another connection.
-    pub async fn cancel_request(&mut self, conn_id: u32) {
+    pub async fn cancel_request(&mut self, conn_id: u32, secret_key: u32) {
         self.cmd_tx
-            .send(Command::CancelRequest { conn_id })
+            .send(Command::CancelRequest {
+                conn_id,
+                secret_key,
+            })
             .expect("coordinator unexpectedly canceled request")
     }
 
