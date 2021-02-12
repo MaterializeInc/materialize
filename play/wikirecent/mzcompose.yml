@@ -64,10 +64,10 @@ mzworkflows:
     steps:
       - step: run
         service: app
-        command: /usr/local/bin/async_stream.py top10
+        entrypoint: /usr/local/bin/async_stream.py top10
 
   tail-top10:
     steps:
       - step: run
         service: app
-        command: /usr/local/bin/async_tail.py top10
+        entrypoint: /usr/local/bin/async_tail.py top10
