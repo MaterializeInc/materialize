@@ -592,9 +592,15 @@ where
 
         let desc = stmt.desc().clone();
         let stmt = stmt.sql().cloned();
-        self.coord_client
-            .session()
-            .set_portal(portal_name, desc, stmt, params, result_formats);
+        if let Err(err) =
+            self.coord_client
+                .session()
+                .set_portal(portal_name, desc, stmt, params, result_formats)
+        {
+            return self
+                .error(ErrorResponse::from_coord(Severity::Error, err))
+                .await;
+        }
 
         self.conn.send(BackendMessage::BindComplete).await?;
         Ok(State::Ready)
