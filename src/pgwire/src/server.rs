@@ -108,9 +108,7 @@ impl Server {
                     conn_id,
                     secret_key,
                 }) => {
-                    coord_client
-                        .cancel_request(conn_id, secret_key)
-                        .await;
+                    coord_client.cancel_request(conn_id, secret_key).await;
                     // For security, the client is not told whether the cancel
                     // request succeeds or fails.
                     return Ok(());
