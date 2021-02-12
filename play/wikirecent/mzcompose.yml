@@ -68,6 +68,17 @@ mzworkflows:
 
   tail-top10:
     steps:
+      - step: workflow
+        workflow: psycopg3-tail-top10
+
+  asyncpg-tail-top10:
+    steps:
       - step: run
         service: app
-        entrypoint: /usr/local/bin/async_tail.py top10
+        entrypoint: /usr/local/bin/asyncpg_tail.py top10
+
+  psycopg3-tail-top10:
+    steps:
+      - step: run
+        service: app
+        entrypoint: /usr/local/bin/psycopg3_tail.py top10
