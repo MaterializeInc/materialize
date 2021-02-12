@@ -54,4 +54,3 @@ query II rowsort
 select * from valid AS OF 18446744073709551615;
 ----
 5  18446744073709551616
-
