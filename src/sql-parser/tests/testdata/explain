@@ -58,11 +58,11 @@ EXPLAIN OPTIMIZED PLAN FOR VIEW foo
 ----
 EXPLAIN OPTIMIZED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(ObjectName([Ident("foo")])), options: ExplainOptions { typed: false } })
+Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(UnresolvedObjectName([Ident("foo")])), options: ExplainOptions { typed: false } })
 
 parse-statement
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
 ----
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
 =>
-Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(ObjectName([Ident("foo")])), options: ExplainOptions { typed: true } })
+Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(UnresolvedObjectName([Ident("foo")])), options: ExplainOptions { typed: true } })
