@@ -19,10 +19,9 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use dataflow_types::{DataEncoding, DataflowError, LinearOperator};
-use repr::{Datum, RelationType, Row, RowArena, Timestamp};
+use repr::{RelationType, Row, Timestamp};
 
 use crate::decode::decode_upsert;
-use crate::operator::StreamExt;
 use crate::source::{SourceData, SourceOutput};
 
 /// Entrypoint to the upsert-specific transformations involved
@@ -185,8 +184,8 @@ where
 /// whereas the input stream is `Stream<G, (key, Option<value>, Timestamp)>
 fn apply_linear_operators<G>(
     stream: &Stream<G, (Row, Option<Row>, Timestamp)>,
-    linear_operator: &mut Option<LinearOperator>,
-    src_type: &RelationType,
+    _linear_operator: &mut Option<LinearOperator>,
+    _src_type: &RelationType,
 ) -> (
     Stream<G, (Row, Option<Row>, Timestamp)>,
     Stream<G, DataflowError>,
@@ -194,118 +193,20 @@ fn apply_linear_operators<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    let operator = linear_operator.take();
     let mut row_packer = repr::RowPacker::new();
 
-    if let Some(operator) = operator {
-        // Determine replacement values for unused columns.
-        // This is copied over from applying linear operators to
-        // the non-upsert case.
-        // At this point, the stream consists of (key, key+payload, time)
-        // so it is ok to delete replace unused values in key+payload
-        // but not to replace unused values in key because that would cause
-        // errors in arrange_from_upsert
-        let position_or = (0..src_type.arity())
-            .map(|col| {
-                if operator.projection.contains(&col) {
-                    Some(col)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-
-        // If a row does not match a predicate whose support lies in the key
-        // columns, it can be tossed away entirely. If a row does not match
-        // a predicate whose support is not contained in the key columns, it
-        // must be replaced with (key, None) in case if there was previously a
-        // row with the same key that matched the predicate.
-        let key_col_len = src_type.keys[0].len();
-        let mut predicates = operator.predicates;
-        let mut key_predicates = Vec::new();
-        predicates.retain(|p| {
-            let key_predicate = p.support().into_iter().all(|c| c < key_col_len);
-            if key_predicate {
-                key_predicates.push(p.clone());
+    // just prepend the key to the value without unpacking rows
+    let prepended = stream.map({
+        move |(key, value, timestamp)| {
+            if let Some(value) = value {
+                row_packer.extend_by_row(&key);
+                row_packer.extend_by_row(&value);
+                (key, Some(row_packer.finish_and_reuse()), timestamp)
+            } else {
+                (key, None, timestamp)
             }
-            !key_predicate
-        });
-
-        let mut storage = Vec::new();
-
-        stream.unary_fallible(Pipeline, "UpsertLinearFallible", move |_, _| {
-            move |input, ok_output, err_output| {
-                input.for_each(|time, data| {
-                    let mut ok_session = ok_output.session(&time);
-                    let mut err_session = err_output.session(&time);
-                    data.swap(&mut storage);
-                    let temp_storage = RowArena::new();
-                    for (key, value, time) in storage.drain(..) {
-                        let mut datums = key.unpack();
-                        let key_pred_eval = key_predicates
-                            .iter()
-                            .map(|predicate| predicate.eval(&datums, &temp_storage))
-                            .find(|result| result != &Ok(Datum::True));
-                        match key_pred_eval {
-                            None => {
-                                if let Some(value) = value {
-                                    let value_datums = value.unpack();
-                                    // combine value datums with key datums
-                                    datums.extend(value_datums);
-                                    // evaluate predicates against the entire record
-                                    let pred_eval = predicates
-                                        .iter()
-                                        .map(|predicate| predicate.eval(&datums, &temp_storage))
-                                        .find(|result| result != &Ok(Datum::True));
-                                    match pred_eval {
-                                        None => {
-                                            // project all demanded keys from the record
-                                            let record = Some(row_packer.pack(
-                                                position_or.iter().map(|pos_or| match pos_or {
-                                                    Some(index) => datums[*index],
-                                                    None => Datum::Dummy,
-                                                }),
-                                            ));
-                                            ok_session.give((key, record, time));
-                                        }
-                                        Some(Ok(Datum::False)) | Some(Ok(Datum::Null)) => {
-                                            ok_session.give((key, None, time));
-                                        }
-                                        Some(Ok(x)) => {
-                                            panic!("Predicate evaluated to invalid value: {:?}", x)
-                                        }
-                                        Some(Err(x)) => {
-                                            err_session.give(DataflowError::from(x));
-                                        }
-                                    }
-                                } else {
-                                    ok_session.give((key, None, time));
-                                }
-                            }
-                            Some(Ok(Datum::False)) | Some(Ok(Datum::Null)) => {}
-                            Some(Ok(x)) => panic!("Predicate evaluated to invalid value: {:?}", x),
-                            Some(Err(x)) => {
-                                err_session.give(DataflowError::from(x));
-                            }
-                        };
-                    }
-                })
-            }
-        })
-    } else {
-        // just prepend the key to the value without unpacking rows
-        let prepended = stream.map({
-            move |(key, value, timestamp)| {
-                if let Some(value) = value {
-                    row_packer.extend_by_row(&key);
-                    row_packer.extend_by_row(&value);
-                    (key, Some(row_packer.finish_and_reuse()), timestamp)
-                } else {
-                    (key, None, timestamp)
-                }
-            }
-        });
-        let scope = &prepended.scope();
-        (prepended, operator::empty(scope))
-    }
+        }
+    });
+    let scope = &prepended.scope();
+    (prepended, operator::empty(scope))
 }
