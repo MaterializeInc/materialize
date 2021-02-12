@@ -25,14 +25,13 @@ use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType, Function,
-    FunctionArgs, Ident, IfExistsBehavior, Query, Raw, RawName, SqlOption, Statement, TableFactor,
-    UnresolvedObjectName, Value,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
+    IfExistsBehavior, Query, Raw, RawName, SqlOption, Statement, TableFactor, UnresolvedObjectName,
+    Value,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::plan::error::PlanError;
-use crate::plan::query;
 use crate::plan::statement::StatementContext;
 
 /// Normalizes a single identifier.
@@ -45,8 +44,8 @@ pub fn column_name(id: Ident) -> ColumnName {
     ColumnName::from(ident(id))
 }
 
-/// Normalizes an object name.
-pub fn object_name(mut name: UnresolvedObjectName) -> Result<PartialName, PlanError> {
+/// Normalizes an unresolved object name.
+pub fn unresolved_object_name(mut name: UnresolvedObjectName) -> Result<PartialName, PlanError> {
     if name.0.len() < 1 || name.0.len() > 3 {
         return Err(PlanError::MisqualifiedName(name.to_string()));
     }
@@ -64,7 +63,7 @@ pub fn object_name(mut name: UnresolvedObjectName) -> Result<PartialName, PlanEr
 }
 
 /// Normalizes a list of `WITH` options.
-pub fn options(options: &[SqlOption]) -> BTreeMap<String, Value> {
+pub fn options<T: AstInfo>(options: &[SqlOption<T>]) -> BTreeMap<String, Value> {
     options
         .iter()
         .map(|o| match o {
@@ -83,7 +82,7 @@ pub fn options(options: &[SqlOption]) -> BTreeMap<String, Value> {
 
 /// Normalizes `WITH` option keys without normalizing their corresponding
 /// values.
-pub fn option_objects(options: &[SqlOption]) -> BTreeMap<String, SqlOption> {
+pub fn option_objects(options: &[SqlOption<Raw>]) -> BTreeMap<String, SqlOption<Raw>> {
     options
         .iter()
         .map(|o| (ident(o.name().clone()), o.clone()))
@@ -116,13 +115,15 @@ pub fn create_statement(
     mut stmt: Statement<Raw>,
 ) -> Result<String, PlanError> {
     let allocate_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
-        Ok(unresolve(scx.allocate_name(object_name(name.clone())?)))
+        Ok(unresolve(
+            scx.allocate_name(unresolved_object_name(name.clone())?),
+        ))
     };
 
     let allocate_temporary_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
-        Ok(unresolve(
-            scx.allocate_temporary_name(object_name(name.clone())?),
-        ))
+        Ok(unresolve(scx.allocate_temporary_name(
+            unresolved_object_name(name.clone())?,
+        )))
     };
 
     let resolve_item = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
@@ -242,20 +243,6 @@ pub fn create_statement(
             match object_name {
                 RawName::Name(n) | RawName::Id(_, n) => self.visit_unresolved_object_name_mut(n),
             }
-        }
-
-        fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType) {
-            if let DataType::Other { name, typ_mod } = data_type {
-                let canonical_name = query::canonicalize_type_name_internal(&name.clone());
-                if &canonical_name != name {
-                    // None of our underlying types with aliases support
-                    // typ_mods, while the aliases themselves do, so we should
-                    // ensure they're empty.
-                    *typ_mod = vec![];
-                    *name = canonical_name;
-                }
-            }
-            visit_mut::visit_data_type_mut(self, data_type)
         }
     }
 
@@ -533,7 +520,7 @@ pub fn aws_connect_info(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashSet};
     use std::error::Error;
     use std::rc::Rc;
 
@@ -548,6 +535,7 @@ mod tests {
         let scx = &StatementContext {
             pcx: &PlanContext::default(),
             catalog: &DummyCatalog,
+            ids: HashSet::new(),
             param_types: Rc::new(RefCell::new(BTreeMap::new())),
         };
 

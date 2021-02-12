@@ -12,6 +12,7 @@
 //! This module houses the handlers for statements that manipulate data, like
 //! `INSERT`, `SELECT`, `TAIL`, and `COPY`.
 
+use std::collections::HashSet;
 use std::convert::TryFrom;
 
 use anyhow::bail;
@@ -179,6 +180,7 @@ pub fn plan_explain(
             let scx = StatementContext {
                 pcx: view.plan_cx(),
                 catalog: scx.catalog,
+                ids: HashSet::new(),
                 param_types: scx.param_types.clone(),
             };
             (scx, query)

@@ -105,7 +105,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 }
 
 async fn purify_format(
-    format: &mut Option<Format>,
+    format: &mut Option<Format<Raw>>,
     connector: &mut Connector,
     col_names: &mut Vec<Ident>,
     file: Option<tokio::fs::File>,

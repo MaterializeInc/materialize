@@ -18,7 +18,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashSet},
+    rc::Rc,
+};
 
 use expr::GlobalId;
 use repr::{RelationDesc, RelationType};
@@ -80,6 +84,7 @@ fn datadriven() {
                     let scx = StatementContext {
                         catalog: &catalog,
                         pcx: &PlanContext::default(),
+                        ids: HashSet::new(),
                         param_types: Rc::new(RefCell::new(BTreeMap::new())),
                     };
                     let mut qcx = QueryContext::root(&scx, QueryLifetime::OneShot);
