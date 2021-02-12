@@ -3126,13 +3126,12 @@ impl Coordinator {
                     predicates,
                 } = &*e
                 {
-                    match dataflow::extract_temporal(predicates.iter().cloned()) {
+                    match dataflow::FilterPlan::create_from(predicates.iter().cloned()) {
                         Err(e) => coord_bail!("{:?}", e),
-                        Ok((_normal, lower, upper)) => {
+                        Ok(plan) => {
                             // If we are in experimenal mode permit temporal filters.
                             // TODO(mcsherry): remove this gating eventually.
-                            let non_temporal = lower.is_empty() && upper.is_empty();
-                            if non_temporal || self.catalog.config().experimental_mode {
+                            if plan.non_temporal() || self.catalog.config().experimental_mode {
                                 Ok(())
                             } else {
                                 coord_bail!("temporal filters require the --experimental flag")

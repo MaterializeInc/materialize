@@ -481,7 +481,7 @@ where
                     // Implement source filtering and projection.
                     // At the moment this is strictly optional, but we perform it anyhow
                     // to demonstrate the intended use.
-                    if let Some(operators) = src.operators.clone() {
+                    if let Some(mut operators) = src.operators.clone() {
                         // Determine replacement values for unused columns.
                         let source_type = src.desc.typ();
                         let position_or = (0..source_type.arity())
@@ -494,36 +494,36 @@ where
                             })
                             .collect::<Vec<_>>();
 
-                        // Evaluate the predicate on each record, noting potential errors that might result.
-                        let (collection2, errors) = collection.flat_map_fallible({
+                        // Apply predicates and insert dummy values into undemanded columns.
+                        let (collection2, errors) = collection.inner.flat_map_fallible({
+                            let mut datums = crate::render::datum_vec::DatumVec::new();
                             let mut row_packer = repr::RowPacker::new();
-                            move |input_row| {
-                                let temp_storage = RowArena::new();
-                                let datums = input_row.unpack();
-                                let pred_eval = operators
-                                    .predicates
-                                    .iter()
-                                    .map(|predicate| predicate.eval(&datums, &temp_storage))
-                                    .find(|result| result != &Ok(Datum::True));
-                                match pred_eval {
-                                    None => Some(Ok(row_packer.pack(position_or.iter().map(
-                                        |pos_or| match pos_or {
-                                            Some(index) => datums[*index],
-                                            None => Datum::Dummy,
-                                        },
-                                    )))),
-                                    Some(Ok(Datum::False)) => None,
-                                    Some(Ok(Datum::Null)) => None,
-                                    Some(Ok(x)) => {
-                                        panic!("Predicate evaluated to invalid value: {:?}", x)
-                                    }
-                                    Some(Err(x)) => Some(Err(x.into())),
-                                }
+                            let predicates = std::mem::take(&mut operators.predicates);
+                            // The predicates may be temporal, which requires the nuance
+                            // of an explicit plan capable of evaluating the predicates.
+                            let filter_plan = filter::FilterPlan::create_from(predicates)
+                                .unwrap_or_else(|e| panic!(e));
+                            move |(input_row, time, diff)| {
+                                let mut datums_local = datums.borrow_with(&input_row);
+                                let times_diffs =
+                                    filter_plan.evaluate(&mut datums_local, time, diff);
+                                // The output row may need to have `Datum::Dummy` values stitched in.
+                                let output_row = row_packer.pack(position_or.iter().map(
+                                    |pos_or| match pos_or {
+                                        Some(index) => datums_local[*index],
+                                        None => Datum::Dummy,
+                                    },
+                                ));
+                                // Each produced (time, diff) results in a copy of `output_row` in the output.
+                                // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
+                                times_diffs.map(move |time_diff| {
+                                    time_diff.map(|(t, d)| (output_row.clone(), t, d))
+                                })
                             }
                         });
 
-                        collection = collection2;
-                        err_collection = err_collection.concat(&errors);
+                        collection = collection2.as_collection();
+                        err_collection = err_collection.concat(&errors.as_collection());
                     }
 
                     // Apply `as_of` to each timestamp.
