@@ -25,15 +25,16 @@ def rev_parse(git_ref: str) -> str:
     return subprocess.check_output(["git", "rev-parse", git_ref]).strip().decode()
 
 
-def mzcompose_location() -> str:
+def mzcompose_location(mz_root: str) -> str:
     """Return the absolute path to mzcompose.
 
     MZ_ROOT is expected to be set via pyactivate.
     """
-    return pathlib.Path(os.environ["MZ_ROOT"], "bin", "mzcompose")
+    return pathlib.Path(mz_root, "bin", "mzcompose")
 
 
 def main(
+    mz_root: str,
     composition: str,
     benchmark: str,
     worker_counts: typing.List[int],
@@ -44,16 +45,15 @@ def main(
         # Explicitly override the worker counts for the CI benchmark
         worker_counts = [1]
 
-
     setup_benchmark = [
-        mzcompose_location(),
+        mzcompose_location(mz_root),
         "--mz-find",
         composition,
         "run",
         f"setup-{benchmark}",
     ]
     run_benchmark = [
-        mzcompose_location(),
+        mzcompose_location(mz_root),
         "--mz-find",
         composition,
         "run",
@@ -86,7 +86,7 @@ def main(
     ):
 
         child_env = os.environ.copy()
-        child_env["MZ_ROOT"] = os.environ["MZ_ROOT"]
+        child_env["MZ_ROOT"] = mz_root
         child_env["MZ_WORKERS"] = str(worker_count)
         child_env["MZBUILD_WAIT_FOR_IMAGE"] = "true"
         if git_revision:
@@ -183,7 +183,12 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    # Ensure that we are working out of the git directory so that commands, such as git, will work
+    mz_root = os.environ["MZ_ROOT"]
+    os.chdir(mz_root)
+
     worker_counts = enumerate_cpu_counts()
     git_revisions = [None, *[rev_parse(ref) for ref in args.git_references]]
 
-    main(args.composition, args.size, worker_counts, git_revisions)
+    main(mz_root, args.composition, args.size, worker_counts, git_revisions)
