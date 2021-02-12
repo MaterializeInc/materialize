@@ -16,6 +16,7 @@ integer_datetimes           on                                         "Reports 
 DateStyle                   "ISO, MDY"                                 "Sets the display format for date and time values (PostgreSQL)."
 search_path                 "mz_catalog, pg_catalog, public, mz_temp"  "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."
 server_version              9.5.0                                      "Shows the server version (PostgreSQL)."
+server_version_num          90500                                      "Shows the server version as an integer (PostgreSQL)."
 sql_safe_updates            off                                        "Prohibits SQL statements that may be overly destructive (CockroachDB)."
 standard_conforming_strings on                                         "Causes '...' strings to treat backslashes literally (PostgreSQL)."
 TimeZone                    UTC                                        "Sets the time zone for displaying and interpreting time stamps (PostgreSQL)."
@@ -60,6 +61,9 @@ parameter "DateStyle" can only be set to "ISO, MDY"
 
 ! SET server_version = "9.6.0"
 parameter "server_version" cannot be changed
+
+! SET server_version_num = "90600"
+parameter "server_version_num" cannot be changed
 
 ! SET TimeZone = 'nope'
 parameter "TimeZone" can only be set to "UTC"
