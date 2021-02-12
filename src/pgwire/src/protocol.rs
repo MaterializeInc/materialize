@@ -20,6 +20,7 @@ use futures::stream::{self, StreamExt};
 use itertools::izip;
 use lazy_static::lazy_static;
 use log::debug;
+use openssl::nid::Nid;
 use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_uint_counter};
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
@@ -43,6 +44,7 @@ use crate::codec::FramedConn;
 use crate::message::{
     self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
 };
+use crate::server::{Conn, TlsMode};
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -90,6 +92,7 @@ pub struct StateMachine<A> {
     pub conn: FramedConn<A>,
     pub conn_id: u32,
     pub secret_key: u32,
+    pub tls_mode: Option<TlsMode>,
     pub coord_client: coord::SessionClient,
 }
 
@@ -218,6 +221,47 @@ where
         version: i32,
         params: HashMap<String, String>,
     ) -> Result<State, io::Error> {
+        // Validate that the connection is compatible with the TLS mode.
+        //
+        // The match here explicitly spells out all cases to be resilient to
+        // future changes to TlsMode.
+        match (&self.tls_mode, self.conn.inner()) {
+            (None, Conn::Unencrypted(_)) => (),
+            (None, Conn::Ssl(_)) => unreachable!(),
+            (Some(TlsMode::Require), Conn::Ssl(_)) => (),
+            (Some(TlsMode::Require), Conn::Unencrypted(_))
+            | (Some(TlsMode::VerifyUser), Conn::Unencrypted(_)) => {
+                return self
+                    .error(ErrorResponse::fatal(
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                        "TLS encryption is required",
+                    ))
+                    .await;
+            }
+            (Some(TlsMode::VerifyUser), Conn::Ssl(conn)) => {
+                let user = self.coord_client.session().user();
+                let cn_matches = match conn.ssl().peer_certificate() {
+                    None => false,
+                    Some(cert) => cert
+                        .subject_name()
+                        .entries_by_nid(Nid::COMMONNAME)
+                        .any(|n| n.data().as_slice() == user.as_bytes()),
+                };
+                if !cn_matches {
+                    let msg = format!(
+                        "certificate authentication failed for user {}",
+                        user.quoted()
+                    );
+                    return self
+                        .error(ErrorResponse::fatal(
+                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                            msg,
+                        ))
+                        .await;
+                }
+            }
+        }
+
         if version != VERSION_3 {
             return self
                 .error(ErrorResponse::fatal(

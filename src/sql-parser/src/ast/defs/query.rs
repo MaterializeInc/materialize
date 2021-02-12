@@ -24,7 +24,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{Expr, FunctionArgs, Ident, ObjectName, SqlOption};
+use crate::ast::{Expr, FunctionArgs, Ident, SqlOption, UnresolvedObjectName};
 
 // This represents the metadata that lives next to an AST, as we take it through
 // various stages in the planning process.
@@ -43,7 +43,7 @@ use crate::ast::{Expr, FunctionArgs, Ident, ObjectName, SqlOption};
 // sql/src/plan/query.rs:resolve_names.
 pub trait AstInfo: Clone {
     // The type used for table references.
-    type Table: AstDisplay + Clone + Hash + Debug + Eq;
+    type ObjectName: AstDisplay + Clone + Hash + Debug + Eq;
     // The type stored next to CTEs for their assigned ID.
     type Id: Clone + Hash + Debug + Eq;
 }
@@ -53,8 +53,8 @@ pub struct Raw;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum RawName {
-    Name(ObjectName),
-    Id(u64, ObjectName),
+    Name(UnresolvedObjectName),
+    Id(u64, UnresolvedObjectName),
 }
 
 impl AstDisplay for RawName {
@@ -72,7 +72,7 @@ impl AstDisplay for RawName {
 impl_display!(RawName);
 
 impl AstInfo for Raw {
-    type Table = RawName;
+    type ObjectName = RawName;
     type Id = ();
 }
 
@@ -396,11 +396,11 @@ impl<T: AstInfo> TableWithJoins<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TableFactor<T: AstInfo> {
     Table {
-        name: T::Table,
+        name: T::ObjectName,
         alias: Option<TableAlias>,
     },
     Function {
-        name: ObjectName,
+        name: UnresolvedObjectName,
         args: FunctionArgs<T>,
         alias: Option<TableAlias>,
     },

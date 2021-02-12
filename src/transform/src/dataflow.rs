@@ -279,7 +279,14 @@ pub mod monotonic {
                 }
             }
             MirRelationExpr::Project { input, .. } => is_monotonic(input, sources),
-            MirRelationExpr::Filter { input, .. } => is_monotonic(input, sources),
+            MirRelationExpr::Filter { input, predicates } => {
+                let is_monotonic = is_monotonic(input, sources);
+                // Non-temporal predicates can introduce non-monotonicity, as they
+                // can result in the future removal of records.
+                // TODO: this could be improved to only restrict if upper bounds
+                // are present, as temporal lower bounds only delay introduction.
+                is_monotonic && !predicates.iter().any(|p| p.contains_temporal())
+            }
             MirRelationExpr::Map { input, .. } => is_monotonic(input, sources),
             MirRelationExpr::TopK {
                 input, monotonic, ..

@@ -61,7 +61,7 @@ impl Client {
         self.send(|tx| Command::DumpCatalog { tx }).await
     }
 
-    /// Executes a statement as the system user that is not tied to a session.
+    /// Executes a statement as the specified user that is not tied to a session.
     ///
     /// This will execute in a pseudo session that is not able to create any
     /// temporary resources that would normally need to be cleaned up by Terminate.
@@ -69,9 +69,15 @@ impl Client {
         &mut self,
         stmt: Statement<Raw>,
         params: Params,
+        user: String,
     ) -> Result<NoSessionExecuteResponse, CoordError> {
-        self.send(|tx| Command::NoSessionExecute { stmt, params, tx })
-            .await
+        self.send(|tx| Command::NoSessionExecute {
+            stmt,
+            params,
+            user,
+            tx,
+        })
+        .await
     }
 
     /// Cancel the query currently running on another connection.

@@ -19,10 +19,10 @@ use ore::collections::CollectionExt;
 use repr::{Datum, RelationDesc, Row, ScalarType};
 
 use crate::ast::{
-    ObjectName, ObjectType, Raw, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
+    ObjectType, Raw, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
-    ShowStatementFilter, Statement, Value,
+    ShowStatementFilter, Statement, UnresolvedObjectName, Value,
 };
 use crate::catalog::CatalogItemType;
 use crate::parse;
@@ -195,7 +195,7 @@ fn show_schemas<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
-    from: Option<ObjectName>,
+    from: Option<UnresolvedObjectName>,
     filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let database = if let Some(from) = from {
@@ -237,7 +237,7 @@ fn show_tables<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
-    from: Option<ObjectName>,
+    from: Option<UnresolvedObjectName>,
     filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     if extended {
@@ -270,7 +270,7 @@ fn show_sources<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
     materialized: bool,
-    from: Option<ObjectName>,
+    from: Option<UnresolvedObjectName>,
     filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
@@ -316,7 +316,7 @@ fn show_views<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
     materialized: bool,
-    from: Option<ObjectName>,
+    from: Option<UnresolvedObjectName>,
     filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
@@ -361,7 +361,7 @@ fn show_views<'a>(
 fn show_sinks<'a>(
     scx: &'a StatementContext<'a>,
     full: bool,
-    from: Option<ObjectName>,
+    from: Option<UnresolvedObjectName>,
     filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
@@ -390,7 +390,7 @@ fn show_types<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
-    from: Option<ObjectName>,
+    from: Option<UnresolvedObjectName>,
     filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {
@@ -420,7 +420,7 @@ fn show_all_objects<'a>(
     scx: &'a StatementContext<'a>,
     extended: bool,
     full: bool,
-    from: Option<ObjectName>,
+    from: Option<UnresolvedObjectName>,
     filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
     let schema = if let Some(from) = from {

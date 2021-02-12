@@ -8,7 +8,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""async_tail
+"""psycopg3_tail
 
 Example utility that streams a VIEW using the TAIL command provided by materialized. Useful for
 debugging / viewing the data transferred between materialized and the Python web server.
@@ -25,15 +25,13 @@ import psycopg3
 async def tail_view(args):
     """Continuously print changes to a Materialize View."""
     dsn = f"postgresql://materialize@{args.host}:{args.port}/materialize"
+    query = f"TAIL {args.view} WITH (PROGRESS)"
     async with await psycopg3.AsyncConnection.connect(dsn) as conn:
         async with await conn.cursor() as cursor:
-            query = f"DECLARE cur CURSOR FOR TAIL {args.view} WITH (PROGRESS)"
-            await cursor.execute(query)
-            while 1:
-                await cursor.execute(f"FETCH ALL cur")
-                async for row in cursor:
-                    (timestamp, progressed, diff, *columns) = row
-                    print(f"{timestamp} {progressed} {diff} {columns}")
+            # Stream works great in situations where you never plan to cancel the request
+            # If you need cancellation, consider using DECLARE / FETCH instead
+            async for (timestamp, progressed, diff, *columns) in cursor.stream(query):
+                print(f"{timestamp} {progressed} {diff} {columns}")
 
 
 def main():
