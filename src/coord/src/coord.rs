@@ -79,7 +79,7 @@ use crate::catalog::builtin::{
 use crate::catalog::{
     self, Catalog, CatalogItem, Func, Index, SinkConnectorState, Type, TypeInner,
 };
-use crate::client::{Handle, Client};
+use crate::client::{Client, Handle};
 use crate::command::{
     Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
@@ -574,7 +574,7 @@ impl Coordinator {
                     .resolve_database(catalog.default_database())
                     .is_err()
                 {
-                    messages.push(StartupMessage::UnknownSessionDatabase);
+                    messages.push(StartupMessage::UnknownSessionDatabase(catalog.default_database().into()));
                 }
 
                 self.cancel.insert(session.conn_id(), cancel_tx);

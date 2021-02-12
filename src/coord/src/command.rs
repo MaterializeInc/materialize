@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -15,6 +16,7 @@ use derivative::Derivative;
 use tokio::sync::{mpsc, oneshot};
 
 use dataflow_types::PeekResponse;
+use ore::str::StrExt;
 use repr::Row;
 use sql::ast::{FetchDirection, ObjectType, Raw, Statement};
 use sql::plan::ExecuteTimeout;
@@ -99,7 +101,34 @@ pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponse> + Send>>;
 #[derive(Debug)]
 pub enum StartupMessage {
     /// The database specified in the initial session does not exist.
-    UnknownSessionDatabase,
+    UnknownSessionDatabase(String),
+}
+
+impl StartupMessage {
+    /// Reports additional details about the error, if any are available.
+    pub fn detail(&self) -> Option<String> {
+        None
+    }
+
+    /// Reports a hint for the user about how the error could be fixed.
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            StartupMessage::UnknownSessionDatabase(_) => Some(
+                "Create the database with CREATE DATABASE \
+                 or pick an extant database with SET DATABASE = name. \
+                 List available databases with SHOW DATABASES."
+                    .into(),
+            ),
+        }
+    }
+}
+
+impl fmt::Display for StartupMessage {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            StartupMessage::UnknownSessionDatabase(name) => write!(f, "session database {} does not exist", name.quoted())
+        }
+    }
 }
 
 /// The response to [`SessionClient::execute`](crate::SessionClient::execute).

@@ -28,9 +28,9 @@ use tokio::time::{self, Duration, Instant};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use coord::session::{
-    EndTransactionAction, Portal, PortalState, RowBatchStream, TransactionStatus,
+    EndTransactionAction, Portal, PortalState, RowBatchStream, Session, TransactionStatus,
 };
-use coord::{ExecuteResponse, StartupMessage};
+use coord::ExecuteResponse;
 use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use ore::netio::AsyncReady;
@@ -81,6 +81,142 @@ lazy_static! {
     .unwrap();
 }
 
+/// Parameters for the [`run`] function.
+pub struct RunParams<'a, A> {
+    /// The TLS mode of the pgwire server.
+    pub tls_mode: Option<TlsMode>,
+    /// A client for the coordinator.
+    pub coord_client: coord::Client,
+    /// The connection to the client.
+    pub conn: &'a mut FramedConn<A>,
+    /// The protocol version that the client provided in the startup message.
+    pub version: i32,
+    /// The parameters that the client provided in the startup message.
+    pub params: HashMap<String, String>,
+    /// An opaque secret key assigned to this connection.
+    pub secret_key: u32,
+}
+
+/// Runs a pgwire connection to completion.
+///
+/// This involves responding to `FrontendMessage::StartupMessage` and all future
+/// requests until the client terminates the connection or a fatal error occurs.
+///
+/// Note that this function returns successfully even upon delivering a fatal
+/// error to the client. It only returns `Err` if an unexpected I/O error occurs
+/// while communicating with the client, e.g., if the connection is severed in
+/// the middle of a request.
+pub async fn run<'a, A>(
+    RunParams {
+        tls_mode,
+        coord_client,
+        conn,
+        version,
+        mut params,
+        secret_key,
+    }: RunParams<'a, A>,
+) -> Result<(), io::Error>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+{
+    if version != VERSION_3 {
+        return conn
+            .send(ErrorResponse::fatal(
+                SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                "server does not support the client's requested protocol version",
+            ))
+            .await;
+    }
+
+    let user = params.remove("user").unwrap_or_else(String::new);
+
+    // Validate that the connection is compatible with the TLS mode.
+    //
+    // The match here explicitly spells out all cases to be resilient to
+    // future changes to TlsMode.
+    match (tls_mode, conn.inner()) {
+        (None, Conn::Unencrypted(_)) => (),
+        (None, Conn::Ssl(_)) => unreachable!(),
+        (Some(TlsMode::Require), Conn::Ssl(_)) => (),
+        (Some(TlsMode::Require), Conn::Unencrypted(_))
+        | (Some(TlsMode::VerifyUser), Conn::Unencrypted(_)) => {
+            return conn
+                .send(ErrorResponse::fatal(
+                    SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                    "TLS encryption is required",
+                ))
+                .await;
+        }
+        (Some(TlsMode::VerifyUser), Conn::Ssl(inner_conn)) => {
+            let cn_matches = match inner_conn.ssl().peer_certificate() {
+                None => false,
+                Some(cert) => cert
+                    .subject_name()
+                    .entries_by_nid(Nid::COMMONNAME)
+                    .any(|n| n.data().as_slice() == user.as_bytes()),
+            };
+            if !cn_matches {
+                let msg = format!(
+                    "certificate authentication failed for user {}",
+                    user.quoted()
+                );
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                        msg,
+                    ))
+                    .await;
+            }
+        }
+    }
+
+    // Construct session.
+    let mut session = Session::new(conn.id(), user);
+    for (name, value) in params {
+        let _ = session.vars_mut().set(&name, &value);
+    }
+
+    // Register session with coordinator.
+    let mut coord_client = coord_client.for_session(session);
+    let startup_messages = match coord_client.startup().await {
+        Ok(startup_messages) => startup_messages,
+        Err(e) => {
+            return conn
+                .send(ErrorResponse::from_coord(Severity::Fatal, e))
+                .await
+        }
+    };
+
+    // From this point forward we must not fail without calling `coord_client.terminate`!
+
+    let res = async {
+        let session = coord_client.session();
+        let mut buf = vec![BackendMessage::AuthenticationOk];
+        for var in session.vars().notify_set() {
+            buf.push(BackendMessage::ParameterStatus(var.name(), var.value()));
+        }
+        buf.push(BackendMessage::BackendKeyData {
+            conn_id: session.conn_id(),
+            secret_key,
+        });
+        for startup_message in startup_messages {
+            buf.push(ErrorResponse::from_startup_message(startup_message).into());
+        }
+        buf.push(BackendMessage::ReadyForQuery(session.transaction().into()));
+        conn.send_all(buf).await?;
+        conn.flush().await?;
+
+        let machine = StateMachine {
+            conn,
+            coord_client: &mut coord_client,
+        };
+        machine.run().await
+    }
+    .await;
+    coord_client.terminate().await;
+    res
+}
+
 #[derive(Debug)]
 enum State {
     Ready,
@@ -88,51 +224,30 @@ enum State {
     Done,
 }
 
-pub struct StateMachine<A> {
-    pub conn: FramedConn<A>,
-    pub conn_id: u32,
-    pub secret_key: u32,
-    pub tls_mode: Option<TlsMode>,
-    pub coord_client: coord::SessionClient,
+struct StateMachine<'a, A> {
+    conn: &'a mut FramedConn<A>,
+    coord_client: &'a mut coord::SessionClient,
 }
 
-impl<A> StateMachine<A>
+impl<'a, A> StateMachine<'a, A>
 where
-    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + 'a,
 {
     // Manually desugar this (don't use `async fn run`) here because a much better
     // error message is produced if there are problems with Send or other traits
     // somewhere within the Future.
     #[allow(clippy::manual_async_fn)]
-    pub fn run(
-        mut self,
-        version: i32,
-        params: HashMap<String, String>,
-    ) -> impl Future<Output = Result<(), io::Error>> + Send {
+    fn run(mut self) -> impl Future<Output = Result<(), io::Error>> + Send + 'a {
         async move {
-            // Call the inner logic from a function that's safe to use `?` in so that
-            // terminate can correctly be called in all cases.
-            let res = self.run_inner(version, params).await;
-            self.coord_client.terminate().await;
-            res
-        }
-    }
-
-    async fn run_inner(
-        &mut self,
-        version: i32,
-        params: HashMap<String, String>,
-    ) -> Result<(), io::Error> {
-        let mut state = self.startup(version, params).await?;
-        loop {
-            state = match state {
-                State::Ready => self.advance_ready().await?,
-                State::Drain => self.advance_drain().await?,
-                State::Done => break,
+            let mut state = State::Ready;
+            loop {
+                state = match state {
+                    State::Ready => self.advance_ready().await?,
+                    State::Drain => self.advance_drain().await?,
+                    State::Done => return Ok(()),
+                }
             }
         }
-        self.flush().await?;
-        Ok(())
     }
 
     async fn advance_ready(&mut self) -> Result<State, io::Error> {
@@ -214,111 +329,6 @@ where
             None => Ok(State::Done),
             _ => Ok(State::Drain),
         }
-    }
-
-    async fn startup(
-        &mut self,
-        version: i32,
-        params: HashMap<String, String>,
-    ) -> Result<State, io::Error> {
-        // Validate that the connection is compatible with the TLS mode.
-        //
-        // The match here explicitly spells out all cases to be resilient to
-        // future changes to TlsMode.
-        match (&self.tls_mode, self.conn.inner()) {
-            (None, Conn::Unencrypted(_)) => (),
-            (None, Conn::Ssl(_)) => unreachable!(),
-            (Some(TlsMode::Require), Conn::Ssl(_)) => (),
-            (Some(TlsMode::Require), Conn::Unencrypted(_))
-            | (Some(TlsMode::VerifyUser), Conn::Unencrypted(_)) => {
-                return self
-                    .error(ErrorResponse::fatal(
-                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
-                        "TLS encryption is required",
-                    ))
-                    .await;
-            }
-            (Some(TlsMode::VerifyUser), Conn::Ssl(conn)) => {
-                let user = self.coord_client.session().user();
-                let cn_matches = match conn.ssl().peer_certificate() {
-                    None => false,
-                    Some(cert) => cert
-                        .subject_name()
-                        .entries_by_nid(Nid::COMMONNAME)
-                        .any(|n| n.data().as_slice() == user.as_bytes()),
-                };
-                if !cn_matches {
-                    let msg = format!(
-                        "certificate authentication failed for user {}",
-                        user.quoted()
-                    );
-                    return self
-                        .error(ErrorResponse::fatal(
-                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
-                            msg,
-                        ))
-                        .await;
-                }
-            }
-        }
-
-        if version != VERSION_3 {
-            return self
-                .error(ErrorResponse::fatal(
-                    SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
-                    "server does not support the client's requested protocol version",
-                ))
-                .await;
-        }
-
-        for (name, value) in params {
-            let _ = self.coord_client.session().vars_mut().set(&name, &value);
-        }
-
-        let notices: Vec<_> = match self.coord_client.startup().await {
-            Ok(messages) => messages
-                .into_iter()
-                .map(|m| match m {
-                    StartupMessage::UnknownSessionDatabase => ErrorResponse::notice(
-                        SqlState::SUCCESSFUL_COMPLETION,
-                        format!(
-                            "session database '{}' does not exist",
-                            self.coord_client.session().vars().database(),
-                        ),
-                    )
-                    .with_hint(
-                        "Create the database with CREATE DATABASE \
-                         or pick an extant database with SET DATABASE = <name>. \
-                         List available databases with SHOW DATABASES.",
-                    )
-                    .into_message(),
-                })
-                .collect(),
-            Err(e) => {
-                return self
-                    .error(ErrorResponse::from_coord(Severity::Fatal, e))
-                    .await;
-            }
-        };
-
-        let mut messages = vec![BackendMessage::AuthenticationOk];
-        messages.extend(
-            self.coord_client
-                .session()
-                .vars()
-                .notify_set()
-                .map(|v| BackendMessage::ParameterStatus(v.name(), v.value())),
-        );
-        messages.push(BackendMessage::BackendKeyData {
-            conn_id: self.conn_id,
-            secret_key: self.secret_key,
-        });
-        messages.extend(notices);
-        messages.push(BackendMessage::ReadyForQuery(
-            self.coord_client.session().transaction().into(),
-        ));
-        self.conn.send_all(messages).await?;
-        self.flush().await
     }
 
     async fn one_query(&mut self, stmt: Statement<Raw>) -> Result<State, io::Error> {
@@ -887,8 +897,7 @@ where
             ($existed:expr, $code:expr, $type:expr) => {{
                 if $existed {
                     let msg =
-                        ErrorResponse::notice($code, concat!($type, " already exists, skipping"))
-                            .into_message();
+                        ErrorResponse::notice($code, concat!($type, " already exists, skipping"));
                     self.conn.send(msg).await?;
                 }
                 command_complete!("CREATE {}", $type.to_uppercase())
@@ -1028,8 +1037,7 @@ where
                     let msg = ErrorResponse::notice(
                         SqlState::NO_ACTIVE_SQL_TRANSACTION,
                         "there is no transaction in progress",
-                    )
-                    .into_message();
+                    );
                     self.conn.send(msg).await?;
                 }
                 command_complete!("{}", tag)
@@ -1368,7 +1376,7 @@ where
         assert!(err.severity.is_error());
         debug!(
             "cid={} error code={} message={}",
-            self.conn_id,
+            self.coord_client.session().conn_id(),
             err.code.code(),
             err.message
         );
