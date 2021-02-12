@@ -25,3 +25,5 @@ pub mod source;
 pub use server::{
     serve, CacheMessage, Config, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta,
 };
+
+pub use render::filter::extract_temporal;

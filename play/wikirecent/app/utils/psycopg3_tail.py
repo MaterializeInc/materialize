@@ -28,6 +28,8 @@ async def tail_view(args):
     query = f"TAIL {args.view} WITH (PROGRESS)"
     async with await psycopg3.AsyncConnection.connect(dsn) as conn:
         async with await conn.cursor() as cursor:
+            # Stream works great in situations where you never plan to cancel the request
+            # If you need cancellation, consider using DECLARE / FETCH instead
             async for (timestamp, progressed, diff, *columns) in cursor.stream(query):
                 print(f"{timestamp} {progressed} {diff} {columns}")
 
