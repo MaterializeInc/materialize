@@ -273,11 +273,8 @@ impl FilterPlan {
         // Only proceed if the new time is not greater or equal to upper,
         // and if no null values were encountered in bound evaluation.
         if lower_bound_u64 != upper_bound_u64 && !null_eval {
-            // We send `upper` first because it allows us to avoid a clone
-            // in the case that `upper` is `None`. At this point `lower`
-            // should not be `None`, and there is nothing lost this order.
-            let upper_opt = upper_bound_u64.map(|time| Ok((time, -diff)));
             let lower_opt = lower_bound_u64.map(|time| Ok((time, diff)));
+            let upper_opt = upper_bound_u64.map(|time| Ok((time, -diff)));
             lower_opt.into_iter().chain(upper_opt.into_iter())
         } else {
             None.into_iter().chain(None.into_iter())
