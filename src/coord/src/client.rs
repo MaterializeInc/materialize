@@ -21,6 +21,7 @@ use crate::command::{
     Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupResponse,
 };
 use crate::error::CoordError;
+use crate::id_alloc::IdAllocator;
 use crate::session::{EndTransactionAction, Session};
 
 /// A handle to a running coordinator.
@@ -43,23 +44,62 @@ impl Handle {
     }
 }
 
-/// A client for a coordinator.
+/// A coordinator client.
 ///
-/// A client is a simple handle to a communication channel with the coordinator.
-/// It can be cheaply cloned.
+/// A coordinator client is a simple handle to a communication channel with the
+/// coordinator. It can be cheaply cloned.
 ///
-/// Clients keep the coordinator alive. The coordinator will not exit until
-/// all outstanding clients have dropped.
+/// Clients keep the coordinator alive. The coordinator will not exit until all
+/// outstanding clients have dropped.
 #[derive(Debug, Clone)]
 pub struct Client {
-    pub(crate) cmd_tx: mpsc::UnboundedSender<Command>,
+    cmd_tx: mpsc::UnboundedSender<Command>,
+    id_alloc: Arc<IdAllocator>,
 }
 
 impl Client {
-    /// Starts a new session with the coordinator.
+    pub(crate) fn new(cmd_tx: mpsc::UnboundedSender<Command>) -> Client {
+        Client {
+            cmd_tx,
+            id_alloc: Arc::new(IdAllocator::new(1, 1 << 16)),
+        }
+    }
+
+    /// Allocates a client for an incoming connection.
+    pub fn new_conn(&self) -> Result<ConnClient, CoordError> {
+        Ok(ConnClient {
+            conn_id: self.id_alloc.alloc()?,
+            inner: self.clone(),
+        })
+    }
+}
+
+/// A coordinator client that is bound to a connection.
+///
+/// The `ConnClient` automatically allocates an ID for the connection when
+/// it is created, and frees that ID for potential reuse when it is dropped.
+///
+/// See also [`Client`].
+#[derive(Debug, Clone)]
+pub struct ConnClient {
+    conn_id: u32,
+    inner: Client,
+}
+
+impl ConnClient {
+    /// Returns the ID of the connection associated with this client.
+    pub fn conn_id(&self) -> u32 {
+        self.conn_id
+    }
+
+    /// Upgrades this connection client to a session client.
     ///
-    /// Consumes this client, returning a new client that is bound to the
-    /// session and a response containing various details about the startup.
+    /// A session is a connection that has successfully negotiated parameters,
+    /// like the user. Most coordinator operations are available only after
+    /// upgrading a connection to a session.
+    ///
+    /// Returns a new client that is bound to the session and a response
+    /// containing various details about the startup.
     pub async fn startup(
         self,
         session: Session,
@@ -121,9 +161,10 @@ impl Client {
         .await
     }
 
-    /// Cancel the query currently running on another connection.
+    /// Cancels the query currently running on another connection.
     pub async fn cancel_request(&mut self, conn_id: u32, secret_key: u32) {
-        self.cmd_tx
+        self.inner
+            .cmd_tx
             .send(Command::CancelRequest {
                 conn_id,
                 secret_key,
@@ -136,19 +177,28 @@ impl Client {
         F: FnOnce(oneshot::Sender<T>) -> Command,
     {
         let (tx, rx) = oneshot::channel();
-        self.cmd_tx
+        self.inner
+            .cmd_tx
             .send(f(tx))
             .expect("coordinator unexpectedly gone");
         rx.await.expect("coordinator unexpectedly canceled request")
     }
 }
 
-/// A [`Client`] that is bound to a session.
+impl Drop for ConnClient {
+    fn drop(&mut self) {
+        self.inner.id_alloc.free(self.conn_id);
+    }
+}
+
+/// A coordinator client that is bound to a connection.
 ///
 /// You must call [`SessionClient::terminate`] rather than dropping a session
-/// client directly.
+/// client directly. Dropping an unterminated `SessionClient` will panic.
+///
+/// See also [`Client`].
 pub struct SessionClient {
-    inner: Client,
+    inner: ConnClient,
     // Invariant: session may only be `None` during a method call. Every public
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
@@ -246,6 +296,7 @@ impl SessionClient {
     pub async fn terminate(mut self) {
         let session = self.session.take().expect("session invariant violated");
         self.inner
+            .inner
             .cmd_tx
             .send(Command::Terminate { session })
             .expect("coordinator unexpectedly gone");

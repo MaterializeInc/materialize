@@ -35,6 +35,7 @@ mod client;
 mod command;
 mod coord;
 mod error;
+mod id_alloc;
 mod sink_connector;
 mod timestamp;
 mod util;
@@ -43,7 +44,7 @@ pub mod catalog;
 pub mod session;
 
 pub use crate::cache::CacheConfig;
-pub use crate::client::{Client, Handle, SessionClient};
+pub use crate::client::{Client, ConnClient, Handle, SessionClient};
 pub use crate::command::{Cancelled, ExecuteResponse, NoSessionExecuteResponse, StartupMessage};
 pub use crate::coord::{serve, Config, LoggingConfig};
 pub use crate::error::CoordError;

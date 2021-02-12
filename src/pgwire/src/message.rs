@@ -316,6 +316,7 @@ impl ErrorResponse {
             CoordError::ConstrainedParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             CoordError::Eval(_) => SqlState::INTERNAL_ERROR,
+            CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,

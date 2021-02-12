@@ -86,7 +86,7 @@ pub struct RunParams<'a, A> {
     /// The TLS mode of the pgwire server.
     pub tls_mode: Option<TlsMode>,
     /// A client for the coordinator.
-    pub coord_client: coord::Client,
+    pub coord_client: coord::ConnClient,
     /// The connection to the client.
     pub conn: &'a mut FramedConn<A>,
     /// The protocol version that the client provided in the startup message.

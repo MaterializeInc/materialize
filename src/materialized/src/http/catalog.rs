@@ -19,9 +19,9 @@ impl Server {
         &self,
         _: Request<Body>,
     ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        let mut coord_client = self.coord_client.clone();
+        let coord_client = self.coord_client.clone();
         async move {
-            let dump = coord_client.dump_catalog().await;
+            let dump = coord_client.new_conn()?.dump_catalog().await;
             Ok(Response::builder()
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(dump))

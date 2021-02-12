@@ -23,7 +23,6 @@
 #![deny(clippy::as_conversions)]
 
 mod codec;
-mod id_alloc;
 mod message;
 mod protocol;
 mod server;
