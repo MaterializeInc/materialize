@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::VecDeque;
-use std::error::Error;
-use std::fmt;
 use std::sync::Mutex;
+
+use crate::error::CoordError;
 
 /// Manages allocation of u32 IDs.
 ///
@@ -40,14 +40,14 @@ impl IdAllocator {
     }
 
     /// Allocates a new ID.
-    pub fn alloc(&self) -> Result<u32, IdExhaustionError> {
+    pub fn alloc(&self) -> Result<u32, CoordError> {
         let mut inner = self.0.lock().expect("lock poisoned");
         if let Some(id) = inner.free.pop_front() {
             Ok(id)
         } else {
             let id = inner.next;
             if id > inner.max {
-                Err(IdExhaustionError)
+                Err(CoordError::IdExhaustionError)
             } else {
                 inner.next += 1;
                 Ok(id)
@@ -65,17 +65,6 @@ impl IdAllocator {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
-pub struct IdExhaustionError;
-
-impl fmt::Display for IdExhaustionError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("id allocator exhausted all valid ids")
-    }
-}
-
-impl Error for IdExhaustionError {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -83,21 +72,22 @@ mod tests {
     #[test]
     fn test_id_alloc() {
         let ida = IdAllocator::new(3, 5);
-        assert_eq!(ida.alloc(), Ok(3));
-        assert_eq!(ida.alloc(), Ok(4));
-        assert_eq!(ida.alloc(), Ok(5));
+        assert_eq!(ida.alloc().unwrap(), 3);
+        assert_eq!(ida.alloc().unwrap(), 4);
+        assert_eq!(ida.alloc().unwrap(), 5);
         ida.free(4);
-        assert_eq!(ida.alloc(), Ok(4));
+        assert_eq!(ida.alloc().unwrap(), 4);
         ida.free(5);
         ida.free(3);
-        assert_eq!(ida.alloc(), Ok(5));
-        assert_eq!(ida.alloc(), Ok(3));
+        assert_eq!(ida.alloc().unwrap(), 5);
+        assert_eq!(ida.alloc().unwrap(), 3);
         match ida.alloc() {
             Ok(id) => panic!(
                 "id allocator returned {}, not expected id exhaution error",
                 id
             ),
-            Err(IdExhaustionError) => (),
+            Err(CoordError::IdExhaustionError) => (),
+            Err(e) => panic!("unexpected error {:?}", e),
         }
     }
 }

@@ -11,7 +11,6 @@ use std::fmt;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use anyhow::bail;
 use async_trait::async_trait;
 use log::trace;
 use openssl::ssl::{Ssl, SslContext};
@@ -21,7 +20,6 @@ use tokio_openssl::SslStream;
 use ore::netio::AsyncReady;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
-use crate::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::message::FrontendStartupMessage;
 use crate::protocol;
 
@@ -58,7 +56,6 @@ pub enum TlsMode {
 
 /// A server that communicates with clients via the pgwire protocol.
 pub struct Server {
-    id_alloc: IdAllocator,
     tls: Option<TlsConfig>,
     coord_client: coord::Client,
 }
@@ -67,37 +64,17 @@ impl Server {
     /// Constructs a new server.
     pub fn new(config: Config) -> Server {
         Server {
-            id_alloc: IdAllocator::new(1, 1 << 16),
             tls: config.tls,
             coord_client: config.coord_client,
         }
     }
 
-    /// Handles an incoming pgwire connection.
     pub async fn handle_connection<A>(&self, conn: A) -> Result<(), anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
     {
-        // Allocate state for this connection.
-        let conn_id = match self.id_alloc.alloc() {
-            Ok(id) => id,
-            Err(IdExhaustionError) => {
-                bail!("maximum number of connections reached");
-            }
-        };
-
-        let res = self.handle_connection_inner(conn_id, conn).await;
-
-        // Clean up state tied to this specific connection.
-        self.id_alloc.free(conn_id);
-
-        Ok(res?)
-    }
-
-    async fn handle_connection_inner<A>(&self, conn_id: u32, conn: A) -> Result<(), anyhow::Error>
-    where
-        A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin + fmt::Debug + 'static,
-    {
+        let mut coord_client = self.coord_client.new_conn()?;
+        let conn_id = coord_client.conn_id();
         let mut conn = Conn::Unencrypted(conn);
         loop {
             let message = codec::decode_startup(&mut conn).await?;
@@ -117,7 +94,7 @@ impl Server {
                     let mut conn = FramedConn::new(conn_id, conn);
                     protocol::run(protocol::RunParams {
                         tls_mode: self.tls.as_ref().map(|tls| tls.mode),
-                        coord_client: self.coord_client.clone(),
+                        coord_client,
                         conn: &mut conn,
                         version,
                         params,
@@ -131,8 +108,7 @@ impl Server {
                     conn_id,
                     secret_key,
                 }) => {
-                    self.coord_client
-                        .clone()
+                    coord_client
                         .cancel_request(conn_id, secret_key)
                         .await;
                     // For security, the client is not told whether the cancel

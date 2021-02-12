@@ -57,7 +57,7 @@ impl Server {
 
 /// Executes a single SQL statement as the specified user.
 async fn query_sql(
-    mut coord_client: coord::Client,
+    coord_client: coord::Client,
     sql: String,
     params: Params,
     user: String,
@@ -67,7 +67,7 @@ async fn query_sql(
         bail!("expected exactly 1 statement");
     }
     let stmt = stmts.into_element();
-    let res = coord_client.execute(stmt, params, user).await?;
+    let res = coord_client.new_conn()?.execute(stmt, params, user).await?;
     let rows = match res.response {
         ExecuteResponse::SendingRows(rows) => {
             let response = rows.await;

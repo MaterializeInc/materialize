@@ -3463,7 +3463,7 @@ pub async fn serve(
                 cluster_id,
                 _thread: thread.join_on_drop(),
             };
-            let client = Client { cmd_tx };
+            let client = Client::new(cmd_tx);
             Ok((handle, client))
         }
         Err(e) => {
