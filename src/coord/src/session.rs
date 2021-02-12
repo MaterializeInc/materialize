@@ -30,7 +30,7 @@ pub use self::vars::{Var, Vars};
 
 const DUMMY_CONNECTION_ID: u32 = 0;
 
-/// A `Session` holds SQL state that is attached to a session.
+/// A session holds per-connection state.
 #[derive(Debug)]
 pub struct Session {
     conn_id: u32,
@@ -74,7 +74,9 @@ impl Session {
         self.conn_id
     }
 
-    /// Starts a transaction. This needs to consume and return self because an
+    /// Starts a transaction.
+    ///
+    /// This needs to consume and return self because an
     /// implicit transaction can be bumped up to an explicit transaction, and we
     /// want to keep around the inner ops. In order to do this in Rust we have to
     /// take ownership instead of borrow.
@@ -324,22 +326,23 @@ pub enum PortalState {
 /// A stream of batched rows.
 pub type RowBatchStream = Box<dyn Stream<Item = Vec<Row>> + Send + Unpin>;
 
-/// The transaction status of a session. Postgres' transaction states are in
-/// backend/access/transam/xact.c.
+/// The transaction status of a session.
+///
+/// PostgreSQL's transaction states are in backend/access/transam/xact.c.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransactionStatus {
-    /// Idle. Matches TBLOCK_DEFAULT.
+    /// Idle. Matches `TBLOCK_DEFAULT`.
     Default,
-    /// Running a single-query transaction. Matches TBLOCK_STARTED.
+    /// Running a single-query transaction. Matches `TBLOCK_STARTED`.
     Started(TransactionOps),
-    /// Currently in a transaction issued from a BEGIN. Matches TBLOCK_INPROGRESS.
+    /// Currently in a transaction issued from a `BEGIN`. Matches `TBLOCK_INPROGRESS`.
     InTransaction(TransactionOps),
     /// Currently in an implicit transaction started from a multi-statement query
-    /// with more than 1 statements. Matches TBLOCK_IMPLICIT_INPROGRESS.
+    /// with more than 1 statements. Matches `TBLOCK_IMPLICIT_INPROGRESS`.
     InTransactionImplicit(TransactionOps),
     /// In a failed transaction that was started explicitly (i.e., previously
     /// InTransaction). We do not use Failed for implicit transactions because
-    /// those cleanup after themselves. Matches TBLOCK_ABORT.
+    /// those cleanup after themselves. Matches `TBLOCK_ABORT`.
     Failed,
 }
 
@@ -349,23 +352,24 @@ impl Default for TransactionStatus {
     }
 }
 
-/// The type of operation being performed by the transaction. This is
-/// needed because we currently do not allow mixing reads and writes in a
-/// transaction. Use this to record what we have done, and what may need to
+/// The type of operation being performed by the transaction.
+///
+/// This is needed because we currently do not allow mixing reads and writes in
+/// a transaction. Use this to record what we have done, and what may need to
 /// happen at commit.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransactionOps {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
     None,
-    /// This transaction has had a read (SELECT, TAIL) and must only do other reads.
+    /// This transaction has had a read (`SELECT`, `TAIL`) and must only do other reads.
     Reads,
-    /// This transaction has had a write (INSERT, UPDATE, DELETE) and must only do
+    /// This transaction has had a write (`INSERT`, `UPDATE`, `DELETE`) and must only do
     /// other writes.
     Writes(Vec<WriteOp>),
 }
 
-/// An INSERT waiting to be committed.
+/// An `INSERT` waiting to be committed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WriteOp {
     /// The target table.

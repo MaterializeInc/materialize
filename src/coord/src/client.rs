@@ -11,7 +11,9 @@ use std::future::Future;
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot, watch};
+use uuid::Uuid;
 
+use ore::thread::JoinOnDropHandle;
 use sql::ast::{Raw, Statement};
 use sql::plan::Params;
 
@@ -21,21 +23,39 @@ use crate::command::{
 use crate::error::CoordError;
 use crate::session::{EndTransactionAction, Session};
 
-/// A client for a [`Coordinator`](crate::Coordinator).
+/// A handle to a running coordinator.
+///
+/// The coordinator runs on its own thread. Dropping the handle will wait for
+/// the coordinator's thread to exit, which will only occur after all
+/// outstanding [`Client`]s for the coordinator have dropped.
+pub struct Handle {
+    pub(crate) cluster_id: Uuid,
+    pub(crate) _thread: JoinOnDropHandle<()>,
+}
+
+impl Handle {
+    /// Returns the cluster ID associated with this coordinator.
+    ///
+    /// The cluster ID is recorded in the data directory when it is first
+    /// created and persists until the data directory is deleted.
+    pub fn cluster_id(&self) -> Uuid {
+        self.cluster_id
+    }
+}
+
+/// A client for a coordinator.
 ///
 /// A client is a simple handle to a communication channel with the coordinator.
-/// They can be cheaply cloned.
+/// It can be cheaply cloned.
+///
+/// Clients keep the coordinator alive. The coordinator will not exit until
+/// all outstanding clients have dropped.
 #[derive(Debug, Clone)]
 pub struct Client {
-    cmd_tx: mpsc::UnboundedSender<Command>,
+    pub(crate) cmd_tx: mpsc::UnboundedSender<Command>,
 }
 
 impl Client {
-    /// Constructs a new client.
-    pub fn new(cmd_tx: mpsc::UnboundedSender<Command>) -> Client {
-        Client { cmd_tx }
-    }
-
     /// Binds this client to a session.
     pub fn for_session(&self, session: Session) -> SessionClient {
         // Cancellation works by creating a watch channel (which remembers only
@@ -109,8 +129,8 @@ pub struct SessionClient {
     /// a call to `startup`.
     started_up: bool,
 
-    pub cancel_tx: Arc<watch::Sender<Cancelled>>,
-    pub cancel_rx: watch::Receiver<Cancelled>,
+    cancel_tx: Arc<watch::Sender<Cancelled>>,
+    cancel_rx: watch::Receiver<Cancelled>,
 }
 
 impl SessionClient {

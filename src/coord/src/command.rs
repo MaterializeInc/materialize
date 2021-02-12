@@ -25,7 +25,6 @@ use crate::session::{EndTransactionAction, Session};
 
 #[derive(Debug)]
 pub enum Command {
-    /// Notify the coordinator of a new client session.
     Startup {
         session: Session,
         cancel_tx: Arc<watch::Sender<Cancelled>>,
@@ -86,6 +85,7 @@ pub struct Response<T> {
     pub session: Session,
 }
 
+/// The response to [`Client::execute`](crate::Client::execute).
 #[derive(Debug)]
 pub struct NoSessionExecuteResponse {
     pub desc: Option<repr::RelationDesc>,
@@ -94,14 +94,15 @@ pub struct NoSessionExecuteResponse {
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponse> + Send>>;
 
-/// Notifications that may be generated in response to [`Command::Startup`].
+/// Notifications that may be generated in response to
+/// [`SessionClient::startup`](crate::SessionClient::startup).
 #[derive(Debug)]
 pub enum StartupMessage {
     /// The database specified in the initial session does not exist.
     UnknownSessionDatabase,
 }
 
-/// The response to [`Command::Execute]`.
+/// The response to [`SessionClient::execute`](crate::SessionClient::execute).
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub enum ExecuteResponse {

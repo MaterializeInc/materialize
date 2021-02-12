@@ -27,10 +27,11 @@ use repr::CachedRecord;
 // Interval at which Cacher will try to flush out pending records
 static CACHE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
 
+/// Configures the coordinator's source caching.
 #[derive(Clone, Debug)]
 pub struct CacheConfig {
     /// Maximum number of records that are allowed to be pending for a source
-    /// before we attempt to flush that source immediately.
+    /// before the cacher will attempt to flush that source immediately.
     pub max_pending_records: usize,
     /// Directory where all cache information is stored.
     pub path: PathBuf,
