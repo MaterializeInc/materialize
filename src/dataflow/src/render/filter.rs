@@ -323,9 +323,11 @@ where
                 let mut datums = DatumVec::new();
                 move |(data, time, diff)| {
                     let mut datums_local = datums.borrow_with(&data);
-                    // TODO: It would be nice to avoid the `data.clone` for the last output.
                     let times_diffs = filter_plan.evaluate(&mut datums_local, time, diff);
+                    // Drop to release borrow on `data` and allow it to move into the closure.
                     drop(datums_local);
+                    // Each produced (time, diff) results in a copy of `data` in the output.
+                    // TODO: It would be nice to avoid the `data.clone` for the last output.
                     times_diffs.map(move |time_diff| time_diff.map(|(t, d)| (data.clone(), t, d)))
                 }
             });
