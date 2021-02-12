@@ -29,7 +29,7 @@ do
     esac
 done
 
-cargo doc
+cargo doc --document-private-items
 
 crates=$(cargo metadata --format-version=1 \
   | jq -r -f misc/doc/crates.jq --arg pwd "$(pwd)")
