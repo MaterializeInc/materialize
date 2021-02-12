@@ -18,13 +18,12 @@ use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt, Interest, ReadBuf, Ready};
 use tokio_openssl::SslStream;
 
-use coord::session::Session;
 use ore::netio::AsyncReady;
 
 use crate::codec::{self, FramedConn, ACCEPT_SSL_ENCRYPTION, REJECT_ENCRYPTION};
 use crate::id_alloc::{IdAllocator, IdExhaustionError};
 use crate::message::FrontendStartupMessage;
-use crate::protocol::StateMachine;
+use crate::protocol;
 use crate::secrets::SecretManager;
 
 /// Configures a [`Server`].
@@ -97,7 +96,7 @@ impl Server {
         self.id_alloc.free(conn_id);
         self.secrets.free(conn_id);
 
-        res
+        Ok(res?)
     }
 
     async fn handle_connection_inner<A>(&self, conn_id: u32, conn: A) -> Result<(), anyhow::Error>
@@ -119,20 +118,18 @@ impl Server {
                 // `SslRequest`. This is considered a graceful termination.
                 None => return Ok(()),
 
-                Some(FrontendStartupMessage::Startup {
-                    version,
-                    mut params,
-                }) => {
-                    let user = params.remove("user").unwrap_or_else(String::new);
-                    let coord_client = self.coord_client.for_session(Session::new(conn_id, user));
-                    let machine = StateMachine {
-                        conn: FramedConn::new(conn_id, conn),
-                        conn_id,
-                        secret_key: self.secrets.get(conn_id).unwrap(),
+                Some(FrontendStartupMessage::Startup { version, params }) => {
+                    let mut conn = FramedConn::new(conn_id, conn);
+                    protocol::run(protocol::RunParams {
                         tls_mode: self.tls.as_ref().map(|tls| tls.mode),
-                        coord_client,
-                    };
-                    machine.run(version, params).await?;
+                        coord_client: self.coord_client.clone(),
+                        conn: &mut conn,
+                        version,
+                        params,
+                        secret_key: self.secrets.get(conn_id).unwrap(),
+                    })
+                    .await?;
+                    conn.flush().await?;
                     return Ok(());
                 }
 
