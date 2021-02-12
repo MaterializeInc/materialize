@@ -433,10 +433,8 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTPS,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
-                    // NOTE(benesch): this is a terrible error message. But is
-                    // it our fault or hyper's?
                     assert!(code.is_none());
-                    assert_eq!(message, "channel closed");
+                    assert_http_certificate_required_message(&message)
                 })),
             },
             // Connecting with TLS with a bad client certificate should fail.
@@ -565,10 +563,8 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 scheme: Scheme::HTTPS,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
-                    // NOTE(benesch): this is a terrible error message. But is
-                    // it our fault or hyper's?
                     assert!(code.is_none());
-                    assert_eq!(message, "channel closed");
+                    assert_http_certificate_required_message(&message);
                 })),
             },
             // Connecting with TLS with a bad client certificate should fail.
@@ -664,4 +660,11 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
     );
 
     Ok(())
+}
+
+fn assert_http_certificate_required_message(message: &str) {
+    // NOTE(benesch): often Hyper returns a useless "channel closed" error
+    // message instead of the actual TLS error message. I suspect this is a bug
+    // in Hyper.
+    assert!(message.contains("tlsv13 alert certificate required") || message == "channel closed")
 }
