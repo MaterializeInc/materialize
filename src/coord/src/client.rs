@@ -56,8 +56,12 @@ pub struct Client {
 }
 
 impl Client {
-    /// Binds this client to a session.
-    pub fn for_session(&self, session: Session) -> SessionClient {
+    /// Starts a new session with the coordinator.
+    ///
+    /// Consumes this client, returning a new client that is bound to the
+    /// session and a list of messages that are intended to be displayed to the
+    /// user.
+    pub async fn startup(self, session: Session) -> Result<(SessionClient, Vec<StartupMessage>), CoordError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
         // connection. The coordinator will send a cancelled message on it if a
@@ -66,14 +70,18 @@ impl Client {
         // an in-progress statement.
         let (cancel_tx, cancel_rx) = watch::channel(Cancelled::NotCancelled);
         let cancel_tx = Arc::new(cancel_tx);
-
-        SessionClient {
-            inner: self.clone(),
+        let mut client = SessionClient {
+            inner: self,
             session: Some(session),
-            started_up: false,
-            cancel_tx,
+            cancel_tx: cancel_tx.clone(),
             cancel_rx,
-        }
+        };
+        let messages = client.send(|tx, session| Command::Startup {
+            session,
+            cancel_tx,
+            tx,
+        }).await?;
+        Ok((client, messages))
     }
 
     /// Dumps the catalog to a JSON string.
@@ -120,15 +128,14 @@ impl Client {
 }
 
 /// A [`Client`] that is bound to a session.
+///
+/// You must call [`SessionClient::terminate`] rather than dropping a session
+/// client directly.
 pub struct SessionClient {
     inner: Client,
     // Invariant: session may only be `None` during a method call. Every public
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
-    /// Whether the coordinator has been notified of this `SessionClient` via
-    /// a call to `startup`.
-    started_up: bool,
-
     cancel_tx: Arc<watch::Sender<Cancelled>>,
     cancel_rx: watch::Receiver<Cancelled>,
 }
@@ -155,41 +162,10 @@ impl SessionClient {
         let _ = self.cancel_tx.send(Cancelled::NotCancelled);
     }
 
-    /// Notifies the coordinator of a new client session.
-    ///
-    /// Returns a list of messages that are intended to be displayed to the
-    /// user.
-    ///
-    /// Once you observe a successful response to this method, you must not call
-    /// it again. You must observe a successful response to this method before
-    /// calling any other method on the client, besides
-    /// [`SessionClient::terminate`].
-    pub async fn startup(&mut self) -> Result<Vec<StartupMessage>, CoordError> {
-        assert!(!self.started_up);
-        let cancel_tx = Arc::clone(&self.cancel_tx);
-        match self
-            .send(|tx, session| Command::Startup {
-                session,
-                cancel_tx,
-                tx,
-            })
-            .await
-        {
-            Ok(messages) => {
-                self.started_up = true;
-                Ok(messages)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
     /// Saves the specified statement as a prepared statement.
     ///
     /// The prepared statement is saved in the connection's [`sql::Session`]
     /// under the specified name.
-    ///
-    /// You must have observed a successful response to
-    /// [`SessionClient::startup`] before calling this method.
     pub async fn describe(
         &mut self,
         name: String,
@@ -207,9 +183,6 @@ impl SessionClient {
     }
 
     /// Binds a statement to a portal.
-    ///
-    /// You must have observed a successful response to
-    /// [`SessionClient::startup`] before calling this method.
     pub async fn declare(
         &mut self,
         name: String,
@@ -227,9 +200,6 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
-    ///
-    /// You must have observed a successful response to
-    /// [`SessionClient::startup`] before calling this method.
     pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, CoordError> {
         self.send(|tx, session| Command::Execute {
             portal_name,
@@ -240,9 +210,6 @@ impl SessionClient {
     }
 
     /// Ends a transaction.
-    ///
-    /// You must have observed a successful response to
-    /// [`SessionClient::startup`] before calling this method.
     pub async fn end_transaction(
         &mut self,
         action: EndTransactionAction,
@@ -257,17 +224,15 @@ impl SessionClient {
 
     /// Terminates this client session.
     ///
-    /// This consumes this `SessionClient`. If the coordinator was notified of
-    /// this client session by `startup`, then this method will clean up any
-    /// state on the coordinator about this session.
+    /// This method cleans up any coordinator state associated with the session
+    /// before consuming the `SessionClient. Call this method instead of
+    /// dropping the object directly.
     pub async fn terminate(mut self) {
         let session = self.session.take().expect("session invariant violated");
-        if self.started_up {
-            self.inner
-                .cmd_tx
-                .send(Command::Terminate { session })
-                .expect("coordinator unexpectedly gone");
-        }
+        self.inner
+            .cmd_tx
+            .send(Command::Terminate { session })
+            .expect("coordinator unexpectedly gone");
     }
 
     /// Returns a mutable reference to the session bound to this client.
@@ -283,5 +248,13 @@ impl SessionClient {
         let res = self.inner.send(|tx| f(tx, session)).await;
         self.session = Some(res.session);
         res.result
+    }
+}
+
+impl Drop for SessionClient {
+    fn drop(&mut self) {
+        if self.session.is_some() {
+            panic!("unterminated SessionClient dropped")
+        }
     }
 }
