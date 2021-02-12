@@ -245,11 +245,11 @@ mzworkflows:
   ci:
     steps:
     - step: workflow
-      workflow: setup-ci
+      workflow: setup-benchmark-ci
     - step: workflow
-      workflow: run-ci
+      workflow: run-benchmark-ci
 
-  setup-ci:
+  setup-benchmark-ci:
     steps:
     - step: workflow
       workflow: start-services
@@ -260,7 +260,7 @@ mzworkflows:
         --num-records=100000
         --distribution=small
 
-  run-ci:
+  run-benchmark-ci:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-1}
     steps:
