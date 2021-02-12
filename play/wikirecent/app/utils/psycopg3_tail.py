@@ -8,7 +8,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""async_tail
+"""psycopg3_tail
 
 Example utility that streams a VIEW using the TAIL command provided by materialized. Useful for
 debugging / viewing the data transferred between materialized and the Python web server.
