@@ -134,6 +134,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
                     }
                     S3KeySource::SqsNotifications { queue } => {
                         tokio::spawn(read_sqs_task(
+                            source_id.to_string(),
                             glob.clone(),
                             queue,
                             aws_info.clone(),
@@ -202,6 +203,7 @@ async fn download_objects_task(
                 if let Some(bi) = seen_buckets.get_mut(&msg.bucket) {
                     let is_new = bi.keys.insert(msg.key.clone());
                     if !is_new {
+                        bi.metrics.objects_duplicate.inc();
                         continue;
                     }
                 } else {
@@ -329,6 +331,7 @@ async fn scan_bucket_task(
 }
 
 async fn read_sqs_task(
+    source_id: String,
     glob: Option<GlobMatcher>,
     queue: String,
     aws_info: aws::ConnectInfo,
@@ -370,6 +373,8 @@ async fn read_sqs_task(
         }
     };
 
+    let mut metrics: HashMap<String, ScanBucketMetrics> = HashMap::new();
+
     let mut allowed_errors = 10;
     loop {
         let response = client
@@ -407,6 +412,17 @@ async fn read_sqs_task(
                                     ) {
                                         let key = record.s3.object.key;
                                         if glob.map(|g| g.is_match(&key)).unwrap_or(true) {
+                                            if let Some(m) = metrics.get(&record.s3.bucket.name) {
+                                                m.objects_discovered.inc()
+                                            } else {
+                                                let m = ScanBucketMetrics::new(
+                                                    &source_id,
+                                                    &record.s3.bucket.name,
+                                                );
+                                                m.objects_discovered.inc();
+                                                metrics.insert(record.s3.bucket.name.clone(), m);
+                                            }
+
                                             let ki = Ok(KeyInfo {
                                                 bucket: record.s3.bucket.name,
                                                 key,

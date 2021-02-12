@@ -13,6 +13,7 @@ use prometheus::{register_uint_counter_vec, DeleteOnDropCounter, UIntCounterVec}
 
 pub(super) struct BucketMetrics {
     objects_downloaded: DeleteOnDropCounter<'static, AtomicU64>,
+    pub objects_duplicate: DeleteOnDropCounter<'static, AtomicU64>,
     bytes_downloaded: DeleteOnDropCounter<'static, AtomicU64>,
     messages_ingested: DeleteOnDropCounter<'static, AtomicU64>,
 }
@@ -27,9 +28,15 @@ impl BucketMetrics {
                 LABELS
             )
             .unwrap();
+            static ref OBJECTS_DUPLICATE: UIntCounterVec = register_uint_counter_vec!(
+                "mz_s3_objects_duplicate_detected",
+                "The number of s3 objects that are duplicates, and therefore not downloaded.",
+                LABELS
+            )
+            .unwrap();
             static ref BYTES_DOWNLOADED: UIntCounterVec = register_uint_counter_vec!(
                 "mz_s3_bytes_downloaded",
-                "The total count of bytes downloaded for this source",
+                "The total count of bytes downloaded for this source.",
                 LABELS
             )
             .unwrap();
@@ -47,6 +54,11 @@ impl BucketMetrics {
             objects_downloaded: DeleteOnDropCounter::new_with_error_handler(
                 OBJECTS_DOWNLOADED.with_label_values(labels),
                 &OBJECTS_DOWNLOADED,
+                |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
+            ),
+            objects_duplicate: DeleteOnDropCounter::new_with_error_handler(
+                OBJECTS_DUPLICATE.with_label_values(labels),
+                &OBJECTS_DUPLICATE,
                 |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
             bytes_downloaded: DeleteOnDropCounter::new_with_error_handler(
