@@ -77,7 +77,7 @@ pub struct Server {
 impl Server {
     pub fn new(config: Config) -> Server {
         // Just set this metric once so that it shows up in the metric export.
-        metrics::WORKER_COUNT
+        crate::server_metrics::WORKER_COUNT
             .with_label_values(&[&config.worker_count.to_string()])
             .set(1);
         Server {
