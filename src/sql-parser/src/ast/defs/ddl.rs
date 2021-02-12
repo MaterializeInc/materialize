@@ -236,15 +236,6 @@ impl AstDisplay for Compression {
 }
 impl_display!(Compression);
 
-impl From<Compression> for dataflow_types::Compression {
-    fn from(c: Compression) -> Self {
-        match c {
-            Compression::Gzip => Self::Gzip,
-            Compression::None => Self::None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Connector {
     File {
