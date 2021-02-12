@@ -21,7 +21,7 @@
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, DataType, Ident, ObjectName, OrderByExpr, Query, Value};
+use crate::ast::{AstInfo, DataType, Ident, OrderByExpr, Query, UnresolvedObjectName, Value};
 
 /// An SQL expression of any type.
 ///
@@ -92,7 +92,7 @@ pub enum Expr<T: AstInfo> {
     /// `expr COLLATE collation`
     Collate {
         expr: Box<Expr<T>>,
-        collation: ObjectName,
+        collation: UnresolvedObjectName,
     },
     /// COALESCE(<expr>, ...)
     ///
@@ -516,7 +516,7 @@ impl<T: AstInfo> Expr<T> {
 
     pub fn call(name: Vec<&str>, args: Vec<Expr<T>>) -> Expr<T> {
         Expr::Function(Function {
-            name: ObjectName(name.into_iter().map(Into::into).collect()),
+            name: UnresolvedObjectName(name.into_iter().map(Into::into).collect()),
             args: FunctionArgs::Args(args),
             filter: None,
             over: None,
@@ -664,7 +664,7 @@ impl_display!(WindowFrameBound);
 /// A function call
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Function<T: AstInfo> {
-    pub name: ObjectName,
+    pub name: UnresolvedObjectName,
     pub args: FunctionArgs<T>,
     // aggregate functions may specify e.g. `COUNT(DISTINCT X) FILTER (WHERE ...)`
     pub filter: Option<Box<Expr<T>>>,

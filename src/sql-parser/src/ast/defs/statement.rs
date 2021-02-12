@@ -20,8 +20,8 @@
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, Connector, DataType, Envelope, Expr, Format, Ident, ObjectName, Query,
-    TableConstraint, Value,
+    AstInfo, ColumnDef, Connector, DataType, Envelope, Expr, Format, Ident, Query, TableConstraint,
+    UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -145,7 +145,7 @@ impl_display_t!(SelectStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InsertStatement<T: AstInfo> {
     /// TABLE
-    pub table_name: ObjectName,
+    pub table_name: UnresolvedObjectName,
     /// COLUMNS
     pub columns: Vec<Ident>,
     /// A SQL query that specifies what to insert.
@@ -170,7 +170,7 @@ impl_display_t!(InsertStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum CopyRelation<T: AstInfo> {
     Table {
-        name: ObjectName,
+        name: UnresolvedObjectName,
         columns: Vec<Ident>,
     },
     Select(SelectStatement<T>),
@@ -262,7 +262,7 @@ impl_display_t!(CopyStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct UpdateStatement<T: AstInfo> {
     /// TABLE
-    pub table_name: ObjectName,
+    pub table_name: UnresolvedObjectName,
     /// Column assignments
     pub assignments: Vec<Assignment<T>>,
     /// WHERE
@@ -289,7 +289,7 @@ impl_display_t!(UpdateStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DeleteStatement<T: AstInfo> {
     /// `FROM`
-    pub table_name: ObjectName,
+    pub table_name: UnresolvedObjectName,
     /// `WHERE`
     pub selection: Option<Expr<T>>,
 }
@@ -327,7 +327,7 @@ impl_display!(CreateDatabaseStatement);
 /// `CREATE SCHEMA`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSchemaStatement {
-    pub name: ObjectName,
+    pub name: UnresolvedObjectName,
     pub if_not_exists: bool,
 }
 
@@ -345,7 +345,7 @@ impl_display!(CreateSchemaStatement);
 /// `CREATE SOURCE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSourceStatement {
-    pub name: ObjectName,
+    pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
     pub connector: Connector,
     pub with_options: Vec<SqlOption>,
@@ -394,8 +394,8 @@ impl_display!(CreateSourceStatement);
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
-    pub name: ObjectName,
-    pub from: ObjectName,
+    pub name: UnresolvedObjectName,
+    pub from: UnresolvedObjectName,
     pub connector: Connector,
     pub with_options: Vec<SqlOption>,
     pub format: Option<Format>,
@@ -447,7 +447,7 @@ impl_display_t!(CreateSinkStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateViewStatement<T: AstInfo> {
     /// View name
-    pub name: ObjectName,
+    pub name: UnresolvedObjectName,
     pub columns: Vec<Ident>,
     pub with_options: Vec<SqlOption>,
     pub query: Query<T>,
@@ -500,7 +500,7 @@ impl_display_t!(CreateViewStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateTableStatement<T: AstInfo> {
     /// Table name
-    pub name: ObjectName,
+    pub name: UnresolvedObjectName,
     /// Optional schema
     pub columns: Vec<ColumnDef<T>>,
     pub constraints: Vec<TableConstraint<T>>,
@@ -543,7 +543,7 @@ pub struct CreateIndexStatement<T: AstInfo> {
     /// Optional index name.
     pub name: Option<Ident>,
     /// `ON` table or view name
-    pub on_name: ObjectName,
+    pub on_name: UnresolvedObjectName,
     /// Expressions that form part of the index key. If not included, the
     /// key_parts will be inferred from the named object.
     pub key_parts: Option<Vec<Expr<T>>>,
@@ -632,7 +632,7 @@ impl_display!(CreateRoleOption);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateTypeStatement {
     /// Name of the created type.
-    pub name: ObjectName,
+    pub name: UnresolvedObjectName,
     /// The new type's "base type".
     pub as_type: CreateTypeAs,
     /// Provides the name and type for the key
@@ -677,7 +677,7 @@ impl_display!(CreateTypeAs);
 pub struct AlterObjectRenameStatement {
     pub object_type: ObjectType,
     pub if_exists: bool,
-    pub name: ObjectName,
+    pub name: UnresolvedObjectName,
     pub to_item_name: Ident,
 }
 
@@ -705,7 +705,7 @@ pub enum AlterIndexOptionsList {
 /// `ALTER INDEX ... {RESET, SET}`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterIndexOptionsStatement {
-    pub index_name: ObjectName,
+    pub index_name: UnresolvedObjectName,
     pub if_exists: bool,
     pub options: AlterIndexOptionsList,
 }
@@ -794,7 +794,7 @@ pub struct DropObjectsStatement {
     /// An optional `IF EXISTS` clause. (Non-standard.)
     pub if_exists: bool,
     /// One or more objects to drop. (ANSI SQL requires exactly one.)
-    pub names: Vec<ObjectName>,
+    pub names: Vec<UnresolvedObjectName>,
     /// Whether `CASCADE` was specified. This will be `false` when
     /// `RESTRICT` or no drop behavior at all was specified.
     pub cascade: bool,
@@ -883,7 +883,7 @@ impl_display_t!(ShowDatabasesStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowObjectsStatement<T: AstInfo> {
     pub object_type: ObjectType,
-    pub from: Option<ObjectName>,
+    pub from: Option<UnresolvedObjectName>,
     pub extended: bool,
     pub full: bool,
     pub materialized: bool,
@@ -929,7 +929,7 @@ impl_display_t!(ShowObjectsStatement);
 /// `SHOW INDEX|INDEXES|KEYS`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowIndexesStatement<T: AstInfo> {
-    pub table_name: ObjectName,
+    pub table_name: UnresolvedObjectName,
     pub extended: bool,
     pub filter: Option<ShowStatementFilter<T>>,
 }
@@ -957,7 +957,7 @@ impl_display_t!(ShowIndexesStatement);
 pub struct ShowColumnsStatement<T: AstInfo> {
     pub extended: bool,
     pub full: bool,
-    pub table_name: ObjectName,
+    pub table_name: UnresolvedObjectName,
     pub filter: Option<ShowStatementFilter<T>>,
 }
 
@@ -983,7 +983,7 @@ impl_display_t!(ShowColumnsStatement);
 /// `SHOW CREATE VIEW <view>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowCreateViewStatement {
-    pub view_name: ObjectName,
+    pub view_name: UnresolvedObjectName,
 }
 
 impl AstDisplay for ShowCreateViewStatement {
@@ -997,7 +997,7 @@ impl_display!(ShowCreateViewStatement);
 /// `SHOW CREATE SOURCE <source>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowCreateSourceStatement {
-    pub source_name: ObjectName,
+    pub source_name: UnresolvedObjectName,
 }
 
 impl AstDisplay for ShowCreateSourceStatement {
@@ -1011,7 +1011,7 @@ impl_display!(ShowCreateSourceStatement);
 /// `SHOW CREATE TABLE <table>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowCreateTableStatement {
-    pub table_name: ObjectName,
+    pub table_name: UnresolvedObjectName,
 }
 
 impl AstDisplay for ShowCreateTableStatement {
@@ -1025,7 +1025,7 @@ impl_display!(ShowCreateTableStatement);
 /// `SHOW CREATE SINK <sink>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowCreateSinkStatement {
-    pub sink_name: ObjectName,
+    pub sink_name: UnresolvedObjectName,
 }
 
 impl AstDisplay for ShowCreateSinkStatement {
@@ -1039,7 +1039,7 @@ impl_display!(ShowCreateSinkStatement);
 /// `SHOW CREATE INDEX <index>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ShowCreateIndexStatement {
-    pub index_name: ObjectName,
+    pub index_name: UnresolvedObjectName,
 }
 
 impl AstDisplay for ShowCreateIndexStatement {
@@ -1119,7 +1119,7 @@ impl_display!(RollbackStatement);
 /// `TAIL`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TailStatement<T: AstInfo> {
-    pub name: ObjectName,
+    pub name: UnresolvedObjectName,
     pub options: Vec<WithOption>,
     pub as_of: Option<Expr<T>>,
 }
@@ -1240,7 +1240,7 @@ pub enum SqlOption {
     },
     ObjectName {
         name: Ident,
-        object_name: ObjectName,
+        object_name: UnresolvedObjectName,
     },
     DataType {
         name: Ident,
@@ -1301,7 +1301,7 @@ impl_display!(WithOption);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WithOptionValue {
     Value(Value),
-    ObjectName(ObjectName),
+    ObjectName(UnresolvedObjectName),
 }
 
 impl AstDisplay for WithOptionValue {
@@ -1429,7 +1429,7 @@ impl_display!(ExplainStage);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Explainee<T: AstInfo> {
-    View(ObjectName),
+    View(UnresolvedObjectName),
     Query(Query<T>),
 }
 

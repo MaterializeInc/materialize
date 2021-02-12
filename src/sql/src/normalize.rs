@@ -26,8 +26,8 @@ use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType, Function,
-    FunctionArgs, Ident, IfExistsBehavior, ObjectName, Query, Raw, RawName, SqlOption, Statement,
-    TableFactor, Value,
+    FunctionArgs, Ident, IfExistsBehavior, Query, Raw, RawName, SqlOption, Statement, TableFactor,
+    UnresolvedObjectName, Value,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -46,7 +46,7 @@ pub fn column_name(id: Ident) -> ColumnName {
 }
 
 /// Normalizes an object name.
-pub fn object_name(mut name: ObjectName) -> Result<PartialName, PlanError> {
+pub fn object_name(mut name: UnresolvedObjectName) -> Result<PartialName, PlanError> {
     if name.0.len() < 1 || name.0.len() > 3 {
         return Err(PlanError::MisqualifiedName(name.to_string()));
     }
@@ -93,14 +93,14 @@ pub fn option_objects(options: &[SqlOption]) -> BTreeMap<String, SqlOption> {
 /// Unnormalizes an object name.
 ///
 /// This is the inverse of the [`object_name`] function.
-pub fn unresolve(name: FullName) -> ObjectName {
+pub fn unresolve(name: FullName) -> UnresolvedObjectName {
     let mut out = vec![];
     if let DatabaseSpecifier::Name(n) = name.database {
         out.push(Ident::new(n));
     }
     out.push(Ident::new(name.schema));
     out.push(Ident::new(name.item));
-    ObjectName(out)
+    UnresolvedObjectName(out)
 }
 
 /// Normalizes a `CREATE` statement.
@@ -115,24 +115,24 @@ pub fn create_statement(
     scx: &StatementContext,
     mut stmt: Statement<Raw>,
 ) -> Result<String, PlanError> {
-    let allocate_name = |name: &ObjectName| -> Result<_, PlanError> {
+    let allocate_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
         Ok(unresolve(scx.allocate_name(object_name(name.clone())?)))
     };
 
-    let allocate_temporary_name = |name: &ObjectName| -> Result<_, PlanError> {
+    let allocate_temporary_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
         Ok(unresolve(
             scx.allocate_temporary_name(object_name(name.clone())?),
         ))
     };
 
-    let resolve_item = |name: &ObjectName| -> Result<_, PlanError> {
+    let resolve_item = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
         let item = scx.resolve_item(name.clone())?;
         Ok(unresolve(item.name().clone()))
     };
 
     fn normalize_function_name(
         scx: &StatementContext,
-        name: &mut ObjectName,
+        name: &mut UnresolvedObjectName,
     ) -> Result<(), PlanError> {
         let full_name = scx.resolve_function(name.clone())?;
         *name = unresolve(full_name.name().clone());
@@ -187,7 +187,7 @@ pub fn create_statement(
         fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Raw>) {
             match table_factor {
                 TableFactor::Table { name, alias, .. } => {
-                    self.visit_table_mut(name);
+                    self.visit_object_name_mut(name);
                     if let Some(alias) = alias {
                         self.visit_table_alias_mut(alias);
                     }
@@ -221,23 +221,26 @@ pub fn create_statement(
             }
         }
 
-        fn visit_object_name_mut(&mut self, object_name: &'ast mut ObjectName) {
+        fn visit_unresolved_object_name_mut(
+            &mut self,
+            unresolved_object_name: &'ast mut UnresolvedObjectName,
+        ) {
             // Single-part object names can refer to CTEs in addition to
             // catalog objects.
-            if let [ident] = object_name.0.as_slice() {
+            if let [ident] = unresolved_object_name.0.as_slice() {
                 if self.ctes.contains(ident) {
                     return;
                 }
             }
-            match self.scx.resolve_item(object_name.clone()) {
-                Ok(full_name) => *object_name = unresolve(full_name.name().clone()),
+            match self.scx.resolve_item(unresolved_object_name.clone()) {
+                Ok(full_name) => *unresolved_object_name = unresolve(full_name.name().clone()),
                 Err(e) => self.err = Some(e),
             };
         }
 
-        fn visit_table_mut(&mut self, table: &'ast mut <Raw as AstInfo>::Table) {
-            match table {
-                RawName::Name(n) | RawName::Id(_, n) => self.visit_object_name_mut(n),
+        fn visit_object_name_mut(&mut self, object_name: &'ast mut <Raw as AstInfo>::ObjectName) {
+            match object_name {
+                RawName::Name(n) | RawName::Id(_, n) => self.visit_unresolved_object_name_mut(n),
             }
         }
 

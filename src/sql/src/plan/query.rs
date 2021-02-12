@@ -36,8 +36,9 @@ use sql_parser::ast::fold::Fold;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     AstInfo, Cte, DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource,
-    JoinConstraint, JoinOperator, Limit, ObjectName, OrderByExpr, Query, Raw, RawName, Select,
-    SelectItem, SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, Value, Values,
+    JoinConstraint, JoinOperator, Limit, OrderByExpr, Query, Raw, RawName, Select, SelectItem,
+    SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, UnresolvedObjectName, Value,
+    Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -69,25 +70,25 @@ use crate::plan::typeconv::{self, CastContext};
 pub struct Aug;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct ResolvedTableName {
+pub struct ResolvedObjectName {
     id: Id,
     raw_name: PartialName,
 }
 
-impl AstDisplay for ResolvedTableName {
+impl AstDisplay for ResolvedObjectName {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str(format!("[{}: {}]", self.id, self.raw_name));
     }
 }
 
-impl std::fmt::Display for ResolvedTableName {
+impl std::fmt::Display for ResolvedObjectName {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(self.to_ast_string().as_str())
     }
 }
 
 impl AstInfo for Aug {
-    type Table = ResolvedTableName;
+    type ObjectName = ResolvedObjectName;
     type Id = Id;
 }
 
@@ -157,14 +158,17 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         panic!("this should have been handled when walking the CTE");
     }
 
-    fn fold_table(&mut self, table: <Raw as AstInfo>::Table) -> <Aug as AstInfo>::Table {
-        match table {
+    fn fold_object_name(
+        &mut self,
+        object_name: <Raw as AstInfo>::ObjectName,
+    ) -> <Aug as AstInfo>::ObjectName {
+        match object_name {
             RawName::Name(raw_name) => {
                 // Check if unqualified name refers to a CTE.
                 if raw_name.0.len() == 1 {
                     let norm_name = normalize::ident(raw_name.0[0].clone());
                     if let Some(id) = self.ctes.get(&norm_name) {
-                        return ResolvedTableName {
+                        return ResolvedObjectName {
                             id: Id::Local(*id),
                             raw_name: normalize::object_name(raw_name).unwrap(),
                         };
@@ -173,7 +177,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 
                 let name = normalize::object_name(raw_name).unwrap();
                 match self.catalog.resolve_item(&name) {
-                    Ok(item) => ResolvedTableName {
+                    Ok(item) => ResolvedObjectName {
                         id: Id::Global(item.id()),
                         raw_name: name,
                     },
@@ -181,7 +185,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         if self.status.is_ok() {
                             self.status = Err(e.into());
                         }
-                        ResolvedTableName {
+                        ResolvedObjectName {
                             id: Id::Local(LocalId::new(0)),
                             raw_name: name,
                         }
@@ -193,7 +197,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 if self.catalog.try_get_item_by_id(&gid).is_none() {
                     self.status = Err(anyhow!("invalid id {}", &gid));
                 }
-                ResolvedTableName {
+                ResolvedObjectName {
                     id: Id::Global(gid),
                     raw_name: normalize::object_name(raw_name).unwrap(),
                 }
@@ -304,7 +308,7 @@ fn try_push_projection_order_by(
 
 pub fn plan_insert_query(
     scx: &StatementContext,
-    table_name: ObjectName,
+    table_name: UnresolvedObjectName,
     columns: Vec<Ident>,
     source: InsertSource<Raw>,
 ) -> Result<(GlobalId, HirRelationExpr), anyhow::Error> {
@@ -1546,11 +1550,11 @@ fn plan_table_factor(
 
 fn plan_table_function(
     ecx: &ExprContext,
-    name: &ObjectName,
+    name: &UnresolvedObjectName,
     alias: Option<&TableAlias>,
     args: &FunctionArgs<Aug>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
-    if *name == ObjectName::unqualified("values") {
+    if *name == UnresolvedObjectName::unqualified("values") {
         // Produce a nice error message for the common typo
         // `SELECT * FROM VALUES (1)`.
         bail!("VALUES expression in FROM clause must be surrounded by parentheses");
@@ -1692,7 +1696,7 @@ fn expand_select_item<'a>(
             expr: Expr::QualifiedWildcard(table_name),
             alias: _,
         } => {
-            let table_name = normalize::object_name(ObjectName(table_name.clone()))?;
+            let table_name = normalize::object_name(UnresolvedObjectName(table_name.clone()))?;
             let out: Vec<_> = ecx
                 .scope
                 .items
@@ -2530,7 +2534,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
-        let table_name = normalize::object_name(ObjectName(names))?;
+        let table_name = normalize::object_name(UnresolvedObjectName(names))?;
         let (i, _name) = ecx.scope.resolve_table_column(&table_name, &col_name)?;
         return Ok(HirScalarExpr::Column(i));
     }
@@ -2647,7 +2651,7 @@ fn plan_function<'a>(
 /// If the name does not specify a known built-in function, returns an error.
 pub fn resolve_func(
     ecx: &ExprContext,
-    name: &ObjectName,
+    name: &UnresolvedObjectName,
     args: &sql_parser::ast::FunctionArgs<Aug>,
 ) -> Result<&'static Func, anyhow::Error> {
     if let Ok(i) = ecx.qcx.scx.resolve_function(name.clone()) {
@@ -2872,12 +2876,12 @@ pub fn scalar_type_from_sql(
     })
 }
 
-pub fn canonicalize_type_name_internal(name: &ObjectName) -> ObjectName {
+pub fn canonicalize_type_name_internal(name: &UnresolvedObjectName) -> UnresolvedObjectName {
     // Rewrite some unqualified aliases to the name we know they should
     // use in the catalog, i.e. canonicalize the catalog name.
     match name.to_string().as_str() {
-        "char" | "varchar" => ObjectName::unqualified("text"),
-        "smallint" => ObjectName::unqualified("int4"),
+        "char" | "varchar" => UnresolvedObjectName::unqualified("text"),
+        "smallint" => UnresolvedObjectName::unqualified("int4"),
         _ => name.clone(),
     }
 }
@@ -3122,7 +3126,7 @@ impl<'a> QueryContext<'a> {
     /// CTE.
     pub fn resolve_table_name(
         &self,
-        object: ResolvedTableName,
+        object: ResolvedObjectName,
     ) -> Result<(HirRelationExpr, Scope), PlanError> {
         match object.id {
             Id::Local(id) => {

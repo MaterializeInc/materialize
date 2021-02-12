@@ -13,7 +13,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use sql_parser::ast::{Ident, ObjectName};
+use sql_parser::ast::{Ident, UnresolvedObjectName};
 
 /// A fully-qualified name of an item in the catalog.
 ///
@@ -84,15 +84,15 @@ impl fmt::Display for SchemaName {
     }
 }
 
-impl From<FullName> for ObjectName {
-    fn from(full_name: FullName) -> ObjectName {
+impl From<FullName> for UnresolvedObjectName {
+    fn from(full_name: FullName) -> UnresolvedObjectName {
         let mut name_parts = Vec::new();
         if let DatabaseSpecifier::Name(database) = full_name.database {
             name_parts.push(Ident::new(database));
         }
         name_parts.push(Ident::new(full_name.schema));
         name_parts.push(Ident::new(full_name.item));
-        ObjectName(name_parts)
+        UnresolvedObjectName(name_parts)
     }
 }
 

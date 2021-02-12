@@ -26,7 +26,7 @@
 //! by invoking the right visitor method of each of its fields.
 //!
 //! ```
-//! # use sql_parser::ast::{Expr, Function, FunctionArgs, ObjectName, WindowSpec, Raw, AstInfo};
+//! # use sql_parser::ast::{Expr, Function, FunctionArgs, UnresolvedObjectName, WindowSpec, Raw, AstInfo};
 //! #
 //! pub trait Visit<'ast, T: AstInfo> {
 //!     /* ... */
@@ -36,7 +36,7 @@
 //!     }
 //!
 //!     /* ... */
-//!     # fn visit_object_name(&mut self, node: &'ast ObjectName);
+//!     # fn visit_unresolved_object_name(&mut self, node: &'ast UnresolvedObjectName);
 //!     # fn visit_function_args(&mut self, node: &'ast FunctionArgs<T>);
 //!     # fn visit_expr(&mut self, node: &'ast Expr<T>);
 //!     # fn visit_window_spec(&mut self, node: &'ast WindowSpec<T>);
@@ -46,7 +46,7 @@
 //! where
 //!     V: Visit<'ast, T> + ?Sized,
 //! {
-//!     visitor.visit_object_name(&node.name);
+//!     visitor.visit_unresolved_object_name(&node.name);
 //!     visitor.visit_function_args(&node.args);
 //!     if let Some(filter) = &node.filter {
 //!         visitor.visit_expr(&*filter);
@@ -117,7 +117,7 @@
 //!         self.idents.push(node);
 //!         visit::visit_ident(self, node);
 //!     }
-//!     fn visit_table(&mut self, name: &'ast <Raw as AstInfo>::Table) {
+//!     fn visit_object_name(&mut self, name: &'ast <Raw as AstInfo>::ObjectName) {
 //!         match name {
 //!             RawName::Name(n) | RawName::Id(_, n) => {
 //!                 for node in &n.0 {
