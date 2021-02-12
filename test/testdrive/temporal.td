@@ -81,9 +81,6 @@ ts
 > SELECT * FROM two_bounds2 AS OF 9
 ts
 ---
-6
-7
-8
 9
 10
 
