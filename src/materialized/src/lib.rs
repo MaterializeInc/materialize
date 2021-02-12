@@ -13,6 +13,7 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
+use std::convert::TryInto;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -199,6 +200,11 @@ pub async fn serve(
         }
     };
 
+    // Set this metric once so that it shows up in the metric export.
+    crate::server_metrics::WORKER_COUNT
+        .with_label_values(&[&workers.to_string()])
+        .set(workers.try_into().unwrap());
+
     // Initialize network listener.
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
@@ -248,10 +254,6 @@ pub async fn serve(
             tls: http_tls,
             coord_client,
             start_time,
-            // TODO(benesch): passing this to `http::Server::new` just
-            // so it can set a static metric is silly. We should just
-            // set the metric directly here.
-            worker_count: workers,
         }));
         mux.serve(incoming.by_ref().take_until(drain_tripwire))
             .await;
