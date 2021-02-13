@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
+use std::fs::{self};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 

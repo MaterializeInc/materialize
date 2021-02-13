@@ -22,7 +22,7 @@ use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::mem;
 use std::os::unix::ffi::OsStringExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -66,6 +66,10 @@ use sql::names::{DatabaseSpecifier, FullName, SchemaName};
 use sql::plan::StatementDesc;
 use sql::plan::{
     CopyFormat, IndexOption, IndexOptionName, MutationKind, Params, PeekWhen, Plan, PlanContext,
+};
+use storage::{
+    Compacter, CompacterMessage, Message as PersistedMessage, Trace as PersistedTrace,
+    WriteAheadLogs,
 };
 use transform::Optimizer;
 
@@ -155,6 +159,7 @@ pub struct Config<'a> {
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
+    data_directory: PathBuf,
     worker_guards: WorkerGuards<()>,
     worker_txs: Vec<crossbeam_channel::Sender<SequencedCommand>>,
     optimizer: Optimizer,
@@ -175,6 +180,7 @@ pub struct Coordinator {
     // Channel to communicate source status updates and shutdown notifications to the cacher
     // thread.
     cache_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
+    compacter_tx: mpsc::UnboundedSender<CompacterMessage>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -188,6 +194,8 @@ pub struct Coordinator {
     /// A map from connection ID to metadata about that connection for all
     // active connections.
     active_conns: HashMap<u32, ConnMeta>,
+    /// Map of all persisted tables.
+    table_wals: WriteAheadLogs,
 }
 
 /// Metadata about an active connection.
@@ -307,7 +315,41 @@ impl Coordinator {
 
         for &(id, oid, name, item) in &items {
             match item {
-                CatalogItem::Table(_) | CatalogItem::View(_) => (),
+                CatalogItem::View(_) => (),
+                CatalogItem::Table(_) => {
+                    // TODO gross hack for now
+                    if !id.is_system() {
+                        self.table_wals.resume(*id)?;
+                        let wals_path = self.data_directory.join("table_wals");
+                        let traces_path = self.data_directory.join("table_traces");
+                        let persisted_table = PersistedTrace::resume(*id, traces_path, wals_path)?;
+                        let messages = persisted_table.read()?;
+
+                        let mut updates = vec![];
+                        for persisted_message in messages.into_iter() {
+                            match persisted_message {
+                                PersistedMessage::Progress(_) => {
+                                    // Send the messages accumulated so far + update
+                                    // progress
+                                    let updates = std::mem::replace(&mut updates, vec![]);
+                                    self.broadcast(SequencedCommand::Insert { id: *id, updates });
+                                    // TODO: trying to send this fails because on restart
+                                    // the frontier has already advanced ahead. Need to investigate
+                                    // this more.
+                                    // self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
+                                    //    advance_to: time,
+                                    // });
+                                }
+                                PersistedMessage::Data(update) => {
+                                    updates.push(update);
+                                }
+                            }
+                        }
+                        self.compacter_tx
+                            .send(CompacterMessage::Resume(*id, persisted_table))
+                            .expect("compacter receiver should not drop first");
+                    }
+                }
                 CatalogItem::Sink(sink) => {
                     let builder = match &sink.connector {
                         SinkConnectorState::Pending(builder) => builder,
@@ -440,6 +482,9 @@ impl Coordinator {
                         > self.closed_up_to / self.logging_granularity.unwrap()
             {
                 if next_ts > self.closed_up_to {
+                    self.table_wals
+                        .write_progress(next_ts)
+                        .expect("TODO handle this better");
                     self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
                         advance_to: next_ts,
                     });
@@ -1843,6 +1888,13 @@ impl Coordinator {
             .await
         {
             Ok(_) => {
+                // TODO what do we do when this errors?
+                // We should maybe create the file before commit
+                // the catalog
+                self.table_wals.create(table_id)?;
+                self.compacter_tx
+                    .send(CompacterMessage::Add(table_id))
+                    .expect("compacter receiver should not drop first");
                 self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
                     .await?;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
@@ -2184,7 +2236,16 @@ impl Coordinator {
                 ExecuteResponse::DroppedSource
             }
             ObjectType::View => ExecuteResponse::DroppedView,
-            ObjectType::Table => ExecuteResponse::DroppedTable,
+            ObjectType::Table => {
+                for id in items.iter() {
+                    self.table_wals.destroy(*id)?;
+                    self.compacter_tx
+                        .send(CompacterMessage::Drop(*id))
+                        .expect("compacter receiver should not drop first");
+                }
+
+                ExecuteResponse::DroppedTable
+            }
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
             ObjectType::Type => ExecuteResponse::DroppedType,
@@ -2262,7 +2323,7 @@ impl Coordinator {
                                 )));
                             }
 
-                            let updates = rows
+                            let updates: Vec<_> = rows
                                 .into_iter()
                                 .map(|(row, diff)| Update {
                                     row,
@@ -2271,6 +2332,7 @@ impl Coordinator {
                                 })
                                 .collect();
 
+                            self.table_wals.write(id, &updates)?;
                             self.broadcast(SequencedCommand::Insert { id, updates });
                         }
                     }
@@ -3364,6 +3426,13 @@ pub async fn serve(
         None
     };
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
+
+    let (compacter_tx, compacter_rx) = mpsc::unbounded_channel();
+    let wals_path = data_directory.join("table_wals");
+    let traces_path = data_directory.join("table_traces");
+    let mut compacter = Compacter::new(compacter_rx, traces_path, wals_path.clone())?;
+    tokio::spawn(async move { compacter.run().await });
+
     let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
         Some(symbiosis::Postgres::open_and_erase(symbiosis_url).await?)
     } else {
@@ -3400,6 +3469,7 @@ pub async fn serve(
     .join_on_drop();
 
     let mut coord = Coordinator {
+        data_directory: data_directory.to_path_buf(),
         worker_guards,
         worker_txs,
         optimizer: Default::default(),
@@ -3413,6 +3483,7 @@ pub async fn serve(
         logical_compaction_window_ms: logical_compaction_window.map(duration_to_timestamp_millis),
         internal_cmd_tx,
         ts_tx: ts_tx.clone(),
+        compacter_tx,
         cache_tx,
         closed_up_to: 1,
         read_lower_bound: 1,
@@ -3420,6 +3491,7 @@ pub async fn serve(
         need_advance: true,
         transient_id_counter: 1,
         active_conns: HashMap::new(),
+        table_wals: WriteAheadLogs::new(wals_path)?,
     };
     coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
     if let Some(config) = &logging {
