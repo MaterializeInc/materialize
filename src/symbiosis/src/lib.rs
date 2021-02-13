@@ -25,6 +25,7 @@
 //! extremely slow and inefficient on large data sets.
 
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::env;
@@ -124,6 +125,7 @@ END $$;
         let scx = StatementContext {
             pcx,
             catalog,
+            ids: HashSet::new(),
             param_types: Rc::new(RefCell::new(BTreeMap::new())),
         };
         Ok(match stmt {
@@ -148,7 +150,8 @@ END $$;
 
                 let mut sql_types: Vec<_> = Vec::with_capacity(columns.len());
                 for (index, column) in columns.iter().enumerate() {
-                    let aug_data_type = resolve_names_data_type(&scx, column.data_type.clone())?;
+                    let (aug_data_type, _ids) =
+                        resolve_names_data_type(&scx, column.data_type.clone())?;
                     let ty = sql::plan::scalar_type_from_sql(&scx, &aug_data_type)?;
                     sql_types.push(aug_data_type);
                     let mut nullable = true;

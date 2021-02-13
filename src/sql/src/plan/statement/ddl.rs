@@ -164,7 +164,7 @@ pub fn plan_create_table(
     let mut defaults = Vec::with_capacity(columns.len());
 
     for c in columns {
-        let aug_data_type = resolve_names_data_type(scx, c.data_type.clone())?;
+        let (aug_data_type, _ids) = resolve_names_data_type(scx, c.data_type.clone())?;
         let ty = plan::scalar_type_from_sql(scx, &aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();

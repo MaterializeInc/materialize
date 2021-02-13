@@ -103,6 +103,7 @@ struct NameResolver<'a> {
     catalog: &'a dyn Catalog,
     ctes: HashMap<String, LocalId>,
     status: Result<(), anyhow::Error>,
+    ids: HashSet<GlobalId>,
 }
 
 impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
@@ -183,10 +184,13 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 
                 let name = normalize::unresolved_object_name(raw_name).unwrap();
                 match self.catalog.resolve_item(&name) {
-                    Ok(item) => ResolvedObjectName {
-                        id: Id::Global(item.id()),
-                        raw_name: name,
-                    },
+                    Ok(item) => {
+                        self.ids.insert(item.id());
+                        ResolvedObjectName {
+                            id: Id::Global(item.id()),
+                            raw_name: name,
+                        }
+                    }
                     Err(e) => {
                         if self.status.is_ok() {
                             self.status = Err(e.into());
@@ -203,6 +207,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 if self.catalog.try_get_item_by_id(&gid).is_none() {
                     self.status = Err(anyhow!("invalid id {}", &gid));
                 }
+                self.ids.insert(gid.clone());
                 ResolvedObjectName {
                     id: Id::Global(gid),
                     raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
@@ -223,9 +228,11 @@ pub fn resolve_names(
         status: Ok(()),
         catalog: qcx.scx.catalog,
         ctes: HashMap::new(),
+        ids: HashSet::new(),
     };
     let result = n.fold_query(query);
     n.status?;
+    qcx.ids.extend(n.ids.iter());
     Ok(result)
 }
 
@@ -237,24 +244,27 @@ pub fn resolve_names_expr(
         status: Ok(()),
         catalog: qcx.scx.catalog,
         ctes: HashMap::new(),
+        ids: HashSet::new(),
     };
     let result = n.fold_expr(expr);
     n.status?;
+    qcx.ids.extend(n.ids.iter());
     Ok(result)
 }
 
 pub fn resolve_names_data_type(
     scx: &StatementContext,
     data_type: DataType<Raw>,
-) -> Result<DataType<Aug>, anyhow::Error> {
+) -> Result<(DataType<Aug>, HashSet<GlobalId>), anyhow::Error> {
     let mut n = NameResolver {
         status: Ok(()),
         catalog: scx.catalog,
         ctes: HashMap::new(),
+        ids: HashSet::new(),
     };
     let result = n.fold_data_type(data_type);
     n.status?;
-    Ok(result)
+    Ok((result, n.ids))
 }
 
 /// Plans a top-level query, returning the `HirRelationExpr` describing the query
@@ -3098,6 +3108,8 @@ pub struct QueryContext<'a> {
     pub outer_relation_types: Vec<RelationType>,
     /// CTEs for this query, mapping their assigned LocalIds to their definition.
     pub ctes: HashMap<LocalId, CteDesc>,
+    /// The GlobalIds of the items the `Query` is dependent upon.
+    pub ids: HashSet<GlobalId>,
 }
 
 impl<'a> QueryContext<'a> {
@@ -3108,6 +3120,7 @@ impl<'a> QueryContext<'a> {
             outer_scope: Scope::empty(None),
             outer_relation_types: vec![],
             ctes: HashMap::new(),
+            ids: HashSet::new(),
         }
     }
 
@@ -3134,6 +3147,7 @@ impl<'a> QueryContext<'a> {
                 .cloned()
                 .collect(),
             ctes,
+            ids: HashSet::new(),
         }
     }
 
