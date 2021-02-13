@@ -137,11 +137,12 @@ pub struct Role {
     pub oid: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CatalogEntry {
     item: CatalogItem,
     used_by: Vec<GlobalId>,
     id: GlobalId,
+    #[serde(skip)]
     oid: u32,
     name: FullName,
 }
@@ -180,6 +181,7 @@ pub struct Sink {
     pub create_sql: String,
     pub plan_cx: PlanContext,
     pub from: GlobalId,
+    #[serde(skip)]
     pub connector: SinkConnectorState,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
@@ -1847,7 +1849,16 @@ impl Catalog {
     /// that the serialized state for two identical catalogs will compare
     /// identically.
     pub fn dump(&self) -> String {
-        serde_json::to_string(&self.by_name).expect("serialization cannot fail")
+        let mut catalog = serde_json::to_value(&self.by_name).unwrap();
+        for (_, database) in catalog.as_object_mut().unwrap() {
+            for (_, schema) in database["schemas"].as_object_mut().unwrap() {
+                for (_, id_val) in schema["items"].as_object_mut().unwrap() {
+                    let id: GlobalId = serde_json::from_value(id_val.clone()).unwrap();
+                    *id_val = serde_json::to_value(&self.get_by_id(&id)).unwrap();
+                }
+            }
+        }
+        catalog.to_string()
     }
 
     pub fn config(&self) -> &sql::catalog::CatalogConfig {
