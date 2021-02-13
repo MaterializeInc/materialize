@@ -7,6 +7,53 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Reduction execution planning and dataflow construction.
+//!
+//! Materialize needs to be able to maintain reductions incrementally (roughly, using
+//! time proportional to the number of changes in the input) and ideally, with a
+//! memory footprint proportional to the number of reductions being computed. To achieve that,
+//! reduction functions are divied into three categories, each with their own specialized plan
+//! and dataflow.
+//!
+//! 1. Accumulable:
+//!    Accumulable reductions can be computed inline in a Differential update's `difference`
+//!    field because they basically boil down to tracking counts of things. `sum()` is an
+//!    example of an accumulable reduction, and when some element `x` is removed from the set
+//!    of elements being summed, we can introduce `-x` to incrementally maintain the sum. More
+//!    formally, accumulable reductions correspond to instances of Abelian groups.
+//! 2. Hierarchical:
+//!    Hierarchical reductions don't have a meaningful negation like accumulable reductions do, but
+//!    they are still associative, which lets us compute the reduction over subsets of the
+//!    input, and then compute the reduction again on those results. For example:
+//!    `min[2, 5, 1, 10]` is the same as `min[ min[2, 5], min[1, 10]]`. When we compute hierarchical
+//!    reductions this way, we can maintain the computation in sublinear time with respect to
+//!    the overall input. `min` and `max` are two examples of hierarchical reductions. More formally,
+//!    hierarchical reductions correspond to instances of semigroups, in that they are associative,
+//!    but in order to benefit from being computed hierarchically, they need to have some reduction
+//!    in data size as well. A function like "concat-everything-to-a-string" wouldn't benefit from
+//!    hierarchical evaluation.
+//!
+//!    When the input is append-only, or monotonic, reductions that would otherwise have to be computed
+//!    hierarchically can instead be computed in-place, because we only need to keep the value that's
+//!    better than the "best" (minimal or maximal for min and max) seen so far.
+//! 3. Basic:
+//!    Basic reductions are a bit like the Hufflepuffs of this trifecta. They are neither accumulable nor
+//!    hierarchical (most likely they are associative but don't involve any data reduction) and so for these
+//!    we can't do much more than just defer to Differential's reduce operator and eat a large maintenance cost.
+//!
+//! When render these reductions we want to limit the number of arrangements we produce. Therefore, if we only
+//! have multiple instances of a single reduction type in our reduce expression, we'll specialize and only
+//! render a dataflow to compute those functions. If instead we have instances of multiple reduction types
+//! in the same expression, we'll need to divide them up by type, render them separately, and then take those
+//! results and collate them back in the requested order.
+//!
+//! We build `ReducePlan`s to manage the complexity of planning the generated dataflow for a given reduce
+//! expression. The intent here is that each creating a `ReducePlan` should capture all of the decision making
+//! about what kind of dataflow do we need to render and what each operator needs to do, and then actually
+//! rendering the plan can be a relatively simple application of (as much as possible) straight line code.
+//! Furthermore, the goal is to encode invariants (such as "Hierarchical reductions are either all monotonic or
+//! all bucketed") in the type system so that they can be checked by the compiler.
+
 use std::collections::BTreeMap;
 
 use differential_dataflow::collection::AsCollection;
@@ -39,13 +86,13 @@ enum ReducePlan {
     // Aggregations that can be computed in place
     Accumulable(AccumulablePlan),
     // Aggregations that can be computed hierarchically
-    Hierarchical(HierarchicalExpr),
+    Hierarchical(HierarchicalPlan),
     // Aggregations that cannot be computed in place
     // or hierarchically.
-    Basic(BasicExpr),
+    Basic(BasicPlan),
     // A mix of multiple types of aggregates that need
     // to be combined together.
-    Collation(CollationExpr),
+    Collation(CollationPlan),
 }
 
 // LIR node for accumulable reductions
@@ -68,20 +115,20 @@ struct AccumulablePlan {
 
 // LIR node for hierarchical reductions
 #[derive(Clone, Debug)]
-enum HierarchicalExpr {
+enum HierarchicalPlan {
     // LIR node for hierarchical, monotonic reductions
-    Monotonic(MonotonicExpr),
+    Monotonic(MonotonicPlan),
     // LIR node for hierarchical reductions that are not
     // monotonic and thus have to be rendered via a reduction
     // tree that partitions reductions into fine and then coarser
     // buckets.
-    Bucketed(BucketedExpr),
+    Bucketed(BucketedPlan),
 }
 
 // LIR node for reductions that are hierarchical but presented with a monotonic
 // input stream.
 #[derive(Clone, Debug)]
-struct MonotonicExpr {
+struct MonotonicPlan {
     // Aggregations being computed monotonically.
     aggr_funcs: Vec<AggregateFunc>,
     // Set of "skips" or calls to `nth()` an iterator needs to do over
@@ -93,7 +140,7 @@ struct MonotonicExpr {
 // monotonic. This gets rendered with a series of reduce
 // operators that serve as a min / max heap
 #[derive(Clone, Debug)]
-struct BucketedExpr {
+struct BucketedPlan {
     // Aggregations being computed hierarchically
     aggr_funcs: Vec<AggregateFunc>,
     // Set of "skips" or calls to `nth()` an iterator needs to do over
@@ -112,7 +159,7 @@ struct BucketedExpr {
 // LIR node for basic reductions - those that are neither
 // computed in place nor computed hierarchically.
 #[derive(Clone, Debug)]
-enum BasicExpr {
+enum BasicPlan {
     // LIR node for reductions with only a single basic reduction
     Single(usize, AggregateExpr),
     // LIR node for reductions with multiple basic reductions
@@ -126,10 +173,10 @@ enum BasicExpr {
 // to stitch answers together in the order requested by the user
 // TODO: could we express this as a delta join
 #[derive(Clone, Debug, Default)]
-struct CollationExpr {
+struct CollationPlan {
     accumulable: Option<AccumulablePlan>,
-    hierarchical: Option<HierarchicalExpr>,
-    basic: Option<BasicExpr>,
+    hierarchical: Option<HierarchicalPlan>,
+    basic: Option<BasicPlan>,
     aggregate_types: Vec<ReductionType>,
 }
 
@@ -369,8 +416,8 @@ fn plan_reduce(
 
                 let skips = convert_indexes_to_skips(indexes);
                 if monotonic {
-                    let monotonic = MonotonicExpr { aggr_funcs, skips };
-                    ReducePlan::Hierarchical(HierarchicalExpr::Monotonic(monotonic))
+                    let monotonic = MonotonicPlan { aggr_funcs, skips };
+                    ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(monotonic))
                 } else {
                     let mut shifts = vec![];
                     let mut current = 4usize;
@@ -385,23 +432,23 @@ fn plan_reduce(
 
                     shifts.reverse();
 
-                    let bucketed = BucketedExpr {
+                    let bucketed = BucketedPlan {
                         aggr_funcs,
                         skips,
                         shifts,
                     };
 
-                    ReducePlan::Hierarchical(HierarchicalExpr::Bucketed(bucketed))
+                    ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(bucketed))
                 }
             }
             ReductionType::Basic => {
                 if aggregates_list.len() == 1 {
-                    ReducePlan::Basic(BasicExpr::Single(
+                    ReducePlan::Basic(BasicPlan::Single(
                         aggregates_list[0].0,
                         aggregates_list[0].1.clone(),
                     ))
                 } else {
-                    ReducePlan::Basic(BasicExpr::Multiple(aggregates_list))
+                    ReducePlan::Basic(BasicPlan::Multiple(aggregates_list))
                 }
             }
         }
@@ -437,7 +484,7 @@ fn plan_reduce(
 
     // Otherwise, we have to stitch reductions together.
     assert!(lir.len() <= 3);
-    let mut collation: CollationExpr = Default::default();
+    let mut collation: CollationPlan = Default::default();
     let aggregate_types = aggregates
         .iter()
         .map(|a| reduction_type(&a.func))
@@ -473,18 +520,18 @@ where
     G::Timestamp: Lattice,
 {
     let build_hierarchical = |collection: Collection<G, (Row, Row)>,
-                              expr: HierarchicalExpr,
+                              expr: HierarchicalPlan,
                               top_level: bool| match expr {
-        HierarchicalExpr::Monotonic(expr) => build_monotonic(collection, expr, top_level),
-        HierarchicalExpr::Bucketed(expr) => build_bucketed(collection, expr, top_level),
+        HierarchicalPlan::Monotonic(expr) => build_monotonic(collection, expr, top_level),
+        HierarchicalPlan::Bucketed(expr) => build_bucketed(collection, expr, top_level),
     };
 
     let build_basic =
-        |collection: Collection<G, (Row, Row)>, expr: BasicExpr, top_level: bool| match expr {
-            BasicExpr::Single(index, aggr) => {
+        |collection: Collection<G, (Row, Row)>, expr: BasicPlan, top_level: bool| match expr {
+            BasicPlan::Single(index, aggr) => {
                 build_basic_aggregate(collection, index, &aggr, top_level)
             }
-            BasicExpr::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
+            BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
         };
 
     match lir {
@@ -725,11 +772,11 @@ where
 // implementation.
 fn build_bucketed<G>(
     collection: Collection<G, (Row, Row)>,
-    BucketedExpr {
+    BucketedPlan {
         aggr_funcs,
         skips,
         shifts,
-    }: BucketedExpr,
+    }: BucketedPlan,
     prepend_key: bool,
 ) -> Arrangement<G, Row>
 where
@@ -835,7 +882,7 @@ where
 
 fn build_monotonic<G>(
     collection: Collection<G, (Row, Row)>,
-    MonotonicExpr { aggr_funcs, skips }: MonotonicExpr,
+    MonotonicPlan { aggr_funcs, skips }: MonotonicPlan,
     prepend_key: bool,
 ) -> Arrangement<G, Row>
 where
