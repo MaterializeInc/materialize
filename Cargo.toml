@@ -1,13 +1,13 @@
 [workspace]
 members = [
     "demo/billing",
+    "fuzz",
     "play/mbta",
     "src/avro",
     "src/avro-derive",
     "src/aws-util",
     "src/build-info",
     "src/ccsr",
-    "src/comm",
     "src/coord",
     "src/dataflow-bin",
     "src/dataflow-types",
@@ -38,6 +38,7 @@ members = [
     "test/metabase/smoketest",
     "test/performance/perf-kinesis",
     "test/performance/perf-upsert",
+    "test/performance/s3-datagen",
     "test/smith",
     "test/test-util",
 ]

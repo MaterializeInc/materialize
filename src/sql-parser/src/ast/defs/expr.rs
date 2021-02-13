@@ -21,7 +21,7 @@
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, DataType, Ident, ObjectName, OrderByExpr, Query, Value};
+use crate::ast::{AstInfo, DataType, Ident, OrderByExpr, Query, UnresolvedObjectName, Value};
 
 /// An SQL expression of any type.
 ///
@@ -92,13 +92,21 @@ pub enum Expr<T: AstInfo> {
     /// `expr COLLATE collation`
     Collate {
         expr: Box<Expr<T>>,
-        collation: ObjectName,
+        collation: UnresolvedObjectName,
     },
     /// COALESCE(<expr>, ...)
     ///
     /// While COALESCE has the same syntax as a function call, its semantics are
     /// extremely unusual, and are better captured with a dedicated AST node.
     Coalesce { exprs: Vec<Expr<T>> },
+    /// NULLIF(expr, expr)
+    ///
+    /// While NULLIF has the same syntax as a function call, it is not evaluated
+    /// as a function within Postgres.
+    NullIf {
+        l_expr: Box<Expr<T>>,
+        r_expr: Box<Expr<T>>,
+    },
     /// Nested expression e.g. `(foo > bar)` or `(1)`
     Nested(Box<Expr<T>>),
     /// A row constructor like `ROW(<expr>...)` or `(<expr>, <expr>...)`.
@@ -278,7 +286,8 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                     | Expr::Function { .. }
                     | Expr::Identifier { .. }
                     | Expr::Collate { .. }
-                    | Expr::Coalesce { .. });
+                    | Expr::Coalesce { .. }
+                    | Expr::NullIf{ .. });
                 if needs_wrap {
                     f.write_str('(');
                 }
@@ -297,6 +306,11 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
             Expr::Coalesce { exprs } => {
                 f.write_str("COALESCE(");
                 f.write_node(&display::comma_separated(&exprs));
+                f.write_str(")");
+            }
+            Expr::NullIf { l_expr, r_expr } => {
+                f.write_str("COALESCE(");
+                f.write_node(&display::comma_separated(&[l_expr, r_expr]));
                 f.write_str(")");
             }
             Expr::Nested(ast) => {
@@ -502,7 +516,7 @@ impl<T: AstInfo> Expr<T> {
 
     pub fn call(name: Vec<&str>, args: Vec<Expr<T>>) -> Expr<T> {
         Expr::Function(Function {
-            name: ObjectName(name.into_iter().map(Into::into).collect()),
+            name: UnresolvedObjectName(name.into_iter().map(Into::into).collect()),
             args: FunctionArgs::Args(args),
             filter: None,
             over: None,
@@ -650,7 +664,7 @@ impl_display!(WindowFrameBound);
 /// A function call
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Function<T: AstInfo> {
-    pub name: ObjectName,
+    pub name: UnresolvedObjectName,
     pub args: FunctionArgs<T>,
     // aggregate functions may specify e.g. `COUNT(DISTINCT X) FILTER (WHERE ...)`
     pub filter: Option<Box<Expr<T>>>,

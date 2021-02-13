@@ -25,7 +25,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::TransformArgs;
-use expr::{Id, JoinInputMapper, RelationExpr, ScalarExpr};
+use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
 /// Push non-null requirements toward sources.
 #[derive(Debug)]
@@ -34,7 +34,7 @@ pub struct NonNullRequirements;
 impl crate::Transform for NonNullRequirements {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         self.action(relation, HashSet::new(), &mut HashMap::new());
@@ -46,19 +46,23 @@ impl NonNullRequirements {
     /// Push non-null requirements toward sources.
     pub fn action(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         mut columns: HashSet<usize>,
         gets: &mut HashMap<Id, Vec<HashSet<usize>>>,
     ) {
         match relation {
-            RelationExpr::Constant { rows, .. } => rows.retain(|(row, _)| {
-                let datums = row.unpack();
-                columns.iter().all(|c| datums[*c] != repr::Datum::Null)
-            }),
-            RelationExpr::Get { id, .. } => {
+            MirRelationExpr::Constant { rows, .. } => {
+                if let Ok(rows) = rows {
+                    rows.retain(|(row, _)| {
+                        let datums = row.unpack();
+                        columns.iter().all(|c| datums[*c] != repr::Datum::Null)
+                    })
+                }
+            }
+            MirRelationExpr::Get { id, .. } => {
                 gets.entry(*id).or_insert_with(Vec::new).push(columns);
             }
-            RelationExpr::Let { id, value, body } => {
+            MirRelationExpr::Let { id, value, body } => {
                 // Let harvests any non-null requirements from its body,
                 // and acts on the intersection of the requirements for
                 // each corresponding Get, pushing them at its value.
@@ -76,21 +80,21 @@ impl NonNullRequirements {
                     self.action(value, need, gets);
                 }
             }
-            RelationExpr::Project { input, outputs } => {
+            MirRelationExpr::Project { input, outputs } => {
                 self.action(
                     input,
                     columns.into_iter().map(|c| outputs[c]).collect(),
                     gets,
                 );
             }
-            RelationExpr::Map { input, scalars } => {
+            MirRelationExpr::Map { input, scalars } => {
                 let arity = input.arity();
                 if columns
                     .iter()
                     .any(|c| *c >= arity && scalars[*c - arity].is_literal_null())
                 {
                     // A null value was introduced in a marked column;
-                    // the entire expression can be zerod out.
+                    // the entire expression can be zeroed out.
                     relation.take_safely();
                 } else {
                     // For each column, if it must be non-null, extract the expression's
@@ -106,27 +110,46 @@ impl NonNullRequirements {
                     self.action(input, columns, gets);
                 }
             }
-            RelationExpr::FlatMap {
+            MirRelationExpr::FlatMap {
                 input,
                 func,
                 exprs,
                 demand: _,
             } => {
+                // Columns whose number is smaller than arity refer to
+                // columns of `input`. Columns whose number is
+                // greater than or equal to the arity refer to columns created
+                // by the FlatMap. The latter group of columns cannot be
+                // propagated down.
+                let arity = input.arity();
+                columns.retain(|c| *c < arity);
+
                 if func.empty_on_null_input() {
+                    // we can safely disregard rows where any of the exprs
+                    // evaluate to null
                     for expr in exprs {
                         expr.non_null_requirements(&mut columns);
                     }
                 }
+
+                // TODO: if `!func.empty_on_null_input()` and there are members
+                // of `columns` that refer to columns created by the FlatMap, we
+                // may be able to propagate some non-null requirements based on
+                // which columns created by the FlatMap cannot be null. However,
+                // as there are no TableFuncs for which
+                // `!func.empty_on_null_input()`, it is yet unknown what should
+                // be done in this case.
+
                 self.action(input, columns, gets);
             }
-            RelationExpr::Filter { input, predicates } => {
+            MirRelationExpr::Filter { input, predicates } => {
                 for predicate in predicates {
                     predicate.non_null_requirements(&mut columns);
                     // TODO: Not(IsNull) should add a constraint!
                 }
                 self.action(input, columns, gets);
             }
-            RelationExpr::Join {
+            MirRelationExpr::Join {
                 inputs,
                 equivalences,
                 ..
@@ -141,7 +164,7 @@ impl NonNullRequirements {
                 // Also, any non-nullable columns impose constraints on their equivalence class.
                 for equivalence in equivalences {
                     let exists_constraint = equivalence.iter().any(|expr| {
-                        if let ScalarExpr::Column(c) = expr {
+                        if let MirScalarExpr::Column(c) = expr {
                             let (col, rel) = input_mapper.map_column_to_local(*c);
                             new_columns[rel].contains(&col)
                                 || !input_types[rel].column_types[col].nullable
@@ -152,7 +175,7 @@ impl NonNullRequirements {
 
                     if exists_constraint {
                         for expr in equivalence.iter() {
-                            if let ScalarExpr::Column(c) = expr {
+                            if let MirScalarExpr::Column(c) = expr {
                                 let (col, rel) = input_mapper.map_column_to_local(*c);
                                 new_columns[rel].insert(col);
                             }
@@ -164,7 +187,7 @@ impl NonNullRequirements {
                     self.action(input, columns, gets);
                 }
             }
-            RelationExpr::Reduce {
+            MirRelationExpr::Reduce {
                 input,
                 group_key,
                 aggregates,
@@ -184,24 +207,76 @@ impl NonNullRequirements {
                 }
                 self.action(input, new_columns, gets);
             }
-            RelationExpr::TopK { input, .. } => {
+            MirRelationExpr::TopK { input, .. } => {
                 self.action(input, columns, gets);
             }
-            RelationExpr::Negate { input } => {
+            MirRelationExpr::Negate { input } => {
                 self.action(input, columns, gets);
             }
-            RelationExpr::Threshold { input } => {
+            MirRelationExpr::Threshold { input } => {
                 self.action(input, columns, gets);
             }
-            RelationExpr::Union { base, inputs } => {
+            MirRelationExpr::Union { base, inputs } => {
                 self.action(base, columns.clone(), gets);
                 for input in inputs {
                     self.action(input, columns.clone(), gets);
                 }
             }
-            RelationExpr::ArrangeBy { input, .. } => {
+            MirRelationExpr::ArrangeBy { input, .. } => {
                 self.action(input, columns, gets);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Transform;
+    use expr::{BinaryFunc, GlobalId, IdGen, MirScalarExpr, TableFunc};
+    use repr::{ColumnType, RelationType, ScalarType};
+
+    #[test]
+    fn issue5520_regression_map_test() {
+        let mut test_expr = MirRelationExpr::Filter {
+            input: Box::new(MirRelationExpr::FlatMap {
+                input: Box::new(MirRelationExpr::Map {
+                    input: Box::new(MirRelationExpr::Get {
+                        id: Id::Global(GlobalId::User(0)),
+                        typ: RelationType::new(vec![
+                            ColumnType {
+                                nullable: true,
+                                scalar_type: ScalarType::Int32,
+                            },
+                            ColumnType {
+                                nullable: true,
+                                scalar_type: ScalarType::Int64,
+                            },
+                        ]),
+                    }),
+                    scalars: vec![MirScalarExpr::literal_null(ScalarType::Int32)],
+                }),
+                func: TableFunc::GenerateSeriesInt32,
+                exprs: vec![MirScalarExpr::Column(1)],
+                demand: None,
+            }),
+            predicates: vec![MirScalarExpr::CallBinary {
+                func: BinaryFunc::Eq,
+                expr1: Box::new(MirScalarExpr::Column(0)),
+                expr2: Box::new(MirScalarExpr::Column(3)),
+            }],
+        };
+        let expected = test_expr.clone();
+        let transform = NonNullRequirements;
+        assert!(transform
+            .transform(
+                &mut test_expr,
+                TransformArgs {
+                    id_gen: &mut IdGen::default(),
+                    indexes: &mut HashMap::new()
+                }
+            )
+            .is_ok());
+        assert_eq!(test_expr, expected);
     }
 }

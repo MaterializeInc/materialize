@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::future::Future;
 use std::iter;
@@ -15,27 +16,35 @@ use std::mem;
 
 use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{BoxFuture, FutureExt};
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::stream::{self, StreamExt};
 use itertools::izip;
 use lazy_static::lazy_static;
 use log::debug;
+use openssl::nid::Nid;
 use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_uint_counter};
-use tokio::io::{AsyncRead, AsyncWrite, Interest};
+use tokio::io::{self, AsyncRead, AsyncWrite, Interest};
 use tokio::time::{self, Duration, Instant};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
-use coord::session::{Portal, PortalState, RowBatchStream, TransactionStatus};
+use coord::session::{
+    EndTransactionAction, Portal, PortalState, RowBatchStream, TransactionStatus,
+};
 use coord::{ExecuteResponse, StartupMessage};
 use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use ore::netio::AsyncReady;
+use ore::str::StrExt;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
 use sql::ast::{FetchDirection, Ident, Raw, Statement};
 use sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
-use crate::message::{self, BackendMessage, ErrorResponse, FrontendMessage, VERSIONS, VERSION_3};
+use crate::message::{
+    self, BackendMessage, ErrorResponse, FrontendMessage, Severity, VERSIONS, VERSION_3,
+};
+use crate::server::{Conn, TlsMode};
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -83,6 +92,7 @@ pub struct StateMachine<A> {
     pub conn: FramedConn<A>,
     pub conn_id: u32,
     pub secret_key: u32,
+    pub tls_mode: Option<TlsMode>,
     pub coord_client: coord::SessionClient,
 }
 
@@ -97,31 +107,43 @@ where
     pub fn run(
         mut self,
         version: i32,
-        params: Vec<(String, String)>,
-    ) -> impl Future<Output = Result<(), comm::Error>> + Send {
+        params: HashMap<String, String>,
+    ) -> impl Future<Output = Result<(), io::Error>> + Send {
         async move {
-            let mut state = self.startup(version, params).await?;
-
-            loop {
-                state = match state {
-                    State::Ready => self.advance_ready().await?,
-                    State::Drain => self.advance_drain().await?,
-                    State::Done => break,
-                }
-            }
-
+            // Call the inner logic from a function that's safe to use `?` in so that
+            // terminate can correctly be called in all cases.
+            let res = self.run_inner(version, params).await;
             self.coord_client.terminate().await;
-            Ok(())
+            res
         }
     }
 
-    async fn advance_ready(&mut self) -> Result<State, comm::Error> {
+    async fn run_inner(
+        &mut self,
+        version: i32,
+        params: HashMap<String, String>,
+    ) -> Result<(), io::Error> {
+        let mut state = self.startup(version, params).await?;
+        loop {
+            state = match state {
+                State::Ready => self.advance_ready().await?,
+                State::Drain => self.advance_drain().await?,
+                State::Done => break,
+            }
+        }
+        self.flush().await?;
+        Ok(())
+    }
+
+    async fn advance_ready(&mut self) -> Result<State, io::Error> {
         let message = self.conn.recv().await?;
         let timer = Instant::now();
         let name = match &message {
             Some(message) => message.name(),
             None => "eof",
         };
+
+        self.coord_client.reset_canceled();
 
         let next_state = match message {
             Some(FrontendMessage::Query { sql }) => self.query(sql).await?,
@@ -186,7 +208,7 @@ where
         Ok(next_state)
     }
 
-    async fn advance_drain(&mut self) -> Result<State, comm::Error> {
+    async fn advance_drain(&mut self) -> Result<State, io::Error> {
         match self.conn.recv().await? {
             Some(FrontendMessage::Sync) => self.sync().await,
             None => Ok(State::Done),
@@ -197,8 +219,49 @@ where
     async fn startup(
         &mut self,
         version: i32,
-        params: Vec<(String, String)>,
-    ) -> Result<State, comm::Error> {
+        params: HashMap<String, String>,
+    ) -> Result<State, io::Error> {
+        // Validate that the connection is compatible with the TLS mode.
+        //
+        // The match here explicitly spells out all cases to be resilient to
+        // future changes to TlsMode.
+        match (&self.tls_mode, self.conn.inner()) {
+            (None, Conn::Unencrypted(_)) => (),
+            (None, Conn::Ssl(_)) => unreachable!(),
+            (Some(TlsMode::Require), Conn::Ssl(_)) => (),
+            (Some(TlsMode::Require), Conn::Unencrypted(_))
+            | (Some(TlsMode::VerifyUser), Conn::Unencrypted(_)) => {
+                return self
+                    .error(ErrorResponse::fatal(
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                        "TLS encryption is required",
+                    ))
+                    .await;
+            }
+            (Some(TlsMode::VerifyUser), Conn::Ssl(conn)) => {
+                let user = self.coord_client.session().user();
+                let cn_matches = match conn.ssl().peer_certificate() {
+                    None => false,
+                    Some(cert) => cert
+                        .subject_name()
+                        .entries_by_nid(Nid::COMMONNAME)
+                        .any(|n| n.data().as_slice() == user.as_bytes()),
+                };
+                if !cn_matches {
+                    let msg = format!(
+                        "certificate authentication failed for user {}",
+                        user.quoted()
+                    );
+                    return self
+                        .error(ErrorResponse::fatal(
+                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                            msg,
+                        ))
+                        .await;
+                }
+            }
+        }
+
         if version != VERSION_3 {
             return self
                 .error(ErrorResponse::fatal(
@@ -233,10 +296,7 @@ where
                 .collect(),
             Err(e) => {
                 return self
-                    .error(ErrorResponse::error(
-                        SqlState::INTERNAL_ERROR,
-                        format!("{:#}", e),
-                    ))
+                    .error(ErrorResponse::from_coord(Severity::Fatal, e))
                     .await;
             }
         };
@@ -261,7 +321,7 @@ where
         self.flush().await
     }
 
-    async fn one_query(&mut self, stmt: Statement<Raw>) -> Result<State, comm::Error> {
+    async fn one_query(&mut self, stmt: Statement<Raw>) -> Result<State, io::Error> {
         // Bind the portal. Note that this does not set the empty string prepared
         // statement.
         let param_types = vec![];
@@ -272,10 +332,7 @@ where
             .await
         {
             return self
-                .error(ErrorResponse::error(
-                    SqlState::INTERNAL_ERROR,
-                    format!("{:#}", e),
-                ))
+                .error(ErrorResponse::from_coord(Severity::Error, e))
                 .await;
         }
 
@@ -320,11 +377,8 @@ where
                 .await
             }
             Err(e) => {
-                self.error(ErrorResponse::error(
-                    SqlState::INTERNAL_ERROR,
-                    format!("{:#}", e),
-                ))
-                .await
+                self.error(ErrorResponse::from_coord(Severity::Error, e))
+                    .await
             }
         };
 
@@ -337,7 +391,7 @@ where
     // See "Multiple Statements in a Simple Query" which documents how implicit
     // transactions are handled.
     // From https://www.postgresql.org/docs/current/protocol-flow.html
-    async fn query(&mut self, sql: String) -> Result<State, comm::Error> {
+    async fn query(&mut self, sql: String) -> Result<State, io::Error> {
         // Parse first before doing any transaction checking.
         let stmts = match parse_sql(&sql) {
             Ok(stmts) => stmts,
@@ -347,15 +401,7 @@ where
             }
         };
 
-        // Start an implicit transaction if we aren't in any transaction and there's
-        // more than one statement. This mirrors the `use_implicit_block` variable in
-        // postgres.
-        if stmts.len() > 1 {
-            let session = self.coord_client.session();
-            if let TransactionStatus::Idle = session.transaction() {
-                session.start_transaction_implicit();
-            }
-        }
+        let num_stmts = stmts.len();
 
         // Compare with postgres' backend/tcop/postgres.c exec_simple_query.
         for stmt in stmts {
@@ -364,6 +410,17 @@ where
                 self.aborted_txn_error().await?;
                 break;
             }
+
+            // Start an implicit transaction if we aren't in any transaction and there's
+            // more than one statement. This mirrors the `use_implicit_block` variable in
+            // postgres.
+            //
+            // This needs to be done in the loop instead of once at the top because
+            // a COMMIT/ROLLBACK statement needs to start a new transaction on next
+            // statement.
+            self.coord_client
+                .session()
+                .start_transaction_implicit(num_stmts);
 
             match self.one_query(stmt).await? {
                 State::Ready => (),
@@ -374,9 +431,12 @@ where
 
         // Implicit transactions are closed at the end of a Query message.
         {
-            let session = self.coord_client.session();
-            if let TransactionStatus::InTransactionImplicit = session.transaction() {
-                session.end_transaction();
+            let implicit = matches!(
+                self.coord_client.session().transaction(),
+                TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_)
+            );
+            if implicit {
+                self.commit_transaction().await;
             }
         }
         self.ready().await
@@ -387,7 +447,7 @@ where
         name: String,
         sql: String,
         param_oids: Vec<u32>,
-    ) -> Result<State, comm::Error> {
+    ) -> Result<State, io::Error> {
         let mut param_types = vec![];
         for oid in param_oids {
             match pgrepr::Type::from_oid(oid) {
@@ -432,13 +492,20 @@ where
                 Ok(State::Ready)
             }
             Err(e) => {
-                self.error(ErrorResponse::error(
-                    SqlState::INTERNAL_ERROR,
-                    format!("{:#}", e),
-                ))
-                .await
+                self.error(ErrorResponse::from_coord(Severity::Error, e))
+                    .await
             }
         }
+    }
+
+    /// Commits and clears the current transaction.
+    async fn commit_transaction(&mut self) {
+        // We ignore the ExecuteResponse or error here because there's nothing to tell
+        // the user in either of those cases.
+        let _ = self
+            .coord_client
+            .end_transaction(EndTransactionAction::Commit)
+            .await;
     }
 
     async fn bind(
@@ -448,7 +515,7 @@ where
         param_formats: Vec<pgrepr::Format>,
         raw_params: Vec<Option<Vec<u8>>>,
         result_formats: Vec<pgrepr::Format>,
-    ) -> Result<State, comm::Error> {
+    ) -> Result<State, io::Error> {
         let aborted_txn = self.is_aborted_txn();
         let stmt = self
             .coord_client
@@ -540,7 +607,7 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
-    ) -> BoxFuture<'_, Result<State, comm::Error>> {
+    ) -> BoxFuture<'_, Result<State, io::Error>> {
         async move {
             let aborted_txn = self.is_aborted_txn();
 
@@ -552,7 +619,7 @@ where
                     return self
                         .error(ErrorResponse::error(
                             SqlState::INVALID_CURSOR_NAME,
-                            format!("portal \"{}\" does not exist", portal_name),
+                            format!("portal {} does not exist", portal_name.quoted()),
                         ))
                         .await;
                 }
@@ -568,6 +635,12 @@ where
 
             match &mut portal.state {
                 PortalState::NotStarted => {
+                    // Start a transaction if we aren't in one. Postgres does this both here and
+                    // in bind. We don't do it in bind because I'm not sure what purpose it would
+                    // serve us (i.e., I'm not aware of a pgtest that would differ between us and
+                    // Postgres).
+                    self.coord_client.session().start_transaction_implicit(1);
+
                     match self.coord_client.execute(portal_name.clone()).await {
                         Ok(response) => {
                             self.send_execute_response(
@@ -582,11 +655,8 @@ where
                             .await
                         }
                         Err(e) => {
-                            self.error(ErrorResponse::error(
-                                SqlState::INTERNAL_ERROR,
-                                format!("{:#}", e),
-                            ))
-                            .await
+                            self.error(ErrorResponse::from_coord(Severity::Error, e))
+                                .await
                         }
                     }
                 }
@@ -632,7 +702,7 @@ where
         .boxed()
     }
 
-    async fn describe_statement(&mut self, name: String) -> Result<State, comm::Error> {
+    async fn describe_statement(&mut self, name: String) -> Result<State, io::Error> {
         let stmt = self.coord_client.session().get_prepared_statement(&name);
         match stmt {
             Some(stmt) => {
@@ -658,7 +728,7 @@ where
         }
     }
 
-    async fn describe_portal(&mut self, name: &str) -> Result<State, comm::Error> {
+    async fn describe_portal(&mut self, name: &str) -> Result<State, io::Error> {
         let session = self.coord_client.session();
         let row_desc = session
             .get_portal(name)
@@ -671,20 +741,20 @@ where
             None => {
                 self.error(ErrorResponse::error(
                     SqlState::INVALID_CURSOR_NAME,
-                    format!("portal \"{}\" does not exist", name),
+                    format!("portal {} does not exist", name.quoted()),
                 ))
                 .await
             }
         }
     }
 
-    async fn close_statement(&mut self, name: String) -> Result<State, comm::Error> {
+    async fn close_statement(&mut self, name: String) -> Result<State, io::Error> {
         self.coord_client.session().remove_prepared_statement(&name);
         self.conn.send(BackendMessage::CloseComplete).await?;
         Ok(State::Ready)
     }
 
-    async fn close_portal(&mut self, name: String) -> Result<State, comm::Error> {
+    async fn close_portal(&mut self, name: String) -> Result<State, io::Error> {
         self.coord_client.session().remove_portal(&name);
         self.conn.send(BackendMessage::CloseComplete).await?;
         Ok(State::Ready)
@@ -706,7 +776,7 @@ where
         max_rows: ExecuteCount,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
-    ) -> Result<State, comm::Error> {
+    ) -> Result<State, io::Error> {
         // Unlike Execute, no count specified in FETCH returns 1 row, and 0 means 0
         // instead of All.
         let count = count.unwrap_or(FetchDirection::ForwardCount(1));
@@ -760,21 +830,24 @@ where
         .await
     }
 
-    async fn flush(&mut self) -> Result<State, comm::Error> {
+    async fn flush(&mut self) -> Result<State, io::Error> {
         self.conn.flush().await?;
         Ok(State::Ready)
     }
 
-    async fn sync(&mut self) -> Result<State, comm::Error> {
+    async fn sync(&mut self) -> Result<State, io::Error> {
         // Close the current transaction if we are not in an explicit transaction.
-        let session = self.coord_client.session();
-        if let TransactionStatus::Idle = session.transaction() {
-            session.end_transaction();
+        let started = matches!(
+            self.coord_client.session().transaction(),
+            TransactionStatus::Started(_)
+        );
+        if started {
+            self.commit_transaction().await;
         }
         return self.ready().await;
     }
 
-    async fn ready(&mut self) -> Result<State, comm::Error> {
+    async fn ready(&mut self) -> Result<State, io::Error> {
         let txn_state = self.coord_client.session().transaction().into();
         self.conn
             .send(BackendMessage::ReadyForQuery(txn_state))
@@ -792,7 +865,7 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
-    ) -> Result<State, comm::Error> {
+    ) -> Result<State, io::Error> {
         macro_rules! command_complete {
             ($($arg:tt)*) => {{
                 // N.B.: the output of format! must be stored into a
@@ -827,6 +900,10 @@ where
             ExecuteResponse::CreatedSchema { existed } => {
                 created!(existed, SqlState::DUPLICATE_SCHEMA, "schema")
             }
+            ExecuteResponse::CreatedRole => {
+                let existed = false;
+                created!(existed, SqlState::DUPLICATE_OBJECT, "role")
+            }
             ExecuteResponse::CreatedTable { existed } => {
                 created!(existed, SqlState::DUPLICATE_TABLE, "table")
             }
@@ -852,6 +929,7 @@ where
             ExecuteResponse::DiscardedAll => command_complete!("DISCARD ALL"),
             ExecuteResponse::DroppedDatabase => command_complete!("DROP DATABASE"),
             ExecuteResponse::DroppedSchema => command_complete!("DROP SCHEMA"),
+            ExecuteResponse::DroppedRole => command_complete!("DROP ROLE"),
             ExecuteResponse::DroppedSource => command_complete!("DROP SOURCE"),
             ExecuteResponse::DroppedIndex => command_complete!("DROP INDEX"),
             ExecuteResponse::DroppedSink => command_complete!("DROP SINK"),
@@ -889,7 +967,7 @@ where
             ExecuteResponse::SendingRows(rx) => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::SendingRows");
-                match rx.await? {
+                match rx.await {
                     PeekResponse::Canceled => {
                         self.error(ErrorResponse::error(
                             SqlState::QUERY_CANCELED,
@@ -905,7 +983,7 @@ where
                         self.send_rows(
                             row_desc,
                             portal_name,
-                            Box::new(stream::iter(vec![Ok(rows)])),
+                            Box::new(stream::iter(vec![rows])),
                             max_rows,
                             get_response,
                             fetch_portal_name,
@@ -956,7 +1034,7 @@ where
                 self.send_rows(
                     row_desc,
                     portal_name,
-                    Box::new(rx),
+                    Box::new(UnboundedReceiverStream::new(rx)),
                     max_rows,
                     get_response,
                     fetch_portal_name,
@@ -968,8 +1046,8 @@ where
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyTo");
                 let rows: RowBatchStream = match *resp {
-                    ExecuteResponse::Tailing { rx } => Box::new(rx),
-                    ExecuteResponse::SendingRows(rx) => match rx.await? {
+                    ExecuteResponse::Tailing { rx } => Box::new(UnboundedReceiverStream::new(rx)),
+                    ExecuteResponse::SendingRows(rx) => match rx.await {
                         // TODO(mjibson): This logic is duplicated from SendingRows. Dedup?
                         PeekResponse::Canceled => {
                             return self
@@ -984,7 +1062,7 @@ where
                                 .error(ErrorResponse::error(SqlState::INTERNAL_ERROR, text))
                                 .await;
                         }
-                        PeekResponse::Rows(rows) => Box::new(stream::iter(vec![Ok(rows)])),
+                        PeekResponse::Rows(rows) => Box::new(stream::iter(vec![rows])),
                     },
                     _ => {
                         return self
@@ -1000,9 +1078,6 @@ where
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
             ExecuteResponse::AlteredIndexLogicalCompaction => command_complete!("ALTER INDEX"),
-            ExecuteResponse::PgError { code, message } => {
-                self.error(ErrorResponse::error(code, message)).await
-            }
         }
     }
 
@@ -1016,9 +1091,7 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
-    ) -> Result<State, comm::Error> {
-        let session = self.coord_client.session();
-
+    ) -> Result<State, io::Error> {
         // If this portal is being executed from a FETCH then we need to use the result
         // format type of the outer portal.
         let result_format_portal_name: &str = if let Some(ref name) = fetch_portal_name {
@@ -1026,15 +1099,13 @@ where
         } else {
             &portal_name
         };
-        let result_formats = session
+        let result_formats = self
+            .coord_client
+            .session()
             .get_portal(result_format_portal_name)
             .expect("valid fetch portal name for send rows")
             .result_formats
             .clone();
-
-        let portal = session
-            .get_portal_mut(&portal_name)
-            .expect("valid portal name for send rows");
 
         let (mut wait_once, mut deadline) = match timeout {
             ExecuteTimeout::None => (false, None),
@@ -1046,30 +1117,20 @@ where
         // fetch_batch is a helper function that fetches the next row batch and
         // implements timeout deadlines if they were requested.
         async fn fetch_batch(
-            wait_once: &mut bool,
-            deadline: &mut Option<Instant>,
+            deadline: Option<Instant>,
             rows: &mut RowBatchStream,
-        ) -> Result<Option<Vec<Row>>, comm::Error> {
-            let res = match deadline {
-                None => rows.try_next().await,
-                Some(deadline) => match time::timeout_at(*deadline, rows.try_next()).await {
-                    Ok(batch) => batch,
-                    Err(_elapsed) => Ok(None),
-                },
-            };
-            // If wait_once is true: the first time this fn is called it blocks (same as
-            // deadline == None). The second time this fn is called it should behave the
-            // same a 0s timeout.
-            if *wait_once {
-                *deadline = Some(Instant::now());
-                *wait_once = false;
+            canceled: impl Future<Output = ()>,
+        ) -> FetchResult {
+            tokio::select! {
+                _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
+                _ = canceled => FetchResult::Cancelled,
+                batch = rows.next() => FetchResult::Rows(batch),
             }
-            res
         };
 
-        let mut batch: Option<Vec<Row>> =
-            fetch_batch(&mut wait_once, &mut deadline, &mut rows).await?;
-        if let Some([row, ..]) = batch.as_deref() {
+        let canceled = self.coord_client.canceled();
+        let mut batch = fetch_batch(deadline, &mut rows, canceled).await;
+        if let Some([row, ..]) = batch.as_rows() {
             let datums = row.unpack();
             let col_types = &row_desc.typ().column_types;
             if datums.len() != col_types.len() {
@@ -1117,32 +1178,60 @@ where
         };
 
         // Send rows while the client still wants them and there are still rows to send.
-        while let Some(batch_rows) = batch {
-            let mut batch_rows = batch_rows;
-            // Drain panics if it's > len, so cap it.
-            let drain_rows = cmp::min(want_rows, batch_rows.len());
-            self.conn
-                .send_all(batch_rows.drain(..drain_rows).map(|row| {
-                    BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
-                }))
-                .await?;
-            total_sent_rows += drain_rows;
-            want_rows -= drain_rows;
-            // If we have sent the number of requested rows, put the remainder of the batch
-            // back and stop sending.
-            if want_rows == 0 {
-                rows = Box::new(stream::iter(vec![Ok(batch_rows)]).chain(rows));
-                break;
+        loop {
+            match batch {
+                FetchResult::Rows(None) => break,
+                FetchResult::Rows(Some(mut batch_rows)) => {
+                    // If wait_once is true: the first time this fn is called it blocks (same as
+                    // deadline == None). The second time this fn is called it should behave the
+                    // same a 0s timeout.
+                    if wait_once && !batch_rows.is_empty() {
+                        deadline = Some(Instant::now());
+                        wait_once = false;
+                    }
+
+                    //  let mut batch_rows = batch_rows;
+                    // Drain panics if it's > len, so cap it.
+                    let drain_rows = cmp::min(want_rows, batch_rows.len());
+                    self.conn
+                        .send_all(batch_rows.drain(..drain_rows).map(|row| {
+                            BackendMessage::DataRow(pgrepr::values_from_row(row, row_desc.typ()))
+                        }))
+                        .await?;
+                    total_sent_rows += drain_rows;
+                    want_rows -= drain_rows;
+                    // If we have sent the number of requested rows, put the remainder of the batch
+                    // back and stop sending.
+                    if want_rows == 0 && !batch_rows.is_empty() {
+                        rows = Box::new(stream::iter(vec![batch_rows]).chain(rows));
+                        break;
+                    }
+                    self.conn.flush().await?;
+                    let canceled = self.coord_client.canceled();
+                    batch = fetch_batch(deadline, &mut rows, canceled).await;
+                }
+                FetchResult::Cancelled => {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::QUERY_CANCELED,
+                            "canceling statement due to user request",
+                        ))
+                        .await;
+                }
             }
-            self.conn.flush().await?;
-            batch = fetch_batch(&mut wait_once, &mut deadline, &mut rows).await?;
         }
 
         ROWS_RETURNED.inc_by(u64::cast_from(total_sent_rows));
 
+        let portal = self
+            .coord_client
+            .session()
+            .get_portal_mut(&portal_name)
+            .expect("valid portal name for send rows");
+
         // Always return rows back, even if it's empty. This prevents an unclosed
         // portal from re-executing after it has been emptied.
-        portal.state = PortalState::InProgress(Some(Box::new(rows)));
+        portal.state = PortalState::InProgress(Some(rows));
 
         let fetch_portal = fetch_portal_name.map(|name| {
             self.coord_client
@@ -1160,7 +1249,7 @@ where
         format: CopyFormat,
         row_desc: RelationDesc,
         mut stream: RowBatchStream,
-    ) -> Result<State, comm::Error> {
+    ) -> Result<State, io::Error> {
         let (encode_fn, encode_format): (
             fn(Row, &RelationType, &mut Vec<u8>) -> Result<(), std::io::Error>,
             pgrepr::Format,
@@ -1205,19 +1294,8 @@ where
 
         let mut count = 0;
         loop {
-            match time::timeout(Duration::from_secs(1), stream.next()).await {
-                Ok(None) => break,
-                Ok(Some(rows)) => {
-                    let rows = rows?;
-                    count += rows.len();
-                    for row in rows {
-                        encode_fn(row, typ, &mut out)?;
-                        self.conn
-                            .send(BackendMessage::CopyData(mem::take(&mut out)))
-                            .await?;
-                    }
-                }
-                Err(time::error::Elapsed { .. }) => {
+            tokio::select! {
+                _ = time::sleep_until(Instant::now() + Duration::from_secs(1)) => {
                     // It's been a while since we've had any data to send, and
                     // the client may have disconnected. Check whether the
                     // socket is no longer readable and error if so. Otherwise
@@ -1238,8 +1316,29 @@ where
                             ))
                             .await;
                     }
-                }
+                },
+                _ = self.coord_client.canceled() => {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::QUERY_CANCELED,
+                            "canceling statement due to user request",
+                        ))
+                    .await;
+                },
+                batch = stream.next() => match batch {
+                    None => break,
+                    Some(rows) => {
+                        count += rows.len();
+                        for row in rows {
+                            encode_fn(row, typ, &mut out)?;
+                            self.conn
+                                .send(BackendMessage::CopyData(mem::take(&mut out)))
+                                .await?;
+                        }
+                    }
+                },
             }
+
             self.conn.flush().await?;
         }
         // Send required trailers.
@@ -1259,7 +1358,7 @@ where
         Ok(State::Ready)
     }
 
-    async fn error(&mut self, err: ErrorResponse) -> Result<State, comm::Error> {
+    async fn error(&mut self, err: ErrorResponse) -> Result<State, io::Error> {
         assert!(err.severity.is_error());
         debug!(
             "cid={} error code={} message={}",
@@ -1271,17 +1370,21 @@ where
         self.conn.send(BackendMessage::ErrorResponse(err)).await?;
         let session = self.coord_client.session();
         match session.transaction() {
-            // In Idle (i.e., a single statement), nothing changes since the state is
-            // always reset back to idle even during failure.
-            TransactionStatus::Idle => session.end_transaction(),
+            // Error can be called from describe and parse and so might not be in an active
+            // transaction.
+            TransactionStatus::Default | TransactionStatus::Failed => {}
+            // In Started (i.e., a single statement), cleanup ourselves.
+            TransactionStatus::Started(_) => {
+                session.clear_transaction();
+            }
             // Implicit transactions also clear themselves.
-            // TODO(mjibson): once we care about it, this will need to ensure we ROLLBACK
-            // the transaction.
-            TransactionStatus::InTransactionImplicit => session.end_transaction(),
+            TransactionStatus::InTransactionImplicit(_) => {
+                session.clear_transaction();
+            }
             // Explicit transactions move to failed.
-            TransactionStatus::InTransaction => session.fail_transaction(),
-            // We should never attempt to execute any failable SQL while in Failed.
-            TransactionStatus::Failed => unreachable!(),
+            TransactionStatus::InTransaction(_) => {
+                session.fail_transaction();
+            }
         };
         if is_fatal {
             Ok(State::Done)
@@ -1290,7 +1393,7 @@ where
         }
     }
 
-    async fn aborted_txn_error(&mut self) -> Result<State, comm::Error> {
+    async fn aborted_txn_error(&mut self) -> Result<State, io::Error> {
         self.conn
             .send(BackendMessage::ErrorResponse(ErrorResponse::error(
                 SqlState::IN_FAILED_SQL_TRANSACTION,
@@ -1392,5 +1495,20 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
         // Add PREPARE to this if we ever support it.
         Some(stmt) => matches!(stmt, Statement::Commit(_) | Statement::Rollback(_)),
         None => false,
+    }
+}
+
+#[derive(Debug)]
+enum FetchResult {
+    Rows(Option<Vec<Row>>),
+    Cancelled,
+}
+
+impl FetchResult {
+    fn as_rows(&self) -> Option<&[Row]> {
+        match self {
+            FetchResult::Rows(rows) => rows.as_deref(),
+            _ => None,
+        }
     }
 }

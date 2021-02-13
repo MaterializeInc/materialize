@@ -9,7 +9,8 @@
 
 //! Remove empty `Map` operators.
 
-use crate::{RelationExpr, TransformArgs};
+use crate::TransformArgs;
+use expr::MirRelationExpr;
 
 /// Remove empty `Map` operators.
 #[derive(Debug)]
@@ -18,7 +19,7 @@ pub struct EmptyMap;
 impl crate::Transform for EmptyMap {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
@@ -30,8 +31,8 @@ impl crate::Transform for EmptyMap {
 
 impl EmptyMap {
     /// Remove empty `Map` operators.
-    pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Map { input, scalars } = relation {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
+        if let MirRelationExpr::Map { input, scalars } = relation {
             if scalars.is_empty() {
                 *relation = input.take_dangerous();
             }

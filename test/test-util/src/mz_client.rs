@@ -15,7 +15,7 @@ use tokio_postgres::{Client, Error, NoTls, Row};
 /// object along the way.
 pub async fn client(host: &str, port: u16) -> Result<Client> {
     let (mz_client, conn) = tokio_postgres::Config::new()
-        .user("mzd")
+        .user("materialize")
         .host(host)
         .port(port)
         .connect(NoTls)

@@ -11,7 +11,7 @@ use tokio_postgres::config::Host;
 use tokio_postgres::Config;
 use url::Url;
 
-use crate::error::Error;
+use crate::error::{Error, ResultExt};
 
 /// Constructs a URL from PostgreSQL configuration parameters.
 ///
@@ -25,28 +25,21 @@ pub fn config_url(config: &Config) -> Result<Url, Error> {
         [Host::Tcp(host)] => host.clone(),
         [Host::Unix(path)] => path.display().to_string(),
         _ => {
-            return Err(Error::General {
-                ctx: "materialized URL cannot contain multiple hosts".into(),
-                cause: None,
-                hints: vec![],
-            })
+            return Err(Error::message(
+                "materialized URL cannot contain multiple hosts",
+            ));
         }
     };
-    url.set_host(Some(&host)).map_err(|e| Error::General {
-        ctx: "parsing materialized host".into(),
-        cause: Some(Box::new(e)),
-        hints: vec![],
-    })?;
+    url.set_host(Some(&host))
+        .err_ctx("parsing materialized host")?;
 
     url.set_port(Some(match config.get_ports() {
         [] => 5432,
         [port] => *port,
         _ => {
-            return Err(Error::General {
-                ctx: "materialized URL cannot contain multiple ports".into(),
-                cause: None,
-                hints: vec![],
-            })
+            return Err(Error::message(
+                "materialized URL cannot contain multiple ports",
+            ));
         }
     }))
     .expect("known to be valid to set port");

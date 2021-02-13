@@ -12,7 +12,7 @@
 // TODO(frank): evaluate for redundancy with projection hoisting.
 
 use crate::TransformArgs;
-use expr::RelationExpr;
+use expr::MirRelationExpr;
 
 /// Fuses Project operators with parent operators when possible.
 #[derive(Debug)]
@@ -21,7 +21,7 @@ pub struct Project;
 impl crate::Transform for Project {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut_pre(&mut |e| {
@@ -33,9 +33,9 @@ impl crate::Transform for Project {
 
 impl Project {
     /// Fuses Project operators with parent operators when possible.
-    pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Project { input, outputs } = relation {
-            while let RelationExpr::Project {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
+        if let MirRelationExpr::Project { input, outputs } = relation {
+            while let MirRelationExpr::Project {
                 input: inner,
                 outputs: outputs2,
             } = &mut **input
@@ -49,7 +49,7 @@ impl Project {
         }
 
         // Any reduce will absorb any project. Also, this happens often.
-        if let RelationExpr::Reduce {
+        if let MirRelationExpr::Reduce {
             input,
             group_key,
             aggregates,
@@ -57,7 +57,7 @@ impl Project {
             expected_group_size: _,
         } = relation
         {
-            if let RelationExpr::Project {
+            if let MirRelationExpr::Project {
                 input: inner,
                 outputs,
             } = &mut **input

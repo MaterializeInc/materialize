@@ -30,7 +30,7 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use dataflow_types::{DataflowDesc, DataflowError};
-use expr::{GlobalId, ScalarExpr};
+use expr::{GlobalId, MirScalarExpr};
 
 use crate::source::SourceToken;
 
@@ -92,13 +92,13 @@ where
     /// Dataflow local collections.
     pub collections: HashMap<P, (Collection<S, V, Diff>, Collection<S, DataflowError, Diff>)>,
     /// Dataflow local arrangements.
-    pub local: HashMap<P, BTreeMap<Vec<ScalarExpr>, (Arrangement<S, V>, ErrArrangement<S>)>>,
+    pub local: HashMap<P, BTreeMap<Vec<MirScalarExpr>, (Arrangement<S, V>, ErrArrangement<S>)>>,
     /// Imported arrangements.
     #[allow(clippy::type_complexity)] // TODO(fms): fix or ignore lint globally.
     pub trace: HashMap<
         P,
         BTreeMap<
-            Vec<ScalarExpr>,
+            Vec<MirScalarExpr>,
             (
                 GlobalId,
                 ArrangementImport<S, V, T>,
@@ -198,7 +198,7 @@ where
         I: IntoIterator,
         I::Item: Data,
         L: FnMut(RefOrMut<V>) -> I + 'static,
-        K: FnMut(&[ScalarExpr]) -> Option<V>,
+        K: FnMut(&[MirScalarExpr]) -> Option<V>,
     {
         if let Some((oks, err)) = self.collections.get(relation_expr) {
             Some((
@@ -310,7 +310,7 @@ where
     ) -> Option<ArrangementFlavor<S, V, T>> {
         let mut keys = Vec::new();
         for column in columns {
-            keys.push(ScalarExpr::Column(*column));
+            keys.push(MirScalarExpr::Column(*column));
         }
         self.arrangement(relation_expr, &keys)
     }
@@ -322,7 +322,7 @@ where
     pub fn arrangement(
         &self,
         relation_expr: &P,
-        keys: &[ScalarExpr],
+        keys: &[MirScalarExpr],
     ) -> Option<ArrangementFlavor<S, V, T>> {
         if let Some(local) = self.get_local(relation_expr, keys) {
             let (oks, errs) = local.clone();
@@ -338,7 +338,7 @@ where
     pub fn get_local(
         &self,
         relation_expr: &P,
-        keys: &[ScalarExpr],
+        keys: &[MirScalarExpr],
     ) -> Option<&(Arrangement<S, V>, ErrArrangement<S>)> {
         self.local.get(relation_expr).and_then(|x| x.get(keys))
     }
@@ -352,7 +352,7 @@ where
     ) {
         let mut keys = Vec::new();
         for column in columns {
-            keys.push(ScalarExpr::Column(*column));
+            keys.push(MirScalarExpr::Column(*column));
         }
         self.set_local(relation_expr, &keys, arranged);
     }
@@ -361,7 +361,7 @@ where
     pub fn set_local(
         &mut self,
         relation_expr: &P,
-        keys: &[ScalarExpr],
+        keys: &[MirScalarExpr],
         arranged: (Arrangement<S, V>, ErrArrangement<S>),
     ) {
         self.local
@@ -374,7 +374,7 @@ where
     pub fn get_trace(
         &self,
         relation_expr: &P,
-        keys: &[ScalarExpr],
+        keys: &[MirScalarExpr],
     ) -> Option<&(
         GlobalId,
         ArrangementImport<S, V, T>,
@@ -388,7 +388,7 @@ where
         &mut self,
         gid: GlobalId,
         relation_expr: &P,
-        keys: &[ScalarExpr],
+        keys: &[MirScalarExpr],
         arranged: (ArrangementImport<S, V, T>, ErrArrangementImport<S, T>),
     ) {
         self.trace

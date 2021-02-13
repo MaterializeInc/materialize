@@ -845,7 +845,7 @@ mod tests {
 
     #[test]
     fn test_from_avro_datum() {
-        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let schema: Schema = SCHEMA.parse().unwrap();
         let mut encoded: &'static [u8] = &[54, 6, 102, 111, 111];
 
         let mut record = Record::new(schema.top_node()).unwrap();
@@ -858,7 +858,7 @@ mod tests {
 
     #[test]
     fn test_null_union() {
-        let schema = Schema::parse_str(UNION_SCHEMA).unwrap();
+        let schema: Schema = UNION_SCHEMA.parse().unwrap();
         let mut encoded: &'static [u8] = &[2, 0];
 
         assert_eq!(
@@ -874,7 +874,7 @@ mod tests {
 
     #[test]
     fn test_reader_stream() {
-        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let schema: Schema = SCHEMA.parse().unwrap();
         let reader = Reader::with_schema(&schema, ENCODED).unwrap();
 
         let mut record1 = Record::new(schema.top_node()).unwrap();
@@ -894,14 +894,14 @@ mod tests {
 
     #[test]
     fn test_reader_invalid_header() {
-        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let schema: Schema = SCHEMA.parse().unwrap();
         let invalid = ENCODED.to_owned().into_iter().skip(1).collect::<Vec<u8>>();
         assert!(Reader::with_schema(&schema, &invalid[..]).is_err());
     }
 
     #[test]
     fn test_reader_invalid_block() {
-        let schema = Schema::parse_str(SCHEMA).unwrap();
+        let schema: Schema = SCHEMA.parse().unwrap();
         let invalid = ENCODED
             .to_owned()
             .into_iter()

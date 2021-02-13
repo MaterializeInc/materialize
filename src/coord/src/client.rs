@@ -7,15 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use futures::SinkExt;
+use std::future::Future;
+use std::sync::Arc;
+
+use tokio::sync::{mpsc, oneshot, watch};
 
 use sql::ast::{Raw, Statement};
 use sql::plan::Params;
 
 use crate::command::{
-    Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
+    Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
 };
-use crate::session::Session;
+use crate::error::CoordError;
+use crate::session::{EndTransactionAction, Session};
 
 /// A client for a [`Coordinator`](crate::Coordinator).
 ///
@@ -23,20 +27,32 @@ use crate::session::Session;
 /// They can be cheaply cloned.
 #[derive(Debug, Clone)]
 pub struct Client {
-    cmd_tx: futures::channel::mpsc::UnboundedSender<Command>,
+    cmd_tx: mpsc::UnboundedSender<Command>,
 }
 
 impl Client {
     /// Constructs a new client.
-    pub fn new(cmd_tx: futures::channel::mpsc::UnboundedSender<Command>) -> Client {
+    pub fn new(cmd_tx: mpsc::UnboundedSender<Command>) -> Client {
         Client { cmd_tx }
     }
 
     /// Binds this client to a session.
     pub fn for_session(&self, session: Session) -> SessionClient {
+        // Cancellation works by creating a watch channel (which remembers only
+        // the last value sent to it) and sharing it between the coordinator and
+        // connection. The coordinator will send a cancelled message on it if a
+        // cancellation request comes. The connection will reset that on every message
+        // it receives and then check for it where we want to add the ability to cancel
+        // an in-progress statement.
+        let (cancel_tx, cancel_rx) = watch::channel(Cancelled::NotCancelled);
+        let cancel_tx = Arc::new(cancel_tx);
+
         SessionClient {
             inner: self.clone(),
             session: Some(session),
+            started_up: false,
+            cancel_tx,
+            cancel_rx,
         }
     }
 
@@ -45,7 +61,7 @@ impl Client {
         self.send(|tx| Command::DumpCatalog { tx }).await
     }
 
-    /// Executes a statement as the system user that is not tied to a session.
+    /// Executes a statement as the specified user that is not tied to a session.
     ///
     /// This will execute in a pseudo session that is not able to create any
     /// temporary resources that would normally need to be cleaned up by Terminate.
@@ -53,27 +69,31 @@ impl Client {
         &mut self,
         stmt: Statement<Raw>,
         params: Params,
-    ) -> Result<NoSessionExecuteResponse, anyhow::Error> {
-        self.send(|tx| Command::NoSessionExecute { stmt, params, tx })
-            .await
+        user: String,
+    ) -> Result<NoSessionExecuteResponse, CoordError> {
+        self.send(|tx| Command::NoSessionExecute {
+            stmt,
+            params,
+            user,
+            tx,
+        })
+        .await
     }
 
     /// Cancel the query currently running on another connection.
     pub async fn cancel_request(&mut self, conn_id: u32) {
         self.cmd_tx
             .send(Command::CancelRequest { conn_id })
-            .await
             .expect("coordinator unexpectedly canceled request")
     }
 
     async fn send<T, F>(&mut self, f: F) -> T
     where
-        F: FnOnce(futures::channel::oneshot::Sender<T>) -> Command,
+        F: FnOnce(oneshot::Sender<T>) -> Command,
     {
-        let (tx, rx) = futures::channel::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(f(tx))
-            .await
             .expect("coordinator unexpectedly gone");
         rx.await.expect("coordinator unexpectedly canceled request")
     }
@@ -85,28 +105,77 @@ pub struct SessionClient {
     // Invariant: session may only be `None` during a method call. Every public
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
+    /// Whether the coordinator has been notified of this `SessionClient` via
+    /// a call to `startup`.
+    started_up: bool,
+
+    pub cancel_tx: Arc<watch::Sender<Cancelled>>,
+    pub cancel_rx: watch::Receiver<Cancelled>,
 }
 
 impl SessionClient {
+    pub fn canceled(&self) -> impl Future<Output = ()> + Send {
+        let mut cancel_rx = self.cancel_rx.clone();
+        async move {
+            loop {
+                let _ = cancel_rx.changed().await;
+                if let Cancelled::Cancelled = *cancel_rx.borrow() {
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn reset_canceled(&mut self) {
+        // Clear any cancellation message.
+        // TODO(mjibson): This makes the use of .changed annoying since it will
+        // generally always have a NotCancelled message first that needs to be ignored,
+        // and thus run in a loop. Figure out a way to have the future only resolve on
+        // a Cancelled message.
+        let _ = self.cancel_tx.send(Cancelled::NotCancelled);
+    }
+
     /// Notifies the coordinator of a new client session.
     ///
     /// Returns a list of messages that are intended to be displayed to the
     /// user.
-    pub async fn startup(&mut self) -> Result<Vec<StartupMessage>, anyhow::Error> {
-        self.send(|tx, session| Command::Startup { session, tx })
+    ///
+    /// Once you observe a successful response to this method, you must not call
+    /// it again. You must observe a successful response to this method before
+    /// calling any other method on the client, besides
+    /// [`SessionClient::terminate`].
+    pub async fn startup(&mut self) -> Result<Vec<StartupMessage>, CoordError> {
+        assert!(!self.started_up);
+        let cancel_tx = Arc::clone(&self.cancel_tx);
+        match self
+            .send(|tx, session| Command::Startup {
+                session,
+                cancel_tx,
+                tx,
+            })
             .await
+        {
+            Ok(messages) => {
+                self.started_up = true;
+                Ok(messages)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Saves the specified statement as a prepared statement.
     ///
     /// The prepared statement is saved in the connection's [`sql::Session`]
     /// under the specified name.
+    ///
+    /// You must have observed a successful response to
+    /// [`SessionClient::startup`] before calling this method.
     pub async fn describe(
         &mut self,
         name: String,
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), CoordError> {
         self.send(|tx, session| Command::Describe {
             name,
             stmt,
@@ -118,12 +187,15 @@ impl SessionClient {
     }
 
     /// Binds a statement to a portal.
+    ///
+    /// You must have observed a successful response to
+    /// [`SessionClient::startup`] before calling this method.
     pub async fn declare(
         &mut self,
         name: String,
         stmt: Statement<Raw>,
         param_types: Vec<Option<pgrepr::Type>>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), CoordError> {
         self.send(|tx, session| Command::Declare {
             name,
             stmt,
@@ -135,7 +207,10 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
-    pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, anyhow::Error> {
+    ///
+    /// You must have observed a successful response to
+    /// [`SessionClient::startup`] before calling this method.
+    pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, CoordError> {
         self.send(|tx, session| Command::Execute {
             portal_name,
             session,
@@ -144,17 +219,35 @@ impl SessionClient {
         .await
     }
 
+    /// Ends a transaction.
+    ///
+    /// You must have observed a successful response to
+    /// [`SessionClient::startup`] before calling this method.
+    pub async fn end_transaction(
+        &mut self,
+        action: EndTransactionAction,
+    ) -> Result<ExecuteResponse, CoordError> {
+        self.send(|tx, session| Command::Commit {
+            action,
+            session,
+            tx,
+        })
+        .await
+    }
+
     /// Terminates this client session.
     ///
-    /// This both consumes this `SessionClient` and cleans up any state
-    /// associated with the session on stored by the coordinator.
+    /// This consumes this `SessionClient`. If the coordinator was notified of
+    /// this client session by `startup`, then this method will clean up any
+    /// state on the coordinator about this session.
     pub async fn terminate(mut self) {
         let session = self.session.take().expect("session invariant violated");
-        self.inner
-            .cmd_tx
-            .send(Command::Terminate { session })
-            .await
-            .expect("coordinator unexpectedly gone");
+        if self.started_up {
+            self.inner
+                .cmd_tx
+                .send(Command::Terminate { session })
+                .expect("coordinator unexpectedly gone");
+        }
     }
 
     /// Returns a mutable reference to the session bound to this client.
@@ -162,9 +255,9 @@ impl SessionClient {
         self.session.as_mut().unwrap()
     }
 
-    async fn send<T, F>(&mut self, f: F) -> Result<T, anyhow::Error>
+    async fn send<T, F>(&mut self, f: F) -> Result<T, CoordError>
     where
-        F: FnOnce(futures::channel::oneshot::Sender<Response<T>>, Session) -> Command,
+        F: FnOnce(oneshot::Sender<Response<T>>, Session) -> Command,
     {
         let session = self.session.take().expect("session invariant violated");
         let res = self.inner.send(|tx| f(tx, session)).await;

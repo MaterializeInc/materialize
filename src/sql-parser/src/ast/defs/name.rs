@@ -23,7 +23,7 @@ use crate::keywords::Keyword;
 
 /// An identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Ident(String);
+pub struct Ident(pub(crate) String);
 
 impl Ident {
     /// Create a new identifier with the given value.
@@ -41,9 +41,9 @@ impl Ident {
         let mut chars = self.0.chars();
         chars
             .next()
-            .map(|ch| (ch >= 'a' && ch <= 'z') || (ch == '_'))
+            .map(|ch| ('a'..='z').contains(&ch) || (ch == '_'))
             .unwrap_or(false)
-            && chars.all(|ch| (ch >= 'a' && ch <= 'z') || (ch == '_') || (ch >= '0' && ch <= '9'))
+            && chars.all(|ch| ('a'..='z').contains(&ch) || (ch == '_') || ('0'..='9').contains(&ch))
             && !self
                 .as_keyword()
                 .map(Keyword::is_sometimes_reserved)
@@ -95,24 +95,38 @@ impl_display!(Ident);
 
 /// A name of a table, view, custom type, etc., possibly multi-part, i.e. db.schema.obj
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ObjectName(pub Vec<Ident>);
+pub struct UnresolvedObjectName(pub Vec<Ident>);
 
-impl ObjectName {
+pub enum CatalogName {
+    ObjectName(Vec<Ident>),
+    FuncName(Vec<Ident>),
+}
+
+impl UnresolvedObjectName {
     /// Creates an `ObjectName` with a single [`Ident`], i.e. it appears as
     /// "unqualified".
-    pub fn unqualified(n: &str) -> ObjectName {
-        ObjectName(vec![Ident::new(n)])
+    pub fn unqualified(n: &str) -> UnresolvedObjectName {
+        UnresolvedObjectName(vec![Ident::new(n)])
+    }
+
+    /// Creates an `ObjectName` with an [`Ident`] for each element of `n`.
+    ///
+    /// Panics if passed an in ineligible `&[&str]` whose length is 0 or greater
+    /// than 3.
+    pub fn qualified(n: &[&str]) -> UnresolvedObjectName {
+        assert!(n.len() <= 3 && n.len() > 0);
+        UnresolvedObjectName(n.iter().map(|n| (*n).into()).collect::<Vec<_>>())
     }
 }
 
-impl AstDisplay for ObjectName {
+impl AstDisplay for UnresolvedObjectName {
     fn fmt(&self, f: &mut AstFormatter) {
         display::separated(&self.0, ".").fmt(f);
     }
 }
-impl_display!(ObjectName);
+impl_display!(UnresolvedObjectName);
 
-impl AstDisplay for &ObjectName {
+impl AstDisplay for &UnresolvedObjectName {
     fn fmt(&self, f: &mut AstFormatter) {
         display::separated(&self.0, ".").fmt(f);
     }

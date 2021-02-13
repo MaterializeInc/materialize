@@ -30,7 +30,7 @@ UTF8
 UTF8
 
 ! SET client_encoding = UTF9
-parameter client_encoding is read only
+parameter "client_encoding" cannot be changed
 
 > SET sql_safe_updates = on
 > SHOW sql_safe_updates
@@ -54,15 +54,15 @@ off
 > SET DateStyle = 'MDY'
 > SET DateStyle = 'ISO,MDY'
 ! SET DateStyle = 'ooga booga'
-parameter DateStyle can only be set to ISO, MDY
+parameter "DateStyle" can only be set to "ISO, MDY"
 
 # `search_path` is tested elsewhere.
 
 ! SET server_version = "9.6.0"
-parameter server_version is read only
+parameter "server_version" cannot be changed
 
 ! SET TimeZone = 'nope'
-parameter TimeZone can only be set to UTC
+parameter "TimeZone" can only be set to "UTC"
 
 # The `transaction_isolation` variable has dedicated syntax as mandated by the
 # SQL standard.
@@ -70,7 +70,7 @@ parameter TimeZone can only be set to UTC
 serializable
 
 ! SET transaction_isolation = 'read committed'
-parameter transaction_isolation is read only
+parameter "transaction_isolation" cannot be changed
 
 ! SET integer_datetimes = false
-parameter integer_datetimes is read only
+parameter "integer_datetimes" cannot be changed

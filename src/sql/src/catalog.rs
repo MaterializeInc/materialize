@@ -17,11 +17,12 @@ use std::time::SystemTime;
 use std::{error::Error, unimplemented};
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
-use expr::{DummyHumanizer, ExprHumanizer, GlobalId, ScalarExpr};
+use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql_parser::ast::{Expr, Raw};
 use uuid::Uuid;
 
+use crate::func::Func;
 use crate::names::{FullName, PartialName, SchemaName};
 use crate::plan::PlanContext;
 
@@ -53,6 +54,9 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
     /// Returns the search path used by the catalog.
     fn search_path(&self, include_system_schemas: bool) -> Vec<&str>;
 
+    /// Returns the name of the user who is issuing the query.
+    fn user(&self) -> &str;
+
     /// Returns the database to use if one is not explicitly specified.
     fn default_database(&self) -> &str;
 
@@ -75,6 +79,9 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
         schema_name: &str,
     ) -> Result<&dyn CatalogSchema, CatalogError>;
 
+    /// Resolves the named role.
+    fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
+
     /// Resolves a partially-specified item name.
     ///
     /// If the partial name has a database component, it searches only the
@@ -89,6 +96,10 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
     /// of the search schemas. The catalog implementation must choose one.
     fn resolve_item(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
 
+    /// Performs the same operation as [`Catalog::resolve_item`] but for
+    /// functions within the catalog.
+    fn resolve_function(&self, item_name: &PartialName) -> Result<&dyn CatalogItem, CatalogError>;
+
     /// Lists the items in the specified schema in the specified database.
     ///
     /// Panics if `schema_name` does not specify a valid schema.
@@ -96,6 +107,9 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
         &'a self,
         schema: &SchemaName,
     ) -> Box<dyn Iterator<Item = &'a dyn CatalogItem> + 'a>;
+
+    /// Gets an item by its ID.
+    fn try_get_item_by_id(&self, id: &GlobalId) -> Option<&dyn CatalogItem>;
 
     /// Gets an item by its ID.
     ///
@@ -154,12 +168,21 @@ pub trait CatalogDatabase {
     fn id(&self) -> i64;
 }
 
-/// A database in a [`Catalog`].
+/// A schema in a [`Catalog`].
 pub trait CatalogSchema {
     /// Returns a fully-specified name of the schema.
     fn name(&self) -> &SchemaName;
 
     /// Returns a stable ID for the schema.
+    fn id(&self) -> i64;
+}
+
+/// A role in a [`Catalog`].
+pub trait CatalogRole {
+    /// Returns a fully-specified name of the role.
+    fn name(&self) -> &str;
+
+    /// Returns a stable ID for the role.
     fn id(&self) -> i64;
 }
 
@@ -183,6 +206,12 @@ pub trait CatalogItem {
     /// an index), it returns an error.
     fn desc(&self) -> Result<&RelationDesc, CatalogError>;
 
+    /// Returns the resolved function.
+    ///
+    /// If the catalog item is not of a type that produces functions (i.e.,
+    /// anything other than a function), it returns an error.
+    fn func(&self) -> Result<&'static Func, CatalogError>;
+
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;
 
@@ -202,7 +231,7 @@ pub trait CatalogItem {
 
     /// Returns the index details associated with the catalog item, if the
     /// catalog item is an index.
-    fn index_details(&self) -> Option<(&[ScalarExpr], GlobalId)>;
+    fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)>;
 
     /// Returns the column defaults associated with the catalog item, if the
     /// catalog item is a table.
@@ -224,6 +253,8 @@ pub enum CatalogItemType {
     Index,
     /// A type.
     Type,
+    /// A func.
+    Func,
 }
 
 impl fmt::Display for CatalogItemType {
@@ -235,6 +266,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::View => f.write_str("view"),
             CatalogItemType::Index => f.write_str("index"),
             CatalogItemType::Type => f.write_str("type"),
+            CatalogItemType::Func => f.write_str("func"),
         }
     }
 }
@@ -246,36 +278,39 @@ pub enum CatalogError {
     UnknownDatabase(String),
     /// Unknown schema.
     UnknownSchema(String),
+    /// Unknown role.
+    UnknownRole(String),
     /// Unknown item.
     UnknownItem(String),
-    /// Invalid attempt to depend on a sink.
-    InvalidSinkDependency(String),
-    /// Invalid attempt to depend on an index.
-    InvalidIndexDependency(String),
-    /// Invalid attempt to depend on a type.
-    InvalidTypeDependency(String),
+    /// Unknown function.
+    UnknownFunction(String),
+    /// Invalid attempt to depend on a non-dependable item.
+    InvalidDependency {
+        /// The invalid item's name.
+        name: String,
+        /// The invalid item's type.
+        typ: CatalogItemType,
+    },
 }
 
 impl fmt::Display for CatalogError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
+            Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
+            Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
-            Self::InvalidSinkDependency(name) => write!(
+            Self::InvalidDependency { name, typ } => write!(
                 f,
-                "catalog item '{}' is a sink and so cannot be depended upon",
-                name
-            ),
-            Self::InvalidIndexDependency(name) => write!(
-                f,
-                "catalog item '{}' is an index and so cannot be depended upon",
-                name
-            ),
-            Self::InvalidTypeDependency(name) => write!(
-                f,
-                "catalog item '{}' is a type and so cannot be depended upon",
-                name
+                "catalog item '{}' is {} {} and so cannot be depended upon",
+                name,
+                if matches!(typ, CatalogItemType::Index) {
+                    "an"
+                } else {
+                    "a"
+                },
+                typ,
             ),
         }
     }
@@ -304,6 +339,10 @@ impl Catalog for DummyCatalog {
         vec!["dummy"]
     }
 
+    fn user(&self) -> &str {
+        "dummy"
+    }
+
     fn default_database(&self) -> &str {
         "dummy"
     }
@@ -320,7 +359,15 @@ impl Catalog for DummyCatalog {
         unimplemented!();
     }
 
+    fn resolve_role(&self, _: &str) -> Result<&dyn CatalogRole, CatalogError> {
+        unimplemented!();
+    }
+
     fn resolve_item(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
+        unimplemented!();
+    }
+
+    fn resolve_function(&self, _: &PartialName) -> Result<&dyn CatalogItem, CatalogError> {
         unimplemented!();
     }
 
@@ -332,6 +379,10 @@ impl Catalog for DummyCatalog {
     }
 
     fn get_item_by_id(&self, _: &GlobalId) -> &dyn CatalogItem {
+        unimplemented!();
+    }
+
+    fn try_get_item_by_id(&self, _: &GlobalId) -> Option<&dyn CatalogItem> {
         unimplemented!();
     }
 

@@ -17,19 +17,17 @@ use std::rc::Rc;
 
 use anyhow::bail;
 
+use expr::GlobalId;
 use ore::collections::CollectionExt;
 use repr::{ColumnType, RelationDesc, ScalarType};
 
-use crate::ast::{Ident, ObjectName, ObjectType, Raw, Statement};
+use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};
 use crate::catalog::{Catalog, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema};
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::query;
 use crate::plan::{Params, Plan, PlanContext};
-
-#[macro_use]
-mod with_options;
 
 mod ddl;
 mod dml;
@@ -107,13 +105,14 @@ pub fn describe(
     let desc = match stmt {
         // DDL statements.
         Statement::CreateDatabase(stmt) => ddl::describe_create_database(&scx, stmt)?,
-        Statement::CreateIndex(stmt) => ddl::describe_create_index(&scx, stmt)?,
         Statement::CreateSchema(stmt) => ddl::describe_create_schema(&scx, stmt)?,
-        Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
-        Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
         Statement::CreateTable(stmt) => ddl::describe_create_table(&scx, stmt)?,
+        Statement::CreateSource(stmt) => ddl::describe_create_source(&scx, stmt)?,
         Statement::CreateView(stmt) => ddl::describe_create_view(&scx, stmt)?,
+        Statement::CreateSink(stmt) => ddl::describe_create_sink(&scx, stmt)?,
+        Statement::CreateIndex(stmt) => ddl::describe_create_index(&scx, stmt)?,
         Statement::CreateType(stmt) => ddl::describe_create_type(&scx, stmt)?,
+        Statement::CreateRole(stmt) => ddl::describe_create_role(&scx, stmt)?,
         Statement::DropDatabase(stmt) => ddl::describe_drop_database(&scx, stmt)?,
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
@@ -163,6 +162,10 @@ pub fn describe(
 /// Planning is a pure, synchronous function and so requires that the provided
 /// `stmt` does does not depend on any external state. To purify a statement,
 /// use [`crate::pure::purify`].
+///
+/// The returned plan is tied to the state of the provided catalog. If the state
+/// of the catalog changes after planning, the validity of the plan is not
+/// guaranteed.
 pub fn plan(
     pcx: &PlanContext,
     catalog: &dyn Catalog,
@@ -192,6 +195,7 @@ pub fn plan(
         Statement::CreateSink(stmt) => ddl::plan_create_sink(scx, stmt),
         Statement::CreateIndex(stmt) => ddl::plan_create_index(scx, stmt),
         Statement::CreateType(stmt) => ddl::plan_create_type(scx, stmt),
+        Statement::CreateRole(stmt) => ddl::plan_create_role(scx, stmt),
         Statement::DropDatabase(stmt) => ddl::plan_drop_database(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::AlterIndexOptions(stmt) => ddl::plan_alter_index_options(scx, stmt),
@@ -295,10 +299,13 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn resolve_default_schema(&self) -> Result<&dyn CatalogSchema, PlanError> {
-        self.resolve_schema(ObjectName::unqualified("public"))
+        self.resolve_schema(UnresolvedObjectName::unqualified("public"))
     }
 
-    pub fn resolve_database(&self, name: ObjectName) -> Result<&dyn CatalogDatabase, PlanError> {
+    pub fn resolve_database(
+        &self,
+        name: UnresolvedObjectName,
+    ) -> Result<&dyn CatalogDatabase, PlanError> {
         if name.0.len() != 1 {
             return Err(PlanError::OverqualifiedDatabaseName(name.to_string()));
         }
@@ -310,7 +317,10 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_database(&name)?)
     }
 
-    pub fn resolve_schema(&self, mut name: ObjectName) -> Result<&dyn CatalogSchema, PlanError> {
+    pub fn resolve_schema(
+        &self,
+        mut name: UnresolvedObjectName,
+    ) -> Result<&dyn CatalogSchema, PlanError> {
         if name.0.len() > 2 {
             return Err(PlanError::OverqualifiedSchemaName(name.to_string()));
         }
@@ -319,9 +329,21 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_schema(database_spec, &schema_name)?)
     }
 
-    pub fn resolve_item(&self, name: ObjectName) -> Result<&dyn CatalogItem, PlanError> {
+    pub fn resolve_item(&self, name: UnresolvedObjectName) -> Result<&dyn CatalogItem, PlanError> {
         let name = normalize::object_name(name)?;
         Ok(self.catalog.resolve_item(&name)?)
+    }
+
+    pub fn resolve_function(
+        &self,
+        name: UnresolvedObjectName,
+    ) -> Result<&dyn CatalogItem, PlanError> {
+        let name = normalize::object_name(name)?;
+        Ok(self.catalog.resolve_function(&name)?)
+    }
+
+    pub fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
+        self.catalog.get_item_by_id(id)
     }
 
     pub fn experimental_mode(&self) -> bool {

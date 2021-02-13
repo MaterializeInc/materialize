@@ -22,10 +22,7 @@ pub struct DataflowBuilder<'a> {
     indexes: &'a ArrangementFrontiers<Timestamp>,
 }
 
-impl<C> Coordinator<C>
-where
-    C: comm::Connection,
-{
+impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
     pub fn dataflow_builder(&self) -> DataflowBuilder {
         DataflowBuilder {
@@ -111,7 +108,7 @@ impl<'a> DataflowBuilder<'a> {
     pub fn import_view_into_dataflow(
         &self,
         view_id: &GlobalId,
-        view: &OptimizedRelationExpr,
+        view: &OptimizedMirRelationExpr,
         dataflow: &mut DataflowDesc,
     ) {
         // TODO: We only need to import Get arguments for which we cannot find arrangements.
@@ -120,8 +117,8 @@ impl<'a> DataflowBuilder<'a> {
         }
         // Collect sources, views, and indexes used.
         view.as_ref().visit(&mut |e| {
-            if let RelationExpr::ArrangeBy { input, keys } = e {
-                if let RelationExpr::Get {
+            if let MirRelationExpr::ArrangeBy { input, keys } = e {
+                if let MirRelationExpr::Get {
                     id: Id::Global(on_id),
                     typ,
                 } = &**input

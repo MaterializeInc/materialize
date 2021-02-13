@@ -9,23 +9,27 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use derivative::Derivative;
+use tokio::sync::{mpsc, oneshot};
 
 use dataflow_types::PeekResponse;
 use repr::Row;
 use sql::ast::{FetchDirection, ObjectType, Raw, Statement};
 use sql::plan::ExecuteTimeout;
-use tokio_postgres::error::SqlState;
+use tokio::sync::watch;
 
-use crate::session::Session;
+use crate::error::CoordError;
+use crate::session::{EndTransactionAction, Session};
 
 #[derive(Debug)]
 pub enum Command {
     /// Notify the coordinator of a new client session.
     Startup {
         session: Session,
-        tx: futures::channel::oneshot::Sender<Response<Vec<StartupMessage>>>,
+        cancel_tx: Arc<watch::Sender<Cancelled>>,
+        tx: oneshot::Sender<Response<Vec<StartupMessage>>>,
     },
 
     Declare {
@@ -33,7 +37,7 @@ pub enum Command {
         stmt: Statement<Raw>,
         param_types: Vec<Option<pgrepr::Type>>,
         session: Session,
-        tx: futures::channel::oneshot::Sender<Response<()>>,
+        tx: oneshot::Sender<Response<()>>,
     },
 
     Describe {
@@ -41,13 +45,19 @@ pub enum Command {
         stmt: Option<Statement<Raw>>,
         param_types: Vec<Option<pgrepr::Type>>,
         session: Session,
-        tx: futures::channel::oneshot::Sender<Response<()>>,
+        tx: oneshot::Sender<Response<()>>,
     },
 
     Execute {
         portal_name: String,
         session: Session,
-        tx: futures::channel::oneshot::Sender<Response<ExecuteResponse>>,
+        tx: oneshot::Sender<Response<ExecuteResponse>>,
+    },
+
+    Commit {
+        action: EndTransactionAction,
+        session: Session,
+        tx: oneshot::Sender<Response<ExecuteResponse>>,
     },
 
     CancelRequest {
@@ -55,7 +65,7 @@ pub enum Command {
     },
 
     DumpCatalog {
-        tx: futures::channel::oneshot::Sender<String>,
+        tx: oneshot::Sender<String>,
     },
 
     Terminate {
@@ -65,13 +75,14 @@ pub enum Command {
     NoSessionExecute {
         stmt: Statement<Raw>,
         params: sql::plan::Params,
-        tx: futures::channel::oneshot::Sender<anyhow::Result<NoSessionExecuteResponse>>,
+        user: String,
+        tx: oneshot::Sender<Result<NoSessionExecuteResponse, CoordError>>,
     },
 }
 
 #[derive(Debug)]
 pub struct Response<T> {
-    pub result: Result<T, anyhow::Error>,
+    pub result: Result<T, CoordError>,
     pub session: Session,
 }
 
@@ -81,7 +92,7 @@ pub struct NoSessionExecuteResponse {
     pub response: ExecuteResponse,
 }
 
-pub type RowsFuture = Pin<Box<dyn Future<Output = Result<PeekResponse, comm::Error>> + Send>>;
+pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponse> + Send>>;
 
 /// Notifications that may be generated in response to [`Command::Startup`].
 #[derive(Debug)]
@@ -97,7 +108,7 @@ pub enum ExecuteResponse {
     /// The active transaction was exited.
     TransactionExited {
         was_implicit: bool,
-        tag: String,
+        tag: &'static str,
     },
     // The requested object was altered.
     AlteredObject(ObjectType),
@@ -107,7 +118,6 @@ pub enum ExecuteResponse {
     ClosedCursor,
     CopyTo {
         format: sql::plan::CopyFormat,
-        #[derivative(Debug = "ignore")]
         resp: Box<ExecuteResponse>,
     },
     /// The requested database was created.
@@ -118,6 +128,8 @@ pub enum ExecuteResponse {
     CreatedSchema {
         existed: bool,
     },
+    /// The requested role was created.
+    CreatedRole,
     /// The requested index was created.
     CreatedIndex {
         existed: bool,
@@ -150,6 +162,8 @@ pub enum ExecuteResponse {
     DiscardedAll,
     /// The requested database was dropped.
     DroppedDatabase,
+    /// The requested role was dropped.
+    DroppedRole,
     /// The requested schema was dropped.
     DroppedSchema,
     /// The requested source was dropped.
@@ -177,11 +191,6 @@ pub enum ExecuteResponse {
     },
     /// The specified number of rows were inserted into the requested table.
     Inserted(usize),
-    /// A SQL error occurred.
-    PgError {
-        code: SqlState,
-        message: String,
-    },
     /// Rows will be delivered via the specified future.
     SendingRows(#[derivative(Debug = "ignore")] RowsFuture),
     /// The specified variable was set to a new value.
@@ -193,8 +202,18 @@ pub enum ExecuteResponse {
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
     Tailing {
-        rx: comm::mpsc::Receiver<Vec<Row>>,
+        rx: mpsc::UnboundedReceiver<Vec<Row>>,
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
+}
+
+/// The state of a cancellation request.
+#[derive(Debug, Clone, Copy)]
+pub enum Cancelled {
+    /// A cancellation request has occurred.
+    Cancelled,
+    /// No cancellation request has yet occurred, or a previous request has been
+    /// cleared.
+    NotCancelled,
 }

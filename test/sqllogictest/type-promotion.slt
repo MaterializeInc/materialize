@@ -477,7 +477,7 @@ SELECT '1'::jsonb::double;
 ----
 1.000
 
-query error invalid input syntax for double precision: invalid float literal: "dog"
+query error invalid input syntax for double precision: "dog"
 SELECT 'dog'::text::double
 
 query error CAST does not support casting from time to double precision
@@ -534,7 +534,7 @@ SELECT '2'::jsonb::real;
 ----
 2.000
 
-query error invalid input syntax for real: invalid float literal: "dog"
+query error invalid input syntax for real: "dog"
 SELECT 'dog'::text::real
 
 query error CAST does not support casting from time to real

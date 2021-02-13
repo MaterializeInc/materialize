@@ -36,6 +36,7 @@ use repr::Timestamp;
 use timely::dataflow::Scope;
 use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
+use tokio::sync::mpsc;
 
 use super::source::util::source;
 use crate::logging::materialized::{Logger, MaterializedEvent};
@@ -43,7 +44,7 @@ use crate::operator::StreamExt;
 use crate::server::{
     TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
 };
-use crate::source::cache::CacheSender;
+use crate::CacheMessage;
 
 mod file;
 mod kafka;
@@ -89,7 +90,7 @@ pub struct SourceConfig<'a, G> {
     /// Data encoding
     pub encoding: DataEncoding,
     /// Channel to send source caching information to cacher thread
-    pub caching_tx: Option<CacheSender>,
+    pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// Timely worker logger for source events
     pub logger: Option<Logger>,
 }
@@ -299,8 +300,12 @@ pub(crate) trait SourceInfo<Out> {
     where
         Self: Sized;
 
+    // BYO consistency methods
+
     /// This function determines whether it is safe to close the current timestamp.
-    /// It is safe to close the current timestamp if
+    ///
+    /// It is safe to close the current timestamp if:
+    ///
     /// 1) this worker does not own the current partition
     /// 2) we will never receive a message with a lower or equal timestamp than offset.
     fn can_close_timestamp(
@@ -324,12 +329,17 @@ pub(crate) trait SourceInfo<Out> {
     /// called, the source should be able to receive messages from this partition
     fn ensure_has_partition(&mut self, consistency_info: &mut ConsistencyInfo, pid: PartitionId);
 
+    // BYO  + RT methods
+
     /// Informs source that there are now `partition_count` entries for this source
+    // this might be better as BYO-only, but it is actually called in RT timestamping as well
     fn update_partition_count(
         &mut self,
         consistency_info: &mut ConsistencyInfo,
         partition_count: i32,
     );
+
+    // source reading
 
     /// Returns the next message read from the source
     fn get_next_message(
@@ -341,10 +351,12 @@ pub(crate) trait SourceInfo<Out> {
     /// Buffer a message that cannot get timestamped
     fn buffer_message(&mut self, message: SourceMessage<Out>);
 
+    // caching
+
     /// Cache a message
     fn cache_message(
         &self,
-        _caching_tx: &mut Option<CacheSender>,
+        _caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
         _message: &SourceMessage<Out>,
         _timestamp: Timestamp,
         _offset: Option<MzOffset>,
@@ -1000,7 +1012,9 @@ where
                         consistency_info
                             .partition_metrics
                             .get_mut(&partition)
-                            .unwrap()
+                            .unwrap_or_else(|| {
+                                panic!("partition metrics do not exist for partition {}", partition)
+                            })
                             .offset_received
                             .set(offset.offset);
 

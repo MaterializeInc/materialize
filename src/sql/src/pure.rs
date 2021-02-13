@@ -7,12 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Statement purification.
+//! SQL purification.
+//!
+//! See the [crate-level documentation](crate) for details.
 
 use std::collections::BTreeMap;
 
-use anyhow::{bail, Context};
+use anyhow::{anyhow, bail, Context};
+use aws_arn::ARN;
 use tokio::io::AsyncBufReadExt;
+use tokio::time::Duration;
 
 use repr::strconv;
 use sql_parser::ast::{
@@ -22,12 +26,15 @@ use sql_parser::ast::{
 use crate::kafka_util;
 use crate::normalize;
 
-/// Removes dependencies on external state from `stmt`: inlining schemas in
-/// files, fetching schemas from registries, and so on. The [`Statement`]
-/// returned from this function will be valid to pass to `Plan`.
+/// Purifies a statement, removing any dependencies on external state.
+///
+/// See the section on [purification](crate#purification) in the crate
+/// documentation for details.
 ///
 /// Note that purification is asynchronous, and may take an unboundedly long
-/// time to complete.
+/// time to complete. As a result purification does *not* have access to a
+/// [`Catalog`](crate::catalog::Catalog), as that would require locking access
+/// to the catalog for an unbounded amount of time.
 pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::Error> {
     if let Statement::CreateSource(CreateSourceStatement {
         col_names,
@@ -72,7 +79,21 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 }
                 file = Some(f);
             }
-            _ => (),
+            Connector::S3 { .. } => {
+                let aws_info = normalize::aws_connect_info(&mut with_options_map, None)?;
+                aws_util::aws::validate_credentials(aws_info.clone(), Duration::from_secs(1))
+                    .await?;
+            }
+            Connector::Kinesis { arn } => {
+                let region = arn
+                    .parse::<ARN>()
+                    .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?
+                    .region
+                    .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
+
+                let aws_info = normalize::aws_connect_info(&mut with_options_map, Some(region))?;
+                aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
+            }
         }
 
         purify_format(format, connector, col_names, file, &config_options).await?;

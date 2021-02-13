@@ -70,15 +70,15 @@ b  sum
 name nullable type
 -------------------
 b     false   bigint
-sum   true    numeric
+sum   false   numeric
 
 > SHOW VIEWS LIKE '%data%'
 data_view
 
 > SHOW CREATE VIEW test1
 View                      "Create View"
-----------------------------------------------------------------------------------------------------------------------------------------------------------------
-materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT \"b\", \"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+materialize.public.test1  "CREATE VIEW \"materialize\".\"public\".\"test1\" AS SELECT \"b\", \"pg_catalog\".\"sum\"(\"a\") FROM \"materialize\".\"public\".\"data\" GROUP BY \"b\""
 
 # Materialized view can be built on a not-materialized view.
 > CREATE MATERIALIZED VIEW test2 AS

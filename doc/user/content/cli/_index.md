@@ -11,24 +11,41 @@ The `materialized` binary supports the following command line flags:
 
 Flag | Default | Modifies
 -----|---------|----------
-[`--address-file`](#horizontally-scaled-clusters) | N/A |  Address of all coordinating Materialize nodes
 [`--cache-max-pending-records`](#source-cache) | 1000000 | Maximum number of input records buffered before flushing immediately to disk.
 [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted
 [`--differential-idle-merge-effort`](#dataflow-tuning) | N/A | *Advanced.* Amount of compaction to perform when idle.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
 [`--disable-telemetry`](#telemetry) | N/A | Disables telemetry reporting.
-[`--experimental`](#experimental-mode) | Disabled | Get more details [here](#experimental-mode)
+[`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
-[`--process`](#horizontally-scaled-clusters) | 0 | This node's ID when coordinating with other Materialize nodes
-[`--processes`](#horizontally-scaled-clusters) | 1 | Number of coordinating Materialize nodes
 [`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
+[`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA) {{< version-added v0.7.1 />}}
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
+[`--tls-mode`](#tls-encryption) | N/A | How stringently to demand TLS authentication and encryption {{< version-added v0.7.1 />}}
 [`--tls-key`](#tls-encryption) | N/A | Path to TLS private key file
 [`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
 [`-w`](#worker-threads) | REQ |  Dataflow worker threads
 `-v` | N/A | Print version and exit
 `-vv` | N/A | Print version and additional build information, and exit
+
+If a command line flag takes an argument, you can alternatively set that flag
+via an environment variable named after the flag. If both the environment
+variable and command line flag are specified, the command line flag takes
+precedence.
+
+The process for converting a flag name to an environment variable name is as
+follows:
+
+  1. Convert all characters to uppercase
+  2. Replace all hyphens with underscores
+  3. add an `MZ_` prefix.
+
+For example, the `--data-directory` command line flag corresponds to the
+`MZ_DATA_DIRECTORY` environment variable.
+
+Note that command line flags that do not take arguments, like `--experimental`
+and `--disable-telemetry`, do not yet have corresponding environment variables.
 
 ### Data directory
 
@@ -80,29 +97,6 @@ workers that have to fight for physical resources will only block each other.
 Example: an `r5d.4xlarge` instance has 16 VCPUs, or 8 physical cores. The
 recommended worker setting on this VM is `7`.
 
-### Horizontally scaled clusters
-
-{{< warning >}}
-Note that multi-node Materialize clusters are **not** supported by Materialize,
-and are not permitted in production under the free usage BSL license without a
-separate commercial agreement with Materialize.
-{{< /warning >}}
-
-`--processes` controls the total number of nodes in a horizontally-scaled
-Materialize cluster. The IP addresses of each node should be specified in a
-file, one per line, which is specified by the `--address-file` flag.
-
-When each node is started, it must additionally be told which `--process` it is,
-from `0` to `processes - 1`.
-
-You should not attempt running a horizontally-scaled Materialize cluster until
-you have maxed-out vertical-scaling. Multi-node clusters are not particulary
-efficient. An `x1.32xlarge` instance on AWS has 128 VCPUs, and will be superior
-in every way (reliability, cost, ease-of-use) to a multi-node Materialize
-cluster with the same total number of VCPUs. It is our performance goal that
-Materialize under that configuration be able to handle every conceivable
-streaming workload that you may wish to throw at it.
-
 ### Listen address
 
 By default, `materialized` binds to `0.0.0.0:6875`. This means that Materialize
@@ -132,28 +126,42 @@ the compaction window.
 
 ### TLS encryption
 
-Materialize can use Transport Layer Security (TLS) to encrypt traffic between
-SQL and HTTP clients and the `materialized` server.
+Materialize can use Transport Layer Security (TLS) to:
+
+ * Encrypt traffic between SQL and HTTP clients and the `materialized` server
+ * Authenticate SQL and HTTP clients
+
+{{< version-added v0.7.1 >}}
+The `--tls-mode` and `--tls-ca` options.
+{{< /version-changed >}}
 
 #### Configuration
 
-To enable TLS, you will need to supply two files, one containing a TLS
-certificate and one containing the corresponding private key. Point
-`materialized` at these files using the `--tls-cert` and `--tls-key` options,
-respectively:
+Whether Materialize requires TLS encryption or authentication is determined by
+the value of the `--tls-mode` option:
+
+Value         | Description
+--------------|------------
+`disable`     | Disables TLS.<br><br>Materialize will reject HTTPS connections and SQL connections that negotiate TLS. This is the default mode if `--tls-cert` is not specified.
+`require`     | Requires TLS encryption.<br><br>Materialize will reject HTTP connections and SQL connections that do not negotiate TLS.
+`verify-ca`   | Like `require`, but additionally requires that clients present a certificate.<br><br>Materialize verifies that the client certificate is issued by the certificate authority (CA) specified by the `--tls-ca` option.
+`verify-full` | Like `verify-ca`, but the Common Name (CN) field of the client certificate additionally determines the user who is connecting.<br><br>For HTTPS connections, this user is taken directly from the CN field. For SQL connections, the name of the user in the connection parameters must match the name specified in the CN field.<br><br>This is the default mode if `--tls-cert` is specified.
+
+In all TLS modes but `disable`, you will need to supply two files, one
+containing a TLS certificate and one containing the corresponding private key.
+Point `materialized` at these files using the `--tls-cert` and `--tls-key`
+options, respectively.
+
+If the TLS mode is `verify-ca` or `verify-full`, you will additionally need to
+supply the path to a TLS certificate authority (CA) via the `--tls-ca` flag.
+Client certificates will be verified using this CA.
+
+The following example demonstrates how to configure a server in `verify-full`
+mode:
 
 ```shell
-$ materialized -w1 --tls-cert=server.crt --tls-key=server.key
+$ materialized -w1 --tls-cert=server.crt --tls-key=server.key --tls-ca=root.crt
 ```
-
-When TLS is enabled, Materialize serves both unencrypted and encrypted traffic
-over the same TCP port, as specified by [`--listen-addr`](#listen-address). The
-web UI will be served over HTTPS in addition to HTTP. Incoming SQL connections
-can negotiate TLS encryption at the client's option; consult your SQL client's
-documentation for details.
-
-It is not currently possible to configure Materialize to reject unencrypted
-connections.
 
 Materialize statically links against a vendored copy of [OpenSSL]. It does *not*
 use any SSL library that may be provided by your system. To see the version of
@@ -168,12 +176,12 @@ OpenSSL 1.1.1g  21 Apr 2020
 librdkafka v1.4.2
 ```
 
-Materialize configures OpenSSL according to Mozilla's [Modern
-compatibility][moz-modern] level, which requires TLS v1.3 and modern cipher
-suites. Using weaker cipher suites or older TLS protocol versions is not
+Materialize configures OpenSSL according to Mozilla's [Intermediate
+compatibility][moz-intermediate] level, which requires TLS v1.2+ and recent
+cipher suites. Using weaker cipher suites or older TLS protocol versions is not
 supported.
 
-[moz-modern]: https://wiki.mozilla.org/Security/Server_Side_TLS#Modern_compatibility
+[moz-intermediate]: https://wiki.mozilla.org/Security/Server_Side_TLS#Intermediate_compatibility_.28recommended.29
 
 #### Generating TLS certificates
 
@@ -192,7 +200,7 @@ Acquire a certificate from a proper certificate authority (CA) instead.
 
 ### Experimental mode
 
-{{< version-added v0.4.0 >}}
+{{< version-added v0.4.0 />}}
 
 {{< warning >}}
 

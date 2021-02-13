@@ -93,7 +93,7 @@ def get_version_tags(*, fetch: bool = True) -> List[semver.VersionInfo]:
     """List all the version-like tags in the repo
 
     Args:
-        fetch: If false, don't update git, only intended for testing
+        fetch: If false, don't automatically run `git fetch --tags`.
     """
     if fetch:
         spawn.runv(["git", "fetch", "--tags"])

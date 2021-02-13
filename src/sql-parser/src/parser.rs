@@ -321,6 +321,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(CASE) => self.parse_case_expr(),
             Token::Keyword(CAST) => self.parse_cast_expr(),
             Token::Keyword(COALESCE) => self.parse_coalesce_expr(),
+            Token::Keyword(NULLIF) => self.parse_nullif_expr(),
             Token::Keyword(EXISTS) => self.parse_exists_expr(),
             Token::Keyword(EXTRACT) => self.parse_extract_expr(),
             Token::Keyword(INTERVAL) => self.parse_literal_interval(),
@@ -479,7 +480,7 @@ impl<'a> Parser<'a> {
         Ok(parse(self)?.into_expr())
     }
 
-    fn parse_function(&mut self, name: ObjectName) -> Result<Expr<Raw>, ParserError> {
+    fn parse_function(&mut self, name: UnresolvedObjectName) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let all = self.parse_keyword(ALL);
         let distinct = self.parse_keyword(DISTINCT);
@@ -640,6 +641,15 @@ impl<'a> Parser<'a> {
         Ok(Expr::Coalesce { exprs })
     }
 
+    fn parse_nullif_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+        let l_expr = Box::new(self.parse_expr()?);
+        self.expect_token(&Token::Comma)?;
+        let r_expr = Box::new(self.parse_expr()?);
+        self.expect_token(&Token::RParen)?;
+        Ok(Expr::NullIf { l_expr, r_expr })
+    }
+
     fn parse_extract_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let field = match self.next_token() {
@@ -652,7 +662,7 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: ObjectName::unqualified("date_part"),
+            name: UnresolvedObjectName::unqualified("date_part"),
             args: FunctionArgs::Args(vec![Expr::Value(Value::String(field)), expr]),
             filter: None,
             over: None,
@@ -701,7 +711,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: ObjectName::unqualified(name),
+            name: UnresolvedObjectName::unqualified(name),
             args: FunctionArgs::Args(exprs),
             filter: None,
             over: None,
@@ -923,7 +933,7 @@ impl<'a> Parser<'a> {
                 AT => {
                     self.expect_keywords(&[TIME, ZONE])?;
                     Ok(Expr::Function(Function {
-                        name: ObjectName(vec!["timezone".into()]),
+                        name: UnresolvedObjectName(vec!["timezone".into()]),
                         args: FunctionArgs::Args(vec![self.parse_subexpr(precedence)?, expr]),
                         filter: None,
                         over: None,
@@ -1308,6 +1318,7 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(SCHEMA) {
             self.parse_create_schema()
         } else if self.parse_keyword(TABLE) {
+            self.prev_token();
             self.parse_create_table()
         } else if self.parse_keyword(OR) || self.parse_keyword(VIEW) {
             self.prev_token();
@@ -1317,10 +1328,19 @@ impl<'a> Parser<'a> {
                 self.prev_token();
                 self.prev_token();
                 self.parse_create_view()
+            } else if self.parse_keyword(MATERIALIZED) && self.parse_keyword(VIEW) {
+                self.prev_token();
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_view()
+            } else if self.parse_keyword(TABLE) {
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_table()
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "VIEW after CREATE TEMPORARY",
+                    "VIEW or MATERIALIZED VIEW after CREATE TEMPORARY",
                     self.peek_token(),
                 )
             }
@@ -1353,12 +1373,15 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(INDEX) {
             self.prev_token();
             self.parse_create_index()
+        } else if self.parse_keyword(ROLE) || self.parse_keyword(USER) {
+            self.prev_token();
+            self.parse_create_role()
         } else if self.parse_keyword(TYPE) {
             self.parse_create_type()
         } else {
             self.expected(
                 self.peek_pos(),
-                "DATABASE, SCHEMA, [MATERIALIZED] VIEW, SOURCE, SINK, or INDEX after CREATE",
+                "DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TYPE, USER, or [MATERIALIZED] VIEW after CREATE",
                 self.peek_token(),
             )
         }
@@ -1519,6 +1542,17 @@ impl<'a> Parser<'a> {
         Ok(envelope)
     }
 
+    fn parse_compression(&mut self) -> Result<Compression, ParserError> {
+        let compression = if self.parse_keyword(NONE) {
+            Compression::None
+        } else if self.parse_keyword(GZIP) {
+            Compression::Gzip
+        } else {
+            return self.expected(self.peek_pos(), "NONE or GZIP", self.peek_token());
+        };
+        Ok(compression)
+    }
+
     fn parse_create_source(&mut self) -> Result<Statement<Raw>, ParserError> {
         let materialized = self.parse_keyword(MATERIALIZED);
         self.expect_keyword(SOURCE)?;
@@ -1605,7 +1639,12 @@ impl<'a> Parser<'a> {
         match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3])? {
             FILE => {
                 let path = self.parse_literal_string()?;
-                Ok(Connector::File { path })
+                let compression = if self.parse_keyword(COMPRESSION) {
+                    self.parse_compression()?
+                } else {
+                    Compression::None
+                };
+                Ok(Connector::File { path, compression })
             }
             KAFKA => {
                 self.expect_keyword(BROKER)?;
@@ -1630,16 +1669,31 @@ impl<'a> Parser<'a> {
                 Ok(Connector::AvroOcf { path })
             }
             S3 => {
-                // FROM S3 BUCKET '<bucket>' OBJECTS FROM SCAN MATCHING '<pattern>'
-                self.expect_keyword(BUCKET)?;
-                let bucket = self.parse_literal_string()?;
-                self.expect_keywords(&[OBJECTS, FROM, SCAN])?;
+                // FROM S3 OBJECTS FROM (SCAN '<bucket>')+ MATCHING '<pattern>'
+                self.expect_keywords(&[OBJECTS, FROM])?;
+                let mut key_sources = Vec::new();
+                while let Some(keyword) = self.parse_one_of_keywords(&[SCAN]) {
+                    match keyword {
+                        SCAN => {
+                            self.expect_keyword(BUCKET)?;
+                            let bucket = self.parse_literal_string()?;
+                            key_sources.push(S3KeySource::Scan { bucket });
+                        }
+                        key => unreachable!("Keyword {} is not expected after OBJECTS FROM", key),
+                    }
+                    if !self.consume_token(&Token::Comma) {
+                        break;
+                    }
+                }
                 let pattern = if self.parse_keyword(MATCHING) {
                     Some(self.parse_literal_string()?)
                 } else {
                     None
                 };
-                Ok(Connector::S3 { bucket, pattern })
+                Ok(Connector::S3 {
+                    key_sources,
+                    pattern,
+                })
             }
             _ => unreachable!(),
         }
@@ -1721,6 +1775,32 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_create_role(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let is_user = match self.expect_one_of_keywords(&[ROLE, USER])? {
+            ROLE => false,
+            USER => true,
+            _ => unreachable!(),
+        };
+        let name = self.parse_identifier()?;
+        let _ = self.parse_keyword(WITH);
+        let mut options = vec![];
+        loop {
+            match self.parse_one_of_keywords(&[SUPERUSER, NOSUPERUSER, LOGIN, NOLOGIN]) {
+                None => break,
+                Some(SUPERUSER) => options.push(CreateRoleOption::SuperUser),
+                Some(NOSUPERUSER) => options.push(CreateRoleOption::NoSuperUser),
+                Some(LOGIN) => options.push(CreateRoleOption::Login),
+                Some(NOLOGIN) => options.push(CreateRoleOption::NoLogin),
+                Some(_) => unreachable!(),
+            }
+        }
+        Ok(Statement::CreateRole(CreateRoleStatement {
+            is_user,
+            name,
+            options,
+        }))
+    }
+
     fn parse_create_type(&mut self) -> Result<Statement<Raw>, ParserError> {
         let name = self.parse_object_name()?;
         self.expect_keyword(AS)?;
@@ -1780,29 +1860,28 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
-        let object_type = match self
-            .parse_one_of_keywords(&[DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, INDEX, TYPE])
-        {
+        let object_type = match self.parse_one_of_keywords(&[
+            DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
+        ]) {
             Some(DATABASE) => {
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
                     if_exists: self.parse_if_exists()?,
                     name: self.parse_identifier()?,
                 }));
             }
-            Some(SCHEMA) => ObjectType::Schema,
-            Some(TABLE) => ObjectType::Table,
-            Some(VIEW) => ObjectType::View,
-            Some(SOURCE) => ObjectType::Source,
-            Some(SINK) => ObjectType::Sink,
             Some(INDEX) => ObjectType::Index,
+            Some(ROLE) | Some(USER) => ObjectType::Role,
+            Some(SCHEMA) => ObjectType::Schema,
+            Some(SINK) => ObjectType::Sink,
+            Some(SOURCE) => ObjectType::Source,
+            Some(TABLE) => ObjectType::Table,
             Some(TYPE) => ObjectType::Type,
-            _ => {
-                return self.expected(
-                    self.peek_pos(),
-                    "DATABASE, SCHEMA, TABLE, VIEW, SOURCE, SINK, INDEX, or TYPE after DROP",
-                    self.peek_token(),
-                )
-            }
+            Some(VIEW) => ObjectType::View,
+            _ => return self.expected(
+                self.peek_pos(),
+                "DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW after DROP",
+                self.peek_token(),
+            ),
         };
 
         let if_exists = self.parse_if_exists()?;
@@ -1826,6 +1905,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_table(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
+        self.expect_keyword(TABLE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
@@ -1838,6 +1919,7 @@ impl<'a> Parser<'a> {
             constraints,
             with_options,
             if_not_exists,
+            temporary,
         }))
     }
 
@@ -2190,6 +2272,10 @@ impl<'a> Parser<'a> {
                         format!("No value parser for keyword {}", kw)
                     );
                 }
+                Token::Op(ref op) if op == "-" => match self.next_token() {
+                    Some(Token::Number(n)) => Ok(Value::Number(format!("-{}", n))),
+                    other => self.expected(self.peek_prev_pos(), "literal int", other),
+                },
                 Token::Number(ref n) => Ok(Value::Number(n.to_string())),
                 Token::String(ref s) => Ok(Value::String(s.to_string())),
                 Token::HexString(ref s) => Ok(Value::HexString(s.to_string())),
@@ -2273,7 +2359,7 @@ impl<'a> Parser<'a> {
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
     fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
         let other = |name: &str| DataType::Other {
-            name: ObjectName::unqualified(name),
+            name: UnresolvedObjectName::unqualified(name),
             typ_mod: vec![],
         };
 
@@ -2287,7 +2373,7 @@ impl<'a> Parser<'a> {
                         "char"
                     };
                     DataType::Other {
-                        name: ObjectName::unqualified(name),
+                        name: UnresolvedObjectName::unqualified(name),
                         typ_mod: match self.parse_optional_precision()? {
                             Some(u) => vec![u],
                             None => vec![],
@@ -2295,7 +2381,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 VARCHAR => DataType::Other {
-                    name: ObjectName::unqualified("varchar"),
+                    name: UnresolvedObjectName::unqualified("varchar"),
                     typ_mod: match self.parse_optional_precision()? {
                         Some(u) => vec![u],
                         None => vec![],
@@ -2306,7 +2392,7 @@ impl<'a> Parser<'a> {
                 // Number-like types
                 BIGINT => other("int8"),
                 DEC | DECIMAL => DataType::Other {
-                    name: ObjectName::unqualified("numeric"),
+                    name: UnresolvedObjectName::unqualified("numeric"),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 DOUBLE => {
@@ -2358,6 +2444,7 @@ impl<'a> Parser<'a> {
                 // Misc.
                 BOOLEAN => other("bool"),
                 BYTES => other("bytea"),
+                JSON => other("jsonb"),
                 REGCLASS => other("oid"),
 
                 _ => {
@@ -2467,7 +2554,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a possibly qualified, possibly quoted identifier, e.g.
     /// `foo` or `myschema."table"`
-    fn parse_object_name(&mut self) -> Result<ObjectName, ParserError> {
+    fn parse_object_name(&mut self) -> Result<UnresolvedObjectName, ParserError> {
         let mut idents = vec![];
         loop {
             idents.push(self.parse_identifier()?);
@@ -2475,7 +2562,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        Ok(ObjectName(idents))
+        Ok(UnresolvedObjectName(idents))
     }
 
     /// Parse a simple one-word identifier (possibly quoted, possibly a keyword)
@@ -2526,7 +2613,7 @@ impl<'a> Parser<'a> {
                     Ok(Expr::QualifiedWildcard(id_parts))
                 } else if self.consume_token(&Token::LParen) {
                     self.prev_token();
-                    self.parse_function(ObjectName(id_parts))
+                    self.parse_function(UnresolvedObjectName(id_parts))
                 } else {
                     Ok(Expr::Identifier(id_parts))
                 }
@@ -2732,7 +2819,11 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::LParen)?;
         let query = self.parse_query()?;
         self.expect_token(&Token::RParen)?;
-        Ok(Cte { alias, query })
+        Ok(Cte {
+            alias,
+            query,
+            id: (),
+        })
     }
 
     /// Parse a "query body", which is an expression with roughly the
@@ -2935,7 +3026,7 @@ impl<'a> Parser<'a> {
         let extended = self.parse_keyword(EXTENDED);
         if extended {
             self.expect_one_of_keywords(&[
-                SCHEMAS, INDEX, INDEXES, KEYS, TABLES, TYPES, COLUMNS, OBJECTS, FULL,
+                COLUMNS, FULL, INDEX, INDEXES, KEYS, OBJECTS, SCHEMAS, TABLES, TYPES,
             ])?;
             self.prev_token();
         }
@@ -2943,18 +3034,19 @@ impl<'a> Parser<'a> {
         let full = self.parse_keyword(FULL);
         if full {
             if extended {
-                self.expect_one_of_keywords(&[SCHEMAS, COLUMNS, TABLES, TYPES, OBJECTS])?;
+                self.expect_one_of_keywords(&[COLUMNS, OBJECTS, SCHEMAS, TABLES, TYPES])?;
             } else {
                 self.expect_one_of_keywords(&[
-                    SCHEMAS,
                     COLUMNS,
+                    MATERIALIZED,
+                    OBJECTS,
+                    ROLES,
+                    SCHEMAS,
+                    SINKS,
+                    SOURCES,
                     TABLES,
                     TYPES,
                     VIEWS,
-                    SINKS,
-                    SOURCES,
-                    OBJECTS,
-                    MATERIALIZED,
                 ])?;
             }
             self.prev_token();
@@ -2968,18 +3060,19 @@ impl<'a> Parser<'a> {
 
         if self.parse_one_of_keywords(&[COLUMNS, FIELDS]).is_some() {
             self.parse_show_columns(extended, full)
-        } else if let Some(object_type) =
-            self.parse_one_of_keywords(&[SCHEMAS, SOURCES, VIEWS, SINKS, TABLES, TYPES, OBJECTS])
-        {
+        } else if let Some(object_type) = self.parse_one_of_keywords(&[
+            OBJECTS, ROLES, SCHEMAS, SINKS, SOURCES, TABLES, TYPES, USERS, VIEWS,
+        ]) {
             Ok(Statement::ShowObjects(ShowObjectsStatement {
                 object_type: match object_type {
+                    OBJECTS => ObjectType::Object,
+                    ROLES | USERS => ObjectType::Role,
                     SCHEMAS => ObjectType::Schema,
-                    SOURCES => ObjectType::Source,
-                    VIEWS => ObjectType::View,
                     SINKS => ObjectType::Sink,
+                    SOURCES => ObjectType::Source,
                     TABLES => ObjectType::Table,
                     TYPES => ObjectType::Type,
-                    OBJECTS => ObjectType::Object,
+                    VIEWS => ObjectType::View,
                     val => panic!(
                         "`parse_one_of_keywords` returned an impossible value: {}",
                         val
@@ -3216,6 +3309,24 @@ impl<'a> Parser<'a> {
                 join: Box::new(table_and_joins),
                 alias: self.parse_optional_table_alias()?,
             })
+        } else if self.consume_token(&Token::LBracket) {
+            let id = self.parse_literal_uint()?;
+            self.expect_keyword(AS)?;
+            let name = self.parse_object_name()?;
+            // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
+            if name.0.len() != 3 {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "table name in square brackets must be fully qualified"
+                );
+            }
+            self.expect_token(&Token::RBracket)?;
+
+            Ok(TableFactor::Table {
+                name: RawName::Id(id, name),
+                alias: self.parse_optional_table_alias()?,
+            })
         } else {
             let name = self.parse_object_name()?;
             if self.consume_token(&Token::LParen) {
@@ -3226,7 +3337,7 @@ impl<'a> Parser<'a> {
                 })
             } else {
                 Ok(TableFactor::Table {
-                    name,
+                    name: RawName::Name(name),
                     alias: self.parse_optional_table_alias()?,
                 })
             }

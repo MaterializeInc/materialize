@@ -194,7 +194,7 @@ ReadyForQuery
 RowDescription {"fields":[{"name":"?column?"}]}
 DataRow {"fields":["1"]}
 CommandComplete {"tag":"SELECT 1"}
-ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD ALL cannot run inside a transaction block"}]}
+ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD ALL cannot be run inside a transaction block"}]}
 ReadyForQuery {"status":"I"}
 
 # Should fail within an explicit transaction.
@@ -211,7 +211,7 @@ ReadyForQuery
 ----
 CommandComplete {"tag":"BEGIN"}
 ReadyForQuery {"status":"T"}
-ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD ALL cannot run inside a transaction block"}]}
+ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD ALL cannot be run inside a transaction block"}]}
 ReadyForQuery {"status":"E"}
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
@@ -272,7 +272,7 @@ BindComplete
 CommandComplete {"tag":"BEGIN"}
 ParseComplete
 BindComplete
-ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD ALL cannot run inside a transaction block"}]}
+ErrorResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"DISCARD ALL cannot be run inside a transaction block"}]}
 ReadyForQuery {"status":"E"}
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}

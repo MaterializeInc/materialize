@@ -25,8 +25,6 @@ use futures::stream::{
 };
 use futures::{io, ready};
 
-pub mod channel;
-
 /// Extension methods for futures.
 pub trait OreFutureExt {
     /// Wraps this future an [`Either`] future, with this future becoming the

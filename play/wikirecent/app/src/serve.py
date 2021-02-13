@@ -27,6 +27,7 @@ This file is written in a bottom-up structure. The code flows as follows:
   internal copy of the view that can be used to initialize state for new listeners.
 """
 
+import argparse
 import collections
 import logging
 import os
@@ -102,8 +103,6 @@ class View:
         log.info('Spawning coroutine to TAIL VIEW "%s"', self.view_name)
         async with await self.mzql_connection() as conn:
             async with await conn.cursor() as cursor:
-                query = f"DECLARE cur CURSOR FOR TAIL {self.view_name} WITH (PROGRESS)"
-                await cursor.execute(query)
                 await self.tail_view_inner(cursor)
 
     async def tail_view_inner(self, cursor):
@@ -114,27 +113,26 @@ class View:
         """
         inserted = []
         deleted = []
-        while True:
-            await cursor.execute(f"FETCH ALL cur")
-            async for (timestamp, progressed, diff, *columns) in cursor:
-                # The progressed column serves as a synchronization primitive indicating that all
-                # rows for an update have been read. We should publish this update.
-                if progressed:
-                    self.update(deleted, inserted, timestamp)
-                    inserted = []
-                    deleted = []
-                    continue
+        query = f"TAIL {self.view_name} WITH (PROGRESS)"
+        async for (timestamp, progressed, diff, *columns) in cursor.stream(query):
+            # The progressed column serves as a synchronization primitive indicating that all
+            # rows for an update have been read. We should publish this update.
+            if progressed:
+                self.update(deleted, inserted, timestamp)
+                inserted = []
+                deleted = []
+                continue
 
-                # Simplify our implementation by creating "diff" copies of each row instead
-                # of tracking counts per row
-                if diff < 0:
-                    deleted.extend([columns] * abs(diff))
-                elif diff > 0:
-                    inserted.extend([columns] * diff)
-                else:
-                    raise ValueError(
-                        f"Bad data in TAIL: {timestamp}, {progressed}, {diff}, {columns}"
-                    )
+            # Simplify our implementation by creating "diff" copies of each row instead
+            # of tracking counts per row
+            if diff < 0:
+                deleted.extend([columns] * abs(diff))
+            elif diff > 0:
+                inserted.extend([columns] * diff)
+            else:
+                raise ValueError(
+                    f"Bad data in TAIL: {timestamp}, {progressed}, {diff}, {columns}"
+                )
 
     def update(self, deleted, inserted, timestamp):
         """Update our internal view based on this diff and broadcast the update to listeners.
@@ -220,7 +218,7 @@ def configure_logging():
     )
 
 
-def run():
+def run(dsn, views):
     """Create the Wikirecent Tornado Application.
 
     Create a Tornado application configured with our HTTP / Websocket handlers and start listening
@@ -242,8 +240,8 @@ def run():
         static_path=static_path,
         template_path=template_path,
         debug=True,
-        configured_views=["counter", "top10"],
-        dsn="postgresql://materialized:6875/materialize",
+        configured_views=views,
+        dsn=dsn,
     )
 
     port = 8875
@@ -258,4 +256,28 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--dbhost", help="materialized hostname", default="materialized", type=str
+    )
+    parser.add_argument(
+        "--dbname", help="materialized database name", default="materialize", type=str
+    )
+    parser.add_argument(
+        "--dbport", help="materialized port number", default=6875, type=int
+    )
+    parser.add_argument(
+        "--dbuser", help="materialized username", default="materialize", type=str
+    )
+
+    parser.add_argument(
+        "views", type=str, nargs="+", help="Views to expose as websockets"
+    )
+
+    args = parser.parse_args()
+
+    dsn = f"postgresql://{args.dbuser}@{args.dbhost}:{args.dbport}/{args.dbname}"
+
+    run(dsn, args.views)

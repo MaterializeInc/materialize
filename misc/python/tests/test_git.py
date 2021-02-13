@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from unittest.mock import patch
 import pytest  # type: ignore
 
 from semver import VersionInfo
@@ -22,24 +23,17 @@ def test_versioninfo() -> None:
 
 
 def test_tags_returns_ordered_newest_first() -> None:
-    tags = git.get_version_tags(fetch=False)
-    # use a couple hard coded tags for extra sanity
-    current_latest = VersionInfo.parse("0.3.1")
-    older = VersionInfo.parse("0.2.0")
-    seen_latest = False
-    prev = tags[0]
-    for tag in tags:
-        # ensure that actual versions are correctly ordered
-        assert (prev.major, prev.minor, prev.patch) >= (
-            tag.major,
-            tag.minor,
-            tag.patch,
-        )
-        if prev.prerelease and tag.prerelease:
-            assert prev.prerelease >= tag.prerelease
-        prev = tag
-
-        if tag == current_latest:
-            seen_latest = True
-        elif tag == older:
-            assert seen_latest, "We should see newer tags first"
+    with patch("materialize.spawn.capture") as mock:
+        # NOTE(benesch): we mock out the return value of `git tag` because local
+        # Git clones are missing tags weirdly often. I'm not sure why.
+        # Regardless, it's better for unit tests not to depend on the local Git
+        # repository state.
+        mock.return_value = """0.2.0
+0.3.2-rc1
+0.3.1"""
+        tags = git.get_version_tags(fetch=False)
+    assert tags == [
+        VersionInfo.parse("0.3.2-rc1"),
+        VersionInfo.parse("0.3.1"),
+        VersionInfo.parse("0.2.0"),
+    ]

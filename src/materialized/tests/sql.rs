@@ -20,10 +20,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use postgres::error::DbError;
 use tempfile::NamedTempFile;
 
-use util::MzTimestamp;
+use util::{MzTimestamp, PostgresErrorExt};
 
 pub mod util;
 
@@ -35,7 +34,8 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind("localhost:0")?;
     let listener_port = listener.local_addr()?.port();
 
-    let (server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     let slow_thread = thread::spawn(move || {
         client.batch_execute(&format!(
@@ -53,7 +53,7 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
 
     // Verify that the coordinator can still process other requests from other
     // sessions.
-    let mut client = server.connect()?;
+    let mut client = server.connect(postgres::NoTls)?;
     let answer: i32 = client.query_one("SELECT 1 + 1", &[])?.get(0);
     assert_eq!(answer, 2);
 
@@ -76,7 +76,8 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
 fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     // Confirm that `now()` and `current_timestamp()` both return a
     // DateTime<Utc>, but don't assert specific times.
@@ -104,9 +105,10 @@ fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
 fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let config = util::Config::default().threads(2);
-    let (server, mut client_writes) = util::start_server(config)?;
-    let mut client_reads = server.connect()?;
+    let config = util::Config::default().workers(2);
+    let server = util::start_server(config)?;
+    let mut client_writes = server.connect(postgres::NoTls)?;
+    let mut client_reads = server.connect(postgres::NoTls)?;
 
     client_writes.batch_execute("CREATE TABLE t (data text)")?;
     client_reads.batch_execute(
@@ -175,18 +177,12 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         assert_eq!(rows[i].get::<_, String>("data"), format!("line {}", i + 1));
     }
 
-    match client_reads.batch_execute("TAIL v AS OF 1") {
-        Ok(()) => panic!("TAIL with bad AS OF unexpectedly succeeded"),
-        Err(e) => {
-            let e = e
-                .source()
-                .and_then(|e| e.downcast_ref::<DbError>())
-                .unwrap();
-            assert!(e
-                .message()
-                .starts_with("Timestamp (1) is not valid for all inputs"));
-        }
-    }
+    let err = client_reads
+        .batch_execute("TAIL v AS OF 1")
+        .unwrap_db_error();
+    assert!(err
+        .message()
+        .starts_with("Timestamp (1) is not valid for all inputs"));
 
     Ok(())
 }
@@ -199,9 +195,10 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
 fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let config = util::Config::default().threads(2);
-    let (server, mut client_writes) = util::start_server(config)?;
-    let mut client_reads = server.connect()?;
+    let config = util::Config::default().workers(2);
+    let server = util::start_server(config)?;
+    let mut client_writes = server.connect(postgres::NoTls)?;
+    let mut client_reads = server.connect(postgres::NoTls)?;
 
     client_writes.batch_execute("CREATE TABLE t (data text)")?;
     client_reads.batch_execute(
@@ -237,8 +234,9 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
 fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let config = util::Config::default().threads(2);
-    let (_server, mut client) = util::start_server(config)?;
+    let config = util::Config::default().workers(2);
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     client.batch_execute("CREATE TABLE t (i INT8)")?;
     client.batch_execute("INSERT INTO t VALUES (1), (2), (3);")?;
@@ -303,8 +301,9 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
 fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let config = util::Config::default().threads(2);
-    let (_server, mut client) = util::start_server(config)?;
+    let config = util::Config::default().workers(2);
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     client.batch_execute("CREATE TABLE t (i INT8)")?;
     client.batch_execute("INSERT INTO t VALUES (1), (2), (3)")?;
@@ -359,7 +358,8 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default();
-    let (_server, mut client) = util::start_server(config)?;
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     client.batch_execute("CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);")?;
 
@@ -380,7 +380,8 @@ fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default();
-    let (_server, mut client) = util::start_server(config)?;
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     let mut file = NamedTempFile::new()?;
     client.batch_execute(&*format!(
@@ -429,13 +430,13 @@ fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
 fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (server, _) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
 
     // We have to use the async PostgreSQL client so that we can ungracefully
     // abort the connection task.
     // See: https://github.com/sfackler/rust-postgres/issues/725
     server.runtime.block_on(async {
-        let (client, conn_task) = server.connect_async().await?;
+        let (client, conn_task) = server.connect_async(tokio_postgres::NoTls).await?;
 
         // Create a table with no data that we can TAIL. This is the simplest
         // way to cause a TAIL to never terminate.
@@ -465,8 +466,9 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
 fn test_temporary_views() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (server, mut client_a) = util::start_server(util::Config::default())?;
-    let mut client_b = server.connect()?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client_a = server.connect(postgres::NoTls)?;
+    let mut client_b = server.connect(postgres::NoTls)?;
     client_a
         .batch_execute("CREATE VIEW v AS VALUES (1, 'foo'), (2, 'bar'), (3, 'foo'), (1, 'bar')")?;
     client_a.batch_execute("CREATE TEMPORARY VIEW temp_v AS SELECT * FROM v")?;
@@ -483,10 +485,9 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
     // Ensure that client_b can query v, but not temp_v.
     let count: i64 = client_b.query_one(query_v, &[])?.get("count");
     assert_eq!(4, count);
-    match client_b.query_one(query_temp_v, &[]) {
-        Ok(_) => panic!("query unexpectedly succeeded"),
-        Err(e) => assert!(e.to_string().contains("unknown catalog item \'temp_v\'")),
-    }
+
+    let err = client_b.query_one(query_temp_v, &[]).unwrap_db_error();
+    assert_eq!(err.message(), "unknown catalog item \'temp_v\'");
 
     Ok(())
 }

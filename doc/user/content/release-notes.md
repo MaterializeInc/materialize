@@ -46,10 +46,24 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
-{{% version-header v0.6.2 %}}
+{{% version-header v0.7.1 %}}
 
-- Commit consumed offsets to Kafka to facilitate source ingest progress
-  monitoring.
+- Multipartition Kafka sinks with consistency enabled will create single-partition
+  consistency topics.
+
+{{% version-header v0.7.0 %}}
+
+- **Breaking change.** Require a valid user name when [connecting to
+  Materialize](/connect/cli#connection-details). Previously, Materialize did not
+  support the concept of [roles](/sql/create-role), so it accepted all user
+  names.
+
+  Materialize instances have a user named `materialize` installed, unless you
+  drop this user with [`DROP USER`](/sql/drop-user). You can add additional
+  users with [`CREATE ROLE`](/sql/create-role).
+
+- Allow setting most [command-line flags](/cli#command-line-flags) via
+  environment variables.
 
 - Fix a bug that would cause `DROP` statements targeting multiple objects to fail
   when those objects had dependent objects in common {{% gh 5316 %}}.
@@ -57,44 +71,142 @@ Wrap your release notes at the 80 character mark.
 - Prevent a bug that would allow `CREATE OR REPLACE` statements to create dependencies
   on objects that were about to be dropped {{% gh 5272 %}}.
 
+- Remove deprecated `MZ_THREADS` alias for `MZ_WORKERS`.
+
+- Support equality operations on `uuid` data, which enables joins on `uuid`
+  columns {{% gh 5540 %}}.
+- Add the [`current_user`](/sql/functions/#system-information-func) system
+  information function.
+
+- Add the [`CREATE ROLE`](/sql/create-role),
+  [`CREATE USER`](/sql/create-user), [`DROP ROLE`](/sql/drop-role), and
+  [`DROP USER`](/sql/drop-user) statements to manage roles in a Materialize
+  instance. These roles do not yet serve any purpose, but they will enable
+  authentication in a later release.
+
+- Functions can now be resolved as schema-qualified objects, e.g. `SELECT pg_catalog.abs(-1);`.
+
+- Support [multi-partition](/sql/create-sink/#with-options) Kafka sinks {{% gh 5537 %}}.
+
+- Support [gzip-compressed](/sql/create-source/text-file/#compression) file sources {{% gh 5392 %}}.
+
 {{% version-header v0.6.1 %}}
 
-- Add the advanced [`--timely-progress-mode` and `--differential-idle-merge-effort` command-line arguments](/cli/#dataflow-tuning)
-  to tune dataflow performance.
+- **Backwards-incompatible change.** Validate `WITH` clauses in [`CREATE
+  SOURCE`](/sql/create-source) and [`CREATE SINK`](/sql/create-sink) statements.
+  Previously Materialize would ignore any invalid options in these statement's
+  `WITH` clauses.
 
-- Add `ALL` to [`FETCH`](/sql/fetch).
+  Upgrading to v0.6.1 will therefore fail if any of the sources or sinks within
+  have invalid `WITH` options. If this occurs, drop these invalid sources or
+  sinks using v0.6.0 and recreate them with valid `WITH` options.
 
-- Change [`FETCH`](/sql/fetch) with no `TIMEOUT` to wait for some rows
-  to be available.
+- **Backwards-incompatible change.** Change the default value of the `timeout`
+  option to [`FETCH`](/sql/fetch) from `0s` to `None`. The old default caused
+  `FETCH` to return immediately even if no rows were available. The new default
+  causes `FETCH` to wait for at least one row to be available.
 
-  **Backwards-incompatible change.**
+  To maintain the old behavior, explicitly set the timeout to `0s`, as in:
 
-- Consider the following keywords to be fully reserved: `WITH`, `SELECT`,
-  `WHERE`, `GROUP`, `HAVING`, `ORDER`, `LIMIT`, `OFFSET`, `FETCH`, `OPTION`,
-  `UNION`, `EXCEPT`, `INTERSECT`. Previously only the `FROM` keyword was
-  considered fully reserved.
+  ```sql
+  FETCH ... WITH (timeout = '0s')
+  ```
 
-  These keywords can no longer be used as bare identifiers anywhere in a SQL
+- **Backwards-incompatible change.** Consider the following keywords to be fully
+  reserved in SQL statements: `WITH`, `SELECT`, `WHERE`, `GROUP`, `HAVING`,
+  `ORDER`, `LIMIT`, `OFFSET`, `FETCH`, `OPTION`, `UNION`, `EXCEPT`, `INTERSECT`.
+  Previously only the `FROM` keyword was considered fully reserved.
+
+  You can no longer use these keywords as bare identifiers anywhere in a SQL
   statement, except following an `AS` keyword in a table or column alias. They
-  can continue to be used as identifiers if escaped. See the
-  [Keyword collision](/sql/identifiers#keyword-collision) documentation for
-  details.
+  can continue to be used as identifiers if escaped. See the [Keyword
+  collision](/sql/identifiers#keyword-collision) documentation for details.
 
-  **Backwards-incompatible change.**
+- **Backwards-incompatible change.** Change the return type of
+  [`sum`](/sql/functions/#aggregate-func) over [`bigint`](/sql/types/integer)s
+  from `bigint` to [`numeric`](/sql/types/numeric). This avoids the possibility
+  of overflow when summing many large numbers {{% gh 5218 %}}.
 
-- Validate `WITH` clauses in `CREATE SOURCE` and `CREATE SINK` statements. This
-  is a potentially backwards-incompatible change as previously any invalid
-  `WITH` clauses would be silently ignored. Upgrading materialize in-place
-  on a persisted catalog that has an invalid `WITH` clause will now fail.
+  We expect the breakage from this change to be minimal, as the semantics
+  of `bigint` and `numeric` are nearly identical.
 
-  **Backwards-incompatible change.**
+- Speed up parsing of [`real`](/sql/types/float) and
+  [`numeric`](/sql/types/numeric) values by approximately 2x and 100x,
+  respectively {{% gh 5341 5343 %}}.
 
-- Add `upper` and `lower` to the [string function](/sql/functions#string-func) suite.
+- Ensure the first batch of updates in a [source](/sql/create-source) without
+  consistency information is stamped with the current wall clock time, rather
+  than timestamp `1` {{% gh 5201 %}}.
 
-- Change [`sum`](/sql/functions/#aggregate-func) over `bigint` to return `numeric`.
-  Previously, `sum` over `bigint` returned `bigint`.
+- When Materialize consumes a message from a [Kafka source](/sql/create-source/avro-kafka),
+  commit that message's offset back to Kafka {{% gh 5324 %}}. This allows
+  Kafka-related tools to monitor Materialize's consumer lag.
 
-  **Backwards-incompatible change**
+- Add the [`SHOW OBJECTS`](/sql/show-objects) SQL statement to display all
+  objects in a database, regardless of their type.
+
+- Improve the PostgreSQL compatibility of several date and time-related
+  features:
+
+  - Correct `date_trunc`'s rounding behavior when truncating by
+    decade, century, or millenium {{% gh 5056 %}}.
+
+    Thanks to external contributor [@zRedShift](https://github.com/zRedShift).
+
+  - Allow specifying units of `microseconds`, `milliseconds`, `month`,
+    `quarter`, `decade`, `century`, or `millenium` when applying the `EXTRACT`
+    function to an [`interval`](/sql/types/interval) {{% gh 5107 %}}. Previously
+    these units were only supported with the [`timestamp`](/sql/types/timestamp)
+    and [`timestamptz`](/sql/types/timestamptz) types.
+
+    Thanks again to external contributor
+    [@zRedShift](https://github.com/zRedShift).
+
+  - Support multiplying and dividing [`interval`](/sql/types/interval)s by
+    numbers {{% gh 5107 %}}.
+
+    Thanks once more to external contributor
+    [@zRedShift](https://github.com/zRedShift).
+
+  - Handle parsing [`timestamp`](/sql/types/timestamp) and [`timestamptz`](/sql/types/timestamptz)
+    from additional compact formats like `700203` {{% gh 4889 %}}.
+
+- Add the `upper` and `lower` [string functions](/sql/functions#string-func),
+  which convert any alphabetic characters in a string to uppercase and
+  lowercase, respectively.
+
+- Permit specifying `ALL` as a row count to [`FETCH`](/sql/fetch) to indicate
+  that there is no limit on the number of rows you wish to fetch.
+
+- Support the `ISNULL` operator as an alias for the `IS NULL` operator, which
+  tests whether its argument is `NULL` {{% gh 5048 %}}.
+
+- Support the [`ILIKE` operator](/sql/functions#boolean), which is the
+  case-insensitive version of the [`LIKE` operator](/sql/functions#boolean) for
+  pattern matching on a string.
+
+- Permit the `USING` clause of a [join](/sql/join) to reference columns with
+  different types on the left and right-hand side of the join if there is
+  an [implicit cast](/sql/types#casts) between the types {{% gh 5276 %}}.
+
+- Use SQL standard type names in error messages, rather than Materialize's
+  internal type names {{% gh 5175 %}}.
+
+- Fix two bugs involving [common-table expressions (CTEs)](/sql/select#common-table-expressions-ctes):
+
+  - Allow CTEs in `CREATE VIEW` {{% gh 5111 %}}.
+
+  - Allow reuse of CTE names in nested subqueries {{% gh 5222 %}}. Reuse of
+    CTE names within a given query is still prohibited.
+
+- Fix a bug that caused incorrect results when multiple aggregations of a
+  certain type appeared in the same `SELECT` query {{% gh 5304 %}}.
+
+- Add the advanced [`--timely-progress-mode` and `--differential-idle-merge-effort` command-line arguments](/cli/#dataflow-tuning) to tune dataflow performance. These arguments replace existing undocumented environment variables.
+
+{{< comment >}}
+Document new timezone stuff and add a release note about it.
+{{< /comment >}}
 
 {{% version-header v0.6.0 %}}
 
@@ -139,8 +251,8 @@ Wrap your release notes at the 80 character mark.
   facilitate fetching partial results from a query and are therefore
   particularly useful in conjuction with [`TAIL`](/sql/tail#tailing-with-fetch).
 
-  **Known issue.** Requesting binary-formatted values with [`FETCH`] does not
-  work correctly. This bug will be fixed in the next release.
+  **Known issue.** Requesting binary-formatted values with [`FETCH`](/sql/fetch)
+  does not work correctly. This bug will be fixed in the next release.
 
 - Support [common-table expressions (CTEs)](/sql/select#common-table-expressions-ctes)
   in `SELECT` statements.
@@ -182,13 +294,12 @@ Wrap your release notes at the 80 character mark.
 
   - Support timestamp progress with the `PROGRESSED` option.
 
-  - Use Materialize's standard `WITH` option syntax, meaning:
+  - **Backwards-incompatible change.** Use Materialize's standard `WITH` option
+    syntax, meaning:
 
     - `WITH SNAPSHOT` is now `WITH (SNAPSHOT)`.
 
     - `WITHOUT SNAPSHOT` is now `WITH (SNAPSHOT = false)`.
-
-    **Backwards-incompatible change.**
 
 - Report an error without crashing when a query contains unexpected UTF-8
   characters, e.g., `SELECT ’1’`. {{% gh 4755 %}}
@@ -220,12 +331,12 @@ Wrap your release notes at the 80 character mark.
   or let you choose which protocol to use. If you are using one of these
   clients, you can safely issue `COPY TO` statements in v0.5.1.
 
-- Send the rows returned by the [`TAIL`](/sql/tail) statement to the client
-  normally (i.e., as if the rows were returned by a [`SELECT`](/sql/select)
-  statement) rather than via the PostgreSQL [`COPY` protocol][pg-copy]. The new
-  format additionally moves the timestamp and diff information to dedicated
-  `timestamp` and `diff` columns at the beginning of each row.
-  **Backwards-incompatible change.**
+- **Backwards-incompatible change.** Send the rows returned by the
+  [`TAIL`](/sql/tail) statement to the client normally (i.e., as if the rows
+  were returned by a [`SELECT`](/sql/select) statement) rather than via the
+  PostgreSQL [`COPY` protocol][pg-copy]. The new format additionally moves the
+  timestamp and diff information to dedicated `timestamp` and `diff` columns at
+  the beginning of each row.
 
   To replicate the old behavior of sending `TAIL` results via the `COPY`
   protocol, explicitly wrap the `TAIL` statement in a [`COPY TO`](/sql/copy-to)

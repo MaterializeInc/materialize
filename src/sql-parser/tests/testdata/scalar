@@ -83,7 +83,7 @@ Op { op: "!~*", expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo")
 parse-scalar
 a !x 'foo'
 ----
-Op { op: "!", expr1: Identifier([Ident("a")]), expr2: Some(Cast { expr: Value(String("foo")), data_type: Other { name: ObjectName([Ident("x")]), typ_mod: [] } }) }
+Op { op: "!", expr1: Identifier([Ident("a")]), expr2: Some(Cast { expr: Value(String("foo")), data_type: Other { name: UnresolvedObjectName([Ident("x")]), typ_mod: [] } }) }
 
 parse-scalar
 a !x
@@ -144,107 +144,107 @@ id::numeric
 parse-scalar
 EXTRACT(YEAR FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("year")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("year")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(MILLENIUM FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("millenium")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("millenium")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(CENTURY FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("century")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("century")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(YEAR FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("year")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("year")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(ISOYEAR FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("isoyear")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("isoyear")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(QUARTER FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("quarter")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("quarter")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(MONTH FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("month")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("month")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(DAY FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("day")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("day")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(HOUR FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("hour")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("hour")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(MINUTE FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("minute")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("minute")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(SECOND FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("second")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("second")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(MILLISECONDS FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("milliseconds")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("milliseconds")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(MICROSECONDS FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("microseconds")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("microseconds")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(TIMEZONE FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("timezone")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("timezone")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(TIMEZONE_HOUR FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("timezone_hour")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("timezone_hour")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(TIMEZONE_MINUTE FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("timezone_minute")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("timezone_minute")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(WEEK FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("week")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("week")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(DOY FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("doy")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("doy")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(DOW FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("dow")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("dow")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(ISODOW FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("isodow")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("isodow")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 EXTRACT(EPOCH FROM d)
 ----
-Function(Function { name: ObjectName([Ident("date_part")]), args: Args([Value(String("epoch")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("date_part")]), args: Args([Value(String("epoch")), Identifier([Ident("d")])]), filter: None, over: None, distinct: false })
 
 parse-scalar
 COALESCE(foo, bar)
@@ -262,7 +262,7 @@ COALESCE()
 parse-scalar
 sqrt(id)
 ----
-Function(Function { name: ObjectName([Ident("sqrt")]), args: Args([Identifier([Ident("id")])]), filter: None, over: None, distinct: false })
+Function(Function { name: UnresolvedObjectName([Ident("sqrt")]), args: Args([Identifier([Ident("id")])]), filter: None, over: None, distinct: false })
 
 parse-scalar roundtrip
 (a + b) - (c + d)
@@ -292,7 +292,7 @@ AnySubquery { left: Value(Number("1")), op: "<", right: Query { ctes: [], body: 
 parse-scalar
 1 < ANY (fn())
 ----
-AnyExpr { left: Value(Number("1")), op: "<", right: Function(Function { name: ObjectName([Ident("fn")]), args: Args([]), filter: None, over: None, distinct: false }) }
+AnyExpr { left: Value(Number("1")), op: "<", right: Function(Function { name: UnresolvedObjectName([Ident("fn")]), args: Args([]), filter: None, over: None, distinct: false }) }
 
 parse-scalar
 LIST[]
@@ -347,17 +347,17 @@ SubscriptSlice { expr: List([List([Value(Number("1"))]), List([Value(Number("2")
 parse-scalar
 ARRAY[]::int[]
 ----
-Cast { expr: Array([]), data_type: Array(Other { name: ObjectName([Ident("int4")]), typ_mod: [] }) }
+Cast { expr: Array([]), data_type: Array(Other { name: UnresolvedObjectName([Ident("int4")]), typ_mod: [] }) }
 
 parse-scalar
 ARRAY[]::int[][][][]
 ----
-Cast { expr: Array([]), data_type: Array(Other { name: ObjectName([Ident("int4")]), typ_mod: [] }) }
+Cast { expr: Array([]), data_type: Array(Other { name: UnresolvedObjectName([Ident("int4")]), typ_mod: [] }) }
 
 parse-scalar
 ARRAY[]::int[2][2]
 ----
-Cast { expr: Array([]), data_type: Array(Other { name: ObjectName([Ident("int4")]), typ_mod: [] }) }
+Cast { expr: Array([]), data_type: Array(Other { name: UnresolvedObjectName([Ident("int4")]), typ_mod: [] }) }
 
 parse-scalar
 a -> b

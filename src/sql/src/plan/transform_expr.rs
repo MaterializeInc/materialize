@@ -17,7 +17,7 @@ use lazy_static::lazy_static;
 use repr::{ColumnType, RelationType, ScalarType};
 
 use crate::plan::expr::{
-    AbstractExpr, AggregateFunc, BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc,
+    AbstractExpr, AggregateFunc, BinaryFunc, HirRelationExpr, HirScalarExpr, UnaryFunc,
 };
 
 /// Rewrites predicates that contain subqueries so that the subqueries
@@ -50,20 +50,20 @@ use crate::plan::expr::{
 /// = e`, will be further restricted to outer rows that match `A = b AND c =
 /// d AND EXISTS(<subquery>)`. This can vastly reduce the cost of the
 /// subquery, especially when the original conjunction contains join keys.
-pub fn split_subquery_predicates(expr: &mut RelationExpr) {
-    fn walk_relation(expr: &mut RelationExpr) {
+pub fn split_subquery_predicates(expr: &mut HirRelationExpr) {
+    fn walk_relation(expr: &mut HirRelationExpr) {
         expr.visit_mut(&mut |expr| match expr {
-            RelationExpr::Map { scalars, .. } => {
+            HirRelationExpr::Map { scalars, .. } => {
                 for scalar in scalars {
                     walk_scalar(scalar);
                 }
             }
-            RelationExpr::CallTable { exprs, .. } => {
+            HirRelationExpr::CallTable { exprs, .. } => {
                 for expr in exprs {
                     walk_scalar(expr);
                 }
             }
-            RelationExpr::Filter { predicates, .. } => {
+            HirRelationExpr::Filter { predicates, .. } => {
                 let mut subqueries = vec![];
                 for predicate in &mut *predicates {
                     walk_scalar(predicate);
@@ -82,17 +82,17 @@ pub fn split_subquery_predicates(expr: &mut RelationExpr) {
         })
     }
 
-    fn walk_scalar(expr: &mut ScalarExpr) {
+    fn walk_scalar(expr: &mut HirScalarExpr) {
         expr.visit_mut(&mut |expr| match expr {
-            ScalarExpr::Exists(input) | ScalarExpr::Select(input) => walk_relation(input),
+            HirScalarExpr::Exists(input) | HirScalarExpr::Select(input) => walk_relation(input),
             _ => (),
         })
     }
 
-    fn contains_subquery(expr: &ScalarExpr) -> bool {
+    fn contains_subquery(expr: &HirScalarExpr) -> bool {
         let mut found = false;
         expr.visit(&mut |expr| match expr {
-            ScalarExpr::Exists(_) | ScalarExpr::Select(_) => found = true,
+            HirScalarExpr::Exists(_) | HirScalarExpr::Select(_) => found = true,
             _ => (),
         });
         found
@@ -114,9 +114,9 @@ pub fn split_subquery_predicates(expr: &mut RelationExpr) {
     ///
     /// and returns the expression fragments `EXISTS (<subquery 1>)` and
     //// `(<subquery 2>) = e` in the `out` vector.
-    fn extract_conjuncted_subqueries(expr: &mut ScalarExpr, out: &mut Vec<ScalarExpr>) {
+    fn extract_conjuncted_subqueries(expr: &mut HirScalarExpr, out: &mut Vec<HirScalarExpr>) {
         match expr {
-            ScalarExpr::CallBinary {
+            HirScalarExpr::CallBinary {
                 func: BinaryFunc::And,
                 expr1,
                 expr2,
@@ -125,7 +125,7 @@ pub fn split_subquery_predicates(expr: &mut RelationExpr) {
                 extract_conjuncted_subqueries(expr2, out);
             }
             expr if contains_subquery(expr) => {
-                out.push(mem::replace(expr, ScalarExpr::literal_true()))
+                out.push(mem::replace(expr, HirScalarExpr::literal_true()))
             }
             _ => (),
         }
@@ -152,10 +152,10 @@ pub fn split_subquery_predicates(expr: &mut RelationExpr) {
 ///
 /// See Section 3.5 of "Execution Strategies for SQL Subqueries" by
 /// M. Elhemali, et al.
-pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
-    fn walk_relation(expr: &mut RelationExpr, outers: &[RelationType]) {
+pub fn try_simplify_quantified_comparisons(expr: &mut HirRelationExpr) {
+    fn walk_relation(expr: &mut HirRelationExpr, outers: &[RelationType]) {
         match expr {
-            RelationExpr::Map { scalars, input } => {
+            HirRelationExpr::Map { scalars, input } => {
                 walk_relation(input, outers);
                 let mut outers = outers.to_vec();
                 outers.push(input.typ(&outers, &NO_PARAMS));
@@ -168,7 +168,7 @@ pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
                     inner.column_types.push(scalar_type);
                 }
             }
-            RelationExpr::Filter { predicates, input } => {
+            HirRelationExpr::Filter { predicates, input } => {
                 walk_relation(input, outers);
                 let mut outers = outers.to_vec();
                 outers.push(input.typ(&outers, &NO_PARAMS));
@@ -176,12 +176,12 @@ pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
                     walk_scalar(pred, &outers, true);
                 }
             }
-            RelationExpr::CallTable { exprs, .. } => {
+            HirRelationExpr::CallTable { exprs, .. } => {
                 for scalar in exprs {
                     walk_scalar(scalar, &outers, false);
                 }
             }
-            RelationExpr::Join {
+            HirRelationExpr::Join {
                 kind, left, right, ..
             } if kind.is_lateral() => {
                 walk_relation(left, outers);
@@ -193,10 +193,10 @@ pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
         }
     }
 
-    fn walk_scalar(expr: &mut ScalarExpr, outers: &[RelationType], mut in_filter: bool) {
+    fn walk_scalar(expr: &mut HirScalarExpr, outers: &[RelationType], mut in_filter: bool) {
         expr.visit_mut_pre(&mut |e| match e {
-            ScalarExpr::Exists(input) => walk_relation(input, outers),
-            ScalarExpr::Select(input) => {
+            HirScalarExpr::Exists(input) => walk_relation(input, outers),
+            HirScalarExpr::Select(input) => {
                 walk_relation(input, outers);
 
                 // We're inside of a `(SELECT ...)` subquery. Now let's see if
@@ -206,7 +206,7 @@ pub fn try_simplify_quantified_comparisons(expr: &mut RelationExpr) {
                 // in stages; the early returns avoid brutal nesting.
 
                 let (func, expr, input) = match &mut **input {
-                    RelationExpr::Reduce {
+                    HirRelationExpr::Reduce {
                         group_key,
                         aggregates,
                         input,
@@ -272,7 +272,11 @@ lazy_static! {
     static ref NO_PARAMS: BTreeMap<usize, ScalarType> = BTreeMap::new();
 }
 
-fn column_type(outers: &[RelationType], inner: &RelationExpr, expr: &ScalarExpr) -> ColumnType {
+fn column_type(
+    outers: &[RelationType],
+    inner: &HirRelationExpr,
+    expr: &HirScalarExpr,
+) -> ColumnType {
     let inner_type = inner.typ(&outers, &NO_PARAMS);
     expr.typ(&outers, &inner_type, &NO_PARAMS)
 }

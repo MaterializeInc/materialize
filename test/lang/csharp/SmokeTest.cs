@@ -9,16 +9,15 @@
 
 using Npgsql;
 using NUnit.Framework;
+using System;
 using System.Threading;
 
 namespace csharp
 {
     public class Tests
     {
-        private NpgsqlConnection conn;
-
         private NpgsqlConnection OpenConnection() {
-            var conn = new NpgsqlConnection("host=materialized;port=6875;database=materialize");
+            var conn = new NpgsqlConnection("host=materialized;port=6875;database=materialize;username=materialize");
             conn.Open();
             return conn;
         }
@@ -43,9 +42,48 @@ namespace csharp
             new NpgsqlCommand("CREATE TABLE t (a int, b text)", conn).ExecuteNonQuery();
             new NpgsqlCommand("INSERT INTO t VALUES (1, 'a')", conn).ExecuteNonQuery();
 
+            var txn = conn.BeginTransaction();
+            new NpgsqlCommand("DECLARE c CURSOR FOR TAIL t", conn, txn).ExecuteNonQuery();
+            using (var cmd = new NpgsqlCommand("FETCH ALL c", conn, txn))
+            using (var reader  = cmd.ExecuteReader())
+            {
+                Assert.IsTrue(reader.Read());
+                Assert.AreEqual(1, reader[1]); // diff
+                Assert.AreEqual(1, reader[2]); // a
+                Assert.AreEqual("a", reader[3]); // b
+                Assert.IsFalse(reader.Read());
+            }
+
+            // Insert another row from another connection to simulate an update
+            // arriving.
+            using (var conn2 = OpenConnection()) {
+                new NpgsqlCommand("INSERT INTO t VALUES (2, 'b')", conn2).ExecuteNonQuery();
+            }
+
+            using (var cmd = new NpgsqlCommand("FETCH ALL c", conn, txn))
+            using (var reader  = cmd.ExecuteReader())
+            {
+                Assert.IsTrue(reader.Read());
+                Assert.AreEqual(1, reader[1]); // diff
+                Assert.AreEqual(2, reader[2]); // a
+                Assert.AreEqual("b", reader[3]); // b
+                Assert.IsFalse(reader.Read());
+            }
+            txn.Commit();
+
+            new NpgsqlCommand("DROP TABLE t", conn).ExecuteNonQuery();
+        }
+
+        [Test]
+        public void CopyTail() {
+            using var conn = OpenConnection();
+
+            // Create a table with one row of data.
+            new NpgsqlCommand("CREATE TABLE t (a int, b text)", conn).ExecuteNonQuery();
+            new NpgsqlCommand("INSERT INTO t VALUES (1, 'a')", conn).ExecuteNonQuery();
+
             // Start a tail using the binary copy protocol.
             var reader = conn.BeginBinaryExport("COPY (TAIL t) TO STDOUT (FORMAT BINARY)");
-
             // Validate the first row.
             Assert.AreEqual(4, reader.StartRow());
             reader.Read<decimal>(); // ignore timestamp column
@@ -73,6 +111,11 @@ namespace csharp
 
             // The tail won't end until we send a cancel request.
             reader.Cancel();
+
+            // Ensure the COPY has ended after being cancelled.
+            Assert.Throws<OperationCanceledException>(delegate { reader.StartRow(); });
+
+            new NpgsqlCommand("DROP TABLE t", conn).ExecuteNonQuery();
         }
     }
 }

@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use crate::TransformArgs;
-use expr::{Id, IdGen, LocalId, RelationExpr};
+use expr::{Id, IdGen, LocalId, MirRelationExpr};
 use repr::RelationType;
 
 /// Refreshes identifiers and types for local let bindings.
@@ -28,7 +28,7 @@ pub struct UpdateLet;
 impl crate::Transform for UpdateLet {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         args: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         *args.id_gen = IdGen::default(); // Get a fresh IdGen.
@@ -41,12 +41,12 @@ impl UpdateLet {
     /// Re-assign type information and identifier to each `Get`.
     pub fn action(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         remap: &mut HashMap<LocalId, (LocalId, RelationType)>,
         id_gen: &mut IdGen,
     ) {
         match relation {
-            RelationExpr::Let { id, value, body } => {
+            MirRelationExpr::Let { id, value, body } => {
                 self.action(value, remap, id_gen);
                 // If a local id, assign a new identifier and refresh the type.
                 let new_id = LocalId::new(id_gen.allocate_id());
@@ -58,7 +58,7 @@ impl UpdateLet {
                 }
                 *id = new_id;
             }
-            RelationExpr::Get { id, typ } => {
+            MirRelationExpr::Get { id, typ } => {
                 if let Id::Local(local_id) = id {
                     if let Some((new_id, new_type)) = remap.get(local_id) {
                         *local_id = new_id.clone();

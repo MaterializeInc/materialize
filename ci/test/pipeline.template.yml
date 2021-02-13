@@ -80,11 +80,10 @@ steps:
     depends_on: build
     timeout_in_minutes: 30
     inputs: [test/testdrive]
-    command: --ci-output test/testdrive/*.td test/testdrive/esoteric/*.td
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
-          run: testdrive
+          run: ci
 
   - id: kafka-ssl
     label: ":lock: Kafka SSL smoke test"
@@ -163,6 +162,15 @@ steps:
           run: ci
     timeout_in_minutes: 30
 
+  - id: avro-upsert-benchmark
+    label: "avro upsert benchmark sanity check"
+    depends_on: build
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: avro-upsert
+          run: ci
+    timeout_in_minutes: 10
+
   - id: tb
     label: tb
     depends_on: build
@@ -189,6 +197,15 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: metabase
           run: smoketest
+
+  - id: dbt-materialize
+    label: "dbt-materialize"
+    depends_on: build
+    timeout_in_minutes: 10
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: dbt-materialize
+          run: ci
 
   - id: lang-csharp
     label: ":csharp: tests"

@@ -38,11 +38,10 @@ use repr::{ColumnName, RelationDesc, Row, ScalarType, Timestamp};
 use crate::ast::{ExplainOptions, ExplainStage, Expr, FetchDirection, ObjectType, Raw, Statement};
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 
-pub(crate) mod decorrelate;
 pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod expr;
-pub(crate) mod func;
+pub(crate) mod lowering;
 pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
@@ -51,11 +50,13 @@ pub(crate) mod transform_ast;
 pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 
-pub use self::expr::RelationExpr;
+pub use self::expr::HirRelationExpr;
 pub use error::PlanError;
 pub use explain::Explanation;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
-pub use query::{scalar_type_from_sql, unwrap_numeric_typ_mod};
+pub use query::{
+    resolve_names, scalar_type_from_sql, unwrap_numeric_typ_mod, QueryContext, QueryLifetime,
+};
 pub use statement::{describe, plan, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
@@ -69,6 +70,9 @@ pub enum Plan {
         database_name: DatabaseSpecifier,
         schema_name: String,
         if_not_exists: bool,
+    },
+    CreateRole {
+        name: String,
     },
     CreateSource {
         name: FullName,
@@ -114,6 +118,9 @@ pub enum Plan {
     DropSchema {
         name: SchemaName,
     },
+    DropRoles {
+        names: Vec<String>,
+    },
     DropItems {
         items: Vec<GlobalId>,
         ty: ObjectType,
@@ -129,7 +136,7 @@ pub enum Plan {
     CommitTransaction,
     AbortTransaction,
     Peek {
-        source: ::expr::RelationExpr,
+        source: ::expr::MirRelationExpr,
         when: PeekWhen,
         finishing: RowSetFinishing,
         copy_to: Option<CopyFormat>,
@@ -145,8 +152,8 @@ pub enum Plan {
     },
     SendRows(Vec<Row>),
     ExplainPlan {
-        raw_plan: RelationExpr,
-        decorrelated_plan: ::expr::RelationExpr,
+        raw_plan: HirRelationExpr,
+        decorrelated_plan: ::expr::MirRelationExpr,
         row_set_finishing: Option<RowSetFinishing>,
         stage: ExplainStage,
         options: ExplainOptions,
@@ -159,7 +166,7 @@ pub enum Plan {
     },
     Insert {
         id: GlobalId,
-        values: ::expr::RelationExpr,
+        values: ::expr::MirRelationExpr,
     },
     AlterItemRename {
         id: Option<GlobalId>,
@@ -186,6 +193,7 @@ pub struct Table {
     pub create_sql: String,
     pub desc: RelationDesc,
     pub defaults: Vec<Expr<Raw>>,
+    pub temporary: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -206,7 +214,7 @@ pub struct Sink {
 #[derive(Clone, Debug)]
 pub struct View {
     pub create_sql: String,
-    pub expr: ::expr::RelationExpr,
+    pub expr: ::expr::MirRelationExpr,
     pub column_names: Vec<Option<ColumnName>>,
     pub temporary: bool,
 }
@@ -215,7 +223,7 @@ pub struct View {
 pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
-    pub keys: Vec<::expr::ScalarExpr>,
+    pub keys: Vec<::expr::MirScalarExpr>,
 }
 
 #[derive(Clone, Debug)]

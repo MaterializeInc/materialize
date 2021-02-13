@@ -90,7 +90,14 @@ instance running as part of this demo, run:
 
 To view the data sent from the materialized to the app server, use the `tail-top10` workflow:
 
-    ./bin/mzcompose run tail-top10
+    ./bin/mzcompose run psycopg3-tail-top10
+
+The above example uses [psycopg3][] as an asynchronous client. There is another example using
+[asyncpg][] that you can run using:
+
+    ./bin/mzcompose run asyncpg-tail-top10
+
+[asyncpg]: https://github.com/MagicStack/asyncpg
 
 The output from this script corresponds to the row-oriented results returned by materialized to
 the web server. The implementation of this script in

@@ -1134,14 +1134,12 @@ ORDER BY
 
 %1 =
 | Get materialize.public.revenue (u27)
-| Filter !(isnull(#1))
 | ArrangeBy (#0)
 
 %2 =
 | Get materialize.public.revenue (u27)
 | Reduce group=()
 | | agg max(#1)
-| Filter !(isnull(#0))
 | ArrangeBy (#0)
 
 %3 =

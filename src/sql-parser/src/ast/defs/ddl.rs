@@ -24,7 +24,7 @@
 use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, DataType, Expr, Ident, ObjectName, SqlOption};
+use crate::ast::{AstInfo, DataType, Expr, Ident, SqlOption, UnresolvedObjectName};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -215,9 +215,32 @@ impl AstDisplay for Format {
 impl_display!(Format);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Compression {
+    Gzip,
+    None,
+}
+
+impl Default for Compression {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+impl AstDisplay for Compression {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            Self::Gzip => f.write_str("GZIP"),
+            Self::None => f.write_str("NONE"),
+        }
+    }
+}
+impl_display!(Compression);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Connector {
     File {
         path: String,
+        compression: Compression,
     },
     Kafka {
         broker: String,
@@ -232,7 +255,8 @@ pub enum Connector {
         path: String,
     },
     S3 {
-        bucket: String,
+        /// The list of places that we will look for object keys
+        key_sources: Vec<S3KeySource>,
         /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
         pattern: Option<String>,
     },
@@ -241,10 +265,14 @@ pub enum Connector {
 impl AstDisplay for Connector {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
-            Connector::File { path } => {
+            Connector::File { path, compression } => {
                 f.write_str("FILE '");
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
+                if compression != &Default::default() {
+                    f.write_str(" COMPRESSION ");
+                    f.write_node(compression);
+                }
             }
             Connector::Kafka { broker, topic, key } => {
                 f.write_str("KAFKA BROKER '");
@@ -269,10 +297,12 @@ impl AstDisplay for Connector {
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
             }
-            Connector::S3 { bucket, pattern } => {
-                f.write_str("S3 BUCKET '");
-                f.write_str(&display::escape_single_quote_string(bucket));
-                f.write_str("' OBJECTS FROM SCAN");
+            Connector::S3 {
+                key_sources,
+                pattern,
+            } => {
+                f.write_str("S3 OBJECTS FROM");
+                f.write_node(&display::comma_separated(key_sources));
                 if let Some(pattern) = pattern {
                     f.write_str(" MATCHING '");
                     f.write_str(&display::escape_single_quote_string(pattern));
@@ -283,6 +313,26 @@ impl AstDisplay for Connector {
     }
 }
 impl_display!(Connector);
+
+/// The key sources specified in the `OBJECTS FROM` clause.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum S3KeySource {
+    /// `OBJECTS FROM SCAN BUCKET '<bucket>'`
+    Scan { bucket: String },
+}
+
+impl AstDisplay for S3KeySource {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            S3KeySource::Scan { bucket } => {
+                f.write_str(" SCAN BUCKET '");
+                f.write_str(&display::escape_single_quote_string(bucket));
+                f.write_str("'");
+            }
+        }
+    }
+}
+impl_display!(S3KeySource);
 
 /// A table-level constraint, specified in a `CREATE TABLE` or an
 /// `ALTER TABLE ADD <constraint>` statement.
@@ -300,7 +350,7 @@ pub enum TableConstraint<T: AstInfo> {
     ForeignKey {
         name: Option<Ident>,
         columns: Vec<Ident>,
-        foreign_table: ObjectName,
+        foreign_table: UnresolvedObjectName,
         referred_columns: Vec<Ident>,
     },
     /// `[ CONSTRAINT <name> ] CHECK (<expr>)`
@@ -359,7 +409,7 @@ impl_display_t!(TableConstraint);
 pub struct ColumnDef<T: AstInfo> {
     pub name: Ident,
     pub data_type: DataType,
-    pub collation: Option<ObjectName>,
+    pub collation: Option<UnresolvedObjectName>,
     pub options: Vec<ColumnOptionDef<T>>,
 }
 
@@ -423,7 +473,7 @@ pub enum ColumnOption<T: AstInfo> {
     /// A referential integrity constraint (`[FOREIGN KEY REFERENCES
     /// <foreign_table> (<referred_columns>)`).
     ForeignKey {
-        foreign_table: ObjectName,
+        foreign_table: UnresolvedObjectName,
         referred_columns: Vec<Ident>,
     },
     // `CHECK (<expr>)`

@@ -9,7 +9,8 @@
 
 //! Transform column references in a `Map` into a `Project`.
 
-use crate::{RelationExpr, ScalarExpr, TransformArgs};
+use crate::TransformArgs;
+use expr::{MirRelationExpr, MirScalarExpr};
 
 /// Transform column references in a `Map` into a `Project`, or repeated
 /// aggregations in a `Reduce` into a `Project`.
@@ -19,7 +20,7 @@ pub struct ProjectionExtraction;
 impl crate::Transform for ProjectionExtraction {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         relation.visit_mut(&mut |e| {
@@ -31,14 +32,17 @@ impl crate::Transform for ProjectionExtraction {
 
 impl ProjectionExtraction {
     /// Transform column references in a `Map` into a `Project`.
-    pub fn action(&self, relation: &mut RelationExpr) {
-        if let RelationExpr::Map { input, scalars } = relation {
-            if scalars.iter().any(|s| matches!(s, ScalarExpr::Column(_))) {
+    pub fn action(&self, relation: &mut MirRelationExpr) {
+        if let MirRelationExpr::Map { input, scalars } = relation {
+            if scalars
+                .iter()
+                .any(|s| matches!(s, MirScalarExpr::Column(_)))
+            {
                 let input_arity = input.arity();
                 let mut outputs: Vec<_> = (0..input_arity).collect();
                 let mut dropped = 0;
                 scalars.retain(|scalar| {
-                    if let ScalarExpr::Column(col) = scalar {
+                    if let MirScalarExpr::Column(col) = scalar {
                         dropped += 1;
                         // We may need to chase down a few levels of indirection;
                         // find the original input column in `outputs[*col]`.
@@ -56,7 +60,7 @@ impl ProjectionExtraction {
                     *relation = relation.take_dangerous().project(outputs);
                 }
             }
-        } else if let RelationExpr::Reduce {
+        } else if let MirRelationExpr::Reduce {
             input: _,
             group_key,
             aggregates,

@@ -27,7 +27,7 @@ use ore::fmt::FormatBuffer;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit::Visit;
 use sql_parser::ast::visit_mut::{self, VisitMut};
-use sql_parser::ast::{AstInfo, Expr, Ident, Raw};
+use sql_parser::ast::{AstInfo, Expr, Ident, Raw, RawName};
 use sql_parser::parser::{self, ParserError};
 
 #[test]
@@ -178,9 +178,11 @@ fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
         fn visit_ident(&mut self, ident: &'a Ident) {
             self.seen_idents.push(ident.as_str());
         }
-        fn visit_table(&mut self, name: &'a <Raw as AstInfo>::Table) {
-            for ident in &name.0 {
-                self.seen_idents.push(ident.as_str());
+        fn visit_object_name(&mut self, object_name: &'a <Raw as AstInfo>::ObjectName) {
+            if let RawName::Name(name) = object_name {
+                for ident in &name.0 {
+                    self.seen_idents.push(ident.as_str());
+                }
             }
         }
     }

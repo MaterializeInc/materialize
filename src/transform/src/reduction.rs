@@ -12,8 +12,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::iter;
 
-use expr::RelationExpr;
-use repr::{Datum, RowArena};
+use expr::{AggregateExpr, EvalError, MirRelationExpr, MirScalarExpr, TableFunc};
+use repr::{Datum, Row, RowArena};
 
 use crate::{TransformArgs, TransformError};
 
@@ -28,7 +28,7 @@ pub struct FoldConstants;
 impl crate::Transform for FoldConstants {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), TransformError> {
         relation.try_visit_mut(&mut |e| self.action(e))
@@ -37,114 +37,66 @@ impl crate::Transform for FoldConstants {
 
 impl FoldConstants {
     /// Replace operators on constants collections with constant collections.
-    pub fn action(&self, relation: &mut RelationExpr) -> Result<(), TransformError> {
+    pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
         let relation_type = relation.typ();
         match relation {
-            RelationExpr::Constant { .. } => { /* handled after match */ }
-            RelationExpr::Get { .. } => {}
-            RelationExpr::Let { .. } => { /* constant prop done in InlineLet */ }
-            RelationExpr::Reduce {
+            MirRelationExpr::Constant { .. } => { /* handled after match */ }
+            MirRelationExpr::Get { .. } => {}
+            MirRelationExpr::Let { .. } => { /* constant prop done in InlineLet */ }
+            MirRelationExpr::Reduce {
                 input,
                 group_key,
                 aggregates,
                 monotonic: _,
                 expected_group_size: _,
             } => {
-                for aggregate in aggregates.iter_mut() {
-                    aggregate.expr.reduce(&input.typ());
+                let input_typ = input.typ();
+                // Reduce expressions to their simplest form.
+                for key in group_key.iter_mut() {
+                    key.reduce(&input_typ);
                 }
-                if let RelationExpr::Constant { rows, .. } = &**input {
-                    // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
-                    // where `an` is the input to the nth aggregate function in
-                    // `aggregates`.
-                    let mut groups = BTreeMap::new();
-                    let temp_storage2 = RowArena::new();
-                    let mut row_packer = repr::RowPacker::new();
-                    for (row, diff) in rows {
-                        // We currently maintain the invariant that any negative
-                        // multiplicities will be consolidated away before they
-                        // arrive at a reduce.
-                        assert!(
-                            *diff > 0,
-                            "constant folding encountered reduce on collection \
-                             with non-positive multiplicities"
-                        );
-                        let datums = row.unpack();
-                        let temp_storage = RowArena::new();
-                        let key = group_key
-                            .iter()
-                            .map(|e| e.eval(&datums, &temp_storage2))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        let val = aggregates
-                            .iter()
-                            .map(|agg| {
-                                Ok::<_, TransformError>(
-                                    row_packer.pack(&[agg.expr.eval(&datums, &temp_storage)?]),
-                                )
-                            })
-                            .collect::<Result<Vec<_>, _>>()?;
-                        let entry = groups.entry(key).or_insert_with(Vec::new);
-                        for _ in 0..*diff {
-                            entry.push(val.clone());
-                        }
-                    }
+                for aggregate in aggregates.iter_mut() {
+                    aggregate.expr.reduce(&input_typ);
+                }
 
-                    // For each group, apply the aggregate function to the rows
-                    // in the group. The output is
-                    // `Vec<Vec<k1, ..., kn, r1, ..., rn>>`
-                    // where kn is the nth column of the key and rn is the
-                    // result of the nth aggregate function for that group.
-                    let new_rows = groups
-                        .into_iter()
-                        .map({
-                            let mut row_packer = repr::RowPacker::new();
-                            move |(key, vals)| {
-                                let temp_storage = RowArena::new();
-                                let row = row_packer.pack(key.into_iter().chain(
-                                    aggregates.iter().enumerate().map(|(i, agg)| {
-                                        if agg.distinct {
-                                            agg.func.eval(
-                                                vals.iter()
-                                                    .map(|val| val[i].unpack_first())
-                                                    .collect::<HashSet<_>>()
-                                                    .into_iter(),
-                                                &temp_storage,
-                                            )
-                                        } else {
-                                            agg.func.eval(
-                                                vals.iter().map(|val| val[i].unpack_first()),
-                                                &temp_storage,
-                                            )
-                                        }
-                                    }),
-                                ));
-                                (row, 1)
-                            }
-                        })
-                        .collect();
+                // Guard against evaluating expression that may contain temporal expressions.
+                if group_key.iter().any(|e| e.contains_temporal())
+                    || aggregates.iter().any(|a| a.expr.contains_temporal())
+                {
+                    return Ok(());
+                }
 
-                    *relation = RelationExpr::Constant {
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
+                    let new_rows = match rows {
+                        Ok(rows) => Self::fold_reduce_constant(group_key, aggregates, rows),
+                        Err(e) => Err(e.clone()),
+                    };
+                    *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
-            RelationExpr::TopK { .. } => { /*too complicated*/ }
-            RelationExpr::Negate { input } => {
-                if let RelationExpr::Constant { rows, .. } = &mut **input {
-                    for (_row, diff) in rows {
-                        *diff *= -1;
+            MirRelationExpr::TopK { .. } => { /*too complicated*/ }
+            MirRelationExpr::Negate { input } => {
+                if let MirRelationExpr::Constant { rows, .. } = &mut **input {
+                    if let Ok(rows) = rows {
+                        for (_row, diff) in rows {
+                            *diff *= -1;
+                        }
                     }
                     *relation = input.take_dangerous();
                 }
             }
-            RelationExpr::Threshold { input } => {
-                if let RelationExpr::Constant { rows, .. } = &mut **input {
-                    rows.retain(|(_, diff)| *diff > 0);
+            MirRelationExpr::Threshold { input } => {
+                if let MirRelationExpr::Constant { rows, .. } = &mut **input {
+                    if let Ok(rows) = rows {
+                        rows.retain(|(_, diff)| *diff > 0);
+                    }
                     *relation = input.take_dangerous();
                 }
             }
-            RelationExpr::Map { input, scalars } => {
+            MirRelationExpr::Map { input, scalars } => {
                 // Before reducing the scalar expressions, we need to form an appropriate
                 // RelationType to provide to each. Each expression needs a different
                 // relation type; although we could in principle use `relation_type` here,
@@ -163,27 +115,35 @@ impl FoldConstants {
                     scalar.reduce(&current_type);
                 }
 
-                if let RelationExpr::Constant { rows, .. } = &**input {
+                // Guard against evaluating expression that may contain temporal expressions.
+                if scalars.iter().any(|e| e.contains_temporal()) {
+                    return Ok(());
+                }
+
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let mut row_packer = repr::RowPacker::new();
-                    let new_rows = rows
-                        .iter()
-                        .cloned()
-                        .map(|(input_row, diff)| {
-                            let mut unpacked = input_row.unpack();
-                            let temp_storage = RowArena::new();
-                            for scalar in scalars.iter() {
-                                unpacked.push(scalar.eval(&unpacked, &temp_storage)?)
-                            }
-                            Ok::<_, TransformError>((row_packer.pack(unpacked), diff))
-                        })
-                        .collect::<Result<_, _>>()?;
-                    *relation = RelationExpr::Constant {
+                    let new_rows = match rows {
+                        Ok(rows) => rows
+                            .iter()
+                            .cloned()
+                            .map(|(input_row, diff)| {
+                                let mut unpacked = input_row.unpack();
+                                let temp_storage = RowArena::new();
+                                for scalar in scalars.iter() {
+                                    unpacked.push(scalar.eval(&unpacked, &temp_storage)?)
+                                }
+                                Ok::<_, EvalError>((row_packer.pack(unpacked), diff))
+                            })
+                            .collect::<Result<_, _>>(),
+                        Err(e) => Err(e.clone()),
+                    };
+                    *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
-            RelationExpr::FlatMap {
+            MirRelationExpr::FlatMap {
                 input,
                 func,
                 exprs,
@@ -193,36 +153,32 @@ impl FoldConstants {
                     expr.reduce(&input.typ());
                 }
 
-                if let RelationExpr::Constant { rows, .. } = &**input {
-                    let mut new_rows = Vec::new();
-                    let mut row_packer = repr::RowPacker::new();
-                    for (input_row, diff) in rows {
-                        let datums = input_row.unpack();
-                        let temp_storage = RowArena::new();
-                        let output_rows = func.eval(
-                            exprs
-                                .iter()
-                                .map(|expr| expr.eval(&datums, &temp_storage))
-                                .collect::<Result<Vec<_>, _>>()?,
-                            &temp_storage,
-                        );
-                        for (output_row, diff2) in output_rows {
-                            let row = row_packer
-                                .pack(input_row.clone().into_iter().chain(output_row.into_iter()));
-                            new_rows.push((row, diff2 * *diff))
-                        }
-                    }
-                    *relation = RelationExpr::Constant {
+                // Guard against evaluating expression that may contain temporal expressions.
+                if exprs.iter().any(|e| e.contains_temporal()) {
+                    return Ok(());
+                }
+
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
+                    let new_rows = match rows {
+                        Ok(rows) => Self::fold_flat_map_constant(func, exprs, rows),
+                        Err(e) => Err(e.clone()),
+                    };
+                    *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
-            RelationExpr::Filter { input, predicates } => {
+            MirRelationExpr::Filter { input, predicates } => {
                 for predicate in predicates.iter_mut() {
                     predicate.reduce(&input.typ());
                 }
                 predicates.retain(|p| !p.is_literal_true());
+
+                // Guard against evaluating expression that may contain temporal expressions.
+                if predicates.iter().any(|e| e.contains_temporal()) {
+                    return Ok(());
+                }
 
                 // If any predicate is false, reduce to the empty collection.
                 if predicates
@@ -230,64 +186,74 @@ impl FoldConstants {
                     .any(|p| p.is_literal_false() || p.is_literal_null())
                 {
                     relation.take_safely();
-                } else if let RelationExpr::Constant { rows, .. } = &**input {
-                    let mut new_rows = Vec::new();
-                    'outer: for (row, diff) in rows {
-                        let datums = row.unpack();
-                        let temp_storage = RowArena::new();
-                        for p in &*predicates {
-                            if p.eval(&datums, &temp_storage)? != Datum::True {
-                                continue 'outer;
-                            }
-                        }
-                        new_rows.push((row.clone(), *diff))
-                    }
-                    *relation = RelationExpr::Constant {
+                } else if let MirRelationExpr::Constant { rows, .. } = &**input {
+                    let new_rows = match rows {
+                        Ok(rows) => Self::fold_filter_constant(predicates, rows),
+                        Err(e) => Err(e.clone()),
+                    };
+                    *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
-            RelationExpr::Project { input, outputs } => {
-                if let RelationExpr::Constant { rows, .. } = &**input {
+            MirRelationExpr::Project { input, outputs } => {
+                if let MirRelationExpr::Constant { rows, .. } = &**input {
                     let mut row_packer = repr::RowPacker::new();
-                    let new_rows = rows
-                        .iter()
-                        .map(|(input_row, diff)| {
-                            let datums = input_row.unpack();
-                            (row_packer.pack(outputs.iter().map(|i| &datums[*i])), *diff)
-                        })
-                        .collect();
-                    *relation = RelationExpr::Constant {
+                    let new_rows = match rows {
+                        Ok(rows) => Ok(rows
+                            .iter()
+                            .map(|(input_row, diff)| {
+                                let datums = input_row.unpack();
+                                (row_packer.pack(outputs.iter().map(|i| &datums[*i])), *diff)
+                            })
+                            .collect()),
+                        Err(e) => Err(e.clone()),
+                    };
+                    *relation = MirRelationExpr::Constant {
                         rows: new_rows,
-                        typ: relation.typ(),
+                        typ: relation_type,
                     };
                 }
             }
-            RelationExpr::Join {
+            MirRelationExpr::Join {
                 inputs,
                 equivalences,
                 ..
             } => {
                 if inputs.iter().any(|e| e.is_empty()) {
                     relation.take_safely();
+                } else if let Some(e) = inputs.iter().find_map(|i| match i {
+                    MirRelationExpr::Constant { rows: Err(e), .. } => Some(e),
+                    _ => None,
+                }) {
+                    *relation = MirRelationExpr::Constant {
+                        rows: Err(e.clone()),
+                        typ: relation_type,
+                    };
                 } else if inputs
                     .iter()
-                    .all(|i| matches!(i, RelationExpr::Constant { .. }))
+                    .all(|i| matches!(i, MirRelationExpr::Constant { rows: Ok(_), .. }))
                 {
+                    // Guard against evaluating expression that may contain temporal expressions.
+                    if equivalences
+                        .iter()
+                        .any(|equiv| equiv.iter().any(|e| e.contains_temporal()))
+                    {
+                        return Ok(());
+                    }
+
                     // We can fold all constant inputs together, but must apply the constraints to restrict them.
                     // We start with a single 0-ary row.
                     let mut old_rows = vec![(repr::Row::pack::<_, Datum>(None), 1)];
                     let mut row_packer = repr::RowPacker::new();
                     for input in inputs.iter() {
-                        if let RelationExpr::Constant { rows, .. } = input {
+                        if let MirRelationExpr::Constant { rows: Ok(rows), .. } = input {
                             let mut next_rows = Vec::new();
                             for (old_row, old_count) in old_rows {
                                 for (new_row, new_count) in rows.iter() {
-                                    let old_datums = old_row.unpack();
-                                    let new_datums = new_row.unpack();
                                     next_rows.push((
-                                        row_packer.pack(old_datums.iter().chain(new_datums.iter())),
+                                        row_packer.pack(old_row.iter().chain(new_row.iter())),
                                         old_count * *new_count,
                                     ));
                                 }
@@ -311,35 +277,50 @@ impl FoldConstants {
                         })
                     });
 
-                    let typ = relation.typ();
-                    *relation = RelationExpr::Constant {
-                        rows: old_rows,
-                        typ,
+                    *relation = MirRelationExpr::Constant {
+                        rows: Ok(old_rows),
+                        typ: relation_type,
                     };
                 }
                 // TODO: General constant folding for all constant inputs.
             }
-            RelationExpr::Union { base, inputs } => {
-                let mut rows = vec![];
-                let mut new_inputs = vec![];
+            MirRelationExpr::Union { base, inputs } => {
+                if let Some(e) = iter::once(&mut **base)
+                    .chain(&mut *inputs)
+                    .find_map(|i| match i {
+                        MirRelationExpr::Constant { rows: Err(e), .. } => Some(e),
+                        _ => None,
+                    })
+                {
+                    *relation = MirRelationExpr::Constant {
+                        rows: Err(e.clone()),
+                        typ: relation_type,
+                    };
+                } else {
+                    let mut rows = vec![];
+                    let mut new_inputs = vec![];
 
-                for input in iter::once(&mut **base).chain(&mut *inputs) {
-                    match input.take_dangerous() {
-                        RelationExpr::Constant { rows: rs, typ: _ } => rows.extend(rs),
-                        input => new_inputs.push(input),
+                    for input in iter::once(&mut **base).chain(&mut *inputs) {
+                        match input.take_dangerous() {
+                            MirRelationExpr::Constant {
+                                rows: Ok(rs),
+                                typ: _,
+                            } => rows.extend(rs),
+                            input => new_inputs.push(input),
+                        }
                     }
-                }
-                if !rows.is_empty() {
-                    new_inputs.push(RelationExpr::Constant {
-                        rows,
-                        typ: relation_type.clone(),
-                    });
-                }
+                    if !rows.is_empty() {
+                        new_inputs.push(MirRelationExpr::Constant {
+                            rows: Ok(rows),
+                            typ: relation_type.clone(),
+                        });
+                    }
 
-                *relation = RelationExpr::union_many(new_inputs, relation_type);
+                    *relation = MirRelationExpr::union_many(new_inputs, relation_type);
+                }
             }
-            RelationExpr::ArrangeBy { input, .. } => {
-                if let RelationExpr::Constant { .. } = &**input {
+            MirRelationExpr::ArrangeBy { input, .. } => {
+                if let MirRelationExpr::Constant { .. } = &**input {
                     *relation = input.take_dangerous();
                 }
             }
@@ -349,7 +330,11 @@ impl FoldConstants {
         // will be consolidated. We have to make a separate check for constant
         // nodes here, since the match arm above might install new constant
         // nodes.
-        if let RelationExpr::Constant { rows, typ } = relation {
+        if let MirRelationExpr::Constant {
+            rows: Ok(rows),
+            typ,
+        } = relation
+        {
             // Reduce down to canonical representation.
             let mut accum = HashMap::new();
             for (row, cnt) in rows.iter() {
@@ -365,8 +350,7 @@ impl FoldConstants {
                 col_type.nullable = false;
             }
             for (row, _) in rows.iter_mut() {
-                let datums = row.unpack();
-                for (index, datum) in datums.iter().enumerate() {
+                for (index, datum) in row.iter().enumerate() {
                     if datum.is_null() {
                         typ.column_types[index].nullable = true;
                     }
@@ -376,12 +360,130 @@ impl FoldConstants {
 
         Ok(())
     }
+
+    fn fold_reduce_constant(
+        group_key: &[MirScalarExpr],
+        aggregates: &[AggregateExpr],
+        rows: &[(Row, isize)],
+    ) -> Result<Vec<(Row, isize)>, EvalError> {
+        // Build a map from `group_key` to `Vec<Vec<an, ..., a1>>)`,
+        // where `an` is the input to the nth aggregate function in
+        // `aggregates`.
+        let mut groups = BTreeMap::new();
+        let temp_storage2 = RowArena::new();
+        let mut row_packer = repr::RowPacker::new();
+        for (row, diff) in rows {
+            // We currently maintain the invariant that any negative
+            // multiplicities will be consolidated away before they
+            // arrive at a reduce.
+            assert!(
+                *diff > 0,
+                "constant folding encountered reduce on collection \
+                             with non-positive multiplicities"
+            );
+            let datums = row.unpack();
+            let temp_storage = RowArena::new();
+            let key = group_key
+                .iter()
+                .map(|e| e.eval(&datums, &temp_storage2))
+                .collect::<Result<Vec<_>, _>>()?;
+            let val = aggregates
+                .iter()
+                .map(|agg| {
+                    Ok::<_, EvalError>(row_packer.pack(&[agg.expr.eval(&datums, &temp_storage)?]))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let entry = groups.entry(key).or_insert_with(Vec::new);
+            for _ in 0..*diff {
+                entry.push(val.clone());
+            }
+        }
+
+        // For each group, apply the aggregate function to the rows
+        // in the group. The output is
+        // `Vec<Vec<k1, ..., kn, r1, ..., rn>>`
+        // where kn is the nth column of the key and rn is the
+        // result of the nth aggregate function for that group.
+        let new_rows = groups
+            .into_iter()
+            .map({
+                let mut row_packer = repr::RowPacker::new();
+                move |(key, vals)| {
+                    let temp_storage = RowArena::new();
+                    let row = row_packer.pack(key.into_iter().chain(
+                        aggregates.iter().enumerate().map(|(i, agg)| {
+                            if agg.distinct {
+                                agg.func.eval(
+                                    vals.iter()
+                                        .map(|val| val[i].unpack_first())
+                                        .collect::<HashSet<_>>()
+                                        .into_iter(),
+                                    &temp_storage,
+                                )
+                            } else {
+                                agg.func.eval(
+                                    vals.iter().map(|val| val[i].unpack_first()),
+                                    &temp_storage,
+                                )
+                            }
+                        }),
+                    ));
+                    (row, 1)
+                }
+            })
+            .collect();
+        Ok(new_rows)
+    }
+
+    fn fold_flat_map_constant(
+        func: &TableFunc,
+        exprs: &[MirScalarExpr],
+        rows: &[(Row, isize)],
+    ) -> Result<Vec<(Row, isize)>, EvalError> {
+        let mut new_rows = Vec::new();
+        let mut row_packer = repr::RowPacker::new();
+        for (input_row, diff) in rows {
+            let datums = input_row.unpack();
+            let temp_storage = RowArena::new();
+            let output_rows = func.eval(
+                exprs
+                    .iter()
+                    .map(|expr| expr.eval(&datums, &temp_storage))
+                    .collect::<Result<Vec<_>, _>>()?,
+                &temp_storage,
+            );
+            for (output_row, diff2) in output_rows {
+                let row =
+                    row_packer.pack(input_row.clone().into_iter().chain(output_row.into_iter()));
+                new_rows.push((row, diff2 * *diff))
+            }
+        }
+        Ok(new_rows)
+    }
+
+    fn fold_filter_constant(
+        predicates: &[MirScalarExpr],
+        rows: &[(Row, isize)],
+    ) -> Result<Vec<(Row, isize)>, EvalError> {
+        let mut new_rows = Vec::new();
+        'outer: for (row, diff) in rows {
+            let datums = row.unpack();
+            let temp_storage = RowArena::new();
+            for p in &*predicates {
+                if p.eval(&datums, &temp_storage)? != Datum::True {
+                    continue 'outer;
+                }
+            }
+            new_rows.push((row.clone(), *diff))
+        }
+        Ok(new_rows)
+    }
 }
 
 /// Transforms !(a && b) into !a || !b and !(a || b) into !a && !b
 pub mod demorgans {
 
-    use expr::{BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc};
+    use expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 
     use crate::{TransformArgs, TransformError};
 
@@ -391,7 +493,7 @@ pub mod demorgans {
     impl crate::Transform for DeMorgans {
         fn transform(
             &self,
-            relation: &mut RelationExpr,
+            relation: &mut MirRelationExpr,
             _: TransformArgs,
         ) -> Result<(), TransformError> {
             relation.visit_mut_pre(&mut |e| {
@@ -403,8 +505,8 @@ pub mod demorgans {
 
     impl DeMorgans {
         /// Transforms !(a && b) into !a || !b and !(a || b) into !a && !b
-        pub fn action(&self, relation: &mut RelationExpr) {
-            if let RelationExpr::Filter {
+        pub fn action(&self, relation: &mut MirRelationExpr) {
+            if let MirRelationExpr::Filter {
                 input: _,
                 predicates,
             } = relation
@@ -417,39 +519,39 @@ pub mod demorgans {
     }
 
     /// Transforms !(a && b) into !a || !b and !(a || b) into !a && !b
-    pub fn demorgans(expr: &mut ScalarExpr) {
-        if let ScalarExpr::CallUnary {
+    pub fn demorgans(expr: &mut MirScalarExpr) {
+        if let MirScalarExpr::CallUnary {
             expr: inner,
             func: UnaryFunc::Not,
         } = expr
         {
-            if let ScalarExpr::CallBinary { expr1, expr2, func } = &mut **inner {
+            if let MirScalarExpr::CallBinary { expr1, expr2, func } = &mut **inner {
                 match func {
                     BinaryFunc::And => {
-                        let inner0 = ScalarExpr::CallUnary {
+                        let inner0 = MirScalarExpr::CallUnary {
                             expr: Box::new(expr1.take()),
                             func: UnaryFunc::Not,
                         };
-                        let inner1 = ScalarExpr::CallUnary {
+                        let inner1 = MirScalarExpr::CallUnary {
                             expr: Box::new(expr2.take()),
                             func: UnaryFunc::Not,
                         };
-                        *expr = ScalarExpr::CallBinary {
+                        *expr = MirScalarExpr::CallBinary {
                             expr1: Box::new(inner0),
                             expr2: Box::new(inner1),
                             func: BinaryFunc::Or,
                         }
                     }
                     BinaryFunc::Or => {
-                        let inner0 = ScalarExpr::CallUnary {
+                        let inner0 = MirScalarExpr::CallUnary {
                             expr: Box::new(expr1.take()),
                             func: UnaryFunc::Not,
                         };
-                        let inner1 = ScalarExpr::CallUnary {
+                        let inner1 = MirScalarExpr::CallUnary {
                             expr: Box::new(expr2.take()),
                             func: UnaryFunc::Not,
                         };
-                        *expr = ScalarExpr::CallBinary {
+                        *expr = MirScalarExpr::CallBinary {
                             expr1: Box::new(inner0),
                             expr2: Box::new(inner1),
                             func: BinaryFunc::And,
@@ -465,7 +567,7 @@ pub mod demorgans {
 /// Transforms predicates from (a && b) || (a && c) into a && (b || c).
 pub mod undistribute_and {
 
-    use expr::{BinaryFunc, RelationExpr, ScalarExpr};
+    use expr::{BinaryFunc, MirRelationExpr, MirScalarExpr};
     use repr::{Datum, ScalarType};
 
     use crate::{TransformArgs, TransformError};
@@ -477,7 +579,7 @@ pub mod undistribute_and {
     impl crate::Transform for UndistributeAnd {
         fn transform(
             &self,
-            relation: &mut RelationExpr,
+            relation: &mut MirRelationExpr,
             _: TransformArgs,
         ) -> Result<(), TransformError> {
             relation.visit_mut(&mut |e| {
@@ -489,8 +591,8 @@ pub mod undistribute_and {
 
     impl UndistributeAnd {
         /// Transforms predicates from (a && b) || (a && c) into a && (b || c).
-        pub fn action(&self, relation: &mut RelationExpr) {
-            if let RelationExpr::Filter {
+        pub fn action(&self, relation: &mut MirRelationExpr) {
+            if let MirRelationExpr::Filter {
                 input: _,
                 predicates,
             } = relation
@@ -503,8 +605,8 @@ pub mod undistribute_and {
     }
 
     /// Collects undistributable terms from AND expressions.
-    fn harvest_ands(expr: &ScalarExpr, ands: &mut Vec<ScalarExpr>) {
-        if let ScalarExpr::CallBinary {
+    fn harvest_ands(expr: &MirScalarExpr, ands: &mut Vec<MirScalarExpr>) {
+        if let MirScalarExpr::CallBinary {
             expr1,
             expr2,
             func: BinaryFunc::And,
@@ -518,8 +620,8 @@ pub mod undistribute_and {
     }
 
     /// Removes undistributed terms from AND expressions.
-    fn suppress_ands(expr: &mut ScalarExpr, ands: &[ScalarExpr]) {
-        if let ScalarExpr::CallBinary {
+    fn suppress_ands(expr: &mut MirScalarExpr, ands: &[MirScalarExpr]) {
+        if let MirScalarExpr::CallBinary {
             expr1,
             expr2,
             func: BinaryFunc::And,
@@ -530,7 +632,7 @@ pub mod undistribute_and {
             suppress_ands(expr2, ands);
 
             // If either argument is in our list, replace it by `true`.
-            let tru = ScalarExpr::literal_ok(Datum::True, ScalarType::Bool.nullable(false));
+            let tru = MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
             if ands.contains(expr1) {
                 *expr = std::mem::replace(expr2, tru);
             } else if ands.contains(expr2) {
@@ -540,13 +642,13 @@ pub mod undistribute_and {
     }
 
     /// Transforms (a && b) || (a && c) into a && (b || c)
-    pub fn undistribute_and(expr: &mut ScalarExpr) {
+    pub fn undistribute_and(expr: &mut MirScalarExpr) {
         expr.visit_mut(&mut |x| undistribute_and_helper(x));
     }
 
     /// AND undistribution to apply at each `ScalarExpr`.
-    pub fn undistribute_and_helper(expr: &mut ScalarExpr) {
-        if let ScalarExpr::CallBinary {
+    pub fn undistribute_and_helper(expr: &mut MirScalarExpr) {
+        if let MirScalarExpr::CallBinary {
             expr1,
             expr2,
             func: BinaryFunc::Or,
@@ -571,7 +673,7 @@ pub mod undistribute_and {
             }
 
             for and_term in intersection.into_iter() {
-                *expr = ScalarExpr::CallBinary {
+                *expr = MirScalarExpr::CallBinary {
                     expr1: Box::new(expr.take()),
                     expr2: Box::new(and_term),
                     func: BinaryFunc::And,
@@ -583,7 +685,7 @@ pub mod undistribute_and {
 
 /// Transforms `NOT(a <op> b)` to `a negate(<op>) b` if it exists.
 pub mod negate_predicate {
-    use expr::{BinaryFunc, RelationExpr, ScalarExpr, UnaryFunc};
+    use expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, UnaryFunc};
 
     use crate::{TransformArgs, TransformError};
 
@@ -594,7 +696,7 @@ pub mod negate_predicate {
     impl crate::Transform for NegatePredicate {
         fn transform(
             &self,
-            relation: &mut RelationExpr,
+            relation: &mut MirRelationExpr,
             _: TransformArgs,
         ) -> Result<(), TransformError> {
             self.action(relation);
@@ -617,29 +719,29 @@ pub mod negate_predicate {
 
     impl NegatePredicate {
         /// Transforms `NOT(a <op> b)` to `a negate(<op>) b` if it exists.
-        pub fn action(&self, relation: &mut RelationExpr) {
+        pub fn action(&self, relation: &mut MirRelationExpr) {
             relation.visit_scalars_mut(&mut |x| x.visit_mut(&mut negate_predicate))
         }
     }
 
     /// Transforms `NOT(a <op> b)` to `a negate(<op>) b` if it exists.
-    pub fn negate_predicate(expr: &mut ScalarExpr) {
-        if let ScalarExpr::CallUnary {
+    pub fn negate_predicate(expr: &mut MirScalarExpr) {
+        if let MirScalarExpr::CallUnary {
             expr: not_input,
             func: UnaryFunc::Not,
         } = expr
         {
             match &mut **not_input {
-                ScalarExpr::CallBinary { expr1, expr2, func } => {
+                MirScalarExpr::CallBinary { expr1, expr2, func } => {
                     if let Some(negated_func) = negate(func) {
-                        *expr = ScalarExpr::CallBinary {
+                        *expr = MirScalarExpr::CallBinary {
                             expr1: Box::new(expr1.take()),
                             expr2: Box::new(expr2.take()),
                             func: negated_func,
                         }
                     }
                 }
-                ScalarExpr::CallUnary {
+                MirScalarExpr::CallUnary {
                     expr: inner_expr,
                     func: UnaryFunc::Not,
                 } => *expr = inner_expr.take(),

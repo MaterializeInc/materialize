@@ -20,8 +20,8 @@ use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
 use globset::GlobBuilder;
 use itertools::Itertools;
+use ore::str::StrExt;
 use reqwest::Url;
-use rusoto_core::Region;
 
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
@@ -36,23 +36,22 @@ use ore::collections::CollectionExt;
 use ore::iter::IteratorExt;
 use regex::Regex;
 use repr::{strconv, RelationDesc, RelationType, ScalarType};
-use sql_parser::ast::Envelope;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
-    ColumnOption, Connector, CreateDatabaseStatement, CreateIndexStatement, CreateSchemaStatement,
-    CreateSinkStatement, CreateSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, DataType, DropDatabaseStatement,
-    DropObjectsStatement, Expr, Format, Ident, IfExistsBehavior, ObjectName, ObjectType, Raw,
-    SqlOption, Statement, Value,
+    ColumnOption, Compression, Connector, CreateDatabaseStatement, CreateIndexStatement,
+    CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
+    CreateViewStatement, DataType, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr,
+    Format, Ident, IfExistsBehavior, ObjectType, Raw, SqlOption, Statement, UnresolvedObjectName,
+    Value,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
 use crate::plan::query::QueryLifetime;
-use crate::plan::statement::with_options::aws_connect_info;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     self, plan_utils, query, AlterIndexLogicalCompactionWindow, Index, LogicalCompactionWindow,
@@ -130,6 +129,7 @@ pub fn plan_create_table(
         constraints,
         with_options,
         if_not_exists,
+        temporary,
     } = &stmt;
 
     if !with_options.is_empty() {
@@ -146,8 +146,8 @@ pub fn plan_create_table(
 
     if let Some(dup) = names.iter().duplicates().next() {
         bail!(
-            "cannot CREATE TABLE: column \"{}\" specified more than once",
-            dup
+            "cannot CREATE TABLE: column {} specified more than once",
+            dup.as_str().quoted()
         );
     }
 
@@ -178,7 +178,12 @@ pub fn plan_create_table(
 
     let typ = RelationType::new(column_types);
 
-    let name = scx.allocate_name(normalize::object_name(name.clone())?);
+    let temporary = *temporary;
+    let name = if temporary {
+        scx.allocate_temporary_name(normalize::object_name(name.to_owned())?)
+    } else {
+        scx.allocate_name(normalize::object_name(name.to_owned())?)
+    };
     let desc = RelationDesc::new(typ, names.into_iter().map(Some));
 
     let create_sql = normalize::create_statement(&scx, Statement::CreateTable(stmt.clone()))?;
@@ -186,6 +191,7 @@ pub fn plan_create_table(
         create_sql,
         desc,
         defaults,
+        temporary,
     };
     Ok(Plan::CreateTable {
         name,
@@ -389,10 +395,9 @@ pub fn plan_create_source(
             (connector, encoding)
         }
         Connector::Kinesis { arn, .. } => {
-            let arn: ARN = match arn.parse() {
-                Ok(arn) => arn,
-                Err(e) => bail!("Unable to parse provided ARN: {:#?}", e),
-            };
+            let arn: ARN = arn
+                .parse()
+                .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?;
             let stream_name = match arn.resource {
                 Resource::Path(path) => {
                     if let Some(path) = path.strip_prefix("stream/") {
@@ -404,43 +409,19 @@ pub fn plan_create_source(
                 _ => unsupported!(format!("AWS Resource type: {:#?}", arn.resource)),
             };
 
-            let region: Region = match arn.region {
-                Some(region) => match region.parse() {
-                    Ok(region) => {
-                        // ignore the endpoint option if we're pointing at a
-                        // valid, non-custom AWS region
-                        with_options.remove("endpoint");
-                        region
-                    }
-                    Err(e) => {
-                        // Region's fromstr doesn't support parsing custom regions.
-                        // If a Kinesis stream's ARN indicates it exists in a custom
-                        // region, support it iff a valid endpoint for the stream
-                        // is also provided.
-                        match with_options.remove("endpoint") {
-                            Some(Value::String(endpoint)) => Region::Custom {
-                                name: region,
-                                endpoint,
-                            },
-                            _ => bail!(
-                                "Unable to parse AWS region: {}. If providing a custom \
-                                        region, an `endpoint` option must also be provided",
-                                e
-                            ),
-                        }
-                    }
-                },
-                None => bail!("Provided ARN does not include an AWS region"),
-            };
+            let region = arn
+                .region
+                .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
+            let aws_info = normalize::aws_connect_info(&mut with_options, Some(region))?;
             let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                 stream_name,
-                aws_info: aws_connect_info(&mut with_options, Some(region))?,
+                aws_info,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
         }
-        Connector::File { path, .. } => {
+        Connector::File { path, compression } => {
             let tail = match with_options.remove("tail") {
                 None => false,
                 Some(Value::Boolean(b)) => b,
@@ -455,15 +436,34 @@ pub fn plan_create_source(
 
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
+                compression: match compression {
+                    Compression::Gzip => dataflow_types::Compression::Gzip,
+                    Compression::None => dataflow_types::Compression::None,
+                },
                 tail,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
         }
-        Connector::S3 { bucket, pattern } => {
+        Connector::S3 {
+            key_sources,
+            pattern,
+        } => {
             scx.require_experimental_mode("S3 Sources")?;
+            let aws_info = normalize::aws_connect_info(&mut with_options, None)?;
+            let mut converted_sources = Vec::new();
+            for ks in key_sources {
+                let dtks = match ks {
+                    sql_parser::ast::S3KeySource::Scan { bucket } => {
+                        dataflow_types::S3KeySource::Scan {
+                            bucket: bucket.clone(),
+                        }
+                    }
+                };
+                converted_sources.push(dtks);
+            }
             let connector = ExternalSourceConnector::S3(S3SourceConnector {
-                bucket: bucket.clone(),
+                key_sources: converted_sources,
                 pattern: pattern
                     .as_ref()
                     .map(|p| {
@@ -473,7 +473,7 @@ pub fn plan_create_source(
                             .build()
                     })
                     .transpose()?,
-                aws_info: aws_connect_info(&mut with_options, None)?,
+                aws_info,
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
@@ -494,6 +494,7 @@ pub fn plan_create_source(
 
             let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                 path: path.clone().into(),
+                compression: dataflow_types::Compression::None,
                 tail,
             });
             if format.is_some() {
@@ -719,7 +720,7 @@ pub fn plan_create_view(
     relation_expr.bind_parameters(&params)?;
     //TODO: materialize#724 - persist finishing information with the view?
     relation_expr.finish(finishing);
-    let relation_expr = relation_expr.decorrelate();
+    let relation_expr = relation_expr.lower();
     let replace = if *if_exists == IfExistsBehavior::Replace {
         if let Ok(item) = scx.catalog.resolve_item(&name.clone().into()) {
             if relation_expr.global_uses().contains(&item.id()) {
@@ -798,15 +799,30 @@ fn kafka_sink_builder(
         .key_writer_schema()
         .map(|key_schema| key_schema.canonical_form());
 
-    // Use the user supplied value for replication factor, or default to 1
-    let replication_factor = match with_options.remove("replication_factor") {
-        None => 1,
-        Some(Value::Number(n)) => n.parse::<u32>()?,
-        Some(_) => bail!("replication factor for sink topics has to be a positive integer"),
+    // Use the user supplied value for partition count, or default to -1 (broker default)
+    let partition_count = match with_options.remove("partition_count") {
+        None => -1,
+        Some(Value::Number(n)) => n.parse::<i32>()?,
+        Some(_) => bail!("partition count for sink topics must be an integer"),
     };
 
-    if replication_factor == 0 {
-        bail!("replication factor for sink topics has to be greater than zero");
+    if partition_count == 0 || partition_count < -1 {
+        bail!(
+            "partition count for sink topics must be a positive integer or -1 for broker default"
+        );
+    }
+
+    // Use the user supplied value for replication factor, or default to -1 (broker default)
+    let replication_factor = match with_options.remove("replication_factor") {
+        None => -1,
+        Some(Value::Number(n)) => n.parse::<i32>()?,
+        Some(_) => bail!("replication factor for sink topics must be an integer"),
+    };
+
+    if replication_factor == 0 || replication_factor < -1 {
+        bail!(
+            "replication factor for sink topics must be a positive integer or -1 for broker default"
+        );
     }
 
     let consistency_value_schema = if include_consistency {
@@ -827,6 +843,7 @@ fn kafka_sink_builder(
         value_schema,
         topic_prefix,
         topic_suffix,
+        partition_count,
         replication_factor,
         fuel: 10000,
         consistency_value_schema,
@@ -1066,7 +1083,7 @@ pub fn plan_create_index(
             let index_name_col_suffix = keys
                 .iter()
                 .map(|k| match k {
-                    expr::ScalarExpr::Column(i) => match on_desc.get_unambiguous_name(*i) {
+                    expr::MirScalarExpr::Column(i) => match on_desc.get_unambiguous_name(*i) {
                         Some(col_name) => col_name.to_string(),
                         None => format!("{}", i + 1),
                     },
@@ -1146,9 +1163,9 @@ pub fn plan_create_type(
                 DataType::Other { name, typ_mod } => {
                     if !typ_mod.is_empty() {
                         bail!(
-                            "CREATE TYPE ... AS {}option \"{}\" cannot accept type modifier on \
+                            "CREATE TYPE ... AS {}option {} cannot accept type modifier on \
                             {}, you must use the default type",
-                            as_type,
+                            as_type.to_string().quoted(),
                             key,
                             name
                         )
@@ -1156,9 +1173,9 @@ pub fn plan_create_type(
                     query::canonicalize_type_name_internal(&name)
                 }
                 d => bail!(
-                    "CREATE TYPE ... AS {}option \"{}\" can only use named data types, but \
+                    "CREATE TYPE ... AS {}option {} can only use named data types, but \
                     found unnamed data type {}. Use CREATE TYPE to create a named type first",
-                    as_type,
+                    as_type.to_string().quoted(),
                     key,
                     d.to_ast_string(),
                 ),
@@ -1194,7 +1211,7 @@ pub fn plan_create_type(
 
     let name = scx.allocate_name(normalize::object_name(name)?);
     if scx.catalog.item_exists(&name) {
-        bail!("catalog item \"{}\" already exists", name.to_string());
+        bail!("catalog item {} already exists", name.to_string().quoted());
     }
 
     let inner = match as_type {
@@ -1238,6 +1255,51 @@ fn extract_timestamp_frequency_option(
         },
         Some(_) => bail!("timestamp_frequency_ms must be an u64"),
     }
+}
+
+pub fn describe_create_role(
+    _: &StatementContext,
+    _: CreateRoleStatement,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_role(
+    _: &StatementContext,
+    CreateRoleStatement {
+        name,
+        is_user,
+        options,
+    }: CreateRoleStatement,
+) -> Result<Plan, anyhow::Error> {
+    let mut login = None;
+    let mut super_user = None;
+    for option in options {
+        match option {
+            CreateRoleOption::Login | CreateRoleOption::NoLogin if login.is_some() => {
+                bail!("conflicting or redundant options");
+            }
+            CreateRoleOption::SuperUser | CreateRoleOption::NoSuperUser if super_user.is_some() => {
+                bail!("conflicting or redundant options");
+            }
+            CreateRoleOption::Login => login = Some(true),
+            CreateRoleOption::NoLogin => login = Some(false),
+            CreateRoleOption::SuperUser => super_user = Some(true),
+            CreateRoleOption::NoSuperUser => super_user = Some(false),
+        }
+    }
+    if is_user && login.is_none() {
+        login = Some(true);
+    }
+    if login != Some(true) {
+        unsupported!("non-login users");
+    }
+    if super_user != Some(true) {
+        unsupported!("non-superusers");
+    }
+    Ok(Plan::CreateRole {
+        name: normalize::ident(name),
+    })
 }
 
 pub fn describe_drop_database(
@@ -1290,6 +1352,7 @@ pub fn plan_drop_objects(
         | ObjectType::Index
         | ObjectType::Sink
         | ObjectType::Type => plan_drop_items(scx, object_type, if_exists, names, cascade),
+        ObjectType::Role => plan_drop_role(scx, if_exists, names),
         ObjectType::Object => unreachable!("cannot drop generic OBJECT, must provide object type"),
     }
 }
@@ -1297,7 +1360,7 @@ pub fn plan_drop_objects(
 pub fn plan_drop_schema(
     scx: &StatementContext,
     if_exists: bool,
-    names: Vec<ObjectName>,
+    names: Vec<UnresolvedObjectName>,
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
     if names.len() != 1 {
@@ -1324,7 +1387,7 @@ pub fn plan_drop_schema(
         }
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the
-            // database does not exist.
+            // schema does not exist.
             // TODO(benesch): adjust the types here properly, rather than making
             // up a nonexistent database.
             Ok(Plan::DropSchema {
@@ -1338,11 +1401,38 @@ pub fn plan_drop_schema(
     }
 }
 
+pub fn plan_drop_role(
+    scx: &StatementContext,
+    if_exists: bool,
+    names: Vec<UnresolvedObjectName>,
+) -> Result<Plan, anyhow::Error> {
+    let mut out = vec![];
+    for name in names {
+        let name = if name.0.len() == 1 {
+            normalize::ident(name.0.into_element())
+        } else {
+            bail!("invalid role name {}", name.to_string().quoted())
+        };
+        if name == scx.catalog.user() {
+            bail!("current user cannot be dropped");
+        }
+        match scx.catalog.resolve_role(&name) {
+            Ok(_) => out.push(name),
+            Err(_) if if_exists => {
+                // TODO(benesch): generate a notice indicating that the
+                // role does not exist.
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(Plan::DropRoles { names: out })
+}
+
 pub fn plan_drop_items(
     scx: &StatementContext,
     object_type: ObjectType,
     if_exists: bool,
-    names: Vec<ObjectName>,
+    names: Vec<UnresolvedObjectName>,
     cascade: bool,
 ) -> Result<Plan, anyhow::Error> {
     let items = names
@@ -1385,7 +1475,8 @@ pub fn plan_drop_item(
         for id in catalog_entry.used_by() {
             let dep = scx.catalog.get_item_by_id(id);
             match dep.item_type() {
-                CatalogItemType::Table
+                CatalogItemType::Func
+                | CatalogItemType::Table
                 | CatalogItemType::Source
                 | CatalogItemType::View
                 | CatalogItemType::Sink
@@ -1451,8 +1542,8 @@ pub fn plan_alter_index_options(
                     };
 
                     if !options.is_empty() {
-                        bail!("unrecognized parameter: \"{}\". Only \"logical_compaction_window\" is currently supported.",
-                              options.keys().next().expect("known to exist"))
+                        bail!("unrecognized parameter: {}. Only \"logical_compaction_window\" is currently supported.",
+                              options.keys().next().expect("known to exist").quoted())
                     }
 
                     logical_compaction_window
@@ -1502,7 +1593,10 @@ pub fn plan_alter_object_rename(
             let mut proposed_name = name.0;
             let last = proposed_name.last_mut().unwrap();
             *last = to_item_name.clone();
-            if scx.resolve_item(ObjectName(proposed_name)).is_ok() {
+            if scx
+                .resolve_item(UnresolvedObjectName(proposed_name))
+                .is_ok()
+            {
                 bail!("{} is already taken by item in schema", to_item_name)
             }
             Some(entry.id())

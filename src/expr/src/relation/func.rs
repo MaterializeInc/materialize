@@ -505,8 +505,12 @@ impl AggregateFunc {
             AggregateFunc::SumInt64 => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
             _ => input_type.scalar_type,
         };
-        // max/min/sum return null on empty sets
-        let nullable = !matches!(self, AggregateFunc::Count);
+        // Count never produces null, and other aggregations only produce
+        // null in the presence of null inputs.
+        let nullable = match self {
+            AggregateFunc::Count => false,
+            _ => input_type.nullable,
+        };
         scalar_type.nullable(nullable)
     }
 }
@@ -852,6 +856,11 @@ impl TableFunc {
     }
 
     pub fn empty_on_null_input(&self) -> bool {
+        // Warning: this returns currently "true" for all TableFuncs.
+        // If adding a TableFunc for which this function will return "false",
+        // check the places where `empty_on_null_input` is called to ensure,
+        // such as NonNullRequirements that the case this function returns
+        // false is properly handled.
         match self {
             TableFunc::JsonbEach { .. }
             | TableFunc::JsonbObjectKeys

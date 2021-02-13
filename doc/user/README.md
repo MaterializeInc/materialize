@@ -1,31 +1,9 @@
 # User docs
 
-This is the root directory of the Materialize user documentation, which are
+This is the root directory of the Materialize user documentation, which is
 rendered by [Hugo] locally and published by CI to <https://materialize.com/docs>.
 
-## Viewing the docs locally
-
-1. [Install Hugo](https://gohugo.io/getting-started/installing/).
-
-1. Launch the site by running:
-
-    ```shell
-    cd doc/user
-    hugo serve -D
-    ```
-
-    If you're making changes to the site, you might want a more cache-busting
-    version:
-
-    ```shell
-    hugo server --disableFastRender --ignoreCache
-    ```
-
-1. Open <http://localhost:1313>.
-
-You can also read the documentation in Markdown in the `content` directory,
-though some features like our SQL syntax diagrams will not be readily
-accessible.
+For help contributing to the docs, see [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Structure
 
@@ -110,7 +88,12 @@ each meaningfully distinct combination of connector and format), and leveraged
 Hugo partials and shortcodes to simplify page creation and resuse content across
 pages.
 
-You can find all of the `CREATE SOURCE` docs at [content/sql/create-source](content/sql/create-source/).
+* You can find all of the `CREATE SOURCE` docs at
+  [content/sql/create-source](content/sql/create-source/).
+* Each `CREATE SOURCE` doc page will call the `create-source` *layout* to provide uniform details
+  [layouts/shortcodes/create-source](layouts/shortcodes/create-source)
+* The details of that layout are filled in by partials at
+  [layouts/partials/create-source/connector](layouts/partials/create-source/connector)
 
 ### Hugo shortcodes and partials
 

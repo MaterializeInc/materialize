@@ -15,7 +15,7 @@
 //! harming planning.
 
 use crate::TransformArgs;
-use expr::{Id, LocalId, RelationExpr};
+use expr::{Id, LocalId, MirRelationExpr};
 
 /// Install replace certain `Get` operators with their `Let` value.
 #[derive(Debug)]
@@ -24,13 +24,13 @@ pub struct InlineLet;
 impl crate::Transform for InlineLet {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         let mut lets = vec![];
         self.action(relation, &mut lets);
         for (id, value) in lets.into_iter().rev() {
-            *relation = RelationExpr::Let {
+            *relation = MirRelationExpr::Let {
                 id,
                 value: Box::new(value),
                 body: Box::new(relation.take_safely()),
@@ -42,26 +42,30 @@ impl crate::Transform for InlineLet {
 
 impl InlineLet {
     /// Install replace certain `Get` operators with their `Let` value.
-    pub fn action(&self, relation: &mut RelationExpr, lets: &mut Vec<(LocalId, RelationExpr)>) {
-        if let RelationExpr::Let { id, value, body } = relation {
+    pub fn action(
+        &self,
+        relation: &mut MirRelationExpr,
+        lets: &mut Vec<(LocalId, MirRelationExpr)>,
+    ) {
+        if let MirRelationExpr::Let { id, value, body } = relation {
             self.action(value, lets);
 
             let mut num_gets = 0;
             body.visit_mut_pre(&mut |relation| match relation {
-                RelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
+                MirRelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
                     num_gets += 1;
                 }
                 _ => (),
             });
             let inlinable = match &**value {
-                RelationExpr::Get { .. } | RelationExpr::Constant { .. } => true,
+                MirRelationExpr::Get { .. } | MirRelationExpr::Constant { .. } => true,
                 _ => num_gets <= 1,
             };
 
             if inlinable {
                 // if only used once, just inline it
                 body.visit_mut_pre(&mut |relation| match relation {
-                    RelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
+                    MirRelationExpr::Get { id: get_id, .. } if Id::Local(*id) == *get_id => {
                         *relation = (**value).clone();
                     }
                     _ => (),

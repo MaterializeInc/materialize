@@ -203,23 +203,23 @@ EXPLAIN TYPED DECORRELATED PLAN FOR VIEW foo
 %0 = Let l0 =
 | Constant ()
 | | types = ()
-| | keys = ()
+| | keys = (())
 
 %1 =
 | Constant ()
 | | types = ()
-| | keys = ()
+| | keys = (())
 
 %2 =
 | Join %0 %1
 | | implementation = Unimplemented
 | | types = ()
-| | keys = ()
+| | keys = (())
 | Map 1
 | | types = (integer)
-| | keys = ()
+| | keys = (())
 | | types = (integer)
-| | keys = ()
+| | keys = (())
 
 EOF
 
@@ -309,6 +309,7 @@ query T multiline
 EXPLAIN SELECT mz_logical_timestamp()
 ----
 %0 =
-| Constant (0dec)
+| Constant ()
+| Map mz_logical_timestamp()
 
 EOF

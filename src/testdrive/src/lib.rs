@@ -14,7 +14,7 @@
 use std::fs::File;
 use std::io::{self, Read};
 
-use self::error::{InputError, ResultExt};
+use self::error::InputError;
 use self::parser::LineReader;
 
 mod action;
@@ -24,7 +24,7 @@ mod parser;
 mod util;
 
 pub use self::action::Config;
-pub use self::error::Error;
+pub use self::error::{Error, ResultExt};
 
 /// Runs a testdrive script stored in a file.
 pub async fn run_file(config: &Config, filename: &str) -> Result<(), Error> {
@@ -40,7 +40,7 @@ pub async fn run_stdin(config: &Config) -> Result<(), Error> {
     let mut contents = String::new();
     io::stdin()
         .read_to_string(&mut contents)
-        .err_ctx("reading <stdin>".into())?;
+        .err_ctx("reading <stdin>")?;
     run_string(config, "<stdin>", &contents).await
 }
 
@@ -99,9 +99,25 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
             let redo = a.action.redo(&mut state);
             redo.await.map_err(|e| InputError { msg: e, pos: a.pos })?;
         }
-        state.reset_kinesis().await?;
+        let mut errors = Vec::new();
+        if let Err(e) = state.reset_s3().await {
+            errors.push(e);
+        }
+        if let Err(e) = state.reset_kinesis().await {
+            errors.push(e);
+        }
         drop(state);
-        state_cleanup.await?;
+        if let Err(e) = state_cleanup.await {
+            errors.push(e);
+        }
+
+        if !errors.is_empty() {
+            return Err(Error::General {
+                ctx: "Failed to clean up state at shut down".into(),
+                causes: errors.into_iter().map(Into::into).collect(),
+                hints: Vec::new(),
+            });
+        }
     }
     Ok(())
 }

@@ -19,4 +19,4 @@ cd "$(dirname "$0")/../../.."
 
 cd test/lang/csharp
 
-dotnet test
+dotnet test csharp-npgsql.csproj

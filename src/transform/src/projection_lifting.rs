@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::mem;
 
 use crate::TransformArgs;
-use expr::{Id, RelationExpr};
+use expr::{Id, MirRelationExpr};
 
 /// Hoist projections through operators.
 #[derive(Debug)]
@@ -24,7 +24,7 @@ pub struct ProjectionLifting;
 impl crate::Transform for ProjectionLifting {
     fn transform(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
         self.action(relation, &mut HashMap::new());
@@ -36,25 +36,25 @@ impl ProjectionLifting {
     /// Hoist projections through operators.
     pub fn action(
         &self,
-        relation: &mut RelationExpr,
+        relation: &mut MirRelationExpr,
         // Map from names to new get type and projection required at use.
         gets: &mut HashMap<Id, (repr::RelationType, Vec<usize>)>,
     ) {
         match relation {
-            RelationExpr::Constant { .. } => {}
-            RelationExpr::Get { id, .. } => {
+            MirRelationExpr::Constant { .. } => {}
+            MirRelationExpr::Get { id, .. } => {
                 if let Some((typ, columns)) = gets.get(id) {
-                    *relation = RelationExpr::Get {
+                    *relation = MirRelationExpr::Get {
                         id: *id,
                         typ: typ.clone(),
                     }
                     .project(columns.clone());
                 }
             }
-            RelationExpr::Let { id, value, body } => {
+            MirRelationExpr::Let { id, value, body } => {
                 self.action(value, gets);
                 let id = Id::Local(*id);
-                if let RelationExpr::Project { input, outputs } = &mut **value {
+                if let MirRelationExpr::Project { input, outputs } = &mut **value {
                     let typ = input.typ();
                     let prior = gets.insert(id, (typ, outputs.clone()));
                     assert!(!prior.is_some());
@@ -64,9 +64,9 @@ impl ProjectionLifting {
                 self.action(body, gets);
                 gets.remove(&id);
             }
-            RelationExpr::Project { input, outputs } => {
+            MirRelationExpr::Project { input, outputs } => {
                 self.action(input, gets);
-                if let RelationExpr::Project {
+                if let MirRelationExpr::Project {
                     input: inner,
                     outputs: inner_outputs,
                 } = &mut **input
@@ -77,9 +77,9 @@ impl ProjectionLifting {
                     **input = inner.take_dangerous();
                 }
             }
-            RelationExpr::Map { input, scalars } => {
+            MirRelationExpr::Map { input, scalars } => {
                 self.action(input, gets);
-                if let RelationExpr::Project {
+                if let MirRelationExpr::Project {
                     input: inner,
                     outputs,
                 } = &mut **input
@@ -100,14 +100,14 @@ impl ProjectionLifting {
                         .project(new_outputs);
                 }
             }
-            RelationExpr::FlatMap {
+            MirRelationExpr::FlatMap {
                 input,
                 func,
                 exprs,
                 demand,
             } => {
                 self.action(input, gets);
-                if let RelationExpr::Project {
+                if let MirRelationExpr::Project {
                     input: inner,
                     outputs,
                 } = &mut **input
@@ -130,9 +130,9 @@ impl ProjectionLifting {
                         .project(new_outputs);
                 }
             }
-            RelationExpr::Filter { input, predicates } => {
+            MirRelationExpr::Filter { input, predicates } => {
                 self.action(input, gets);
-                if let RelationExpr::Project {
+                if let MirRelationExpr::Project {
                     input: inner,
                     outputs,
                 } = &mut **input
@@ -147,7 +147,7 @@ impl ProjectionLifting {
                         .project(outputs.clone());
                 }
             }
-            RelationExpr::Join {
+            MirRelationExpr::Join {
                 inputs,
                 equivalences,
                 demand,
@@ -162,7 +162,7 @@ impl ProjectionLifting {
                 let mut temp_arity = 0;
 
                 for join_input in inputs.iter_mut() {
-                    if let RelationExpr::Project { input, outputs } = join_input {
+                    if let MirRelationExpr::Project { input, outputs } = join_input {
                         for output in outputs.iter() {
                             projection.push(temp_arity + *output);
                         }
@@ -193,7 +193,7 @@ impl ProjectionLifting {
                     *relation = relation.take_dangerous().project(projection);
                 }
             }
-            RelationExpr::Reduce {
+            MirRelationExpr::Reduce {
                 input,
                 group_key,
                 aggregates,
@@ -202,7 +202,7 @@ impl ProjectionLifting {
             } => {
                 // Reduce *absorbs* projections, which is amazing!
                 self.action(input, gets);
-                if let RelationExpr::Project {
+                if let MirRelationExpr::Project {
                     input: inner,
                     outputs,
                 } = &mut **input
@@ -216,7 +216,7 @@ impl ProjectionLifting {
                     **input = inner.take_dangerous();
                 }
             }
-            RelationExpr::TopK {
+            MirRelationExpr::TopK {
                 input,
                 group_key,
                 order_key,
@@ -225,7 +225,7 @@ impl ProjectionLifting {
                 monotonic: _,
             } => {
                 self.action(input, gets);
-                if let RelationExpr::Project {
+                if let MirRelationExpr::Project {
                     input: inner,
                     outputs,
                 } = &mut **input
@@ -247,9 +247,9 @@ impl ProjectionLifting {
                         .project(outputs.clone());
                 }
             }
-            RelationExpr::Negate { input } => {
+            MirRelationExpr::Negate { input } => {
                 self.action(input, gets);
-                if let RelationExpr::Project {
+                if let MirRelationExpr::Project {
                     input: inner,
                     outputs,
                 } = &mut **input
@@ -257,21 +257,21 @@ impl ProjectionLifting {
                     *relation = inner.take_dangerous().negate().project(outputs.clone());
                 }
             }
-            RelationExpr::Threshold { input } => {
+            MirRelationExpr::Threshold { input } => {
                 // We cannot, in general, lift projections out of threshold.
                 // If we could reason that the input cannot be negative, we
                 // would be able to lift the projection, but otherwise our
                 // action on weights need to accumulate the restricted rows.
                 self.action(input, gets);
             }
-            RelationExpr::Union { base, inputs } => {
+            MirRelationExpr::Union { base, inputs } => {
                 // We cannot, in general, lift projections out of unions.
                 self.action(base, gets);
                 for input in &mut *inputs {
                     self.action(input, gets);
                 }
 
-                if let RelationExpr::Project {
+                if let MirRelationExpr::Project {
                     input: base_input,
                     outputs: base_outputs,
                 } = &mut **base
@@ -281,7 +281,7 @@ impl ProjectionLifting {
                     let mut can_lift = true;
                     for input in &mut *inputs {
                         match input {
-                            RelationExpr::Project { input, outputs }
+                            MirRelationExpr::Project { input, outputs }
                                 if input.typ() == base_typ && outputs == base_outputs => {}
                             _ => {
                                 can_lift = false;
@@ -295,7 +295,7 @@ impl ProjectionLifting {
                         **base = base_input.take_dangerous();
                         for inp in inputs {
                             match inp {
-                                RelationExpr::Project { input, .. } => {
+                                MirRelationExpr::Project { input, .. } => {
                                     *inp = input.take_dangerous();
                                 }
                                 _ => unreachable!(),
@@ -305,9 +305,9 @@ impl ProjectionLifting {
                     }
                 }
             }
-            RelationExpr::ArrangeBy { input, keys } => {
+            MirRelationExpr::ArrangeBy { input, keys } => {
                 self.action(input, gets);
-                if let RelationExpr::Project {
+                if let MirRelationExpr::Project {
                     input: inner,
                     outputs,
                 } = &mut **input
