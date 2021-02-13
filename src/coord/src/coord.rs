@@ -61,7 +61,7 @@ use sql::ast::{
     CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
     FetchStatement, Ident, ObjectType, Raw, Statement,
 };
-use sql::catalog::Catalog as _;
+use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName, SchemaName};
 use sql::plan::StatementDesc;
 use sql::plan::{
@@ -2253,6 +2253,13 @@ impl Coordinator {
                     if let TransactionOps::Writes(inserts) = ops {
                         let timestamp = self.get_write_ts();
                         for WriteOp { id, rows } in inserts {
+                            // Re-verify this id exists.
+                            if self.catalog.try_get_by_id(id).is_none() {
+                                return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                                    id.to_string(),
+                                )));
+                            }
+
                             let updates = rows
                                 .into_iter()
                                 .map(|(row, diff)| Update {

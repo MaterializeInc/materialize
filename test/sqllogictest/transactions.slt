@@ -166,3 +166,24 @@ simple
 COMMIT
 ----
 COMPLETE 0
+
+# Regression for #5725
+statement ok
+CREATE TABLE t5727 (i INT)
+
+simple
+BEGIN;
+INSERT INTO t VALUES (1);
+----
+COMPLETE 0
+COMPLETE 1
+
+simple conn=drop
+DROP TABLE t
+----
+COMPLETE 0
+
+simple
+COMMIT
+----
+db error: ERROR: unknown catalog item 'u1'
