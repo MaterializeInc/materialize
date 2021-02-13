@@ -8,21 +8,23 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use log::{error, info, trace};
+use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
+use log::{debug, error, info, trace};
 use tokio::select;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use dataflow::source::cache::RecordFileMetadata;
 use dataflow::CacheMessage;
-use dataflow_types::{ExternalSourceConnector, SourceConnector};
+use dataflow_types::{ExternalSourceConnector, SourceConnector, Update};
 use expr::GlobalId;
-use repr::CachedRecord;
+use repr::{CachedRecord, Row};
 
 // Interval at which Cacher will try to flush out pending records
 static CACHE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
@@ -459,6 +461,199 @@ fn extract_prefix(
     }
 
     records.drain(..prefix_length).collect()
+}
+
+pub struct Tables {
+    path: PathBuf,
+    files: HashMap<GlobalId, File>,
+}
+
+impl Tables {
+    pub fn new(path: PathBuf) -> Result<Self, anyhow::Error> {
+        fs::create_dir_all(&path)
+            .with_context(|| anyhow!("trying to create tables directory: {:#?}", path))?;
+        Ok(Self {
+            path,
+            files: HashMap::new(),
+        })
+    }
+
+    // TODO make this path use cluster_id
+    fn get_path(&self, id: GlobalId) -> PathBuf {
+        self.path.join(id.to_string())
+    }
+
+    pub fn create_table(&mut self, id: GlobalId) -> Result<(), anyhow::Error> {
+        if self.files.contains_key(&id) {
+            bail!("asked to create table {:?} that was already created", id)
+        }
+
+        let file_path = self.get_path(id);
+        let file = fs::OpenOptions::new()
+            .append(true)
+            .create_new(true)
+            .open(&file_path)
+            .with_context(|| {
+                anyhow!(
+                    "trying to create file for table: {} path: {:#?}",
+                    id,
+                    file_path
+                )
+            })?;
+
+        self.files.insert(id, file);
+        Ok(())
+    }
+
+    pub fn drop_table(&mut self, id: GlobalId) -> Result<(), anyhow::Error> {
+        if !self.files.contains_key(&id) {
+            bail!("asked to delete table {:?} that doesn't exist", id)
+        }
+
+        let file = self.files.remove(&id).expect("file known to exist");
+        // explicitly close this file descriptor
+        drop(file);
+
+        fs::remove_file(self.path.join(id.to_string()))
+            .with_context(|| anyhow!("trying to remove table {}", id))?;
+
+        Ok(())
+    }
+
+    pub fn write_updates(&mut self, id: GlobalId, updates: &[Update]) -> Result<(), anyhow::Error> {
+        if !self.files.contains_key(&id) {
+            // TODO get rid of this later
+            panic!("asked to write to unknown table: {}", id)
+        }
+
+        let file = self.files.get_mut(&id).expect("file known to exist");
+        let mut buf = Vec::new();
+        for update in updates {
+            encode_update(update, &mut buf)?;
+        }
+        file.write_all(&buf)?;
+        file.flush()?;
+
+        Ok(())
+    }
+
+    pub fn reload_table(&mut self, id: GlobalId) -> Result<Vec<Update>, anyhow::Error> {
+        // We need to find the proper file again, open it,
+        // read back its contents into a Vec<Update>
+        // send that back to the coord
+        // TODO: note that the last step is not necessary once we
+        // read from the file like a proper source
+
+        let path = self.get_path(id);
+        debug!("reading table data from {}", path.display());
+        let data = fs::read(&path).unwrap();
+
+        let file = fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .with_context(|| {
+                anyhow!("trying to reopen file for table: {} path: {:#?}", id, path)
+            })?;
+
+        self.files.insert(id, file);
+
+        Ok(TableIter::new(data).collect())
+    }
+}
+
+/// Write a 20 byte header + length-prefixed Row to a buffer
+/// The header contains 4 byte bool - is it a progress update true / false (0x1, 0x0)?
+/// TODO could use the other bytes for some magic
+/// 8 bytes timestamp
+/// 8 bytes diff
+fn encode_update(update: &Update, buf: &mut Vec<u8>) -> Result<(), anyhow::Error> {
+    assert!(update.diff != 0);
+    assert!(update.timestamp > 0);
+    let data = update.row.data();
+    assert!(data.len() > 0);
+
+    if data.len() >= u32::MAX as usize {
+        bail!("failed to encode row: row too large");
+    }
+
+    // Write out the header
+    // Not a progress update so - 0
+    buf.write_u32::<NetworkEndian>(0).unwrap();
+    buf.write_u64::<NetworkEndian>(update.timestamp).unwrap();
+    buf.write_i64::<NetworkEndian>(update.diff as i64).unwrap();
+
+    // Now write out the data
+    buf.write_u32::<NetworkEndian>(data.len() as u32)
+        .expect("writes to vec cannot fail");
+    buf.extend_from_slice(data);
+    Ok(())
+}
+
+fn read_update(buf: &[u8], offset: usize) -> Option<(Update, usize)> {
+    if offset >= buf.len() {
+        return None;
+    }
+
+    // Let's start by only looking at the buffer at the offset.
+    let (_, data) = buf.split_at(offset);
+
+    // Let's read the header first
+    let mut cursor = Cursor::new(&data);
+
+    let is_progress = cursor.read_u32::<NetworkEndian>().unwrap();
+    let timestamp = cursor.read_u64::<NetworkEndian>().unwrap();
+    let diff = cursor.read_i64::<NetworkEndian>().unwrap() as isize;
+    let len = cursor.read_u32::<NetworkEndian>().unwrap() as usize;
+
+    // TODO: change this later
+    assert!(is_progress == 0);
+    assert!(timestamp > 0);
+    assert!(diff != 0);
+    assert!(len != 0);
+
+    // Grab the next len bytes after the 24 byte length header, and turn
+    // it into a vector so that we can extract things from it as a Row.
+    // TODO: could we avoid the extra allocation here?
+    let (_, rest) = data.split_at(24);
+    let row = rest[..len].to_vec();
+
+    let row = unsafe { Row::new(row) };
+    Some((
+        Update {
+            row,
+            timestamp,
+            diff,
+        },
+        offset + 24 + len,
+    ))
+}
+
+/// Iterator through a set of table updates.
+#[derive(Debug)]
+pub struct TableIter {
+    /// Underlying data from which we read the records.
+    pub data: Vec<u8>,
+    /// Offset into the data.
+    pub offset: usize,
+}
+
+impl Iterator for TableIter {
+    type Item = Update;
+
+    fn next(&mut self) -> Option<Update> {
+        if let Some((update, next_offset)) = read_update(&self.data, self.offset) {
+            self.offset = next_offset;
+            Some(update)
+        } else {
+            None
+        }
+    }
+}
+
+impl TableIter {
+    pub fn new(data: Vec<u8>) -> Self {
+        Self { data, offset: 0 }
+    }
 }
 
 #[test]

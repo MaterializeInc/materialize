@@ -71,7 +71,7 @@ use sql::plan::{
 use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
-use crate::cache::{CacheConfig, Cacher};
+use crate::cache::{CacheConfig, Cacher, Tables};
 use crate::catalog::builtin::{
     BUILTINS, MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES,
     MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES,
@@ -184,6 +184,8 @@ pub struct Coordinator {
     /// Map from connection id to a tokio::sync::watch sender that can be used to
     /// signal to the receiver end that a cancel message has been sent.
     cancel: HashMap<u32, Arc<watch::Sender<Cancelled>>>,
+    /// Map of all persisted tables.
+    tables: Tables,
 }
 
 impl Coordinator {
@@ -287,7 +289,14 @@ impl Coordinator {
 
         for &(id, oid, name, item) in &items {
             match item {
-                CatalogItem::Table(_) | CatalogItem::View(_) => (),
+                CatalogItem::View(_) => (),
+                CatalogItem::Table(_) => {
+                    if !id.is_system() {
+                        // TODO gross hack for now
+                        let updates = self.tables.reload_table(*id)?;
+                        self.broadcast(SequencedCommand::Insert { id: *id, updates });
+                    }
+                }
                 CatalogItem::Sink(sink) => {
                     let builder = match &sink.connector {
                         SinkConnectorState::Pending(builder) => builder,
@@ -1849,6 +1858,10 @@ impl Coordinator {
             .await
         {
             Ok(_) => {
+                // TODO what do we do when this errors?
+                // We should maybe create the file before commit
+                // the catalog
+                self.tables.create_table(table_id)?;
                 self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
                     .await?;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
@@ -2182,7 +2195,13 @@ impl Coordinator {
                 ExecuteResponse::DroppedSource
             }
             ObjectType::View => ExecuteResponse::DroppedView,
-            ObjectType::Table => ExecuteResponse::DroppedTable,
+            ObjectType::Table => {
+                for id in items.iter() {
+                    self.tables.drop_table(*id)?;
+                }
+
+                ExecuteResponse::DroppedTable
+            }
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
             ObjectType::Type => ExecuteResponse::DroppedType,
@@ -2260,7 +2279,7 @@ impl Coordinator {
                                 )));
                             }
 
-                            let updates = rows
+                            let updates: Vec<_> = rows
                                 .into_iter()
                                 .map(|(row, diff)| Update {
                                     row,
@@ -2269,6 +2288,10 @@ impl Coordinator {
                                 })
                                 .collect();
 
+                            // TODO this is almost certainly going
+                            // to cause problems with things that aren't
+                            // tables
+                            self.tables.write_updates(id, &updates)?;
                             self.broadcast(SequencedCommand::Insert { id, updates });
                         }
                     }
@@ -3401,6 +3424,7 @@ pub async fn serve(
         need_advance: true,
         transient_id_counter: 1,
         cancel: HashMap::new(),
+        tables: Tables::new(data_directory.join("tables"))?,
     };
     coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
     if let Some(config) = &logging {
