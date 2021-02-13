@@ -62,7 +62,15 @@ Wrap your release notes at the 80 character mark.
 
 - Support [gzip-compressed](/sql/create-source/text-file/#compression) file sources {{% gh 5392 %}}.
 
+- Restore the `-D` command-line option as the short form of the
+  [`--data-directory`](/cli/#data-directory) option.
+
 {{% version-header v0.7.0 %}}
+
+- **Known issue.** The `-D` command-line option, shorthand for the
+  `--data-directory` option, was inadvertently removed.
+
+  It will be restored in the next release.
 
 - **Breaking change.** Require a valid user name when [connecting to
   Materialize](/connect/cli#connection-details). Previously, Materialize did not
