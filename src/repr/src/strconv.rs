@@ -27,9 +27,15 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+use std::num::FpCategory;
 
 use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use fast_float::FastFloat;
+use lazy_static::lazy_static;
+use num_traits::Float as NumFloat;
+use regex::bytes::Regex;
+use ryu::Float as RyuFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -63,7 +69,7 @@ pub fn parse_bool(s: &str) -> Result<bool, ParseError> {
     match s.trim().to_lowercase().as_str() {
         "t" | "tr" | "tru" | "true" | "y" | "ye" | "yes" | "on" | "1" => Ok(true),
         "f" | "fa" | "fal" | "fals" | "false" | "n" | "no" | "of" | "off" | "0" => Ok(false),
-        _ => Err(ParseError::new("boolean", s)),
+        _ => Err(ParseError::invalid_input_syntax("boolean", s)),
     }
 }
 
@@ -97,7 +103,7 @@ where
 pub fn parse_int32(s: &str) -> Result<i32, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::new("integer", s).with_details(e))
+        .map_err(|e| ParseError::invalid_input_syntax("integer", s).with_details(e))
 }
 
 /// Writes an [`i32`] to `buf`.
@@ -113,7 +119,7 @@ where
 pub fn parse_int64(s: &str) -> Result<i64, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::new("bigint", s).with_details(e))
+        .map_err(|e| ParseError::invalid_input_syntax("bigint", s).with_details(e))
 }
 
 /// Writes an `i64` to `buf`.
@@ -125,9 +131,87 @@ where
     Nestable::Yes
 }
 
+fn parse_float<Fl>(type_name: &'static str, s: &str) -> Result<Fl, ParseError>
+where
+    Fl: NumFloat + FastFloat,
+{
+    // Matching PostgreSQL's float parsing behavior is tricky. PostgreSQL's
+    // implementation delegates almost entirely to strtof(3)/strtod(3), which
+    // will report an out-of-range error if a number was rounded to zero or
+    // infinity. For example, parsing "1e70" as a 32-bit float will yield an
+    // out-of-range error because it is rounded to infinity, but parsing an
+    // explicitly-specified "inf" will yield infinity without an error.
+    //
+    // To @benesch's knowledge, there is no Rust implementation of float parsing
+    // that reports whether underflow or overflow occurred. So we figure it out
+    // ourselves after the fact. If fast_float returns infinity and the input
+    // was not an explicitly-specified infinity, then we know overflow occurred.
+    // If fast_float returns zero and the input was not an explicitly-specified
+    // zero, then we know underflow occurred.
+
+    lazy_static! {
+        // Matches `0`, `-0`, `+0`, `000000.00000`, `0.0e10`, et al.
+        static ref ZERO_RE: Regex = Regex::new("(?i-u)^[-+]?0+(\\.0+)?(e|$)").unwrap();
+        // Matches `inf`, `-inf`, `+inf`, `infinity`, et al.
+        static ref INF_RE: Regex = Regex::new("(?i-u)^[-+]?inf").unwrap();
+    }
+
+    let buf = s.trim().as_bytes();
+    let f: Fl =
+        fast_float::parse(buf).map_err(|_| ParseError::invalid_input_syntax(type_name, s))?;
+    match f.classify() {
+        FpCategory::Infinite if !INF_RE.is_match(buf) => {
+            Err(ParseError::out_of_range(type_name, s))
+        }
+        FpCategory::Zero if !ZERO_RE.is_match(buf) => Err(ParseError::out_of_range(type_name, s)),
+        _ => Ok(f),
+    }
+}
+
+fn format_float<F, Fl>(buf: &mut F, f: Fl) -> Nestable
+where
+    F: FormatBuffer,
+    Fl: NumFloat + RyuFloat,
+{
+    // Use ryu rather than the standard library. ryu uses scientific notation
+    // when possible, which better matches PostgreSQL. The standard library's
+    // `ToString` implementations print all available digits, which is rather
+    // verbose.
+    //
+    // Note that we have to fix up ryu's formatting in a few cases to match
+    // PostgreSQL. PostgreSQL spells out "Infinity" in full, never emits a
+    // trailing ".0", and formats positive exponents as e.g. "1e+10" rather than
+    // "1e10". If we need to speed up float formatting, we can look into forking
+    // ryu and making these edits directly, but for now it doesn't seem worth
+    // it.
+
+    match f.classify() {
+        FpCategory::Infinite if f.is_sign_negative() => buf.write_str("-Infinity"),
+        FpCategory::Infinite => buf.write_str("Infinity"),
+        FpCategory::Nan => buf.write_str("NaN"),
+        _ => {
+            debug_assert!(f.is_finite());
+            let mut ryu_buf = ryu::Buffer::new();
+            let mut s = ryu_buf.format_finite(f);
+            if let Some(trimmed) = s.strip_suffix(".0") {
+                s = trimmed;
+            }
+            let mut chars = s.chars().peekable();
+            while let Some(ch) = chars.next() {
+                buf.write_char(ch);
+                if ch == 'e' && chars.peek() != Some(&'-') {
+                    buf.write_char('+');
+                }
+            }
+        }
+    }
+
+    Nestable::Yes
+}
+
 /// Parses an `f32` from `s`.
 pub fn parse_float32(s: &str) -> Result<f32, ParseError> {
-    fast_float::parse(s).map_err(|_| ParseError::new("real", s))
+    parse_float("real", s)
 }
 
 /// Writes an `f32` to `buf`.
@@ -135,21 +219,12 @@ pub fn format_float32<F>(buf: &mut F, f: f32) -> Nestable
 where
     F: FormatBuffer,
 {
-    if f.is_infinite() {
-        if f.is_sign_negative() {
-            buf.write_str("-Infinity")
-        } else {
-            buf.write_str("Infinity")
-        }
-    } else {
-        write!(buf, "{}", f)
-    }
-    Nestable::Yes
+    format_float(buf, f)
 }
 
 /// Parses an `f64` from `s`.
 pub fn parse_float64(s: &str) -> Result<f64, ParseError> {
-    fast_float::parse(s).map_err(|_| ParseError::new("double precision", s))
+    parse_float("double precision", s)
 }
 
 /// Writes an `f64` to `buf`.
@@ -157,16 +232,7 @@ pub fn format_float64<F>(buf: &mut F, f: f64) -> Nestable
 where
     F: FormatBuffer,
 {
-    if f.is_infinite() {
-        if f.is_sign_negative() {
-            buf.write_str("-Infinity")
-        } else {
-            buf.write_str("Infinity")
-        }
-    } else {
-        write!(buf, "{}", f)
-    }
-    Nestable::Yes
+    format_float(buf, f)
 }
 
 /// Use the following grammar to parse `s` into:
@@ -223,7 +289,7 @@ fn parse_timestamp_string(s: &str) -> Result<(NaiveDate, NaiveTime, datetime::Ti
 pub fn parse_date(s: &str) -> Result<NaiveDate, ParseError> {
     match parse_timestamp_string(s) {
         Ok((date, _, _)) => Ok(date),
-        Err(e) => Err(ParseError::new("date", s).with_details(e)),
+        Err(e) => Err(ParseError::invalid_input_syntax("date", s).with_details(e)),
     }
 }
 
@@ -246,7 +312,7 @@ where
 pub fn parse_time(s: &str) -> Result<NaiveTime, ParseError> {
     ParsedDateTime::build_parsed_datetime_time(&s)
         .and_then(|pdt| pdt.compute_time())
-        .map_err(|e| ParseError::new("time", s).with_details(e))
+        .map_err(|e| ParseError::invalid_input_syntax("time", s).with_details(e))
 }
 
 /// Writes a [`NaiveDateTime`] timestamp to `buf`.
@@ -263,7 +329,7 @@ where
 pub fn parse_timestamp(s: &str) -> Result<NaiveDateTime, ParseError> {
     match parse_timestamp_string(s) {
         Ok((date, time, _)) => Ok(date.and_time(time)),
-        Err(e) => Err(ParseError::new("timestamp", s).with_details(e)),
+        Err(e) => Err(ParseError::invalid_input_syntax("timestamp", s).with_details(e)),
     }
 }
 
@@ -299,7 +365,9 @@ pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
             };
             Ok(DateTime::from_utc(dt - offset, Utc))
         })
-        .map_err(|e| ParseError::new("timestamp with time zone", s).with_details(e))
+        .map_err(|e| {
+            ParseError::invalid_input_syntax("timestamp with time zone", s).with_details(e)
+        })
 }
 
 /// Writes a [`DateTime<Utc>`] timestamp to `buf`.
@@ -343,7 +411,7 @@ pub fn parse_interval(s: &str) -> Result<Interval, ParseError> {
 pub fn parse_interval_w_disambiguator(s: &str, d: DateTimeField) -> Result<Interval, ParseError> {
     ParsedDateTime::build_parsed_datetime_interval(&s, d)
         .and_then(|pdt| pdt.compute_interval())
-        .map_err(|e| ParseError::new("interval", s).with_details(e))
+        .map_err(|e| ParseError::invalid_input_syntax("interval", s).with_details(e))
 }
 
 pub fn format_interval<F>(buf: &mut F, iv: Interval) -> Nestable
@@ -357,7 +425,7 @@ where
 pub fn parse_decimal(s: &str) -> Result<Decimal, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::new("numeric", s).with_details(e))
+        .map_err(|e| ParseError::invalid_input_syntax("numeric", s).with_details(e))
 }
 
 pub fn format_decimal<F>(buf: &mut F, d: &Decimal) -> Nestable
@@ -383,7 +451,8 @@ pub fn parse_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
     // [0]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.9
     // [1]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.10
     if let Some(remainder) = s.strip_prefix(r"\x") {
-        hex::decode(remainder).map_err(|e| ParseError::new("bytea", s).with_details(e))
+        hex::decode(remainder)
+            .map_err(|e| ParseError::invalid_input_syntax("bytea", s).with_details(e))
     } else {
         parse_bytes_traditional(s)
     }
@@ -402,7 +471,8 @@ fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
         }
         match bytes.next() {
             None => {
-                return Err(ParseError::new("bytea", s).with_details("ends with escape character"))
+                return Err(ParseError::invalid_input_syntax("bytea", s)
+                    .with_details("ends with escape character"))
             }
             Some(b'\\') => out.push(b'\\'),
             b => match (b, bytes.next(), bytes.next()) {
@@ -410,7 +480,8 @@ fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
                     out.push(((d2 - b'0') << 6) + ((d1 - b'0') << 3) + (d0 - b'0'));
                 }
                 _ => {
-                    return Err(ParseError::new("bytea", s).with_details("invalid escape sequence"))
+                    return Err(ParseError::invalid_input_syntax("bytea", s)
+                        .with_details("invalid escape sequence"))
                 }
             },
         }
@@ -429,7 +500,7 @@ where
 pub fn parse_jsonb(s: &str) -> Result<Jsonb, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::new("jsonb", s).with_details(e))
+        .map_err(|e| ParseError::invalid_input_syntax("jsonb", s).with_details(e))
 }
 
 pub fn format_jsonb<F>(buf: &mut F, jsonb: JsonbRef) -> Nestable
@@ -450,7 +521,7 @@ where
 pub fn parse_uuid(s: &str) -> Result<Uuid, ParseError> {
     s.trim()
         .parse()
-        .map_err(|e| ParseError::new("uuid", s).with_details(e))
+        .map_err(|e| ParseError::invalid_input_syntax("uuid", s).with_details(e))
 }
 
 pub fn format_uuid<F>(buf: &mut F, uuid: Uuid) -> Nestable
@@ -491,7 +562,7 @@ where
     E: fmt::Display,
 {
     parse_list_inner(s, is_element_type_list, make_null, gen_elem)
-        .map_err(|details| ParseError::new("list", s).with_details(details))
+        .map_err(|details| ParseError::invalid_input_syntax("list", s).with_details(details))
 }
 
 // `parse_list_inner`'s separation from `parse_list` simplifies error handling
@@ -699,7 +770,7 @@ where
     E: fmt::Display,
 {
     parse_map_inner(s, is_value_type_map, gen_elem)
-        .map_err(|details| ParseError::new("map", s).with_details(details))
+        .map_err(|details| ParseError::invalid_input_syntax("map", s).with_details(details))
 }
 
 pub fn parse_map_inner<'a, V, E>(
@@ -1082,27 +1153,49 @@ where
     }
 }
 
-/// An error while parsing input as a type.
+/// An error while parsing an input as a type.
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct ParseError {
+    kind: ParseErrorKind,
     type_name: String,
     input: String,
     details: Option<String>,
+}
+
+#[derive(Ord, PartialOrd, Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum ParseErrorKind {
+    OutOfRange,
+    InvalidInputSyntax,
 }
 
 impl ParseError {
     // To ensure that reversing the parameters causes a compile-time error, we
     // require that `type_name` be a string literal, even though `ParseError`
     // itself stores the type name as a `String`.
-    fn new<S>(type_name: &'static str, input: S) -> ParseError
+    fn new<S>(kind: ParseErrorKind, type_name: &'static str, input: S) -> ParseError
     where
         S: Into<String>,
     {
         ParseError {
+            kind,
             type_name: type_name.into(),
             input: input.into(),
             details: None,
         }
+    }
+
+    fn out_of_range<S>(type_name: &'static str, input: S) -> ParseError
+    where
+        S: Into<String>,
+    {
+        ParseError::new(ParseErrorKind::OutOfRange, type_name, input)
+    }
+
+    fn invalid_input_syntax<S>(type_name: &'static str, input: S) -> ParseError
+    where
+        S: Into<String>,
+    {
+        ParseError::new(ParseErrorKind::InvalidInputSyntax, type_name, input)
     }
 
     fn with_details<D>(mut self, details: D) -> ParseError
@@ -1116,11 +1209,27 @@ impl ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "invalid input syntax for {}: ", self.type_name)?;
-        if let Some(details) = &self.details {
-            write!(f, "{}: ", details)?;
+        match self.kind {
+            ParseErrorKind::OutOfRange => {
+                write!(
+                    f,
+                    "{} is out of range for type {}",
+                    self.input.quoted(),
+                    self.type_name
+                )?;
+                if let Some(details) = &self.details {
+                    write!(f, "{}: ", details)?;
+                }
+                Ok(())
+            }
+            ParseErrorKind::InvalidInputSyntax => {
+                write!(f, "invalid input syntax for type {}: ", self.type_name)?;
+                if let Some(details) = &self.details {
+                    write!(f, "{}: ", details)?;
+                }
+                write!(f, "{}", self.input.quoted())
+            }
         }
-        write!(f, "{}", self.input.quoted())
     }
 }
 

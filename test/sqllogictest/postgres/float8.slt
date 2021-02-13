@@ -1,0 +1,377 @@
+# Copyright 1994, Regents of the University of California.
+# Copyright 1996-2019 PostgreSQL Global Development Group.
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# This file is derived from the regression test suite in PostgreSQL.
+# The original file was retrieved on February 10, 2021 from:
+#
+#     https://github.com/postgres/postgres/blob/64990081504661ff5c04dbf20cc4252be66ab149/src/test/regress/expected/float8.out
+#
+# The original source code is subject to the terms of the PostgreSQL
+# license, a copy of which can be found in the LICENSE file at the
+# root of this repository.
+
+mode cockroach
+
+statement ok
+CREATE TABLE float8_tbl (f1 float8)
+
+statement ok
+INSERT INTO float8_tbl (f1) VALUES ('    0.0   '), ('1004.30  '), ('   -34.84'), ('1.2345678901234e+200'), ('1.2345678901234e-200')
+
+# test for underflow and overflow handling
+query error "10e400" is out of range for type double precision
+SELECT '10e400'::float8
+
+query error "-10e400" is out of range for type double precision
+SELECT '-10e400'::float8
+
+query error "10e-400" is out of range for type double precision
+SELECT '10e-400'::float8
+
+query error "-10e-400" is out of range for type double precision
+SELECT '-10e-400'::float8
+
+# bad input
+query error invalid input syntax for type double precision: ""
+SELECT ''::float8
+
+query error invalid input syntax for type double precision: "     "
+SELECT '     '::float8
+
+query error invalid input syntax for type double precision: "xyz"
+SELECT 'xyz'::float8
+
+query error invalid input syntax for type double precision: "5.0.0"
+SELECT '5.0.0'::float8
+
+query error invalid input syntax for type double precision: "5 . 0"
+SELECT '5 . 0'::float8
+
+query error invalid input syntax for type double precision: "5.   0"
+SELECT '5.   0'::float8
+
+query error invalid input syntax for type double precision: "    - 3"
+SELECT '    - 3'::float8
+
+query error invalid input syntax for type double precision: "123           5"
+SELECT '123           5'::float8
+
+# special inputs
+query T
+SELECT 'NaN'::float8::text
+----
+NaN
+
+query T
+SELECT 'nan'::float8::text
+----
+NaN
+
+query T
+SELECT '   NAN  '::float8::text
+----
+NaN
+
+query T
+SELECT 'infinity'::float8::text
+----
+Infinity
+
+query T
+SELECT '          -INFINiTY   '::float8::text
+----
+-Infinity
+
+# bad special inputs
+query error invalid input syntax for type double precision: "N A N"
+SELECT 'N A N'::float8::text
+
+query error invalid input syntax for type double precision: "NaN x"
+SELECT 'NaN x'::float8;
+
+query error invalid input syntax for type double precision: " INFINITY    x"
+SELECT ' INFINITY    x'::float8
+
+query T
+SELECT ('Infinity'::float8 + 100.0)::text
+----
+Infinity
+
+query T
+SELECT ('Infinity'::float8 / 'Infinity'::float8)::text
+----
+NaN
+
+query R
+SELECT '42'::float8 / 'Infinity'::float8
+----
+0
+
+query T
+SELECT ('nan'::float8 / 'nan'::float8)::text
+----
+NaN
+
+query T
+SELECT ('nan'::float8 / '0'::float8)::text
+----
+NaN
+
+# TODO(benesch): re-enable when the numeric type supports NaN.
+#
+# query T
+# SELECT 'nan'::numeric::float8
+# ----
+# NaN
+
+query T rowsort
+SELECT f1::text FROM float8_tbl
+----
+0
+1004.3
+-34.84
+1.2345678901234e+200
+1.2345678901234e-200
+
+query T
+SELECT f.f1::text FROM float8_tbl f WHERE f.f1 <> '1004.3'
+----
+0
+-34.84
+1.2345678901234e+200
+1.2345678901234e-200
+
+query T
+SELECT f.f1::text FROM float8_tbl f WHERE f.f1 = '1004.3'
+----
+1004.3
+
+query T rowsort
+SELECT f.f1::text FROM float8_tbl f WHERE '1004.3' > f.f1
+----
+0
+-34.84
+1.2345678901234e-200
+
+query T rowsort
+SELECT f.f1::text FROM float8_tbl f WHERE  f.f1 < '1004.3'
+----
+0
+-34.84
+1.2345678901234e-200
+
+query T rowsort
+SELECT f.f1::text FROM float8_tbl f WHERE '1004.3' >= f.f1
+----
+0
+1004.3
+-34.84
+1.2345678901234e-200
+
+query T rowsort
+SELECT f.f1::text FROM float8_tbl f WHERE  f.f1 <= '1004.3'
+----
+0
+1004.3
+-34.84
+1.2345678901234e-200
+
+query TT rowsort
+SELECT f.f1::text, (f.f1 * '-10')::text AS x FROM float8_tbl f WHERE f.f1 > '0.0'
+----
+1004.3                -10043
+1.2345678901234e+200  -1.2345678901234e+201
+1.2345678901234e-200  -1.2345678901234e-199
+
+query TT rowsort
+SELECT f.f1::text, (f.f1 + '-10')::text AS x FROM float8_tbl f WHERE f.f1 > '0.0'
+----
+1004.3                994.3
+1.2345678901234e+200  1.2345678901234e+200
+1.2345678901234e-200  -10
+
+query TT rowsort
+SELECT f.f1::text, (f.f1 / '-10')::text AS x FROM float8_tbl f WHERE f.f1 > '0.0'
+----
+              1004.3   -100.42999999999999
+1.2345678901234e+200  -1.2345678901234e+199
+1.2345678901234e-200  -1.2345678901234e-201
+
+query TT rowsort
+SELECT f.f1::text, (f.f1 - '-10')::text AS x FROM float8_tbl f WHERE f.f1 > '0.0';
+----
+1004.3                1014.3
+1.2345678901234e+200  1.2345678901234e+200
+1.2345678901234e-200  10
+
+# -- round
+query TT rowsort
+SELECT f.f1::text, round(f.f1)::text AS round_f1 FROM float8_tbl f
+----
+0                     0
+1004.3                1004
+-34.84                -35
+1.2345678901234e+200  1.2345678901234e+200
+1.2345678901234e-200  0
+
+# ceil / ceiling
+query T rowsort
+select ceil(f1)::text as ceil_f1 from float8_tbl f
+----
+0
+1005
+-34
+1.2345678901234e+200
+1
+
+# TODO(benesch): support ceiling.
+#
+# query T rowsort
+# select ceiling(f1)::text as ceiling_f1 from float8_tbl f;
+# ----
+# 0
+# 1005
+# -34
+# 1.2345678901234e+200
+# 1
+
+# floor
+query T rowsort
+select floor(f1)::text as floor_f1 from float8_tbl f
+----
+0
+1004
+-35
+1.2345678901234e+200
+0
+
+# TODO(benesch): support sign.
+#
+# -- sign
+# select sign(f1) as sign_f1 from float8_tbl f;
+#  sign_f1
+# ---------
+#        0
+#        1
+#       -1
+#        1
+#        1
+# (5 rows)
+
+# test for over- and underflow
+query error "10e400" is out of range for type double precision
+SELECT '10e400'::float8
+
+query error "-10e400" is out of range for type double precision
+SELECT '-10e400'::float8
+
+query error "10e-400" is out of range for type double precision
+SELECT '10e-400'::float8
+
+query error "-10e-400" is out of range for type double precision
+SELECT '-10e-400'::float8
+
+# test edge-case coercions to integer
+
+# TODO(benesch): enable when we support `int2`.
+#
+# SELECT '32767.4'::float8::int2;
+#  int2
+# -------
+#  32767
+# (1 row)
+#
+# SELECT '32767.6'::float8::int2;
+# ERROR:  smallint out of range
+# SELECT '-32768.4'::float8::int2;
+#   int2
+# --------
+#  -32768
+# (1 row)
+#
+# SELECT '-32768.6'::float8::int2;
+# ERROR:  smallint out of range
+# SELECT '2147483647.4'::float8::int4;
+#     int4
+# ------------
+#  2147483647
+# (1 row)
+
+query error integer out of range
+SELECT '2147483647.6'::float8::int4
+
+query I
+SELECT '-2147483648.4'::float8::int4
+----
+-2147483648
+
+query error integer out of range
+SELECT '-2147483648.6'::float8::int4
+
+query I
+SELECT '9223372036854773760'::float8::int8
+----
+9223372036854773760
+
+query error bigint out of range
+SELECT '9223372036854775807'::float8::int8
+
+query I
+SELECT '-9223372036854775808.5'::float8::int8
+----
+-9223372036854775808
+
+query error bigint out of range
+SELECT '-9223372036854780000'::float8::int8
+
+query error bigint out of range
+SELECT '922337203685477580700.0'::float8::int8
+
+query RI rowsort
+SELECT x, x::int4 AS int4_value
+FROM (VALUES (-2.5::float8),
+             (-1.5::float8),
+             (-0.5::float8),
+             (0.0::float8),
+             (0.5::float8),
+             (1.5::float8),
+             (2.5::float8)) t(x);
+----
+-2.5  -2
+-1.5  -2
+-0.5  0
+0     0
+0.5   0
+1.5   2
+2.5   2
+
+query RI rowsort
+SELECT x, x::int8 AS int8_value
+FROM (VALUES (-2.5::float8),
+             (-1.5::float8),
+             (-0.5::float8),
+             (0.0::float8),
+             (0.5::float8),
+             (1.5::float8),
+             (2.5::float8)) t(x);
+----
+-2.5  -2
+-1.5  -2
+-0.5  0
+0     0
+0.5   0
+1.5   2
+2.5   2
+
+query T
+SELECT 4567890123456789::int8::float8::text
+----
+4567890123456789

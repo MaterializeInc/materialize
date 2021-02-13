@@ -695,9 +695,11 @@ impl fmt::Display for MirScalarExpr {
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum EvalError {
     DivisionByZero,
+    FloatOverflow,
+    FloatUnderflow,
     NumericFieldOverflow,
-    FloatOutOfRange,
-    IntegerOutOfRange,
+    Int32OutOfRange,
+    Int64OutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
     InvalidTimezone(String),
@@ -729,9 +731,11 @@ impl fmt::Display for EvalError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             EvalError::DivisionByZero => f.write_str("division by zero"),
+            EvalError::FloatOverflow => f.write_str("value out of range: overflow"),
+            EvalError::FloatUnderflow => f.write_str("value out of range: underflow"),
             EvalError::NumericFieldOverflow => f.write_str("numeric field overflow"),
-            EvalError::FloatOutOfRange => f.write_str("float out of range"),
-            EvalError::IntegerOutOfRange => f.write_str("integer out of range"),
+            EvalError::Int32OutOfRange => f.write_str("integer out of range"),
+            EvalError::Int64OutOfRange => f.write_str("bigint out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
             EvalError::InvalidTimezone(tz) => write!(f, "invalid time zone '{}'", tz),

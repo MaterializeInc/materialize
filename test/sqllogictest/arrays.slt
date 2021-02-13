@@ -67,7 +67,7 @@ true
 query error no overload for integer = text: arguments cannot be implicitly cast
 SELECT 1 = ANY(ARRAY['hi'::text])
 
-query error invalid input syntax for integer: invalid digit found in string: "hi"
+query error invalid input syntax for type integer: invalid digit found in string: "hi"
 select 'hi' = any(array[1]);
 
 query error cannot determine type of empty array

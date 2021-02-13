@@ -47,7 +47,7 @@ SELECT '日本語'::text::bytea::text
 ----
 \xe697a5e69cace8aa9e
 
-query error invalid input syntax for bytea: invalid escape sequence
+query error invalid input syntax for type bytea: invalid escape sequence
 SELECT '\400'::bytea
 
 # TODO(benesch): support bytea_output.
@@ -115,13 +115,13 @@ SELECT length('a\\b'::text::bytea)
 ----
 3
 
-query error invalid input syntax for bytea: invalid escape sequence
+query error invalid input syntax for type bytea: invalid escape sequence
 SELECT 'a\bcde'::text::bytea
 
-query error invalid input syntax for bytea: invalid escape sequence
+query error invalid input syntax for type bytea: invalid escape sequence
 SELECT 'a\01'::text::bytea
 
-query error invalid input syntax for bytea: ends with escape character
+query error invalid input syntax for type bytea: ends with escape character
 SELECT 'a\'::text::bytea
 
 subtest Regression_27950
