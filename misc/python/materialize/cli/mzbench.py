@@ -50,7 +50,7 @@ def main(
     if args.no_benchmark_this_checkout:
         git_references = args.git_references
     else:
-        git_refereences = [None, *args.git_references]
+        git_references = [None, *args.git_references]
 
     if args.verbose:
         build_tags = [None, *[mzbuild_tag(ref) for ref in args.git_references]]
