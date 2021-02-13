@@ -12,5 +12,8 @@ FROM python:3.9-slim
 COPY requirements.txt /tmp
 RUN pip install -r /tmp/requirements.txt
 
+RUN mkdir -p /usr/share/benchmarks/schemas
+COPY schemas /usr/share/benchmarks/schemas
+
 COPY wait_metric /usr/local/bin
 ENTRYPOINT ["wait_metric"]
