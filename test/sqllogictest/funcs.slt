@@ -473,6 +473,8 @@ EXPLAIN PLAN FOR SELECT (a::bool AND b::bool) IS NULL FROM t
 
 EOF
 
+mode cockroach
+
 # Test qualified function names.
 
 query I
@@ -651,6 +653,22 @@ query I
 SELECT array_length(ARRAY[]::int[], 1)
 ----
 NULL
+
+# Test strange collapsing behavior of nested empty arrays. See #5545.
+
+query TIII
+SELECT arr, array_lower(arr, 1), array_upper(arr, 1), array_length(arr, 1) FROM
+    (VALUES
+        (ARRAY[]::int[]),
+        (ARRAY[ARRAY[]]::int[]),
+        (ARRAY[ARRAY[], ARRAY[], ARRAY[]]::int[]),
+        (ARRAY[ARRAY[ARRAY[ARRAY[]]]]::int[])
+    ) AS _ (arr)
+----
+{}  NULL  NULL  NULL
+{}  NULL  NULL  NULL
+{}  NULL  NULL  NULL
+{}  NULL  NULL  NULL
 
 query T
 SELECT upper('a1Bd')
