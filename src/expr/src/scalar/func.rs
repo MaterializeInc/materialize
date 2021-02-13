@@ -3718,12 +3718,22 @@ fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> D
 /// (The arrays must also be of the same element type, but that is checked by
 /// the SQL type system, rather than checked here at runtime.)
 ///
-/// The lower bound of the additional dimension is always one. The length of
-/// the new dimension is equal to `datums.len()`.
+/// If all input arrays are zero-dimensional arrays, then the output is a zero-
+/// dimensional array. Otherwise the lower bound of the additional dimension is
+/// one and the length of the new dimension is equal to `datums.len()`.
 fn array_create_multidim<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
+    // Per PostgreSQL, if all input arrays are zero dimensional, so is the
+    // output.
+    if datums.iter().all(|d| d.unwrap_array().dims().is_empty()) {
+        let dims = &[];
+        let datums = &[];
+        let datum = temp_storage.try_make_datum(|packer| packer.push_array(dims, datums))?;
+        return Ok(datum);
+    }
+
     let mut dims = vec![ArrayDimension {
         lower_bound: 1,
         length: datums.len(),
@@ -3738,18 +3748,26 @@ fn array_create_multidim<'a>(
     Ok(datum)
 }
 
-/// Constructs a new 1D array out of an arbitrary number of scalars.
+/// Constructs a new zero or one dimensional array out of an arbitrary number of
+/// scalars.
 ///
-/// The lower bound of the array is always one. The length of the array is equal
-/// to `datums.len()`.
+/// If `datums` is empty, constructs a zero-dimensional array. Otherwise,
+/// constructs a one dimensional array whose lower bound is one and whose length
+/// is equal to `datums.len()`.
 fn array_create_scalar<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let dims = &[ArrayDimension {
+    let mut dims = &[ArrayDimension {
         lower_bound: 1,
         length: datums.len(),
-    }];
+    }][..];
+    if datums.is_empty() {
+        // Per PostgreSQL, empty arrays are represented with zero dimensions,
+        // not one dimension of zero length. We write this condition a little
+        // strangely to satisfy the borrow checker while avoiding an allocation.
+        dims = &[];
+    }
     let datum = temp_storage.try_make_datum(|packer| packer.push_array(dims, datums))?;
     Ok(datum)
 }
@@ -4029,12 +4047,12 @@ fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let i = b.unwrap_int64();
-    if i < 1 {
-        return Datum::Null;
-    }
-    match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
-        Some(ArrayDimension { length: 0, .. }) | None => Datum::Null,
+    let i = match usize::try_from(b.unwrap_int64()) {
+        Ok(0) | Err(_) => return Datum::Null,
+        Ok(n) => n - 1,
+    };
+    match a.unwrap_array().dims().into_iter().nth(i) {
+        None => Datum::Null,
         Some(dim) => Datum::Int64(dim.length as i64),
     }
 }

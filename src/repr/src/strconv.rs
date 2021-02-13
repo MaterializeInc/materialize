@@ -912,6 +912,11 @@ pub fn format_array_inner<F, T>(
 ) where
     F: FormatBuffer,
 {
+    if dims.is_empty() {
+        buf.write_str("{}");
+        return;
+    }
+
     buf.write_char('{');
     for j in 0..dims[0].length {
         if j > 0 {
