@@ -308,6 +308,7 @@ impl ErrorResponse {
         let code = match e {
             CoordError::Catalog(_) => SqlState::INTERNAL_ERROR,
             CoordError::ConstrainedParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
+            CoordError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             CoordError::Eval(_) => SqlState::INTERNAL_ERROR,
             CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
