@@ -474,10 +474,14 @@ impl MirRelationExpr {
                 //
                 // TODO: make unique key structure an optimization analysis
                 // rather than part of the type information.
+                // TODO: perhaps ensure that (above) A.proj(key) is a
+                // subset of B, as otherwise there are negative records
+                // and who knows what is true (not expected, but again
+                // who knows what the query plan might look like).
                 let mut keys = Vec::new();
                 if let MirRelationExpr::Get {
                     id: first_id,
-                    typ: first_get_type,
+                    typ: _,
                 } = &**base
                 {
                     if inputs.len() == 1 {
@@ -488,18 +492,19 @@ impl MirRelationExpr {
                                         if let MirRelationExpr::Negate { input } = &**input {
                                             if let MirRelationExpr::Get {
                                                 id: second_id,
-                                                typ: second_get_type,
+                                                typ: _,
                                             } = &**input
                                             {
                                                 if first_id == second_id {
-                                                    keys.extend(inputs[0].typ().keys);
-                                                    keys.retain(|key| {
-                                                        first_get_type.keys.contains(key)
-                                                            && second_get_type.keys.contains(key)
-                                                            && key
-                                                                .iter()
-                                                                .all(|c| outputs.get(*c) == Some(c))
-                                                    });
+                                                    keys.extend(
+                                                        inputs[0].typ().keys.drain(..).filter(
+                                                            |key| {
+                                                                key.iter().all(|c| {
+                                                                    outputs.get(*c) == Some(c)
+                                                                })
+                                                            },
+                                                        ),
+                                                    );
                                                 }
                                             }
                                         }
