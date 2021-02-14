@@ -255,11 +255,13 @@ impl HirRelationExpr {
 
                 let left = left.applied_to(id_gen, get_outer, col_map);
                 left.let_in(id_gen, |id_gen, get_left| {
+                    let apply_requires_distinct_outer = false;
                     let mut join = branch(
                         id_gen,
                         get_left.clone(),
                         col_map,
                         *right,
+                        apply_requires_distinct_outer,
                         |id_gen, right, get_left, col_map| {
                             right.applied_to(id_gen, get_left, col_map)
                         },
@@ -621,11 +623,13 @@ impl HirScalarExpr {
             // When the subquery would return 0 rows for some row in the outer query, `subquery.applied_to(get_inner)` will not have any corresponding row.
             // Use `lookup` if you need to add default values for cases when the subquery returns 0 rows.
             Exists(expr) => {
+                let apply_requires_distinct_outer = false;
                 *inner = branch(
                     id_gen,
                     inner.take_dangerous(),
                     col_map,
                     *expr,
+                    apply_requires_distinct_outer,
                     |id_gen, expr, get_inner, col_map| {
                         let exists = expr
                             // compute for every row in get_inner
@@ -650,11 +654,13 @@ impl HirScalarExpr {
             }
 
             Select(expr) => {
+                let apply_requires_distinct_outer = true;
                 *inner = branch(
                     id_gen,
                     inner.take_dangerous(),
                     col_map,
                     *expr,
+                    apply_requires_distinct_outer,
                     |id_gen, expr, get_inner, col_map| {
                         let select = expr
                             // compute for every row in get_inner
@@ -749,6 +755,15 @@ impl HirScalarExpr {
 /// not depended upon by `inner` are thrown away before the distinct, so that we
 /// don't perform needless computation of `inner`.
 ///
+/// `branch` will inspect the contents of `inner` to determine whether `inner`
+/// is not multiplicity sensitive (roughly, contains only maps, filters,
+/// projections, and calls to table functions). If it is not multiplicity
+/// sensitive, `branch` will *not* distinctify outer. If this is problematic,
+/// e.g. because the `apply` callback itself introduces multiplicity-sensitive
+/// operations that were not present in `inner`, then set
+/// `apply_requires_distinct_outer` to ensure that `branch` chooses the plan
+/// that distinctifies `outer`.
+///
 /// The caller must supply the `apply` function that applies the rewritten
 /// `inner` to `outer`.
 fn branch<F>(
@@ -756,6 +771,7 @@ fn branch<F>(
     outer: expr::MirRelationExpr,
     col_map: &ColumnMap,
     mut inner: HirRelationExpr,
+    apply_requires_distinct_outer: bool,
     apply: F,
 ) -> expr::MirRelationExpr
 where
@@ -822,7 +838,7 @@ where
         | HirRelationExpr::CallTable { .. } => (),
         _ => is_simple = false,
     });
-    if is_simple {
+    if is_simple && !apply_requires_distinct_outer {
         let new_col_map = col_map.enter_scope(outer.arity() - col_map.len());
         return outer.let_in(id_gen, |id_gen, get_outer| {
             apply(id_gen, inner, get_outer, &new_col_map)
