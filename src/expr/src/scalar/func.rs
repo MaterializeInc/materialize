@@ -1183,6 +1183,20 @@ fn sqrt_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum, EvalError> {
     cast_float64_to_decimal(Datum::from(d_scaled.sqrt()), Datum::from(i32::from(scale)))
 }
 
+fn cbrt_float32<'a>(a: Datum<'a>) -> Datum {
+    Datum::from(a.unwrap_float32().cbrt())
+}
+
+fn cbrt_float64<'a>(a: Datum<'a>) -> Datum {
+    Datum::from(a.unwrap_float64().cbrt())
+}
+
+fn cbrt_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
+    let d_f64 = cast_significand_to_float64(a);
+    let d_scaled = d_f64.unwrap_float64() / 10_f64.powi(i32::from(scale));
+    cast_float64_to_decimal(Datum::from(d_scaled.cbrt()), Datum::from(i32::from(scale)))
+}
+
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -2769,6 +2783,9 @@ pub enum UnaryFunc {
     SqrtFloat32,
     SqrtFloat64,
     SqrtDec(u8),
+    CbrtFloat32,
+    CbrtFloat64,
+    CbrtDec(u8),
     AbsInt32,
     AbsInt64,
     AbsFloat32,
@@ -3029,6 +3046,9 @@ impl UnaryFunc {
             UnaryFunc::SqrtFloat32 => sqrt_float32(a),
             UnaryFunc::SqrtFloat64 => sqrt_float64(a),
             UnaryFunc::SqrtDec(scale) => sqrt_dec(a, *scale),
+            UnaryFunc::CbrtFloat32 => Ok(cbrt_float32(a)),
+            UnaryFunc::CbrtFloat64 => Ok(cbrt_float64(a)),
+            UnaryFunc::CbrtDec(scale) => cbrt_dec(a, *scale),
             UnaryFunc::Ascii => Ok(ascii(a)),
             UnaryFunc::BitLengthString => bit_length(a.unwrap_str()),
             UnaryFunc::BitLengthBytes => bit_length(a.unwrap_bytes()),
@@ -3181,7 +3201,8 @@ impl UnaryFunc {
 
             CeilFloat32 | FloorFloat32 | RoundFloat32 => ScalarType::Float32.nullable(in_nullable),
             CeilFloat64 | FloorFloat64 | RoundFloat64 => ScalarType::Float64.nullable(in_nullable),
-            CeilDecimal(scale) | FloorDecimal(scale) | RoundDecimal(scale) | SqrtDec(scale) => {
+            CeilDecimal(scale) | FloorDecimal(scale) | RoundDecimal(scale)
+            | SqrtDec(scale) | CbrtDec(scale) => {
                 match input_type.scalar_type {
                     ScalarType::Decimal(_, s) => assert_eq!(*scale, s),
                     _ => unreachable!(),
@@ -3191,6 +3212,9 @@ impl UnaryFunc {
 
             SqrtFloat32 => ScalarType::Float32.nullable(true),
             SqrtFloat64 => ScalarType::Float64.nullable(true),
+
+            CbrtFloat32 => ScalarType::Float32.nullable(true),
+            CbrtFloat64 => ScalarType::Float64.nullable(true),
 
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
             | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => input_type,
@@ -3352,6 +3376,9 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::SqrtFloat32 => f.write_str("sqrtf32"),
             UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
             UnaryFunc::SqrtDec(_) => f.write_str("sqrtdec"),
+            UnaryFunc::CbrtFloat32 => f.write_str("cbrtf32"),
+            UnaryFunc::CbrtFloat64 => f.write_str("cbrtf64"),
+            UnaryFunc::CbrtDec(_) => f.write_str("cbrtdec"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::CharLength => f.write_str("char_length"),
             UnaryFunc::BitLengthBytes => f.write_str("bit_length"),
