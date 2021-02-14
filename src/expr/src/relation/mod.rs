@@ -455,7 +455,55 @@ impl MirRelationExpr {
                             .unwrap();
                     }
                 }
-                RelationType::new(base_cols)
+
+                // Generally, union does not have any unique keys, becuase
+                // each input might contribute some. However, there is at
+                // least one idiomatic structure that does preserve keys,
+                // which results from SQL aggregations that must populate
+                // absent records with default values. In that pattern,
+                // the union of one GET with its negation, which has been
+                // subjected to a projection and map, we can remove their
+                // influence on the key structure and return the keys of
+                // the remaining input collection.
+                //
+                // If there are A, B, each with a unique `key` such that
+                // we are looking at
+                //
+                //     A + (B - A.proj(key)).map(stuff)
+                //
+                // TODO: make unique key structure an optimization analysis
+                // rather than part of the type information.
+                let mut keys = Vec::new();
+                if let MirRelationExpr::Get { id: first_id, typ: first_get_type } = &**base {
+                    if inputs.len() == 1 {
+                        if let MirRelationExpr::Map { input, .. } = &inputs[0] {
+                            if let MirRelationExpr::Union { base, inputs } = &** input {
+                                if inputs.len() == 1 {
+                                    if let MirRelationExpr::Project { input, outputs } = &**base {
+                                        if let MirRelationExpr::Negate { input } = &**input {
+                                            if let MirRelationExpr::Get { id: second_id, typ: second_get_type } = &**input {
+                                                if first_id == second_id {
+                                                    keys.extend(inputs[0].typ().keys);
+                                                    keys.retain(|key| {
+                                                        first_get_type.keys.contains(key) && second_get_type.keys.contains(key)
+                                                        && key.iter().all(|c| outputs.get(*c) == Some(c))
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+
+                let mut result = RelationType::new(base_cols);
+                for key in keys {
+                    result = result.with_key(key);
+                }
+                result
                 // Important: do not inherit keys of either input, as not unique.
             }
             MirRelationExpr::ArrangeBy { input, .. } => input.typ(),
