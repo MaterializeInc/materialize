@@ -51,8 +51,6 @@
 //! expression. The intent here is that each creating a `ReducePlan` should capture all of the decision making
 //! about what kind of dataflow do we need to render and what each operator needs to do, and then actually
 //! rendering the plan can be a relatively simple application of (as much as possible) straight line code.
-//! Furthermore, the goal is to encode invariants (such as "Hierarchical reductions are either all monotonic or
-//! all bucketed") in the type system so that they can be checked by the compiler.
 
 use std::collections::BTreeMap;
 
@@ -78,34 +76,52 @@ use super::context::Context;
 use crate::render::context::Arrangement;
 use crate::render::datum_vec::DatumVec;
 
-// Top level object for the Reduce lower-level IR
+/// A `ReducePlan` provides a concise description for how we will
+/// execute a given reduce expression.
+///
+/// The provided reduce expression can have no
+/// aggregations, in which case its just a `Distinct` and otherwise
+/// it's composed of a combination of accumulable, hierarchical and
+/// basic aggregations.
+///
+/// We want to try to centralize as much decision making about the
+/// shape / general computation of the rendered dataflow graph
+/// in this plan, and then make actually rendering the graph
+/// be as simple (and compiler verifiable) as possible.
 #[derive(Clone, Debug)]
 enum ReducePlan {
-    // No aggregations, just distinct
+    /// Plan for not computing any aggregations, just a simple distinct.
     Distinct,
-    // Aggregations that can be computed in place
+    /// Plan for only computing accumulable aggregations.
     Accumulable(AccumulablePlan),
-    // Aggregations that can be computed hierarchically
+    /// Plan for only computing hierarchical aggregations.
     Hierarchical(HierarchicalPlan),
-    // Aggregations that cannot be computed in place
-    // or hierarchically.
+    /// Plan for only computing basic aggregations.
     Basic(BasicPlan),
-    // A mix of multiple types of aggregates that need
-    // to be combined together.
+    /// Plan for computing a mix of different kinds of aggregations.
+    /// We need to do extra work here to reassemble results back in the
+    /// requested order.
     Collation(CollationPlan),
 }
 
-// LIR node for accumulable reductions
+/// Plan for computing a set of accumulable aggregations.
+///
+/// We fuse all of the accumulable aggregations together
+/// and compute them with one dataflow fragment. We need to
+/// be careful to separate out the aggregations that
+/// apply only to the distinct set of values. We need
+/// to apply a distinct operator to those before we
+/// combine them with everything else.
 #[derive(Clone, Debug)]
 struct AccumulablePlan {
-    // All of the accumulable aggregations, ordered according to
-    // the output of the accumulable dataflow.
+    /// All of the aggregations we were asked to compute, stored
+    /// in order.
     full_aggrs: Vec<AggregateExpr>,
-    // All of the non-distinct accumulable aggregates.
-    // Each element represents:
-    // (index of the aggregation among accumulable aggregations,
-    //   index of the datum among inputs, aggregation expr)
-    // These will all be rendered together in one dataflow fragment.
+    /// All of the non-distinct accumulable aggregates.
+    /// Each element represents:
+    /// (index of the aggregation among accumulable aggregations,
+    ///  index of the datum among inputs, aggregation expr)
+    /// These will all be rendered together in one dataflow fragment.
     simple_aggrs: Vec<(usize, usize, AggregateExpr)>,
     // Same as above but for all of the `DISTINCT` accumulable aggregations.
     distinct_aggrs: Vec<(usize, usize, AggregateExpr)>,
@@ -113,70 +129,106 @@ struct AccumulablePlan {
     num_accumulable: usize,
 }
 
-// LIR node for hierarchical reductions
+/// Plan for computing a set of hierarchical aggregations.
+///
+/// In the append-only setting we can render them in-place
+/// with monotonic plans, but otherwise, we need to render
+/// them with a reduction tree that splits the inputs into
+/// small, and then progressively larger, buckets
 #[derive(Clone, Debug)]
 enum HierarchicalPlan {
-    // LIR node for hierarchical, monotonic reductions
+    /// Plan hierarchical aggregations under monotonic inputs.
     Monotonic(MonotonicPlan),
-    // LIR node for hierarchical reductions that are not
-    // monotonic and thus have to be rendered via a reduction
-    // tree that partitions reductions into fine and then coarser
-    // buckets.
+    /// Plan for hierarchical aggregations under non-monotonic inputs.
     Bucketed(BucketedPlan),
 }
 
-// LIR node for reductions that are hierarchical but presented with a monotonic
-// input stream.
+/// Plan for computing a set of hierarchical aggregations with a
+/// monotonic input.
+///
+/// Here, the aggregations will be rendered in place. We don't
+/// need to worry about retractions because the inputs are
+/// append only, so we can change our computation to
+/// only retain the "best" value in the diff field, instead
+/// of holding onto all values.
 #[derive(Clone, Debug)]
 struct MonotonicPlan {
-    // Aggregations being computed monotonically.
+    /// All of the aggregations we were asked to compute.
     aggr_funcs: Vec<AggregateFunc>,
-    // Set of "skips" or calls to `nth()` an iterator needs to do over
-    // the input to extract the relevant datums.
+    /// Set of "skips" or calls to `nth()` an iterator needs to do over
+    /// the input to extract the relevant datums.
     skips: Vec<usize>,
 }
 
-// LIR node for hierarchical reductions that are not
-// monotonic. This gets rendered with a series of reduce
-// operators that serve as a min / max heap
+/// Plan for computing a set of hierarchical aggregations
+/// with non-monotonic inputs.
+///
+/// To perform hierarchical aggregations with stable runtimes
+/// under updates we'll subdivide the group key into buckets, compute
+/// the reduction in each of those subdivided buckets and then combine
+/// the results into a coarser bucket (one that represents a larger
+/// fraction of the original input) and redo the reduction in another
+/// layer. Effectively, we'll construct a min / max heap out of a series
+/// of reduce operators (each one is a separate layer).
 #[derive(Clone, Debug)]
 struct BucketedPlan {
-    // Aggregations being computed hierarchically
+    /// All of the aggregations we were asked to compute.
     aggr_funcs: Vec<AggregateFunc>,
-    // Set of "skips" or calls to `nth()` an iterator needs to do over
-    // the input to extract the relevant datums.
+    /// Set of "skips" or calls to `nth()` an iterator needs to do over
+    /// the input to extract the relevant datums.
     skips: Vec<usize>,
-    // Sequence of bitshifts for each key sub-division expression.
-    // To perform a large hierarchical reduction with stable runtimes
-    // under updates we'll subdivide the group key into buckets, compute
-    // the reduction in each of those buckets and then combine into a
-    // coarser bucket and redo the reduction in another layer.
-    // These shifts denote the log_base_2 of the number of
-    // buckets in each layer.
+    /// In each layer, we'll assign values to buckets by hashing
+    /// the value and then taking `hash % number_of_buckets[layer]`.
+    /// These shifts denote the log_base_2 of the number of
+    /// buckets in each layer (we get the actual number of
+    /// buckets with `2 << shifts[layer]`).
     shifts: Vec<usize>,
 }
 
-// LIR node for basic reductions - those that are neither
-// computed in place nor computed hierarchically.
+/// Plan for computing a set of basic aggregations.
+///
+/// There's much less complexity when rendering basic aggregations.
+/// Each aggregation corresponds to one Differential reduce operator.
+/// That's it. However, we still want to present one final arrangement
+/// so basic aggregations present results with the same interface
+/// (one arrangement containing a row with all results) that accumulable
+/// and hierarchical aggregations do. To provide that, we render an
+/// additional reduce operator whenever we have multiple reduce aggregates
+/// to combine and present results in the appropriate order. If we
+/// were only asked to compute a single aggregation, we can skip
+/// that step and return the arragement provided by computing the aggregation
+/// directly.
 #[derive(Clone, Debug)]
 enum BasicPlan {
-    // LIR node for reductions with only a single basic reduction
+    /// Plan for rendering a single basic aggregation. Here, the
+    /// first element denotes the index in the set of inputs
+    /// that we are aggregating over.
     Single(usize, AggregateExpr),
-    // LIR node for reductions with multiple basic reductions
-    // These need to then be collated together in an additional
-    // reduction.
+    /// Plan for rendering multiple basic aggregations.
+    /// These need to then be collated together in an additional
+    /// reduction. Each element represents the:
+    /// `(index of the set of the input we are aggregating over,
+    ///   the aggregation function)`
     Multiple(Vec<(usize, AggregateExpr)>),
 }
 
-// LIR for reduce collation. We use this when the underlying
-// list of aggregates contains more than one type of reduction
-// to stitch answers together in the order requested by the user
-// TODO: could we express this as a delta join
+/// Plan for collating the results of computing multiple aggregation
+/// types.
+///
+/// TODO: could we express this as a delta join
 #[derive(Clone, Debug, Default)]
 struct CollationPlan {
+    /// Accumulable aggregation results to collate, if any.
     accumulable: Option<AccumulablePlan>,
+    /// Hierarchical aggregation results to collate, if any.
     hierarchical: Option<HierarchicalPlan>,
+    /// Basic aggregation results to collate, if any.
     basic: Option<BasicPlan>,
+    /// When we get results back from each of the different
+    /// aggregation types, they will be subsequences of
+    /// the sequence aggregations in the original reduce expression.
+    /// We keep a map from output position -> reduction type
+    /// to easily merge results back into the requested order.
     aggregate_types: Vec<ReductionType>,
 }
 
@@ -353,8 +405,9 @@ where
             // collating aggregates.
 
             // First, let's plan out what we are going to do with this reduce
-            let lir = plan_reduce(aggregates.clone(), *monotonic, *expected_group_size);
-            let arrangement = build_reduce(ok_input, lir);
+            let plan =
+                ReducePlan::create_from(aggregates.clone(), *monotonic, *expected_group_size);
+            let arrangement = plan.render(ok_input);
             let index = (0..group_key.len()).collect::<Vec<_>>();
             self.set_local_columns(
                 relation_expr,
@@ -365,204 +418,207 @@ where
     }
 }
 
-// Generate a lower-level IR node for the supplied aggregations that
-// describes what the resulting dataflow will look like.
-fn plan_reduce(
-    aggregates: Vec<AggregateExpr>,
-    monotonic: bool,
-    expected_group_size: Option<usize>,
-) -> ReducePlan {
-    let lower = move |typ: ReductionType, aggregates_list: Vec<(usize, AggregateExpr)>| {
-        assert!(
-            aggregates_list.len() > 0,
-            "error: tried to render a reduce dataflow with no aggregates"
-        );
-        match typ {
-            ReductionType::Accumulable => {
-                let mut simple_aggrs = vec![];
-                let mut distinct_aggrs = vec![];
-                let num_accumulable = aggregates_list.len();
-                let full_aggrs: Vec<_> = aggregates_list
-                    .iter()
-                    .cloned()
-                    .map(|(_, aggr)| aggr)
-                    .collect();
-                for (accumulable_index, (datum_index, aggr)) in
-                    aggregates_list.into_iter().enumerate()
-                {
-                    if aggr.distinct {
-                        distinct_aggrs.push((accumulable_index, datum_index, aggr));
-                    } else {
-                        simple_aggrs.push((accumulable_index, datum_index, aggr));
-                    };
-                }
-                ReducePlan::Accumulable(AccumulablePlan {
-                    full_aggrs,
-                    simple_aggrs,
-                    distinct_aggrs,
-                    num_accumulable,
-                })
-            }
-            ReductionType::Hierarchical => {
-                let aggr_funcs: Vec<_> = aggregates_list
-                    .iter()
-                    .cloned()
-                    .map(|(_, aggr)| aggr.func)
-                    .collect();
-                let indexes: Vec<_> = aggregates_list
-                    .into_iter()
-                    .map(|(index, _)| index)
-                    .collect();
-
-                let skips = convert_indexes_to_skips(indexes);
-                if monotonic {
-                    let monotonic = MonotonicPlan { aggr_funcs, skips };
-                    ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(monotonic))
-                } else {
-                    let mut shifts = vec![];
-                    let mut current = 4usize;
-
-                    // Plan for 4B records in the expected case
-                    let limit = expected_group_size.unwrap_or(4_000_000_000);
-
-                    while (1 << current) < limit {
-                        shifts.push(current);
-                        current += 4;
+impl ReducePlan {
+    /// Generate a plan for computing the supplied aggregations that
+    /// summarizes what the resulting dataflow and how the aggregations
+    /// will be executed.
+    fn create_from(
+        aggregates: Vec<AggregateExpr>,
+        monotonic: bool,
+        expected_group_size: Option<usize>,
+    ) -> Self {
+        let lower = move |typ: ReductionType, aggregates_list: Vec<(usize, AggregateExpr)>| {
+            assert!(
+                aggregates_list.len() > 0,
+                "error: tried to render a reduce dataflow with no aggregates"
+            );
+            match typ {
+                ReductionType::Accumulable => {
+                    let mut simple_aggrs = vec![];
+                    let mut distinct_aggrs = vec![];
+                    let num_accumulable = aggregates_list.len();
+                    let full_aggrs: Vec<_> = aggregates_list
+                        .iter()
+                        .cloned()
+                        .map(|(_, aggr)| aggr)
+                        .collect();
+                    for (accumulable_index, (datum_index, aggr)) in
+                        aggregates_list.into_iter().enumerate()
+                    {
+                        if aggr.distinct {
+                            distinct_aggrs.push((accumulable_index, datum_index, aggr));
+                        } else {
+                            simple_aggrs.push((accumulable_index, datum_index, aggr));
+                        };
                     }
+                    ReducePlan::Accumulable(AccumulablePlan {
+                        full_aggrs,
+                        simple_aggrs,
+                        distinct_aggrs,
+                        num_accumulable,
+                    })
+                }
+                ReductionType::Hierarchical => {
+                    let aggr_funcs: Vec<_> = aggregates_list
+                        .iter()
+                        .cloned()
+                        .map(|(_, aggr)| aggr.func)
+                        .collect();
+                    let indexes: Vec<_> = aggregates_list
+                        .into_iter()
+                        .map(|(index, _)| index)
+                        .collect();
 
-                    shifts.reverse();
+                    let skips = convert_indexes_to_skips(indexes);
+                    if monotonic {
+                        let monotonic = MonotonicPlan { aggr_funcs, skips };
+                        ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(monotonic))
+                    } else {
+                        let mut shifts = vec![];
+                        let mut current = 4usize;
 
-                    let bucketed = BucketedPlan {
-                        aggr_funcs,
-                        skips,
-                        shifts,
-                    };
+                        // Plan for 4B records in the expected case
+                        let limit = expected_group_size.unwrap_or(4_000_000_000);
 
-                    ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(bucketed))
+                        while (1 << current) < limit {
+                            shifts.push(current);
+                            current += 4;
+                        }
+
+                        shifts.reverse();
+
+                        let bucketed = BucketedPlan {
+                            aggr_funcs,
+                            skips,
+                            shifts,
+                        };
+
+                        ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(bucketed))
+                    }
+                }
+                ReductionType::Basic => {
+                    if aggregates_list.len() == 1 {
+                        ReducePlan::Basic(BasicPlan::Single(
+                            aggregates_list[0].0,
+                            aggregates_list[0].1.clone(),
+                        ))
+                    } else {
+                        ReducePlan::Basic(BasicPlan::Multiple(aggregates_list))
+                    }
                 }
             }
-            ReductionType::Basic => {
-                if aggregates_list.len() == 1 {
-                    ReducePlan::Basic(BasicPlan::Single(
-                        aggregates_list[0].0,
-                        aggregates_list[0].1.clone(),
-                    ))
-                } else {
-                    ReducePlan::Basic(BasicPlan::Multiple(aggregates_list))
-                }
-            }
-        }
-    };
-
-    // If we don't have any aggregations we are just computing a distinct.
-    if aggregates.is_empty() {
-        return ReducePlan::Distinct;
-    }
-
-    // Otherwise, we need to group aggregations according to their
-    // reduction type (accumulable, hierarchical, or basic)
-    let mut reduction_types = BTreeMap::new();
-    // We need to make sure that each list of aggregates by type forms
-    // a subsequence of the overall sequence of aggregates.
-    for index in 0..aggregates.len() {
-        let typ = reduction_type(&aggregates[index].func);
-        let aggregates_list = reduction_types.entry(typ).or_insert_with(Vec::new);
-        aggregates_list.push((index, aggregates[index].clone()));
-    }
-
-    // Convert each grouped list of reductions into a LIR node.
-    let lir: Vec<_> = reduction_types
-        .into_iter()
-        .map(|(typ, aggregates_list)| lower(typ, aggregates_list))
-        .collect();
-
-    // If we only have a single type of aggregation present we can
-    // render that directly
-    if lir.len() == 1 {
-        return lir[0].clone();
-    }
-
-    // Otherwise, we have to stitch reductions together.
-    assert!(lir.len() <= 3);
-    let mut collation: CollationPlan = Default::default();
-    let aggregate_types = aggregates
-        .iter()
-        .map(|a| reduction_type(&a.func))
-        .collect::<Vec<_>>();
-
-    collation.aggregate_types = aggregate_types;
-
-    for expr in lir.into_iter() {
-        match expr {
-            ReducePlan::Accumulable(e) => {
-                assert!(collation.accumulable.is_none());
-                collation.accumulable = Some(e);
-            }
-            ReducePlan::Hierarchical(e) => {
-                assert!(collation.hierarchical.is_none());
-                collation.hierarchical = Some(e);
-            }
-            ReducePlan::Basic(e) => {
-                assert!(collation.basic.is_none());
-                collation.basic = Some(e);
-            }
-            _ => panic!("Inner reduce LIR expr was unsupported type!"),
-        }
-    }
-
-    ReducePlan::Collation(collation)
-}
-
-// Render a dataflow based on the provided LIR node.
-fn build_reduce<G>(collection: Collection<G, (Row, Row)>, lir: ReducePlan) -> Arrangement<G, Row>
-where
-    G: Scope,
-    G::Timestamp: Lattice,
-{
-    let build_hierarchical = |collection: Collection<G, (Row, Row)>,
-                              expr: HierarchicalPlan,
-                              top_level: bool| match expr {
-        HierarchicalPlan::Monotonic(expr) => build_monotonic(collection, expr, top_level),
-        HierarchicalPlan::Bucketed(expr) => build_bucketed(collection, expr, top_level),
-    };
-
-    let build_basic =
-        |collection: Collection<G, (Row, Row)>, expr: BasicPlan, top_level: bool| match expr {
-            BasicPlan::Single(index, aggr) => {
-                build_basic_aggregate(collection, index, &aggr, top_level)
-            }
-            BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
         };
 
-    match lir {
-        ReducePlan::Distinct => build_distinct(collection),
-        ReducePlan::Accumulable(expr) => build_accumulable(collection, expr, true),
-        ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr, true),
-        ReducePlan::Basic(expr) => build_basic(collection, expr, true),
-        ReducePlan::Collation(expr) => {
-            // First, we need to render our constituent aggregations.
-            let mut to_collate = vec![];
+        // If we don't have any aggregations we are just computing a distinct.
+        if aggregates.is_empty() {
+            return ReducePlan::Distinct;
+        }
 
-            if let Some(accumulable) = expr.accumulable {
-                to_collate.push((
-                    ReductionType::Accumulable,
-                    build_accumulable(collection.clone(), accumulable, false),
-                ));
+        // Otherwise, we need to group aggregations according to their
+        // reduction type (accumulable, hierarchical, or basic)
+        let mut reduction_types = BTreeMap::new();
+        // We need to make sure that each list of aggregates by type forms
+        // a subsequence of the overall sequence of aggregates.
+        for index in 0..aggregates.len() {
+            let typ = reduction_type(&aggregates[index].func);
+            let aggregates_list = reduction_types.entry(typ).or_insert_with(Vec::new);
+            aggregates_list.push((index, aggregates[index].clone()));
+        }
+
+        // Convert each grouped list of reductions into a LIR node.
+        let lir: Vec<_> = reduction_types
+            .into_iter()
+            .map(|(typ, aggregates_list)| lower(typ, aggregates_list))
+            .collect();
+
+        // If we only have a single type of aggregation present we can
+        // render that directly
+        if lir.len() == 1 {
+            return lir[0].clone();
+        }
+
+        // Otherwise, we have to stitch reductions together.
+        assert!(lir.len() <= 3);
+        let mut collation: CollationPlan = Default::default();
+        let aggregate_types = aggregates
+            .iter()
+            .map(|a| reduction_type(&a.func))
+            .collect::<Vec<_>>();
+
+        collation.aggregate_types = aggregate_types;
+
+        for expr in lir.into_iter() {
+            match expr {
+                ReducePlan::Accumulable(e) => {
+                    assert!(collation.accumulable.is_none());
+                    collation.accumulable = Some(e);
+                }
+                ReducePlan::Hierarchical(e) => {
+                    assert!(collation.hierarchical.is_none());
+                    collation.hierarchical = Some(e);
+                }
+                ReducePlan::Basic(e) => {
+                    assert!(collation.basic.is_none());
+                    collation.basic = Some(e);
+                }
+                _ => panic!("Inner reduce LIR expr was unsupported type!"),
             }
-            if let Some(hierarchical) = expr.hierarchical {
-                to_collate.push((
-                    ReductionType::Hierarchical,
-                    build_hierarchical(collection.clone(), hierarchical, false),
-                ));
+        }
+
+        ReducePlan::Collation(collation)
+    }
+
+    /// Render a dataflow based on the provided plan.
+    fn render<G>(self, collection: Collection<G, (Row, Row)>) -> Arrangement<G, Row>
+    where
+        G: Scope,
+        G::Timestamp: Lattice,
+    {
+        let build_hierarchical = |collection: Collection<G, (Row, Row)>,
+                                  expr: HierarchicalPlan,
+                                  top_level: bool| match expr {
+            HierarchicalPlan::Monotonic(expr) => build_monotonic(collection, expr, top_level),
+            HierarchicalPlan::Bucketed(expr) => build_bucketed(collection, expr, top_level),
+        };
+
+        let build_basic =
+            |collection: Collection<G, (Row, Row)>, expr: BasicPlan, top_level: bool| match expr {
+                BasicPlan::Single(index, aggr) => {
+                    build_basic_aggregate(collection, index, &aggr, top_level)
+                }
+                BasicPlan::Multiple(aggrs) => build_basic_aggregates(collection, aggrs, top_level),
+            };
+
+        match self {
+            ReducePlan::Distinct => build_distinct(collection),
+            ReducePlan::Accumulable(expr) => build_accumulable(collection, expr, true),
+            ReducePlan::Hierarchical(expr) => build_hierarchical(collection, expr, true),
+            ReducePlan::Basic(expr) => build_basic(collection, expr, true),
+            ReducePlan::Collation(expr) => {
+                // First, we need to render our constituent aggregations.
+                let mut to_collate = vec![];
+
+                if let Some(accumulable) = expr.accumulable {
+                    to_collate.push((
+                        ReductionType::Accumulable,
+                        build_accumulable(collection.clone(), accumulable, false),
+                    ));
+                }
+                if let Some(hierarchical) = expr.hierarchical {
+                    to_collate.push((
+                        ReductionType::Hierarchical,
+                        build_hierarchical(collection.clone(), hierarchical, false),
+                    ));
+                }
+                if let Some(basic) = expr.basic {
+                    to_collate.push((
+                        ReductionType::Basic,
+                        build_basic(collection.clone(), basic, false),
+                    ));
+                }
+                // Now we need to collate them together.
+                build_collation(to_collate, expr.aggregate_types, &mut collection.scope())
             }
-            if let Some(basic) = expr.basic {
-                to_collate.push((
-                    ReductionType::Basic,
-                    build_basic(collection.clone(), basic, false),
-                ));
-            }
-            // Now we need to collate them together.
-            build_collation(to_collate, expr.aggregate_types, &mut collection.scope())
         }
     }
 }
