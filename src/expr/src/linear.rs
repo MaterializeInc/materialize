@@ -162,8 +162,10 @@ impl MapFilterProject {
             self.predicates.push((max_support, predicate))
         }
         // Stable sort predicates by position at which they take effect.
+        // We put literal errors at the end as a stop-gap to avoid erroring
+        // before we are able to evaluate any predicates that might prevent it.
         self.predicates
-            .sort_by_key(|(position, _predicate)| *position);
+            .sort_by_key(|(position, predicate)| (predicate.is_literal_err(), *position));
         self
     }
 
