@@ -76,6 +76,23 @@ use super::context::Context;
 use crate::render::context::Arrangement;
 use crate::render::datum_vec::DatumVec;
 
+/// This enum represents the three potential classes of aggregations.
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+enum ReductionType {
+    /// Accumulable functions can be subtracted from (are invertible), and associative.
+    /// We can compute these results by moving some data to the diff field under arbitrary
+    /// changes to inputs. Examples include sum or count.
+    Accumulable = 1,
+    /// Hierarchical functions are associative, which means we can split up the work of
+    /// computing them across subsets. Note that hierarchical reductions should also
+    /// reduce the data in some way, as otherwise rendering them hierarchically is not
+    /// worth it. Examples include min or max.
+    Hierarchical = 2,
+    /// Basic, for lack of a better word, are functions that are neither accumulable
+    /// nor hierarchical. Examples include jsonb_agg.
+    Basic = 3,
+}
+
 /// A `ReducePlan` provides a concise description for how we will
 /// execute a given reduce expression.
 ///
@@ -230,192 +247,6 @@ struct CollationPlan {
     /// We keep a map from output position -> reduction type
     /// to easily merge results back into the requested order.
     aggregate_types: Vec<ReductionType>,
-}
-
-// This enum indicates what class of reduction each aggregate function is.
-#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-enum ReductionType {
-    // Accumulable functions can be subtracted from (are invertible), and associative.
-    // We can compute these results by moving some data to the diff field under arbitrary
-    // changes to inputs. Examples include sum or count.
-    Accumulable = 1,
-    // Hierarchical functions are associative, which means we can split up the work of
-    // computing them across subsets. Note that hierarchical reductions should also
-    // reduce the data in some way, as otherwise rendering them hierarchically is not
-    // worth it. Examples include min or max.
-    Hierarchical = 2,
-    // Basic, for lack of a better word, are functions that are neither accumulable
-    // nor hierarchical. Examples include jsonb_agg.
-    Basic = 3,
-}
-
-impl<G, T> Context<G, MirRelationExpr, Row, T>
-where
-    G: Scope,
-    G::Timestamp: Lattice + Refines<T>,
-    T: Timestamp + Lattice,
-{
-    /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
-    /// minimize worst-case incremental update times and memory footprint.
-    pub fn render_reduce(&mut self, relation_expr: &MirRelationExpr) {
-        if let MirRelationExpr::Reduce {
-            input,
-            group_key,
-            aggregates,
-            monotonic,
-            expected_group_size,
-        } = relation_expr
-        {
-            // The reduce operator may have multiple aggregation functions, some of
-            // which should only be applied to distinct values for each key. We need
-            // to build a non-trivial dataflow fragment to robustly implement these
-            // aggregations, including:
-            //
-            // 1. Different reductions for each aggregation, to avoid maintaining
-            //    state proportional to the cross-product of values.
-            //
-            // 2. Distinct operators before each reduction which requires distinct
-            //    inputs, to avoid recomputation when the distinct set is stable.
-            //
-            // 3. Hierachical aggregation for operators like min and max that we
-            //    cannot perform in the diff field.
-            //
-            // Our plan is to perform these actions, and the re-integrate the results
-            // in a final reduce whose output arrangement looks just as if we had
-            // applied a single reduction (which should be good for any consumers
-            // of the operator and its arrangement).
-
-            // Our first step is to extract `(key, vals)` from `input`.
-            // We do this carefully, attempting to avoid unneccesary allocations
-            // that would result from cloning rows in input arrangements.
-
-            let input_arity = input.arity();
-
-            // TODO(mcsherry): These two MFPs could be unified into one, which would
-            // allow optimization across their computation, e.g. if both parsed input
-            // strings to typed data, but it involves a bit of dancing around when we
-            // pull the data out of their output (i.e. as an iterator, rather than use
-            // the built-in evaluation direction to a `Row`).
-
-            // Form an operator for evaluating key expressions.
-            let mut key_mfp = expr::MapFilterProject::new(input_arity)
-                .map(group_key.iter().cloned())
-                .project(input_arity..(input_arity + group_key.len()));
-
-            // Form an operator for evaluating value expressions.
-            let mut val_mfp = expr::MapFilterProject::new(input_arity)
-                .map(aggregates.iter().map(|a| a.expr.clone()))
-                .project(input_arity..(input_arity + aggregates.len()));
-
-            // Determine the columns we'll need from the row.
-            let mut demand = Vec::new();
-            demand.extend(key_mfp.demand());
-            demand.extend(val_mfp.demand());
-            demand.sort();
-            demand.dedup();
-            // remap column references to the subset we use.
-            let mut demand_map = std::collections::HashMap::new();
-            for column in demand.iter() {
-                demand_map.insert(*column, demand_map.len());
-            }
-            key_mfp.permute(&demand_map, demand_map.len());
-            key_mfp.optimize();
-            val_mfp.permute(&demand_map, demand_map.len());
-            val_mfp.optimize();
-
-            let skips = convert_indexes_to_skips(demand);
-
-            let mut row_packer = RowPacker::new();
-            let mut datums = DatumVec::new();
-            let (key_val_input, mut err_input): (
-                Collection<_, Result<(Row, Row), DataflowError>, _>,
-                _,
-            ) = self
-                .flat_map_ref(
-                    input,
-                    |_expr| None,
-                    move |row| {
-                        let temp_storage = RowArena::new();
-
-                        // Unpack only the demanded columns.
-                        let mut datums_local = datums.borrow();
-                        let mut row_iter = row.iter();
-                        for skip in skips.iter() {
-                            datums_local.push((&mut row_iter).nth(*skip).unwrap());
-                        }
-
-                        // Evaluate the key expressions.
-                        row_packer.clear();
-                        let key = match key_mfp.evaluate(
-                            &mut datums_local,
-                            &temp_storage,
-                            &mut row_packer,
-                        ) {
-                            Err(e) => return Some(Err(DataflowError::from(e))),
-                            Ok(key) => key.expect("Row expected as no predicate was used"),
-                        };
-                        // Evaluate the value expressions.
-                        // The prior evaluation may have left additional columns we should delete.
-                        datums_local.truncate(skips.len());
-                        let val = match val_mfp.evaluate_iter(&mut datums_local, &temp_storage) {
-                            Err(e) => return Some(Err(DataflowError::from(e))),
-                            Ok(val) => val.expect("Row expected as no predicate was used"),
-                        };
-                        row_packer.extend(val);
-                        drop(datums_local);
-
-                        // Mint the final row, ideally re-using resources.
-                        // TODO(mcsherry): This can perhaps be extracted for
-                        // re-use if it seems to be a common pattern.
-                        use timely::communication::message::RefOrMut;
-                        let row = match row {
-                            RefOrMut::Ref(_) => row_packer.finish_and_reuse(),
-                            RefOrMut::Mut(row) => {
-                                row_packer.finish_into(row);
-                                std::mem::take(row)
-                            }
-                        };
-                        return Some(Ok((key, row)));
-                    },
-                )
-                .unwrap();
-
-            // Demux out the potential errors from key and value selector evaluation.
-            use timely::dataflow::operators::ok_err::OkErr;
-            let (ok, err) = key_val_input.inner.ok_err(|(x, t, d)| match x {
-                Ok(x) => Ok((x, t, d)),
-                Err(x) => Err((x, t, d)),
-            });
-
-            let ok_input = ok.as_collection();
-            err_input = err.as_collection().concat(&err_input);
-
-            // At this point, we need plan out the reduction based on the aggregation
-            // functions used.
-            //   1. If there are no aggregation functions, the operation is a "distinct"
-            //      and we can / should just apply that differential operator.
-            //   2. We can decompose the remaining aggregation functions into one of three
-            //      types: accumulable, hierarchical, or basic.
-            //   3. If we only have one type of reduction in our dataflow we can render its
-            //      fragment individually.
-            //   4. Otherwise, we have to merge them together.
-
-            // Distinct is a special case, as there are no aggregates to aggregate.
-            // In this case, we use a special implementation that does not rely on
-            // collating aggregates.
-
-            // First, let's plan out what we are going to do with this reduce
-            let plan =
-                ReducePlan::create_from(aggregates.clone(), *monotonic, *expected_group_size);
-            let arrangement = plan.render(ok_input);
-            let index = (0..group_key.len()).collect::<Vec<_>>();
-            self.set_local_columns(
-                relation_expr,
-                &index[..],
-                (arrangement, err_input.arrange()),
-            );
-        }
-    }
 }
 
 impl ReducePlan {
@@ -619,6 +450,175 @@ impl ReducePlan {
                 // Now we need to collate them together.
                 build_collation(to_collate, expr.aggregate_types, &mut collection.scope())
             }
+        }
+    }
+}
+
+impl<G, T> Context<G, MirRelationExpr, Row, T>
+where
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T>,
+    T: Timestamp + Lattice,
+{
+    /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
+    /// minimize worst-case incremental update times and memory footprint.
+    pub fn render_reduce(&mut self, relation_expr: &MirRelationExpr) {
+        if let MirRelationExpr::Reduce {
+            input,
+            group_key,
+            aggregates,
+            monotonic,
+            expected_group_size,
+        } = relation_expr
+        {
+            // The reduce operator may have multiple aggregation functions, some of
+            // which should only be applied to distinct values for each key. We need
+            // to build a non-trivial dataflow fragment to robustly implement these
+            // aggregations, including:
+            //
+            // 1. Different reductions for each aggregation, to avoid maintaining
+            //    state proportional to the cross-product of values.
+            //
+            // 2. Distinct operators before each reduction which requires distinct
+            //    inputs, to avoid recomputation when the distinct set is stable.
+            //
+            // 3. Hierachical aggregation for operators like min and max that we
+            //    cannot perform in the diff field.
+            //
+            // Our plan is to perform these actions, and the re-integrate the results
+            // in a final reduce whose output arrangement looks just as if we had
+            // applied a single reduction (which should be good for any consumers
+            // of the operator and its arrangement).
+
+            // Our first step is to extract `(key, vals)` from `input`.
+            // We do this carefully, attempting to avoid unneccesary allocations
+            // that would result from cloning rows in input arrangements.
+
+            let input_arity = input.arity();
+
+            // TODO(mcsherry): These two MFPs could be unified into one, which would
+            // allow optimization across their computation, e.g. if both parsed input
+            // strings to typed data, but it involves a bit of dancing around when we
+            // pull the data out of their output (i.e. as an iterator, rather than use
+            // the built-in evaluation direction to a `Row`).
+
+            // Form an operator for evaluating key expressions.
+            let mut key_mfp = expr::MapFilterProject::new(input_arity)
+                .map(group_key.iter().cloned())
+                .project(input_arity..(input_arity + group_key.len()));
+
+            // Form an operator for evaluating value expressions.
+            let mut val_mfp = expr::MapFilterProject::new(input_arity)
+                .map(aggregates.iter().map(|a| a.expr.clone()))
+                .project(input_arity..(input_arity + aggregates.len()));
+
+            // Determine the columns we'll need from the row.
+            let mut demand = Vec::new();
+            demand.extend(key_mfp.demand());
+            demand.extend(val_mfp.demand());
+            demand.sort();
+            demand.dedup();
+            // remap column references to the subset we use.
+            let mut demand_map = std::collections::HashMap::new();
+            for column in demand.iter() {
+                demand_map.insert(*column, demand_map.len());
+            }
+            key_mfp.permute(&demand_map, demand_map.len());
+            key_mfp.optimize();
+            val_mfp.permute(&demand_map, demand_map.len());
+            val_mfp.optimize();
+
+            let skips = convert_indexes_to_skips(demand);
+
+            let mut row_packer = RowPacker::new();
+            let mut datums = DatumVec::new();
+            let (key_val_input, mut err_input): (
+                Collection<_, Result<(Row, Row), DataflowError>, _>,
+                _,
+            ) = self
+                .flat_map_ref(
+                    input,
+                    |_expr| None,
+                    move |row| {
+                        let temp_storage = RowArena::new();
+
+                        // Unpack only the demanded columns.
+                        let mut datums_local = datums.borrow();
+                        let mut row_iter = row.iter();
+                        for skip in skips.iter() {
+                            datums_local.push((&mut row_iter).nth(*skip).unwrap());
+                        }
+
+                        // Evaluate the key expressions.
+                        row_packer.clear();
+                        let key = match key_mfp.evaluate(
+                            &mut datums_local,
+                            &temp_storage,
+                            &mut row_packer,
+                        ) {
+                            Err(e) => return Some(Err(DataflowError::from(e))),
+                            Ok(key) => key.expect("Row expected as no predicate was used"),
+                        };
+                        // Evaluate the value expressions.
+                        // The prior evaluation may have left additional columns we should delete.
+                        datums_local.truncate(skips.len());
+                        let val = match val_mfp.evaluate_iter(&mut datums_local, &temp_storage) {
+                            Err(e) => return Some(Err(DataflowError::from(e))),
+                            Ok(val) => val.expect("Row expected as no predicate was used"),
+                        };
+                        row_packer.extend(val);
+                        drop(datums_local);
+
+                        // Mint the final row, ideally re-using resources.
+                        // TODO(mcsherry): This can perhaps be extracted for
+                        // re-use if it seems to be a common pattern.
+                        use timely::communication::message::RefOrMut;
+                        let row = match row {
+                            RefOrMut::Ref(_) => row_packer.finish_and_reuse(),
+                            RefOrMut::Mut(row) => {
+                                row_packer.finish_into(row);
+                                std::mem::take(row)
+                            }
+                        };
+                        return Some(Ok((key, row)));
+                    },
+                )
+                .unwrap();
+
+            // Demux out the potential errors from key and value selector evaluation.
+            use timely::dataflow::operators::ok_err::OkErr;
+            let (ok, err) = key_val_input.inner.ok_err(|(x, t, d)| match x {
+                Ok(x) => Ok((x, t, d)),
+                Err(x) => Err((x, t, d)),
+            });
+
+            let ok_input = ok.as_collection();
+            err_input = err.as_collection().concat(&err_input);
+
+            // At this point, we need plan out the reduction based on the aggregation
+            // functions used.
+            //   1. If there are no aggregation functions, the operation is a "distinct"
+            //      and we can / should just apply that differential operator.
+            //   2. We can decompose the remaining aggregation functions into one of three
+            //      types: accumulable, hierarchical, or basic.
+            //   3. If we only have one type of reduction in our dataflow we can render its
+            //      fragment individually.
+            //   4. Otherwise, we have to merge them together.
+
+            // Distinct is a special case, as there are no aggregates to aggregate.
+            // In this case, we use a special implementation that does not rely on
+            // collating aggregates.
+
+            // First, let's plan out what we are going to do with this reduce
+            let plan =
+                ReducePlan::create_from(aggregates.clone(), *monotonic, *expected_group_size);
+            let arrangement = plan.render(ok_input);
+            let index = (0..group_key.len()).collect::<Vec<_>>();
+            self.set_local_columns(
+                relation_expr,
+                &index[..],
+                (arrangement, err_input.arrange()),
+            );
         }
     }
 }
