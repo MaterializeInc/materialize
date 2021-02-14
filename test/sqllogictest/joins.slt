@@ -550,7 +550,6 @@ mode standard
 query T multiline
 EXPLAIN SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id = 1)
 ----
-<<<<<<< HEAD
 %0 =
 | Get materialize.public.t4362 (u10)
 | ArrangeBy (#0)
@@ -558,15 +557,6 @@ EXPLAIN SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id
 %1 =
 | Get materialize.public.t4362 (u10)
 | Filter (#1 = 1)
-=======
-%0 = Let l0 =
-| Get materialize.public.v4362 (u12)
-| Filter (#1 = 1)
-
-%1 =
-| Get materialize.public.v4362 (u12)
-| ArrangeBy (#0)
->>>>>>> 058c0031b (correct joins.slt)
 
 %2 =
 | Get %0 (l0)

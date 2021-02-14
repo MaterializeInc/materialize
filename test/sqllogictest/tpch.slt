@@ -1188,7 +1188,6 @@ ORDER BY
     s_suppkey
 ----
 %0 = Let l0 =
-<<<<<<< HEAD
 | Get materialize.public.lineitem (u21)
 | Filter (datetots(#10) < 1996-04-01 00:00:00), (#10 >= 1996-01-01)
 | Reduce group=(#2)
@@ -1204,55 +1203,15 @@ ORDER BY
 
 %3 =
 | Get %0 (l0)
-=======
-| Get materialize.public.revenue (u27)
-| Reduce group=()
-| | agg max(#1)
-
-%1 =
-| Get %0 (l0)
-| Negate
-| Project ()
-
-%2 =
-| Constant ()
-
-%3 =
-| Union %1 %2
-| Map null
-
-%4 = Let l1 =
-| Union %0 %3
-
-%5 =
-| Get materialize.public.supplier (u8)
-| ArrangeBy (#0)
-
-%6 =
-| Get materialize.public.revenue (u27)
-| ArrangeBy (#1)
-
-%7 =
-| Get %4 (l1)
->>>>>>> 0b0cf0f9b (commit regressed plans for inspection)
 | Reduce group=()
 | | agg count(true)
 | Filter (#0 > 1)
 | Map (err: more than one record produced in subquery)
 | Project (#1)
 
-<<<<<<< HEAD
 %4 =
 | Join %1 %2 %3 (= #0 #7) (= #8 #9)
 | | implementation = Differential %1.(#0) %2.(#0) %3.(#0)
-=======
-%8 =
-| Union %4 %7
-
-%9 =
-| Join %5 %6 %8 (= #0 #7) (= #8 #9)
-| | implementation = Differential %8 %6.(#1) %5.(#0)
->>>>>>> 0b0cf0f9b (commit regressed plans for inspection)
 | | demand = (#0..#2, #4, #8)
 | Project (#0..#2, #4, #8)
 
