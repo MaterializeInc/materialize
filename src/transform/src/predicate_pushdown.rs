@@ -12,10 +12,16 @@
 //! This action generally improves the quality of the query, in that selective per-record
 //! filters reduce the volume of data before they arrive at more expensive operators.
 //!
+//!
 //! The one time when this action might not improve the quality of a query is
 //! if a filter gets pushed down on an arrangement because that blocks arrangement
 //! reuse. It assumed that actions that need an arrangement are responsible for
 //! lifting filters out of the way.
+//!
+//! Predicate pushdown will not push down literal errors, unless it is certain that
+//! the literal errors will be unconditionally evaluated. For example, the pushdown
+//! will not happen if not all predicates can be pushed down (e.g. reduce and map),
+//! or if we are not certain that the input is non-empty (e.g. join).
 //!
 //! ```rust
 //! use expr::{BinaryFunc, IdGen, MirRelationExpr, MirScalarExpr};
