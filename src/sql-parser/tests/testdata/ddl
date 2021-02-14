@@ -571,42 +571,49 @@ CREATE INDEX foo ON myschema.bar (a, b)
 ----
 CREATE INDEX foo ON myschema.bar (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), on_name: UnresolvedObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), on_name: UnresolvedObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
+
+parse-statement
+CREATE INDEX foo ON myschema.bar (a, b) WITH (baz = 'raz')
+----
+CREATE INDEX foo ON myschema.bar (a, b) WITH (baz = 'raz')
+=>
+CreateIndex(CreateIndexStatement { name: Some(Ident("foo")), on_name: UnresolvedObjectName([Ident("myschema"), Ident("bar")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [WithOption { key: Ident("baz"), value: Some(Value(String("raz"))) }], if_not_exists: false })
 
 parse-statement
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 ----
 CREATE INDEX fizz ON baz (ascii(x), a IS NOT NULL, (EXISTS (SELECT y FROM boop WHERE boop.z = z)), delta)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), on_name: UnresolvedObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: UnresolvedObjectName([Ident("ascii")]), args: Args([Identifier([Ident("x")])]), filter: None, over: None, distinct: false }), IsNull { expr: Identifier([Ident("a")]), negated: true }, Nested(Exists(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: "=", expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("fizz")), on_name: UnresolvedObjectName([Ident("baz")]), key_parts: Some([Function(Function { name: UnresolvedObjectName([Ident("ascii")]), args: Args([Identifier([Ident("x")])]), filter: None, over: None, distinct: false }), IsNull { expr: Identifier([Ident("a")]), negated: true }, Nested(Exists(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("y")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("boop")])), alias: None }, joins: [] }], selection: Some(Op { op: "=", expr1: Identifier([Ident("boop"), Ident("z")]), expr2: Some(Identifier([Ident("z")])) }), group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None })), Identifier([Ident("delta")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX ind ON tab ((col + 1))
 ----
 CREATE INDEX ind ON tab ((col + 1))
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), on_name: UnresolvedObjectName([Ident("tab")]), key_parts: Some([Nested(Op { op: "+", expr1: Identifier([Ident("col")]), expr2: Some(Value(Number("1"))) })]), if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("ind")), on_name: UnresolvedObjectName([Ident("tab")]), key_parts: Some([Nested(Op { op: "+", expr1: Identifier([Ident("col")]), expr2: Some(Value(Number("1"))) })]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
 ----
 CREATE INDEX qualifiers ON no_parentheses (alpha.omega)
 =>
-CreateIndex(CreateIndexStatement { name: Some(Ident("qualifiers")), on_name: UnresolvedObjectName([Ident("no_parentheses")]), key_parts: Some([Identifier([Ident("alpha"), Ident("omega")])]), if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: Some(Ident("qualifiers")), on_name: UnresolvedObjectName([Ident("no_parentheses")]), key_parts: Some([Identifier([Ident("alpha"), Ident("omega")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE DEFAULT INDEX ON tab
 ----
 CREATE DEFAULT INDEX ON tab
 =>
-CreateIndex(CreateIndexStatement { name: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: None, if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: None, with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE DEFAULT INDEX IF NOT EXISTS ON tab
 ----
 CREATE DEFAULT INDEX IF NOT EXISTS ON tab
 =>
-CreateIndex(CreateIndexStatement { name: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: None, if_not_exists: true })
+CreateIndex(CreateIndexStatement { name: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: None, with_options: [], if_not_exists: true })
 
 parse-statement
 CREATE DEFAULT INDEX ON tab (a, b)
@@ -627,7 +634,7 @@ CREATE INDEX ON tab (a, b)
 ----
 CREATE INDEX ON tab (a, b)
 =>
-CreateIndex(CreateIndexStatement { name: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), if_not_exists: false })
+CreateIndex(CreateIndexStatement { name: None, on_name: UnresolvedObjectName([Ident("tab")]), key_parts: Some([Identifier([Ident("a")]), Identifier([Ident("b")])]), with_options: [], if_not_exists: false })
 
 parse-statement
 CREATE INDEX IF NOT EXISTS ON tab (a, b)
@@ -825,7 +832,7 @@ ALTER INDEX name SET (property = true)
 ----
 ALTER INDEX name SET (property = true)
 =>
-AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, options: Set([Value { name: Ident("property"), value: Boolean(true) }]) })
+AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, options: Set([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
 
 parse-statement
 ALTER INDEX name RESET (property)
@@ -839,7 +846,7 @@ ALTER INDEX IF EXISTS name SET (property = true)
 ----
 ALTER INDEX IF EXISTS name SET (property = true)
 =>
-AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: true, options: Set([Value { name: Ident("property"), value: Boolean(true) }]) })
+AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: true, options: Set([WithOption { key: Ident("property"), value: Some(Value(Boolean(true))) }]) })
 
 parse-statement
 ALTER INDEX name SET ()
@@ -858,9 +865,9 @@ ALTER INDEX name RESET ()
 parse-statement
 ALTER INDEX name SET (property)
 ----
-error: Expected equals sign, found right parenthesis
 ALTER INDEX name SET (property)
-                              ^
+=>
+AlterIndexOptions(AlterIndexOptionsStatement { index_name: UnresolvedObjectName([Ident("name")]), if_exists: false, options: Set([WithOption { key: Ident("property"), value: None }]) })
 
 parse-statement
 ALTER INDEX name RESET (property = true)

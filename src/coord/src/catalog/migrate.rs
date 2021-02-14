@@ -86,12 +86,16 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                     name: _,
                     on_name: _,
                     key_parts,
+                    with_options,
                     if_not_exists: _,
                 }) => {
                     if let Some(key_parts) = key_parts {
                         for key_part in key_parts {
                             TypeNormalizer.visit_expr_mut(key_part);
                         }
+                    }
+                    for with_option in with_options {
+                        TypeNormalizer.visit_with_option_mut(with_option);
                     }
                 }
 
@@ -180,6 +184,7 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                     name: _,
                     on_name: _,
                     key_parts,
+                    with_options: _,
                     if_not_exists: _,
                 }) => {
                     if let Some(key_parts) = key_parts {
