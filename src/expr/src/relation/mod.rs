@@ -406,7 +406,20 @@ impl MirRelationExpr {
                 }
                 result
             }
-            MirRelationExpr::TopK { input, .. } => input.typ(),
+            MirRelationExpr::TopK {
+                input,
+                group_key,
+                limit,
+                ..
+            } => {
+                // If `limit` is `Some(1)` then the group key will become
+                // a unique key, as there will be only one record with that key.
+                let mut typ = input.typ();
+                if limit == &Some(1) {
+                    typ = typ.with_key(group_key.clone())
+                }
+                typ
+            }
             MirRelationExpr::Negate { input } => {
                 // Although negate may have distinct records for each key,
                 // the multiplicity is -1 rather than 1. This breaks many
