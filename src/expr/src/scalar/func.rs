@@ -818,6 +818,79 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     }
 }
 
+fn encode<'a>(
+    data: Datum<'a>,
+    format: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let encoding = format.unwrap_str().to_lowercase();
+    let bytes = data.unwrap_bytes();
+    match encoding.as_str() {
+        "base64" => Ok(Datum::String(
+            temp_storage.push_string(base64::encode(bytes)),
+        )),
+        "hex" => Ok(Datum::String(temp_storage.push_string(hex::encode(bytes)))),
+        "escape" => {
+            let mut result = String::with_capacity(bytes.len());
+            for b in bytes {
+                if b == &('\\' as u8) {
+                    result += "\\\\";
+                } else if (b & 0x80) == 0x80 {
+                    result += &format!("\\{:o}", b);
+                } else {
+                    result += &format!("{}", b);
+                }
+            }
+            Ok(Datum::String(temp_storage.push_string(result)))
+        }
+        _ => Err(EvalError::InvalidEncodingName(encoding)),
+    }
+}
+
+fn decode<'a>(
+    data: Datum<'a>,
+    format: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let encoding = format.unwrap_str().to_lowercase();
+    let string = data.unwrap_str();
+    match encoding.as_str() {
+        "base64" => match base64::decode(string) {
+            Ok(bytes) => Ok(Datum::from(temp_storage.push_bytes(bytes))),
+            Err(e) => Err(EvalError::InvalidByteSequence {
+                byte_sequence: e.to_string(),
+                encoding_name: encoding,
+            }),
+        },
+        "hex" => match hex::decode(string) {
+            Ok(bytes) => Ok(Datum::from(temp_storage.push_bytes(bytes))),
+            Err(e) => Err(EvalError::InvalidByteSequence {
+                byte_sequence: e.to_string(),
+                encoding_name: encoding,
+            }),
+        },
+        "escape" => {
+            let mut result = Vec::with_capacity(string.len());
+            let chunks = string.as_bytes().chunks_exact(4);
+            let remainder = chunks.remainder();
+            for chunk in chunks {
+                if &chunk[..2] == "\\\\".as_bytes() {
+                    result.push('\\' as u8);
+                } else if chunk[0] == ('\\' as u8) {
+                    result.push(
+                        u8::from_str_radix(std::str::from_utf8(&chunk[1..]).unwrap(), 8).unwrap(),
+                    );
+                } else {
+                    result.extend_from_slice(chunk);
+                }
+            }
+            result.extend_from_slice(remainder);
+            Ok(Datum::from(temp_storage.push_bytes(result)))
+        }
+        _ => Err(EvalError::InvalidEncodingName(encoding)),
+    }
+}
+
 fn bit_length<'a, B>(bytes: B) -> Result<Datum<'a>, EvalError>
 where
     B: AsRef<[u8]>,
@@ -2138,6 +2211,8 @@ pub enum BinaryFunc {
     DigestString,
     DigestBytes,
     MzRenderTypemod,
+    Encode,
+    Decode,
 }
 
 impl BinaryFunc {
@@ -2268,6 +2343,8 @@ impl BinaryFunc {
             BinaryFunc::MapContainsMap => Ok(eager!(map_contains_map)),
             BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
             BinaryFunc::ConvertFrom => eager!(convert_from),
+            BinaryFunc::Encode => eager!(encode, temp_storage),
+            BinaryFunc::Decode => eager!(decode, temp_storage),
             BinaryFunc::Trim => Ok(eager!(trim)),
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
@@ -2452,6 +2529,8 @@ impl BinaryFunc {
             ListListConcat | ListElementConcat => input1_type.scalar_type.nullable(true),
             ElementListConcat => input2_type.scalar_type.nullable(true),
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
+            Encode => ScalarType::String.nullable(true),
+            Decode => ScalarType::Bytes.nullable(true),
         }
     }
 
@@ -2630,7 +2709,9 @@ impl BinaryFunc {
             | ListLengthMax { .. }
             | DigestString
             | DigestBytes
-            | MzRenderTypemod => false,
+            | MzRenderTypemod
+            | Encode
+            | Decode => false,
         }
     }
 }
@@ -2744,6 +2825,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ElementListConcat => f.write_str("||"),
             BinaryFunc::DigestString | BinaryFunc::DigestBytes => f.write_str("digest"),
             BinaryFunc::MzRenderTypemod => f.write_str("mz_render_typemod"),
+            BinaryFunc::Encode => f.write_str("encode"),
+            BinaryFunc::Decode => f.write_str("decode"),
         }
     }
 }
