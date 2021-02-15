@@ -11,7 +11,7 @@ path = "checker.rs"
 
 [dependencies]
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-env_logger = "0.8.2"
+env_logger = "0.8.3"
 futures = "0.3.12"
 hyper = "0.14.0"
 lazy_static = "1.4.0"
