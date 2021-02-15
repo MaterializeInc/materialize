@@ -548,12 +548,31 @@ impl Tables {
         debug!("reading table data from {}", path.display());
         let data = fs::read(&path).unwrap();
 
+        // If we can't find a file that's either an error or a migration from a
+        // version without persistent tables to one with persistent tables
+        // Handle it by creating a new file for now.
+        // TODO: is there a better way to handle this / structure the logic?
+        // TODO: you probably want to break this up into ensure_table and then
+        // reload?
         let file = fs::OpenOptions::new()
             .append(true)
             .open(&path)
-            .with_context(|| {
-                anyhow!("trying to reopen file for table: {} path: {:#?}", id, path)
-            })?;
+            .unwrap_or_else(|_| {
+                error!("failed to reopen file for table: {} path: {:#?}", id, path);
+                fs::OpenOptions::new()
+                    .append(true)
+                    .create_new(true)
+                    .open(&path)
+                    .with_context(|| {
+                        anyhow!(
+                            "trying to recreate file for table: {} path: {:#?}",
+                            id,
+                            path
+                        )
+                        // TODO: handle this better
+                    })
+                    .expect("creating the file must succeed")
+            });
 
         self.files.insert(id, file);
 
