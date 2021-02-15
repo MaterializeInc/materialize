@@ -638,8 +638,8 @@ where
     }
 }
 
-/// Combine arrangements containing results of different aggregation types
-/// into a single arrangement.
+/// Build the dataflow to combine arrangements containing results of different
+/// aggregation types into a single arrangement.
 ///
 /// This computes the same thing as a join on the group key followed by shuffling
 /// the values into the correct order. This implementation assumes that all input
@@ -735,8 +735,8 @@ where
     })
 }
 
-/// Compute and arrange multiple non-accumulable, non-hierarchical aggregations
-/// on `input`.
+/// Build the dataflow to compute and arrange multiple non-accumulable,
+/// non-hierarchical aggregations on `input`.
 ///
 /// This function assumes that we are explicitly rendering multiple basic aggregations.
 /// For each aggregate, we render a different reduce operator, and then fuse
@@ -778,7 +778,7 @@ where
         })
 }
 
-/// Compute a single basic aggregation.
+/// Build the dataflow to compute a single basic aggregation.
 ///
 /// This method also applies distinctness if required. `prepend_keys` is true if
 /// the arrangement produced by this function needs to be reused by other views.
@@ -850,8 +850,8 @@ where
     })
 }
 
-/// Compute and arrange multiple hierarchical aggregations on non-monotonic
-/// inputs.
+/// Build the dataflow to compute and arrange multiple hierarchical aggregations
+/// on non-monotonic inputs.
 ///
 /// This function renders a single reduction tree that computes aggregations with
 /// a priority queue implemented with a series of reduce operators that partition
@@ -927,7 +927,8 @@ where
     })
 }
 
-/// Compute one stage of a reduction tree for multiple hierarchical aggregates.
+/// Build the dataflow for one stage of a reduction tree for multiple hierarchical
+/// aggregates.
 ///
 /// `buckets` indicates the number of buckets in this stage. We do some non
 /// obvious trickery here to limit the memory usage per layer by internally
@@ -978,6 +979,11 @@ where
     negated_output.negate().concat(&input).consolidate()
 }
 
+/// Build the dataflow to compute and arrange multiple hierarchical aggregations
+/// on monotonic inputs.
+///
+/// `prepend_keys` is true if the arrangement produced by this function needs to
+/// be reused by other views.
 fn build_monotonic<G>(
     collection: Collection<G, (Row, Row)>,
     MonotonicPlan { aggr_funcs, skips }: MonotonicPlan,
@@ -1044,7 +1050,7 @@ where
         })
 }
 
-/// Builds the dataflow for reductions that can be performed in-place.
+/// Build the dataflow to compute and arrange multiple accumulable aggregations.
 ///
 /// The incoming values are moved to the update's "difference" field, at which point
 /// they can be accumulated in place. The `count` operator promotes the accumulated
@@ -1255,18 +1261,17 @@ where
         )
 }
 
-// Transforms a vector containing indexes of needed columns
-// into a vector containing the "skips" an iterator over a Row would
-// need to perform to see those values
-// E.g. [3, 6, 10, 15] turns into [3, 3, 4, 5]
-fn convert_indexes_to_skips(mut demand: Vec<usize>) -> Vec<usize> {
-    // transform `demand` into "skips"
-    for index in (1..demand.len()).rev() {
-        demand[index] -= demand[index - 1];
-        demand[index] -= 1;
+/// Transforms a vector containing indexes of needed columns into one containing
+/// the "skips" an iterator over a Row would need to perform to see those values.
+///
+/// E.g. [3, 6, 10, 15] turns into [3, 3, 4, 5]
+fn convert_indexes_to_skips(mut indexes: Vec<usize>) -> Vec<usize> {
+    for i in (1..indexes.len()).rev() {
+        indexes[i] -= indexes[i - 1];
+        indexes[i] -= 1;
     }
 
-    demand
+    indexes
 }
 
 /// Determines whether a function can be accumulated in an update's "difference" field,
