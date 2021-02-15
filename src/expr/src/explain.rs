@@ -215,18 +215,19 @@ impl<'a> Explanation<'a> {
 
         match node.expr {
             Constant { rows, .. } => {
-                write!(f, "| Constant ")?;
+                write!(f, "| Constant")?;
                 match rows {
-                    Ok(rows) => writeln!(
+                    Ok(rows) if !rows.is_empty() => writeln!(
                         f,
-                        "{}",
+                        " {}",
                         separated(
                             " ",
                             rows.iter()
                                 .flat_map(|(row, count)| (0..*count).map(move |_| row))
                         )
                     )?,
-                    Err(e) => writeln!(f, "Err({})", e.to_string().quoted())?,
+                    Ok(_) => writeln!(f)?,
+                    Err(e) => writeln!(f, " Err({})", e.to_string().quoted())?,
                 }
             }
             Get { id, .. } => match id {

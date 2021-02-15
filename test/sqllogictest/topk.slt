@@ -101,7 +101,7 @@ EXPLAIN PLAN FOR SELECT state, COUNT(*) FROM (
     GROUP BY state
 ----
 %0 =
-| Constant 
+| Constant
 
 EOF
 
