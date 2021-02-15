@@ -194,12 +194,10 @@ struct BucketedPlan {
     /// Set of "skips" or calls to `nth()` an iterator needs to do over
     /// the input to extract the relevant datums.
     skips: Vec<usize>,
-    /// In each layer, we'll assign values to buckets by hashing
-    /// the value and then taking `hash % number_of_buckets[layer]`.
-    /// These shifts denote the log_base_2 of the number of
-    /// buckets in each layer (we get the actual number of
-    /// buckets with `2 << shifts[layer]`).
-    shifts: Vec<usize>,
+    // The number of buckets in each layer of the reduction tree. Should
+    // be decreasing, and ideally, a power of two so that we can easily
+    // distribute values to buckets with `value.hashed() % bucketes[layer]`.
+    buckets: Vec<u64>,
 }
 
 /// Plan for computing a set of basic aggregations.
@@ -314,25 +312,29 @@ impl ReducePlan {
                     let monotonic = MonotonicPlan { aggr_funcs, skips };
                     ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(monotonic))
                 } else {
-                    let mut shifts = vec![];
-                    let mut current = 4usize;
+                    let mut buckets = vec![];
+                    let mut current = 16;
 
                     // Plan for 4B records in the expected case if the user
                     // didn't specify a group size.
                     let limit = expected_group_size.unwrap_or(4_000_000_000);
 
-                    while (1 << current) < limit {
-                        shifts.push(current);
-                        current += 4;
+                    // Distribute buckets in powers of 16, so that we can strike
+                    // a balance between how many inputs each layer gets from
+                    // the preceeding layer, while also limiting the number of
+                    // layers.
+                    while current < limit {
+                        buckets.push(current as u64);
+                        current *= 16;
                     }
 
                     // We need to store the bucket numbers in decreasing order.
-                    shifts.reverse();
+                    buckets.reverse();
 
                     let bucketed = BucketedPlan {
                         aggr_funcs,
                         skips,
-                        shifts,
+                        buckets,
                     };
 
                     ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(bucketed))
@@ -865,7 +867,7 @@ fn build_bucketed<G>(
     BucketedPlan {
         aggr_funcs,
         skips,
-        shifts,
+        buckets,
     }: BucketedPlan,
     prepend_key: bool,
 ) -> Arrangement<G, Row>
@@ -888,8 +890,8 @@ where
 
     // Repeatedly apply hierarchical reduction with a progressively coarser key.
     let mut stage = input.map(move |(key, values)| ((key, values.hashed()), values));
-    for log_modulus in shifts.iter() {
-        stage = build_bucketed_stage(stage, aggr_funcs.clone(), 1u64 << log_modulus);
+    for b in buckets.into_iter() {
+        stage = build_bucketed_stage(stage, aggr_funcs.clone(), b);
     }
 
     // Discard the hash from the key and return to the format of the input data.
@@ -927,17 +929,21 @@ where
 
 /// Compute one stage of a reduction tree for multiple hierarchical aggregates.
 ///
-/// `modulus` indicates the log_base_2 of the number of buckets in this stage.
+/// `buckets` indicates the number of buckets in this stage. We do some non
+/// obvious trickery here to limit the memory usage per layer by internally
+/// holding only the elements that were rejected by this stage. However, the
+/// output collection maintains the `((key, bucket), (passing value)` for this
+/// stage.
 fn build_bucketed_stage<G>(
     input: Collection<G, ((Row, u64), Vec<Row>)>,
     aggrs: Vec<AggregateFunc>,
-    modulus: u64,
+    buckets: u64,
 ) -> Collection<G, ((Row, u64), Vec<Row>)>
 where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    let input = input.map(move |((key, hash), values)| ((key, hash % modulus), values));
+    let input = input.map(move |((key, hash), values)| ((key, hash % buckets), values));
 
     let negated_output = input
         .reduce_named("MinsMaxesHierarchical", {
