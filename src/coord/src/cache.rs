@@ -570,7 +570,6 @@ fn encode_update(update: &Update, buf: &mut Vec<u8>) -> Result<(), anyhow::Error
     assert!(update.diff != 0);
     assert!(update.timestamp > 0);
     let data = update.row.data();
-    assert!(data.len() > 0);
 
     if data.len() >= u32::MAX as usize {
         bail!("failed to encode row: row too large");
@@ -609,7 +608,6 @@ fn read_update(buf: &[u8], offset: usize) -> Option<(Update, usize)> {
     assert!(is_progress == 0);
     assert!(timestamp > 0);
     assert!(diff != 0);
-    assert!(len != 0);
 
     // Grab the next len bytes after the 24 byte length header, and turn
     // it into a vector so that we can extract things from it as a Row.
