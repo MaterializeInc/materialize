@@ -10,7 +10,7 @@ anyhow = "1.0.38"
 fstrings = "0.2.3"
 itertools = "0.9.0"
 ore = { path = "../ore" }
-quote = "1.0.8"
+quote = "1.0.9"
 syn = { version = "1.0.55", features = ["extra-traits", "full", "parsing"] }
 
 [dev-dependencies]
