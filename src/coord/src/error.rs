@@ -61,6 +61,7 @@ impl CoordError {
     pub fn detail(&self) -> Option<String> {
         match self {
             CoordError::Catalog(c) => c.detail(),
+            CoordError::Eval(e) => e.detail(),
             _ => None,
         }
     }
@@ -69,6 +70,7 @@ impl CoordError {
     pub fn hint(&self) -> Option<String> {
         match self {
             CoordError::Catalog(c) => c.hint(),
+            CoordError::Eval(e) => e.hint(),
             CoordError::UnknownLoginRole(_) => {
                 // TODO(benesch): this will be a bad hint when people are used
                 // to creating roles in Materialize, since they might drop the

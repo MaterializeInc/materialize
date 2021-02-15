@@ -14,12 +14,12 @@ use std::fmt;
 use std::iter;
 use std::str;
 
+use ::encoding::label::encoding_from_whatwg_label;
+use ::encoding::DecoderTrap;
 use chrono::{
     DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike,
     Utc,
 };
-use encoding::label::encoding_from_whatwg_label;
-use encoding::DecoderTrap;
 use hmac::{Hmac, Mac, NewMac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
@@ -44,6 +44,7 @@ use repr::{strconv, ColumnName, ColumnType, Datum, RowArena, RowPacker, ScalarTy
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{like_pattern, EvalError, MirScalarExpr};
 
+mod encoding;
 mod format;
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -816,6 +817,26 @@ fn convert_from<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
             encoding_name,
         }),
     }
+}
+
+fn encode<'a>(
+    bytes: Datum<'a>,
+    format: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let format = encoding::lookup_format(format.unwrap_str())?;
+    let out = format.encode(bytes.unwrap_bytes());
+    Ok(Datum::from(temp_storage.push_string(out)))
+}
+
+fn decode<'a>(
+    string: Datum<'a>,
+    format: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let format = encoding::lookup_format(format.unwrap_str())?;
+    let out = format.decode(string.unwrap_str())?;
+    Ok(Datum::from(temp_storage.push_bytes(out)))
 }
 
 fn bit_length<'a, B>(bytes: B) -> Result<Datum<'a>, EvalError>
@@ -2138,6 +2159,8 @@ pub enum BinaryFunc {
     DigestString,
     DigestBytes,
     MzRenderTypemod,
+    Encode,
+    Decode,
 }
 
 impl BinaryFunc {
@@ -2268,6 +2291,8 @@ impl BinaryFunc {
             BinaryFunc::MapContainsMap => Ok(eager!(map_contains_map)),
             BinaryFunc::RoundDecimal(scale) => Ok(eager!(round_decimal_binary, *scale)),
             BinaryFunc::ConvertFrom => eager!(convert_from),
+            BinaryFunc::Encode => eager!(encode, temp_storage),
+            BinaryFunc::Decode => eager!(decode, temp_storage),
             BinaryFunc::Trim => Ok(eager!(trim)),
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
@@ -2452,6 +2477,8 @@ impl BinaryFunc {
             ListListConcat | ListElementConcat => input1_type.scalar_type.nullable(true),
             ElementListConcat => input2_type.scalar_type.nullable(true),
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
+            Encode => ScalarType::String.nullable(in_nullable),
+            Decode => ScalarType::Bytes.nullable(in_nullable),
         }
     }
 
@@ -2630,7 +2657,9 @@ impl BinaryFunc {
             | ListLengthMax { .. }
             | DigestString
             | DigestBytes
-            | MzRenderTypemod => false,
+            | MzRenderTypemod
+            | Encode
+            | Decode => false,
         }
     }
 }
@@ -2744,6 +2773,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ElementListConcat => f.write_str("||"),
             BinaryFunc::DigestString | BinaryFunc::DigestBytes => f.write_str("digest"),
             BinaryFunc::MzRenderTypemod => f.write_str("mz_render_typemod"),
+            BinaryFunc::Encode => f.write_str("encode"),
+            BinaryFunc::Decode => f.write_str("decode"),
         }
     }
 }

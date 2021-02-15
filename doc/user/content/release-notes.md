@@ -51,6 +51,11 @@ Wrap your release notes at the 80 character mark.
 - Add the [`cbrt` function](/sql/functions/#numbers-func) for computing the
   cube root of a [`double precision`](/sql/types/float).
 
+- Add the [`encode` and `decode` functions](/sql/functions/encode/) to convert
+  binary data to and from several textual representations.
+
+  Thanks to external contributor [@Posnet](https://github.com/Posnet).
+
 - Multipartition Kafka sinks with consistency enabled will create single-partition
   consistency topics.
 - **Breaking change.** Change the behavior of the

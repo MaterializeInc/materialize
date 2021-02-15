@@ -1782,6 +1782,12 @@ lazy_static! {
                         column_names: vec![Some("jsonb_object_keys".into())],
                     })
                 }), 3931;
+            },
+            "encode" => Scalar {
+                params!(Bytes, String) => BinaryFunc::Encode, 1946;
+            },
+            "decode" => Scalar {
+                params!(String, String) => BinaryFunc::Decode, 1947;
             }
         }
     };

@@ -1066,6 +1066,7 @@ dependencies = [
  "csv",
  "encoding",
  "enum-iterator",
+ "hex",
  "hmac",
  "itertools",
  "md-5",
