@@ -17,7 +17,7 @@ use ore::collections::CollectionExt;
 use repr::adt::array::InvalidArrayError;
 use repr::adt::datetime::DateTimeUnits;
 use repr::adt::regex::Regex;
-use repr::strconv::ParseError;
+use repr::strconv::{ParseError, ParseHexError};
 use repr::{ColumnType, Datum, RelationType, Row, RowArena, ScalarType};
 
 use self::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
@@ -702,6 +702,9 @@ pub enum EvalError {
     Int64OutOfRange,
     IntervalOutOfRange,
     TimestampOutOfRange,
+    InvalidBase64Equals,
+    InvalidBase64Symbol(char),
+    InvalidBase64EndSequence,
     InvalidTimezone(String),
     InvalidTimezoneInterval,
     InvalidTimezoneConversion,
@@ -724,6 +727,7 @@ pub enum EvalError {
     UnsupportedDateTimeUnits(DateTimeUnits),
     UnterminatedLikeEscapeSequence,
     Parse(ParseError),
+    ParseHex(ParseHexError),
     Internal(String),
 }
 
@@ -738,6 +742,15 @@ impl fmt::Display for EvalError {
             EvalError::Int64OutOfRange => f.write_str("bigint out of range"),
             EvalError::IntervalOutOfRange => f.write_str("interval out of range"),
             EvalError::TimestampOutOfRange => f.write_str("timestamp out of range"),
+            EvalError::InvalidBase64Equals => {
+                f.write_str("unexpected \"=\" while decoding base64 sequence")
+            }
+            EvalError::InvalidBase64Symbol(c) => write!(
+                f,
+                "invalid symbol \"{}\" found while decoding base64 sequence",
+                c.escape_default()
+            ),
+            EvalError::InvalidBase64EndSequence => f.write_str("invalid base64 end sequence"),
             EvalError::InvalidTimezone(tz) => write!(f, "invalid time zone '{}'", tz),
             EvalError::InvalidTimezoneInterval => {
                 f.write_str("timezone interval must not contain months or years")
@@ -771,7 +784,23 @@ impl fmt::Display for EvalError {
                 f.write_str("unterminated escape sequence in LIKE")
             }
             EvalError::Parse(e) => e.fmt(f),
+            EvalError::ParseHex(e) => e.fmt(f),
             EvalError::Internal(s) => write!(f, "internal error: {}", s),
+        }
+    }
+}
+
+impl EvalError {
+    pub fn detail(&self) -> Option<String> {
+        None
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            EvalError::InvalidBase64EndSequence => Some(
+                "Input data is missing padding, is truncated, or is otherwise corrupted.".into(),
+            ),
+            _ => None,
         }
     }
 }
@@ -781,6 +810,12 @@ impl std::error::Error for EvalError {}
 impl From<ParseError> for EvalError {
     fn from(e: ParseError) -> EvalError {
         EvalError::Parse(e)
+    }
+}
+
+impl From<ParseHexError> for EvalError {
+    fn from(e: ParseHexError) -> EvalError {
+        EvalError::ParseHex(e)
     }
 }
 
