@@ -265,6 +265,7 @@ pub async fn serve(
         tokio::spawn(version_check::check_version_loop(
             telemetry_url,
             coord_handle.cluster_id().to_string(),
+            start_time,
         ));
     }
 
