@@ -11,10 +11,10 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
-use log::{debug, info, log, Level};
+use log::{debug, log, Level};
 use semver::{Identifier, Version};
 use serde::{Deserialize, Serialize};
-use tokio::time::{sleep as tokio_sleep, Duration};
+use tokio::time::{sleep as tokio_sleep, Duration as TokioDuration};
 
 use ore::retry::RetryBuilder;
 
@@ -52,6 +52,12 @@ pub async fn check_version_loop(telemetry_url: String, cluster_id: String, start
         }
         Ok(_) => (),
         Err(e) => debug!("unable to parse fetched latest version: {}", e),
+    }
+
+    loop {
+        tokio_sleep(TokioDuration::from_secs(TELEMETRY_FREQUENCY_SECS)).await;
+
+        fetch_latest_version(&version_url, start_time).await;
     }
 }
 
