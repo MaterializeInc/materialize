@@ -8,23 +8,35 @@
 // by the Apache License, Version 2.0.
 
 //! Reduction execution planning and dataflow construction.
+
+//! We build `ReducePlan`s to manage the complexity of planning the generated dataflow for a
+//! given reduce expression. The intent here is that each creating a `ReducePlan` should capture
+//! all of the decision making about what kind of dataflow do we need to render and what each
+//! operator needs to do, and then actually rendering the plan can be a relatively simple application
+//! of (as much as possible) straight line code.
 //!
 //! Materialize needs to be able to maintain reductions incrementally (roughly, using
 //! time proportional to the number of changes in the input) and ideally, with a
-//! memory footprint proportional to the number of reductions being computed. To achieve that,
-//! reduction functions are divied into three categories, each with their own specialized plan
-//! and dataflow.
+//! memory footprint proportional to the number of reductions being computed. We have to employ
+//! several tricks to achieve that, and these tricks constitute most of the complexity involved
+//! with planning and rendering reduce expressions. There's some additional complexity involved
+//! in handling aggregations with `DISTINCT` correctly so that we can efficiently suppress
+//! duplicate updates.
+//!
+//! In order to optimize the performance of our rendered dataflow, we divide all aggregations
+//! into three distinct types. Each type gets rendered separately, with its own specialized plan
+//! and dataflow. The three types are as follows:
 //!
 //! 1. Accumulable:
 //!    Accumulable reductions can be computed inline in a Differential update's `difference`
 //!    field because they basically boil down to tracking counts of things. `sum()` is an
 //!    example of an accumulable reduction, and when some element `x` is removed from the set
 //!    of elements being summed, we can introduce `-x` to incrementally maintain the sum. More
-//!    formally, accumulable reductions correspond to instances of Abelian groups.
+//!    formally, accumulable reductions correspond to instances of commutative Abelian groups.
 //! 2. Hierarchical:
 //!    Hierarchical reductions don't have a meaningful negation like accumulable reductions do, but
-//!    they are still associative, which lets us compute the reduction over subsets of the
-//!    input, and then compute the reduction again on those results. For example:
+//!    they are still commutative and associative, which lets us compute the reduction over subsets
+//!    of the input, and then compute the reduction again on those results. For example:
 //!    `min[2, 5, 1, 10]` is the same as `min[ min[2, 5], min[1, 10]]`. When we compute hierarchical
 //!    reductions this way, we can maintain the computation in sublinear time with respect to
 //!    the overall input. `min` and `max` are two examples of hierarchical reductions. More formally,
@@ -41,16 +53,12 @@
 //!    hierarchical (most likely they are associative but don't involve any data reduction) and so for these
 //!    we can't do much more than just defer to Differential's reduce operator and eat a large maintenance cost.
 //!
-//! When render these reductions we want to limit the number of arrangements we produce. Therefore, if we only
-//! have multiple instances of a single reduction type in our reduce expression, we'll specialize and only
-//! render a dataflow to compute those functions. If instead we have instances of multiple reduction types
-//! in the same expression, we'll need to divide them up by type, render them separately, and then take those
-//! results and collate them back in the requested order.
-//!
-//! We build `ReducePlan`s to manage the complexity of planning the generated dataflow for a given reduce
-//! expression. The intent here is that each creating a `ReducePlan` should capture all of the decision making
-//! about what kind of dataflow do we need to render and what each operator needs to do, and then actually
-//! rendering the plan can be a relatively simple application of (as much as possible) straight line code.
+//! When we render these reductions we want to limit the number of arrangements we produce. When we build a
+//! dataflow for a reduction containing multiple types of reductions, we have no choice but to divide up the
+//! requested aggregations by type, render each type separately and then take those results and collate them
+//! back in the requested output order. However, if we only need to perform aggregations of a single reduction
+//! type, we can specialize and render the dataflow to compute those aggregations in the correct order, and
+//! return the output arrangement directly and avoid the extra collation arrangement.
 
 use std::collections::BTreeMap;
 
@@ -76,21 +84,21 @@ use super::context::Context;
 use crate::render::context::Arrangement;
 use crate::render::datum_vec::DatumVec;
 
-/// This enum represents the three potential classes of aggregations.
+/// This enum represents the three potential types of aggregations.
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 enum ReductionType {
     /// Accumulable functions can be subtracted from (are invertible), and associative.
     /// We can compute these results by moving some data to the diff field under arbitrary
     /// changes to inputs. Examples include sum or count.
-    Accumulable = 1,
+    Accumulable,
     /// Hierarchical functions are associative, which means we can split up the work of
     /// computing them across subsets. Note that hierarchical reductions should also
     /// reduce the data in some way, as otherwise rendering them hierarchically is not
     /// worth it. Examples include min or max.
-    Hierarchical = 2,
+    Hierarchical,
     /// Basic, for lack of a better word, are functions that are neither accumulable
     /// nor hierarchical. Examples include jsonb_agg.
-    Basic = 3,
+    Basic,
 }
 
 /// A `ReducePlan` provides a concise description for how we will
@@ -107,13 +115,14 @@ enum ReductionType {
 /// be as simple (and compiler verifiable) as possible.
 #[derive(Clone, Debug)]
 enum ReducePlan {
-    /// Plan for not computing any aggregations, just a simple distinct.
+    /// Plan for not computing any aggregations, just determining the set of
+    /// distinct keys.
     Distinct,
-    /// Plan for only computing accumulable aggregations.
+    /// Plan for computing only accumulable aggregations.
     Accumulable(AccumulablePlan),
-    /// Plan for only computing hierarchical aggregations.
+    /// Plan for computing only hierarchical aggregations.
     Hierarchical(HierarchicalPlan),
-    /// Plan for only computing basic aggregations.
+    /// Plan for computing only basic aggregations.
     Basic(BasicPlan),
     /// Plan for computing a mix of different kinds of aggregations.
     /// We need to do extra work here to reassemble results back in the
@@ -248,6 +257,85 @@ struct CollationPlan {
 }
 
 impl ReducePlan {
+    /// Generate a plan for computing the supplied aggregations.
+    ///
+    /// The resulting plan summarizes what the dataflow to be created
+    /// and how the aggregations will be executed.
+    fn create_from(
+        aggregates: Vec<AggregateExpr>,
+        monotonic: bool,
+        expected_group_size: Option<usize>,
+    ) -> Self {
+        // If we don't have any aggregations we are just computing a distinct.
+        if aggregates.is_empty() {
+            return ReducePlan::Distinct;
+        }
+
+        // Otherwise, we need to group aggregations according to their
+        // reduction type (accumulable, hierarchical, or basic)
+        let mut reduction_types = BTreeMap::new();
+        // We need to make sure that each list of aggregates by type forms
+        // a subsequence of the overall sequence of aggregates.
+        for index in 0..aggregates.len() {
+            let typ = reduction_type(&aggregates[index].func);
+            let aggregates_list = reduction_types.entry(typ).or_insert_with(Vec::new);
+            aggregates_list.push((index, aggregates[index].clone()));
+        }
+
+        // Convert each grouped list of reductions into a plan.
+        let plan: Vec<_> = reduction_types
+            .into_iter()
+            .map(|(typ, aggregates_list)| {
+                ReducePlan::create_inner(typ, aggregates_list, monotonic, expected_group_size)
+            })
+            .collect();
+
+        // If we only have a single type of aggregation present we can
+        // render that directly
+        if plan.len() == 1 {
+            return plan[0].clone();
+        }
+
+        // Otherwise, we have to stitch reductions together.
+
+        // First, lets sanity check that we don't have an impossible number
+        // of reduction types.
+        assert!(plan.len() <= 3);
+
+        let mut collation: CollationPlan = Default::default();
+
+        // Construct a mapping from output_position -> reduction that we can
+        // use to reconstruct the output in the correct order.
+        let aggregate_types = aggregates
+            .iter()
+            .map(|a| reduction_type(&a.func))
+            .collect::<Vec<_>>();
+
+        collation.aggregate_types = aggregate_types;
+
+        for expr in plan.into_iter() {
+            match expr {
+                ReducePlan::Accumulable(e) => {
+                    assert!(collation.accumulable.is_none());
+                    collation.accumulable = Some(e);
+                }
+                ReducePlan::Hierarchical(e) => {
+                    assert!(collation.hierarchical.is_none());
+                    collation.hierarchical = Some(e);
+                }
+                ReducePlan::Basic(e) => {
+                    assert!(collation.basic.is_none());
+                    collation.basic = Some(e);
+                }
+                ReducePlan::Distinct | ReducePlan::Collation(_) => {
+                    panic!("Inner reduce plan was unsupported type!")
+                }
+            }
+        }
+
+        ReducePlan::Collation(collation)
+    }
+
     /// Generate a plan for computing the specified type of aggregations.
     ///
     /// This function assumes that all of the supplied aggregates are
@@ -351,85 +439,6 @@ impl ReducePlan {
                 }
             }
         }
-    }
-
-    /// Generate a plan for computing the supplied aggregations.
-    ///
-    /// The resulting plan summarizes what the dataflow to be created
-    /// and how the aggregations will be executed.
-    fn create_from(
-        aggregates: Vec<AggregateExpr>,
-        monotonic: bool,
-        expected_group_size: Option<usize>,
-    ) -> Self {
-        // If we don't have any aggregations we are just computing a distinct.
-        if aggregates.is_empty() {
-            return ReducePlan::Distinct;
-        }
-
-        // Otherwise, we need to group aggregations according to their
-        // reduction type (accumulable, hierarchical, or basic)
-        let mut reduction_types = BTreeMap::new();
-        // We need to make sure that each list of aggregates by type forms
-        // a subsequence of the overall sequence of aggregates.
-        for index in 0..aggregates.len() {
-            let typ = reduction_type(&aggregates[index].func);
-            let aggregates_list = reduction_types.entry(typ).or_insert_with(Vec::new);
-            aggregates_list.push((index, aggregates[index].clone()));
-        }
-
-        // Convert each grouped list of reductions into a plan.
-        let plan: Vec<_> = reduction_types
-            .into_iter()
-            .map(|(typ, aggregates_list)| {
-                ReducePlan::create_inner(typ, aggregates_list, monotonic, expected_group_size)
-            })
-            .collect();
-
-        // If we only have a single type of aggregation present we can
-        // render that directly
-        if plan.len() == 1 {
-            return plan[0].clone();
-        }
-
-        // Otherwise, we have to stitch reductions together.
-
-        // First, lets sanity check that we don't have an impossible number
-        // of reduction types.
-        assert!(plan.len() <= 3);
-
-        let mut collation: CollationPlan = Default::default();
-
-        // Construct a mapping from output_position -> reduction that we can
-        // use to reconstruct the output in the correct order.
-        let aggregate_types = aggregates
-            .iter()
-            .map(|a| reduction_type(&a.func))
-            .collect::<Vec<_>>();
-
-        collation.aggregate_types = aggregate_types;
-
-        for expr in plan.into_iter() {
-            match expr {
-                ReducePlan::Accumulable(e) => {
-                    assert!(collation.accumulable.is_none());
-                    collation.accumulable = Some(e);
-                }
-                ReducePlan::Hierarchical(e) => {
-                    assert!(collation.hierarchical.is_none());
-                    collation.hierarchical = Some(e);
-                }
-                ReducePlan::Basic(e) => {
-                    assert!(collation.basic.is_none());
-                    collation.basic = Some(e);
-                }
-                ReducePlan::Distinct | ReducePlan::Collation(_) => {
-                    panic!("Inner reduce plan was unsupported type!")
-                }
-            }
-        }
-
-        ReducePlan::Collation(collation)
     }
 
     /// Render a dataflow based on the provided plan.
@@ -723,6 +732,7 @@ where
         })
 }
 
+/// Build the dataflow to compute the set of distinct keys.
 fn build_distinct<G>(collection: Collection<G, (Row, Row)>) -> Arrangement<G, Row>
 where
     G: Scope,
