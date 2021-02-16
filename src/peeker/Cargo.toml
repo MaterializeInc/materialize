@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-env_logger = "0.8.2"
+env_logger = "0.8.3"
 hyper = { version = "0.14.0", features = ["http1", "server", "tcp"] }
 lazy_static = "1.4.0"
 log = "0.4.13"
