@@ -763,8 +763,10 @@ where
     G::Timestamp: Lattice,
 {
     // We are only using this function to render multiple basic aggregates and
-    // stitch them together
-    assert!(aggrs.len() > 1);
+    // stitch them together. If that's not true we should complain.
+    if aggrs.len() <= 1 {
+        log::error!("Unexpectedly computing {} basic aggregations together but we expected to be doing more than one", aggrs.len());
+    }
     let mut to_collect = Vec::new();
     for (index, aggr) in aggrs {
         let result = build_basic_aggregate(input.clone(), index, &aggr, false);
@@ -819,9 +821,11 @@ where
     } else {
         // If the arrangement produced by this function is going to be exported
         // for reuse that implies that theres only a single aggregation in the
-        // whole reduce, and only one value in the values row. Let's make sure
-        // we're not trying to aggregate over anything else.
-        assert!(index == 0);
+        // whole reduce, and only one value in the values row. Let's complain if
+        // we're trying to aggregate over anything else.
+        if index != 0 {
+            log::error!("Computing single basic aggregate on index {} with prepend-keys=true. Expected index 0", index);
+        }
         input
     };
 
@@ -1274,8 +1278,19 @@ where
 /// Transforms a vector containing indexes of needed columns into one containing
 /// the "skips" an iterator over a Row would need to perform to see those values.
 ///
+/// This function requires that all of the elements in `indexes` are strictly
+/// increasing.
 /// E.g. [3, 6, 10, 15] turns into [3, 3, 4, 5]
 fn convert_indexes_to_skips(mut indexes: Vec<usize>) -> Vec<usize> {
+    for i in 1..indexes.len() {
+        if indexes[i - 1] >= indexes[i] {
+            log::error!(
+                "convert_indexes_to_skip needs indexes to be strictly increasing. Received: {:?}",
+                indexes,
+            );
+        }
+    }
+
     for i in (1..indexes.len()).rev() {
         indexes[i] -= indexes[i - 1];
         indexes[i] -= 1;
