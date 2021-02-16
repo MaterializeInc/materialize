@@ -13,6 +13,7 @@
 //! `ALTER`, `CREATE`, and `DROP`.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::convert::TryFrom;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -60,8 +61,8 @@ use crate::plan::expr::{ColumnRef, HirScalarExpr, JoinKind};
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    self, plan_utils, query, Index, IndexOption, IndexOptionName, Params, Plan, Sink, Source,
-    Table, Type, TypeInner, View,
+    self, plan_utils, query, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan,
+    Sink, Source, Table, Type, TypeInner, View,
 };
 use crate::pure::Schema;
 
