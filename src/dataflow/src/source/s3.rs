@@ -9,6 +9,7 @@
 
 //! Functionality for creating S3 sources
 
+use std::collections::{HashMap, HashSet};
 use std::convert::{From, TryInto};
 use std::default::Default;
 use std::ops::AddAssign;
@@ -16,7 +17,9 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use anyhow::{anyhow, Error};
 use globset::GlobMatcher;
+use notifications::Event;
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
+use rusoto_sqs::{DeleteMessageRequest, GetQueueUrlRequest, ReceiveMessageRequest, Sqs};
 use timely::scheduling::{Activator, SyncActivator};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc as tokio_mpsc;
@@ -34,9 +37,12 @@ use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
 
+use self::notifications::{EventType, TestEvent};
+
+mod notifications;
+
 type Out = Vec<u8>;
 struct InternalMessage {
-    bucket: String,
     record: Out,
 }
 
@@ -54,21 +60,25 @@ pub struct S3SourceInfo {
     receiver_stream: Receiver<Result<InternalMessage, Error>>,
     /// Buffer: store message that cannot yet be timestamped
     buffer: Option<SourceMessage<Out>>,
-    /// BucketOffset
-    offset: BucketOffset,
+    /// Total number of records that this source has read
+    offset: S3Offset,
 }
 
+/// Number of records This source has downloaded
+///
+/// Possibly this should be per-bucket or per-object, depending on the needs
+/// for deterministic timestamping on restarts: issue #5715
 #[derive(Clone, Copy, Debug)]
-struct BucketOffset(i64);
+struct S3Offset(i64);
 
-impl AddAssign<i64> for BucketOffset {
+impl AddAssign<i64> for S3Offset {
     fn add_assign(&mut self, other: i64) {
         self.0 += other;
     }
 }
 
-impl From<BucketOffset> for MzOffset {
-    fn from(offset: BucketOffset) -> MzOffset {
+impl From<S3Offset> for MzOffset {
+    fn from(offset: S3Offset) -> MzOffset {
         MzOffset { offset: offset.0 }
     }
 }
@@ -100,6 +110,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             let glob = s3_conn.pattern.map(|g| g.compile_matcher());
             let aws_info = s3_conn.aws_info;
             tokio::spawn(download_objects_task(
+                source_name.clone(),
                 keys_rx,
                 dataflow_tx,
                 aws_info.clone(),
@@ -109,19 +120,17 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
                 match key_source {
                     S3KeySource::Scan { bucket } => {
                         log::debug!("reading s3 bucket={} worker={}", bucket, worker_id);
-
-                        let pid = PartitionId::S3 {
-                            bucket: bucket.clone(),
-                        };
-                        consistency_info.partition_metrics.insert(
-                            pid.clone(),
-                            PartitionMetrics::new(&source_name, source_id, &bucket, logger.clone()),
-                        );
-                        consistency_info.update_partition_metadata(pid);
-
                         tokio::spawn(scan_bucket_task(
                             bucket,
                             glob.clone(),
+                            aws_info.clone(),
+                            keys_tx.clone(),
+                        ));
+                    }
+                    S3KeySource::SqsNotifications { queue } => {
+                        tokio::spawn(read_sqs_task(
+                            glob.clone(),
+                            queue,
                             aws_info.clone(),
                             keys_tx.clone(),
                         ));
@@ -134,13 +143,20 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             rx
         };
 
+        let pid = PartitionId::S3;
+        consistency_info.partition_metrics.insert(
+            pid.clone(),
+            PartitionMetrics::new(&source_name, source_id, "s3", logger),
+        );
+        consistency_info.update_partition_metadata(pid);
+
         Ok(S3SourceInfo {
             source_name,
             id: source_id,
             is_activated_reader: active,
             receiver_stream: receiver,
             buffer: None,
-            offset: BucketOffset(0),
+            offset: S3Offset(0),
         })
     }
 }
@@ -151,6 +167,7 @@ struct KeyInfo {
 }
 
 async fn download_objects_task(
+    source_name: String,
     mut rx: tokio_mpsc::Receiver<anyhow::Result<KeyInfo>>,
     tx: SyncSender<anyhow::Result<InternalMessage>>,
     aws_info: aws::ConnectInfo,
@@ -167,10 +184,25 @@ async fn download_objects_task(
         }
     };
 
-    while let Some(record) = rx.recv().await {
-        match record {
-            Ok(record) => {
-                download_object(&tx, &activator, &client, record.bucket, record.key).await
+    let mut seen_buckets: HashMap<String, HashSet<String>> = HashMap::new();
+
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            Ok(msg) => {
+                if let Some(keys) = seen_buckets.get_mut(&msg.bucket) {
+                    // the insert by default is justified because that should be the
+                    // common case, we should very rarely get duplicate keys
+                    let is_new = keys.insert(msg.key.clone());
+                    if !is_new {
+                        continue;
+                    }
+                } else {
+                    let mut keys = HashSet::new();
+                    keys.insert(msg.key.clone());
+                    seen_buckets.insert(msg.bucket.clone(), keys);
+                }
+
+                download_object(&source_name, &tx, &activator, &client, msg.bucket, msg.key).await;
             }
             Err(e) => tx
                 .send(Err(e))
@@ -223,14 +255,20 @@ async fn scan_bucket_task(
                         .filter(|k| glob.map(|g| g.is_match(k)).unwrap_or(true));
 
                     for key in keys {
-                        tx.send(Ok(KeyInfo {
-                            bucket: bucket.clone(),
-                            key,
-                        }))
-                        .await
-                        .unwrap_or_else(|e| {
-                            log::debug!("unable to send keys to downloader: {}", e)
-                        });
+                        let res = tx
+                            .send(Ok(KeyInfo {
+                                bucket: bucket.clone(),
+                                key,
+                            }))
+                            .await;
+
+                        match res {
+                            Ok(_) => {}
+                            Err(e) => {
+                                log::debug!("unable to send keys to downloader: {}", e);
+                                break;
+                            }
+                        }
                     }
                 }
 
@@ -259,7 +297,150 @@ async fn scan_bucket_task(
     }
 }
 
+async fn read_sqs_task(
+    glob: Option<GlobMatcher>,
+    queue: String,
+    aws_info: aws::ConnectInfo,
+    tx: tokio_mpsc::Sender<anyhow::Result<KeyInfo>>,
+) {
+    let client = match aws_util::sqs::client(aws_info).await {
+        Ok(client) => client,
+        Err(e) => {
+            tx.send(Err(anyhow!("Unable to create sqs client: {}", e)))
+                .await
+                .unwrap_or_else(|e| {
+                    log::debug!("unable to send error on stream creating sqs client: {}", e)
+                });
+            return;
+        }
+    };
+
+    let glob = glob.as_ref();
+
+    // TODO: accept a full url
+    let queue_url = match client
+        .get_queue_url(GetQueueUrlRequest {
+            queue_name: queue.clone(),
+            queue_owner_aws_account_id: None,
+        })
+        .await
+    {
+        Ok(response) => {
+            if let Some(url) = response.queue_url {
+                url
+            } else {
+                log::error!("Empty queue url response for queue {}", queue);
+                return;
+            }
+        }
+        Err(e) => {
+            log::error!("Unable to retrieve queue url for queue {}: {}", queue, e);
+            return;
+        }
+    };
+
+    let mut allowed_errors = 10;
+    loop {
+        let response = client
+            .receive_message(ReceiveMessageRequest {
+                max_number_of_messages: Some(10),
+                queue_url: queue_url.clone(),
+                visibility_timeout: Some(500),
+                // the maximum possible time for a long poll
+                wait_time_seconds: Some(20),
+                ..Default::default()
+            })
+            .await;
+
+        match response {
+            Ok(response) => {
+                let messages = if let Some(m) = response.messages {
+                    m
+                } else {
+                    continue;
+                };
+
+                allowed_errors = 10;
+
+                for message in messages {
+                    if let Some(body) = message.body.as_ref() {
+                        let event: Result<Event, _> = serde_json::from_str(body);
+                        match event {
+                            Ok(event) => {
+                                for record in event.records {
+                                    if matches!(
+                                        record.event_type,
+                                        EventType::ObjectCreatedPut
+                                            | EventType::ObjectCreatedPost
+                                            | EventType::ObjectCreatedCompleteMultipartUpload
+                                    ) {
+                                        let key = record.s3.object.key;
+                                        if glob.map(|g| g.is_match(&key)).unwrap_or(true) {
+                                            let ki = Ok(KeyInfo {
+                                                bucket: record.s3.bucket.name,
+                                                key,
+                                            });
+                                            if tx.send(ki).await.is_err() {
+                                                log::debug!(
+                                                    "Downloader queue is closed, exiting sqs reader",
+                                                );
+                                                return;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                let test: Result<TestEvent, _> = serde_json::from_str(&body);
+                                match test {
+                                    Ok(_) => {} // expected when connecting to a new queue
+                                    Err(_) => {
+                                        log::error!(
+                                            "[customer-data] Unrecognized message from SQS queue {}: {}",
+                                            queue, body,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if let Err(e) = client
+                        .delete_message(DeleteMessageRequest {
+                            queue_url: queue_url.clone(),
+                            receipt_handle: message
+                                .receipt_handle
+                                .clone()
+                                .expect("receipt handle is always returned"),
+                        })
+                        .await
+                    {
+                        log::warn!("Error deleting processed SQS message: {}", e)
+                    }
+                }
+            }
+            Err(e) => {
+                allowed_errors -= 1;
+                if allowed_errors == 0 {
+                    log::error!("failed to read from SQS queue {}: {}", queue, e);
+                    break;
+                } else {
+                    log::warn!(
+                        "unable to read from SQS queue {}: {} ({} retries remaining)",
+                        queue,
+                        e,
+                        allowed_errors
+                    );
+                }
+
+                time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+}
+
 async fn download_object(
+    source_name: &str,
     tx: &SyncSender<anyhow::Result<InternalMessage>>,
     activator: &SyncActivator,
     client: &S3Client,
@@ -291,11 +472,12 @@ async fn download_object(
                 let activate = !buf.is_empty();
                 let mut lines = 0;
                 for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
-                    if let Err(e) = tx.send(Ok(InternalMessage {
-                        bucket: bucket.clone(),
-                        record: line,
-                    })) {
-                        log::debug!("unable to send read line on stream: {}", e);
+                    if let Err(e) = tx.send(Ok(InternalMessage { record: line })) {
+                        log::debug!(
+                            "Source receiver has been closed, exiting ingest source={}: {}",
+                            source_name,
+                            e
+                        );
                         break;
                     } else {
                         lines += 1;
@@ -355,10 +537,10 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
             return Ok(NextMessage::Ready(message));
         }
         match self.receiver_stream.try_recv() {
-            Ok(Ok(InternalMessage { bucket, record })) => {
+            Ok(Ok(InternalMessage { record })) => {
                 self.offset += 1;
                 Ok(NextMessage::Ready(SourceMessage {
-                    partition: PartitionId::S3 { bucket },
+                    partition: PartitionId::S3,
                     offset: self.offset.into(),
                     upstream_time_millis: None,
                     key: None,
@@ -413,14 +595,14 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
 
     fn update_partition_count(
         &mut self,
-        consistency_info: &mut ConsistencyInfo,
-        partition_count: i32,
+        _consistency_info: &mut ConsistencyInfo,
+        _partition_count: i32,
     ) {
-        log::debug!(
-            "ignoring partition count update type={:?} partition_count={}",
-            consistency_info.source_type,
-            partition_count,
-        )
+        // We can't do anything with just the number of "partitions" that we
+        // know about, fundamentally we know more than the timestamper about
+        // how many partitions there are.
+        //
+        // https://github.com/MaterializeInc/materialize/issues/5715
     }
 
     fn buffer_message(&mut self, message: SourceMessage<Out>) {

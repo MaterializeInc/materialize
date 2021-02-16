@@ -680,6 +680,11 @@ pub struct S3SourceConnector {
 pub enum S3KeySource {
     /// Scan the S3 Bucket to discover keys to download
     Scan { bucket: String },
+    /// Load object keys based on the contents of an S3 Notifications channel
+    ///
+    /// S3 notifications channels can be configured to go to SQS, which is the
+    /// only target we currently support.
+    SqsNotifications { queue: String },
 }
 
 #[derive(Clone, Debug, Serialize)]
