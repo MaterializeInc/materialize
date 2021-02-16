@@ -29,6 +29,10 @@ use repr::{CachedRecord, Row};
 // Interval at which Cacher will try to flush out pending records
 static CACHE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
 
+// Limit at which we will make a new log segment
+// TODO: make this configurable and / or bump default to be larger.
+static TABLE_MAX_LOG_SEGMENT_SIZE: usize = 1_000_0000;
+
 #[derive(Clone, Debug)]
 pub struct CacheConfig {
     /// Maximum number of records that are allowed to be pending for a source
@@ -461,6 +465,130 @@ fn extract_prefix(
     }
 
     records.drain(..prefix_length).collect()
+}
+
+pub struct TableLogSegments {
+    id: GlobalId,
+    base_path: PathBuf,
+    current_file: File,
+    current_bytes_written: usize,
+    total_bytes_written: usize,
+    next_sequence_number: usize,
+}
+
+impl TableLogSegments {
+    fn create_table(id: GlobalId, base_path: PathBuf) -> Result<Self, anyhow::Error> {
+        // First lets create the file where these log segments will live
+        fs::create_dir_all(&base_path).with_context(|| {
+            anyhow!(
+                "trying to create directory for table: {} path: {:#?}",
+                id,
+                base_path
+            )
+        })?;
+
+        // TODO: clean this up
+        let file_path = base_path.join(format!("log-0"));
+        let file = fs::OpenOptions::new()
+            .append(true)
+            .create_new(true)
+            .open(&file_path)
+            .with_context(|| {
+                anyhow!(
+                    "trying to create file for table: {} path: {:#?}",
+                    id,
+                    file_path
+                )
+            })?;
+
+        Ok(Self {
+            id,
+            base_path,
+            current_file: file,
+            current_bytes_written: 0,
+            total_bytes_written: 0,
+            next_sequence_number: 1,
+        })
+    }
+
+    fn write_updates(&mut self, updates: &[Update]) -> Result<(), anyhow::Error> {
+        let mut buf = Vec::new();
+        for update in updates {
+            encode_update(update, &mut buf)?;
+        }
+
+        let len = buf.len();
+        self.current_file.write_all(&buf)?;
+        self.current_file.flush()?;
+        self.current_bytes_written += len;
+        self.total_bytes_written += len;
+
+        if self.current_bytes_written > TABLE_MAX_LOG_SEGMENT_SIZE {
+            self.rotate_log_segment()?;
+        }
+
+        Ok(())
+    }
+
+    fn rotate_log_segment(&mut self) -> Result<(), anyhow::Error> {
+        let old_file_path = self
+            .base_path
+            .join(format!("log-{}", self.next_sequence_number - 1));
+        let old_file_rename = self
+            .base_path
+            .join(format!("log-{}-final", self.next_sequence_number - 1));
+        let new_file_path = self
+            .base_path
+            .join(format!("log-{}", self.next_sequence_number));
+
+        // First lets open the new file
+        let file = fs::OpenOptions::new()
+            .append(true)
+            .create_new(true)
+            .open(&new_file_path)
+            .with_context(|| {
+                anyhow!(
+                    "trying to create file for table: {} path: {:#?}",
+                    self.id,
+                    new_file_path
+                )
+            })?;
+
+        let old_file = std::mem::replace(&mut self.current_file, file);
+        old_file.sync_all()?;
+        drop(old_file);
+        fs::rename(old_file_path, old_file_rename)?;
+
+        // Update our own local state
+        self.next_sequence_number += 1;
+        self.current_bytes_written = 0;
+        Ok(())
+    }
+
+    fn reload_table(
+        id: GlobalId,
+        base_path: PathBuf,
+    ) -> Result<(Self, Vec<Update>), anyhow::Error> {
+        // First lets create the directory
+        fs::create_dir_all(&base_path).with_context(|| {
+            anyhow!(
+                "trying to create directory for table: {} path: {:#?}",
+                id,
+                base_path
+            )
+        })?;
+
+        // Then if its empty, we are probably migrating from a version that didn't
+        // have persistent tables. Go ahead and set things up normally as you
+        // would otherwise
+
+        // If its not empty, list out all of the files. There should be
+        // exactly one unfinished file, and potentially more than one
+        // finished file. Go ahead and read in all of the finished files in
+        // sequence number order, and then set yourself up to write from the
+        // unfinished log file
+        unimplemented!()
+    }
 }
 
 pub struct Tables {
