@@ -11,10 +11,10 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use anyhow::bail;
-use log::{debug, info, log, Level};
+use log::{debug, log, Level};
 use semver::{Identifier, Version};
 use serde::{Deserialize, Serialize};
-use tokio::time::{sleep as tokio_sleep, Duration};
+use tokio::time::{self, Duration};
 
 use ore::retry::RetryBuilder;
 
@@ -26,8 +26,13 @@ use crate::BUILD_INFO;
 /// How often we report telemetry
 const TELEMETRY_FREQUENCY: Duration = Duration::from_secs(3600);
 
-// Runs fetch_latest_version in a backoff loop until it succeeds once, prints a
-// warning if there is a newer version, then returns.
+/// Check for the latest version and report telemetry
+///
+/// Runs the telemetry reporting loop infinitely, attempting to report it once
+/// every [`TELEMETRY_FREQUENCY`].
+///
+/// The first time we get the most recent version of materialized this will
+/// report a warning if an upgrade is available.
 pub async fn check_version_loop(telemetry_url: String, cluster_id: String, start_time: Instant) {
     let current_version =
         Version::parse(BUILD_INFO.version).expect("crate version is not valid semver");
@@ -52,6 +57,12 @@ pub async fn check_version_loop(telemetry_url: String, cluster_id: String, start
         }
         Ok(_) => (),
         Err(e) => debug!("unable to parse fetched latest version: {}", e),
+    }
+
+    loop {
+        time::sleep(TELEMETRY_FREQUENCY).await;
+
+        fetch_latest_version(&version_url, start_time).await;
     }
 }
 

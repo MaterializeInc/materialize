@@ -10,7 +10,6 @@
 //! Tools for interacting with Prometheus metrics
 
 use std::collections::{BTreeMap, HashSet};
-use std::convert::TryInto;
 use std::fmt;
 use std::time::Instant;
 
