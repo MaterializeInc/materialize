@@ -98,7 +98,9 @@ impl Type {
             postgres_types::Type::JSONB => Some(Type::Jsonb),
             postgres_types::Type::NUMERIC => Some(Type::Numeric),
             postgres_types::Type::OID => Some(Type::Oid),
-            postgres_types::Type::TEXT | postgres_types::Type::VARCHAR => Some(Type::Text),
+            postgres_types::Type::TEXT
+            | postgres_types::Type::CHAR
+            | postgres_types::Type::VARCHAR => Some(Type::Text),
             postgres_types::Type::TIME => Some(Type::Time),
             postgres_types::Type::TIMESTAMP => Some(Type::Timestamp),
             postgres_types::Type::TIMESTAMPTZ => Some(Type::TimestampTz),
