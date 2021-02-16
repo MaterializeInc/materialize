@@ -165,6 +165,10 @@ Timestamp (3) is not valid for all inputs
 > ALTER INDEX materialize.public.nums_primary_idx
   RESET (logical_compaction_window)
 
+# But also create an index that compacts frequently.
+> CREATE VIEW nums_compacted AS SELECT * FROM nums
+> CREATE DEFAULT INDEX ON nums_compacted WITH (logical_compaction_window = '1ms')
+
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 {"before": {"row": {"num": 6}}, "after": {"row": {"num": 7}}}
 {"before": {"row": {"num": 7}}, "after": {"row": {"num": 8}}}
@@ -183,4 +187,11 @@ $ kafka-ingest format=avro topic=tx schema=${tx-schema}
 > SELECT * FROM nums AS OF 5
 7
 > SELECT * FROM nums AS OF 6
+8
+
+! SELECT * FROM nums_compacted AS OF 4
+Timestamp (4) is not valid for all inputs
+! SELECT * FROM nums_compacted AS OF 5
+Timestamp (5) is not valid for all inputs
+> SELECT * FROM nums_compacted AS OF 6
 8

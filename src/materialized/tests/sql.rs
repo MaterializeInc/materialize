@@ -131,7 +131,8 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     // so we only see events that occur as of or later than that timestamp.
     for (ts, _) in &events {
         client_reads.batch_execute(&*format!(
-            "DECLARE c CURSOR FOR TAIL t WITH (SNAPSHOT = false) AS OF {}",
+            "CLOSE c;
+            DECLARE c CURSOR FOR TAIL t WITH (SNAPSHOT = false) AS OF {}",
             ts - 1
         ))?;
 
@@ -145,7 +146,11 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     // Now tail with a snapshot as of each timestamp. We should see a batch of
     // updates all at the tailed timestamp, and then updates afterward.
     for (ts, _) in &events {
-        client_reads.batch_execute(&*format!("DECLARE c CURSOR FOR TAIL t AS OF {}", ts - 1))?;
+        client_reads.batch_execute(&*format!(
+            "CLOSE c;
+            DECLARE c CURSOR FOR TAIL t AS OF {}",
+            ts - 1
+        ))?;
 
         for (mut expected_ts, expected_data) in events.iter() {
             if expected_ts < ts - 1 {
@@ -167,7 +172,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         .batch_execute("ALTER INDEX t_primary_idx SET (logical_compaction_window = '1ms')")?;
     client_writes.batch_execute("CREATE VIEW v AS SELECT * FROM t")?;
     client_reads.batch_execute(
-        "BEGIN;
+        "CLOSE c;
          DECLARE c CURSOR FOR TAIL v;",
     )?;
     let rows = client_reads.query("FETCH ALL c", &[])?;
@@ -274,7 +279,10 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     // Make a new cursor. Try to fetch more rows from it than exist. Verify that
     // we got all the rows we expect and also waited for at least the timeout
     // duration. Cursor may take a moment to be ready, so do it in a loop.
-    client.batch_execute("DECLARE c CURSOR FOR TAIL t")?;
+    client.batch_execute(
+        "CLOSE c;
+        DECLARE c CURSOR FOR TAIL t",
+    )?;
     loop {
         let before = Instant::now();
         let rows = client.query("FETCH 4 c WITH (TIMEOUT = '1s')", &[])?;
@@ -328,7 +336,10 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
     // be returned, but it's up to the system to decide what is available. This
     // means that we could still get only one row per request, and we won't know
     // how many rows will come back otherwise.
-    client.batch_execute("DECLARE c CURSOR FOR TAIL t;")?;
+    client.batch_execute(
+        "CLOSE c;
+        DECLARE c CURSOR FOR TAIL t;",
+    )?;
     let mut expected_iter = expected.iter().peekable();
     while expected_iter.peek().is_some() {
         let rows = client.query("FETCH ALL c", &[])?;

@@ -158,12 +158,10 @@ fn cast_int32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'
 }
 
 fn cast_int32_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int32() as f32)
 }
 
 fn cast_int32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): is this cast valid?
     Datum::from(f64::from(a.unwrap_int32()))
 }
 
@@ -182,7 +180,7 @@ fn cast_int64_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
 fn cast_int64_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match i32::try_from(a.unwrap_int64()) {
         Ok(n) => Ok(Datum::from(n)),
-        Err(_) => Err(EvalError::IntegerOutOfRange),
+        Err(_) => Err(EvalError::Int32OutOfRange),
     }
 }
 
@@ -191,12 +189,10 @@ fn cast_int64_to_decimal<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn cast_int64_to_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int64() as f32)
 }
 
 fn cast_int64_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): is this cast valid?
     Datum::from(a.unwrap_int64() as f64)
 }
 
@@ -206,20 +202,33 @@ fn cast_int64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'
     Datum::String(temp_storage.push_string(buf))
 }
 
-fn cast_float32_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
-    // i32 (https://github.com/rust-lang/rust/issues/10184).
-    Datum::from(a.unwrap_float32().round() as i32)
+fn cast_float32_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let f = round_float32(a).unwrap_float32();
+    // This condition is delicate because i32::MIN can be represented exactly by
+    // an f32 but not i32::MAX. We follow PostgreSQL's approach here.
+    //
+    // See: https://github.com/postgres/postgres/blob/ca3b37487/src/include/c.h#L1074-L1096
+    if (f >= (i32::MIN as f32)) && (f < -(i32::MIN as f32)) {
+        Ok(Datum::from(f as i32))
+    } else {
+        Err(EvalError::Int32OutOfRange)
+    }
 }
 
-fn cast_float32_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
-    // i64 (https://github.com/rust-lang/rust/issues/10184).
-    Datum::from(a.unwrap_float32().round() as i64)
+fn cast_float32_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let f = round_float32(a).unwrap_float32();
+    // This condition is delicate because i64::MIN can be represented exactly by
+    // an f32 but not i64::MAX. We follow PostgreSQL's approach here.
+    //
+    // See: https://github.com/postgres/postgres/blob/ca3b37487/src/include/c.h#L1074-L1096
+    if (f >= (i64::MIN as f32)) && (f < -(i64::MIN as f32)) {
+        Ok(Datum::from(f as i64))
+    } else {
+        Err(EvalError::Int64OutOfRange)
+    }
 }
 
 fn cast_float32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): is this cast valid?
     Datum::from(f64::from(a.unwrap_float32()))
 }
 
@@ -244,27 +253,41 @@ fn cast_float32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum
     Datum::String(temp_storage.push_string(buf))
 }
 
-fn cast_float64_to_int32<'a>(a: Datum<'a>) -> Datum<'a> {
-    let f = a.unwrap_float64();
-    if f > (i32::max_value() as f64) || f < (i32::min_value() as f64) {
-        Datum::Null
+fn cast_float64_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let f = round_float64(a).unwrap_float64();
+    // This condition is delicate because i32::MIN can be represented exactly by
+    // an f64 but not i32::MAX. We follow PostgreSQL's approach here.
+    //
+    // See: https://github.com/postgres/postgres/blob/ca3b37487/src/include/c.h#L1074-L1096
+    if (f >= (i32::MIN as f64)) && (f < -(i32::MIN as f64)) {
+        Ok(Datum::from(f as i32))
     } else {
-        Datum::from(f.round() as i32)
+        Err(EvalError::Int32OutOfRange)
     }
 }
 
-fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Datum<'a> {
-    // TODO(benesch): this is undefined behavior if the f32 doesn't fit in an
-    // i64 (https://github.com/rust-lang/rust/issues/10184).
-    Datum::from(a.unwrap_float64().round() as i64)
+fn cast_float64_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let f = round_float64(a).unwrap_float64();
+    // This condition is delicate because i64::MIN can be represented exactly by
+    // an f64 but not i64::MAX. We follow PostgreSQL's approach here.
+    //
+    // See: https://github.com/postgres/postgres/blob/ca3b37487/src/include/c.h#L1074-L1096
+    if (f >= (i64::MIN as f64)) && (f < -(i64::MIN as f64)) {
+        Ok(Datum::from(f as i64))
+    } else {
+        Err(EvalError::Int64OutOfRange)
+    }
 }
 
 fn cast_float64_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let f = a.unwrap_float64();
-    if f > f32::MAX as f64 || f < f32::MIN as f64 {
-        Err(EvalError::FloatOutOfRange)
+    let a = a.unwrap_float64();
+    let result = a as f32;
+    if result.is_infinite() && !a.is_infinite() {
+        Err(EvalError::FloatOverflow)
+    } else if result == 0.0 && a != 0.0 {
+        Err(EvalError::FloatUnderflow)
     } else {
-        Ok(Datum::from(f as f32))
+        Ok(Datum::from(result))
     }
 }
 
@@ -742,11 +765,25 @@ fn floor_decimal<'a>(a: Datum<'a>, scale: u8) -> Datum<'a> {
 }
 
 fn round_float32<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float32().round())
+    // f32::round violates IEEE 754 by rounding ties away from zero rather than
+    // to nearest even. There appears to be no way to round ties to nearest even
+    // in Rust natively, so bail out to C.
+    extern "C" {
+        fn rintf(f: f32) -> f32;
+    }
+    let a = a.unwrap_float32();
+    Datum::from(unsafe { rintf(a) })
 }
 
 fn round_float64<'a>(a: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_float64().round())
+    // f64::round violates IEEE 754 by rounding ties away from zero rather than
+    // to nearest even. There appears to be no way to round ties to nearest even
+    // in Rust natively, so bail out to C.
+    extern "C" {
+        fn rint(f: f64) -> f64;
+    }
+    let a = a.unwrap_float64();
+    Datum::from(unsafe { rint(a) })
 }
 
 fn round_decimal_unary<'a>(a: Datum<'a>, a_scale: u8) -> Datum<'a> {
@@ -787,7 +824,7 @@ where
 {
     match i32::try_from(bytes.as_ref().len() * 8) {
         Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::IntegerOutOfRange),
+        Err(_) => Err(EvalError::Int32OutOfRange),
     }
 }
 
@@ -797,14 +834,14 @@ where
 {
     match i32::try_from(bytes.as_ref().len()) {
         Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::IntegerOutOfRange),
+        Err(_) => Err(EvalError::Int32OutOfRange),
     }
 }
 
 fn char_length<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match i32::try_from(a.unwrap_str().chars().count()) {
         Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::IntegerOutOfRange),
+        Err(_) => Err(EvalError::Int32OutOfRange),
     }
 }
 
@@ -833,7 +870,7 @@ fn encoded_bytes_char_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>
 
     match i32::try_from(decoded_string.chars().count()) {
         Ok(l) => Ok(Datum::from(l)),
-        Err(_) => Err(EvalError::IntegerOutOfRange),
+        Err(_) => Err(EvalError::Int32OutOfRange),
     }
 }
 
@@ -1010,20 +1047,22 @@ fn div_int64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 }
 
 fn div_float32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_float32();
     let b = b.unwrap_float32();
-    if b == 0.0 {
+    if b == 0.0 && !a.is_nan() {
         Err(EvalError::DivisionByZero)
     } else {
-        Ok(Datum::from(a.unwrap_float32() / b))
+        Ok(Datum::from(a / b))
     }
 }
 
 fn div_float64<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_float64();
     let b = b.unwrap_float64();
-    if b == 0.0 {
+    if b == 0.0 && !a.is_nan() {
         Err(EvalError::DivisionByZero)
     } else {
-        Ok(Datum::from(a.unwrap_float64() / b))
+        Ok(Datum::from(a / b))
     }
 }
 
@@ -1117,14 +1156,6 @@ pub fn neg_interval<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(-a.unwrap_interval())
 }
 
-fn sqrt_float32<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
-    let x = a.unwrap_float32();
-    if x < 0.0 {
-        return Err(EvalError::NegSqrt);
-    }
-    Ok(Datum::from(x.sqrt()))
-}
-
 fn sqrt_float64<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
     let x = a.unwrap_float64();
     if x < 0.0 {
@@ -1142,6 +1173,10 @@ fn sqrt_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum, EvalError> {
     let d_f64 = cast_significand_to_float64(a);
     let d_scaled = d_f64.unwrap_float64() / 10_f64.powi(i32::from(scale));
     cast_float64_to_decimal(Datum::from(d_scaled.sqrt()), Datum::from(i32::from(scale)))
+}
+
+fn cbrt_float64<'a>(a: Datum<'a>) -> Datum {
+    Datum::from(a.unwrap_float64().cbrt())
 }
 
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -2727,9 +2762,9 @@ pub enum UnaryFunc {
     NegFloat64,
     NegDecimal,
     NegInterval,
-    SqrtFloat32,
     SqrtFloat64,
     SqrtDec(u8),
+    CbrtFloat64,
     AbsInt32,
     AbsInt64,
     AbsFloat32,
@@ -2915,12 +2950,12 @@ impl UnaryFunc {
             UnaryFunc::CastInt64ToFloat32 => Ok(cast_int64_to_float32(a)),
             UnaryFunc::CastInt64ToFloat64 => Ok(cast_int64_to_float64(a)),
             UnaryFunc::CastInt64ToString => Ok(cast_int64_to_string(a, temp_storage)),
-            UnaryFunc::CastFloat32ToInt32 => Ok(cast_float32_to_int32(a)),
-            UnaryFunc::CastFloat32ToInt64 => Ok(cast_float32_to_int64(a)),
+            UnaryFunc::CastFloat32ToInt32 => cast_float32_to_int32(a),
+            UnaryFunc::CastFloat32ToInt64 => cast_float32_to_int64(a),
             UnaryFunc::CastFloat32ToFloat64 => Ok(cast_float32_to_float64(a)),
             UnaryFunc::CastFloat32ToString => Ok(cast_float32_to_string(a, temp_storage)),
-            UnaryFunc::CastFloat64ToInt32 => Ok(cast_float64_to_int32(a)),
-            UnaryFunc::CastFloat64ToInt64 => Ok(cast_float64_to_int64(a)),
+            UnaryFunc::CastFloat64ToInt32 => cast_float64_to_int32(a),
+            UnaryFunc::CastFloat64ToInt64 => cast_float64_to_int64(a),
             UnaryFunc::CastFloat64ToFloat32 => cast_float64_to_float32(a),
             UnaryFunc::CastFloat64ToString => Ok(cast_float64_to_string(a, temp_storage)),
             UnaryFunc::CastDecimalToInt32(scale) => Ok(cast_decimal_to_int32(a, *scale)),
@@ -2987,9 +3022,9 @@ impl UnaryFunc {
             UnaryFunc::FloorFloat32 => Ok(floor_float32(a)),
             UnaryFunc::FloorFloat64 => Ok(floor_float64(a)),
             UnaryFunc::FloorDecimal(scale) => Ok(floor_decimal(a, *scale)),
-            UnaryFunc::SqrtFloat32 => sqrt_float32(a),
             UnaryFunc::SqrtFloat64 => sqrt_float64(a),
             UnaryFunc::SqrtDec(scale) => sqrt_dec(a, *scale),
+            UnaryFunc::CbrtFloat64 => Ok(cbrt_float64(a)),
             UnaryFunc::Ascii => Ok(ascii(a)),
             UnaryFunc::BitLengthString => bit_length(a.unwrap_str()),
             UnaryFunc::BitLengthBytes => bit_length(a.unwrap_bytes()),
@@ -3150,8 +3185,9 @@ impl UnaryFunc {
                 input_type.scalar_type.nullable(in_nullable)
             }
 
-            SqrtFloat32 => ScalarType::Float32.nullable(true),
             SqrtFloat64 => ScalarType::Float64.nullable(true),
+
+            CbrtFloat64 => ScalarType::Float64.nullable(true),
 
             Not | NegInt32 | NegInt64 | NegFloat32 | NegFloat64 | NegDecimal | NegInterval
             | AbsInt32 | AbsInt64 | AbsFloat32 | AbsFloat64 | AbsDecimal => input_type,
@@ -3310,9 +3346,9 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::FloorFloat32 => f.write_str("floorf32"),
             UnaryFunc::FloorFloat64 => f.write_str("floorf64"),
             UnaryFunc::FloorDecimal(_) => f.write_str("floordec"),
-            UnaryFunc::SqrtFloat32 => f.write_str("sqrtf32"),
             UnaryFunc::SqrtFloat64 => f.write_str("sqrtf64"),
             UnaryFunc::SqrtDec(_) => f.write_str("sqrtdec"),
+            UnaryFunc::CbrtFloat64 => f.write_str("cbrtf64"),
             UnaryFunc::Ascii => f.write_str("ascii"),
             UnaryFunc::CharLength => f.write_str("char_length"),
             UnaryFunc::BitLengthBytes => f.write_str("bit_length"),
@@ -3679,12 +3715,22 @@ fn jsonb_build_object<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> D
 /// (The arrays must also be of the same element type, but that is checked by
 /// the SQL type system, rather than checked here at runtime.)
 ///
-/// The lower bound of the additional dimension is always one. The length of
-/// the new dimension is equal to `datums.len()`.
+/// If all input arrays are zero-dimensional arrays, then the output is a zero-
+/// dimensional array. Otherwise the lower bound of the additional dimension is
+/// one and the length of the new dimension is equal to `datums.len()`.
 fn array_create_multidim<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
+    // Per PostgreSQL, if all input arrays are zero dimensional, so is the
+    // output.
+    if datums.iter().all(|d| d.unwrap_array().dims().is_empty()) {
+        let dims = &[];
+        let datums = &[];
+        let datum = temp_storage.try_make_datum(|packer| packer.push_array(dims, datums))?;
+        return Ok(datum);
+    }
+
     let mut dims = vec![ArrayDimension {
         lower_bound: 1,
         length: datums.len(),
@@ -3699,18 +3745,26 @@ fn array_create_multidim<'a>(
     Ok(datum)
 }
 
-/// Constructs a new 1D array out of an arbitrary number of scalars.
+/// Constructs a new zero or one dimensional array out of an arbitrary number of
+/// scalars.
 ///
-/// The lower bound of the array is always one. The length of the array is equal
-/// to `datums.len()`.
+/// If `datums` is empty, constructs a zero-dimensional array. Otherwise,
+/// constructs a one dimensional array whose lower bound is one and whose length
+/// is equal to `datums.len()`.
 fn array_create_scalar<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let dims = &[ArrayDimension {
+    let mut dims = &[ArrayDimension {
         lower_bound: 1,
         length: datums.len(),
-    }];
+    }][..];
+    if datums.is_empty() {
+        // Per PostgreSQL, empty arrays are represented with zero dimensions,
+        // not one dimension of zero length. We write this condition a little
+        // strangely to satisfy the borrow checker while avoiding an allocation.
+        dims = &[];
+    }
     let datum = temp_storage.try_make_datum(|packer| packer.push_array(dims, datums))?;
     Ok(datum)
 }
@@ -3990,12 +4044,12 @@ fn list_index<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn array_length<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    let i = b.unwrap_int64();
-    if i < 1 {
-        return Datum::Null;
-    }
-    match a.unwrap_array().dims().into_iter().nth(i as usize - 1) {
-        Some(ArrayDimension { length: 0, .. }) | None => Datum::Null,
+    let i = match usize::try_from(b.unwrap_int64()) {
+        Ok(0) | Err(_) => return Datum::Null,
+        Ok(n) => n - 1,
+    };
+    match a.unwrap_array().dims().into_iter().nth(i) {
+        None => Datum::Null,
         Some(dim) => Datum::Int64(dim.length as i64),
     }
 }

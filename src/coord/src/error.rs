@@ -24,6 +24,8 @@ pub enum CoordError {
     Catalog(catalog::Error),
     /// The specified session parameter is constrained to its current value.
     ConstrainedParameter(&'static (dyn Var + Send + Sync)),
+    /// The cursor already exists.
+    DuplicateCursor(String),
     /// An error while evaluating an expression.
     Eval(EvalError),
     /// The value for the specified parameter does not have the right type.
@@ -92,6 +94,9 @@ impl fmt::Display for CoordError {
                 p.name().quoted(),
                 p.value().quoted()
             ),
+            CoordError::DuplicateCursor(name) => {
+                write!(f, "cursor {} already exists", name.quoted())
+            }
             CoordError::Eval(e) => e.fmt(f),
             CoordError::InvalidParameterType(p) => write!(
                 f,

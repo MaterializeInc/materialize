@@ -199,7 +199,11 @@ impl Session {
         stmt: Option<Statement<Raw>>,
         params: Vec<(Datum, ScalarType)>,
         result_formats: Vec<pgrepr::Format>,
-    ) {
+    ) -> Result<(), CoordError> {
+        // The empty portal can be silently replaced.
+        if !portal_name.is_empty() && self.portals.contains_key(&portal_name) {
+            return Err(CoordError::DuplicateCursor(portal_name));
+        }
         self.portals.insert(
             portal_name,
             Portal {
@@ -213,6 +217,7 @@ impl Session {
                 state: PortalState::NotStarted,
             },
         );
+        Ok(())
     }
 
     /// Removes the specified portal.

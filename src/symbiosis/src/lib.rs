@@ -369,7 +369,7 @@ fn push_column(
                     row.push(Datum::Date(d));
                 }
                 "float4" => {
-                    let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(f64::from);
+                    let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(f32::from);
                     row.push(f.into());
                 }
                 "float8" => {

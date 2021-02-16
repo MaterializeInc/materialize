@@ -191,6 +191,7 @@ struct Args {
     // === Storage options. ===
     /// Where to store data.
     #[structopt(
+        short = "D",
         long,
         env = "MZ_DATA_DIRECTORY",
         value_name = "PATH",

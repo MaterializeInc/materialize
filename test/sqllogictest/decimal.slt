@@ -241,7 +241,7 @@ SELECT 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1 * 1.0
 1
 
 ### edge cases ###
-query error invalid input syntax for numeric: malformed numeric literal: : ""
+query error invalid input syntax for type numeric: malformed numeric literal: : ""
 SELECT ''::decimal
 
 query R

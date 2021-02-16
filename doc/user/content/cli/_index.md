@@ -12,21 +12,20 @@ The `materialized` binary supports the following command line flags:
 Flag | Default | Modifies
 -----|---------|----------
 [`--cache-max-pending-records`](#source-cache) | 1000000 | Maximum number of input records buffered before flushing immediately to disk.
-[`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted
+[`-D`](#data-directory) / [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted<br><br>**Known issue.** The short form of this option was inadvertently removed in v0.7.0. It will be restored in v0.7.1.
 [`--differential-idle-merge-effort`](#dataflow-tuning) | N/A | *Advanced.* Amount of compaction to perform when idle.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
 [`--disable-telemetry`](#telemetry) | N/A | Disables telemetry reporting.
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
-[`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
+[`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
 [`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
 [`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA) {{< version-added v0.7.1 />}}
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
 [`--tls-mode`](#tls-encryption) | N/A | How stringently to demand TLS authentication and encryption {{< version-added v0.7.1 />}}
 [`--tls-key`](#tls-encryption) | N/A | Path to TLS private key file
-[`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
-[`-w`](#worker-threads) | REQ |  Dataflow worker threads
-`-v` | N/A | Print version and exit
+[`-w`](#worker-threads) / [`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
+`-v` / `--version` | N/A | Print version and exit
 `-vv` | N/A | Print version and additional build information, and exit
 
 If a command line flag takes an argument, you can alternatively set that flag
