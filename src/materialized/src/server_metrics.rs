@@ -9,7 +9,8 @@
 
 //! Tools for interacting with Prometheus metrics
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::convert::TryInto;
 use std::fmt;
 use std::time::Instant;
 
@@ -20,9 +21,12 @@ use prometheus::{
 };
 use sysinfo::{ProcessorExt, SystemExt};
 
+pub const METRIC_SERVER_METADATA: &str = "mz_server_metadata_seconds";
+pub const METRIC_WORKER_COUNT: &str = "mz_server_metadata_timely_worker_threads";
+
 lazy_static! {
     static ref SERVER_METADATA_RAW: GaugeVec = register_gauge_vec!(
-        "mz_server_metadata_seconds",
+        METRIC_SERVER_METADATA,
         "server metadata, value is uptime",
         &[
             "build_time",
@@ -55,7 +59,7 @@ lazy_static! {
         ])
     };
     pub static ref WORKER_COUNT: IntGaugeVec = register_int_gauge_vec!(
-        "mz_server_metadata_timely_worker_threads",
+        METRIC_WORKER_COUNT,
         "number of timely workers materialized is running with",
         &["count"]
     )
@@ -80,6 +84,19 @@ pub fn load_prom_metrics(start_time: Instant) -> Vec<prometheus::proto::MetricFa
 
     REQUEST_METRICS_GATHER.set(Instant::now().duration_since(before_gather).as_micros() as i64);
     result
+}
+
+pub fn filter_metrics<'a>(
+    metrics: &'a [prometheus::proto::MetricFamily],
+    filter: &HashSet<&str>,
+) -> BTreeMap<&'a str, PromMetric<'a>> {
+    metrics
+        .iter()
+        .filter(|m| filter.contains(m.get_name()))
+        .filter_map(|m| PromMetric::from_metric_family(m).ok())
+        .flat_map(|mf| mf)
+        .map(|m| (m.name(), m))
+        .collect()
 }
 
 #[derive(Debug)]
@@ -135,7 +152,7 @@ impl fmt::Display for PromMetric<'_> {
     }
 }
 
-impl PromMetric<'_> {
+impl<'p> PromMetric<'p> {
     pub fn from_metric_family<'a>(
         m: &'a prometheus::proto::MetricFamily,
     ) -> Result<Vec<PromMetric<'a>>, ()> {
@@ -170,5 +187,22 @@ impl PromMetric<'_> {
                 })
             })
             .collect()
+    }
+
+    pub fn name(&self) -> &'p str {
+        match self {
+            PromMetric::Counter { name, .. } => name,
+            PromMetric::Gauge { name, .. } => name,
+            PromMetric::Histogram { name, .. } => name,
+        }
+    }
+
+    /// Get the value of this metric as an i64
+    pub fn value(&self) -> f64 {
+        match self {
+            PromMetric::Counter { value, .. } => *value,
+            PromMetric::Gauge { value, .. } => *value,
+            PromMetric::Histogram { count, .. } => *count as f64,
+        }
     }
 }
