@@ -362,16 +362,20 @@ SELECT 'dog'::char(10)
 ----
 dog
 
-query error type "pg_catalog.char" does not exist
+query T
 SELECT '1'::pg_catalog.char(10)
+----
+1
 
 query T
 SELECT 'dog'::varchar(10)
 ----
 dog
 
-query error type "pg_catalog.varchar" does not exist
+query T
 SELECT 'dog'::pg_catalog.varchar(10)
+----
+dog
 
 # 🔬🔬 time
 
@@ -503,6 +507,16 @@ query T
 SELECT format_type(25, NULL)
 ----
 text
+
+query T
+SELECT format_type(18, NULL)
+----
+char
+
+query T
+SELECT format_type(1043, NULL)
+----
+varchar
 
 query T
 SELECT format_type(26, NULL)
