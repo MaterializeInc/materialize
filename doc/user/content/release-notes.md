@@ -48,6 +48,9 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.7.1 %}}
 
+- Add the [`cbrt` function](/sql/functions/#numbers-func) for computing the
+  cube root of a [`double precision`](/sql/types/float).
+
 - Multipartition Kafka sinks with consistency enabled will create single-partition
   consistency topics.
 - **Breaking change.** Change the behavior of the

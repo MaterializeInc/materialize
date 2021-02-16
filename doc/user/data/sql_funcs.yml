@@ -96,10 +96,13 @@
 
 - type: Numbers
   description: Number functions take number-like arguments, e.g. [`int`](../types/int),
-    [`float`](../types/float), [`numeric`](../types/numeric).
+    [`float`](../types/float), [`numeric`](../types/numeric), unless otherwise specified.
   functions:
   - signature: 'abs(x: N) -> N'
     description: The absolute value of `x`
+
+  - signature: 'cbrt(x: double precision) -> double precision'
+    description: The cube root of `x`.
 
   - signature: 'ceil(x: N) -> N'
     description: The largest integer >= `x`
@@ -119,6 +122,12 @@
   - signature: 'round(x: numeric, y: int) -> numeric'
     description: "`x` rounded to `y` decimal places, while retaining the same
       [`numeric`](../types/numeric) scale; rounds ties away from zero."
+
+  - signature: 'sqrt(x: numeric) -> numeric'
+    description: The square root of `x`.
+
+  - signature: 'sqrt(x: double precision) -> double precision'
+    description: The square root of `x`.
 
 - type: String
   functions:

@@ -1315,6 +1315,9 @@ lazy_static! {
                 params!(String) => UnaryFunc::TrimWhitespace, 885;
                 params!(String, String) => BinaryFunc::Trim, 884;
             },
+            "cbrt" => Scalar {
+                params!(Float64) => UnaryFunc::CbrtFloat64, 1345;
+            },
             "ceil" => Scalar {
                 params!(Float32) => UnaryFunc::CeilFloat32, oid::FUNC_CEIL_F32_OID;
                 params!(Float64) => UnaryFunc::CeilFloat64, 2308;
@@ -1570,7 +1573,6 @@ lazy_static! {
                 params!(String, Int64, Int64) => VariadicFunc::Substr, 936;
             },
             "sqrt" => Scalar {
-                params!(Float32) => UnaryFunc::SqrtFloat32, oid::FUNC_SQRT_F32_OID;
                 params!(Float64) => UnaryFunc::SqrtFloat64, 1344;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();

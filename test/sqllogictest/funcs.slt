@@ -317,6 +317,37 @@ SELECT sqrt(1.23783::decimal(15, 5))
 ----
 1.11257
 
+# Test cbrt.
+query R
+SELECT cbrt(NULL)
+----
+NULL
+
+query R
+SELECT cbrt(1.23783::float)
+----
+1.0737100084353584
+
+query R
+SELECT cbrt(1.23783::double)
+----
+1.0737100084353584
+
+query R
+SELECT cbrt(1.23783::decimal(15,5))
+----
+1.0737100084353584
+
+query R
+SELECT cbrt(-8::double)
+----
+-2
+
+query R
+SELECT cbrt(2::int)
+----
+1.2599210498948734
+
 # Test coalesce.
 query I
 SELECT coalesce(NULL, 1, NULL)
