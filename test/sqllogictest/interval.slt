@@ -67,21 +67,21 @@ SELECT INTERVAL '1-2 3' HOUR;
 1 year 2 months 03:00:00
 
 # Disallow components to be set twice.
-statement error invalid input syntax for interval: YEAR field set twice: "1 year 2 years"
+statement error invalid input syntax for type interval: YEAR field set twice: "1 year 2 years"
 SELECT INTERVAL '1 year 2 years'
 
-statement error invalid input syntax for interval: YEAR or MONTH field set twice: "1-2 3-4"
+statement error invalid input syntax for type interval: YEAR or MONTH field set twice: "1-2 3-4"
 SELECT INTERVAL '1-2 3-4'
 
-statement error invalid input syntax for interval: YEAR field set twice: "1-2 3 year"
+statement error invalid input syntax for type interval: YEAR field set twice: "1-2 3 year"
 SELECT INTERVAL '1-2 3 year'
 
-statement error invalid input syntax for interval: MONTH field set twice: "1-2 3"
+statement error invalid input syntax for type interval: MONTH field set twice: "1-2 3"
 SELECT INTERVAL '1-2 3' MONTH;
 
 # 5 would be parsed as second, but the H:M:S.NS
 # group was already set by 3:4/
-statement error invalid input syntax for interval: SECOND field set twice: "1-2 3:4 5"
+statement error invalid input syntax for type interval: SECOND field set twice: "1-2 3:4 5"
 SELECT INTERVAL '1-2 3:4 5';
 
 # Treat trailing TimeUnit as terminating range.
@@ -142,7 +142,7 @@ SELECT INTERVAL '1:2:3.4 5-6 7' DAY;
 
 # Disambiguate component (YEAR), but disallow because
 # the group it's in has been closed.
-statement error invalid input syntax for interval: YEAR field set twice: "1:2:3.4 5-6 7"
+statement error invalid input syntax for type interval: YEAR field set twice: "1:2:3.4 5-6 7"
 SELECT INTERVAL '1:2:3.4 5-6 7' YEAR;
 
 # Negative components
@@ -220,17 +220,17 @@ SELECT INTERVAL '0-0 0 0:0:0.0';
 00:00:00
 
 # Oversized components in SQL standard-style variables
-statement error invalid input syntax for interval: MONTH must be \[-12, 12\], got 13: "100-13"
+statement error invalid input syntax for type interval: MONTH must be \[-12, 12\], got 13: "100-13"
 SELECT INTERVAL '100-13';
 
-statement error invalid input syntax for interval: MINUTE must be \[-59, 59\], got 61: "100-11 366 250:61"
+statement error invalid input syntax for type interval: MINUTE must be \[-59, 59\], got 61: "100-11 366 250:61"
 SELECT INTERVAL '100-11 366 250:61';
 
-statement error invalid input syntax for interval: SECOND must be \[-60, 60\], got 61: "100-11 366 250:59:61"
+statement error invalid input syntax for type interval: SECOND must be \[-60, 60\], got 61: "100-11 366 250:59:61"
 SELECT INTERVAL '100-11 366 250:59:61';
 
 # Invalid syntax
-statement error invalid input syntax for interval: have unprocessed tokens .500000000
+statement error invalid input syntax for type interval: have unprocessed tokens .500000000
 SELECT INTERVAL '1:2:3.4.5';
 
 statement error
@@ -415,11 +415,11 @@ SELECT INTERVAL '1-2 3:4 5 day';
 1 year 2 months 5 days 03:04:00
 
 # Mix style allowed, but cannot assigning to closed group.
-statement error invalid input syntax for interval: SECOND field set twice: "1-2 3:4 5 second"
+statement error invalid input syntax for type interval: SECOND field set twice: "1-2 3:4 5 second"
 SELECT INTERVAL '1-2 3:4 5 second';
 
 # Commutativity means this is also not allowed.
-statement error invalid input syntax for interval: HOUR, MINUTE, SECOND field set twice: "1-2 5 second 3:4"
+statement error invalid input syntax for type interval: HOUR, MINUTE, SECOND field set twice: "1-2 5 second 3:4"
 SELECT INTERVAL '1-2 5 second 3:4';
 
 # Fractional month in addition to other fields.
@@ -632,10 +632,10 @@ SELECT INTERVAL '1' YEAR / 0
 #----
 #-2236962132 days -07:59:59.999999
 
-statement error invalid input syntax for interval: exceeds min/max interval duration
+statement error invalid input syntax for type interval: exceeds min/max interval duration
 SELECT INTERVAL '2147483647 days 2147483648 hours'
 
-statement error invalid input syntax for interval: exceeds min/max interval duration
+statement error invalid input syntax for type interval: exceeds min/max interval duration
 SELECT INTERVAL '-2147483647 days -2147483648 hours'
 
 statement error interval out of range

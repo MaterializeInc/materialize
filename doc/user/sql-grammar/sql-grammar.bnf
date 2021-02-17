@@ -24,6 +24,7 @@ create_index ::=
         'INDEX' index_name 'ON' obj_name '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')'
         | 'DEFAULT INDEX ON' obj_name
     )
+    ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_materialized_view ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name 'AS' select_stmt |
   'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
@@ -106,10 +107,12 @@ create_source_protobuf_kinesis ::=
 create_source_s3_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM S3 OBJECTS FROM ' (
-      'SCAN BUCKET' bucket_name
-  )
-  (
-    ',' 'SCAN BUCKET' bucket_name
+      'SCAN BUCKET' bucket_name |
+      'SQS NOTIFICATIONS' queue_name
+  ) ( ',' (
+      'SCAN BUCKET' bucket_name |
+      'SQS NOTIFICATIONS' queue_name
+    )
   )*
   ('MATCHING' pattern)?
   'WITH' '('
@@ -124,10 +127,12 @@ create_source_s3_text ::=
 create_source_s3_json ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM S3 OBJECTS FROM ' (
-      'SCAN BUCKET' bucket_name
-  )
-  (
-    ',' 'SCAN BUCKET' bucket_name
+      'SCAN BUCKET' bucket_name |
+      'SQS NOTIFICATIONS' queue_name
+  ) ( ',' (
+      'SCAN BUCKET' bucket_name |
+      'SQS NOTIFICATIONS' queue_name
+    )
   )*
   ('MATCHING' pattern)?
   'WITH' '('
@@ -139,10 +144,12 @@ create_source_s3_csv ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')?
   src_name ( '(' col_name (',' col_name)* ')' )?
   'FROM S3 OBJECTS FROM ' (
-      'SCAN BUCKET' bucket_name
-  )
-  (
-    ',' 'SCAN BUCKET' bucket_name
+      'SCAN BUCKET' bucket_name |
+      'SQS NOTIFICATIONS' queue_name
+  ) ( ',' (
+      'SCAN BUCKET' bucket_name |
+      'SQS NOTIFICATIONS' queue_name
+    )
   )*
   ('MATCHING' pattern)?
   'WITH' '('

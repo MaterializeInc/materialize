@@ -1031,16 +1031,16 @@ SELECT DATE '2007-02-01   T  15:04:05+00'
 ----
 2007-02-01
 
-statement error invalid input syntax for date: invalid DateTimeField: X: "2007-02-01X15:04:05"
+statement error invalid input syntax for type date: invalid DateTimeField: X: "2007-02-01X15:04:05"
 SELECT DATE '2007-02-01X15:04:05'
 
-statement error invalid input syntax for date: invalid DateTimeField: TT: "2007-02-01TT15:04:05"
+statement error invalid input syntax for type date: invalid DateTimeField: TT: "2007-02-01TT15:04:05"
 SELECT DATE '2007-02-01TT15:04:05'
 
-statement error invalid input syntax for date: Cannot determine format of all parts: "2007-02-01  T  T  15:04:05"
+statement error invalid input syntax for type date: Cannot determine format of all parts: "2007-02-01  T  T  15:04:05"
 SELECT DATE '2007-02-01  T  T  15:04:05'
 
-statement error invalid input syntax for date: Invalid timezone string \(T\): 'T' is not a valid timezone. Failed to parse T at token index 0
+statement error invalid input syntax for type date: Invalid timezone string \(T\): 'T' is not a valid timezone. Failed to parse T at token index 0
 SELECT DATE '2007-02-01  T '
 
 # Test casting time to interval & vice versa
@@ -1082,5 +1082,5 @@ SELECT '"2020!03-17 #?~T~02:36:56#"'::timestamp;
 ----
 2020-03-17 02:36:56
 
-query error invalid input syntax for timestamp: have unprocessed tokens 56
+query error invalid input syntax for type timestamp: have unprocessed tokens 56
 select TIMESTAMP '"2020-03-17 ~02:36:~56~"';

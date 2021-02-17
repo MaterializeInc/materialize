@@ -317,6 +317,37 @@ SELECT sqrt(1.23783::decimal(15, 5))
 ----
 1.11257
 
+# Test cbrt.
+query R
+SELECT cbrt(NULL)
+----
+NULL
+
+query R
+SELECT cbrt(1.23783::float)
+----
+1.0737100084353584
+
+query R
+SELECT cbrt(1.23783::double)
+----
+1.0737100084353584
+
+query R
+SELECT cbrt(1.23783::decimal(15,5))
+----
+1.0737100084353584
+
+query R
+SELECT cbrt(-8::double)
+----
+-2
+
+query R
+SELECT cbrt(2::int)
+----
+1.2599210498948734
+
 # Test coalesce.
 query I
 SELECT coalesce(NULL, 1, NULL)
@@ -472,6 +503,8 @@ EXPLAIN PLAN FOR SELECT (a::bool AND b::bool) IS NULL FROM t
 | Project (#2)
 
 EOF
+
+mode cockroach
 
 # Test qualified function names.
 
@@ -651,6 +684,22 @@ query I
 SELECT array_length(ARRAY[]::int[], 1)
 ----
 NULL
+
+# Test strange collapsing behavior of nested empty arrays. See #5545.
+
+query TIII
+SELECT arr, array_lower(arr, 1), array_upper(arr, 1), array_length(arr, 1) FROM
+    (VALUES
+        (ARRAY[]::int[]),
+        (ARRAY[ARRAY[]]::int[]),
+        (ARRAY[ARRAY[], ARRAY[], ARRAY[]]::int[]),
+        (ARRAY[ARRAY[ARRAY[ARRAY[]]]]::int[])
+    ) AS _ (arr)
+----
+{}  NULL  NULL  NULL
+{}  NULL  NULL  NULL
+{}  NULL  NULL  NULL
+{}  NULL  NULL  NULL
 
 query T
 SELECT upper('a1Bd')

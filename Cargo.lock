@@ -241,6 +241,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_s3",
+ "rusoto_sqs",
  "rusoto_sts",
  "serde",
  "tokio",
@@ -781,6 +782,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_s3",
+ "rusoto_sqs",
  "serde",
  "serde_json",
  "timely",
@@ -1043,9 +1045,9 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f26ecb66b4bdca6c1409b40fb255eefc2bd4f6d135dab3c3124f80ffa2a9661e"
+checksum = "17392a012ea30ef05a610aa97dfb49496e71c9f676b27879922ea5bdf60d9d3f"
 dependencies = [
  "atty",
  "humantime",
@@ -2839,9 +2841,9 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffccebf7f721f18477a39f99a7bae543edd02a9850a2cbfe6c407f8cc291dd89"
+checksum = "91fe0f88878f44476a04f211fbe5262367f213d8de01ec584f87d60de749c4cc"
 dependencies = [
  "backtrace",
  "lazy_static",
@@ -3047,9 +3049,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.8"
+version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "991431c3519a3f36861882da93630ce66b52918dcf1b8e2fd66b397fc96f28df"
+checksum = "c3d0b9745dc2debf507c8422de05d7226cc1f0644216dfdfead988f9b1ab32a7"
 dependencies = [
  "proc-macro2",
 ]
@@ -3082,7 +3084,7 @@ checksum = "0ef9e7e66b4468674bfcb0c81af8b7fa0bb154fa9f28eb840da5c447baeb8d7e"
 dependencies = [
  "libc",
  "rand_chacha 0.3.0",
- "rand_core 0.6.0",
+ "rand_core 0.6.2",
  "rand_hc 0.3.0",
 ]
 
@@ -3103,7 +3105,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e12735cf05c9e10bf21534da50a147b924d555dc7a547c42e6bb2d5b6017ae0d"
 dependencies = [
  "ppv-lite86",
- "rand_core 0.6.0",
+ "rand_core 0.6.2",
 ]
 
 [[package]]
@@ -3117,9 +3119,9 @@ dependencies = [
 
 [[package]]
 name = "rand_core"
-version = "0.6.0"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8b34ba8cfb21243bd8df91854c830ff0d785fff2e82ebd4434c2644cb9ada18"
+checksum = "34cf66eb183df1c5876e2dcf6b13d57340741e8dc255b48e40a26de954d06ae7"
 dependencies = [
  "getrandom 0.2.1",
 ]
@@ -3149,7 +3151,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3190ef7066a446f2e7f42e239d161e905420ccab01eb967c9eb27d21b2322a73"
 dependencies = [
- "rand_core 0.6.0",
+ "rand_core 0.6.2",
 ]
 
 [[package]]
@@ -3292,10 +3294,13 @@ dependencies = [
  "fast-float",
  "hex",
  "itertools",
+ "lazy_static",
+ "num-traits",
  "ordered-float",
  "ore",
  "rand 0.8.3",
  "regex",
+ "ryu",
  "serde",
  "serde_json",
  "serde_regex",
@@ -3439,6 +3444,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusoto_sqs"
+version = "0.46.0"
+source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "rusoto_core",
+ "serde_urlencoded",
+ "xml-rs",
+]
+
+[[package]]
 name = "rusoto_sts"
 version = "0.46.0"
 source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
@@ -3484,9 +3502,9 @@ dependencies = [
 
 [[package]]
 name = "ryu"
-version = "1.0.2"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfa8506c1de11c9c4e4c38863ccbe02a305c8188e85a05a784c9e11e1c3910c8"
+checksum = "71d301d4193d031abdd79ff7e3dd721168a9572ef3fe51a1517aba235bd8f86e"
 
 [[package]]
 name = "s3-datagen"
@@ -3781,9 +3799,9 @@ dependencies = [
 
 [[package]]
 name = "snap"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98d3306e84bf86710d6cd8b4c9c3b721d5454cc91a603180f8f8cd06cfd317b4"
+checksum = "dc725476a1398f0480d56cd0ad381f6f32acf2642704456f8f59a35df464b59a"
 
 [[package]]
 name = "socket2"
@@ -3808,6 +3826,7 @@ dependencies = [
  "chrono",
  "datadriven",
  "dataflow-types",
+ "enum-kinds",
  "expr",
  "futures",
  "globset",
@@ -4034,11 +4053,10 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.16.1"
+version = "0.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c14e2f7068e99d8d3e3580787ffc6c7d21ad90393ff5e54523435197ccb43e6"
+checksum = "c3d39c47be321239a7b3d232d733e58b257c6727167e61ee18c87cd2fa2b5b1b"
 dependencies = [
- "cc",
  "cfg-if 1.0.0",
  "core-foundation-sys",
  "doc-comment",

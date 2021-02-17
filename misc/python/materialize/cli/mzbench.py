@@ -12,6 +12,7 @@
 import argparse
 import csv
 import itertools
+import multiprocessing
 import os
 import pathlib
 import subprocess
@@ -23,16 +24,23 @@ def mzbuild_tag(git_ref: str) -> str:
     if not git_ref:
         return git_ref
     try:
-        return subprocess.check_output(
-            ["git", "describe", "--exact-match", git_ref], stderr=subprocess.STDOUT
-        ).strip().decode()
+        return (
+            subprocess.check_output(
+                ["git", "describe", "--exact-match", git_ref], stderr=subprocess.STDOUT
+            )
+            .strip()
+            .decode()
+        )
     except subprocess.CalledProcessError:
-        unstable_ref = subprocess.check_output(["git", "rev-parse", "--verify",
-            git_ref]).strip().decode()
+        unstable_ref = (
+            subprocess.check_output(["git", "rev-parse", "--verify", git_ref])
+            .strip()
+            .decode()
+        )
         return f"unstable-{unstable_ref}"
 
 
-def mzcompose_location(mz_root: str) -> str:
+def mzcompose_location(mz_root: str) -> pathlib.Path:
     """Return the absolute path to mzcompose.
 
     MZ_ROOT is expected to be set via pyactivate.
@@ -40,17 +48,18 @@ def mzcompose_location(mz_root: str) -> str:
     return pathlib.Path(mz_root, "bin", "mzcompose")
 
 
-def main(
-    mz_root: str,
-    args: argparse.Namespace,
-) -> None:
+def main(args: argparse.Namespace) -> None:
+
+    # Ensure that we are working out of the git directory so that commands, such as git, will work
+    mz_root = os.environ["MZ_ROOT"]
+    os.chdir(mz_root)
 
     worker_counts = enumerate_cpu_counts()
 
     if args.no_benchmark_this_checkout:
         git_references = args.git_references
     else:
-        git_refereences = [None, *args.git_references]
+        git_references = [None, *args.git_references]
 
     if args.verbose:
         build_tags = [None, *[mzbuild_tag(ref) for ref in args.git_references]]
@@ -158,7 +167,7 @@ def enumerate_cpu_counts() -> typing.List[int]:
     """
 
     # 15% overhead and count physical cores only
-    max_cpus = round(os.cpu_count() * 0.425)
+    max_cpus = round(multiprocessing.cpu_count() * 0.425)
     num_trials = 4
 
     # Yield the fractional points (4/4, 3/4, ...) between max and 0, not including 0
@@ -189,7 +198,9 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--no-benchmark-this-checkout", action="store_false", help="Don't benchmark the version of materialized in this checkout",
+        "--no-benchmark-this-checkout",
+        action="store_true",
+        help="Don't benchmark the version of materialized in this checkout",
     )
 
     parser.add_argument(
@@ -208,9 +219,4 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-
-    # Ensure that we are working out of the git directory so that commands, such as git, will work
-    mz_root = os.environ["MZ_ROOT"]
-    os.chdir(mz_root)
-
-    main(mz_root, args)
+    main(args)

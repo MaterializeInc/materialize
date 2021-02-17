@@ -255,7 +255,7 @@ pub enum Connector {
         path: String,
     },
     S3 {
-        /// The list of places that we will look for object keys
+        /// The arguments to `OBJECTS FROM`: `SCAN BUCKET` or `SQS NOTIFICATIONS`
         key_sources: Vec<S3KeySource>,
         /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
         pattern: Option<String>,
@@ -314,11 +314,13 @@ impl AstDisplay for Connector {
 }
 impl_display!(Connector);
 
-/// The key sources specified in the `OBJECTS FROM` clause.
+/// The key sources specified in the S3 source's `OBJECTS FROM` clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum S3KeySource {
     /// `OBJECTS FROM SCAN BUCKET '<bucket>'`
     Scan { bucket: String },
+    /// `OBJECTS FROM SQS NOTIFICATIONS '<queue-name>'`
+    SqsNotifications { queue: String },
 }
 
 impl AstDisplay for S3KeySource {
@@ -327,6 +329,11 @@ impl AstDisplay for S3KeySource {
             S3KeySource::Scan { bucket } => {
                 f.write_str(" SCAN BUCKET '");
                 f.write_str(&display::escape_single_quote_string(bucket));
+                f.write_str("'");
+            }
+            S3KeySource::SqsNotifications { queue } => {
+                f.write_str(" SQS NOTIFICATIONS '");
+                f.write_str(&display::escape_single_quote_string(queue));
                 f.write_str("'");
             }
         }

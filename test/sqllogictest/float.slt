@@ -49,8 +49,24 @@ SELECT '2e40'::float8
 ----
 20000000000000000000000000000000000000000
 
-query error float out of range
+query error value out of range: overflow
 SELECT '2e40'::float8::float4
+
+query R
+SELECT '2147483583'::float4::int;
+----
+2147483520
+
+query error integer out of range
+SELECT '2147483648'::float4::int
+
+query R
+SELECT '-2147483648'::float4::int
+----
+-2147483648
+
+query error integer out of range
+SELECT '-2147483777'::float4::int;
 
 # Invalid type mods
 

@@ -48,10 +48,37 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.7.1 %}}
 
+- Add the [`cbrt` function](/sql/functions/#numbers-func) for computing the
+  cube root of a [`double precision`](/sql/types/float).
+
 - Multipartition Kafka sinks with consistency enabled will create single-partition
   consistency topics.
+- **Breaking change.** Change the behavior of the
+  [`round` function](/sql/functions/#numbers-func) when applied to a `real` or
+  `double precision` argument to round ties to the nearest even number,
+  rather than away from zero. When applied to `numeric`, ties are rounded away
+  from zero, as before.
+
+  The new behavior matches PostgreSQL.
+
+- Support [multi-partition](/sql/create-sink/#with-options) kafka sinks {{% gh 5537 %}}.
+
+- Support [gzip-compressed](/sql/create-source/text-file/#compression) file sources {{% gh 5392 %}}.
+
+- Restore the `-D` command-line option as the short form of the
+  [`--data-directory`](/cli/#data-directory) option.
+
+- Allow setting [index parameters](/sql/alter-index/#available-parameters) when
+  creating an index via the new `WITH` clause to [`CREATE INDEX`]. In older
+  versions, setting these parameters required a separate call to [`ALTER
+  INDEX`](/sql/alter-index).
 
 {{% version-header v0.7.0 %}}
+
+- **Known issue.** The `-D` command-line option, shorthand for the
+  `--data-directory` option, was inadvertently removed.
+
+  It will be restored in the next release.
 
 - **Breaking change.** Require a valid user name when [connecting to
   Materialize](/connect/cli#connection-details). Previously, Materialize did not
@@ -970,6 +997,8 @@ Document new timezone stuff and add a release note about it.
 * [Architecture overview](/overview/architecture/)
 
 [`bytea`]: /sql/types/bytea
+[`ALTER INDEX`]: /sql/alter-index
+[`CREATE INDEX`]: /sql/create-index
 [`CREATE MATERIALIZED VIEW`]: /sql/create-materialized-view
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE VIEW`]: /sql/create-view

@@ -353,6 +353,7 @@ pub fn create_statement(
             name: _,
             on_name,
             key_parts,
+            with_options: _,
             if_not_exists,
         }) => {
             *on_name = resolve_item(on_name)?;

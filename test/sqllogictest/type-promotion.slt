@@ -266,7 +266,7 @@ SELECT '1'::jsonb::bigint;
 ----
 1
 
-query error invalid input syntax for bigint: invalid digit found in string: "dog"
+query error invalid input syntax for type bigint: invalid digit found in string: "dog"
 SELECT 'dog'::text::bigint
 
 query error CAST does not support casting from time to bigint
@@ -319,7 +319,7 @@ SELECT '1'::jsonb::boolean;
 ----
 NULL
 
-query error invalid input syntax for boolean: "dog"
+query error invalid input syntax for type boolean: "dog"
 SELECT 'dog'::text::boolean
 
 query error CAST does not support casting from time to boolean
@@ -360,7 +360,7 @@ SELECT '1'::interval::date
 query error CAST does not support casting from jsonb to date
 SELECT '{}'::jsonb::date
 
-query error invalid input syntax for date: YEAR, MONTH, DAY are all required: "dog"
+query error invalid input syntax for type date: YEAR, MONTH, DAY are all required: "dog"
 SELECT 'dog'::text::date
 
 query error CAST does not support casting from time to date
@@ -420,7 +420,7 @@ SELECT '1'::jsonb::numeric;
 ----
 1.0000
 
-query error invalid input syntax for numeric: malformed numeric literal: dog: "dog"
+query error invalid input syntax for type numeric: malformed numeric literal: dog: "dog"
 SELECT 'dog'::text::numeric
 
 query error CAST does not support casting from time to numeric\(38,0\)
@@ -477,7 +477,7 @@ SELECT '1'::jsonb::double;
 ----
 1.000
 
-query error invalid input syntax for double precision: "dog"
+query error invalid input syntax for type double precision: "dog"
 SELECT 'dog'::text::double
 
 query error CAST does not support casting from time to double precision
@@ -534,7 +534,7 @@ SELECT '2'::jsonb::real;
 ----
 2.000
 
-query error invalid input syntax for real: "dog"
+query error invalid input syntax for type real: "dog"
 SELECT 'dog'::text::real
 
 query error CAST does not support casting from time to real
@@ -588,7 +588,7 @@ SELECT '1'::jsonb::integer;
 ----
 1
 
-query error invalid input syntax for integer: invalid digit found in string: "dog"
+query error invalid input syntax for type integer: invalid digit found in string: "dog"
 SELECT 'dog'::text::integer
 
 query error CAST does not support casting from time to integer
@@ -629,7 +629,7 @@ SELECT '1'::interval::interval;
 query error CAST does not support casting from jsonb to interval
 SELECT '{}'::jsonb::interval
 
-query error invalid input syntax for interval: invalid DateTimeField: DOG: "dog"
+query error invalid input syntax for type interval: invalid DateTimeField: DOG: "dog"
 SELECT 'dog'::text::interval
 
 query T
@@ -789,7 +789,7 @@ SELECT '1'::interval::time;
 query error CAST does not support casting from jsonb to time
 SELECT '{}'::jsonb::time
 
-query error invalid input syntax for time: invalid DateTimeField: DOG: "dog"
+query error invalid input syntax for type time: invalid DateTimeField: DOG: "dog"
 SELECT 'dog'::text::time
 
 query T
@@ -832,7 +832,7 @@ SELECT '1'::interval::timestamp
 query error CAST does not support casting from jsonb to timestamp
 SELECT '{}'::jsonb::timestamp
 
-query error invalid input syntax for timestamp: YEAR, MONTH, DAY are all required: "dog"
+query error invalid input syntax for type timestamp: YEAR, MONTH, DAY are all required: "dog"
 SELECT 'dog'::text::timestamp
 
 query error CAST does not support casting from time to timestamp
@@ -877,7 +877,7 @@ SELECT '1'::interval::timestamptz
 query error CAST does not support casting from jsonb to timestamp with time zone
 SELECT '{}'::jsonb::timestamptz
 
-query error invalid input syntax for timestamp with time zone: YEAR, MONTH, DAY are all required: "dog"
+query error invalid input syntax for type timestamp with time zone: YEAR, MONTH, DAY are all required: "dog"
 SELECT 'dog'::text::timestamptz
 
 query error CAST does not support casting from time to timestamp with time zone

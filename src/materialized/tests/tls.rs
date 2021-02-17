@@ -33,9 +33,10 @@ use postgres::error::SqlState;
 use postgres_openssl::MakeTlsConnector;
 use serde::Deserialize;
 use tempfile::TempDir;
+use tokio::runtime::Runtime;
 
 use materialized::TlsMode;
-use tokio::runtime::Runtime;
+use ore::assert_contains;
 
 use crate::util::PostgresErrorExt;
 
@@ -301,7 +302,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 assert: Assert::Err(Box::new(|err| {
                     assert_eq!(
                         err.to_string(),
-                        "error performing TLS handshake: server does not support TLS"
+                        "error performing TLS handshake: server does not support TLS",
                     )
                 })),
             },
@@ -314,7 +315,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                     // a graceful error message. This could plausibly change
                     // due to OpenSSL or Hyper refactorings.
                     assert!(code.is_none());
-                    assert!(message.contains("ssl3_get_record:wrong version number"))
+                    assert_contains!(message, "ssl3_get_record:wrong version number");
                 })),
             },
         ],
@@ -423,9 +424,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
-                    assert!(err
-                        .to_string()
-                        .contains("tlsv13 alert certificate required"))
+                    assert_contains!(err.to_string(), "tlsv13 alert certificate required")
                 })),
             },
             TestCase::Http {
@@ -447,7 +446,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                     b.set_private_key_file(&bad_client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|err| {
-                    assert!(err.to_string().contains("certificate signature failure"))
+                    assert_contains!(err.to_string(), "certificate signature failure")
                 })),
             },
             TestCase::Http {
@@ -460,7 +459,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 }),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert!(code.is_none());
-                    assert!(message.contains("certificate signature failure"));
+                    assert_contains!(message, "certificate signature failure");
                 })),
             },
             // Connecting with a valid client certificate should succeed.
@@ -553,9 +552,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
-                    assert!(err
-                        .to_string()
-                        .contains("tlsv13 alert certificate required"));
+                    assert_contains!(err.to_string(), "tlsv13 alert certificate required");
                 })),
             },
             TestCase::Http {
@@ -577,7 +574,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                     b.set_private_key_file(&bad_client_key, SslFiletype::PEM)
                 }),
                 assert: Assert::Err(Box::new(|err| {
-                    assert!(err.to_string().contains("certificate signature failure"));
+                    assert_contains!(err.to_string(), "certificate signature failure");
                 })),
             },
             TestCase::Http {
@@ -590,7 +587,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 }),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert!(code.is_none());
-                    assert!(message.contains("certificate signature failure"));
+                    assert_contains!(message, "certificate signature failure");
                 })),
             },
             // Connecting with a valid client certificate should succeed.
@@ -666,5 +663,9 @@ fn assert_http_certificate_required_message(message: &str) {
     // NOTE(benesch): often Hyper returns a useless "channel closed" error
     // message instead of the actual TLS error message. I suspect this is a bug
     // in Hyper.
-    assert!(message.contains("tlsv13 alert certificate required") || message == "channel closed")
+    assert!(
+        message.contains("tlsv13 alert certificate required") || message == "channel closed",
+        "unexpected error message: {}",
+        message
+    )
 }

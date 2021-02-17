@@ -1669,15 +1669,22 @@ impl<'a> Parser<'a> {
                 Ok(Connector::AvroOcf { path })
             }
             S3 => {
-                // FROM S3 OBJECTS FROM (SCAN '<bucket>')+ MATCHING '<pattern>'
+                // FROM S3 OBJECTS FROM
+                // (SCAN BUCKET '<bucket>' | SQS NOTIFICATIONS '<channel>')+
+                // MATCHING '<pattern>'
                 self.expect_keywords(&[OBJECTS, FROM])?;
                 let mut key_sources = Vec::new();
-                while let Some(keyword) = self.parse_one_of_keywords(&[SCAN]) {
+                while let Some(keyword) = self.parse_one_of_keywords(&[SCAN, SQS]) {
                     match keyword {
                         SCAN => {
                             self.expect_keyword(BUCKET)?;
                             let bucket = self.parse_literal_string()?;
                             key_sources.push(S3KeySource::Scan { bucket });
+                        }
+                        SQS => {
+                            self.expect_keyword(NOTIFICATIONS)?;
+                            let queue = self.parse_literal_string()?;
+                            key_sources.push(S3KeySource::SqsNotifications { queue });
                         }
                         key => unreachable!("Keyword {} is not expected after OBJECTS FROM", key),
                     }
@@ -1767,10 +1774,13 @@ impl<'a> Parser<'a> {
             }
         };
 
+        let with_options = self.parse_opt_with_options()?;
+
         Ok(Statement::CreateIndex(CreateIndexStatement {
             name,
             on_name,
             key_parts,
+            with_options,
             if_not_exists,
         }))
     }
@@ -2171,9 +2181,7 @@ impl<'a> Parser<'a> {
                     Some(AlterIndexOptionsList::Reset(reset_options))
                 }
                 Some(SET) => {
-                    self.expect_token(&Token::LParen)?;
-                    let set_options = self.parse_comma_separated(Parser::parse_sql_option)?;
-                    self.expect_token(&Token::RParen)?;
+                    let set_options = self.parse_with_options(true)?;
 
                     Some(AlterIndexOptionsList::Set(set_options))
                 }
