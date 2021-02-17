@@ -31,7 +31,7 @@ static CACHE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
 
 // Limit at which we will make a new log segment
 // TODO: make this configurable and / or bump default to be larger.
-static TABLE_MAX_LOG_SEGMENT_SIZE: usize = 1_000_0000;
+static TABLE_MAX_LOG_SEGMENT_SIZE: usize = 10_000_000;
 
 #[derive(Clone, Debug)]
 pub struct CacheConfig {
@@ -578,16 +578,79 @@ impl TableLogSegments {
             )
         })?;
 
-        // Then if its empty, we are probably migrating from a version that didn't
-        // have persistent tables. Go ahead and set things up normally as you
-        // would otherwise
-
+        let mut unfinished_file = None;
+        let mut finished_files = vec![];
         // If its not empty, list out all of the files. There should be
         // exactly one unfinished file, and potentially more than one
         // finished file. Go ahead and read in all of the finished files in
         // sequence number order, and then set yourself up to write from the
         // unfinished log file
-        unimplemented!()
+        let entries = std::fs::read_dir(&base_path)?;
+        for entry in entries {
+            if let Ok(file) = entry {
+                let path = file.path();
+                let file_name = path.file_name();
+                if file_name.is_none() {
+                    continue;
+                }
+
+                let file_name = file_name.unwrap().to_str();
+
+                if file_name.is_none() {
+                    continue;
+                }
+
+                let file_name = file_name.unwrap();
+
+                if !file_name.starts_with("log-") {
+                    continue;
+                }
+
+                if !file_name.ends_with("final") {
+                    assert!(unfinished_file.is_none());
+                    let parts: Vec<_> = file_name.split('-').collect();
+                    let sequence_number = parts[1].parse::<usize>()?;
+                    unfinished_file = Some((path.to_path_buf(), sequence_number));
+                } else {
+                    finished_files.push(path.to_path_buf());
+                }
+            }
+        }
+
+        if let Some((unfinished_file, sequence_number)) = unfinished_file {
+            // Go ahead and load the old data
+
+            let mut updates = vec![];
+            for path in finished_files {
+                let data = fs::read(path).unwrap();
+                updates.extend(TableIter::new(data));
+            }
+
+            let unfinished_data = fs::read(&unfinished_file).unwrap();
+            updates.extend(TableIter::new(unfinished_data));
+
+            // lets start writing from the file
+            let file = fs::OpenOptions::new()
+                .append(true)
+                .open(&unfinished_file)
+                .unwrap();
+
+            let ret = Self {
+                id,
+                base_path,
+                current_file: file,
+                current_bytes_written: 0,
+                total_bytes_written: 0,
+                next_sequence_number: sequence_number + 1,
+            };
+
+            Ok((ret, updates))
+        } else {
+            // Then if its empty, we are probably migrating from a version that didn't
+            // have persistent tables. Go ahead and set things up normally as you
+            let ret = Self::create_table(id, base_path)?;
+            Ok((ret, vec![]))
+        }
     }
 }
 
