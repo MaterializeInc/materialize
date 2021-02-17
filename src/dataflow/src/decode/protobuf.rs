@@ -58,7 +58,7 @@ impl DecoderState for ProtobufDecoderState {
         bytes: &[u8],
         _: Option<i64>,
         _upstream_time_millis: Option<i64>,
-    ) -> Result<Option<Row>, ()> {
+    ) -> Result<Option<Row>, String> {
         match self.decoder.decode(bytes) {
             Ok(row) => {
                 self.events_success += 1;
@@ -66,8 +66,7 @@ impl DecoderState for ProtobufDecoderState {
             }
             Err(err) => {
                 self.events_error += 1;
-                error!("protobuf deserialization error: {:#}", err);
-                Err(())
+                Err(format!("protobuf deserialization error: {:#}", err))
             }
         }
     }

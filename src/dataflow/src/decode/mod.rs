@@ -125,14 +125,12 @@ pub type PushSession<'a, R> =
 pub trait DecoderState {
     fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String>;
     /// Decode the value in the upsert context, which means it might be a None.
-    /// The Error type is `()` because the caller assumes that this function
-    /// will handle whatever type of error that occurs during the decode process.
     fn decode_upsert_value(
         &mut self,
         bytes: &[u8],
         aux_num: Option<i64>,
         upstream_time_millis: Option<i64>,
-    ) -> Result<Option<Row>, ()>;
+    ) -> Result<Option<Row>, String>;
     /// give a session a plain value
     fn give_value<'a>(
         &mut self,
@@ -190,7 +188,7 @@ where
         bytes: &[u8],
         line_no: Option<i64>,
         _upstream_time_millis: Option<i64>,
-    ) -> Result<Option<Row>, ()> {
+    ) -> Result<Option<Row>, String> {
         Ok(Some(pack_with_line_no((self.datum_func)(bytes), line_no)))
     }
 
@@ -217,6 +215,8 @@ where
 /// Note that for code simplicity, this uses dynamic dispatch, which is said to
 /// be slower than using templates. The use of dynamic dispatch has not been
 /// observed to noticeably impact upsert performance at the time of this writing.
+/// TODO (wangandi): reimplement in terms of generics. DataEncoding could be a
+/// trait that returns a corresponding DecoderState.
 pub(crate) fn get_decoder(
     encoding: DataEncoding,
     debug_name: &str,

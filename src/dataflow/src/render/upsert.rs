@@ -153,23 +153,25 @@ where
                                 Ok(decoded_key) => {
                                     let decoded_value = if data.value.is_empty() {
                                         Ok(None)
-                                    } else if let Ok(value) = value_decoder_state
+                                    } else {
+                                        match value_decoder_state
                                         .decode_upsert_value(
                                             &data.value,
                                             data.position,
                                             data.upstream_time_millis,
-                                        )
-                                    {
-                                        if let Some(value) = value {
-                                            // prepend key to row
-                                            row_packer.extend_by_row(&decoded_key);
-                                            row_packer.extend_by_row(&value);
-                                            Ok(Some(row_packer.finish_and_reuse()))
-                                        } else {
-                                            Ok(None)
+                                        ) {
+                                            Ok(value) => {
+                                                if let Some(value) = value {
+                                                    // prepend key to row
+                                                    row_packer.extend_by_row(&decoded_key);
+                                                    row_packer.extend_by_row(&value);
+                                                    Ok(Some(row_packer.finish_and_reuse()))
+                                                } else {
+                                                    Ok(None)
+                                                }
+                                            }
+                                            Err(err) => Err(err)
                                         }
-                                    } else {
-                                        Err(())
                                     };
                                     if let Ok(decoded_value) = decoded_value {
                                         // TODO: add linear operators such as

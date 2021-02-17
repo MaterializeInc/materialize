@@ -77,7 +77,7 @@ impl DecoderState for AvroDecoderState {
         bytes: &[u8],
         coord: Option<i64>,
         upstream_time_millis: Option<i64>,
-    ) -> Result<Option<Row>, ()> {
+    ) -> Result<Option<Row>, String> {
         match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
             Ok(diff_pair) => {
                 self.events_success += 1;
@@ -85,8 +85,7 @@ impl DecoderState for AvroDecoderState {
             }
             Err(err) => {
                 self.events_error += 1;
-                error!("avro deserialization error: {}", err);
-                Err(())
+                Err(format!("avro deserialization error: {}", err))
             }
         }
     }
