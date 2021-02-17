@@ -1271,7 +1271,7 @@ OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query error unknown catalog item 'b'
 SELECT company_id, string_agg(employee::BYTEA, b',')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
@@ -1283,7 +1283,7 @@ OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
 ORDER BY company_id, id;
 
-query error supported
+query error unknown catalog item 'b'
 SELECT company_id, string_agg(employee::BYTEA, b'')
 OVER (PARTITION BY company_id ORDER BY id)
 FROM string_agg_test
@@ -1391,7 +1391,7 @@ FROM (
 GROUP BY e.company_id
 ORDER BY e.company_id;
 
-query error type "b" does not exist
+query error unknown catalog item 'b'
 SELECT e.company_id, string_agg(e.employee, b', ')
 FROM (
   SELECT employee::BYTEA, company_id
@@ -1411,7 +1411,7 @@ FROM (
 GROUP BY e.company_id
 ORDER BY e.company_id;
 
-query error type "b" does not exist
+query error unknown catalog item 'b'
 SELECT e.company_id, string_agg(e.employee, b', ')
 FROM (
   SELECT employee::BYTEA, company_id

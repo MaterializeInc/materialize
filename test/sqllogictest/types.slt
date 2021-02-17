@@ -33,7 +33,7 @@ SELECT pg_typeof('true'::boolean)
 ----
 boolean
 
-query error type "pg_catalog.boolean" does not exist
+query error unknown catalog item 'pg_catalog.boolean'
 SELECT 'true'::pg_catalog.boolean
 
 # 🔬🔬 bytea
@@ -55,7 +55,7 @@ SELECT 'a'::bytes
 ----
 a
 
-query error type "pg_catalog.bytes" does not exist
+query error unknown catalog item 'pg_catalog.bytes'
 SELECT ''::pg_catalog.bytes
 
 # 🔬🔬 date
@@ -89,7 +89,7 @@ SELECT '1.2'::float(1)
 ----
 1.200
 
-query error type "pg_catalog.float" does not exist
+query error unknown catalog item 'pg_catalog.float'
 SELECT '1.2'::pg_catalog.float(1)
 
 query T
@@ -102,7 +102,7 @@ SELECT '1.2'::real
 ----
 1.200
 
-query error type "pg_catalog.real" does not exist
+query error unknown catalog item 'pg_catalog.real'
 SELECT '1.2'::pg_catalog.real
 
 query T
@@ -129,7 +129,7 @@ SELECT '1.2'::float(53)
 ----
 1.200
 
-query error type "pg_catalog.float" does not exist
+query error unknown catalog item 'pg_catalog.float'
 SELECT '1.2'::pg_catalog.float(53)
 
 query T
@@ -142,7 +142,7 @@ SELECT '1.2'::double
 ----
 1.200
 
-query error type "pg_catalog.double" does not exist
+query error unknown catalog item 'pg_catalog.double'
 SELECT '1.2'::pg_catalog.double
 
 query T
@@ -169,7 +169,7 @@ SELECT '1'::int
 ----
 1
 
-query error type "pg_catalog.int" does not exist
+query error unknown catalog item 'pg_catalog.int'
 SELECT '1'::pg_catalog.int
 
 query T
@@ -182,7 +182,7 @@ SELECT '1'::integer
 ----
 1
 
-query error type "pg_catalog.integer" does not exist
+query error unknown catalog item 'pg_catalog.integer'
 SELECT '1'::pg_catalog.integer
 
 query T
@@ -195,7 +195,7 @@ SELECT '1'::smallint
 ----
 1
 
-query error type "pg_catalog.smallint" does not exist
+query error unknown catalog item 'pg_catalog.smallint'
 SELECT '1'::pg_catalog.smallint
 
 query T
@@ -222,7 +222,7 @@ SELECT '1'::bigint
 ----
 1
 
-query error type "pg_catalog.bigint" does not exist
+query error unknown catalog item 'pg_catalog.bigint'
 SELECT '1'::pg_catalog.bigint
 
 query T
@@ -277,7 +277,7 @@ SELECT '{"1":2,"3":4}'::json
 ----
 {"1":2.0,"3":4.0}
 
-query error type "pg_catalog.json" does not exist
+query error unknown catalog item 'pg_catalog.json'
 SELECT '{"1":2,"3":4}'::pg_catalog.json
 
 # 🔬🔬 numeric
@@ -300,7 +300,7 @@ SELECT '1'::decimal(38,0)
 ----
 1
 
-query error type "pg_catalog.decimal" does not exist
+query error unknown catalog item 'pg_catalog.decimal'
 SELECT '1'::pg_catalog.decimal(38,0)
 
 query T
@@ -308,7 +308,7 @@ SELECT '1'::dec(38,0)
 ----
 1
 
-query error type "pg_catalog.dec" does not exist
+query error unknown catalog item 'pg_catalog.dec'
 SELECT '1'::pg_catalog.dec(38,0)
 
 # 🔬🔬 oid
@@ -330,7 +330,7 @@ SELECT '1'::regclass
 ----
 1
 
-query error type "pg_catalog.regclass" does not exist
+query error unknown catalog item 'pg_catalog.regclass'
 SELECT '1'::pg_catalog.regclass
 
 # 🔬🔬 record
