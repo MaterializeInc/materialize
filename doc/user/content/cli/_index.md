@@ -17,6 +17,7 @@ Flag | Default | Modifies
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
 [`--disable-telemetry`](#telemetry) | N/A | Disables telemetry reporting.
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
+[`--introspection-frequency`](#introspection-sources) | 1s | The frequency at which to update [introspection sources](#introspection-sources).
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
 [`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
@@ -122,6 +123,25 @@ time for the configured duration. The default window is 60 seconds.
 
 See the [Deployment section](/ops/deployment#compaction) for guidance on tuning
 the compaction window.
+
+### Introspection sources
+
+{{< version-changed v0.7.1 >}}
+In prior versions of Materialize, this option was undocumented but available
+under the name `--logging-granularity`.
+{{< /version-changed >}}
+
+Materialize maintains several built-in sources and views in
+[`mz_catalog`](/sql/system-catalog) that describe the internal state of the
+dataflow execution layer, like `mz_scheduling_elapsed`.
+
+The `--introspection-frequency` option determines the frequency at which the
+base sources are updated. The default frequency is `1s`. To disable
+introspection entirely, use the special value `off`.
+
+Higher frequencies provide more up-to-date introspection but increase load on
+the system. Lower frequencies increase staleness in exchange for decreased load.
+The default frequency is a good choice for most deployments.
 
 ### TLS encryption
 
