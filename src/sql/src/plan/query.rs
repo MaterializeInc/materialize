@@ -203,8 +203,14 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 }
             }
             RawName::Id(id, raw_name) => {
-                let gid = GlobalId::User(id);
-                if self.catalog.try_get_item_by_id(&gid).is_none() {
+                let gid: GlobalId = match id.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        self.status = Err(e);
+                        GlobalId::User(0)
+                    }
+                };
+                if self.status.is_ok() && self.catalog.try_get_item_by_id(&gid).is_none() {
                     self.status = Err(anyhow!("invalid id {}", &gid));
                 }
                 self.ids.insert(gid.clone());

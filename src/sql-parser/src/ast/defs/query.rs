@@ -54,7 +54,7 @@ pub struct Raw;
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum RawName {
     Name(UnresolvedObjectName),
-    Id(u64, UnresolvedObjectName),
+    Id(String, UnresolvedObjectName),
 }
 
 impl RawName {
@@ -71,7 +71,7 @@ impl AstDisplay for RawName {
         match self {
             RawName::Name(o) => f.write_node(o),
             RawName::Id(id, o) => {
-                f.write_str(format!("[{} AS", id));
+                f.write_str(format!("[{} AS ", id));
                 f.write_node(o);
                 f.write_str("]");
             }

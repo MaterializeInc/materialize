@@ -46,7 +46,7 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                     }
                     *name = match name {
                         RawName::Name(_) => RawName::Name(unresolved_name),
-                        RawName::Id(id, _) => RawName::Id(*id, unresolved_name),
+                        RawName::Id(id, _) => RawName::Id(id.clone(), unresolved_name),
                     }
                 }
             }
