@@ -11,33 +11,96 @@ use std::future::Future;
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, oneshot, watch};
+use uuid::Uuid;
 
+use ore::thread::JoinOnDropHandle;
 use sql::ast::{Raw, Statement};
-use sql::plan::Params;
 
-use crate::command::{
-    Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
-};
+use crate::command::{Cancelled, Command, ExecuteResponse, Response, StartupResponse};
 use crate::error::CoordError;
+use crate::id_alloc::IdAllocator;
 use crate::session::{EndTransactionAction, Session};
 
-/// A client for a [`Coordinator`](crate::Coordinator).
+/// A handle to a running coordinator.
 ///
-/// A client is a simple handle to a communication channel with the coordinator.
-/// They can be cheaply cloned.
+/// The coordinator runs on its own thread. Dropping the handle will wait for
+/// the coordinator's thread to exit, which will only occur after all
+/// outstanding [`Client`]s for the coordinator have dropped.
+pub struct Handle {
+    pub(crate) cluster_id: Uuid,
+    pub(crate) _thread: JoinOnDropHandle<()>,
+}
+
+impl Handle {
+    /// Returns the cluster ID associated with this coordinator.
+    ///
+    /// The cluster ID is recorded in the data directory when it is first
+    /// created and persists until the data directory is deleted.
+    pub fn cluster_id(&self) -> Uuid {
+        self.cluster_id
+    }
+}
+
+/// A coordinator client.
+///
+/// A coordinator client is a simple handle to a communication channel with the
+/// coordinator. It can be cheaply cloned.
+///
+/// Clients keep the coordinator alive. The coordinator will not exit until all
+/// outstanding clients have dropped.
 #[derive(Debug, Clone)]
 pub struct Client {
     cmd_tx: mpsc::UnboundedSender<Command>,
+    id_alloc: Arc<IdAllocator>,
 }
 
 impl Client {
-    /// Constructs a new client.
-    pub fn new(cmd_tx: mpsc::UnboundedSender<Command>) -> Client {
-        Client { cmd_tx }
+    pub(crate) fn new(cmd_tx: mpsc::UnboundedSender<Command>) -> Client {
+        Client {
+            cmd_tx,
+            id_alloc: Arc::new(IdAllocator::new(1, 1 << 16)),
+        }
     }
 
-    /// Binds this client to a session.
-    pub fn for_session(&self, session: Session) -> SessionClient {
+    /// Allocates a client for an incoming connection.
+    pub fn new_conn(&self) -> Result<ConnClient, CoordError> {
+        Ok(ConnClient {
+            conn_id: self.id_alloc.alloc()?,
+            inner: self.clone(),
+        })
+    }
+}
+
+/// A coordinator client that is bound to a connection.
+///
+/// The `ConnClient` automatically allocates an ID for the connection when
+/// it is created, and frees that ID for potential reuse when it is dropped.
+///
+/// See also [`Client`].
+#[derive(Debug, Clone)]
+pub struct ConnClient {
+    conn_id: u32,
+    inner: Client,
+}
+
+impl ConnClient {
+    /// Returns the ID of the connection associated with this client.
+    pub fn conn_id(&self) -> u32 {
+        self.conn_id
+    }
+
+    /// Upgrades this connection client to a session client.
+    ///
+    /// A session is a connection that has successfully negotiated parameters,
+    /// like the user. Most coordinator operations are available only after
+    /// upgrading a connection to a session.
+    ///
+    /// Returns a new client that is bound to the session and a response
+    /// containing various details about the startup.
+    pub async fn startup(
+        self,
+        session: Session,
+    ) -> Result<(SessionClient, StartupResponse), CoordError> {
         // Cancellation works by creating a watch channel (which remembers only
         // the last value sent to it) and sharing it between the coordinator and
         // connection. The coordinator will send a cancelled message on it if a
@@ -46,44 +109,39 @@ impl Client {
         // an in-progress statement.
         let (cancel_tx, cancel_rx) = watch::channel(Cancelled::NotCancelled);
         let cancel_tx = Arc::new(cancel_tx);
-
-        SessionClient {
-            inner: self.clone(),
+        let mut client = SessionClient {
+            inner: self,
             session: Some(session),
-            started_up: false,
-            cancel_tx,
+            cancel_tx: cancel_tx.clone(),
             cancel_rx,
+        };
+        let response = client
+            .send(|tx, session| Command::Startup {
+                session,
+                cancel_tx,
+                tx,
+            })
+            .await;
+        match response {
+            Ok(response) => Ok((client, response)),
+            Err(e) => {
+                // When startup fails, no need to call terminate. Remove the
+                // session from the client to sidestep the panic in the `Drop`
+                // implementation.
+                client.session.take();
+                Err(e)
+            }
         }
     }
 
-    /// Dumps the catalog to a JSON string.
-    pub async fn dump_catalog(&mut self) -> String {
-        self.send(|tx| Command::DumpCatalog { tx }).await
-    }
-
-    /// Executes a statement as the specified user that is not tied to a session.
-    ///
-    /// This will execute in a pseudo session that is not able to create any
-    /// temporary resources that would normally need to be cleaned up by Terminate.
-    pub async fn execute(
-        &mut self,
-        stmt: Statement<Raw>,
-        params: Params,
-        user: String,
-    ) -> Result<NoSessionExecuteResponse, CoordError> {
-        self.send(|tx| Command::NoSessionExecute {
-            stmt,
-            params,
-            user,
-            tx,
-        })
-        .await
-    }
-
-    /// Cancel the query currently running on another connection.
-    pub async fn cancel_request(&mut self, conn_id: u32) {
-        self.cmd_tx
-            .send(Command::CancelRequest { conn_id })
+    /// Cancels the query currently running on another connection.
+    pub async fn cancel_request(&mut self, conn_id: u32, secret_key: u32) {
+        self.inner
+            .cmd_tx
+            .send(Command::CancelRequest {
+                conn_id,
+                secret_key,
+            })
             .expect("coordinator unexpectedly canceled request")
     }
 
@@ -92,25 +150,33 @@ impl Client {
         F: FnOnce(oneshot::Sender<T>) -> Command,
     {
         let (tx, rx) = oneshot::channel();
-        self.cmd_tx
+        self.inner
+            .cmd_tx
             .send(f(tx))
             .expect("coordinator unexpectedly gone");
         rx.await.expect("coordinator unexpectedly canceled request")
     }
 }
 
-/// A [`Client`] that is bound to a session.
+impl Drop for ConnClient {
+    fn drop(&mut self) {
+        self.inner.id_alloc.free(self.conn_id);
+    }
+}
+
+/// A coordinator client that is bound to a connection.
+///
+/// You must call [`SessionClient::terminate`] rather than dropping a session
+/// client directly. Dropping an unterminated `SessionClient` will panic.
+///
+/// See also [`Client`].
 pub struct SessionClient {
-    inner: Client,
+    inner: ConnClient,
     // Invariant: session may only be `None` during a method call. Every public
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
-    /// Whether the coordinator has been notified of this `SessionClient` via
-    /// a call to `startup`.
-    started_up: bool,
-
-    pub cancel_tx: Arc<watch::Sender<Cancelled>>,
-    pub cancel_rx: watch::Receiver<Cancelled>,
+    cancel_tx: Arc<watch::Sender<Cancelled>>,
+    cancel_rx: watch::Receiver<Cancelled>,
 }
 
 impl SessionClient {
@@ -135,41 +201,10 @@ impl SessionClient {
         let _ = self.cancel_tx.send(Cancelled::NotCancelled);
     }
 
-    /// Notifies the coordinator of a new client session.
-    ///
-    /// Returns a list of messages that are intended to be displayed to the
-    /// user.
-    ///
-    /// Once you observe a successful response to this method, you must not call
-    /// it again. You must observe a successful response to this method before
-    /// calling any other method on the client, besides
-    /// [`SessionClient::terminate`].
-    pub async fn startup(&mut self) -> Result<Vec<StartupMessage>, CoordError> {
-        assert!(!self.started_up);
-        let cancel_tx = Arc::clone(&self.cancel_tx);
-        match self
-            .send(|tx, session| Command::Startup {
-                session,
-                cancel_tx,
-                tx,
-            })
-            .await
-        {
-            Ok(messages) => {
-                self.started_up = true;
-                Ok(messages)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
     /// Saves the specified statement as a prepared statement.
     ///
     /// The prepared statement is saved in the connection's [`sql::Session`]
     /// under the specified name.
-    ///
-    /// You must have observed a successful response to
-    /// [`SessionClient::startup`] before calling this method.
     pub async fn describe(
         &mut self,
         name: String,
@@ -187,9 +222,6 @@ impl SessionClient {
     }
 
     /// Binds a statement to a portal.
-    ///
-    /// You must have observed a successful response to
-    /// [`SessionClient::startup`] before calling this method.
     pub async fn declare(
         &mut self,
         name: String,
@@ -207,9 +239,6 @@ impl SessionClient {
     }
 
     /// Executes a previously-bound portal.
-    ///
-    /// You must have observed a successful response to
-    /// [`SessionClient::startup`] before calling this method.
     pub async fn execute(&mut self, portal_name: String) -> Result<ExecuteResponse, CoordError> {
         self.send(|tx, session| Command::Execute {
             portal_name,
@@ -220,9 +249,6 @@ impl SessionClient {
     }
 
     /// Ends a transaction.
-    ///
-    /// You must have observed a successful response to
-    /// [`SessionClient::startup`] before calling this method.
     pub async fn end_transaction(
         &mut self,
         action: EndTransactionAction,
@@ -235,19 +261,24 @@ impl SessionClient {
         .await
     }
 
+    /// Dumps the catalog to a JSON string.
+    pub async fn dump_catalog(&mut self) -> Result<String, CoordError> {
+        self.send(|tx, session| Command::DumpCatalog { session, tx })
+            .await
+    }
+
     /// Terminates this client session.
     ///
-    /// This consumes this `SessionClient`. If the coordinator was notified of
-    /// this client session by `startup`, then this method will clean up any
-    /// state on the coordinator about this session.
+    /// This method cleans up any coordinator state associated with the session
+    /// before consuming the `SessionClient. Call this method instead of
+    /// dropping the object directly.
     pub async fn terminate(mut self) {
         let session = self.session.take().expect("session invariant violated");
-        if self.started_up {
-            self.inner
-                .cmd_tx
-                .send(Command::Terminate { session })
-                .expect("coordinator unexpectedly gone");
-        }
+        self.inner
+            .inner
+            .cmd_tx
+            .send(Command::Terminate { session })
+            .expect("coordinator unexpectedly gone");
     }
 
     /// Returns a mutable reference to the session bound to this client.
@@ -263,5 +294,13 @@ impl SessionClient {
         let res = self.inner.send(|tx| f(tx, session)).await;
         self.session = Some(res.session);
         res.result
+    }
+}
+
+impl Drop for SessionClient {
+    fn drop(&mut self) {
+        if self.session.is_some() {
+            panic!("unterminated SessionClient dropped")
+        }
     }
 }

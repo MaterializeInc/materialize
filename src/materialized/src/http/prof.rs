@@ -9,29 +9,30 @@
 
 //! Profiling HTTP endpoints.
 
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Write;
-use std::{borrow::Cow, cell::RefCell, collections::HashMap, future::Future, time::Duration};
+use std::time::Duration;
 
 use askama::Template;
 use cfg_if::cfg_if;
 use hyper::{Body, Request, Response};
 
-use prof::{collate_stacks, time::prof_time, ProfStartTime, StackProfile};
+use prof::{ProfStartTime, StackProfile};
 
-use crate::http::{util, Server};
+use crate::http::util;
 use crate::BUILD_INFO;
 
-impl Server {
-    pub fn handle_prof(
-        &self,
-        req: Request<Body>,
-    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        cfg_if! {
-            if #[cfg(target_os = "macos")] {
-                disabled::handle(req)
-            } else {
-                enabled::handle(req)
-            }
+pub async fn handle_prof(
+    req: Request<Body>,
+    _: &mut coord::SessionClient,
+) -> Result<Response<Body>, anyhow::Error> {
+    cfg_if! {
+        if #[cfg(target_os = "macos")] {
+            disabled::handle(req).await
+        } else {
+            enabled::handle(req).await
         }
     }
 }
@@ -80,7 +81,8 @@ async fn time_prof<'a>(
     let merge_threads = params.get("threads").map(AsRef::as_ref) == Some("merge");
     // SAFETY: We ensure above that memory profiling is off.
     // Since we hold the mutex, nobody else can be turning it back on in the intervening time.
-    let stacks = unsafe { prof_time(Duration::from_secs(10), 99, merge_threads) }.await?;
+    let stacks =
+        unsafe { prof::time::prof_time(Duration::from_secs(10), 99, merge_threads) }.await?;
     // Fail with a compile error if we weren't holding the jemalloc lock.
     drop(ctl_lock);
     flamegraph(stacks, "CPU Time Flamegraph", false, &[])
@@ -92,7 +94,7 @@ fn flamegraph(
     display_bytes: bool,
     extras: &[&str],
 ) -> anyhow::Result<Response<Body>> {
-    let collated = collate_stacks(stacks);
+    let collated = prof::collate_stacks(stacks);
     let data_json = RefCell::new(String::new());
     collated.dfs(
         |node| {

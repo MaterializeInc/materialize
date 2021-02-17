@@ -15,7 +15,7 @@ use askama::Template;
 use futures::future;
 use hyper::{Body, Method, Request, Response, StatusCode};
 
-use crate::http::{util, Server};
+use crate::http::util;
 use crate::BUILD_INFO;
 
 #[derive(Template)]
@@ -26,34 +26,30 @@ struct HomeTemplate<'a> {
     build_sha: &'static str,
 }
 
-impl Server {
-    pub fn handle_home(
-        &self,
-        _: Request<Body>,
-    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        future::ok(util::template_response(HomeTemplate {
-            version: BUILD_INFO.version,
-            build_time: BUILD_INFO.time,
-            build_sha: BUILD_INFO.sha,
-        }))
-    }
+pub fn handle_home(
+    _: Request<Body>,
+    _: &mut coord::SessionClient,
+) -> impl Future<Output = anyhow::Result<Response<Body>>> {
+    future::ok(util::template_response(HomeTemplate {
+        version: BUILD_INFO.version,
+        build_time: BUILD_INFO.time,
+        build_sha: BUILD_INFO.sha,
+    }))
+}
 
-    pub fn handle_static(
-        &self,
-        req: Request<Body>,
-    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        async move {
-            if req.method() == Method::GET {
-                let path = req.uri().path();
-                let path = path.strip_prefix("/").unwrap_or(path);
-                match get_static_file(path).await {
-                    Some(body) => Ok(Response::new(body)),
-                    None => Ok(util::error_response(StatusCode::NOT_FOUND, "not found")),
-                }
-            } else {
-                Ok(util::error_response(StatusCode::FORBIDDEN, "bad request"))
-            }
+pub async fn handle_static(
+    req: Request<Body>,
+    _: &mut coord::SessionClient,
+) -> Result<Response<Body>, anyhow::Error> {
+    if req.method() == Method::GET {
+        let path = req.uri().path();
+        let path = path.strip_prefix("/").unwrap_or(path);
+        match get_static_file(path).await {
+            Some(body) => Ok(Response::new(body)),
+            None => Ok(util::error_response(StatusCode::NOT_FOUND, "not found")),
         }
+    } else {
+        Ok(util::error_response(StatusCode::FORBIDDEN, "bad request"))
     }
 }
 

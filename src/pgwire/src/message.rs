@@ -12,7 +12,7 @@ use std::convert::TryFrom;
 use std::io;
 
 use bytes::BytesMut;
-use coord::CoordError;
+use coord::{CoordError, StartupMessage};
 use itertools::Itertools;
 use postgres::error::SqlState;
 
@@ -230,6 +230,12 @@ pub enum BackendMessage {
     CopyDone,
 }
 
+impl From<ErrorResponse> for BackendMessage {
+    fn from(err: ErrorResponse) -> BackendMessage {
+        BackendMessage::ErrorResponse(err)
+    }
+}
+
 /// A local representation of [`CoordTransactionStatus`]
 #[derive(Debug, Clone, Copy)]
 pub enum TransactionStatus {
@@ -310,6 +316,7 @@ impl ErrorResponse {
             CoordError::ConstrainedParameter(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::DuplicateCursor(_) => SqlState::DUPLICATE_CURSOR,
             CoordError::Eval(_) => SqlState::INTERNAL_ERROR,
+            CoordError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             CoordError::InvalidParameterType(_) => SqlState::INVALID_PARAMETER_VALUE,
             CoordError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
@@ -337,21 +344,20 @@ impl ErrorResponse {
         }
     }
 
-    pub fn with_hint<S>(mut self, hint: S) -> ErrorResponse
-    where
-        S: Into<String>,
-    {
-        self.hint = Some(hint.into());
-        self
+    pub fn from_startup_message(message: StartupMessage) -> ErrorResponse {
+        ErrorResponse {
+            severity: Severity::Notice,
+            code: SqlState::SUCCESSFUL_COMPLETION,
+            message: message.to_string(),
+            detail: message.detail(),
+            hint: message.hint(),
+            position: None,
+        }
     }
 
     pub fn with_position(mut self, position: usize) -> ErrorResponse {
         self.position = Some(position);
         self
-    }
-
-    pub fn into_message(self) -> BackendMessage {
-        BackendMessage::ErrorResponse(self)
     }
 }
 

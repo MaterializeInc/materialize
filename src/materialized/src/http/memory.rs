@@ -7,13 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::future::Future;
-
 use askama::Template;
-use futures::future;
 use hyper::{Body, Request, Response};
 
-use crate::http::{util, Server};
+use crate::http::util;
 use crate::BUILD_INFO;
 
 #[derive(Template)]
@@ -22,13 +19,11 @@ struct MemoryTemplate<'a> {
     version: &'a str,
 }
 
-impl Server {
-    pub fn handle_memory(
-        &self,
-        _: Request<Body>,
-    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        future::ok(util::template_response(MemoryTemplate {
-            version: BUILD_INFO.version,
-        }))
-    }
+pub async fn handle_memory(
+    _: Request<Body>,
+    _: &mut coord::SessionClient,
+) -> Result<Response<Body>, anyhow::Error> {
+    Ok(util::template_response(MemoryTemplate {
+        version: BUILD_INFO.version,
+    }))
 }

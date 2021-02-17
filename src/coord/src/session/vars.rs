@@ -112,9 +112,9 @@ const TRANSACTION_ISOLATION: ServerVar<str> = ServerVar {
 ///
 /// The Materialize configuration hierarchy at the moment is much simpler.
 /// Global defaults are hardcoded into the binary, and a select few parameters
-/// can be overridden per session. The infrastructure has been designed with
-/// an eye towards supporting additional layers to the hierarchy, however, as
-/// should the need arise.
+/// can be overridden per session. The infrastructure has been designed with an
+/// eye towards supporting additional layers to the hierarchy, however, should
+/// the need arise.
 ///
 /// The configuration parameters that exist are driven by compatibility with
 /// PostgreSQL drivers that expect them, not because they are particularly
@@ -238,7 +238,7 @@ impl Vars {
     /// Sets the configuration parameter named `name` to the value represented
     /// by `value`.
     ///
-    /// Like with [`Session::get`], configuration parameters are matched case
+    /// Like with [`Var::get`], configuration parameters are matched case
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.

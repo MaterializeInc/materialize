@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -15,6 +16,7 @@ use derivative::Derivative;
 use tokio::sync::{mpsc, oneshot};
 
 use dataflow_types::PeekResponse;
+use ore::str::StrExt;
 use repr::Row;
 use sql::ast::{FetchDirection, ObjectType, Raw, Statement};
 use sql::plan::ExecuteTimeout;
@@ -25,11 +27,10 @@ use crate::session::{EndTransactionAction, Session};
 
 #[derive(Debug)]
 pub enum Command {
-    /// Notify the coordinator of a new client session.
     Startup {
         session: Session,
         cancel_tx: Arc<watch::Sender<Cancelled>>,
-        tx: oneshot::Sender<Response<Vec<StartupMessage>>>,
+        tx: oneshot::Sender<Response<StartupResponse>>,
     },
 
     Declare {
@@ -62,21 +63,16 @@ pub enum Command {
 
     CancelRequest {
         conn_id: u32,
+        secret_key: u32,
     },
 
     DumpCatalog {
-        tx: oneshot::Sender<String>,
+        session: Session,
+        tx: oneshot::Sender<Response<String>>,
     },
 
     Terminate {
         session: Session,
-    },
-
-    NoSessionExecute {
-        stmt: Statement<Raw>,
-        params: sql::plan::Params,
-        user: String,
-        tx: oneshot::Sender<Result<NoSessionExecuteResponse, CoordError>>,
     },
 }
 
@@ -86,22 +82,54 @@ pub struct Response<T> {
     pub session: Session,
 }
 
-#[derive(Debug)]
-pub struct NoSessionExecuteResponse {
-    pub desc: Option<repr::RelationDesc>,
-    pub response: ExecuteResponse,
-}
-
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponse> + Send>>;
 
-/// Notifications that may be generated in response to [`Command::Startup`].
+/// The response to [`Client::startup`](crate::Client::startup).
+#[derive(Debug)]
+pub struct StartupResponse {
+    /// An opaque secret associated with this session.
+    pub secret_key: u32,
+    /// Notifications associated with session startup.
+    pub messages: Vec<StartupMessage>,
+}
+
+/// Messages in a [`StartupResponse`].
 #[derive(Debug)]
 pub enum StartupMessage {
     /// The database specified in the initial session does not exist.
-    UnknownSessionDatabase,
+    UnknownSessionDatabase(String),
 }
 
-/// The response to [`Command::Execute]`.
+impl StartupMessage {
+    /// Reports additional details about the error, if any are available.
+    pub fn detail(&self) -> Option<String> {
+        None
+    }
+
+    /// Reports a hint for the user about how the error could be fixed.
+    pub fn hint(&self) -> Option<String> {
+        match self {
+            StartupMessage::UnknownSessionDatabase(_) => Some(
+                "Create the database with CREATE DATABASE \
+                 or pick an extant database with SET DATABASE = name. \
+                 List available databases with SHOW DATABASES."
+                    .into(),
+            ),
+        }
+    }
+}
+
+impl fmt::Display for StartupMessage {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            StartupMessage::UnknownSessionDatabase(name) => {
+                write!(f, "session database {} does not exist", name.quoted())
+            }
+        }
+    }
+}
+
+/// The response to [`SessionClient::execute`](crate::SessionClient::execute).
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub enum ExecuteResponse {

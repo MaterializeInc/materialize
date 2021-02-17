@@ -114,10 +114,6 @@ lazy_static! {
     ).unwrap();
 }
 
-pub struct TimestampConfig {
-    pub frequency: Duration,
-}
-
 #[derive(Debug)]
 pub enum TimestampMessage {
     Add(SourceInstanceId, SourceConnector),
@@ -733,13 +729,13 @@ fn identify_consistency_format(enc: DataEncoding, env: SourceEnvelope) -> Consis
 
 impl Timestamper {
     pub fn new(
-        config: &TimestampConfig,
+        frequency: Duration,
         tx: mpsc::UnboundedSender<coord::Message>,
         rx: std::sync::mpsc::Receiver<TimestampMessage>,
     ) -> Self {
         info!(
             "Starting Timestamping Thread. Frequency: {} ms.",
-            config.frequency.as_millis()
+            frequency.as_millis()
         );
 
         Self {
@@ -747,7 +743,7 @@ impl Timestamper {
             byo_sources: HashMap::new(),
             tx,
             rx,
-            timestamp_frequency: config.frequency,
+            timestamp_frequency: frequency,
         }
     }
 
