@@ -58,6 +58,11 @@ Wrap your release notes at the 80 character mark.
 
   Thanks to external contributor [@Posnet](https://github.com/Posnet).
 
+- Add many of the basic
+  [trigonometric functions](/sql/functions/#trigonometric-func).
+
+  Thanks again to external contributor [@andrioni](https://github.com/andrioni).
+
 - Multipartition Kafka sinks with consistency enabled will create single-partition
   consistency topics.
 - **Breaking change.** Change the behavior of the

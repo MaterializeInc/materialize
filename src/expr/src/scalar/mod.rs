@@ -729,6 +729,7 @@ pub enum EvalError {
     Parse(ParseError),
     ParseHex(ParseHexError),
     Internal(String),
+    InfinityOutOfDomain(String),
 }
 
 impl fmt::Display for EvalError {
@@ -786,6 +787,9 @@ impl fmt::Display for EvalError {
             EvalError::Parse(e) => e.fmt(f),
             EvalError::ParseHex(e) => e.fmt(f),
             EvalError::Internal(s) => write!(f, "internal error: {}", s),
+            EvalError::InfinityOutOfDomain(s) => {
+                write!(f, "function {} is only defined for finite arguments", s)
+            }
         }
     }
 }
