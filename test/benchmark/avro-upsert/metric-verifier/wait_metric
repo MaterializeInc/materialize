@@ -18,6 +18,7 @@ import sys
 import time
 import typing
 import urllib
+import uuid
 
 import avro.schema
 import avro.io
@@ -28,7 +29,6 @@ import requests
 
 
 SCHEMAS_DIRECTORY = "/usr/share/benchmarks/schemas"
-SCHEMAS_DIRECTORY = "schemas"
 
 
 class Metric:
@@ -36,7 +36,6 @@ class Metric:
     def __init__(self, topic_name: str, key_schema: str, value_schema: str):
         self.topic_name = topic_name
         self.key_schema = avro.schema.parse(key_schema)
-        print(value_schema)
         self.value_schema = avro.schema.parse(value_schema)
 
         # Namespace for both schemas should be the name of the topic
@@ -53,13 +52,14 @@ class Metric:
 
     def encode_value(self, metric_value: typing.Any) -> bytes:
         buf = io.BytesIO()
-        self.value_writer.write(metric_key, avro.io.BinaryEncoder(buf))
+        self.value_writer.write(metric_value, avro.io.BinaryEncoder(buf))
         return buf.getvalue()
 
 
 class BenchmarkMetrics:
 
-    def __init__(self, schema_directory: str):
+    def __init__(self, args: argparse.Namespace, schema_directory: str):
+        self.args = args
         self.schema_directory = schema_directory
         self.metrics: typing.Dict[str, Metric] = {}
 
@@ -70,18 +70,38 @@ class BenchmarkMetrics:
             key_schema = pathlib.Path(topic_dir, 'key-schema.avsc').read_text().strip()
             value_schema = pathlib.Path(topic_dir, 'value-schema.avsc').read_text().strip()
             self.metrics[topic_name] = Metric(topic_name, key_schema, value_schema)
-            self.update_csr(args, topic_name, key_schema, value_schema)
+            self.update_csr(topic_name, key_schema, value_schema)
 
-    def update_csr(self, args: argparse.Namespace, topic: str, key_schema: str, value_schema: str) -> None:
+    def write_metric(self, topic: str, key: typing.Any, value: typing.Any) -> None:
+        """Write the metric to Kafka."""
+
+        # TODO: Create the topic, if it doesn't exist, and configure schema validation using CSR
+        producer = kafka.KafkaProducer(
+                            bootstrap_servers=[f"{self.args.kafka_host}:{self.args.kafka_port}"],
+                            retries=3,
+                            key_serializer=self.metrics[topic].encode_key,
+                            value_serializer=self.metrics[topic].encode_value,
+                        )
+
+        def on_error(excp: Exception) -> None:
+            print(f"ERROR: Failed to send message {excp}")
+            sys.exit(1)
+
+        producer.send(topic, key=key, value=value)
+        producer.flush()
+
+
+    def update_csr(self, topic: str, key_schema: str, value_schema: str) -> None:
         """Write our JSON schema definition to schema registry."""
 
         schemas = {f"{topic}-key": key_schema,
                    f"{topic}-value": value_schema}
 
+        # TODO: Query CSR to get the current version of the schema and bail if it doesn't match
         headers = {"Content-Type": "application/vnd.schemaregistry.v1+json"}
         for schema_name, schema in schemas.items():
             response = requests.post(
-                f"http://{args.csr_host}:{args.csr_port}/subjects/{schema_name}/versions",
+                f"http://{self.args.csr_host}:{self.args.csr_port}/subjects/{schema_name}/versions",
                 json={"schema": schema},
                 headers=headers,
             )
@@ -97,16 +117,16 @@ def run(args: argparse.Namespace) -> int:
     start = dateparser.parse('now')
     dashboard_start = dateparser.parse('30 seconds ago')
 
-    metrics = BenchmarkMetrics(SCHEMAS_DIRECTORY)
+    metrics = BenchmarkMetrics(args, SCHEMAS_DIRECTORY)
     metrics.load_schemas(args)
 
     try:
         return wait_metric(args)
     finally:
-        record_results(args, topic_name, start, dashboard_start)
+        record_results(args, metrics, start, dashboard_start)
 
 
-def record_results(args: argparse.Namespace, start: datetime.datetime, dashboard_start: datetime.datetime):
+def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: datetime.datetime, dashboard_start: datetime.datetime):
     """Write the results of this benchmark to the Kafka topic"""
 
     # Create parameters to see a dashboard with the metrics from this benchmark run
@@ -120,21 +140,20 @@ def record_results(args: argparse.Namespace, start: datetime.datetime, dashboard
              })
     dashboard_url = urllib.parse.urlunparse(('http', args.grafana_location, path, '', query, ''))
 
-    key = encode_key(args.benchmark_id)
-    value = encode_value({"start_ms": start.timestamp() * 1000,
-               "end_ms": dateparser.parse('now').timestamp() *  1000,
-               "dashboard_url": dashboard_url
-              })
+    metrics.write_metric('dev.mtrlz.benchmarks.results.v0',
+                         {"benchmark_id": args.benchmark_id},
+                         {"start_ms": int(start.timestamp()) * 1000,
+                          "end_ms": int(dateparser.parse('now').timestamp()) *  1000,
+                          "dashboard_url": dashboard_url
+                        })
 
 
-    producer.send(kafka_topic, key=key, value=value)
-    producer.flush()
     print(f'Grafana URL: {dashboard_url}')
 
 
 def wait_metric(args: argparse.Namespace) -> int:
     """Wait for the given metric, returning desired exit code (0 is success)."""
-    prom = prometheus_api_client.PrometheusConnect(f'http://{args.host}:{args.port}')
+    prom = prometheus_api_client.PrometheusConnect(f'http://{args.prometheus_host}:{args.prometheus_port}')
     time_so_far = 0
     start = int(time.monotonic())
     while time_so_far < args.timeout_seconds:
@@ -176,7 +195,8 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--benchmark-id",
-        type=int,
+        type=str,
+        default=str(uuid.uuid4()),
         help="Unique identifier that identifies this benchmark",
     )
 
@@ -188,7 +208,7 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--kafkahost",
+        "--kafka-host",
         help="Name of the kafka broker",
         type=str,
         default="kafka",

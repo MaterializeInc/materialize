@@ -5,7 +5,7 @@
     "fields": [
      {
        "name": "benchmark_id",
-       "type": "long"
+       "type": "string"
      }
     ]
 }
