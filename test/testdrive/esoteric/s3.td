@@ -21,7 +21,7 @@ b1
 b2
 b3
 
-$ set queue-name=knots-${testdrive.seed}
+$ set queue-name=materialize-ci-notifications-${testdrive.seed}
 
 $ s3-add-notifications bucket=${bucket} queue=${queue-name}
 
@@ -143,8 +143,10 @@ $ s3-put-object bucket=${bucket} key=logs/2021/01/01/frontend.log
 12/31/2020:23:55:59 99.99.44.44 Python/Requests_22
 
 $ set otherbucket=materialize-ci-td-other-${testdrive.seed}
+$ set otherqueue=materialize-ci-other-${testdrive.seed}
 
 $ s3-create-bucket bucket=${otherbucket}
+$ s3-add-notifications bucket=${otherbucket} queue=${otherqueue}
 
 $ s3-put-object bucket=${otherbucket} key=short/c
 c1
@@ -202,7 +204,7 @@ d
 # S3 has a very loose idea of how fast items should show up:
 # > Typically, event notifications are delivered in seconds but can sometimes take a minute or longer.
 # https://docs.aws.amazon.com/AmazonS3/latest/userguide/NotificationHowTo.html
-$ set-sql-timeout duration=1minutes
+$ set-sql-timeout duration=32seconds
 
 > SELECT text FROM s3_scan_notifications ORDER BY text;
 a1
@@ -218,27 +220,15 @@ d
 
 # check just pulling SQS
 
-# ensure that the old source doesn't read the notification queue
-#
-# We need to ensure that the tokio subsystem gets around to (tokio) polling the
-# SQS reader, to allow it to shut down and stop listenting to SQS messages. The
-# SQS reader isn't part of the timely/dd infrastructure, it's not even really
-# exposed to the coordinator, so there is no way to observe whether or not it
-# is shut down with the current infrastructure.
-#
-# Conversation about making this observable happened here:
-# https://github.com/MaterializeInc/materialize/pull/5723#discussion_r574264439
-$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
-
 # This section fails in localstack, but succeeds in AWS/CI
-$ s3-put-object bucket=${bucket} key=short/e
-fails
-in
-localstack
+$ s3-put-object bucket=${otherbucket} key=short/e
+e1
+e2
+e3
 
 > CREATE MATERIALIZED SOURCE s3_notifications
-  FROM S3 OBJECTS FROM SQS NOTIFICATIONS '${queue-name}'
-  MATCHING 'short/*'
+  FROM S3 OBJECTS FROM SQS NOTIFICATIONS '${otherqueue}'
+  MATCHING 'short/e'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -249,6 +239,6 @@ localstack
   FORMAT TEXT;
 
 > SELECT text FROM s3_notifications ORDER BY text;
-fails
-in
-localstack
+e1
+e2
+e3
