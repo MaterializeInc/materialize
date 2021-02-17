@@ -2797,7 +2797,9 @@ fn find_trivial_column_equivalences(expr: &HirScalarExpr) -> Vec<(usize, usize)>
                     }),
                 ) = (&**expr1, &**expr2)
                 {
-                    equivalences.push((*l, *r));
+                    if l != r {
+                        equivalences.push((*l, *r));
+                    }
                 }
             }
             CallBinary {

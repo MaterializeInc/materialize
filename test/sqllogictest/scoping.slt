@@ -33,6 +33,12 @@ query I
 SELECT t1.a FROM t1 JOIN (t2 JOIN t3 ON t2.a = t3.a) ON t1.a = t2.a GROUP BY t3.a
 ----
 
+# Ensure that reflexive equality expressions do not cause the specified column
+# to become unnameable. See #5765.
+query I
+SELECT t1.a FROM t1 JOIN t2 ON t1.a = t1.a GROUP BY t1.a
+----
+
 # This works in PostgreSQL.
 query I
 SELECT t1.a FROM t1 NATURAL JOIN t2
