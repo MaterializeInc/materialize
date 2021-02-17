@@ -84,14 +84,18 @@ struct Args {
     workers: WorkerCount,
     /// Log Timely logging itself.
     #[structopt(long, hidden = true)]
-    debug_timely_logging: bool,
+    debug_introspection: bool,
 
     // === Performance tuning parameters. ===
-    /// Granularity of dataflow logs.
+    /// The frequency at which to update introspection sources.
     ///
-    /// Set to "off" to disable dataflow logging.
-    #[structopt(short = "l", long, env = "MZ_LOGGING_GRANULARITY", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1s")]
-    logging_granularity: OptionalDuration,
+    /// The introspection sources are the built-in sources in the mz_catalog
+    /// schema, like mz_scheduling_elapsed, that reflect the internal state of
+    /// Materialize's dataflow engine.
+    ///
+    /// Set to "off" to disable introspection.
+    #[structopt(long, env = "MZ_INTROSPECTION_FREQUENCY", parse(try_from_str = parse_optional_duration), value_name = "FREQUENCY", default_value = "1s")]
+    introspection_frequency: OptionalDuration,
     /// How much historical detail to maintain in arrangements.
     ///
     /// Set to "off" to disable logical compaction.
@@ -276,15 +280,17 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     }
 
     // Configure Timely and Differential workers.
-    let log_logging = args.debug_timely_logging;
+    let log_logging = args.debug_introspection;
     let logging = args
-        .logging_granularity
+        .introspection_frequency
         .map(|granularity| coord::LoggingConfig {
             granularity,
             log_logging,
         });
     if log_logging && logging.is_none() {
-        bail!("cannot specify --debug-timely-logging and --logging-granularity=off simultaneously");
+        bail!(
+            "cannot specify --debug-introspection and --introspection-frequency=off simultaneously"
+        );
     }
 
     // Configure connections.
