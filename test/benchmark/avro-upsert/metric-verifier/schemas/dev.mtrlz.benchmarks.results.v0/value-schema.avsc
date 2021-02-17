@@ -1,7 +1,7 @@
 {
     "name": "value",
     "type" : "record",
-    "namespace": "dev.mtrlz.benchmarks.results.0",
+    "namespace": "dev.mtrlz.benchmarks.results.v0",
     "fields": [
      {
        "name": "start_ms",
@@ -13,7 +13,7 @@
      },
      {
        "name": "dashboard_url",
-       "type": "str"
+       "type": "string"
      }
     ]
 }

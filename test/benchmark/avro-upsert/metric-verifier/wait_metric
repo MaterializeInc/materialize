@@ -12,15 +12,84 @@
 import argparse
 import dateparser
 import datetime
+import io
+import pathlib
 import sys
 import time
+import typing
 import urllib
 
+import avro.schema
+import avro.io
 import kafka  # type: ignore
 import prometheus_api_client
 import prometheus_api_client.utils
+import requests
+
 
 SCHEMAS_DIRECTORY = "/usr/share/benchmarks/schemas"
+SCHEMAS_DIRECTORY = "schemas"
+
+
+class Metric:
+
+    def __init__(self, topic_name: str, key_schema: str, value_schema: str):
+        self.topic_name = topic_name
+        self.key_schema = avro.schema.parse(key_schema)
+        print(value_schema)
+        self.value_schema = avro.schema.parse(value_schema)
+
+        # Namespace for both schemas should be the name of the topic
+        assert self.key_schema.namespace == self.value_schema.namespace
+        assert self.topic_name == self.key_schema.namespace
+
+        self.key_writer = avro.io.DatumWriter(self.key_schema)
+        self.value_writer = avro.io.DatumWriter(self.value_schema)
+
+    def encode_key(self, metric_key: typing.Any) -> bytes:
+        buf = io.BytesIO()
+        self.key_writer.write(metric_key, avro.io.BinaryEncoder(buf))
+        return buf.getvalue()
+
+    def encode_value(self, metric_value: typing.Any) -> bytes:
+        buf = io.BytesIO()
+        self.value_writer.write(metric_key, avro.io.BinaryEncoder(buf))
+        return buf.getvalue()
+
+
+class BenchmarkMetrics:
+
+    def __init__(self, schema_directory: str):
+        self.schema_directory = schema_directory
+        self.metrics: typing.Dict[str, Metric] = {}
+
+    def load_schemas(self, args: argparse.Namespace) -> None:
+        """Read schemas from disk and update schema registry as well."""
+        for topic_dir in pathlib.Path(self.schema_directory).iterdir():
+            topic_name = topic_dir.name
+            key_schema = pathlib.Path(topic_dir, 'key-schema.avsc').read_text().strip()
+            value_schema = pathlib.Path(topic_dir, 'value-schema.avsc').read_text().strip()
+            self.metrics[topic_name] = Metric(topic_name, key_schema, value_schema)
+            self.update_csr(args, topic_name, key_schema, value_schema)
+
+    def update_csr(self, args: argparse.Namespace, topic: str, key_schema: str, value_schema: str) -> None:
+        """Write our JSON schema definition to schema registry."""
+
+        schemas = {f"{topic}-key": key_schema,
+                   f"{topic}-value": value_schema}
+
+        headers = {"Content-Type": "application/vnd.schemaregistry.v1+json"}
+        for schema_name, schema in schemas.items():
+            response = requests.post(
+                f"http://{args.csr_host}:{args.csr_port}/subjects/{schema_name}/versions",
+                json={"schema": schema},
+                headers=headers,
+            )
+
+            response.raise_for_status()
+            if args.verbose:
+                print(f"Wrote schema for {schema_name}, subject_id {response.json()['id']}")
+
 
 def run(args: argparse.Namespace) -> int:
     """Wait for the query to settle or timeout and then dump ingest metrics."""
@@ -28,13 +97,8 @@ def run(args: argparse.Namespace) -> int:
     start = dateparser.parse('now')
     dashboard_start = dateparser.parse('30 seconds ago')
 
-    # Parse topic name from the schema files ("namespace")
-    topic = None
-    for schema_file in pathlib.Path(SCHEMAS_DIRECTORY).glob('*.avsc'):
-        topic_name = set_schema(args, schema_file)
-        if topic:
-            assert topic_name == topic
-        topic = topic_name
+    metrics = BenchmarkMetrics(SCHEMAS_DIRECTORY)
+    metrics.load_schemas(args)
 
     try:
         return wait_metric(args)
@@ -66,26 +130,6 @@ def record_results(args: argparse.Namespace, start: datetime.datetime, dashboard
     producer.send(kafka_topic, key=key, value=value)
     producer.flush()
     print(f'Grafana URL: {dashboard_url}')
-
-
-def set_schema(args: argparse.Namespace, schema_file: pathlib.Path) -> None:
-    """Write our JSON schema definition to schema registry."""
-
-    url = f"http://{args.schema_registry}:{args.schema_registry_port/subjects/{schema_name}/versions"
-    headers = {"Content-Type": "application/vnd.schemaregistry.v1+json"}
-    schema = schema_file.read_text().strip()
-    response = requests.post(
-        url,
-        json={"schema": schema},
-        headers=headers,
-    )
-
-    response.raise_for_status()
-    if not response.json()["id"] == subject_id:
-        print(f"FATAL: failed to write schema to schema registry: {url}")
-        sys.exit(1)
-
-    return json.loads(schema)["namespace"]
 
 
 def wait_metric(args: argparse.Namespace) -> int:
@@ -154,11 +198,11 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--schema-registry", help="Hostname of the Kafka schema registry", type=str,
+        "--csr-host", help="Hostname of the schema registry", type=str,
         default="schema-registry"
     )
     parser.add_argument(
-        "--schema-registry-port", help="Port that schema registry is listening on", type=int,
+        "--csr-port", help="Port that schema registry is listening on", type=int,
         default=8081
     )
 
