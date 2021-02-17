@@ -112,32 +112,41 @@ where
                     ) in vector.drain(..)
                     {
                         if key.is_empty() {
-                            error!("{}", "Encountered empty key");
+                            error!("Encountered empty key for value {:?}", new_value);
                             continue;
                         }
-                        let entry = to_send
-                            .entry(time)
-                            .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
-                            .1
-                            .entry(key)
-                            .or_insert_with(Default::default);
 
-                        let new_entry = SourceData {
-                            value: new_value,
-                            position: new_position,
-                            upstream_time_millis: new_upstream_time_millis,
-                        };
-
-                        // if the time is equal, toss out the row with the
-                        // lower offset
                         if let Some(new_offset) = new_position {
+                            let entry = to_send
+                                .entry(time)
+                                .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
+                                .1
+                                .entry(key)
+                                .or_insert_with(Default::default);
+
+                            let new_entry = SourceData {
+                                value: new_value,
+                                position: new_position,
+                                upstream_time_millis: new_upstream_time_millis,
+                            };
+
                             if let Some(offset) = entry.position {
+                                // If the time is equal, toss out the row with the
+                                // lower offset
                                 if offset < new_offset {
                                     *entry = new_entry;
                                 }
                             } else {
+                                // If there was not a previous entry, we'll have
+                                // inserted a blank default value, and the
+                                // offset would be none.
+                                // Just insert new entry into the hashmap.
                                 *entry = new_entry;
                             }
+                        } else {
+                            // This case should be unreachable because kafka
+                            // records should always come with an offset.
+                            error!("Encountered row with empty offset {:?}", key);
                         }
                     }
                 });
@@ -154,8 +163,7 @@ where
                                     let decoded_value = if data.value.is_empty() {
                                         Ok(None)
                                     } else {
-                                        match value_decoder_state
-                                        .decode_upsert_value(
+                                        match value_decoder_state.decode_upsert_value(
                                             &data.value,
                                             data.position,
                                             data.upstream_time_millis,
@@ -170,7 +178,7 @@ where
                                                     Ok(None)
                                                 }
                                             }
-                                            Err(err) => Err(err)
+                                            Err(err) => Err(err),
                                         }
                                     };
                                     if let Ok(decoded_value) = decoded_value {

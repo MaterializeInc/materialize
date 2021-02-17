@@ -466,53 +466,54 @@ where
 
                     collection = collection2.as_collection();
                     err_collection = err_collection.concat(&errors.as_collection());
-
-                    // Apply `as_of` to each timestamp.
-                    match envelope {
-                        SourceEnvelope::Upsert(_) => {}
-                        _ => {
-                            let as_of_frontier1 = self.as_of_frontier.clone();
-                            collection = collection
-                                .inner
-                                .map_in_place(move |(_, time, _)| {
-                                    time.advance_by(as_of_frontier1.borrow())
-                                })
-                                .as_collection();
-
-                            let as_of_frontier2 = self.as_of_frontier.clone();
-                            err_collection = err_collection
-                                .inner
-                                .map_in_place(move |(_, time, _)| {
-                                    time.advance_by(as_of_frontier2.borrow())
-                                })
-                                .as_collection();
-                        }
-                    }
-
-                    let get = MirRelationExpr::Get {
-                        id: Id::BareSource(src_id),
-                        typ: src.bare_desc.typ().clone(),
-                    };
-                    // Introduce the stream by name, as an unarranged collection.
-                    self.collections
-                        .insert(get.clone(), (collection, err_collection));
-
-                    let mut expr = src.optimized_expr.0;
-                    expr.visit_mut(&mut |node| {
-                        if let MirRelationExpr::Get {
-                            id: Id::LocalBareSource,
-                            ..
-                        } = node
-                        {
-                            *node = get.clone()
-                        }
-                    });
-
-                    // Do whatever envelope processing is required.
-                    self.ensure_rendered(&expr, scope, scope.index());
-                    let new_get = MirRelationExpr::global_get(src_id, expr.typ());
-                    self.clone_from_to(&expr, &new_get);
                 };
+
+                // Apply `as_of` to each timestamp.
+                match envelope {
+                    SourceEnvelope::Upsert(_) => {}
+                    _ => {
+                        let as_of_frontier1 = self.as_of_frontier.clone();
+                        collection = collection
+                            .inner
+                            .map_in_place(move |(_, time, _)| {
+                                time.advance_by(as_of_frontier1.borrow())
+                            })
+                            .as_collection();
+
+                        let as_of_frontier2 = self.as_of_frontier.clone();
+                        err_collection = err_collection
+                            .inner
+                            .map_in_place(move |(_, time, _)| {
+                                time.advance_by(as_of_frontier2.borrow())
+                            })
+                            .as_collection();
+                    }
+                }
+
+                let get = MirRelationExpr::Get {
+                    id: Id::BareSource(src_id),
+                    typ: src.bare_desc.typ().clone(),
+                };
+                // Introduce the stream by name, as an unarranged collection.
+                self.collections
+                    .insert(get.clone(), (collection, err_collection));
+
+                let mut expr = src.optimized_expr.0;
+                expr.visit_mut(&mut |node| {
+                    if let MirRelationExpr::Get {
+                        id: Id::LocalBareSource,
+                        ..
+                    } = node
+                    {
+                        *node = get.clone()
+                    }
+                });
+
+                // Do whatever envelope processing is required.
+                self.ensure_rendered(&expr, scope, scope.index());
+                let new_get = MirRelationExpr::global_get(src_id, expr.typ());
+                self.clone_from_to(&expr, &new_get);
+
                 let token = Rc::new(capability);
                 self.source_tokens.insert(src_id, token.clone());
 
