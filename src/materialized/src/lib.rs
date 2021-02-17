@@ -25,11 +25,10 @@ use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use build_info::BuildInfo;
 use coord::{CacheConfig, LoggingConfig};
-use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 
 use crate::mux::Mux;
 
@@ -161,11 +160,6 @@ pub async fn serve(
     let start_time = Instant::now();
     let workers = config.workers;
 
-    // Construct shared channels for SQL command and result exchange, and
-    // dataflow command and result exchange.
-    let (cmdq_tx, cmd_rx) = mpsc::unbounded_channel();
-    let coord_client = coord::Client::new(cmdq_tx);
-
     // Validate TLS configuration, if present.
     let (pgwire_tls, http_tls) = match &config.tls {
         None => (None, None),
@@ -208,6 +202,24 @@ pub async fn serve(
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
 
+    // Initialize coordinator.
+    let (coord_handle, coord_client) = coord::serve(
+        coord::Config {
+            workers,
+            timely_worker: config.timely_worker,
+            symbiosis_url: config.symbiosis_url.as_deref(),
+            logging: config.logging,
+            data_directory: &config.data_directory,
+            timestamp_frequency: config.timestamp_frequency,
+            cache: config.cache,
+            logical_compaction_window: config.logical_compaction_window,
+            experimental_mode: config.experimental_mode,
+            build_info: &BUILD_INFO,
+        },
+        runtime,
+    )
+    .await?;
+
     // Launch task to serve connections.
     //
     // The lifetime of this task is controlled by a trigger that activates on
@@ -244,40 +256,19 @@ pub async fn serve(
             .await;
     });
 
-    // Initialize coordinator.
-    let (coord_thread, cluster_id) = coord::serve(
-        coord::Config {
-            cmd_rx,
-            workers,
-            timely_worker: config.timely_worker,
-            symbiosis_url: config.symbiosis_url.as_deref(),
-            logging: config.logging,
-            data_directory: &config.data_directory,
-            timestamp: coord::TimestampConfig {
-                frequency: config.timestamp_frequency,
-            },
-            cache: config.cache,
-            logical_compaction_window: config.logical_compaction_window,
-            experimental_mode: config.experimental_mode,
-            build_info: &BUILD_INFO,
-        },
-        runtime,
-    )
-    .await?;
-
     // Start a task that checks for the latest version and prints a warning if
     // it finds a different version than currently running.
     if let Some(telemetry_url) = config.telemetry_url {
         tokio::spawn(version_check::check_version_loop(
             telemetry_url,
-            cluster_id.to_string(),
+            coord_handle.cluster_id().to_string(),
         ));
     }
 
     Ok(Server {
         local_addr,
         _drain_trigger: drain_trigger,
-        _coord_thread: coord_thread.join_on_drop(),
+        _coord_handle: coord_handle,
     })
 }
 
@@ -286,7 +277,7 @@ pub struct Server {
     local_addr: SocketAddr,
     // Drop order matters for these fields.
     _drain_trigger: oneshot::Sender<()>,
-    _coord_thread: JoinOnDropHandle<()>,
+    _coord_handle: coord::Handle,
 }
 
 impl Server {

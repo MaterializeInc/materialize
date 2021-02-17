@@ -58,7 +58,7 @@ use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
 use crate::plan::expr::{ColumnRef, HirScalarExpr, JoinKind};
-use crate::plan::query::QueryLifetime;
+use crate::plan::query::{resolve_names_data_type, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
     self, plan_utils, query, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan,
@@ -164,7 +164,8 @@ pub fn plan_create_table(
     let mut defaults = Vec::with_capacity(columns.len());
 
     for c in columns {
-        let ty = plan::scalar_type_from_sql(scx, &c.data_type)?;
+        let (aug_data_type, _ids) = resolve_names_data_type(scx, c.data_type.clone())?;
+        let ty = plan::scalar_type_from_sql(scx, &aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
         for option in &c.options {
@@ -187,9 +188,9 @@ pub fn plan_create_table(
 
     let temporary = *temporary;
     let name = if temporary {
-        scx.allocate_temporary_name(normalize::object_name(name.to_owned())?)
+        scx.allocate_temporary_name(normalize::unresolved_object_name(name.to_owned())?)
     } else {
-        scx.allocate_name(normalize::object_name(name.to_owned())?)
+        scx.allocate_name(normalize::unresolved_object_name(name.to_owned())?)
     };
     let desc = RelationDesc::new(typ, names.into_iter().map(Some));
 
@@ -209,7 +210,7 @@ pub fn plan_create_table(
 
 pub fn describe_create_source(
     _: &StatementContext,
-    _: CreateSourceStatement,
+    _: CreateSourceStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -268,7 +269,7 @@ fn plan_source_envelope(
 
 pub fn plan_create_source(
     scx: &StatementContext,
-    stmt: CreateSourceStatement,
+    stmt: CreateSourceStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let CreateSourceStatement {
         name,
@@ -280,7 +281,7 @@ pub fn plan_create_source(
         if_not_exists,
         materialized,
     } = &stmt;
-    let get_encoding = |format: &Option<Format>| {
+    let get_encoding = |format: &Option<Format<Raw>>| {
         let format = format
             .as_ref()
             .ok_or_else(|| anyhow!("Source format must be specified"))?;
@@ -741,7 +742,7 @@ pub fn plan_create_source(
 
     let if_not_exists = *if_not_exists;
     let materialized = *materialized;
-    let name = scx.allocate_name(normalize::object_name(name.clone())?);
+    let name = scx.allocate_name(normalize::unresolved_object_name(name.clone())?);
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
     let (expr, column_names) = plan_source_envelope(&bare_desc, &envelope, post_transform_key);
@@ -800,9 +801,9 @@ pub fn plan_create_view(
         unsupported!("WITH options");
     }
     let name = if *temporary {
-        scx.allocate_temporary_name(normalize::object_name(name.to_owned())?)
+        scx.allocate_temporary_name(normalize::unresolved_object_name(name.to_owned())?)
     } else {
-        scx.allocate_name(normalize::object_name(name.to_owned())?)
+        scx.allocate_name(normalize::unresolved_object_name(name.to_owned())?)
     };
     let (mut relation_expr, mut desc, finishing) =
         query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
@@ -846,7 +847,7 @@ pub fn plan_create_view(
 
 #[allow(clippy::too_many_arguments)]
 fn kafka_sink_builder(
-    format: Option<Format>,
+    format: Option<Format<Raw>>,
     with_options: &mut BTreeMap<String, Value>,
     broker: String,
     topic_prefix: String,
@@ -945,7 +946,7 @@ fn kafka_sink_builder(
 }
 
 fn avro_ocf_sink_builder(
-    format: Option<Format>,
+    format: Option<Format<Raw>>,
     path: String,
     file_name_suffix: String,
     value_desc: RelationDesc,
@@ -998,7 +999,7 @@ pub fn plan_create_sink(
         Some(Envelope::None) => unsupported!("\"ENVELOPE NONE\" sinks"),
         Some(Envelope::Upsert(Some(_))) => unsupported!("Upsert sinks with custom key encodings"),
     };
-    let name = scx.allocate_name(normalize::object_name(name)?);
+    let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     let from = scx.resolve_item(from)?;
     let suffix = format!(
         "{}-{}",
@@ -1226,14 +1227,14 @@ pub fn plan_create_index(
 
 pub fn describe_create_type(
     _: &StatementContext,
-    _: CreateTypeStatement,
+    _: CreateTypeStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
 
 pub fn plan_create_type(
     scx: &StatementContext,
-    stmt: CreateTypeStatement,
+    stmt: CreateTypeStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, Statement::CreateType(stmt.clone()))?;
     let CreateTypeStatement {
@@ -1263,7 +1264,7 @@ pub fn plan_create_type(
                             name
                         )
                     }
-                    query::canonicalize_type_name_internal(&name)
+                    name
                 }
                 d => bail!(
                     "CREATE TYPE ... AS {}option {} can only use named data types, but \
@@ -1278,7 +1279,9 @@ pub fn plan_create_type(
         };
         let item = scx
             .catalog
-            .resolve_item(&normalize::object_name(item_name.clone())?)?;
+            .resolve_item(&normalize::unresolved_object_name(
+                item_name.name().clone(),
+            )?)?;
         let item_id = item.id();
         if scx
             .catalog
@@ -1302,7 +1305,7 @@ pub fn plan_create_type(
         )
     }
 
-    let name = scx.allocate_name(normalize::object_name(name)?);
+    let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     if scx.catalog.item_exists(&name) {
         bail!("catalog item {} already exists", name.to_string().quoted());
     }

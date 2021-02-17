@@ -53,16 +53,16 @@ impl AstDisplay for Schema {
 impl_display!(Schema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum AvroSchema {
+pub enum AvroSchema<T: AstInfo> {
     CsrUrl {
         url: String,
         seed: Option<CsrSeed>,
-        with_options: Vec<SqlOption>,
+        with_options: Vec<SqlOption<T>>,
     },
     Schema(Schema),
 }
 
-impl AstDisplay for AvroSchema {
+impl<T: AstInfo> AstDisplay for AvroSchema<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Self::CsrUrl {
@@ -87,7 +87,7 @@ impl AstDisplay for AvroSchema {
         }
     }
 }
-impl_display!(AvroSchema);
+impl_display_t!(AvroSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeed {
@@ -111,9 +111,9 @@ impl AstDisplay for CsrSeed {
 impl_display!(CsrSeed);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Format {
+pub enum Format<T: AstInfo> {
     Bytes,
-    Avro(AvroSchema),
+    Avro(AvroSchema<T>),
     Protobuf {
         message_name: String,
         schema: Schema,
@@ -129,20 +129,20 @@ pub enum Format {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Envelope {
+pub enum Envelope<T: AstInfo> {
     None,
     Debezium,
-    Upsert(Option<Format>),
+    Upsert(Option<Format<T>>),
     CdcV2,
 }
 
-impl Default for Envelope {
+impl<T: AstInfo> Default for Envelope<T> {
     fn default() -> Self {
         Self::None
     }
 }
 
-impl AstDisplay for Envelope {
+impl<T: AstInfo> AstDisplay for Envelope<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Self::None => {
@@ -165,9 +165,9 @@ impl AstDisplay for Envelope {
         }
     }
 }
-impl_display!(Envelope);
+impl_display_t!(Envelope);
 
-impl AstDisplay for Format {
+impl<T: AstInfo> AstDisplay for Format<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Self::Bytes => f.write_str("BYTES"),
@@ -212,7 +212,7 @@ impl AstDisplay for Format {
         }
     }
 }
-impl_display!(Format);
+impl_display_t!(Format);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Compression {
@@ -415,7 +415,7 @@ impl_display_t!(TableConstraint);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ColumnDef<T: AstInfo> {
     pub name: Ident,
-    pub data_type: DataType,
+    pub data_type: DataType<T>,
     pub collation: Option<UnresolvedObjectName>,
     pub options: Vec<ColumnOptionDef<T>>,
 }

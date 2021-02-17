@@ -28,6 +28,8 @@ pub enum CoordError {
     DuplicateCursor(String),
     /// An error while evaluating an expression.
     Eval(EvalError),
+    /// The ID allocator exhausted all valid IDs.
+    IdExhaustionError,
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
     /// The named operation cannot be run in a transaction.
@@ -98,6 +100,7 @@ impl fmt::Display for CoordError {
                 write!(f, "cursor {} already exists", name.quoted())
             }
             CoordError::Eval(e) => e.fmt(f),
+            CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
             CoordError::InvalidParameterType(p) => write!(
                 f,
                 "parameter {} requires a {} value",

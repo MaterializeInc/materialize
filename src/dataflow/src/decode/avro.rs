@@ -72,23 +72,20 @@ impl DecoderState for AvroDecoderState {
     }
 
     /// give a session a key-value pair
-    fn give_key_value<'a>(
+    fn decode_upsert_value<'a>(
         &mut self,
-        key: Row,
         bytes: &[u8],
         coord: Option<i64>,
         upstream_time_millis: Option<i64>,
-        session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
-        time: Timestamp,
-    ) {
+    ) -> Result<Option<Row>, String> {
         match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
             Ok(diff_pair) => {
                 self.events_success += 1;
-                session.give((key, diff_pair.after, time));
+                Ok(diff_pair.after)
             }
             Err(err) => {
                 self.events_error += 1;
-                error!("avro deserialization error: {}", err)
+                Err(format!("avro deserialization error: {}", err))
             }
         }
     }

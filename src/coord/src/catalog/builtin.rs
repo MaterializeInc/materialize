@@ -128,6 +128,11 @@ pub struct BuiltinFunc {
     pub inner: &'static sql::func::Func,
 }
 
+pub struct BuiltinRole {
+    pub name: &'static str,
+    pub id: i64,
+}
+
 // Builtin definitions below. Keep these sorted by global ID, and ensure you
 // add new builtins to the `BUILTINS` map.
 //
@@ -1185,6 +1190,11 @@ pub const PG_ENUM: BuiltinView = BuiltinView {
     needs_logs: false,
 };
 
+pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
+    name: "mz_system",
+    id: -1,
+};
+
 lazy_static! {
     pub static ref BUILTINS: BTreeMap<GlobalId, Builtin> = {
         let mut builtins = vec![
@@ -1317,6 +1327,8 @@ lazy_static! {
 
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };
+
+    pub static ref BUILTIN_ROLES: Vec<BuiltinRole> = vec![MZ_SYSTEM];
 }
 
 impl BUILTINS {

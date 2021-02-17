@@ -54,7 +54,16 @@ pub struct Raw;
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum RawName {
     Name(UnresolvedObjectName),
-    Id(u64, UnresolvedObjectName),
+    Id(String, UnresolvedObjectName),
+}
+
+impl RawName {
+    pub fn name(&self) -> &UnresolvedObjectName {
+        match self {
+            RawName::Name(name) => name,
+            RawName::Id(_, name) => name,
+        }
+    }
 }
 
 impl AstDisplay for RawName {
@@ -62,7 +71,7 @@ impl AstDisplay for RawName {
         match self {
             RawName::Name(o) => f.write_node(o),
             RawName::Id(id, o) => {
-                f.write_str(format!("[{} AS", id));
+                f.write_str(format!("[{} AS ", id));
                 f.write_node(o);
                 f.write_str("]");
             }
@@ -241,7 +250,7 @@ pub struct Select<T: AstInfo> {
     /// HAVING
     pub having: Option<Expr<T>>,
     /// OPTION
-    pub options: Vec<SqlOption>,
+    pub options: Vec<SqlOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for Select<T> {

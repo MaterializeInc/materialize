@@ -180,15 +180,16 @@ where
     //
     // Note that we have to fix up ryu's formatting in a few cases to match
     // PostgreSQL. PostgreSQL spells out "Infinity" in full, never emits a
-    // trailing ".0", and formats positive exponents as e.g. "1e+10" rather than
-    // "1e10". If we need to speed up float formatting, we can look into forking
-    // ryu and making these edits directly, but for now it doesn't seem worth
-    // it.
+    // trailing ".0", formats positive exponents as e.g. "1e+10" rather than
+    // "1e10", and emits a negative sign for negative zero. If we need to speed
+    // up float formatting, we can look into forking ryu and making these edits
+    // directly, but for now it doesn't seem worth it.
 
     match f.classify() {
         FpCategory::Infinite if f.is_sign_negative() => buf.write_str("-Infinity"),
         FpCategory::Infinite => buf.write_str("Infinity"),
         FpCategory::Nan => buf.write_str("NaN"),
+        FpCategory::Zero if f.is_sign_negative() => buf.write_str("-0"),
         _ => {
             debug_assert!(f.is_finite());
             let mut ryu_buf = ryu::Buffer::new();

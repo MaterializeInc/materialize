@@ -1031,7 +1031,7 @@ fn get_named_columns<'a>(
                 if let Some(named_idx) = named_idx {
                     if !seen_avro_nodes.insert(named_idx) {
                         bail!(
-                            "Recursively defined type in schema: {}",
+                            "Recursive types are not supported: {}",
                             v.get_human_name(schema.root)
                         );
                     }
@@ -1109,7 +1109,7 @@ fn validate_schema_2(
                 if let Some(named_idx) = named_idx {
                     if !seen_avro_nodes.insert(named_idx) {
                         bail!(
-                            "Recursively defined type in schema: {}",
+                            "Recursive types are not supported: {}",
                             f.schema.get_human_name(schema.root)
                         );
                     }
@@ -1134,7 +1134,7 @@ fn validate_schema_2(
             if let Some(named_idx) = named_idx {
                 if !seen_avro_nodes.insert(named_idx) {
                     bail!(
-                        "Recursively defined type in schema: {}",
+                        "Recursive types are not supported: {}",
                         inner.get_human_name(schema.root)
                     );
                 }

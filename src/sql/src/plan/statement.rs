@@ -12,7 +12,7 @@
 //! This module houses the entry points for planning a SQL statement.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 
 use anyhow::bail;
@@ -99,6 +99,7 @@ pub fn describe(
     let scx = StatementContext {
         catalog,
         pcx: &PlanContext::default(),
+        ids: HashSet::new(),
         param_types: Rc::new(RefCell::new(param_types)),
     };
 
@@ -182,6 +183,7 @@ pub fn plan(
     let scx = &StatementContext {
         pcx,
         catalog,
+        ids: HashSet::new(),
         param_types: Rc::new(RefCell::new(param_types)),
     };
 
@@ -268,6 +270,7 @@ impl PartialEq<CatalogItemType> for ObjectType {
 pub struct StatementContext<'a> {
     pub pcx: &'a PlanContext,
     pub catalog: &'a dyn Catalog,
+    pub ids: HashSet<GlobalId>,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     pub param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
@@ -330,7 +333,7 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn resolve_item(&self, name: UnresolvedObjectName) -> Result<&dyn CatalogItem, PlanError> {
-        let name = normalize::object_name(name)?;
+        let name = normalize::unresolved_object_name(name)?;
         Ok(self.catalog.resolve_item(&name)?)
     }
 
@@ -338,7 +341,7 @@ impl<'a> StatementContext<'a> {
         &self,
         name: UnresolvedObjectName,
     ) -> Result<&dyn CatalogItem, PlanError> {
-        let name = normalize::object_name(name)?;
+        let name = normalize::unresolved_object_name(name)?;
         Ok(self.catalog.resolve_function(&name)?)
     }
 

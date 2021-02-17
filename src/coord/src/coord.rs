@@ -24,7 +24,7 @@ use std::mem;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, Context};
@@ -32,12 +32,12 @@ use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
+use rand::Rng;
 use timely::communication::WorkerGuards;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
-use tokio::runtime::{Handle, Runtime};
+use tokio::runtime::{Handle as TokioHandle, Runtime};
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use uuid::Uuid;
 
 use build_info::BuildInfo;
 use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
@@ -80,15 +80,16 @@ use crate::catalog::builtin::{
 use crate::catalog::{
     self, Catalog, CatalogItem, Func, Index, SinkConnectorState, Type, TypeInner,
 };
+use crate::client::{Client, Handle};
 use crate::command::{
-    Cancelled, Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
+    Cancelled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::error::CoordError;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::sink_connector;
-use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
+use crate::timestamp::{TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 
 mod arrangement_state;
@@ -131,20 +132,21 @@ pub struct SinkConnectorReady {
     pub result: Result<SinkConnector, CoordError>,
 }
 
+/// Configures dataflow worker logging.
 #[derive(Clone, Debug)]
 pub struct LoggingConfig {
     pub granularity: Duration,
     pub log_logging: bool,
 }
 
+/// Configures a coordinator.
 pub struct Config<'a> {
     pub workers: usize,
     pub timely_worker: timely::WorkerConfig,
-    pub cmd_rx: mpsc::UnboundedReceiver<Command>,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
-    pub timestamp: TimestampConfig,
+    pub timestamp_frequency: Duration,
     pub cache: Option<CacheConfig>,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
@@ -183,9 +185,25 @@ pub struct Coordinator {
     /// TODO(justin): this is a hack, and does not work right with TAIL.
     need_advance: bool,
     transient_id_counter: u64,
-    /// Map from connection id to a tokio::sync::watch sender that can be used to
-    /// signal to the receiver end that a cancel message has been sent.
-    cancel: HashMap<u32, Arc<watch::Sender<Cancelled>>>,
+    /// A map from connection ID to metadata about that connection for all
+    // active connections.
+    active_conns: HashMap<u32, ConnMeta>,
+}
+
+/// Metadata about an active connection.
+struct ConnMeta {
+    /// A watch channel shared with the client to inform the client of
+    /// cancellation requests. The coordinator sets the contained value to
+    /// `Cancelled::Cancelled` whenever it receives a cancellation request that
+    /// targets this connection. It is the client's responsibility to check this
+    /// value when appropriate and to reset the value to
+    /// `Cancelled::NotCancelled` before starting a new operation.
+    cancel_tx: Arc<watch::Sender<Cancelled>>,
+    /// Pgwire specifies that every connection have a 32-bit secret associated
+    /// with it, that is known to both the client and the server. Cancellation
+    /// requests are required to authenticate with the secret of the connection
+    /// that they are targeting.
+    secret_key: u32,
 }
 
 impl Coordinator {
@@ -573,12 +591,28 @@ impl Coordinator {
                     .resolve_database(catalog.default_database())
                     .is_err()
                 {
-                    messages.push(StartupMessage::UnknownSessionDatabase);
+                    messages.push(StartupMessage::UnknownSessionDatabase(
+                        catalog.default_database().into(),
+                    ));
                 }
 
-                self.cancel.insert(session.conn_id(), cancel_tx);
+                let secret_key = rand::thread_rng().gen();
 
-                ClientTransmitter::new(tx).send(Ok(messages), session)
+                self.active_conns.insert(
+                    session.conn_id(),
+                    ConnMeta {
+                        cancel_tx,
+                        secret_key,
+                    },
+                );
+
+                ClientTransmitter::new(tx).send(
+                    Ok(StartupResponse {
+                        messages,
+                        secret_key,
+                    }),
+                    session,
+                )
             }
 
             Command::Execute {
@@ -739,50 +773,6 @@ impl Coordinator {
                 }
             }
 
-            // NoSessionExecute is designed to support a limited set of queries that
-            // run as the system user and are not associated with a user session. Due to
-            // that limitation, they do not support all plans (some of which require side
-            // effects in the session).
-            Command::NoSessionExecute {
-                stmt,
-                params,
-                user,
-                tx,
-            } => {
-                let res = async {
-                    let stmt = sql::pure::purify(stmt).await?;
-                    let catalog = self.catalog.for_sessionless_user(user);
-                    let desc = describe(&catalog, stmt.clone(), &[], None)?;
-                    let pcx = PlanContext::default();
-                    let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
-                    // At time of writing this comment, Peeks use the connection id only for
-                    // logging, so it is safe to reuse the system id, which is the conn_id from
-                    // for_system_session().
-                    let conn_id = catalog.conn_id();
-                    let response = match plan {
-                        Plan::Peek {
-                            source,
-                            when,
-                            finishing,
-                            copy_to,
-                        } => {
-                            self.sequence_peek(conn_id, source, when, finishing, copy_to)
-                                .await?
-                        }
-
-                        Plan::SendRows(rows) => send_immediate_rows(rows),
-
-                        _ => coord_bail!("unsupported plan"),
-                    };
-                    Ok(NoSessionExecuteResponse {
-                        desc: desc.relation_desc,
-                        response,
-                    })
-                }
-                .await;
-                let _ = tx.send(res);
-            }
-
             Command::Declare {
                 name,
                 stmt,
@@ -805,12 +795,21 @@ impl Coordinator {
                 let _ = tx.send(Response { result, session });
             }
 
-            Command::CancelRequest { conn_id } => {
-                self.handle_cancel(conn_id).await;
+            Command::CancelRequest {
+                conn_id,
+                secret_key,
+            } => {
+                self.handle_cancel(conn_id, secret_key).await;
             }
 
-            Command::DumpCatalog { tx } => {
-                let _ = tx.send(self.catalog.dump());
+            Command::DumpCatalog { session, tx } => {
+                // TODO(benesch): when we have RBAC, dumping the catalog should
+                // require superuser permissions.
+
+                let _ = tx.send(Response {
+                    result: Ok(self.catalog.dump()),
+                    session,
+                });
             }
 
             Command::Terminate { mut session } => {
@@ -986,13 +985,20 @@ impl Coordinator {
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
     /// the named `conn_id`.
-    async fn handle_cancel(&mut self, conn_id: u32) {
-        // Tell dataflow to cancel any pending peeks.
-        self.broadcast(SequencedCommand::CancelPeek { conn_id });
+    async fn handle_cancel(&mut self, conn_id: u32, secret_key: u32) {
+        if let Some(conn_meta) = self.active_conns.get(&conn_id) {
+            // If the secret key specified by the client doesn't match the
+            // actual secret key for the target connection, we treat this as a
+            // rogue cancellation request and ignore it.
+            if conn_meta.secret_key != secret_key {
+                return;
+            }
 
-        // Inform the session (if it asks) about the cancellation.
-        if let Some(cancel) = self.cancel.get_mut(&conn_id) {
-            let _ = cancel.send(Cancelled::Cancelled);
+            // Tell dataflow to cancel any pending peeks.
+            self.broadcast(SequencedCommand::CancelPeek { conn_id });
+
+            // Inform the target session (if it asks) about the cancellation.
+            let _ = conn_meta.cancel_tx.send(Cancelled::Cancelled);
         }
     }
 
@@ -1007,7 +1013,7 @@ impl Coordinator {
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
-        self.cancel.remove(&session.conn_id());
+        self.active_conns.remove(&session.conn_id());
     }
 
     // Removes all temporary items created by the specified connection, though
@@ -1579,7 +1585,7 @@ impl Coordinator {
             ),
 
             Plan::StartTransaction => {
-                let session = session.start_transaction();
+                session.start_transaction();
                 tx.send(Ok(ExecuteResponse::StartedTransaction), session)
             }
 
@@ -3322,21 +3328,21 @@ impl Coordinator {
     }
 }
 
-/// Begins coordinating user requests to the dataflow layer based on the
-/// provided configuration. Returns the thread that hosts the coordinator and
-/// the cluster ID.
+/// Serves the coordinator based on the provided configuration.
 ///
-/// To gracefully shut down the coordinator, send a `Message::Shutdown` to the
-/// `cmd_rx` in the configuration, then join on the thread.
+/// For a high-level description of the coordinator, see the [crate
+/// documentation](crate).
+///
+/// Returns a handle to the coordinator and a client to communicate with the
+/// coordinator.
 pub async fn serve(
     Config {
         workers,
         timely_worker,
-        cmd_rx,
         symbiosis_url,
         logging,
         data_directory,
-        timestamp: timestamp_config,
+        timestamp_frequency,
         cache: cache_config,
         logical_compaction_window,
         experimental_mode,
@@ -3346,7 +3352,8 @@ pub async fn serve(
     // `Handle::current().block_in_place()` lands. See:
     // https://github.com/tokio-rs/tokio/pull/3097.
     runtime: Arc<Runtime>,
-) -> Result<(JoinHandle<()>, Uuid), CoordError> {
+) -> Result<(Handle, Client), CoordError> {
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
     let cache_tx = if let Some(cache_config) = &cache_config {
         let (cache_tx, cache_rx) = mpsc::unbounded_channel();
@@ -3384,8 +3391,8 @@ pub async fn serve(
     // Spawn timestamper after any fallible operations so that if bootstrap fails we still
     // tell it to shut down.
     let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-    let mut timestamper = Timestamper::new(&timestamp_config, internal_cmd_tx.clone(), ts_rx);
-    let executor = Handle::current();
+    let mut timestamper = Timestamper::new(timestamp_frequency, internal_cmd_tx.clone(), ts_rx);
+    let executor = TokioHandle::current();
     let timestamper_thread_handle = thread::spawn(move || {
         let _executor_guard = executor.enter();
         timestamper.update()
@@ -3412,7 +3419,7 @@ pub async fn serve(
         last_op_was_read: false,
         need_advance: true,
         transient_id_counter: 1,
-        cancel: HashMap::new(),
+        active_conns: HashMap::new(),
     };
     coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
     if let Some(config) = &logging {
@@ -3430,7 +3437,7 @@ pub async fn serve(
     }
     match coord.bootstrap(initial_catalog_events).await {
         Ok(()) => {
-            let coord = thread::spawn(move || {
+            let thread = thread::spawn(move || {
                 runtime.block_on(coord.serve(
                     internal_cmd_rx,
                     cmd_rx,
@@ -3438,7 +3445,12 @@ pub async fn serve(
                     timestamper_thread_handle,
                 ))
             });
-            Ok((coord, cluster_id))
+            let handle = Handle {
+                cluster_id,
+                _thread: thread.join_on_drop(),
+            };
+            let client = Client::new(cmd_tx);
+            Ok((handle, client))
         }
         Err(e) => {
             // Tell the timestamper thread to shut down.
