@@ -7,12 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-fn main() {
-    protoc::Protoc::new()
-        .serde(true)
-        .include("src/format/protobuf")
-        .input("src/format/protobuf/billing.proto")
-        .input("src/format/protobuf/recursive.proto")
-        .input("src/format/protobuf/simple.proto")
-        .build_script_exec();
+syntax = "proto3";
+
+message Self {
+    Self self = 1;
+}
+
+message Mutual1 {
+    Mutual2 m = 1;
+}
+
+message Mutual2 {
+    Mutual3 m = 1;
+}
+
+message Mutual3 {
+    Mutual1 m = 1;
 }
