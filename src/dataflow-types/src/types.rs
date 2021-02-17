@@ -130,11 +130,15 @@ impl DataflowDesc {
         &mut self,
         id: GlobalId,
         connector: SourceConnector,
+        bare_desc: RelationDesc,
+        optimized_expr: OptimizedMirRelationExpr,
         desc: RelationDesc,
     ) {
         let source_description = SourceDesc {
             connector,
             operators: None,
+            bare_desc,
+            optimized_expr,
             desc,
         };
         self.source_imports.insert(id, source_description);
@@ -276,7 +280,7 @@ impl DataflowDesc {
     pub fn arity_of(&self, id: &GlobalId) -> usize {
         for (source_id, desc) in self.source_imports.iter() {
             if source_id == id {
-                return desc.desc.typ().arity();
+                return desc.arity();
             }
         }
         for (_index_id, (desc, typ)) in self.index_imports.iter() {
@@ -338,10 +342,22 @@ impl DataEncoding {
         Ok(match self {
             DataEncoding::Bytes => key_desc.with_column("data", ScalarType::Bytes.nullable(false)),
             DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
-                avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
-                    .context("validating avro ocf reader schema")?
-                    .into_iter()
-                    .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty))
+                let desc =
+                    avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
+                        .context("validating avro ocf reader schema")?
+                        .into_iter()
+                        .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
+                if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
+                    desc.with_column(
+                        "diff",
+                        ColumnType {
+                            nullable: false,
+                            scalar_type: ScalarType::Int64,
+                        },
+                    )
+                } else {
+                    desc
+                }
             }
             DataEncoding::Avro(AvroEncoding {
                 value_schema,
@@ -353,16 +369,28 @@ impl DataEncoding {
                         .context("validating avro value schema")?
                         .into_iter()
                         .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
-                if let Some(key_schema) = key_schema {
-                    match avro::validate_key_schema(key_schema, &desc) {
-                        Ok(key) => desc.with_key(key),
-                        Err(e) => {
+                let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
+                    avro::validate_key_schema(key_schema, &desc)
+                        .map(Some)
+                        .unwrap_or_else(|e| {
                             warn!("Not using key due to error: {}", e);
-                            desc
-                        }
-                    }
+                            None
+                        })
+                });
+                if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
+                    desc.with_column(
+                        "diff",
+                        ColumnType {
+                            nullable: false,
+                            scalar_type: ScalarType::Int64,
+                        },
+                    )
                 } else {
-                    desc
+                    if let Some(key) = key_schema_indices {
+                        desc.with_key(key)
+                    } else {
+                        desc
+                    }
                 }
             }
             DataEncoding::Protobuf(ProtobufEncoding {
@@ -455,13 +483,15 @@ pub struct SourceDesc {
     /// Optionally, filtering and projection that may optimistically be applied
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
+    pub bare_desc: RelationDesc,
+    pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
 }
 
 impl SourceDesc {
     /// Computes the arity of this source.
     pub fn arity(&self) -> usize {
-        self.desc.arity()
+        self.optimized_expr.0.arity()
     }
 }
 

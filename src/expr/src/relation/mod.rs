@@ -208,6 +208,18 @@ pub enum MirRelationExpr {
         /// Columns to arrange `input` by, in order of decreasing primacy
         keys: Vec<Vec<MirScalarExpr>>,
     },
+    /// Declares that `keys` are primary keys for `input`.
+    /// Should be used *very* sparingly, and only if there's no plausible
+    /// way to derive the key information from the underlying expression.
+    /// The result of declaring a key that isn't actually a key for the underlying expression is undefined.
+    ///
+    /// There is no operator rendered for this IR node; thus, its runtime memory footprint is zero.
+    DeclareKeys {
+        /// The source collection
+        input: Box<MirRelationExpr>,
+        /// The set of columns in the source collection that form a key.
+        keys: Vec<Vec<usize>>,
+    },
 }
 
 impl MirRelationExpr {
@@ -322,10 +334,13 @@ impl MirRelationExpr {
                 exprs: _,
                 demand: _,
             } => {
-                let mut typ = input.typ();
-                typ.column_types.extend(func.output_type().column_types);
+                let mut input_typ = input.typ();
+                input_typ
+                    .column_types
+                    .extend(func.output_type().column_types);
                 // FlatMap can add duplicate rows, so input keys are no longer valid
-                RelationType::new(typ.column_types)
+                let typ = RelationType::new(input_typ.column_types);
+                typ
             }
             MirRelationExpr::Filter { input, .. } => input.typ(),
             MirRelationExpr::Join {
@@ -443,6 +458,7 @@ impl MirRelationExpr {
                 // Important: do not inherit keys of either input, as not unique.
             }
             MirRelationExpr::ArrangeBy { input, .. } => input.typ(),
+            MirRelationExpr::DeclareKeys { input, keys } => input.typ().with_keys(keys.clone()),
         }
     }
 
@@ -793,6 +809,9 @@ impl MirRelationExpr {
             MirRelationExpr::ArrangeBy { input, .. } => {
                 f(input)?;
             }
+            MirRelationExpr::DeclareKeys { input, .. } => {
+                f(input)?;
+            }
         }
         Ok(())
     }
@@ -870,6 +889,9 @@ impl MirRelationExpr {
                 }
             }
             MirRelationExpr::ArrangeBy { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::DeclareKeys { input, .. } => {
                 f(input)?;
             }
         }
@@ -1012,6 +1034,7 @@ impl MirRelationExpr {
             }
             | MirRelationExpr::Negate { input: _ }
             | MirRelationExpr::Threshold { input: _ }
+            | MirRelationExpr::DeclareKeys { input: _, keys: _ }
             | MirRelationExpr::Union { base: _, inputs: _ } => Ok(()),
         }
     }
@@ -1153,6 +1176,14 @@ impl MirRelationExpr {
                 default,
             ))
         })
+    }
+
+    /// Passes the collection through unchanged, but informs the optimizer that `keys` are primary keys.
+    pub fn declare_keys(self, keys: Vec<Vec<usize>>) -> Self {
+        Self::DeclareKeys {
+            input: Box::new(self),
+            keys,
+        }
     }
 }
 

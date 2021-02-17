@@ -19,9 +19,14 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
+use expr::MirRelationExpr;
+use expr::TableFunc;
 use globset::GlobBuilder;
 use itertools::Itertools;
+use log::warn;
 use ore::str::StrExt;
+use repr::ColumnName;
+
 use reqwest::Url;
 
 use dataflow_types::{
@@ -52,11 +57,12 @@ use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
+use crate::plan::expr::{ColumnRef, HirScalarExpr, JoinKind};
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    self, plan_utils, query, Index, IndexOption, IndexOptionName, Params, Plan, Sink, Source,
-    Table, Type, TypeInner, View,
+    self, plan_utils, query, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan,
+    Sink, Source, Table, Type, TypeInner, View,
 };
 use crate::pure::Schema;
 
@@ -206,6 +212,58 @@ pub fn describe_create_source(
     _: CreateSourceStatement,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
+}
+
+fn plan_source_envelope(
+    bare_desc: &RelationDesc,
+    envelope: &SourceEnvelope,
+    post_transform_key: Option<Vec<usize>>,
+) -> (MirRelationExpr, Vec<Option<ColumnName>>) {
+    let get_expr = HirRelationExpr::Get {
+        id: expr::Id::LocalBareSource,
+        typ: bare_desc.typ().clone(),
+    };
+    let hir_expr = if let SourceEnvelope::Debezium(_) = envelope {
+        // Debezium sources produce a diff in their last column.
+        // Thus we need to select all rows but the last, which we repeat by.
+        // I.e., for a source with four columns, we do
+        // SELECT a.column1, a.column2, a.column3 FROM a, repeat(a.column4)
+        //
+        // [btv] - Maybe it would be better to write these in actual SQL and call into the planner, rather than writing out the expr by hand?
+        // Then we would get some nice things; for example, automatic tracking of column names.
+        //
+        // For this simple case, it probably doesn't matter
+        let diff_col = get_expr.arity() - 1;
+        let expr = HirRelationExpr::Join {
+            left: Box::new(get_expr),
+            right: Box::new(HirRelationExpr::CallTable {
+                func: TableFunc::Repeat,
+                exprs: vec![HirScalarExpr::Column(ColumnRef {
+                    level: 1,
+                    column: diff_col,
+                })],
+            }),
+            on: HirScalarExpr::literal_true(),
+            kind: JoinKind::Inner { lateral: true },
+        }
+        .project((0..diff_col).collect());
+        if let Some(post_transform_key) = post_transform_key {
+            expr.declare_keys(vec![post_transform_key])
+        } else {
+            expr
+        }
+    } else {
+        get_expr
+    };
+    let mir_expr = hir_expr.lower();
+
+    let column_names = bare_desc
+        .iter_names()
+        .map(|cn| cn.cloned())
+        .take(mir_expr.arity())
+        .collect();
+
+    (mir_expr, column_names)
 }
 
 pub fn plan_create_source(
@@ -631,17 +689,39 @@ pub fn plan_create_source(
         }
     }
 
-    let mut desc = encoding.desc(&envelope)?;
+    let mut bare_desc = encoding.desc(&envelope)?;
     let ignore_source_keys = match with_options.remove("ignore_source_keys") {
         None => false,
         Some(Value::Boolean(b)) => b,
         Some(_) => bail!("ignore_source_keys must be a boolean"),
     };
     if ignore_source_keys {
-        desc = desc.without_keys();
+        bare_desc = bare_desc.without_keys();
     }
 
-    desc = plan_utils::maybe_rename_columns(format!("source {}", name), desc, &col_names)?;
+    let post_transform_key = if let SourceEnvelope::Debezium(_) = &envelope {
+        if let DataEncoding::Avro(AvroEncoding { key_schema, .. }) = &encoding {
+            if ignore_source_keys {
+                None
+            } else {
+                let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
+                    avro::validate_key_schema(key_schema, &bare_desc)
+                        .map(Some)
+                        .unwrap_or_else(|e| {
+                            warn!("Not using key due to error: {}", e);
+                            None
+                        })
+                });
+                key_schema_indices
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    bare_desc =
+        plan_utils::maybe_rename_columns(format!("source {}", name), bare_desc, &col_names)?;
 
     // TODO(benesch): the available metadata columns should not depend
     // on the format.
@@ -654,7 +734,7 @@ pub fn plan_create_source(
         | (_, SourceEnvelope::Debezium(_)) => (),
         _ => {
             for (name, ty) in external_connector.metadata_columns() {
-                desc = desc.with_column(name, ty);
+                bare_desc = bare_desc.with_column(name, ty);
             }
         }
     }
@@ -664,6 +744,7 @@ pub fn plan_create_source(
     let name = scx.allocate_name(normalize::object_name(name.clone())?);
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
+    let (expr, column_names) = plan_source_envelope(&bare_desc, &envelope, post_transform_key);
     let source = Source {
         create_sql,
         connector: SourceConnector::External {
@@ -673,7 +754,9 @@ pub fn plan_create_source(
             consistency,
             ts_frequency,
         },
-        desc,
+        expr,
+        bare_desc,
+        column_names,
     };
 
     if !with_options.is_empty() {
