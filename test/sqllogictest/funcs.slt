@@ -726,3 +726,203 @@ alreadylow
 
 query error Cannot call function lower\(interval\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT lower('1ms'::interval)
+
+# Test trigonometric functions
+query R
+SELECT sin(NULL)
+----
+NULL
+
+query R
+SELECT sinh(NULL)
+----
+NULL
+
+query R
+SELECT cos(NULL)
+----
+NULL
+
+query R
+SELECT cosh(NULL)
+----
+NULL
+
+query R
+SELECT tan(NULL)
+----
+NULL
+
+query R
+SELECT tanh(NULL)
+----
+NULL
+
+query R
+SELECT cot(NULL)
+----
+NULL
+
+query R
+SELECT sin('NaN'::double)
+----
+NaN
+
+query R
+SELECT sinh('NaN'::double)
+----
+NaN
+
+query R
+SELECT cos('NaN'::double)
+----
+NaN
+
+query R
+SELECT cosh('NaN'::double)
+----
+NaN
+
+query R
+SELECT tan('NaN'::double)
+----
+NaN
+
+query R
+SELECT tanh('NaN'::double)
+----
+NaN
+
+query R
+SELECT cot('NaN'::double)
+----
+NaN
+
+query R
+SELECT sin(0::double)
+----
+0
+
+query R
+SELECT sinh(0::double)
+----
+0
+
+query R
+SELECT cos(0::double)
+----
+1
+
+query R
+SELECT cosh(0::double)
+----
+1
+
+query R
+SELECT tan(0::double)
+----
+0
+
+query R
+SELECT tanh(0::double)
+----
+0
+
+query R
+SELECT cot(0::double)
+----
+inf
+
+query R
+SELECT cot(-0::double)
+----
+-inf
+
+query R
+SELECT sin(1::double)
+----
+0.8414709848078965
+
+query R
+SELECT sinh(1::double)
+----
+1.1752011936438014
+
+query R
+SELECT cos(1::double)
+----
+0.5403023058681398
+
+query R
+SELECT cosh(1::double)
+----
+1.5430806348152437
+
+query R
+SELECT tan(1::double)
+----
+1.557407724654902
+
+query R
+SELECT tanh(1::double)
+----
+0.7615941559557649
+
+query R
+SELECT cot(1::double)
+----
+0.6420926159343308
+
+query error function sin is only defined for finite arguments
+SELECT sin('inf'::double)
+
+query R
+SELECT sinh('inf'::double)
+----
+inf
+
+query error function cos is only defined for finite arguments
+SELECT cos('inf'::double)
+
+query R
+SELECT cosh('inf'::double)
+----
+inf
+
+query error function tan is only defined for finite arguments
+SELECT tan('inf'::double)
+
+query R
+SELECT tanh('inf'::double)
+----
+1
+
+query error function cot is only defined for finite arguments
+SELECT cot('inf'::double)
+
+query error function sin is only defined for finite arguments
+SELECT sin('-inf'::double)
+
+query R
+SELECT sinh('-inf'::double)
+----
+-inf
+
+query error function cos is only defined for finite arguments
+SELECT cos('-inf'::double)
+
+query R
+SELECT cosh('-inf'::double)
+----
+inf
+
+query error function tan is only defined for finite arguments
+SELECT tan('-inf'::double)
+
+query R
+SELECT tanh('-inf'::double)
+----
+-1
+
+query error function cot is only defined for finite arguments
+SELECT cot('-inf'::double)
