@@ -40,7 +40,7 @@ where
     /// streams, where the first output stream represents successful
     /// computations and the second output stream represents failed
     /// computations.
-    fn unary_fallible<D2, E, B, L, P>(
+    fn unary_fallible<D2, E, B, P>(
         &self,
         pact: P,
         name: &str,
@@ -49,12 +49,16 @@ where
     where
         D2: Data,
         E: Data,
-        B: FnOnce(Capability<G::Timestamp>, OperatorInfo) -> L,
-        L: FnMut(
-                &mut InputHandle<G::Timestamp, D1, P::Puller>,
-                &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
-                &mut OutputHandle<G::Timestamp, E, Tee<G::Timestamp, E>>,
-            ) + 'static,
+        B: FnOnce(
+            Capability<G::Timestamp>,
+            OperatorInfo,
+        ) -> Box<
+            dyn FnMut(
+                    &mut InputHandle<G::Timestamp, D1, P::Puller>,
+                    &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
+                    &mut OutputHandle<G::Timestamp, E, Tee<G::Timestamp, E>>,
+                ) + 'static,
+        >,
         P: ParallelizationContract<G::Timestamp, D1>;
 
     /// Like [`timely::dataflow::operators::map::Map::map`], but `logic`
@@ -164,7 +168,7 @@ where
     D1: Data,
     G: Scope,
 {
-    fn unary_fallible<D2, E, B, L, P>(
+    fn unary_fallible<D2, E, B, P>(
         &self,
         pact: P,
         name: &str,
@@ -173,12 +177,16 @@ where
     where
         D2: Data,
         E: Data,
-        B: FnOnce(Capability<G::Timestamp>, OperatorInfo) -> L,
-        L: FnMut(
-                &mut InputHandle<G::Timestamp, D1, P::Puller>,
-                &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
-                &mut OutputHandle<G::Timestamp, E, Tee<G::Timestamp, E>>,
-            ) + 'static,
+        B: FnOnce(
+            Capability<G::Timestamp>,
+            OperatorInfo,
+        ) -> Box<
+            dyn FnMut(
+                    &mut InputHandle<G::Timestamp, D1, P::Puller>,
+                    &mut OutputHandle<G::Timestamp, D2, Tee<G::Timestamp, D2>>,
+                    &mut OutputHandle<G::Timestamp, E, Tee<G::Timestamp, E>>,
+                ) + 'static,
+        >,
         P: ParallelizationContract<G::Timestamp, D1>,
     {
         let mut builder = OperatorBuilder::new(name.into(), self.scope());
@@ -212,7 +220,7 @@ where
     {
         let mut storage = Vec::new();
         self.unary_fallible(Pipeline, "MapFallible", move |_, _| {
-            move |input, ok_output, err_output| {
+            Box::new(move |input, ok_output, err_output| {
                 input.for_each(|time, data| {
                     let mut ok_session = ok_output.session(&time);
                     let mut err_session = err_output.session(&time);
@@ -224,7 +232,7 @@ where
                         }
                     }
                 })
-            }
+            })
         })
     }
 
@@ -237,7 +245,7 @@ where
     {
         let mut storage = Vec::new();
         self.unary_fallible(Pipeline, "FlatMapFallible", move |_, _| {
-            move |input, ok_output, err_output| {
+            Box::new(move |input, ok_output, err_output| {
                 input.for_each(|time, data| {
                     let mut ok_session = ok_output.session(&time);
                     let mut err_session = err_output.session(&time);
@@ -249,7 +257,7 @@ where
                         }
                     }
                 })
-            }
+            })
         })
     }
 
@@ -260,7 +268,7 @@ where
     {
         let mut storage = Vec::new();
         self.unary_fallible(Pipeline, "FilterFallible", move |_, _| {
-            move |input, ok_output, err_output| {
+            Box::new(move |input, ok_output, err_output| {
                 input.for_each(|time, data| {
                     let mut ok_session = ok_output.session(&time);
                     let mut err_session = err_output.session(&time);
@@ -276,7 +284,7 @@ where
                         ok_session.give_vec(&mut storage);
                     }
                 })
-            }
+            })
         })
     }
     fn pass_through(
