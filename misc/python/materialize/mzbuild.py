@@ -205,7 +205,7 @@ class CargoBuild(CargoPreImage):
             # down CI, since we're packaging these binaries up into Docker
             # images and shipping them around. A bit unfortunate, since it'd be
             # nice to have useful backtraces if the binary crashes.
-            spawn.runv([xstrip, self.path / self.bin])
+            spawn.runv([xstrip, "--strip-debug", self.path / self.bin])
         else:
             # Even if we've been asked not to strip the binary, remove the
             # `.debug_pubnames` and `.debug_pubtypes` sections. These are just
