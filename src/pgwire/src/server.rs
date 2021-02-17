@@ -153,7 +153,10 @@ impl Server {
                         trace!("cid={} send=AcceptSsl", conn_id);
                         conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
                         let mut ssl_stream = SslStream::new(Ssl::new(&tls.context)?, conn)?;
-                        Pin::new(&mut ssl_stream).accept().await?;
+                        if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                            let _ = ssl_stream.get_mut().shutdown().await;
+                            return Err(e.into());
+                        }
                         Conn::Ssl(ssl_stream)
                     }
                     (mut conn, _) => {
