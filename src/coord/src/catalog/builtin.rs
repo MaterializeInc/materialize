@@ -399,6 +399,18 @@ pub const TYPE_VARCHAR: BuiltinType = BuiltinType {
     pgtype: &postgres_types::Type::VARCHAR,
 };
 
+pub const TYPE_INT2: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1040),
+    pgtype: &postgres_types::Type::INT2,
+};
+
+pub const TYPE_INT2_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1041),
+    pgtype: &postgres_types::Type::INT2_ARRAY,
+};
+
 lazy_static! {
     pub static ref TYPE_LIST: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
@@ -1207,6 +1219,8 @@ lazy_static! {
             Builtin::Type(&TYPE_OID_ARRAY),
             Builtin::Type(&TYPE_RECORD),
             Builtin::Type(&TYPE_RECORD_ARRAY),
+            Builtin::Type(&TYPE_INT2),
+            Builtin::Type(&TYPE_INT2_ARRAY),
             Builtin::Type(&TYPE_TEXT),
             Builtin::Type(&TYPE_TEXT_ARRAY),
             Builtin::Type(&TYPE_TIME),

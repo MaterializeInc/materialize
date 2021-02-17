@@ -214,6 +214,7 @@ Set
 Show
 Sink
 Sinks
+Smallint
 Snapshot
 Some
 Source
