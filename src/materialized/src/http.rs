@@ -21,7 +21,7 @@ use hyper::{service, Method, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
 use openssl::nid::Nid;
 use openssl::ssl::{Ssl, SslContext};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
 
 use ore::netio::SniffedStream;
@@ -113,7 +113,10 @@ impl Server {
         let conn = match (&self.tls_context(), sniff_tls(&conn.sniff_buffer())) {
             (Some(tls_context), true) => {
                 let mut ssl_stream = SslStream::new(Ssl::new(tls_context)?, conn)?;
-                Pin::new(&mut ssl_stream).accept().await?;
+                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
+                    let _ = ssl_stream.get_mut().shutdown().await;
+                    return Err(e.into());
+                }
                 MaybeHttpsStream::Https(ssl_stream)
             }
             _ => MaybeHttpsStream::Http(conn),
