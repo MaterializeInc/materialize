@@ -787,7 +787,8 @@ impl Timestamper {
                     {
                         (connector, encoding, envelope, consistency)
                     } else {
-                        panic!("A Local Source should never be timestamped");
+                        log::debug!("Local source {} cannot be timestamped. Ignoring", source_id);
+                        continue;
                     };
 
                     if !self.rt_sources.contains_key(&source_id)

@@ -701,7 +701,10 @@ where
                         }
                     }
                 } else {
-                    log::error!("Timestamping not supported for local sources");
+                    log::debug!(
+                        "Timestamping not supported for local sources {}. Ignoring",
+                        id
+                    );
                     None
                 };
 
