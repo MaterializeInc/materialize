@@ -10,14 +10,14 @@
 use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use anyhow::anyhow;
-use differential_dataflow::{capture::YieldingIter, hashable::Hashable};
+use differential_dataflow::capture::YieldingIter;
 use futures::executor::block_on;
 use log::warn;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use repr::RelationDesc;
 use timely::{
     dataflow::{
-        channels::pact::{Exchange, ParallelizationContract},
+        channels::pact::ParallelizationContract,
         channels::pushers::buffer::Session,
         channels::pushers::Counter as PushCounter,
         channels::pushers::Tee,
@@ -38,7 +38,7 @@ use repr::{Diff, Row, RowPacker, Timestamp};
 use self::csv::csv;
 use self::regex::regex as regex_fn;
 use crate::operator::StreamExt;
-use crate::source::{SourceData, SourceOutput};
+use crate::source::SourceOutput;
 
 mod avro;
 mod csv;
@@ -124,16 +124,13 @@ pub type PushSession<'a, R> =
 
 pub trait DecoderState {
     fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String>;
-    /// give a session a key-value pair
-    fn give_key_value<'a>(
+    /// Decode the value in the upsert context, which means it might be a None.
+    fn decode_upsert_value(
         &mut self,
-        key: Row,
         bytes: &[u8],
         aux_num: Option<i64>,
         upstream_time_millis: Option<i64>,
-        session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
-        time: Timestamp,
-    );
+    ) -> Result<Option<Row>, String>;
     /// give a session a plain value
     fn give_value<'a>(
         &mut self,
@@ -186,21 +183,13 @@ where
         Ok(self.row_packer.pack(&[(self.datum_func)(bytes)]))
     }
 
-    /// give a session a key-value pair
-    fn give_key_value<'a>(
+    fn decode_upsert_value<'a>(
         &mut self,
-        key: Row,
         bytes: &[u8],
         line_no: Option<i64>,
         _upstream_time_millis: Option<i64>,
-        session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
-        time: Timestamp,
-    ) {
-        session.give((
-            key,
-            Some(pack_with_line_no((self.datum_func)(bytes), line_no)),
-            time,
-        ));
+    ) -> Result<Option<Row>, String> {
+        Ok(Some(pack_with_line_no((self.datum_func)(bytes), line_no)))
     }
 
     /// give a session a plain value
@@ -222,81 +211,20 @@ where
     fn log_error_count(&mut self) {}
 }
 
-/// Inner method for decoding an upsert source
-/// Mostly, this inner method exists that way static dispatching
-/// can be used for different combinations of key-value decoders
-/// as opposed to dynamic dispatching
-fn decode_upsert_inner<G, K, V>(
-    stream: &Stream<G, ((Vec<u8>, SourceData), Timestamp)>,
-    mut key_decoder_state: K,
-    mut value_decoder_state: V,
-    op_name: &str,
-) -> Stream<G, (Row, Option<Row>, Timestamp)>
-where
-    G: Scope<Timestamp = Timestamp>,
-    K: DecoderState + 'static,
-    V: DecoderState + 'static,
-{
-    stream.unary(
-        Exchange::new(|x: &((Vec<u8>, _), _)| (x.0).hashed()),
-        &op_name,
-        move |_, _| {
-            move |input, output| {
-                input.for_each(|cap, data| {
-                    let mut session = output.session(&cap);
-                    for ((key, data), time) in data.iter() {
-                        if key.is_empty() {
-                            error!("{}", "Encountered empty key");
-                            continue;
-                        }
-                        match key_decoder_state.decode_key(key) {
-                            Ok(key) => {
-                                if data.value.is_empty() {
-                                    session.give((key, None, *cap.time()));
-                                } else {
-                                    value_decoder_state.give_key_value(
-                                        key,
-                                        &data.value,
-                                        data.position,
-                                        data.upstream_time_millis,
-                                        &mut session,
-                                        *time,
-                                    );
-                                }
-                            }
-                            Err(err) => {
-                                error!("{}", err);
-                            }
-                        }
-                    }
-                });
-                key_decoder_state.log_error_count();
-                value_decoder_state.log_error_count();
-            }
-        },
-    )
-}
-
-pub(crate) fn decode_upsert<G>(
-    stream: &Stream<G, ((Vec<u8>, SourceData), Timestamp)>,
-    value_encoding: DataEncoding,
-    key_encoding: DataEncoding,
+/// Get the `DecoderState` corresponding to a particular `DataEncoding`.
+/// Note that for code simplicity, this uses dynamic dispatch, which is said to
+/// be slower than using templates. The use of dynamic dispatch has not been
+/// observed to noticeably impact upsert performance at the time of this writing.
+/// TODO (wangandi): reimplement in terms of generics. DataEncoding could be a
+/// trait that returns a corresponding DecoderState.
+pub(crate) fn get_decoder(
+    encoding: DataEncoding,
     debug_name: &str,
     worker_index: usize,
-) -> Stream<G, (Row, Option<Row>, Timestamp)>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    let op_name = format!(
-        "{}-{}Decode",
-        key_encoding.op_name(),
-        value_encoding.op_name()
-    );
+) -> Box<dyn DecoderState> {
     let avro_err = "Failed to create Avro decoder";
-    match (key_encoding, value_encoding) {
-        (DataEncoding::Bytes, DataEncoding::Avro(val_enc)) => decode_upsert_inner(
-            stream,
-            OffsetDecoderState::from(bytes_to_datum),
+    match encoding {
+        DataEncoding::Avro(val_enc) => Box::new(
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
                 val_enc.schema_registry_config,
@@ -308,74 +236,9 @@ where
                 None,
             )
             .expect(avro_err),
-            &op_name,
         ),
-        (DataEncoding::Text, DataEncoding::Avro(val_enc)) => decode_upsert_inner(
-            stream,
-            OffsetDecoderState::from(text_to_datum),
-            avro::AvroDecoderState::new(
-                &val_enc.value_schema,
-                val_enc.schema_registry_config,
-                interchange::avro::EnvelopeType::Upsert,
-                false,
-                format!("{}-values", debug_name),
-                worker_index,
-                None,
-                None,
-            )
-            .expect(avro_err),
-            &op_name,
-        ),
-        (DataEncoding::Avro(key_enc), DataEncoding::Avro(val_enc)) => decode_upsert_inner(
-            stream,
-            avro::AvroDecoderState::new(
-                &key_enc.value_schema,
-                key_enc.schema_registry_config,
-                interchange::avro::EnvelopeType::None,
-                false,
-                format!("{}-keys", debug_name),
-                worker_index,
-                None,
-                None,
-            )
-            .expect(avro_err),
-            avro::AvroDecoderState::new(
-                &val_enc.value_schema,
-                val_enc.schema_registry_config,
-                interchange::avro::EnvelopeType::Upsert,
-                false,
-                format!("{}-values", debug_name),
-                worker_index,
-                None,
-                None,
-            )
-            .expect(avro_err),
-            &op_name,
-        ),
-        (DataEncoding::Text, DataEncoding::Bytes) => decode_upsert_inner(
-            stream,
-            OffsetDecoderState::from(text_to_datum),
-            OffsetDecoderState::from(bytes_to_datum),
-            &op_name,
-        ),
-        (DataEncoding::Bytes, DataEncoding::Text) => decode_upsert_inner(
-            stream,
-            OffsetDecoderState::from(bytes_to_datum),
-            OffsetDecoderState::from(text_to_datum),
-            &op_name,
-        ),
-        (DataEncoding::Bytes, DataEncoding::Bytes) => decode_upsert_inner(
-            stream,
-            OffsetDecoderState::from(bytes_to_datum),
-            OffsetDecoderState::from(bytes_to_datum),
-            &op_name,
-        ),
-        (DataEncoding::Text, DataEncoding::Text) => decode_upsert_inner(
-            stream,
-            OffsetDecoderState::from(text_to_datum),
-            OffsetDecoderState::from(text_to_datum),
-            &op_name,
-        ),
+        DataEncoding::Bytes => Box::new(OffsetDecoderState::from(bytes_to_datum)),
+        DataEncoding::Text => Box::new(OffsetDecoderState::from(text_to_datum)),
         _ => unreachable!("Unsupported encoding combination"),
     }
 }

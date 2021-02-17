@@ -53,23 +53,20 @@ impl DecoderState for ProtobufDecoderState {
     }
 
     /// give a session a key-value pair
-    fn give_key_value<'a>(
+    fn decode_upsert_value<'a>(
         &mut self,
-        key: Row,
         bytes: &[u8],
         _: Option<i64>,
         _upstream_time_millis: Option<i64>,
-        session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
-        time: Timestamp,
-    ) {
+    ) -> Result<Option<Row>, String> {
         match self.decoder.decode(bytes) {
             Ok(row) => {
                 self.events_success += 1;
-                session.give((key, row, time));
+                Ok(row)
             }
             Err(err) => {
                 self.events_error += 1;
-                error!("protobuf deserialization error: {:#}", err)
+                Err(format!("protobuf deserialization error: {:#}", err))
             }
         }
     }

@@ -108,8 +108,7 @@ use std::{any::Any, cell::RefCell};
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::arrangement::{Arrange, ArrangeByKey};
-use differential_dataflow::operators::arrange::upsert::arrange_from_upsert;
+use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::Consolidate;
 use differential_dataflow::{AsCollection, Collection};
 use timely::communication::Allocate;
@@ -123,7 +122,7 @@ use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id, MapFilterProject, MirRelationExpr, MirScalarExpr, SourceInstanceId};
+use expr::{GlobalId, Id, MapFilterProject, MirRelationExpr, SourceInstanceId};
 use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use mz_avro::types::Value;
 use mz_avro::Schema;
@@ -133,7 +132,7 @@ use ore::iter::IteratorExt;
 use repr::adt::decimal::Significand;
 use repr::{Datum, RelationType, Row, RowArena, RowPacker, Timestamp};
 
-use crate::decode::{decode_avro_values, decode_values};
+use crate::decode::{decode_avro_values, decode_values, get_decoder};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::server::{CacheMessage, LocalInput, TimestampDataUpdates, TimestampMetadataUpdates};
@@ -332,115 +331,73 @@ where
                     caching_tx,
                 };
 
-                let capability = if let SourceEnvelope::Upsert(key_encoding) = envelope {
-                    match connector {
-                        ExternalSourceConnector::Kafka(_) => {
-                            let (source, capability) = source::create_source::<_, KafkaSourceInfo, _>(
-                                source_config,
-                                connector,
-                            );
-
-                            let (transformed, new_err_collection) =
-                                upsert::pre_arrange_from_upsert_transforms(
-                                    &source.0,
-                                    encoding,
-                                    key_encoding,
-                                    &self.debug_name,
-                                    scope.index(),
-                                    self.as_of_frontier.clone(),
-                                    &mut src.operators,
-                                    src.bare_desc.typ(),
-                                );
-
-                            let arranged = arrange_from_upsert(
-                                &transformed,
-                                &format!("UpsertArrange: {}", src_id.to_string()),
-                            );
-
-                            err_collection.concat(
-                                &new_err_collection
-                                    .pass_through("upsert-linear-errors")
-                                    .as_collection(),
-                            );
-
-                            let keys = src.bare_desc.typ().keys[0]
-                                .iter()
-                                .map(|k| MirScalarExpr::Column(*k))
-                                .collect::<Vec<_>>();
-                            let get_expr =
-                                MirRelationExpr::global_get(src_id, src.bare_desc.typ().clone());
-                            self.set_local(&get_expr, &keys, (arranged, err_collection.arrange()));
-                            capability
-                        }
-                        _ => unreachable!("Upsert envelope unsupported for non-Kafka sources"),
-                    }
-                } else {
-                    let (stream, capability) = if let ExternalSourceConnector::AvroOcf(_) =
-                        connector
-                    {
-                        let ((source, err_source), capability) =
-                            source::create_source::<_, FileSourceInfo<Value>, Value>(
-                                source_config,
-                                connector,
-                            );
-                        err_collection = err_collection.concat(
-                            &err_source
-                                .map(DataflowError::SourceError)
-                                .pass_through("AvroOCF-errors")
-                                .as_collection(),
+                let (stream, capability) = if let ExternalSourceConnector::AvroOcf(_) = connector {
+                    let ((source, err_source), capability) =
+                        source::create_source::<_, FileSourceInfo<Value>, Value>(
+                            source_config,
+                            connector,
                         );
-                        let reader_schema = match &encoding {
-                            DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
-                                reader_schema
-                            }
-                            _ => unreachable!(
-                                "Internal error: \
+                    err_collection = err_collection.concat(
+                        &err_source
+                            .map(DataflowError::SourceError)
+                            .pass_through("AvroOCF-errors")
+                            .as_collection(),
+                    );
+                    let reader_schema = match &encoding {
+                        DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => reader_schema,
+                        _ => unreachable!(
+                            "Internal error: \
                                      Avro OCF schema should have already been resolved.\n\
                                     Encoding is: {:?}",
-                                encoding
-                            ),
-                        };
+                            encoding
+                        ),
+                    };
 
-                        let reader_schema: Schema = reader_schema.parse().unwrap();
-                        (
-                            decode_avro_values(&source, &envelope, reader_schema, &self.debug_name),
-                            capability,
+                    let reader_schema: Schema = reader_schema.parse().unwrap();
+                    (
+                        decode_avro_values(&source, &envelope, reader_schema, &self.debug_name),
+                        capability,
+                    )
+                } else {
+                    let ((ok_source, err_source), capability) = match connector {
+                        ExternalSourceConnector::Kafka(_) => {
+                            source::create_source::<_, KafkaSourceInfo, _>(source_config, connector)
+                        }
+                        ExternalSourceConnector::Kinesis(_) => {
+                            source::create_source::<_, KinesisSourceInfo, _>(
+                                source_config,
+                                connector,
+                            )
+                        }
+                        ExternalSourceConnector::S3(_) => {
+                            source::create_source::<_, S3SourceInfo, _>(source_config, connector)
+                        }
+                        ExternalSourceConnector::File(_) => {
+                            source::create_source::<_, FileSourceInfo<Vec<u8>>, Vec<u8>>(
+                                source_config,
+                                connector,
+                            )
+                        }
+                        ExternalSourceConnector::AvroOcf(_) => unreachable!(),
+                    };
+                    err_collection = err_collection.concat(
+                        &err_source
+                            .map(DataflowError::SourceError)
+                            .pass_through("source-errors")
+                            .as_collection(),
+                    );
+
+                    let stream = if let SourceEnvelope::Upsert(key_encoding) = &envelope {
+                        let value_decoder = get_decoder(encoding, &self.debug_name, scope.index());
+                        let key_decoder =
+                            get_decoder(key_encoding.clone(), &self.debug_name, scope.index());
+                        upsert::decode_stream(
+                            &ok_source,
+                            self.as_of_frontier.clone(),
+                            key_decoder,
+                            value_decoder,
                         )
                     } else {
-                        let ((ok_source, err_source), capability) = match connector {
-                            ExternalSourceConnector::Kafka(_) => {
-                                source::create_source::<_, KafkaSourceInfo, _>(
-                                    source_config,
-                                    connector,
-                                )
-                            }
-                            ExternalSourceConnector::Kinesis(_) => {
-                                source::create_source::<_, KinesisSourceInfo, _>(
-                                    source_config,
-                                    connector,
-                                )
-                            }
-                            ExternalSourceConnector::S3(_) => {
-                                source::create_source::<_, S3SourceInfo, _>(
-                                    source_config,
-                                    connector,
-                                )
-                            }
-                            ExternalSourceConnector::File(_) => {
-                                source::create_source::<_, FileSourceInfo<Vec<u8>>, Vec<u8>>(
-                                    source_config,
-                                    connector,
-                                )
-                            }
-                            ExternalSourceConnector::AvroOcf(_) => unreachable!(),
-                        };
-                        err_collection = err_collection.concat(
-                            &err_source
-                                .map(DataflowError::SourceError)
-                                .pass_through("source-errors")
-                                .as_collection(),
-                        );
-
                         // TODO(brennan) -- this should just be a MirRelationExpr::FlatMap using regexp_extract, csv_extract,
                         // a hypothetical future avro_extract, protobuf_extract, etc.
                         let (stream, extra_token) = decode_values(
@@ -458,104 +415,105 @@ where
                                 .or_insert_with(Vec::new)
                                 .push(Rc::new(tok));
                         }
-
-                        (stream, capability)
+                        stream
                     };
+                    (stream, capability)
+                };
 
-                    let mut collection = match envelope {
-                        SourceEnvelope::None
-                        | SourceEnvelope::CdcV2
-                        | SourceEnvelope::Debezium(_) => stream.as_collection(),
-                        SourceEnvelope::Upsert(_) => unreachable!(),
-                    };
+                let mut collection = stream.as_collection();
 
-                    // Implement source filtering and projection.
-                    // At the moment this is strictly optional, but we perform it anyhow
-                    // to demonstrate the intended use.
-                    if let Some(mut operators) = src.operators.clone() {
-                        // Determine replacement values for unused columns.
-                        let source_type = src.bare_desc.typ();
-                        let position_or = (0..source_type.arity())
-                            .map(|col| {
-                                if operators.projection.contains(&col) {
-                                    Some(col)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>();
-
-                        // Apply predicates and insert dummy values into undemanded columns.
-                        let (collection2, errors) = collection.inner.flat_map_fallible({
-                            let mut datums = crate::render::datum_vec::DatumVec::new();
-                            let mut row_packer = repr::RowPacker::new();
-                            let predicates = std::mem::take(&mut operators.predicates);
-                            // The predicates may be temporal, which requires the nuance
-                            // of an explicit plan capable of evaluating the predicates.
-                            let filter_plan = filter::FilterPlan::create_from(predicates)
-                                .unwrap_or_else(|e| panic!(e));
-                            move |(input_row, time, diff)| {
-                                let mut datums_local = datums.borrow_with(&input_row);
-                                let times_diffs =
-                                    filter_plan.evaluate(&mut datums_local, time, diff);
-                                // The output row may need to have `Datum::Dummy` values stitched in.
-                                let output_row = row_packer.pack(position_or.iter().map(
-                                    |pos_or| match pos_or {
-                                        Some(index) => datums_local[*index],
-                                        None => Datum::Dummy,
-                                    },
-                                ));
-                                // Each produced (time, diff) results in a copy of `output_row` in the output.
-                                // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
-                                times_diffs.map(move |time_diff| {
-                                    time_diff.map(|(t, d)| (output_row.clone(), t, d))
-                                })
+                // Implement source filtering and projection.
+                // At the moment this is strictly optional, but we perform it anyhow
+                // to demonstrate the intended use.
+                if let Some(mut operators) = src.operators.clone() {
+                    // Determine replacement values for unused columns.
+                    let source_type = src.bare_desc.typ();
+                    let position_or = (0..source_type.arity())
+                        .map(|col| {
+                            if operators.projection.contains(&col) {
+                                Some(col)
+                            } else {
+                                None
                             }
-                        });
+                        })
+                        .collect::<Vec<_>>();
 
-                        collection = collection2.as_collection();
-                        err_collection = err_collection.concat(&errors.as_collection());
-                    }
-
-                    // Apply `as_of` to each timestamp.
-                    let as_of_frontier1 = self.as_of_frontier.clone();
-                    collection = collection
-                        .inner
-                        .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier1.borrow()))
-                        .as_collection();
-
-                    let as_of_frontier2 = self.as_of_frontier.clone();
-                    err_collection = err_collection
-                        .inner
-                        .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier2.borrow()))
-                        .as_collection();
-
-                    let get = MirRelationExpr::Get {
-                        id: Id::BareSource(src_id),
-                        typ: src.bare_desc.typ().clone(),
-                    };
-                    // Introduce the stream by name, as an unarranged collection.
-                    self.collections
-                        .insert(get.clone(), (collection, err_collection));
-
-                    let mut expr = src.optimized_expr.0;
-                    expr.visit_mut(&mut |node| {
-                        if let MirRelationExpr::Get {
-                            id: Id::LocalBareSource,
-                            ..
-                        } = node
-                        {
-                            *node = get.clone()
+                    // Apply predicates and insert dummy values into undemanded columns.
+                    let (collection2, errors) = collection.inner.flat_map_fallible({
+                        let mut datums = crate::render::datum_vec::DatumVec::new();
+                        let mut row_packer = repr::RowPacker::new();
+                        let predicates = std::mem::take(&mut operators.predicates);
+                        // The predicates may be temporal, which requires the nuance
+                        // of an explicit plan capable of evaluating the predicates.
+                        let filter_plan = filter::FilterPlan::create_from(predicates)
+                            .unwrap_or_else(|e| panic!(e));
+                        move |(input_row, time, diff)| {
+                            let mut datums_local = datums.borrow_with(&input_row);
+                            let times_diffs = filter_plan.evaluate(&mut datums_local, time, diff);
+                            // The output row may need to have `Datum::Dummy` values stitched in.
+                            let output_row =
+                                row_packer.pack(position_or.iter().map(|pos_or| match pos_or {
+                                    Some(index) => datums_local[*index],
+                                    None => Datum::Dummy,
+                                }));
+                            // Each produced (time, diff) results in a copy of `output_row` in the output.
+                            // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
+                            times_diffs.map(move |time_diff| {
+                                time_diff.map(|(t, d)| (output_row.clone(), t, d))
+                            })
                         }
                     });
 
-                    // Do whatever envelope processing is required.
-                    self.ensure_rendered(&expr, scope, scope.index());
-                    let new_get = MirRelationExpr::global_get(src_id, expr.typ());
-                    self.clone_from_to(&expr, &new_get);
-
-                    capability
+                    collection = collection2.as_collection();
+                    err_collection = err_collection.concat(&errors.as_collection());
                 };
+
+                // Apply `as_of` to each timestamp.
+                match envelope {
+                    SourceEnvelope::Upsert(_) => {}
+                    _ => {
+                        let as_of_frontier1 = self.as_of_frontier.clone();
+                        collection = collection
+                            .inner
+                            .map_in_place(move |(_, time, _)| {
+                                time.advance_by(as_of_frontier1.borrow())
+                            })
+                            .as_collection();
+
+                        let as_of_frontier2 = self.as_of_frontier.clone();
+                        err_collection = err_collection
+                            .inner
+                            .map_in_place(move |(_, time, _)| {
+                                time.advance_by(as_of_frontier2.borrow())
+                            })
+                            .as_collection();
+                    }
+                }
+
+                let get = MirRelationExpr::Get {
+                    id: Id::BareSource(src_id),
+                    typ: src.bare_desc.typ().clone(),
+                };
+                // Introduce the stream by name, as an unarranged collection.
+                self.collections
+                    .insert(get.clone(), (collection, err_collection));
+
+                let mut expr = src.optimized_expr.0;
+                expr.visit_mut(&mut |node| {
+                    if let MirRelationExpr::Get {
+                        id: Id::LocalBareSource,
+                        ..
+                    } = node
+                    {
+                        *node = get.clone()
+                    }
+                });
+
+                // Do whatever envelope processing is required.
+                self.ensure_rendered(&expr, scope, scope.index());
+                let new_get = MirRelationExpr::global_get(src_id, expr.typ());
+                self.clone_from_to(&expr, &new_get);
+
                 let token = Rc::new(capability);
                 self.source_tokens.insert(src_id, token.clone());
 
