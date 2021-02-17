@@ -555,6 +555,11 @@ impl ConsistencyInfo {
 
                             let existing_ts = self.partition_metadata.get(pid).unwrap().ts;
                             // Check whether timestamps can be closed on this partition
+
+                            // TODO(rkhaitan): this code performs a linear scan through the full
+                            // set of timestamp bindings to find a match every time. This is
+                            // clearly suboptimal and can be improved upon with a better
+                            // API for sources to interact with timestamp binding information.
                             for (partition_count, ts, offset) in entries {
                                 if existing_ts >= *ts {
                                     //skip old records
