@@ -167,6 +167,7 @@ pub struct Table {
     #[serde(skip)]
     pub defaults: Vec<Expr<Raw>>,
     pub conn_id: Option<u32>,
+    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -188,6 +189,7 @@ pub struct Sink {
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
     pub as_of: Option<u64>,
+    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -203,6 +205,7 @@ pub struct View {
     pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
     pub conn_id: Option<u32>,
+    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -212,6 +215,7 @@ pub struct Index {
     pub on: GlobalId,
     pub keys: Vec<MirScalarExpr>,
     pub conn_id: Option<u32>,
+    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -219,6 +223,7 @@ pub struct Type {
     pub create_sql: String,
     pub plan_cx: PlanContext,
     pub inner: TypeInner,
+    pub depends_on: Vec<GlobalId>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -293,17 +298,12 @@ impl CatalogItem {
     pub fn uses(&self) -> Vec<GlobalId> {
         match self {
             CatalogItem::Func(_) => vec![],
-            CatalogItem::Index(idx) => vec![idx.on],
-            CatalogItem::Sink(sink) => vec![sink.from],
+            CatalogItem::Index(idx) => idx.depends_on.clone(),
+            CatalogItem::Sink(sink) => sink.depends_on.clone(),
             CatalogItem::Source(_) => vec![],
-            CatalogItem::Table(_) => vec![],
-            CatalogItem::Type(typ) => match &typ.inner {
-                TypeInner::Array { element_id } => vec![*element_id],
-                TypeInner::Base | TypeInner::Pseudo => vec![],
-                TypeInner::List { element_id } => vec![*element_id],
-                TypeInner::Map { key_id, value_id } => vec![*key_id, *value_id],
-            },
-            CatalogItem::View(view) => view.optimized_expr.as_ref().global_uses(),
+            CatalogItem::Table(table) => table.depends_on.clone(),
+            CatalogItem::Type(typ) => typ.depends_on.clone(),
+            CatalogItem::View(view) => view.depends_on.clone(),
         }
     }
 
@@ -587,6 +587,7 @@ impl Catalog {
                                 ),
                                 plan_cx: PlanContext::default(),
                                 conn_id: None,
+                                depends_on: vec![log.id],
                             }),
                         ),
                     );
@@ -612,6 +613,7 @@ impl Catalog {
                             desc: table.desc.clone(),
                             defaults: vec![Expr::null(); table.desc.arity()],
                             conn_id: None,
+                            depends_on: vec![],
                         }),
                     ));
                     let oid = catalog.allocate_oid()?;
@@ -633,6 +635,7 @@ impl Catalog {
                                 create_sql: index_sql,
                                 plan_cx: PlanContext::default(),
                                 conn_id: None,
+                                depends_on: vec![table.id],
                             }),
                         ),
                     );
@@ -676,6 +679,7 @@ impl Catalog {
                                 postgres_types::Kind::Simple => TypeInner::Base,
                                 _ => unreachable!(),
                             },
+                            depends_on: vec![],
                         }),
                     ));
                 }
@@ -1053,7 +1057,7 @@ impl Catalog {
                 Some(metadata) => metadata.used_by.push(entry.id),
                 None => panic!(
                     "Catalog: missing dependent catalog item {} while installing {}",
-                    u, entry.name
+                    &u, entry.name
                 ),
             }
         }
@@ -1711,12 +1715,15 @@ impl Catalog {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
         let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
-            Plan::CreateTable { table, .. } => CatalogItem::Table(Table {
+            Plan::CreateTable {
+                table, depends_on, ..
+            } => CatalogItem::Table(Table {
                 create_sql: table.create_sql,
                 plan_cx: pcx,
                 desc: table.desc,
                 defaults: table.defaults,
                 conn_id: None,
+                depends_on,
             }),
             Plan::CreateSource { source, .. } => {
                 let mut optimizer = Optimizer::default();
@@ -1732,7 +1739,9 @@ impl Catalog {
                     desc: transformed_desc,
                 })
             }
-            Plan::CreateView { view, .. } => {
+            Plan::CreateView {
+                view, depends_on, ..
+            } => {
                 let mut optimizer = Optimizer::default();
                 let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;
                 let desc = RelationDesc::new(optimized_expr.as_ref().typ(), view.column_names);
@@ -1742,19 +1751,24 @@ impl Catalog {
                     optimized_expr,
                     desc,
                     conn_id: None,
+                    depends_on,
                 })
             }
-            Plan::CreateIndex { index, .. } => CatalogItem::Index(Index {
+            Plan::CreateIndex {
+                index, depends_on, ..
+            } => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
                 plan_cx: pcx,
                 on: index.on,
                 keys: index.keys,
                 conn_id: None,
+                depends_on,
             }),
             Plan::CreateSink {
                 sink,
                 with_snapshot,
                 as_of,
+                depends_on,
                 ..
             } => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
@@ -1764,11 +1778,15 @@ impl Catalog {
                 envelope: sink.envelope,
                 with_snapshot,
                 as_of,
+                depends_on,
             }),
-            Plan::CreateType { typ, .. } => CatalogItem::Type(Type {
+            Plan::CreateType {
+                typ, depends_on, ..
+            } => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
                 plan_cx: pcx,
                 inner: typ.inner.into(),
+                depends_on,
             }),
             _ => bail!("catalog entry generated inappropriate plan"),
         })
@@ -1806,9 +1824,11 @@ impl Catalog {
         ) {
             // If an index exists for `id`, record it in the output set and stop
             // searching.
-            if let Some((index_id, _)) = catalog.indexes[&id].first() {
-                indexes.push(*index_id);
-                return;
+            if let Some(element) = catalog.indexes.get(&id) {
+                if let Some((index_id, _)) = element.first() {
+                    indexes.push(*index_id);
+                    return;
+                }
             }
 
             match catalog.get_by_id(&id).item() {
@@ -1823,17 +1843,11 @@ impl Catalog {
                     // least one index.
                     *complete = false;
                 }
-                CatalogItem::Table(_) => {
-                    unreachable!("tables always have at least one index");
-                }
-                CatalogItem::Func(_)
+                CatalogItem::Table(_)
+                | CatalogItem::Func(_)
                 | CatalogItem::Index(_)
                 | CatalogItem::Sink(_)
-                | CatalogItem::Type(_) => {
-                    unreachable!(
-                        "cannot depend on functions, indexes, sinks, or user-defined types"
-                    );
-                }
+                | CatalogItem::Type(_) => (),
             }
         }
 
@@ -1850,14 +1864,12 @@ impl Catalog {
     pub fn uses_tables(&self, id: GlobalId) -> bool {
         match self.get_by_id(&id).item() {
             CatalogItem::Table(_) => true,
-            CatalogItem::Source(_) => false,
             item @ CatalogItem::View(_) => item.uses().into_iter().any(|id| self.uses_tables(id)),
-            CatalogItem::Func(_)
+            CatalogItem::Source(_)
+            | CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::Type(_) => {
-                unreachable!("cannot depend on functions, indexes, sinks, or user-defined types");
-            }
+            | CatalogItem::Type(_) => false,
         }
     }
 

@@ -1479,9 +1479,17 @@ impl Coordinator {
                 name,
                 table,
                 if_not_exists,
+                depends_on,
             } => tx.send(
-                self.sequence_create_table(pcx, name, table, if_not_exists, session.conn_id())
-                    .await,
+                self.sequence_create_table(
+                    pcx,
+                    name,
+                    table,
+                    if_not_exists,
+                    depends_on,
+                    session.conn_id(),
+                )
+                .await,
                 session,
             ),
 
@@ -1502,6 +1510,7 @@ impl Coordinator {
                 with_snapshot,
                 as_of,
                 if_not_exists,
+                depends_on,
             } => {
                 self.sequence_create_sink(
                     pcx,
@@ -1512,6 +1521,7 @@ impl Coordinator {
                     with_snapshot,
                     as_of,
                     if_not_exists,
+                    depends_on,
                 )
                 .await
             }
@@ -1522,6 +1532,7 @@ impl Coordinator {
                 replace,
                 materialize,
                 if_not_exists,
+                depends_on,
             } => tx.send(
                 self.sequence_create_view(
                     pcx,
@@ -1531,6 +1542,7 @@ impl Coordinator {
                     session.conn_id(),
                     materialize,
                     if_not_exists,
+                    depends_on,
                 )
                 .await,
                 session,
@@ -1541,15 +1553,21 @@ impl Coordinator {
                 index,
                 options,
                 if_not_exists,
+                depends_on,
             } => tx.send(
-                self.sequence_create_index(pcx, name, index, options, if_not_exists)
+                self.sequence_create_index(pcx, name, index, options, if_not_exists, depends_on)
                     .await,
                 session,
             ),
 
-            Plan::CreateType { name, typ } => {
-                tx.send(self.sequence_create_type(pcx, name, typ).await, session)
-            }
+            Plan::CreateType {
+                name,
+                typ,
+                depends_on,
+            } => tx.send(
+                self.sequence_create_type(pcx, name, typ, depends_on).await,
+                session,
+            ),
 
             Plan::DropDatabase { name } => {
                 tx.send(self.sequence_drop_database(name).await, session)
@@ -1796,16 +1814,20 @@ impl Coordinator {
         name: FullName,
         table: sql::plan::Table,
         if_not_exists: bool,
+        depends_on: Vec<GlobalId>,
         conn_id: u32,
     ) -> Result<ExecuteResponse, CoordError> {
         let conn_id = if table.temporary { Some(conn_id) } else { None };
         let table_id = self.catalog.allocate_id()?;
+        let mut index_depends_on = depends_on.clone();
+        index_depends_on.push(table_id);
         let table = catalog::Table {
             create_sql: table.create_sql,
             plan_cx: pcx,
             desc: table.desc,
             defaults: table.defaults,
             conn_id,
+            depends_on,
         };
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
@@ -1816,6 +1838,7 @@ impl Coordinator {
             table_id,
             &table.desc,
             conn_id,
+            index_depends_on,
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
@@ -1883,6 +1906,7 @@ impl Coordinator {
                 source_id,
                 &source.desc,
                 None,
+                vec![source_id],
             );
             let index_id = self.catalog.allocate_id()?;
             let index_oid = self.catalog.allocate_oid()?;
@@ -1922,6 +1946,7 @@ impl Coordinator {
         with_snapshot: bool,
         as_of: Option<u64>,
         if_not_exists: bool,
+        depends_on: Vec<GlobalId>,
     ) {
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = match self.catalog.allocate_id() {
@@ -1965,6 +1990,7 @@ impl Coordinator {
                 envelope: sink.envelope,
                 with_snapshot,
                 as_of,
+                depends_on,
             }),
         };
         match self.catalog_transact(vec![op]).await {
@@ -2007,6 +2033,7 @@ impl Coordinator {
         conn_id: u32,
         materialize: bool,
         if_not_exists: bool,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = vec![];
         if let Some(id) = replace {
@@ -2023,6 +2050,7 @@ impl Coordinator {
             optimized_expr,
             desc,
             conn_id: if view.temporary { Some(conn_id) } else { None },
+            depends_on,
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -2039,6 +2067,7 @@ impl Coordinator {
                 view_id,
                 &view.desc,
                 view.conn_id,
+                vec![view_id],
             );
             let index_id = self.catalog.allocate_id()?;
             let index_oid = self.catalog.allocate_oid()?;
@@ -2072,6 +2101,7 @@ impl Coordinator {
         mut index: sql::plan::Index,
         options: Vec<IndexOption>,
         if_not_exists: bool,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         for key in &mut index.keys {
             Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
@@ -2082,6 +2112,7 @@ impl Coordinator {
             keys: index.keys,
             on: index.on,
             conn_id: None,
+            depends_on,
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -2108,11 +2139,13 @@ impl Coordinator {
         pcx: PlanContext,
         name: FullName,
         typ: sql::plan::Type,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         let typ = catalog::Type {
             create_sql: typ.create_sql,
             plan_cx: pcx,
             inner: typ.inner.into(),
+            depends_on,
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -3479,6 +3512,7 @@ fn auto_generate_primary_idx(
     on_id: GlobalId,
     on_desc: &RelationDesc,
     conn_id: Option<u32>,
+    depends_on: Vec<GlobalId>,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
 
@@ -3491,6 +3525,7 @@ fn auto_generate_primary_idx(
             .map(|k| MirScalarExpr::Column(*k))
             .collect(),
         conn_id,
+        depends_on,
     }
 }
 

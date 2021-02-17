@@ -47,7 +47,8 @@ use sql::catalog::Catalog;
 use sql::names::FullName;
 use sql::normalize;
 use sql::plan::{
-    resolve_names_data_type, Aug, MutationKind, Plan, PlanContext, StatementContext, Table,
+    plan_default_expr, resolve_names_data_type, Aug, MutationKind, Plan, PlanContext,
+    StatementContext, Table,
 };
 
 pub struct Postgres {
@@ -146,11 +147,12 @@ END $$;
                 // and NOT NULL, UNIQUE, and PRIMARY KEY constraints.
                 let mut column_types = Vec::with_capacity(columns.len());
                 let mut defaults = Vec::with_capacity(columns.len());
+                let mut depends_on = Vec::new();
                 let mut keys = vec![];
 
                 let mut sql_types: Vec<_> = Vec::with_capacity(columns.len());
                 for (index, column) in columns.iter().enumerate() {
-                    let (aug_data_type, _ids) =
+                    let (aug_data_type, ids) =
                         resolve_names_data_type(&scx, column.data_type.clone())?;
                     let ty = sql::plan::scalar_type_from_sql(&scx, &aug_data_type)?;
                     sql_types.push(aug_data_type);
@@ -160,7 +162,11 @@ END $$;
                     for option in &column.options {
                         match &option.option {
                             ColumnOption::NotNull => nullable = false,
-                            ColumnOption::Default(expr) => default = expr.clone(),
+                            ColumnOption::Default(expr) => {
+                                let (_, expr_depends_on) = plan_default_expr(&scx, expr, &ty)?;
+                                depends_on.extend(expr_depends_on);
+                                default = expr.clone();
+                            }
                             // PRIMARY KEY implies UNIQUE and NOT NULL.
                             ColumnOption::Unique { is_primary } => {
                                 keys.push(vec![index]);
@@ -173,6 +179,7 @@ END $$;
                     }
                     column_types.push(ty.nullable(nullable));
                     defaults.push(default);
+                    depends_on.extend(ids);
                 }
                 let mut typ = RelationType { column_types, keys };
 
@@ -219,6 +226,7 @@ END $$;
                     name,
                     table,
                     if_not_exists: *if_not_exists,
+                    depends_on,
                 }
             }
             Statement::DropObjects(DropObjectsStatement {

@@ -17,7 +17,7 @@ use std::convert::TryFrom;
 
 use anyhow::bail;
 
-use expr::RowSetFinishing;
+use expr::{GlobalId, RowSetFinishing};
 use ore::collections::CollectionExt;
 use repr::{RelationDesc, ScalarType};
 
@@ -101,7 +101,7 @@ pub fn describe_select(
     scx: &StatementContext,
     SelectStatement { query, .. }: SelectStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    let (_relation_expr, desc, _finishing) =
+    let (_relation_expr, desc, _finishing, _depends_on) =
         query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -112,7 +112,7 @@ pub fn plan_select(
     params: &Params,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
-    let (relation_expr, _, finishing) = plan_query(scx, query, params, QueryLifetime::OneShot)?;
+    let (relation_expr, _, finishing, _) = plan_query(scx, query, params, QueryLifetime::OneShot)?;
     let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
         Some(ts) => PeekWhen::AtTimestamp(ts),
         None => PeekWhen::Immediately,
@@ -189,7 +189,7 @@ pub fn plan_explain(
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    let (mut sql_expr, desc, finishing) =
+    let (mut sql_expr, desc, finishing, _depends_on) =
         query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
     let finishing = if is_view {
         // views don't use a separate finishing
@@ -218,10 +218,18 @@ pub fn plan_query(
     query: Query<Raw>,
     params: &Params,
     lifetime: QueryLifetime,
-) -> Result<(::expr::MirRelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
-    let (mut expr, desc, finishing) = query::plan_root_query(scx, query, lifetime)?;
+) -> Result<
+    (
+        ::expr::MirRelationExpr,
+        RelationDesc,
+        RowSetFinishing,
+        Vec<GlobalId>,
+    ),
+    anyhow::Error,
+> {
+    let (mut expr, desc, finishing, depends_on) = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params)?;
-    Ok((expr.lower(), desc, finishing))
+    Ok((expr.lower(), desc, finishing, depends_on))
 }
 
 with_options! {
