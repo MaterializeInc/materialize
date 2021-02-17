@@ -1,3 +1,4 @@
 avro==1.10.1
 kafka-python==2.0.2
 prometheus-api-client==0.4.2
+random_name==0.1.1

@@ -8,6 +8,10 @@
        "type": "long"
      },
      {
+       "name": "start_ms",
+       "type": "long"
+     },
+     {
        "name": "end_ms",
        "type": "long"
      },

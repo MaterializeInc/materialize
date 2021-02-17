@@ -18,13 +18,13 @@ import sys
 import time
 import typing
 import urllib
-import uuid
 
 import avro.schema
 import avro.io
 import kafka  # type: ignore
 import prometheus_api_client
 import prometheus_api_client.utils
+import random_name
 import requests
 
 
@@ -196,7 +196,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--benchmark-id",
         type=str,
-        default=str(uuid.uuid4()),
+        default=random_name.generate_name(),
         help="Unique identifier that identifies this benchmark",
     )
 
