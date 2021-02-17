@@ -162,7 +162,7 @@ pub struct RenderState {
     /// Handles to local inputs, keyed by ID.
     pub local_inputs: HashMap<GlobalId, LocalInput>,
     /// Handles to external sources, keyed by ID.
-    pub ts_source_mapping: HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
+    pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
     pub ts_histories: TimestampDataUpdates,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
@@ -557,10 +557,11 @@ where
 
                 // We also need to keep track of this mapping globally to activate sources
                 // on timestamp advancement queries
-                let prev = render_state
+                render_state
                     .ts_source_mapping
-                    .insert(uid, Rc::downgrade(&token));
-                assert!(prev.is_none());
+                    .entry(uid.source_id)
+                    .or_insert_with(Vec::new)
+                    .push(Rc::downgrade(&token));
             }
         }
     }

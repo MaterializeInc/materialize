@@ -763,15 +763,16 @@ where
                             }
                         }
                     }
-                    // TODO: clean this up to not do so much extra work each time
-                    for (source_instance_id, source) in
-                        self.render_state.ts_source_mapping.iter_mut()
-                    {
-                        if source_instance_id.source_id == id {
-                            if let Some(source) = source.upgrade() {
-                                if let Some(token) = &*source {
-                                    token.activate();
-                                }
+
+                    let sources = self
+                        .render_state
+                        .ts_source_mapping
+                        .get(&id)
+                        .expect("id should be present");
+                    for source in sources {
+                        if let Some(source) = source.upgrade() {
+                            if let Some(token) = &*source {
+                                token.activate();
                             }
                         }
                     }
@@ -783,6 +784,11 @@ where
 
                 if prev.is_none() {
                     log::debug!("Attempted to drop timestamping for source {} that was not previously known", id);
+                }
+
+                let prev = self.render_state.ts_source_mapping.remove(&id);
+                if prev.is_none() {
+                    log::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }
             }
         }
