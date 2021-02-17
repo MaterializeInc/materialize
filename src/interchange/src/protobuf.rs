@@ -9,6 +9,8 @@
 
 //! Protobuf source connector
 
+use std::collections::HashSet;
+
 use anyhow::{anyhow, bail, Context, Result};
 use num_traits::ToPrimitive;
 use ordered_float::OrderedFloat;
@@ -34,11 +36,15 @@ fn proto_message_name(message_name: &str) -> String {
     }
 }
 
-fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> Result<ScalarType> {
+fn validate_proto_field<'a>(
+    seen_messages: &mut HashSet<&'a str>,
+    field: &'a FieldDescriptor,
+    descriptors: &'a Descriptors,
+) -> Result<ScalarType> {
     Ok(match field.field_label() {
         FieldLabel::Required => bail!("Required field {} not supported", field.name()),
         FieldLabel::Repeated => {
-            validate_proto_field_resolved(field, descriptors)?;
+            validate_proto_field_resolved(seen_messages, field, descriptors)?;
             ScalarType::Jsonb
         }
         FieldLabel::Optional => {
@@ -55,9 +61,14 @@ fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> R
                 FieldType::String => ScalarType::String,
                 FieldType::Bytes => ScalarType::Bytes,
                 FieldType::Message(m) => {
-                    for f in m.fields().iter() {
-                        validate_proto_field_resolved(&f, descriptors)?;
+                    if seen_messages.contains(m.name()) {
+                        bail!("Recursive types are not supported: {}", m.name());
                     }
+                    seen_messages.insert(m.name());
+                    for f in m.fields().iter() {
+                        validate_proto_field_resolved(seen_messages, &f, descriptors)?;
+                    }
+                    seen_messages.remove(m.name());
                     ScalarType::Jsonb
                 }
                 FieldType::Group => bail!("Unions are currently not supported"),
@@ -68,7 +79,11 @@ fn validate_proto_field(field: &FieldDescriptor, descriptors: &Descriptors) -> R
     })
 }
 
-fn validate_proto_field_resolved(field: &FieldDescriptor, descriptors: &Descriptors) -> Result<()> {
+fn validate_proto_field_resolved<'a>(
+    seen_messages: &mut HashSet<&'a str>,
+    field: &'a FieldDescriptor,
+    descriptors: &'a Descriptors,
+) -> Result<()> {
     match field.field_label() {
         FieldLabel::Required => bail!("Required field {} not supported", field.name()),
         FieldLabel::Repeated | FieldLabel::Optional => match field.field_type(descriptors) {
@@ -89,9 +104,14 @@ fn validate_proto_field_resolved(field: &FieldDescriptor, descriptors: &Descript
             | FieldType::Enum(_) => (),
 
             FieldType::Message(m) => {
-                for f in m.fields().iter() {
-                    validate_proto_field_resolved(&f, descriptors)?;
+                if seen_messages.contains(m.name()) {
+                    bail!("Recursive types are not supported: {}", m.name());
                 }
+                seen_messages.insert(m.name());
+                for f in m.fields().iter() {
+                    validate_proto_field_resolved(seen_messages, &f, descriptors)?;
+                }
+                seen_messages.remove(m.name());
             }
             FieldType::Bytes => {
                 bail!("Arrays or nested messages with bytes objects are not currently supported")
@@ -124,6 +144,8 @@ pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Re
                 .join(", ")
         )
     })?;
+    let mut seen_messages = HashSet::new();
+    seen_messages.insert(message.name());
     let column_types = message
         .fields()
         .iter()
@@ -132,7 +154,7 @@ pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Re
                 /// All the fields have to be optional, so mark a field as
                 /// nullable if it doesn't have any defaults
                 nullable: f.default_value().is_none(),
-                scalar_type: validate_proto_field(&f, descriptors)?,
+                scalar_type: validate_proto_field(&mut seen_messages, &f, descriptors)?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
