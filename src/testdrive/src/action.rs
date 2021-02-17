@@ -103,14 +103,12 @@ pub struct State {
 
 impl State {
     pub async fn reset_materialized(&mut self) -> Result<(), Error> {
-        println!("in reset");
         for row in self
             .pgclient
             .query("SHOW DATABASES", &[])
             .await
             .err_ctx("resetting materialized state: SHOW DATABASES")?
         {
-            println!("in loop");
             let db_name: String = row.get(0);
             let query = format!("DROP DATABASE {}", db_name);
             sql::print_query(&query);
