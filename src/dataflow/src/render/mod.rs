@@ -264,7 +264,7 @@ where
                     .insert(src_id, LocalInput { handle, capability });
                 let err_collection = Collection::empty(scope);
                 self.collections.insert(
-                    MirRelationExpr::global_get(src_id, src.desc.typ().clone()),
+                    MirRelationExpr::global_get(src_id, src.bare_desc.typ().clone()),
                     (stream.as_collection(), err_collection),
                 );
             }
@@ -277,8 +277,6 @@ where
                 ts_frequency,
             } => {
                 // TODO(benesch): this match arm is hard to follow. Refactor.
-
-                let get_expr = MirRelationExpr::global_get(src_id, src.desc.typ().clone());
 
                 // This uid must be unique across all different instantiations of a source
                 let uid = SourceInstanceId {
@@ -351,7 +349,7 @@ where
                                     scope.index(),
                                     self.as_of_frontier.clone(),
                                     &mut src.operators,
-                                    src.desc.typ(),
+                                    src.bare_desc.typ(),
                                 );
 
                             let arranged = arrange_from_upsert(
@@ -365,10 +363,12 @@ where
                                     .as_collection(),
                             );
 
-                            let keys = src.desc.typ().keys[0]
+                            let keys = src.bare_desc.typ().keys[0]
                                 .iter()
                                 .map(|k| MirScalarExpr::Column(*k))
                                 .collect::<Vec<_>>();
+                            let get_expr =
+                                MirRelationExpr::global_get(src_id, src.bare_desc.typ().clone());
                             self.set_local(&get_expr, &keys, (arranged, err_collection.arrange()));
                             capability
                         }
@@ -450,6 +450,7 @@ where
                             &envelope,
                             &mut src.operators,
                             fast_forwarded,
+                            src.desc,
                         );
                         if let Some(tok) = extra_token {
                             self.additional_tokens
@@ -462,19 +463,9 @@ where
                     };
 
                     let mut collection = match envelope {
-                        SourceEnvelope::None | SourceEnvelope::CdcV2 => stream.as_collection(),
-                        SourceEnvelope::Debezium(_) =>
-                        // TODO(btv) -- this should just be a MirRelationExpr::Explode (name TBD)
-                        {
-                            stream.as_collection().explode({
-                                let mut row_packer = repr::RowPacker::new();
-                                move |row| {
-                                    let mut datums = row.unpack();
-                                    let diff = datums.pop().unwrap().unwrap_int64() as isize;
-                                    Some((row_packer.pack(datums.into_iter()), diff))
-                                }
-                            })
-                        }
+                        SourceEnvelope::None
+                        | SourceEnvelope::CdcV2
+                        | SourceEnvelope::Debezium(_) => stream.as_collection(),
                         SourceEnvelope::Upsert(_) => unreachable!(),
                     };
 
@@ -483,7 +474,7 @@ where
                     // to demonstrate the intended use.
                     if let Some(mut operators) = src.operators.clone() {
                         // Determine replacement values for unused columns.
-                        let source_type = src.desc.typ();
+                        let source_type = src.bare_desc.typ();
                         let position_or = (0..source_type.arity())
                             .map(|col| {
                                 if operators.projection.contains(&col) {
@@ -539,11 +530,30 @@ where
                         .map_in_place(move |(_, time, _)| time.advance_by(as_of_frontier2.borrow()))
                         .as_collection();
 
+                    let get = MirRelationExpr::Get {
+                        id: Id::BareSource(src_id),
+                        typ: src.bare_desc.typ().clone(),
+                    };
                     // Introduce the stream by name, as an unarranged collection.
-                    self.collections.insert(
-                        MirRelationExpr::global_get(src_id, src.desc.typ().clone()),
-                        (collection, err_collection),
-                    );
+                    self.collections
+                        .insert(get.clone(), (collection, err_collection));
+
+                    let mut expr = src.optimized_expr.0;
+                    expr.visit_mut(&mut |node| {
+                        if let MirRelationExpr::Get {
+                            id: Id::LocalBareSource,
+                            ..
+                        } = node
+                        {
+                            *node = get.clone()
+                        }
+                    });
+
+                    // Do whatever envelope processing is required.
+                    self.ensure_rendered(&expr, scope, scope.index());
+                    let new_get = MirRelationExpr::global_get(src_id, expr.typ());
+                    self.clone_from_to(&expr, &new_get);
+
                     capability
                 };
                 let token = Rc::new(capability);
@@ -1008,10 +1018,10 @@ where
 
                 // A get should have been loaded into the context, and it is surprising to
                 // reach this point given the `has_collection()` guard at the top of the method.
-                MirRelationExpr::Get { id, typ: _ } => {
+                MirRelationExpr::Get { id, typ } => {
                     // TODO: something more tasteful.
                     // perhaps load an empty collection, warn?
-                    panic!("Collection {} not pre-loaded", id);
+                    panic!("Collection {} (typ: {:?}) not pre-loaded", id, typ);
                 }
 
                 MirRelationExpr::Let { id, value, body } => {
@@ -1169,6 +1179,12 @@ where
                         self.ensure_rendered(input, scope, worker_index);
                     }
                     self.render_arrangeby(relation_expr, None);
+                }
+
+                MirRelationExpr::DeclareKeys { input, keys: _ } => {
+                    // TODO - some kind of debug mode where we assert that the keys are truly keys?
+                    self.ensure_rendered(input, scope, worker_index);
+                    self.clone_from_to(input, relation_expr);
                 }
             };
         }

@@ -66,6 +66,13 @@ const SERVER_VERSION: ServerVar<str> = ServerVar {
     description: "Shows the server version (PostgreSQL).",
 };
 
+const SERVER_VERSION_NUM: ServerVar<i32> = ServerVar {
+    name: unicase::Ascii::new("server_version_num"),
+    // See the comment on `SERVER_VERSION`.
+    value: &90500,
+    description: "Shows the server version as an integer (PostgreSQL).",
+};
+
 const SQL_SAFE_UPDATES: ServerVar<bool> = ServerVar {
     name: unicase::Ascii::new("sql_safe_updates"),
     value: &false,
@@ -122,6 +129,7 @@ pub struct Vars {
     integer_datetimes: ServerVar<bool>,
     search_path: ServerVar<[&'static str]>,
     server_version: ServerVar<str>,
+    server_version_num: ServerVar<i32>,
     sql_safe_updates: SessionVar<bool>,
     standard_conforming_strings: ServerVar<bool>,
     timezone: ServerVar<str>,
@@ -139,6 +147,7 @@ impl Default for Vars {
             integer_datetimes: INTEGER_DATETIMES,
             search_path: SEARCH_PATH,
             server_version: SERVER_VERSION,
+            server_version_num: SERVER_VERSION_NUM,
             sql_safe_updates: SessionVar::new(&SQL_SAFE_UPDATES),
             standard_conforming_strings: STANDARD_CONFORMING_STRINGS,
             timezone: TIMEZONE,
@@ -160,6 +169,7 @@ impl Vars {
             &self.integer_datetimes,
             &self.search_path,
             &self.server_version,
+            &self.server_version_num,
             &self.sql_safe_updates,
             &self.standard_conforming_strings,
             &self.timezone,
@@ -210,6 +220,8 @@ impl Vars {
             Ok(&self.search_path)
         } else if name == SERVER_VERSION.name {
             Ok(&self.server_version)
+        } else if name == SERVER_VERSION_NUM.name {
+            Ok(&self.server_version_num)
         } else if name == SQL_SAFE_UPDATES.name {
             Ok(&self.sql_safe_updates)
         } else if name == STANDARD_CONFORMING_STRINGS.name {
@@ -253,6 +265,8 @@ impl Vars {
             Err(CoordError::ReadOnlyParameter(&SEARCH_PATH))
         } else if name == SERVER_VERSION.name {
             Err(CoordError::ReadOnlyParameter(&SERVER_VERSION))
+        } else if name == SERVER_VERSION_NUM.name {
+            Err(CoordError::ReadOnlyParameter(&SERVER_VERSION_NUM))
         } else if name == SQL_SAFE_UPDATES.name {
             self.sql_safe_updates.set(value)
         } else if name == STANDARD_CONFORMING_STRINGS.name {
@@ -308,6 +322,11 @@ impl Vars {
     /// Returns the value of the `server_version` configuration parameter.
     pub fn server_version(&self) -> &'static str {
         self.server_version.value
+    }
+
+    /// Returns the value of the `server_version_num` configuration parameter.
+    pub fn server_version_num(&self) -> i32 {
+        *self.server_version_num.value
     }
 
     /// Returns the value of the `sql_safe_updates` configuration parameter.

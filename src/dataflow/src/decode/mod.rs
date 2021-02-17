@@ -12,7 +12,9 @@ use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration
 use anyhow::anyhow;
 use differential_dataflow::{capture::YieldingIter, hashable::Hashable};
 use futures::executor::block_on;
+use log::warn;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
+use repr::RelationDesc;
 use timely::{
     dataflow::{
         channels::pact::{Exchange, ParallelizationContract},
@@ -491,16 +493,13 @@ pub fn decode_values<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     fast_forwarded: bool,
+    desc: RelationDesc,
 ) -> (Stream<G, (Row, Timestamp, Diff)>, Option<Box<dyn Any>>)
 where
     G: Scope<Timestamp = Timestamp>,
 {
     let op_name = format!("{}Decode", encoding.op_name());
     let worker_index = stream.scope().index();
-    let key_indices = encoding
-        .desc(envelope)
-        .ok()
-        .and_then(|desc| desc.typ().keys.get(0).cloned());
     match (encoding, envelope) {
         (_, SourceEnvelope::Upsert(_)) => {
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
@@ -523,6 +522,14 @@ where
                 _ => unreachable!(),
             };
 
+            let dbz_key_indices = enc.key_schema.as_ref().and_then(|key_schema| {
+                interchange::avro::validate_key_schema(key_schema, &desc)
+                    .map(Some)
+                    .unwrap_or_else(|e| {
+                        warn!("Not using key due to error: {}", e);
+                        None
+                    })
+            });
             (
                 decode_values_inner(
                     stream,
@@ -534,7 +541,7 @@ where
                         debug_name.to_string(),
                         worker_index,
                         Some(dedup_strat),
-                        key_indices,
+                        dbz_key_indices,
                     )
                     .expect("Failed to create Avro decoder"),
                     &op_name,
@@ -554,7 +561,7 @@ where
                     debug_name.to_string(),
                     worker_index,
                     None,
-                    key_indices,
+                    None,
                 )
                 .expect("Failed to create Avro decoder"),
                 &op_name,

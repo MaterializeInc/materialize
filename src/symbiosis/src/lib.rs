@@ -418,7 +418,7 @@ fn push_column(
                         }
                     }
                 }
-                "smallint" => {
+                "int2" | "smallint" => {
                     let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(i32::from);
                     row.push(i.into());
                 }

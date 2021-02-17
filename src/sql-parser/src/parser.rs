@@ -2399,6 +2399,7 @@ impl<'a> Parser<'a> {
 
                 // Number-like types
                 BIGINT => other("int8"),
+                SMALLINT => other("int2"),
                 DEC | DECIMAL => DataType::Other {
                     name: UnresolvedObjectName::unqualified("numeric"),
                     typ_mod: self.parse_typ_mod()?,
