@@ -767,8 +767,8 @@ where
                     let sources = self
                         .render_state
                         .ts_source_mapping
-                        .get(&id)
-                        .expect("id should be present");
+                        .entry(id)
+                        .or_insert_with(Vec::new);
                     for source in sources {
                         if let Some(source) = source.upgrade() {
                             if let Some(token) = &*source {
