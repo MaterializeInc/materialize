@@ -69,6 +69,7 @@ pub async fn check_version_loop(telemetry_url: String, cluster_id: String, start
 async fn fetch_latest_version(telemetry_url: &str, start_time: Instant) -> String {
     RetryBuilder::new()
         .max_sleep(None)
+        .max_backoff(TELEMETRY_FREQUENCY)
         .initial_backoff(Duration::from_secs(1))
         .build()
         .retry(|_state| async {
