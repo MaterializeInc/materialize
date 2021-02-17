@@ -214,13 +214,13 @@ impl Scope {
         items
     }
 
-    fn resolve<'a, Matches>(
+    fn resolve<'a, M>(
         &'a self,
-        matches: Matches,
+        mut matches: M,
         name_in_error: &str,
     ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError>
     where
-        Matches: Fn(&ScopeItemName) -> bool,
+        M: FnMut(usize, &ScopeItemName) -> bool,
     {
         let mut results = self
             .all_items()
@@ -230,7 +230,7 @@ impl Scope {
                     .iter()
                     .map(move |name| (level, column, item, name))
             })
-            .filter(|(_level, _column, item, name)| (matches)(name) && item.nameable)
+            .filter(|(level, _column, item, name)| (matches)(*level, name) && item.nameable)
             .sorted_by_key(|(level, _column, _item, name)| (*level, !name.priority));
         match results.next() {
             None => Err(PlanError::UnknownColumn(name_in_error.to_owned())),
@@ -257,7 +257,7 @@ impl Scope {
         column_name: &ColumnName,
     ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
         self.resolve(
-            |item: &ScopeItemName| item.column_name.as_ref() == Some(column_name),
+            |_level, item| item.column_name.as_ref() == Some(column_name),
             column_name.as_str(),
         )
     }
@@ -267,13 +267,23 @@ impl Scope {
         table_name: &PartialName,
         column_name: &ColumnName,
     ) -> Result<(ColumnRef, &'a ScopeItemName), PlanError> {
+        let mut seen_at_level = None;
         self.resolve(
-            |item: &ScopeItemName| {
-                item.table_name
-                    .as_ref()
-                    .map(|n| n.matches(table_name))
-                    .unwrap_or(false)
-                    && item.column_name.as_ref() == Some(column_name)
+            |level, item| {
+                // Once we've matched a table name at a level, even if the
+                // column name did not match, we can never match an item from
+                // another level.
+                if let Some(seen_at_level) = seen_at_level {
+                    if seen_at_level != level {
+                        return false;
+                    }
+                }
+                if item.table_name.as_ref().map(|n| n.matches(table_name)) == Some(true) {
+                    seen_at_level = Some(level);
+                    item.column_name.as_ref() == Some(column_name)
+                } else {
+                    false
+                }
             },
             &format!("{}.{}", table_name, column_name),
         )
