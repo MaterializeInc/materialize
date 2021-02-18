@@ -11,7 +11,7 @@ use anyhow::bail;
 
 use ore::collections::CollectionExt;
 use sql::ast::display::AstDisplay;
-use sql::ast::visit_mut::VisitMut;
+use sql::ast::visit_mut::{self, VisitMut};
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType,
     Function, Ident, Raw, RawName, Statement, TableFactor, UnresolvedObjectName,
@@ -133,6 +133,20 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
         tx.commit()?;
         Ok(())
     },
+    // This was previously the place where the function name migration occurred;
+    // however #5802 showed that the implementation was insufficient.
+    //
+    // Introduced for v0.7.0
+    |_: &mut Catalog| Ok(()),
+    // Rewrites all function references to have `pg_catalog` qualification; this
+    // is necessary to support resolving all built-in functions to the catalog.
+    // (At the time of writing Materialize did not support user-defined
+    // functions.)
+    //
+    // The approach is to prepend `pg_catalog` to all `UnresolvedObjectName`
+    // names that could refer to functions.
+    //
+    // Introduced for v0.7.1
     |catalog: &mut Catalog| {
         fn normalize_function_name(name: &mut UnresolvedObjectName) {
             if name.0.len() == 1 {
@@ -155,11 +169,17 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
         impl<'ast> VisitMut<'ast, Raw> for FuncNormalizer {
             fn visit_function_mut(&mut self, func: &'ast mut Function<Raw>) {
                 normalize_function_name(&mut func.name);
+                // Function args can be functions themselves, so let the visitor
+                // find them.
+                visit_mut::visit_function_mut(self, func)
             }
             fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Raw>) {
                 if let TableFactor::Function { ref mut name, .. } = table_factor {
                     normalize_function_name(name);
                 }
+                // Function args can be functions themselves, so let the visitor
+                // find them.
+                visit_mut::visit_table_factor_mut(self, table_factor)
             }
         }
 
