@@ -9,17 +9,20 @@
 
 //! Types related to the creation of dataflow sources.
 
+use futures::stream::{BoxStream, StreamExt as _};
 use mz_avro::types::Value;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{self, Debug};
+use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract},
-    operators::Capability,
+    operators::{self, Capability, Event, ToStreamAsync},
 };
 
 use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError};
@@ -32,11 +35,12 @@ use prometheus::{
     register_uint_gauge_vec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec,
     IntGaugeVec, UIntGauge, UIntGaugeVec,
 };
-use repr::Timestamp;
+use repr::{Diff, Row, Timestamp};
 use timely::dataflow::Scope;
 use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
+use tokio_stream::wrappers::IntervalStream;
 
 use super::source::util::source;
 use crate::logging::materialized::{Logger, MaterializedEvent};
@@ -859,6 +863,117 @@ enum MessageProcessing {
     Active,
     Yielded,
     YieldedWithDelay,
+}
+
+#[derive(Clone)]
+/// A thread-safe shareable timestamp provider that allows consumers to pause ticking of the clock
+/// while they are in the middle of producing data for a particular timestamp.
+pub struct Timestamper {
+    inner: Arc<RwLock<Timestamp>>,
+}
+
+impl Timestamper {
+    fn new() -> Self {
+        let now = UNIX_EPOCH
+            .elapsed()
+            .unwrap()
+            .as_millis()
+            .try_into()
+            .unwrap();
+        Self {
+            inner: Arc::new(RwLock::new(now)),
+        }
+    }
+    /// Grab a lease for the current timestamp. This functions returns an opaque type that
+    /// dereferences to the timestamp and will automatically release the lease when dropped.
+    pub(crate) async fn lease(&self) -> impl Deref<Target = Timestamp> + '_ {
+        self.inner.read().await
+    }
+
+    /// Monotonically increases the current timestamp. This method waits for all current leases to
+    /// end before changing the value. Furthermore, while a tick is pending no more leases will be
+    /// given. This is due to the write-preferring behaviour of the tokio RwLock.
+    async fn tick(&self) -> Timestamp {
+        let mut t = self.inner.write().await;
+        let now = UNIX_EPOCH
+            .elapsed()
+            .unwrap()
+            .as_millis()
+            .try_into()
+            .unwrap();
+        *t = std::cmp::max(*t, now);
+        *t
+    }
+}
+
+/// The expected item for the stream of SimpleSource impelmentation
+pub type StreamItem = Result<(Row, Timestamp, Diff), (Timestamp, String)>;
+
+/// Simple sources must implement this trait. Sources will then get created as part of the
+/// [`create_source_simple`] function.
+///
+/// Each simple source is given access to a timestamper instance that can provide valid times for
+/// messages while also promising that a given timestamp will remain open for as long as a source
+/// needs it to produce its full updates.
+pub trait SimpleSource {
+    /// Consumes the instance of this SimpleSource and converts it into an async Stream
+    fn into_stream(self, clock: Timestamper) -> BoxStream<'static, StreamItem>;
+}
+
+/// Creates a source dataflow operator. The type of ExternalSourceConnector determines the
+/// type of source that should be created
+pub(crate) fn create_source_simple<G, C>(
+    config: SourceConfig<G>,
+    connector: C,
+) -> (
+    (
+        timely::dataflow::Stream<G, (Row, Timestamp, Diff)>,
+        timely::dataflow::Stream<G, SourceError>,
+    ),
+    Option<SourceToken>,
+)
+where
+    G: Scope<Timestamp = Timestamp>,
+    C: SimpleSource + 'static,
+{
+    let SourceConfig {
+        scope,
+        active,
+        timestamp_frequency,
+        ..
+    } = config;
+
+    if active {
+        let timestamper = Timestamper::new();
+
+        let frontier_timestamper = timestamper.clone();
+        let frontier_stream =
+            IntervalStream::new(tokio::time::interval(timestamp_frequency)).then(move |_| {
+                let timestamper = frontier_timestamper.clone();
+                async move {
+                    let t = timestamper.tick().await;
+                    Event::Progress(Some(t))
+                }
+            });
+
+        let data_stream = connector.into_stream(timestamper).map(|item| match item {
+            Ok((row, time, diff)) => Event::Message(time, Ok((row, time, diff))),
+            Err((time, err)) => Event::Message(time, Err(err)),
+        });
+
+        let (future, stream) = futures::stream::select(data_stream, frontier_stream)
+            .boxed()
+            .to_stream(scope);
+        tokio::spawn(future);
+
+        let (ok_stream, err_stream) = stream.map_fallible(|r| r.map_err(SourceError::FileIO));
+
+        ((ok_stream, err_stream), None)
+    } else {
+        let ok_stream = operators::generic::operator::empty(scope);
+        let err_stream = operators::generic::operator::empty(scope);
+        ((ok_stream, err_stream), None)
+    }
 }
 
 /// Creates a source dataflow operator. The type of ExternalSourceConnector determines the
