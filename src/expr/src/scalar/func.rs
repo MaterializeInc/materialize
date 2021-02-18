@@ -3977,6 +3977,33 @@ where
     }
 }
 
+pub fn parse_datum<'a>(s: &'a str, temp_storage: &'a RowArena, ty: ScalarType) -> Result<Datum<'a>, EvalError> {
+    let datum = s.into();
+    use ScalarType::*;
+    match &ty {
+        Bool => cast_string_to_bool(datum),
+        Int32 | Oid => cast_string_to_int32(datum),
+        Int64 => cast_string_to_int64(datum),
+        Float32 => cast_string_to_float32(datum),
+        Float64 => cast_string_to_float64(datum),
+        Decimal(_, s) => cast_string_to_decimal(datum, *s),
+        Date => cast_string_to_date(datum),
+        Time => cast_string_to_time(datum),
+        Timestamp => cast_string_to_timestamp(datum),
+        TimestampTz => cast_string_to_timestamptz(datum),
+        Interval => cast_string_to_interval(datum),
+        String => Ok(datum),
+        Uuid => cast_string_to_uuid(datum),
+        Bytes => cast_string_to_bytes(datum, temp_storage),
+        Jsonb => cast_string_to_jsonb(datum, temp_storage),
+
+        Array(_) => unimplemented!(),
+        List { .. } => unimplemented!(),
+        Map { .. } => unimplemented!(),
+        Record { .. } => unimplemented!(),
+    }
+}
+
 fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     // Return value indicates whether this level's slices are empty results.
     fn slice_and_descend(d: Datum, ranges: &[(usize, usize)], packer: &mut RowPacker) -> bool {
