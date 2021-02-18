@@ -13,6 +13,7 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
+use std::convert::TryInto;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -34,6 +35,7 @@ use crate::mux::Mux;
 
 mod http;
 mod mux;
+mod server_metrics;
 mod version_check;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
@@ -198,6 +200,11 @@ pub async fn serve(
         }
     };
 
+    // Set this metric once so that it shows up in the metric export.
+    crate::server_metrics::WORKER_COUNT
+        .with_label_values(&[&workers.to_string()])
+        .set(workers.try_into().unwrap());
+
     // Initialize network listener.
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
@@ -247,10 +254,6 @@ pub async fn serve(
             tls: http_tls,
             coord_client,
             start_time,
-            // TODO(benesch): passing this to `http::Server::new` just
-            // so it can set a static metric is silly. We should just
-            // set the metric directly here.
-            worker_count: workers,
         }));
         mux.serve(incoming.by_ref().take_until(drain_tripwire))
             .await;
@@ -262,6 +265,7 @@ pub async fn serve(
         tokio::spawn(version_check::check_version_loop(
             telemetry_url,
             coord_handle.cluster_id().to_string(),
+            start_time,
         ));
     }
 

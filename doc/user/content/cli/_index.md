@@ -262,9 +262,17 @@ parameter.
 
 ### Telemetry
 
-Unless disabled with `--disable-telemetry`, upon startup `materialized`
-reports its current version and cluster id to a central server operated by
-materialize.com. If a newer version is available a warning will be logged.
+Unless disabled with `--disable-telemetry`, upon startup and once an hour
+`materialized` reports some anonymous telemetry data to a central server operated
+by materialize.com. If a newer version is available at startup a warning will be
+logged.
+
+Information reported to Materialize:
+
+* Cluster ID
+* Current Version
+* Number of worker threads
+* Uptime
 
 ### Dataflow tuning
 
