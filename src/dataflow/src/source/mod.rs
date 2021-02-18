@@ -17,12 +17,16 @@ use std::convert::TryInto;
 use std::fmt::{self, Debug};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
     channels::pact::{Exchange, ParallelizationContract},
-    operators::Capability,
+    operators::{Capability, Event},
 };
 
+use anyhow::anyhow;
+use async_trait::async_trait;
 use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError};
 use expr::{GlobalId, PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
@@ -33,13 +37,13 @@ use prometheus::{
     register_uint_gauge_vec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec,
     IntGaugeVec, UIntGauge, UIntGaugeVec,
 };
-use repr::{CachedRecord, CachedRecordIter, Timestamp};
+use repr::{CachedRecord, CachedRecordIter, Diff, Row, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::Scope;
 use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
 
 use super::source::util::source;
 use crate::logging::materialized::{Logger, MaterializedEvent};
@@ -977,6 +981,229 @@ enum MessageProcessing {
     Active,
     Yielded,
     YieldedWithDelay,
+}
+
+type EventSender =
+    mpsc::Sender<Event<Option<Timestamp>, Result<(Row, Timestamp, Diff), SourceError>>>;
+
+/// An active transaction at a particular point in time. An instance of this struct is provided to
+/// a source when calling start_tx() on its timestamper. This has the effect of freezing the
+/// timestamper clock while the data for the transaction is sent.
+///
+/// The transaction is automatically committed on Drop at which point the timestamper will continue
+/// ticking its internal clock.
+pub struct SourceTransaction<'a> {
+    timestamp: RwLockReadGuard<'a, Timestamp>,
+    sender: &'a EventSender,
+}
+
+impl SourceTransaction<'_> {
+    /// Record an insertion of a row in the current transaction
+    pub async fn insert(&self, row: Row) -> anyhow::Result<()> {
+        let msg = Ok((row, *self.timestamp, 1));
+        self.sender
+            .send(Event::Message(*self.timestamp, msg))
+            .await
+            .or_else(|_| Err(anyhow!("channel closed")))
+    }
+
+    /// Record a deletion of a row in the current transaction
+    pub async fn delete(&self, row: Row) -> anyhow::Result<()> {
+        let msg = Ok((row, *self.timestamp, -1));
+        self.sender
+            .send(Event::Message(*self.timestamp, msg))
+            .await
+            .or_else(|_| Err(anyhow!("channel closed")))
+    }
+}
+
+/// A thread-safe transaction manager that is responsible for assigning timestamps to the
+/// transactions submitted to the system. Rows can be inserted individually using the
+/// [insert](Timestamper::insert) and [delete](Timestamper::delete) methods or as part of a bigger
+/// transaction.
+///
+/// When a transaction is started using [start_tx](Timestamper::start_tx) the internal clock will be
+/// frozen and any subsequent rows will be timestamped with the exact same timestamp. The
+/// transaction is committed automatically as soon as the transaction object gets dropped.
+pub struct Timestamper {
+    inner: Arc<RwLock<Timestamp>>,
+    sender: EventSender,
+    tick_duration: Duration,
+}
+
+impl Timestamper {
+    fn new(sender: EventSender, tick_duration: Duration) -> Self {
+        let now = UNIX_EPOCH
+            .elapsed()
+            .expect("system clock before 1970")
+            .as_millis()
+            .try_into()
+            .expect("materialize has existed for more than 500M years");
+        Self {
+            inner: Arc::new(RwLock::new(now)),
+            sender,
+            tick_duration,
+        }
+    }
+
+    /// Start a transaction at a particular point in time. The timestamper will freeze its internal
+    /// clock while a transaction is active.
+    pub async fn start_tx<'a>(&'a self) -> SourceTransaction<'a> {
+        SourceTransaction {
+            timestamp: self.inner.read().await,
+            sender: &self.sender,
+        }
+    }
+
+    /// Record an insertion of a row
+    pub async fn insert(&self, row: Row) -> anyhow::Result<()> {
+        self.start_tx().await.insert(row).await
+    }
+
+    /// Record a deletion of a row
+    pub async fn delete(&self, row: Row) -> anyhow::Result<()> {
+        self.start_tx().await.delete(row).await
+    }
+
+    /// Records an error. After this method is called the source will permanently be in an errored
+    /// state
+    async fn error(&self, err: SourceError) -> anyhow::Result<()> {
+        let timestamp = self.inner.read().await;
+        self.sender
+            .send(Event::Message(*timestamp, Err(err)))
+            .await
+            .or_else(|_| Err(anyhow!("channel closed")))
+    }
+
+    /// Attempts to monotonically increase the current timestamp and provides a Progress message to
+    /// timely.
+    ///
+    /// This method will wait for all current transactions to commit before advancing the clock and
+    /// will cause any new requests for transactions to wait for the tick to complete before
+    /// starting.  This is due to the write-preferring behaviour of the tokio RwLock.
+    async fn tick(&self) -> anyhow::Result<()> {
+        tokio::time::sleep(self.tick_duration).await;
+        let mut timestamp = self.inner.write().await;
+        let mut now = UNIX_EPOCH
+            .elapsed()
+            .expect("system clock before 1970")
+            .as_millis();
+
+        // Round to the next greatest self.tick_duration increment.
+        // This is to guarantee that different workers downgrade (without coordination) to the
+        // "same" next time
+        now += self.tick_duration.as_millis() - (now % self.tick_duration.as_millis());
+
+        let now: u64 = now
+            .try_into()
+            .expect("materialize has existed for more than 500M years");
+
+        if *timestamp < now {
+            *timestamp = now;
+            self.sender
+                .send(Event::Progress(Some(*timestamp)))
+                .await
+                .or_else(|_| Err(anyhow!("channel closed")))?;
+        }
+        Ok(())
+    }
+}
+
+/// Simple sources must implement this trait. Sources will then get created as part of the
+/// [`create_source_simple`] function.
+///
+/// Each simple source is given access to a timestamper instance that can be used to insert or
+/// retract rows for this source. See the API of the [Timestamper](Timestamper) for more details.
+#[async_trait]
+pub trait SimpleSource {
+    /// Consumes the instance of this SimpleSource and converts it into an async state machine that
+    /// submits rows using the provided timestamper.
+    ///
+    /// Implementors should return an Err(_) if an unrecoverable error is encountered or Ok(()) when
+    /// they have finished consuming the upstream data.
+    async fn start(self, timestamper: &Timestamper) -> Result<(), SourceError>;
+}
+
+/// Creates a source dataflow operator from a connector implementing [SimpleSource](SimpleSource)
+pub fn create_source_simple<G, C>(
+    config: SourceConfig<G>,
+    connector: C,
+) -> (
+    (
+        timely::dataflow::Stream<G, (Row, Timestamp, Diff)>,
+        timely::dataflow::Stream<G, SourceError>,
+    ),
+    Option<SourceToken>,
+)
+where
+    G: Scope<Timestamp = Timestamp>,
+    C: SimpleSource + Send + 'static,
+{
+    let SourceConfig {
+        name,
+        scope,
+        active,
+        timestamp_frequency,
+        ..
+    } = config;
+
+    let (tx, mut rx) = mpsc::channel(64);
+
+    if active {
+        tokio::spawn(async move {
+            let timestamper = Timestamper::new(tx, timestamp_frequency);
+            let source = connector.start(&timestamper);
+            tokio::pin!(source);
+
+            loop {
+                tokio::select! {
+                    res = timestamper.tick() => {
+                        if res.is_err() {
+                            break;
+                        }
+                    }
+                    res = &mut source => {
+                        if let Err(err) = res {
+                            let _ = timestamper.error(err).await;
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    let (stream, capability) = source(scope, name, move |info| {
+        let activator = Arc::new(scope.sync_activator_for(&info.address[..]));
+
+        move |cap, output| {
+            if !active {
+                return SourceStatus::Done;
+            }
+
+            let waker = futures::task::waker_ref(&activator);
+            let mut context = Context::from_waker(&waker);
+
+            while let Poll::Ready(item) = rx.poll_recv(&mut context) {
+                match item {
+                    Some(Event::Progress(None)) => unreachable!(),
+                    Some(Event::Progress(Some(time))) => {
+                        cap.downgrade(&time);
+                    }
+                    Some(Event::Message(time, data)) => {
+                        output.session(&cap.delayed(&time)).give(data);
+                    }
+                    None => {
+                        return SourceStatus::Done;
+                    }
+                }
+            }
+
+            return SourceStatus::Alive;
+        }
+    });
+
+    (stream.map_fallible(|r| r), Some(capability))
 }
 
 /// Creates a source dataflow operator. The type of ExternalSourceConnector determines the
