@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
 use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
-use log::{debug, error, info, trace};
+use log::{error, info, trace};
 use tokio::select;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -31,7 +31,7 @@ static CACHE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
 
 // Limit at which we will make a new log segment
 // TODO: make this configurable and / or bump default to be larger.
-static TABLE_MAX_LOG_SEGMENT_SIZE: usize = 10_000_000;
+static TABLE_MAX_LOG_SEGMENT_SIZE: usize = 10;
 
 #[derive(Clone, Debug)]
 pub struct CacheConfig {
@@ -530,6 +530,19 @@ impl TableLogSegments {
         Ok(())
     }
 
+    fn drop_table(self) -> Result<(), anyhow::Error> {
+        let path = self.base_path.clone();
+
+        // I never remember the rules for what happens if you delete
+        // a directory with a open fd from that directory, so explicitly
+        // dropping the fd first
+        // Maybe a Option<File> is a better interface?
+        drop(self);
+        fs::remove_dir_all(path)?;
+
+        Ok(())
+    }
+
     fn rotate_log_segment(&mut self) -> Result<(), anyhow::Error> {
         let old_file_path = self
             .base_path
@@ -619,7 +632,6 @@ impl TableLogSegments {
 
         if let Some((unfinished_file, sequence_number)) = unfinished_file {
             // Go ahead and load the old data
-
             let mut updates = vec![];
             for path in finished_files {
                 let data = fs::read(path).unwrap();
@@ -656,7 +668,7 @@ impl TableLogSegments {
 
 pub struct Tables {
     path: PathBuf,
-    files: HashMap<GlobalId, File>,
+    tables: HashMap<GlobalId, TableLogSegments>,
 }
 
 impl Tables {
@@ -665,7 +677,7 @@ impl Tables {
             .with_context(|| anyhow!("trying to create tables directory: {:#?}", path))?;
         Ok(Self {
             path,
-            files: HashMap::new(),
+            tables: HashMap::new(),
         })
     }
 
@@ -675,99 +687,50 @@ impl Tables {
     }
 
     pub fn create_table(&mut self, id: GlobalId) -> Result<(), anyhow::Error> {
-        if self.files.contains_key(&id) {
+        if self.tables.contains_key(&id) {
             bail!("asked to create table {:?} that was already created", id)
         }
 
-        let file_path = self.get_path(id);
-        let file = fs::OpenOptions::new()
-            .append(true)
-            .create_new(true)
-            .open(&file_path)
-            .with_context(|| {
-                anyhow!(
-                    "trying to create file for table: {} path: {:#?}",
-                    id,
-                    file_path
-                )
-            })?;
-
-        self.files.insert(id, file);
+        let table_base_path = self.get_path(id);
+        let table_log = TableLogSegments::create_table(id, table_base_path)?;
+        self.tables.insert(id, table_log);
         Ok(())
     }
 
     pub fn drop_table(&mut self, id: GlobalId) -> Result<(), anyhow::Error> {
-        if !self.files.contains_key(&id) {
+        if !self.tables.contains_key(&id) {
             bail!("asked to delete table {:?} that doesn't exist", id)
         }
 
-        let file = self.files.remove(&id).expect("file known to exist");
-        // explicitly close this file descriptor
-        drop(file);
-
-        fs::remove_file(self.path.join(id.to_string()))
-            .with_context(|| anyhow!("trying to remove table {}", id))?;
+        let table = self.tables.remove(&id).expect("table known to exist");
+        table.drop_table()?;
 
         Ok(())
     }
 
     pub fn write_updates(&mut self, id: GlobalId, updates: &[Update]) -> Result<(), anyhow::Error> {
-        if !self.files.contains_key(&id) {
+        if !self.tables.contains_key(&id) {
             // TODO get rid of this later
             panic!("asked to write to unknown table: {}", id)
         }
 
-        let file = self.files.get_mut(&id).expect("file known to exist");
-        let mut buf = Vec::new();
-        for update in updates {
-            encode_update(update, &mut buf)?;
-        }
-        file.write_all(&buf)?;
-        file.flush()?;
-
+        let table = self.tables.get_mut(&id).expect("table known to exist");
+        table.write_updates(updates)?;
         Ok(())
     }
 
     pub fn reload_table(&mut self, id: GlobalId) -> Result<Vec<Update>, anyhow::Error> {
-        // We need to find the proper file again, open it,
-        // read back its contents into a Vec<Update>
-        // send that back to the coord
-        // TODO: note that the last step is not necessary once we
-        // read from the file like a proper source
+        let table_base_path = self.get_path(id);
+        let (table, updates) = TableLogSegments::reload_table(id, table_base_path)?;
+        self.tables.insert(id, table);
 
-        let path = self.get_path(id);
-        debug!("reading table data from {}", path.display());
-        let data = fs::read(&path).unwrap();
+        Ok(updates)
+    }
 
-        // If we can't find a file that's either an error or a migration from a
-        // version without persistent tables to one with persistent tables
-        // Handle it by creating a new file for now.
-        // TODO: is there a better way to handle this / structure the logic?
-        // TODO: you probably want to break this up into ensure_table and then
-        // reload?
-        let file = fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap_or_else(|_| {
-                error!("failed to reopen file for table: {} path: {:#?}", id, path);
-                fs::OpenOptions::new()
-                    .append(true)
-                    .create_new(true)
-                    .open(&path)
-                    .with_context(|| {
-                        anyhow!(
-                            "trying to recreate file for table: {} path: {:#?}",
-                            id,
-                            path
-                        )
-                        // TODO: handle this better
-                    })
-                    .expect("creating the file must succeed")
-            });
-
-        self.files.insert(id, file);
-
-        Ok(TableIter::new(data).collect())
+    fn close_up_to(&mut self, timestamp: Timestamp) -> Result<(), anyhow::Error> {
+        // For all tables, indicate that <timestamp> is now the min timestamp going
+        // forward
+        unimplemented!()
     }
 }
 
