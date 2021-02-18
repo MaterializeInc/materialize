@@ -18,9 +18,9 @@ use tokio_postgres::NoTls;
 
 /// The schema of a single column
 pub struct PgColumn {
-    name: String,
-    scalar_type: PgType,
-    nullable: bool,
+    pub name: String,
+    pub scalar_type: PgType,
+    pub nullable: bool,
 }
 
 impl AstDisplay for PgColumn {
@@ -38,6 +38,14 @@ impl AstDisplay for PgColumn {
 }
 impl_display!(PgColumn);
 
+/// Information about a remote table
+pub struct TableInfo {
+    /// The OID of the table
+    pub rel_id: u32,
+    /// The schema of each column, in order
+    pub schema: Vec<PgColumn>,
+}
+
 /// Fetches column information from an upstream Postgres source, given
 /// a connection string, a namespace, and a target table.
 ///
@@ -45,11 +53,11 @@ impl_display!(PgColumn);
 ///
 /// - Invalid connection string, user information, or user permissions.
 /// - Upstream table does not exist or contains invalid values.
-pub async fn fetch_columns(
+pub async fn table_info(
     conn: &str,
     namespace: &str,
     table: &str,
-) -> Result<Vec<PgColumn>, anyhow::Error> {
+) -> Result<TableInfo, anyhow::Error> {
     let (client, connection) = tokio_postgres::connect(&conn, NoTls).await?;
     tokio::spawn(connection);
 
@@ -68,7 +76,7 @@ pub async fn fetch_columns(
         .ok_or_else(|| anyhow!("table not found in the upstream catalog"))?
         .get(0);
 
-    Ok(client
+    let schema = client
         .query(
             "SELECT a.attname, a.atttypid, a.attnotnull
                 FROM pg_catalog.pg_attribute a
@@ -92,5 +100,7 @@ pub async fn fetch_columns(
                 nullable,
             })
         })
-        .collect::<Result<Vec<_>, anyhow::Error>>()?)
+        .collect::<Result<Vec<_>, anyhow::Error>>()?;
+
+    Ok(TableInfo { rel_id, schema })
 }

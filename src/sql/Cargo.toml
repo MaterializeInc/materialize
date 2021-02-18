@@ -40,6 +40,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 unicase = "2.6.0"
 url = "2.2.1"
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 
 [dev-dependencies]
 datadriven = "0.5.0"

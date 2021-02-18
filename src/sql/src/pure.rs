@@ -168,8 +168,9 @@ async fn purify_postgres_table(
     table: &str,
     columns: &mut Vec<ColumnDef<Raw>>,
 ) -> Result<(), anyhow::Error> {
-    let fetched_columns = postgres_util::fetch_columns(conn, namespace, table)
+    let fetched_columns = postgres_util::table_info(conn, namespace, table)
         .await?
+        .schema
         .iter()
         .map(|c| c.to_ast_string())
         .collect::<Vec<String>>()
@@ -218,6 +219,8 @@ async fn purify_postgres_table(
             }
         }
     }
+    //TODO(petrosagg): attempt to connect with a replication connection and create a temporary
+    //                 logical replication slot to ensure the server has the correct WAL settings
     Ok(())
 }
 
