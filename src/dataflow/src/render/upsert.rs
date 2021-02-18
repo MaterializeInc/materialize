@@ -40,9 +40,9 @@ where
 {
     // Currently, the upsert-specific transformations run in the
     // following order:
-    // 1. Applies `as_of` frontier compaction. The compaction is important as	
-    /// downstream upsert preparation can compact away updates for the same keys	
-    /// at the same times, and by advancing times we make more of them the same.
+    // 1. Applies `as_of` frontier compaction. The compaction is important as
+    // downstream upsert preparation can compact away updates for the same keys
+    // at the same times, and by advancing times we make more of them the same.
     // 2. compact away updates for the same keys at the same times
     // 3. decoding records
     // 4. prepending the key to the value so that the stream becomes
