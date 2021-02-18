@@ -25,7 +25,9 @@ use openssl::hash::MessageDigest;
 use openssl::nid::Nid;
 use openssl::pkey::{PKey, Private};
 use openssl::rsa::Rsa;
-use openssl::ssl::{SslConnector, SslConnectorBuilder, SslFiletype, SslMethod, SslVerifyMode};
+use openssl::ssl::{
+    SslConnector, SslConnectorBuilder, SslFiletype, SslMethod, SslOptions, SslVerifyMode,
+};
 use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
 use openssl::x509::{X509NameBuilder, X509};
 use postgres::config::SslMode;
@@ -133,6 +135,28 @@ where
     F: Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack>,
 {
     let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    // Disable TLS v1.3 because `postgres` and `hyper` produce stabler error
+    // messages with TLS v1.2.
+    //
+    // Briefly, in TLS v1.3, failing to present a client certificate does not
+    // error during the TLS handshake, as it does in TLS v1.2, but on the first
+    // attempt to read from the stream. But both `postgres` and `hyper` write a
+    // bunch of data before attempting to read from the stream. With a failed
+    // TLS v1.3 connection, sometimes `postgres` and `hyper` succeed in writing
+    // out this data, and then return a nice error message on the call to read.
+    // But sometimes the connection is closed before they write out the data,
+    // and so they report "connection closed" before they ever call read, never
+    // noticing the underlying SSL error.
+    //
+    // It's unclear who's bug this is. Is it on `hyper`/`postgres` to call read
+    // if writing to the stream fails to see if a TLS error occured? Is it on
+    // OpenSSL to provide a better API [1]? Is it a protocol issue that ought to
+    // be corrected in TLS v1.4? We don't want to answer these questions, so we
+    // just avoid TLS v1.3 for now.
+    //
+    // [1]: https://github.com/openssl/openssl/issues/11118
+    let options = connector_builder.options() | SslOptions::NO_TLSV1_3;
+    connector_builder.set_options(options);
     configure(&mut connector_builder).unwrap();
     MakeTlsConnector::new(connector_builder.build())
 }
@@ -142,6 +166,9 @@ where
     F: Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack>,
 {
     let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    // See comment in `make_pg_tls` about disabling TLS v1.3.
+    let options = connector_builder.options() | SslOptions::NO_TLSV1_3;
+    connector_builder.set_options(options);
     configure(&mut connector_builder).unwrap();
     let mut http = HttpConnector::new();
     http.enforce_http(false);
@@ -424,7 +451,10 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
-                    assert_contains!(err.to_string(), "tlsv13 alert certificate required")
+                    assert_contains!(
+                        err.to_string(),
+                        "self signed certificate in certificate chain"
+                    )
                 })),
             },
             TestCase::Http {
@@ -433,7 +463,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert!(code.is_none());
-                    assert_http_certificate_required_message(&message)
+                    assert_contains!(message, "self signed certificate in certificate chain")
                 })),
             },
             // Connecting with TLS with a bad client certificate should fail.
@@ -552,7 +582,10 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
-                    assert_contains!(err.to_string(), "tlsv13 alert certificate required");
+                    assert_contains!(
+                        err.to_string(),
+                        "self signed certificate in certificate chain"
+                    )
                 })),
             },
             TestCase::Http {
@@ -561,7 +594,7 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert!(code.is_none());
-                    assert_http_certificate_required_message(&message);
+                    assert_contains!(message, "self signed certificate in certificate chain")
                 })),
             },
             // Connecting with TLS with a bad client certificate should fail.
@@ -657,15 +690,4 @@ fn test_tls() -> Result<(), Box<dyn Error>> {
     );
 
     Ok(())
-}
-
-fn assert_http_certificate_required_message(message: &str) {
-    // NOTE(benesch): often Hyper returns a useless "channel closed" error
-    // message instead of the actual TLS error message. I suspect this is a bug
-    // in Hyper.
-    assert!(
-        message.contains("tlsv13 alert certificate required") || message == "channel closed",
-        "unexpected error message: {}",
-        message
-    )
 }

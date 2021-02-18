@@ -105,6 +105,13 @@ WITH foo AS (SELECT 1)
 1
 2
 
+# See 5766.
+query error column "a2.f1" does not exist
+SELECT * FROM (VALUES (true)) a2 (f1) WHERE (
+    SELECT TRUE FROM (VALUES (true)) AS a2 (f2)
+    WHERE (SELECT a2.f1)
+)
+
 statement ok
 CREATE TABLE squares (x int, y int);
 
