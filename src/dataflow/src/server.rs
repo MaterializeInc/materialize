@@ -699,10 +699,7 @@ where
                             log::error!("BYO timestamping not supported for S3 sources");
                             None
                         }
-                        (ExternalSourceConnector::Postgres(_), _) => {
-                            log::error!("Postgres sources not supported yet");
-                            None
-                        }
+                        (ExternalSourceConnector::Postgres(_), _) => None,
                     }
                 } else {
                     log::debug!(

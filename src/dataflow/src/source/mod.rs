@@ -51,6 +51,7 @@ use crate::CacheMessage;
 mod file;
 mod kafka;
 mod kinesis;
+mod postgres;
 mod s3;
 mod util;
 
@@ -62,6 +63,7 @@ pub use file::FileReadStyle;
 pub use file::FileSourceInfo;
 pub use kafka::KafkaSourceInfo;
 pub use kinesis::KinesisSourceInfo;
+pub use postgres::PostgresSimpleSource;
 pub use s3::S3SourceInfo;
 
 /// Shared configuration information for all source types.

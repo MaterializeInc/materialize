@@ -33,7 +33,9 @@ use crate::render::context::Context;
 use crate::render::RenderState;
 use crate::server::LocalInput;
 use crate::source::SourceConfig;
-use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo, S3SourceInfo};
+use crate::source::{
+    self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo, PostgresSimpleSource, S3SourceInfo,
+};
 
 impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, Timestamp>
 where
@@ -165,8 +167,20 @@ where
                     }
 
                     (collection, capability)
-                } else if let ExternalSourceConnector::Postgres(_pg_connector) = connector {
-                    unimplemented!("Postgres sources are not supported yet");
+                } else if let ExternalSourceConnector::Postgres(pg_connector) = connector {
+                    let source = PostgresSimpleSource::new(pg_connector);
+
+                    let ((ok_stream, err_stream), capability) =
+                        source::create_source_simple(source_config, source);
+
+                    error_collections.push(
+                        err_stream
+                            .map(DataflowError::SourceError)
+                            .pass_through("source-errors")
+                            .as_collection(),
+                    );
+
+                    (ok_stream.as_collection(), capability)
                 } else {
                     let ((ok_source, err_source), capability) = match connector {
                         ExternalSourceConnector::Kafka(_) => {

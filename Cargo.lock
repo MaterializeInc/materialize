@@ -261,7 +261,7 @@ dependencies = [
  "log",
  "ore",
  "parse_duration",
- "postgres-types",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf",
  "protoc",
  "rand 0.8.3",
@@ -269,7 +269,7 @@ dependencies = [
  "structopt",
  "test-util",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid",
 ]
 
@@ -526,7 +526,7 @@ dependencies = [
  "mz-avro",
  "ore",
  "pgrepr",
- "postgres-types",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus",
  "rand 0.8.3",
  "rdkafka",
@@ -542,7 +542,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-stream",
  "transform",
  "unicase",
@@ -733,6 +733,7 @@ dependencies = [
  "bincode",
  "byteorder",
  "ccsr",
+ "chrono",
  "crossbeam-channel",
  "csv-core",
  "dataflow-types",
@@ -751,6 +752,7 @@ dependencies = [
  "mz-avro",
  "ore",
  "pdqselect",
+ "postgres-protocol 0.6.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication)",
  "prometheus",
  "prometheus-static-metric",
  "rand 0.8.3",
@@ -766,6 +768,7 @@ dependencies = [
  "serde_json",
  "timely",
  "tokio",
+ "tokio-postgres 0.7.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication)",
  "tokio-util",
  "url",
  "uuid",
@@ -1942,7 +1945,7 @@ dependencies = [
  "pgwire",
  "postgres",
  "postgres-openssl",
- "postgres-protocol",
+ "postgres-protocol 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "postgres_array",
  "predicates",
  "prof",
@@ -1966,7 +1969,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-openssl",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
@@ -2055,7 +2058,7 @@ dependencies = [
  "metabase",
  "ore",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2543,7 +2546,7 @@ dependencies = [
  "structopt",
  "test-util",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2558,13 +2561,13 @@ dependencies = [
  "futures-channel",
  "hex",
  "log",
- "postgres-types",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.8.3",
  "rand_distr",
  "structopt",
  "test-util",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2585,7 +2588,7 @@ dependencies = [
  "chrono",
  "lazy_static",
  "ore",
- "postgres-types",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "repr",
  "uuid",
 ]
@@ -2600,7 +2603,7 @@ dependencies = [
  "fallible-iterator",
  "ore",
  "postgres",
- "postgres-protocol",
+ "postgres-protocol 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
  "structopt",
@@ -2756,7 +2759,7 @@ dependencies = [
  "futures",
  "log",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2769,7 +2772,7 @@ dependencies = [
  "openssl",
  "tokio",
  "tokio-openssl",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2791,6 +2794,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "postgres-protocol"
+version = "0.6.0"
+source = "git+https://github.com/petrosagg/rust-postgres?branch=replication#83e2b3362aa7d9cb30706a5d1cb729e5124d2917"
+dependencies = [
+ "base64",
+ "byteorder",
+ "bytes",
+ "fallible-iterator",
+ "hmac",
+ "md-5",
+ "memchr",
+ "rand 0.8.3",
+ "sha2",
+ "stringprep",
+]
+
+[[package]]
 name = "postgres-types"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2799,9 +2819,21 @@ dependencies = [
  "bytes",
  "chrono",
  "fallible-iterator",
- "postgres-protocol",
+ "postgres-protocol 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "postgres-types"
+version = "0.2.0"
+source = "git+https://github.com/petrosagg/rust-postgres?branch=replication#83e2b3362aa7d9cb30706a5d1cb729e5124d2917"
+dependencies = [
+ "bytes",
+ "chrono",
+ "fallible-iterator",
+ "postgres-protocol 0.6.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication)",
  "uuid",
 ]
 
@@ -2813,8 +2845,8 @@ checksum = "0cf05a6ba564431fe9deaefbe02fe4da9e4f3aa879549f09a8d091afc3b39a80"
 dependencies = [
  "bytes",
  "fallible-iterator",
- "postgres-protocol",
- "postgres-types",
+ "postgres-protocol 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -3764,14 +3796,14 @@ dependencies = [
  "futures",
  "futures-channel",
  "log",
- "postgres-types",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest",
  "serde",
  "serde_json",
  "structopt",
  "test-util",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "url",
 ]
 
@@ -3816,7 +3848,8 @@ dependencies = [
  "ore",
  "parse_duration",
  "pgrepr",
- "postgres-types",
+ "postgres-protocol 0.6.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication)",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rdkafka",
  "regex",
  "repr",
@@ -3826,6 +3859,7 @@ dependencies = [
  "serde_json",
  "sql-parser",
  "tokio",
+ "tokio-postgres 0.7.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication)",
  "unicase",
  "url",
  "uuid",
@@ -3865,7 +3899,7 @@ dependencies = [
  "md-5",
  "ore",
  "pgrepr",
- "postgres-protocol",
+ "postgres-protocol 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex",
  "repr",
  "serde_json",
@@ -3874,7 +3908,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid",
  "walkdir",
 ]
@@ -3965,7 +3999,7 @@ dependencies = [
  "serde_json",
  "sql",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid",
  "whoami",
 ]
@@ -4110,13 +4144,13 @@ dependencies = [
  "parse_duration",
  "pgrepr",
  "postgres",
- "postgres-types",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus",
  "regex",
  "serde",
  "structopt",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "toml",
 ]
 
@@ -4132,7 +4166,7 @@ dependencies = [
  "rand 0.8.3",
  "rdkafka",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -4183,7 +4217,7 @@ dependencies = [
  "tempfile",
  "termcolor",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-stream",
  "url",
  "uuid",
@@ -4354,8 +4388,30 @@ dependencies = [
  "percent-encoding",
  "phf",
  "pin-project-lite",
- "postgres-protocol",
- "postgres-types",
+ "postgres-protocol 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "socket2",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "tokio-postgres"
+version = "0.7.0"
+source = "git+https://github.com/petrosagg/rust-postgres?branch=replication#83e2b3362aa7d9cb30706a5d1cb729e5124d2917"
+dependencies = [
+ "async-trait",
+ "byteorder",
+ "bytes",
+ "fallible-iterator",
+ "futures",
+ "log",
+ "parking_lot",
+ "percent-encoding",
+ "phf",
+ "pin-project 1.0.1",
+ "postgres-protocol 0.6.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication)",
+ "postgres-types 0.2.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication)",
  "socket2",
  "tokio",
  "tokio-util",
