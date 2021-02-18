@@ -514,28 +514,44 @@ impl AggregateFunc {
         scalar_type.nullable(nullable)
     }
 
-    /// get the function that combines the results of partially
-    /// pushing down the aggregation + the function, if necessary, that
-    /// downcasts the type of the aggregation column back to the original
-    pub fn outer_agg(&self) -> (AggregateFunc, Option<crate::UnaryFunc>) {
+    /// The necessary "combiner" functions to merge multiple aggregates of this type.
+    ///
+    /// This method returns the aggregate function that can be used to combine aggregate
+    /// values produced by `self`, and if necessary, a function to convert the resulting type.
+    /// If there does not exist a function that can combine multiple aggregates
+    /// of this type, this method returns `None`.
+    ///
+    /// Many aggregate functions can be combined, but doing so may require the use of
+    /// a different function, and potentially some type conversion to return to the intended
+    /// type. For example, `Count` aggregates can be combined with `SumInt64` to produce
+    /// a combined count, but they must also be converted back from its decimal output to
+    /// `Int64` to have the correct output type for `Count`.
+    pub fn outer_agg(&self) -> Option<(AggregateFunc, Option<crate::UnaryFunc>)> {
         match self {
-            AggregateFunc::Count => (
+            AggregateFunc::Count => Some((
                 AggregateFunc::SumInt64,
                 Some(crate::UnaryFunc::CastDecimalToInt64(0)),
-            ),
-            AggregateFunc::SumInt32 => (
+            )),
+            AggregateFunc::SumInt32 => Some((
                 AggregateFunc::SumInt64,
                 Some(crate::UnaryFunc::CastDecimalToInt64(0)),
-            ),
-            AggregateFunc::SumInt64 => (AggregateFunc::SumDecimal, None),
-            _ => (self.clone(), None),
+            )),
+            AggregateFunc::SumInt64 => Some((AggregateFunc::SumDecimal, None)),
+            // we don't yet have an aggregation to flat map jsonb lists into bigger lists
+            AggregateFunc::JsonbAgg => None,
+            _ => Some((self.clone(), None)),
         }
     }
 
-    /// returns true for a function f if
-    /// f({f(distinct A), f(distinct B)}) = f(distinct (A union B))
-    pub fn hierarchical_when_distinct(&self) -> bool {
-        matches!(
+    /// Whether an aggregate always returns the same answer when evaluated on a
+    /// collection as when evaluated on the same collection but with duplicate
+    /// values removed.
+    ///
+    /// Suppose we have a collection `A=[1, 1, 2, 4, 4]`. The maximum value in
+    /// the collection does not change if we remove duplicate values. However,
+    /// the sum of the values in the collection will.
+    pub fn ignores_duplicates(&self) -> bool {
+        !matches!(
             self,
             AggregateFunc::MaxInt32
                 | AggregateFunc::MaxInt64
@@ -561,8 +577,20 @@ impl AggregateFunc {
         )
     }
 
-    /// returns true for a function f if the result of aggregating
-    /// f(literal) depends on the row count of the set being aggregated on
+    /// Whether the result applying the aggregate to a literal is
+    /// dependent on the specific number of rows in the input.
+    ///
+    /// The result of an aggregate on a literal is usually dependent on
+    /// whether the input is empty or not. For example, `max('constant')`
+    /// will return `null` if the input is empty and `'constant'` otherwise.
+    ///
+    /// But the results of some aggregates on a literal further depend on the
+    /// specific number of rows in the input. For example, `count('constant')`
+    /// will return the number of rows in the input, and `sum(2)` will return
+    /// two times the number of rows in the input.
+    ///
+    /// This function will return `true` for aggregates like `count`
+    /// and `false` for an aggregate like `max`.
     pub fn row_count_dependent(&self) -> bool {
         matches!(
             self,

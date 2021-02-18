@@ -11,7 +11,10 @@
 //!
 //! At the moment, this only
 //! * absorbs Map operators into Reduce operators.
-//! * partially pushes Reduce operators into joins.
+//! * partially pushes Reduce operators into
+//!     * joins
+//!     * `filter{join{..}}` when the filter only contains filters that
+//!       reference a single input within the join.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -28,6 +31,8 @@ impl crate::Transform for ReductionPushdown {
         relation: &mut MirRelationExpr,
         _: TransformArgs,
     ) -> Result<(), crate::TransformError> {
+        // `visit_mut_pre` is used here because after pushing down a reduction,
+        // we want to see if we can push the same reduction further down.
         relation.visit_mut_pre(&mut |e| {
             self.action(e);
         });
@@ -47,7 +52,7 @@ impl ReductionPushdown {
         } = relation
         {
             // Map expressions can be absorbed into the Reduce at no cost.
-            if let MirRelationExpr::Map {
+            while let MirRelationExpr::Map {
                 input: inner,
                 scalars,
             } = &mut **input
@@ -86,11 +91,9 @@ impl ReductionPushdown {
                 }
 
                 **input = inner.take_dangerous();
+            }
 
-                // visit relation again to see if the reduction can be pushed
-                // down into whatever the map was around
-                self.action(relation)
-            } else if let MirRelationExpr::Join {
+            if let MirRelationExpr::Join {
                 inputs,
                 equivalences,
                 demand: _,
@@ -261,14 +264,14 @@ impl<'a> ReductionPusher<'a> {
         // classify the aggregations by how many inputs each aggregation references
         for (agg_num, agg) in aggregates.iter().enumerate() {
             let mut expr_inputs = old_join_mapper.lookup_inputs(&agg.expr);
-            if let AggregateFunc::JsonbAgg = agg.func {
-                // JsonbAgg cannot be partially pushed down, so it goes in the
-                // outer reduce
+            if agg.func.outer_agg().is_none() {
+                // Aggregates that cannot be partially pushed down go in the
+                // outer reduce.
                 outer_aggs.push((agg_num, agg.clone()));
             } else if let AggregateFunc::Dummy = agg.func {
-                // do not bother pushing dummy functions down
+                // Do not bother pushing dummy functions down.
                 outer_aggs.push((agg_num, agg.clone()));
-            } else if agg.distinct && !agg.func.hierarchical_when_distinct() {
+            } else if agg.distinct && agg.func.ignores_duplicates() {
                 outer_aggs.push((agg_num, agg.clone()));
             } else if let Some(expr_input) = expr_inputs.next() {
                 if expr_inputs.next().is_some() {
@@ -301,12 +304,9 @@ impl<'a> ReductionPusher<'a> {
                 if agg.func.row_count_dependent() {
                     no_input_aggs_to_push.push((agg_num, agg.clone()));
                 } else {
-                    // it is not worthwhile to push down a reduce on a constant
-                    // whose result does not change based on the input to the
-                    // reduce.
-                    // TODO: an aggregation on a literal whose result does not
-                    // change based on the input of the reduce should be
-                    // converted into a map
+                    // It is not worthwhile to push down a reduce whose result
+                    // only depends on whether or not an input is empty. such a
+                    // reduce should be simplified to `Distinct ()` + a map
                     outer_aggs.push((agg_num, agg.clone()));
                 }
             }
@@ -688,7 +688,7 @@ impl<'a> ReductionPusher<'a> {
         }
         for (agg_num, agg) in inner_aggs {
             let agg_lookup_key = self.old_join_mapper.total_columns() + agg_num;
-            let (outer_agg_func, downcast) = agg.func.outer_agg();
+            let (outer_agg_func, downcast) = agg.func.outer_agg().unwrap();
             // calculate aggs to add to outer reduce
             let outer_agg = AggregateExpr {
                 func: outer_agg_func,
