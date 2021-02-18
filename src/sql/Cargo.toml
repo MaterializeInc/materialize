@@ -38,6 +38,8 @@ tokio = { version = "1.2.0", features = ["fs"] }
 unicase = "2.6.0"
 url = "2.2.0"
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
+tokio-postgres = { git = "https://github.com/petrosagg/rust-postgres", branch = "replication-matt-snapshot" }
+postgres-protocol = { git = "https://github.com/petrosagg/rust-postgres", branch = "replication-matt-snapshot" }
 
 [dev-dependencies]
 datadriven = "0.5.0"
