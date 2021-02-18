@@ -282,7 +282,7 @@ dependencies = [
  "log",
  "ore",
  "parse_duration",
- "postgres-types",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "protobuf",
  "protoc",
  "rand 0.8.3",
@@ -290,7 +290,7 @@ dependencies = [
  "structopt",
  "test-util",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid",
 ]
 
@@ -547,7 +547,7 @@ dependencies = [
  "mz-avro",
  "ore",
  "pgrepr",
- "postgres-types",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus",
  "rand 0.8.3",
  "rdkafka",
@@ -563,7 +563,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-stream",
  "transform",
  "unicase",
@@ -754,6 +754,7 @@ dependencies = [
  "bincode",
  "byteorder",
  "ccsr",
+ "chrono",
  "crossbeam-channel",
  "csv-core",
  "dataflow-types",
@@ -762,6 +763,7 @@ dependencies = [
  "expr",
  "flate2",
  "futures",
+ "genawaiter",
  "globset",
  "inotify",
  "interchange",
@@ -772,6 +774,7 @@ dependencies = [
  "mz-avro",
  "ore",
  "pdqselect",
+ "postgres-protocol 0.6.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication-matt-snapshot)",
  "prometheus",
  "prometheus-static-metric",
  "rand 0.8.3",
@@ -787,6 +790,8 @@ dependencies = [
  "serde_json",
  "timely",
  "tokio",
+ "tokio-postgres 0.7.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication-matt-snapshot)",
+ "tokio-stream",
  "tokio-util",
  "url",
  "uuid",
@@ -854,7 +859,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#2b12f29d951b60c6c1ef3db77fbba1568db5a2c3"
+source = "git+https://github.com/petrosagg/differential-dataflow?branch=async-stream-matt-snapshot#bd9f1dfa54bc64a37383a43e7bdd16b8b91196b6"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -904,7 +909,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#2b12f29d951b60c6c1ef3db77fbba1568db5a2c3"
+source = "git+https://github.com/petrosagg/differential-dataflow?branch=async-stream-matt-snapshot#bd9f1dfa54bc64a37383a43e7bdd16b8b91196b6"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1324,6 +1329,37 @@ dependencies = [
  "honggfuzz",
  "repr",
  "sql-parser",
+]
+
+[[package]]
+name = "genawaiter"
+version = "0.99.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c86bd0361bcbde39b13475e6e36cb24c329964aa2611be285289d1e4b751c1a0"
+dependencies = [
+ "futures-core",
+ "genawaiter-macro",
+ "genawaiter-proc-macro",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "genawaiter-macro"
+version = "0.99.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b32dfe1fdfc0bbde1f22a5da25355514b5e450c33a6af6770884c8750aedfbc"
+
+[[package]]
+name = "genawaiter-proc-macro"
+version = "0.99.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "784f84eebc366e15251c4a8c3acee82a6a6f427949776ecb88377362a9621738"
+dependencies = [
+ "proc-macro-error 0.4.12",
+ "proc-macro-hack",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1965,7 +2001,7 @@ dependencies = [
  "pgwire",
  "postgres",
  "postgres-openssl",
- "postgres-protocol",
+ "postgres-protocol 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "postgres_array",
  "predicates",
  "prof",
@@ -1989,7 +2025,7 @@ dependencies = [
  "timely",
  "tokio",
  "tokio-openssl",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -2076,7 +2112,7 @@ dependencies = [
  "metabase",
  "ore",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2564,7 +2600,7 @@ dependencies = [
  "structopt",
  "test-util",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2579,13 +2615,13 @@ dependencies = [
  "futures-channel",
  "hex",
  "log",
- "postgres-types",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.8.3",
  "rand_distr",
  "structopt",
  "test-util",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2606,7 +2642,7 @@ dependencies = [
  "chrono",
  "lazy_static",
  "ore",
- "postgres-types",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "repr",
  "uuid",
 ]
@@ -2621,7 +2657,7 @@ dependencies = [
  "fallible-iterator",
  "ore",
  "postgres",
- "postgres-protocol",
+ "postgres-protocol 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
  "structopt",
@@ -2777,7 +2813,7 @@ dependencies = [
  "futures",
  "log",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2790,7 +2826,7 @@ dependencies = [
  "openssl",
  "tokio",
  "tokio-openssl",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2812,6 +2848,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "postgres-protocol"
+version = "0.6.0"
+source = "git+https://github.com/petrosagg/rust-postgres?branch=replication-matt-snapshot#83e2b3362aa7d9cb30706a5d1cb729e5124d2917"
+dependencies = [
+ "base64",
+ "byteorder",
+ "bytes",
+ "fallible-iterator",
+ "hmac",
+ "md-5",
+ "memchr",
+ "rand 0.8.3",
+ "sha2",
+ "stringprep",
+]
+
+[[package]]
 name = "postgres-types"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2820,9 +2873,21 @@ dependencies = [
  "bytes",
  "chrono",
  "fallible-iterator",
- "postgres-protocol",
+ "postgres-protocol 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "postgres-types"
+version = "0.2.0"
+source = "git+https://github.com/petrosagg/rust-postgres?branch=replication-matt-snapshot#83e2b3362aa7d9cb30706a5d1cb729e5124d2917"
+dependencies = [
+ "bytes",
+ "chrono",
+ "fallible-iterator",
+ "postgres-protocol 0.6.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication-matt-snapshot)",
  "uuid",
 ]
 
@@ -2834,8 +2899,8 @@ checksum = "0cf05a6ba564431fe9deaefbe02fe4da9e4f3aa879549f09a8d091afc3b39a80"
 dependencies = [
  "bytes",
  "fallible-iterator",
- "postgres-protocol",
- "postgres-types",
+ "postgres-protocol 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2901,14 +2966,40 @@ dependencies = [
 
 [[package]]
 name = "proc-macro-error"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18f33027081eba0a6d8aba6d1b1c3a3be58cbb12106341c2d5759fcd9b5277e7"
+dependencies = [
+ "proc-macro-error-attr 0.4.12",
+ "proc-macro2",
+ "quote",
+ "syn",
+ "version_check",
+]
+
+[[package]]
+name = "proc-macro-error"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da25490ff9892aab3fcf7c36f08cfb902dd3e71ca0f9f9517bea02a73a5ce38c"
 dependencies = [
- "proc-macro-error-attr",
+ "proc-macro-error-attr 1.0.4",
  "proc-macro2",
  "quote",
  "syn",
+ "version_check",
+]
+
+[[package]]
+name = "proc-macro-error-attr"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a5b4b77fdb63c1eca72173d68d24501c54ab1269409f6b672c85deb18af69de"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+ "syn-mid",
  "version_check",
 ]
 
@@ -3785,14 +3876,14 @@ dependencies = [
  "futures",
  "futures-channel",
  "log",
- "postgres-types",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest",
  "serde",
  "serde_json",
  "structopt",
  "test-util",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "url",
 ]
 
@@ -3837,7 +3928,8 @@ dependencies = [
  "ore",
  "parse_duration",
  "pgrepr",
- "postgres-types",
+ "postgres-protocol 0.6.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication-matt-snapshot)",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rdkafka",
  "regex",
  "repr",
@@ -3847,6 +3939,7 @@ dependencies = [
  "serde_json",
  "sql-parser",
  "tokio",
+ "tokio-postgres 0.7.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication-matt-snapshot)",
  "unicase",
  "url",
  "uuid",
@@ -3886,7 +3979,7 @@ dependencies = [
  "md-5",
  "ore",
  "pgrepr",
- "postgres-protocol",
+ "postgres-protocol 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "regex",
  "repr",
  "serde_json",
@@ -3895,7 +3988,7 @@ dependencies = [
  "tempfile",
  "timely",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid",
  "walkdir",
 ]
@@ -3959,7 +4052,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ba9cdfda491b814720b6b06e0cac513d922fc407582032e8706e9f137976f90"
 dependencies = [
  "heck",
- "proc-macro-error",
+ "proc-macro-error 1.0.4",
  "proc-macro2",
  "quote",
  "syn",
@@ -3986,7 +4079,7 @@ dependencies = [
  "serde_json",
  "sql",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid",
  "whoami",
 ]
@@ -4023,6 +4116,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-xid",
+]
+
+[[package]]
+name = "syn-mid"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "baa8e7560a164edb1621a55d18a0c59abf49d360f47aa7b821061dd7eea7fac9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -4131,13 +4235,13 @@ dependencies = [
  "parse_duration",
  "pgrepr",
  "postgres",
- "postgres-types",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus",
  "regex",
  "serde",
  "structopt",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "toml",
 ]
 
@@ -4153,7 +4257,7 @@ dependencies = [
  "rand 0.8.3",
  "rdkafka",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -4203,7 +4307,7 @@ dependencies = [
  "tempfile",
  "termcolor",
  "tokio",
- "tokio-postgres",
+ "tokio-postgres 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio-stream",
  "url",
  "uuid",
@@ -4250,11 +4354,12 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#a5ca77655247dd2be5ee49eb9d89aabfcfa2402f"
+source = "git+https://github.com/petrosagg/timely-dataflow?branch=async-stream-matt-snapshot#b83b835bb0e86aeb0124020afa9cf198a1283d3d"
 dependencies = [
  "abomonation",
  "abomonation_derive",
  "crossbeam-channel",
+ "futures-core",
  "getopts",
  "serde",
  "serde_derive",
@@ -4266,12 +4371,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#a5ca77655247dd2be5ee49eb9d89aabfcfa2402f"
+source = "git+https://github.com/petrosagg/timely-dataflow?branch=async-stream-matt-snapshot#b83b835bb0e86aeb0124020afa9cf198a1283d3d"
 
 [[package]]
 name = "timely_communication"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#a5ca77655247dd2be5ee49eb9d89aabfcfa2402f"
+source = "git+https://github.com/petrosagg/timely-dataflow?branch=async-stream-matt-snapshot#b83b835bb0e86aeb0124020afa9cf198a1283d3d"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4287,7 +4392,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#a5ca77655247dd2be5ee49eb9d89aabfcfa2402f"
+source = "git+https://github.com/petrosagg/timely-dataflow?branch=async-stream-matt-snapshot#b83b835bb0e86aeb0124020afa9cf198a1283d3d"
 
 [[package]]
 name = "timely_sort"
@@ -4373,8 +4478,30 @@ dependencies = [
  "percent-encoding",
  "phf",
  "pin-project-lite",
- "postgres-protocol",
- "postgres-types",
+ "postgres-protocol 0.6.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "postgres-types 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "socket2",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "tokio-postgres"
+version = "0.7.0"
+source = "git+https://github.com/petrosagg/rust-postgres?branch=replication-matt-snapshot#83e2b3362aa7d9cb30706a5d1cb729e5124d2917"
+dependencies = [
+ "async-trait",
+ "byteorder",
+ "bytes",
+ "fallible-iterator",
+ "futures",
+ "log",
+ "parking_lot",
+ "percent-encoding",
+ "phf",
+ "pin-project 1.0.1",
+ "postgres-protocol 0.6.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication-matt-snapshot)",
+ "postgres-types 0.2.0 (git+https://github.com/petrosagg/rust-postgres?branch=replication-matt-snapshot)",
  "socket2",
  "tokio",
  "tokio-util",
