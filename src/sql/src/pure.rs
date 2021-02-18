@@ -94,6 +94,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 let aws_info = normalize::aws_connect_info(&mut with_options_map, Some(region))?;
                 aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
             }
+            Connector::Postgres { .. } => (),
         }
 
         purify_format(format, connector, col_names, file, &config_options).await?;
@@ -106,7 +107,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 
 async fn purify_format(
     format: &mut Option<Format<Raw>>,
-    connector: &mut Connector,
+    connector: &mut Connector<Raw>,
     col_names: &mut Vec<Ident>,
     file: Option<tokio::fs::File>,
     connector_options: &BTreeMap<String, String>,

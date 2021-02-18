@@ -1635,8 +1635,63 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_connector(&mut self) -> Result<Connector, ParserError> {
-        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3])? {
+    fn parse_connector(&mut self) -> Result<Connector<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES])? {
+            POSTGRES => {
+                self.expect_keyword(HOST)?;
+                let conn = self.parse_literal_string()?;
+                self.expect_keyword(PUBLICATION)?;
+                let publication = self.parse_literal_string()?;
+                self.expect_keyword(NAMESPACE)?;
+                let namespace = self.parse_literal_string()?;
+                self.expect_keyword(TABLE)?;
+                let table = self.parse_literal_string()?;
+
+                let mut columns = vec![];
+                self.expect_token(&Token::LParen)?;
+                if !self.consume_token(&Token::RParen) {
+                    loop {
+                        if let Some(column_name) = self.consume_identifier() {
+                            let data_type = self.parse_data_type()?;
+
+                            let mut options = vec![];
+                            if self.parse_keywords(&[NOT, NULL]) {
+                                let option = ColumnOptionDef {
+                                    name: None,
+                                    option: ColumnOption::NotNull,
+                                };
+                                options.push(option);
+                            }
+
+                            columns.push(ColumnDef {
+                                name: column_name,
+                                data_type,
+                                collation: None,
+                                options,
+                            });
+                        }
+                        if self.consume_token(&Token::Comma) {
+                            // Continue.
+                        } else if self.consume_token(&Token::RParen) {
+                            break;
+                        } else {
+                            return self.expected(
+                                self.peek_pos(),
+                                "',' or ')' after column definition",
+                                self.peek_token(),
+                            );
+                        }
+                    }
+                }
+
+                Ok(Connector::Postgres {
+                    conn,
+                    publication,
+                    namespace,
+                    table,
+                    columns,
+                })
+            }
             FILE => {
                 let path = self.parse_literal_string()?;
                 let compression = if self.parse_keyword(COMPRESSION) {
