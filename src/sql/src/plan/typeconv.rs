@@ -584,7 +584,7 @@ pub fn plan_coerce<'a>(
 /// column is assumed to have type `from`.
 ///
 /// If casting from `from` to `to` is not possible, returns `None`.
-fn plan_hypothetical_cast(
+pub fn plan_hypothetical_cast(
     ecx: &ExprContext,
     ccx: CastContext,
     from: &ScalarType,
