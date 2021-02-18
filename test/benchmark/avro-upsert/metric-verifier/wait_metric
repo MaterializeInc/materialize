@@ -92,7 +92,7 @@ def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: d
     # Grafana expects timestamps with milliseconds
     path = '/d/materialize-overview/materialize-overview'
     query = urllib.parse.urlencode( {
-              "from": round((start - datetime.delta(seconds=30)).timestamp()) * 1000,
+              "from": round((start - datetime.timedelta(seconds=30)).timestamp()) * 1000,
                 "to": round(dateparser.parse('in 30 seconds').timestamp()) * 1000,
                 "tz": "UTC"
              })
