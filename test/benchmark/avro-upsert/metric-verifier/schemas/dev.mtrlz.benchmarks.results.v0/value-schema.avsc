@@ -4,6 +4,14 @@
     "namespace": "dev.mtrlz.benchmarks.results.v0",
     "fields": [
      {
+       "name": "passed",
+       "type": "boolean"
+     },
+     {
+       "name": "rows_per_second",
+       "type": "long"
+     },
+     {
        "name": "start_ms",
        "type": "long"
      },

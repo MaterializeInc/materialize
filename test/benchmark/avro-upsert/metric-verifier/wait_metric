@@ -78,12 +78,14 @@ def run(args: argparse.Namespace) -> int:
     metrics = BenchmarkMetrics(args, SCHEMAS_DIRECTORY)
 
     try:
-        return wait_metric(args)
-    finally:
-        record_results(args, metrics, start)
+        return wait_metric(args, metrics, start)
+    except:
+        record_results(args, metrics, start, passed=False)
+        raise
 
 
-def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: datetime.datetime):
+def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: datetime.datetime,
+        rows_per_second: int = 0, passed: bool = False):
     """Write the results of this benchmark to the Kafka topic"""
 
     # TODO: Construct the URL externally from this script
@@ -100,7 +102,9 @@ def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: d
 
     metrics.write_metric('dev.mtrlz.benchmarks.results.v0',
                          {"benchmark_id": args.benchmark_id},
-                         {"start_ms": int(start.timestamp()) * 1000,
+                         {"passed": passed,
+                          "rows_per_second": rows_per_second,
+                          "start_ms": int(start.timestamp()) * 1000,
                           "end_ms": int(dateparser.parse('now').timestamp()) *  1000,
                           "dashboard_url": dashboard_url
                         })
@@ -109,11 +113,11 @@ def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: d
     print(f'Grafana URL: {dashboard_url}')
 
 
-def wait_metric(args: argparse.Namespace) -> int:
+def wait_metric(args: argparse.Namespace, metrics: BenchmarkMetrics, start: datetime.datetime) -> int:
     """Wait for the given metric, returning desired exit code (0 is success)."""
     prom = prometheus_api_client.PrometheusConnect(f'http://{args.prometheus_host}:{args.prometheus_port}')
     time_so_far = 0
-    start = int(time.monotonic())
+    begin = int(time.monotonic())
     while time_so_far < args.timeout_seconds:
         current_values = prom.custom_query(args.prom_query)
         if args.verbose:
@@ -130,10 +134,11 @@ def wait_metric(args: argparse.Namespace) -> int:
             if point == args.expected_value:
                 rate = round(point / max(time_so_far, 1))
                 print(f"SUCCESS! seconds_taken={time_so_far} rows_per_sec={rate}")
+                record_results(args, metrics, start, rate)
                 return 0
 
         time.sleep(1)
-        time_so_far = int(time.monotonic()) - start
+        time_so_far = int(time.monotonic()) - begin
 
     # Check this last because it's okay to have a 1-2 second grace period and we want the
     # ability to print the most recent result
