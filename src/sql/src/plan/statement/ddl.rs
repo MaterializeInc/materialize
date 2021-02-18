@@ -66,11 +66,13 @@ use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{ColumnRef, HirScalarExpr, JoinKind};
-use crate::plan::query::{resolve_names_data_type, QueryLifetime};
+use crate::plan::query::{resolve_names_data_type, ExprContext, QueryLifetime};
+use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc};
+use crate::plan::typeconv::{plan_hypothetical_cast, CastContext};
 use crate::plan::{
     self, plan_utils, query, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan,
-    Sink, Source, Table, Type, TypeInner, View,
+    QueryContext, Sink, Source, Table, Type, TypeInner, View,
 };
 use crate::pure::Schema;
 
@@ -681,20 +683,26 @@ pub fn plan_create_source(
             columns,
         } => {
             scx.require_experimental_mode("Postgres Sources")?;
-            let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
-                conn: conn.clone(),
-                publication: publication.clone(),
-                namespace: namespace.clone(),
-                table: table.clone(),
-            });
 
-            // Build the expecte relation description
+            let qcx = QueryContext::root(scx, QueryLifetime::Static);
+            let desc = RelationDesc::empty();
+            let ecx = ExprContext {
+                qcx: &qcx,
+                name: "postgres column cast",
+                scope: &Scope::empty(None),
+                relation_type: &desc.typ(),
+                allow_aggregates: false,
+                allow_subqueries: true,
+            };
+
+            // Build the expected relation description
             let col_names: Vec<_> = columns
                 .iter()
                 .map(|c| Some(normalize::column_name(c.name.clone())))
                 .collect();
 
             let mut col_types = vec![];
+            let mut cast_exprs = vec![];
             for c in columns {
                 if let Some(collation) = &c.collation {
                     unsupported!(format!(
@@ -717,10 +725,27 @@ pub fn plan_create_source(
                     }
                 }
 
+                let cast_expr = plan_hypothetical_cast(
+                    &ecx,
+                    CastContext::Explicit,
+                    &ScalarType::String,
+                    &scalar_ty,
+                )
+                .unwrap();
+
                 col_types.push(scalar_ty.nullable(nullable));
+                cast_exprs.push(cast_expr);
             }
 
             let desc = RelationDesc::new(RelationType::new(col_types), col_names);
+
+            let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
+                conn: conn.clone(),
+                publication: publication.clone(),
+                namespace: namespace.clone(),
+                table: table.clone(),
+                cast_exprs,
+            });
 
             (connector, DataEncoding::Postgres(desc))
         }
