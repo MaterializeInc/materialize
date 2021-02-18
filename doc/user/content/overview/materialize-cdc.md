@@ -115,12 +115,12 @@ Materialize compares the record updates it has received to the expected changes 
 
 Field | Description
 -------- | -----------
-data  | The array that represents the changed record. Each array is composed of objects that define the `name` and `type` (data type) of each field to be included in the changefeed. `type` supports multiple data types for a single object (for example, both `null` and `int` may be permissible for some fields).
-time  | The logical timestamp of the update. Materialize uses this to determine the order of updates and, in conjunction with the update count, to determine whether there are duplicate updates to be discarded.
-diff  | The type of update (`-1` for deletion, `1` for addition or upsert)
-lower  | The earliest logical timestamp for a set of updates
-upper  | The latest logical timestamp for a set of updates
-counts | The number of updates transmitted between `lower` and `upper`.
+`data`  | The array that represents the changed record. Each array is composed of objects that define the `name` and `type` (data type) of each field to be included in the changefeed. `type` supports multiple data types for a single object (for example, both `null` and `int` may be permissible for some fields).
+`time`  | The logical timestamp of the update. Materialize uses this to determine the order of updates and, in conjunction with the update count, to determine whether there are duplicate updates to be discarded.
+`diff`  | The type of update (`-1` for deletion, `1` for addition or upsert)
+`lower`  | The earliest logical timestamp for a set of updates
+`upper`  | The latest logical timestamp for a set of updates
+`counts` | The number of updates transmitted between `lower` and `upper`.
 
 ## Example Materialize CDC workflow
 
