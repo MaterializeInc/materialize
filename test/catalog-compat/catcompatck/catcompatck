@@ -114,6 +114,12 @@ testdrive --no-reset <<'EOF'
 > INSERT INTO t (a) VALUES (42)
 > SELECT * FROM t
 42  def
+
+# Checks for regressions against #5808; simply having this in the catalog is
+# sufficient, so it doesn't need to be interacted with.
+> CREATE SINK regression_5808 FROM real_time
+  INTO AVRO OCF 'regression_5808.ocf'
+  WITH SNAPSHOT AS OF now()
 EOF
 
 say "killing materialized-golden060"
