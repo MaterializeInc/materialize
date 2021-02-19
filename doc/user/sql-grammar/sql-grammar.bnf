@@ -67,6 +67,11 @@ create_source_csv_file ::=
   'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
   ('DELIMITED BY' char)?
+create_source_json ::=
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )* ')')?
+  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FORMAT' 'BYTES'
 create_source_csv_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
