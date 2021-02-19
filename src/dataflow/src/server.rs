@@ -35,9 +35,10 @@ use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, DataflowError, MzOffset, PeekResponse, TimestampSourceUpdate, Update,
+    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, MzOffset, PeekResponse,
+    SourceConnector, TimestampSourceUpdate, Update,
 };
-use expr::{GlobalId, MapFilterProject, PartitionId, RowSetFinishing, SourceInstanceId};
+use expr::{GlobalId, MapFilterProject, PartitionId, RowSetFinishing};
 use repr::{Diff, Row, RowArena, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -102,12 +103,24 @@ pub enum SequencedCommand {
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
     AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
+    /// Add a new source to be aware of for timestamping.
+    AddSourceTimestamping {
+        /// The ID of the timestamped source
+        id: GlobalId,
+        /// The connector for the timestamped source.
+        connector: SourceConnector,
+    },
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
         /// The ID of the timestamped source
-        id: SourceInstanceId,
+        id: GlobalId,
         /// The associated update (RT or BYO)
         update: TimestampSourceUpdate,
+    },
+    /// Drop all timestamping info for a source
+    DropSourceTimestamping {
+        /// The ID id of the formerly timestamped source.
+        id: GlobalId,
     },
     /// Advance all local inputs to the given timestamp.
     AdvanceAllLocalInputs {
@@ -151,10 +164,6 @@ pub enum CacheMessage {
 pub enum WorkerFeedback {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
-    /// The id of a source whose source connector has been dropped
-    DroppedSource(SourceInstanceId),
-    /// The id of a source whose source connector has been created
-    CreateSource(SourceInstanceId),
 }
 
 /// Configures a dataflow server.
@@ -201,7 +210,6 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                     local_inputs: HashMap::new(),
                     ts_source_mapping: HashMap::new(),
                     ts_histories: Default::default(),
-                    ts_source_updates: Default::default(),
                     dataflow_tokens: HashMap::new(),
                     caching_tx: None,
                 },
@@ -231,21 +239,7 @@ pub enum TimestampDataUpdate {
     BringYourOwn(HashMap<PartitionId, VecDeque<(PartitionCount, Timestamp, MzOffset)>>),
 }
 /// Map of source ID to timestamp data updates (RT or BYO).
-pub type TimestampDataUpdates = Rc<RefCell<HashMap<SourceInstanceId, TimestampDataUpdate>>>;
-
-/// List of sources that need to start being timestamped or have been dropped and no longer require
-/// timestamping.
-/// A source inserts a StartTimestamping to this vector on source creation, and adds a
-/// StopTimestamping request once the operator for the source is dropped.
-pub type TimestampMetadataUpdates = Rc<RefCell<Vec<TimestampMetadataUpdate>>>;
-
-/// Possible timestamping metadata information messages that get sent from workers to coordinator
-pub enum TimestampMetadataUpdate {
-    /// Requests to start timestamping a source with given id
-    StartTimestamping(SourceInstanceId),
-    /// Request to stop timestamping a source wth given id
-    StopTimestamping(SourceInstanceId),
-}
+pub type TimestampDataUpdates = Rc<RefCell<HashMap<GlobalId, TimestampDataUpdate>>>;
 
 /// State maintained for each worker thread.
 ///
@@ -438,8 +432,6 @@ where
             // Report frontier information back the coordinator.
             self.report_frontiers();
 
-            self.report_source_modifications();
-
             // Handle any received commands.
             let cmds: Vec<_> = self.command_rx.try_iter().collect();
             self.metrics.observe_command_queue(&cmds);
@@ -455,36 +447,6 @@ where
             self.metrics.observe_command_finish();
             self.process_peeks();
         }
-    }
-
-    /// Report source drops or creations to the coordinator
-    fn report_source_modifications(&mut self) {
-        let mut updates = self.render_state.ts_source_updates.borrow_mut();
-        for source_update in updates.iter() {
-            match source_update {
-                TimestampMetadataUpdate::StopTimestamping(id) => {
-                    // A source was deleted
-                    self.render_state.ts_histories.borrow_mut().remove(id);
-                    self.render_state.ts_source_mapping.remove(id);
-                    let tx = self.feedback_tx.as_mut().unwrap();
-                    tx.send(WorkerFeedbackWithMeta {
-                        worker_id: self.timely_worker.index(),
-                        message: WorkerFeedback::DroppedSource(*id),
-                    })
-                    .expect("feedback receiver should not drop first");
-                }
-                TimestampMetadataUpdate::StartTimestamping(id) => {
-                    // A source was created
-                    let tx = self.feedback_tx.as_mut().unwrap();
-                    tx.send(WorkerFeedbackWithMeta {
-                        worker_id: self.timely_worker.index(),
-                        message: WorkerFeedback::CreateSource(*id),
-                    })
-                    .expect("feedback receiver should not drop first");
-                }
-            }
-        }
-        updates.clear();
     }
 
     /// Send progress information to the coordinator.
@@ -696,6 +658,61 @@ where
                 self.render_state.traces.del_all_traces();
                 self.shutdown_logging();
             }
+            SequencedCommand::AddSourceTimestamping { id, connector } => {
+                let byo_default = TimestampDataUpdate::BringYourOwn(HashMap::new());
+                let rt_default = TimestampDataUpdate::RealTime(1);
+
+                let source_timestamp_data = if let SourceConnector::External {
+                    connector,
+                    consistency,
+                    ..
+                } = connector
+                {
+                    match (connector, consistency) {
+                        (ExternalSourceConnector::Kafka(_), Consistency::BringYourOwn(_)) => {
+                            Some(byo_default)
+                        }
+                        (ExternalSourceConnector::Kafka(_), Consistency::RealTime) => {
+                            Some(rt_default)
+                        }
+                        (ExternalSourceConnector::AvroOcf(_), Consistency::BringYourOwn(_)) => {
+                            Some(byo_default)
+                        }
+                        (ExternalSourceConnector::AvroOcf(_), Consistency::RealTime) => {
+                            Some(rt_default)
+                        }
+                        (ExternalSourceConnector::File(_), Consistency::BringYourOwn(_)) => {
+                            Some(byo_default)
+                        }
+                        (ExternalSourceConnector::File(_), Consistency::RealTime) => {
+                            Some(rt_default)
+                        }
+                        (ExternalSourceConnector::Kinesis(_), Consistency::RealTime) => {
+                            Some(rt_default)
+                        }
+                        (ExternalSourceConnector::S3(_), Consistency::RealTime) => Some(rt_default),
+                        (ExternalSourceConnector::Kinesis(_), Consistency::BringYourOwn(_)) => {
+                            log::error!("BYO timestamping not supported for Kinesis sources");
+                            None
+                        }
+                        (ExternalSourceConnector::S3(_), Consistency::BringYourOwn(_)) => {
+                            log::error!("BYO timestamping not supported for S3 sources");
+                            None
+                        }
+                    }
+                } else {
+                    log::debug!(
+                        "Timestamping not supported for local sources {}. Ignoring",
+                        id
+                    );
+                    None
+                };
+
+                if let Some(data) = source_timestamp_data {
+                    let prev = self.render_state.ts_histories.borrow_mut().insert(id, data);
+                    assert!(prev.is_none());
+                }
+            }
             SequencedCommand::AdvanceSourceTimestamp { id, update } => {
                 let mut timestamps = self.render_state.ts_histories.borrow_mut();
                 if let Some(ts_entries) = timestamps.get_mut(&id) {
@@ -746,16 +763,32 @@ where
                             }
                         }
                     }
-                    let source = self
+
+                    let sources = self
                         .render_state
                         .ts_source_mapping
-                        .get(&id)
-                        .expect("Id should be present");
-                    if let Some(source) = source.upgrade() {
-                        if let Some(token) = &*source {
-                            token.activate();
+                        .entry(id)
+                        .or_insert_with(Vec::new);
+                    for source in sources {
+                        if let Some(source) = source.upgrade() {
+                            if let Some(token) = &*source {
+                                token.activate();
+                            }
                         }
                     }
+                }
+            }
+            SequencedCommand::DropSourceTimestamping { id } => {
+                let mut timestamps = self.render_state.ts_histories.borrow_mut();
+                let prev = timestamps.remove(&id);
+
+                if prev.is_none() {
+                    log::debug!("Attempted to drop timestamping for source {} that was not previously known", id);
+                }
+
+                let prev = self.render_state.ts_source_mapping.remove(&id);
+                if prev.is_none() {
+                    log::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }
             }
         }

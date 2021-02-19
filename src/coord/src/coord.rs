@@ -49,7 +49,7 @@ use dataflow_types::{
 };
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
-    OptimizedMirRelationExpr, RowSetFinishing, SourceInstanceId,
+    OptimizedMirRelationExpr, RowSetFinishing,
 };
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
@@ -107,7 +107,7 @@ pub enum Message {
 
 #[derive(Debug)]
 pub struct AdvanceSourceTimestamp {
-    pub id: SourceInstanceId,
+    pub id: GlobalId,
     pub update: TimestampSourceUpdate,
 }
 
@@ -281,6 +281,8 @@ impl Coordinator {
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
+                    // Inform the timestamper about this source.
+                    self.update_timestamper(*id, true).await;
                     self.maybe_begin_caching(*id, &source.connector).await;
                 }
                 CatalogItem::Index(_) => {
@@ -467,25 +469,6 @@ impl Coordinator {
                     self.update_upper(&name, changes);
                 }
                 self.maintenance().await;
-            }
-            WorkerFeedback::DroppedSource(source_id) => {
-                // Notify timestamping thread that source has been dropped
-                self.ts_tx
-                    .send(TimestampMessage::DropInstance(source_id))
-                    .expect("Failed to send Drop Instance notice to timestamper");
-            }
-            WorkerFeedback::CreateSource(src_instance_id) => {
-                if let Some(entry) = self.catalog.try_get_by_id(src_instance_id.source_id) {
-                    if let CatalogItem::Source(s) = entry.item() {
-                        self.ts_tx
-                            .send(TimestampMessage::Add(src_instance_id, s.connector.clone()))
-                            .expect("Failed to send CREATE Instance notice to timestamper");
-                    } else {
-                        panic!("A non-source is re-using the same source ID");
-                    }
-                } else {
-                    // Someone already dropped the source
-                }
             }
         }
     }
@@ -1904,6 +1887,7 @@ impl Coordinator {
         };
         match self.catalog_transact(ops).await {
             Ok(()) => {
+                self.update_timestamper(source_id, true).await;
                 if let Some(index_id) = index_id {
                     self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
                         .await?;
@@ -2175,6 +2159,7 @@ impl Coordinator {
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => {
                 for id in items.iter() {
+                    self.update_timestamper(*id, false).await;
                     if let Some(cache_tx) = &mut self.cache_tx {
                         cache_tx
                             .send(CacheMessage::DropSource(*id))
@@ -3291,6 +3276,28 @@ impl Coordinator {
         }
         for handle in self.worker_guards.guards() {
             handle.thread().unpark()
+        }
+    }
+
+    // Notify the timestamper thread that a source has been created or dropped.
+    async fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
+        if create {
+            if let Some(entry) = self.catalog.try_get_by_id(source_id) {
+                if let CatalogItem::Source(s) = entry.item() {
+                    self.ts_tx
+                        .send(TimestampMessage::Add(source_id, s.connector.clone()))
+                        .expect("Failed to send CREATE Instance notice to timestamper");
+                    self.broadcast(SequencedCommand::AddSourceTimestamping {
+                        id: source_id,
+                        connector: s.connector.clone(),
+                    });
+                }
+            }
+        } else {
+            self.ts_tx
+                .send(TimestampMessage::Drop(source_id))
+                .expect("Failed to send DROP Instance notice to timestamper");
+            self.broadcast(SequencedCommand::DropSourceTimestamping { id: source_id });
         }
     }
 

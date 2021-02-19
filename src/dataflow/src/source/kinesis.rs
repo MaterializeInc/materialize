@@ -22,20 +22,12 @@ use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
 use timely::scheduling::{Activator, SyncActivator};
 
-use dataflow_types::{
-    Consistency, DataEncoding, ExternalSourceConnector, KinesisSourceConnector, MzOffset,
-};
+use dataflow_types::{DataEncoding, ExternalSourceConnector, KinesisSourceConnector, MzOffset};
 use expr::{PartitionId, SourceInstanceId};
 
+use crate::logging::materialized::Logger;
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
-};
-use crate::{
-    logging::materialized::Logger,
-    server::{
-        TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-        TimestampMetadataUpdates,
-    },
 };
 
 lazy_static! {
@@ -172,30 +164,6 @@ impl KinesisSourceInfo {
 }
 
 impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
-    fn activate_source_timestamping(
-        id: &SourceInstanceId,
-        consistency: &Consistency,
-        _active: bool,
-        timestamp_data_updates: TimestampDataUpdates,
-        timestamp_metadata_channel: TimestampMetadataUpdates,
-    ) -> Option<TimestampMetadataUpdates> {
-        // Putting source information on the Timestamp channel lets this
-        // Dataflow worker communicate that it has created a source.
-        if let Consistency::BringYourOwn(_) = consistency {
-            error!("Kinesis sources do not currently support BYO consistency");
-            None
-        } else {
-            timestamp_data_updates
-                .borrow_mut()
-                .insert(id.clone(), TimestampDataUpdate::RealTime(1));
-            timestamp_metadata_channel
-                .as_ref()
-                .borrow_mut()
-                .push(TimestampMetadataUpdate::StartTimestamping(*id));
-            Some(timestamp_metadata_channel)
-        }
-    }
-
     fn can_close_timestamp(
         &self,
         consistency_info: &ConsistencyInfo,
