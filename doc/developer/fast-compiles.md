@@ -65,8 +65,8 @@ hardware. A few Materialize employees have embarked on this quest so far:
   * Eli is building a similar desktop to Matt (early 2021).
     See: https://pcpartpicker.com/user/elindsey_/saved/BnTk99
 
-The jury is still out on whether more, slower cores (e.g., 5950x) is better than
-less, faster cores (e.g., 3970x) for the standard `cargo build` development
+The jury is still out on whether more, slower cores (e.g., 3970x) is better than
+less, faster cores (e.g., 5950x) for the standard `cargo build` development
 cycle.
 
 To date, no one has attempted to build a Linux laptop optimized for compilation
