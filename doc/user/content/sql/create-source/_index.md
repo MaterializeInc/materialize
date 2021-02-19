@@ -2,13 +2,11 @@
 title: "CREATE SOURCE"
 description: "`CREATE SOURCE` connects Materialize to an external data source."
 menu:
+  # This should also have a "non-content entry" under Connect, which is
+  # configured in doc/user/config.toml
   main:
     identifier: create-source
     parent: sql
-  main:
-    name: Sources
-    parent: connections
-    weight: 2
 disable_list: true
 disable_toc: true
 ---
