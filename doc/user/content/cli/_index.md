@@ -269,10 +269,11 @@ logged.
 
 Information reported to Materialize:
 
-* Cluster ID
+* Cluster and Session IDs
 * Current Version
 * Number of worker threads
 * Uptime
+* Count of sinks, sources, and views by type
 
 ### Dataflow tuning
 
