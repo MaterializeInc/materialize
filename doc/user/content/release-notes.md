@@ -90,6 +90,15 @@ Wrap your release notes at the 80 character mark.
   -  Views whose embdedded queries contain functions whose arguments are functions {{% gh 5802 %}}.
   -  Sinks using `WITH SNAPSHOT AS OF` {{% gh 5808 %}}.
 
+- Reduce memory usage and increase processing speed in materialized views
+  involving sources with the "upsert" envelope. {{% gh 5509 %}}.
+
+  Users of the [memory usage visualization](/ops/monitoring#memory-usage-visualization)
+  will see that the operator "UpsertArrange" has changed to "Upsert", and that
+  the "Upsert" operator no longer shows any records. Actually, the "Upsert"
+  operator still has a memory footprint proportional to the number of unique
+  keys in the source.
+
 {{% version-header v0.7.0 %}}
 
 - **Known issue.** You cannot upgrade nodes created with versions v0.6.1 or
