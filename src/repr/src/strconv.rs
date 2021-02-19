@@ -452,14 +452,41 @@ pub fn parse_bytes(s: &str) -> Result<Vec<u8>, ParseError> {
     // [0]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.9
     // [1]: https://www.postgresql.org/docs/current/datatype-binary.html#id-1.5.7.12.10
     if let Some(remainder) = s.strip_prefix(r"\x") {
-        hex::decode(remainder)
-            .map_err(|e| ParseError::invalid_input_syntax("bytea", s).with_details(e))
+        parse_bytes_hex(remainder)
+            .map_err(|e| ParseError::invalid_input_syntax("bytea", s).with_details(e.to_string()))
     } else {
         parse_bytes_traditional(s)
     }
 }
 
-fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
+pub fn parse_bytes_hex(s: &str) -> Result<Vec<u8>, ParseHexError> {
+    // Can't use `hex::decode` here, as it doesn't tolerate whitespace
+    // between encoded bytes.
+
+    let decode_nibble = |b| match b {
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        b'0'..=b'9' => Ok(b - b'0'),
+        _ => Err(ParseHexError::InvalidHexDigit(char::from(b))),
+    };
+
+    let mut buf = vec![];
+    let mut nibbles = s.as_bytes().iter().copied();
+    while let Some(n) = nibbles.next() {
+        if let b' ' | b'\n' | b'\t' | b'\r' = n {
+            continue;
+        }
+        let n = decode_nibble(n)?;
+        let n2 = match nibbles.next() {
+            None => return Err(ParseHexError::OddLength),
+            Some(n2) => decode_nibble(n2)?,
+        };
+        buf.push((n << 4) | n2);
+    }
+    Ok(buf)
+}
+
+pub fn parse_bytes_traditional(s: &str) -> Result<Vec<u8>, ParseError> {
     // Bytes are interpreted literally, save for the special escape sequences
     // "\\", which represents a single backslash, and "\NNN", where each N
     // is an octal digit, which represents the byte whose octal value is NNN.
@@ -1240,3 +1267,24 @@ impl fmt::Display for ParseError {
 }
 
 impl Error for ParseError {}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum ParseHexError {
+    InvalidHexDigit(char),
+    OddLength,
+}
+
+impl fmt::Display for ParseHexError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ParseHexError::InvalidHexDigit(c) => {
+                write!(f, "invalid hexadecimal digit: \"{}\"", c.escape_default())
+            }
+            ParseHexError::OddLength => {
+                f.write_str("invalid hexadecimal data: odd number of digits")
+            }
+        }
+    }
+}
+
+impl Error for ParseHexError {}
