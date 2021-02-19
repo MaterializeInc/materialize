@@ -102,10 +102,7 @@ async fn fetch_latest_version(
 }
 
 fn telemetry_data(start_time: Instant, session_id: Uuid) -> Status {
-    let metrics_to_collect: HashSet<_> = [METRIC_SERVER_METADATA, METRIC_WORKER_COUNT]
-        .iter()
-        .copied()
-        .collect();
+    let metrics_to_collect: HashSet<_> = [METRIC_WORKER_COUNT].iter().copied().collect();
 
     let metrics = load_prom_metrics(start_time);
     let filtered = filter_metrics(&metrics, &metrics_to_collect);
