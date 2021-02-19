@@ -20,7 +20,10 @@ use globset::GlobMatcher;
 use metrics::BucketMetrics;
 use notifications::Event;
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
-use rusoto_sqs::{DeleteMessageRequest, GetQueueUrlRequest, ReceiveMessageRequest, Sqs};
+use rusoto_sqs::{
+    ChangeMessageVisibilityBatchRequest, ChangeMessageVisibilityBatchRequestEntry,
+    DeleteMessageRequest, GetQueueUrlRequest, ReceiveMessageRequest, Sqs,
+};
 use timely::scheduling::{Activator, SyncActivator};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc as tokio_mpsc;
@@ -110,7 +113,6 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             let glob = s3_conn.pattern.map(|g| g.compile_matcher());
             let aws_info = s3_conn.aws_info;
             tokio::spawn(download_objects_task(
-                source_name.clone(),
                 source_id.to_string(),
                 keys_rx,
                 dataflow_tx,
@@ -170,7 +172,6 @@ struct KeyInfo {
 }
 
 async fn download_objects_task(
-    source_name: String,
     source_id: String,
     mut rx: tokio_mpsc::Receiver<anyhow::Result<KeyInfo>>,
     tx: SyncSender<anyhow::Result<InternalMessage>>,
@@ -213,29 +214,29 @@ async fn download_objects_task(
                     seen_buckets.insert(msg.bucket.clone(), bi);
                 };
 
-                let update = download_object(
-                    &source_name,
-                    &tx,
-                    &activator,
-                    &client,
-                    msg.bucket.clone(),
-                    msg.key,
-                )
-                .await;
+                let update =
+                    download_object(&tx, &activator, &client, msg.bucket.clone(), msg.key).await;
 
                 if let Some(update) = update {
                     seen_buckets
                         .get_mut(&msg.bucket)
                         .expect("just inserted")
                         .metrics
-                        .inc(1, update.bytes, update.messages)
+                        .inc(1, update.bytes, update.messages);
+                    if update.sent == Sent::SenderClosed {
+                        rx.close();
+                        break;
+                    }
                 }
             }
-            Err(e) => tx
-                .send(Err(e))
-                .unwrap_or_else(|e| log::debug!("unable to send error: {}", e)),
+            Err(e) => {
+                if tx.send(Err(e)).is_err() {
+                    break;
+                }
+            }
         }
     }
+    log::debug!("exiting download objects task source_id={}", source_id);
 }
 
 async fn scan_bucket_task(
@@ -325,6 +326,11 @@ async fn scan_bucket_task(
             }
         }
     }
+    log::debug!(
+        "exiting bucket scan task source_id={} bucket={}",
+        source_id,
+        bucket
+    );
 }
 
 async fn read_sqs_task(
@@ -334,6 +340,12 @@ async fn read_sqs_task(
     aws_info: aws::ConnectInfo,
     tx: tokio_mpsc::Sender<anyhow::Result<KeyInfo>>,
 ) {
+    log::debug!(
+        "starting read sqs task queue={} source_id={}",
+        queue,
+        source_id
+    );
+
     let client = match aws_util::sqs::client(aws_info).await {
         Ok(client) => client,
         Err(e) => {
@@ -373,7 +385,7 @@ async fn read_sqs_task(
     let mut metrics: HashMap<String, ScanBucketMetrics> = HashMap::new();
 
     let mut allowed_errors = 10;
-    loop {
+    'outer: loop {
         let response = client
             .receive_message(ReceiveMessageRequest {
                 max_number_of_messages: Some(10),
@@ -388,81 +400,40 @@ async fn read_sqs_task(
         match response {
             Ok(response) => {
                 let messages = if let Some(m) = response.messages {
-                    m
-                } else {
-                    continue;
-                };
-
-                allowed_errors = 10;
-
-                for message in messages {
-                    if let Some(body) = message.body.as_ref() {
-                        let event: Result<Event, _> = serde_json::from_str(body);
-                        match event {
-                            Ok(event) => {
-                                for record in event.records {
-                                    if matches!(
-                                        record.event_type,
-                                        EventType::ObjectCreatedPut
-                                            | EventType::ObjectCreatedPost
-                                            | EventType::ObjectCreatedCompleteMultipartUpload
-                                    ) {
-                                        let key = record.s3.object.key;
-                                        if glob.map(|g| g.is_match(&key)).unwrap_or(true) {
-                                            if let Some(m) = metrics.get(&record.s3.bucket.name) {
-                                                m.objects_discovered.inc()
-                                            } else {
-                                                let m = ScanBucketMetrics::new(
-                                                    &source_id,
-                                                    &record.s3.bucket.name,
-                                                );
-                                                m.objects_discovered.inc();
-                                                metrics.insert(record.s3.bucket.name.clone(), m);
-                                            }
-
-                                            let ki = Ok(KeyInfo {
-                                                bucket: record.s3.bucket.name,
-                                                key,
-                                            });
-                                            if tx.send(ki).await.is_err() {
-                                                log::debug!(
-                                                    "Downloader queue is closed, exiting sqs reader",
-                                                );
-                                                return;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Err(_) => {
-                                let test: Result<TestEvent, _> = serde_json::from_str(&body);
-                                match test {
-                                    Ok(_) => {} // expected when connecting to a new queue
-                                    Err(_) => {
-                                        log::error!(
-                                            "[customer-data] Unrecognized message from SQS queue {}: {}",
-                                            queue, body,
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                    if tx.is_closed() {
+                        release_messages(&client, None, m.into_iter(), queue_url.clone()).await;
+                        break;
                     }
 
-                    if let Err(e) = client
-                        .delete_message(DeleteMessageRequest {
-                            queue_url: queue_url.clone(),
-                            receipt_handle: message
-                                .receipt_handle
-                                .clone()
-                                .expect("receipt handle is always returned"),
-                        })
-                        .await
-                    {
-                        log::warn!("Error deleting processed SQS message: {}", e)
+                    m
+                } else {
+                    if tx.is_closed() {
+                        break;
+                    }
+                    continue;
+                };
+                allowed_errors = 10;
+
+                let mut msgs_iter = messages.into_iter();
+                while let Some(message) = msgs_iter.next() {
+                    let cancelled_message = process_message(
+                        message,
+                        glob,
+                        &mut metrics,
+                        &source_id,
+                        &tx,
+                        &client,
+                        &queue_url,
+                    )
+                    .await;
+                    if cancelled_message.is_some() {
+                        release_messages(&client, cancelled_message, msgs_iter, queue_url.clone())
+                            .await;
+                        break 'outer;
                     }
                 }
             }
+
             Err(e) => {
                 allowed_errors -= 1;
                 if allowed_errors == 0 {
@@ -481,16 +452,100 @@ async fn read_sqs_task(
             }
         }
     }
+    log::debug!("exiting sqs reader source_id={} queue={}", source_id, queue);
+}
+
+/// Send the relevant parts of the message to the download objects task
+///
+/// Returns any message that wasn't able to be processed to be released back to
+/// the SQS service.
+async fn process_message(
+    message: rusoto_sqs::Message,
+    glob: Option<&GlobMatcher>,
+    metrics: &mut HashMap<String, ScanBucketMetrics>,
+    source_id: &str,
+    tx: &tokio_mpsc::Sender<Result<KeyInfo, Error>>,
+    client: &rusoto_sqs::SqsClient,
+    queue_url: &str,
+) -> Option<rusoto_sqs::Message> {
+    if let Some(body) = message.body.as_ref() {
+        let event: Result<Event, _> = serde_json::from_str(body);
+        match event {
+            Ok(event) => {
+                for record in event.records {
+                    if matches!(
+                        record.event_type,
+                        EventType::ObjectCreatedPut
+                            | EventType::ObjectCreatedPost
+                            | EventType::ObjectCreatedCompleteMultipartUpload
+                    ) {
+                        let key = record.s3.object.key;
+                        if glob.map(|g| g.is_match(&key)).unwrap_or(true) {
+                            if let Some(m) = metrics.get(&record.s3.bucket.name) {
+                                m.objects_discovered.inc()
+                            } else {
+                                let m = ScanBucketMetrics::new(&source_id, &record.s3.bucket.name);
+                                m.objects_discovered.inc();
+                                metrics.insert(record.s3.bucket.name.clone(), m);
+                            }
+
+                            let ki = Ok(KeyInfo {
+                                bucket: record.s3.bucket.name,
+                                key,
+                            });
+                            if tx.send(ki).await.is_err() {
+                                log::info!("sqs reader is closed, marking message as visible");
+                                return Some(message);
+                            }
+                        }
+                    }
+                }
+            }
+            Err(_) => {
+                let test: Result<TestEvent, _> = serde_json::from_str(&body);
+                match test {
+                    Ok(_) => {} // expected when connecting to a new queue
+                    Err(_) => {
+                        log::error!(
+                            "[customer-data] Unrecognized message from SQS queue {}: {}",
+                            queue_url,
+                            body,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if let Err(e) = client
+        .delete_message(DeleteMessageRequest {
+            queue_url: queue_url.to_string(),
+            receipt_handle: message
+                .receipt_handle
+                .expect("receipt handle is always returned"),
+        })
+        .await
+    {
+        log::warn!("Error deleting processed SQS message: {}", e)
+    }
+
+    None
 }
 
 #[derive(Debug)]
 struct DownloadMetricUpdate {
     bytes: u64,
     messages: u64,
+    sent: Sent,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Sent {
+    Success,
+    SenderClosed,
 }
 
 async fn download_object(
-    source_name: &str,
     tx: &SyncSender<anyhow::Result<InternalMessage>>,
     activator: &SyncActivator,
     client: &S3Client,
@@ -519,16 +574,13 @@ async fn download_object(
         let mut buf = Vec::with_capacity(obj.content_length.unwrap_or(1024).try_into().unwrap());
         let mut messages = 0;
 
+        let mut sent = Sent::Success;
         match reader.read_to_end(&mut buf).await {
             Ok(_) => {
                 let activate = !buf.is_empty();
                 for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
-                    if let Err(e) = tx.send(Ok(InternalMessage { record: line })) {
-                        log::debug!(
-                            "Source receiver has been closed, exiting ingest source={}: {}",
-                            source_name,
-                            e
-                        );
+                    if tx.send(Ok(InternalMessage { record: line })).is_err() {
+                        sent = Sent::SenderClosed;
                         break;
                     } else {
                         messages += 1;
@@ -540,14 +592,17 @@ async fn download_object(
                 }
             }
             Err(e) => {
-                tx.send(Err(anyhow!("Unable to read object: {}", e)))
-                    .unwrap_or_else(|e| log::debug!("unable to send error on stream: {}", e));
+                if let Err(e) = tx.send(Err(anyhow!("Unable to read object: {}", e))) {
+                    log::debug!("unable to send error on stream: {}", e);
+                    sent = Sent::SenderClosed;
+                }
             }
         }
 
         Some(DownloadMetricUpdate {
             bytes: buf.len() as u64,
             messages,
+            sent,
         })
     } else {
         log::warn!("get object response had no body");
@@ -642,6 +697,41 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
 }
 
 // Helper utilities
+
+/// Set the SQS visibility timeout back to zero, allowing the messages to be sent to other clients
+async fn release_messages(
+    client: &rusoto_sqs::SqsClient,
+    message: Option<rusoto_sqs::Message>,
+    messages: impl Iterator<Item = rusoto_sqs::Message>,
+    queue_url: String,
+) {
+    if let Err(e) = client
+        .change_message_visibility_batch(ChangeMessageVisibilityBatchRequest {
+            entries: message
+                .into_iter()
+                .chain(messages.into_iter())
+                .filter_map(|m| m.receipt_handle)
+                .enumerate()
+                .map(|(i, receipt_handle)| {
+                    log::debug!(
+                        "releasing message receipt_handle={} queue_url={}",
+                        receipt_handle,
+                        queue_url
+                    );
+                    ChangeMessageVisibilityBatchRequestEntry {
+                        id: i.to_string(),
+                        receipt_handle,
+                        visibility_timeout: Some(0),
+                    }
+                })
+                .collect(),
+            queue_url,
+        })
+        .await
+    {
+        log::warn!("unexpected error releasing SQS messages: {}", e);
+    };
+}
 
 /// Find the unambiguous prefix of a glob
 fn find_prefix(glob: &str) -> String {

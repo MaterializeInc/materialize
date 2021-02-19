@@ -39,11 +39,12 @@ mzworkflows:
       - step: start-services
         services: [kafka, schema-registry, materialized]
       - step: wait-for-tcp
-        host: schema-registry
-        port: 8081
-      - step: wait-for-tcp
         host: kafka
         port: 9092
+        timeout_secs: 120
+      - step: wait-for-tcp
+        host: schema-registry
+        port: 8081
       - step: wait-for-mz
 
 services:
@@ -113,7 +114,8 @@ services:
   localstack:
     image: localstack/localstack:0.12.5
     environment:
-    - SERVICES=sts,iam,kinesis,s3
+    - SERVICES=sqs,sts,iam,kinesis,s3
+    - HOSTNAME_EXTERNAL=localstack
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 

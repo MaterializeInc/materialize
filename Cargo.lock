@@ -4195,6 +4195,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_s3",
+ "rusoto_sqs",
  "rusoto_sts",
  "serde",
  "serde-protobuf",
