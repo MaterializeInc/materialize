@@ -15,6 +15,7 @@ use log::{debug, log, Level};
 use semver::{Identifier, Version};
 use serde::{Deserialize, Serialize};
 use tokio::time::{self, Duration};
+use uuid::Uuid;
 
 use ore::retry::RetryBuilder;
 
@@ -37,8 +38,10 @@ pub async fn check_version_loop(telemetry_url: String, cluster_id: String, start
     let current_version =
         Version::parse(BUILD_INFO.version).expect("crate version is not valid semver");
 
+    let session_id = Uuid::new_v4();
+
     let version_url = format!("{}/api/v1/version/{}", telemetry_url, cluster_id);
-    let latest_version = fetch_latest_version(&version_url, start_time).await;
+    let latest_version = fetch_latest_version(&version_url, start_time, session_id).await;
 
     match Version::parse(&latest_version) {
         Ok(latest_version) if latest_version > current_version => {
@@ -62,11 +65,15 @@ pub async fn check_version_loop(telemetry_url: String, cluster_id: String, start
     loop {
         time::sleep(TELEMETRY_FREQUENCY).await;
 
-        fetch_latest_version(&version_url, start_time).await;
+        fetch_latest_version(&version_url, start_time, session_id).await;
     }
 }
 
-async fn fetch_latest_version(telemetry_url: &str, start_time: Instant) -> String {
+async fn fetch_latest_version(
+    telemetry_url: &str,
+    start_time: Instant,
+    session_id: Uuid,
+) -> String {
     RetryBuilder::new()
         .max_sleep(None)
         .max_backoff(TELEMETRY_FREQUENCY)
@@ -75,7 +82,7 @@ async fn fetch_latest_version(telemetry_url: &str, start_time: Instant) -> Strin
         .retry(|_state| async {
             let version_request = V1VersionRequest {
                 version: BUILD_INFO.version,
-                status: telemetry_data(start_time),
+                status: telemetry_data(start_time, session_id),
             };
 
             let resp = reqwest::Client::new()
@@ -94,7 +101,7 @@ async fn fetch_latest_version(telemetry_url: &str, start_time: Instant) -> Strin
         .expect("retry loop never terminates")
 }
 
-fn telemetry_data(start_time: Instant) -> Status {
+fn telemetry_data(start_time: Instant, session_id: Uuid) -> Status {
     let metrics_to_collect: HashSet<_> = [METRIC_SERVER_METADATA, METRIC_WORKER_COUNT]
         .iter()
         .copied()
@@ -104,6 +111,7 @@ fn telemetry_data(start_time: Instant) -> Status {
     let filtered = filter_metrics(&metrics, &metrics_to_collect);
     let value_default = |name| filtered.get(name).map(|m| m.value()).unwrap_or(0.0);
     Status {
+        session_id,
         uptime_seconds: start_time.elapsed().as_secs(),
         num_workers: value_default(METRIC_WORKER_COUNT),
     }
@@ -115,8 +123,11 @@ struct V1VersionRequest<'a> {
     status: Status,
 }
 
+/// General status of the materialized server, for telemetry
 #[derive(Serialize)]
 struct Status {
+    /// Unique token for every time materialized is restarted
+    session_id: Uuid,
     uptime_seconds: u64,
     num_workers: f64,
 }
