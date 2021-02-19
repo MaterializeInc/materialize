@@ -16,7 +16,7 @@ use prometheus::{register_uint_gauge, register_uint_gauge_vec, UIntGauge, UIntGa
 
 use dataflow_types::{ExternalSourceConnector, SinkConnector, SourceConnector};
 
-use super::{CatalogItem, Sink, SinkConnectorState, Source};
+use crate::catalog::{CatalogItem, Sink, SinkConnectorState, Source};
 
 lazy_static! {
     static ref SOURCES: UIntGaugeVec = register_uint_gauge_vec!(

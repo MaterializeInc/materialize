@@ -50,7 +50,6 @@ use crate::session::Session;
 
 mod config;
 mod error;
-mod metrics;
 mod migrate;
 
 pub mod builtin;
@@ -1087,7 +1086,6 @@ impl Catalog {
         } else {
             schema.items.insert(entry.name.item.clone(), entry.id);
         }
-        metrics::item_created(entry.id, &item);
 
         self.by_oid.insert(oid, entry.id);
         self.by_id.insert(entry.id, entry);
@@ -1597,7 +1595,6 @@ impl Catalog {
                         .items
                         .remove(&metadata.name.item)
                         .expect("catalog out of sync");
-                    metrics::item_dropped(id, &metadata.item);
                     if let CatalogItem::Index(index) = &metadata.item {
                         let indexes = self
                             .indexes

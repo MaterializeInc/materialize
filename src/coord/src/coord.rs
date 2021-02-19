@@ -94,6 +94,7 @@ use crate::util::ClientTransmitter;
 
 mod arrangement_state;
 mod dataflow_builder;
+mod metrics;
 
 #[derive(Debug)]
 pub enum Message {
@@ -2838,6 +2839,7 @@ impl Coordinator {
                     if let Ok(desc) = item.desc(&name) {
                         self.report_column_updates(desc, *id, 1).await;
                     }
+                    metrics::item_created(*id, &item);
                     match item {
                         CatalogItem::Index(index) => {
                             self.report_index_update(*id, *oid, &index, &name.item, 1)
@@ -2974,6 +2976,7 @@ impl Coordinator {
                     _ => unreachable!("DroppedIndex for non-index item"),
                 },
                 catalog::Event::DroppedItem { schema_id, entry } => {
+                    metrics::item_dropped(entry.id(), entry.item());
                     match entry.item() {
                         CatalogItem::Table(_) => {
                             sources_to_drop.push(entry.id());
