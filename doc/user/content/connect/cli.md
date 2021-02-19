@@ -4,6 +4,7 @@ description: "You can connect to Materialize from your favorite shell using comp
 menu:
   main:
     parent: "connections"
+    weight: 1
 ---
 
 You can connect to a running `materialized` process from your favorite shell

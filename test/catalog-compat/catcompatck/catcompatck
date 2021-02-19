@@ -91,6 +91,15 @@ a  b  c
 2  1  21
 3  1  31
 1  2  12
+
+# Checks for regressions against #5802; simply having this in the catalog is
+# sufficient, so it doesn't need to be requeried in each new "epoch".
+> CREATE MATERIALIZED VIEW regression_5802 AS SELECT length(length('')::text);
+
+> SELECT * FROM regression_5802
+length
+------
+1
 EOF
 
 say "killing materialized-golden010"

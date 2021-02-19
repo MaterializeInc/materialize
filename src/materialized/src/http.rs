@@ -52,7 +52,6 @@ pub struct Config {
     pub tls: Option<TlsConfig>,
     pub coord_client: coord::Client,
     pub start_time: Instant,
-    pub worker_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -76,10 +75,6 @@ pub struct Server {
 
 impl Server {
     pub fn new(config: Config) -> Server {
-        // Just set this metric once so that it shows up in the metric export.
-        metrics::WORKER_COUNT
-            .with_label_values(&[&config.worker_count.to_string()])
-            .set(1);
         Server {
             tls: config.tls,
             coord_client: config.coord_client,
