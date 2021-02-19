@@ -129,6 +129,30 @@
   - signature: 'sqrt(x: double precision) -> double precision'
     description: The square root of `x`.
 
+- type: Trigonometric
+  description: Trigonometric functions take and return `double precision` values.
+  functions:
+  - signature: 'cos(x: double precision) -> double precision'
+    description: The cosine of `x`, with `x` in radians.
+
+  - signature: 'cosh(x: double precision) -> double precision'
+    description: The hyperbolic cosine of `x`, with `x` as a hyperbolic angle.
+
+  - signature: 'cot(x: double precision) -> double precision'
+    description: The cotangent of `x`, with `x` in radians.
+
+  - signature: 'sin(x: double precision) -> double precision'
+    description: The sine of `x`, with `x` in radians.
+
+  - signature: 'sinh(x: double precision) -> double precision'
+    description: The hyperbolic sine of `x`, with `x` as a hyperbolic angle.
+
+  - signature: 'tan(x: double precision) -> double precision'
+    description: The tangent of `x`, with `x` in radians.
+
+  - signature: 'tanh(x: double precision) -> double precision'
+    description: The hyperbolic tangent of `x`, with `x` as a hyperbolic angle.
+
 - type: String
   functions:
   - signature: 'ascii(s: str) -> int'

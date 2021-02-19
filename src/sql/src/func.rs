@@ -1351,6 +1351,15 @@ lazy_static! {
             "convert_from" => Scalar {
                 params!(Bytes, String) => BinaryFunc::ConvertFrom, 1714;
             },
+            "cos" => Scalar {
+                params!(Float64) => UnaryFunc::Cos, 1605;
+            },
+            "cosh" => Scalar {
+                params!(Float64) => UnaryFunc::Cosh, 2463;
+            },
+            "cot" => Scalar {
+                params!(Float64) => UnaryFunc::Cot, 1607;
+            },
             "current_schema" => Scalar {
                 params!() => sql_op!("current_schemas(false)[1]"), 1402;
             },
@@ -1540,6 +1549,12 @@ lazy_static! {
                 params!(String) => UnaryFunc::TrimTrailingWhitespace, 882;
                 params!(String, String) => BinaryFunc::TrimTrailing, 876;
             },
+            "sin" => Scalar {
+                params!(Float64) => UnaryFunc::Sin, 1604;
+            },
+            "sinh" => Scalar {
+                params!(Float64) => UnaryFunc::Sinh, 2462;
+            },
             "split_part" => Scalar {
                 params!(String, String, Int64) => VariadicFunc::SplitPart, 2088;
             },
@@ -1578,6 +1593,12 @@ lazy_static! {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
                 }), 1730;
+            },
+            "tan" => Scalar {
+                params!(Float64) => UnaryFunc::Tan, 1606;
+            },
+            "tanh" => Scalar {
+                params!(Float64) => UnaryFunc::Tanh, 246;
             },
             "timezone" => Scalar {
                 params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp, 2069;
