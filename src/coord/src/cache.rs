@@ -699,7 +699,8 @@ impl TableLogSegments {
 
 pub struct Tables {
     path: PathBuf,
-    tables: HashMap<GlobalId, TableLogSegments>,
+    wal: HashMap<GlobalId, TableLogSegments>,
+    traces: HashMap<GlobalId, Trace>,
 }
 
 impl Tables {
@@ -708,7 +709,8 @@ impl Tables {
             .with_context(|| anyhow!("trying to create tables directory: {:#?}", path))?;
         Ok(Self {
             path,
-            tables: HashMap::new(),
+            wal: HashMap::new(),
+            traces: HashMap::new(),
         })
     }
 
@@ -718,34 +720,34 @@ impl Tables {
     }
 
     pub fn create_table(&mut self, id: GlobalId) -> Result<(), anyhow::Error> {
-        if self.tables.contains_key(&id) {
+        if self.wal.contains_key(&id) {
             bail!("asked to create table {:?} that was already created", id)
         }
 
         let table_base_path = self.get_path(id);
         let table_log = TableLogSegments::create_table(id, table_base_path)?;
-        self.tables.insert(id, table_log);
+        self.wal.insert(id, table_log);
         Ok(())
     }
 
     pub fn drop_table(&mut self, id: GlobalId) -> Result<(), anyhow::Error> {
-        if !self.tables.contains_key(&id) {
+        if !self.wal.contains_key(&id) {
             bail!("asked to delete table {:?} that doesn't exist", id)
         }
 
-        let table = self.tables.remove(&id).expect("table known to exist");
+        let table = self.wal.remove(&id).expect("table known to exist");
         table.drop_table()?;
 
         Ok(())
     }
 
     pub fn write_updates(&mut self, id: GlobalId, updates: &[Update]) -> Result<(), anyhow::Error> {
-        if !self.tables.contains_key(&id) {
+        if !self.wal.contains_key(&id) {
             // TODO get rid of this later
             panic!("asked to write to unknown table: {}", id)
         }
 
-        let table = self.tables.get_mut(&id).expect("table known to exist");
+        let table = self.wal.get_mut(&id).expect("table known to exist");
         table.write_updates(updates)?;
         Ok(())
     }
@@ -753,7 +755,7 @@ impl Tables {
     pub fn reload_table(&mut self, id: GlobalId) -> Result<Vec<TableUpdates>, anyhow::Error> {
         let table_base_path = self.get_path(id);
         let (table, updates) = TableLogSegments::reload_table(id, table_base_path)?;
-        self.tables.insert(id, table);
+        self.wal.insert(id, table);
 
         Ok(updates)
     }
@@ -761,7 +763,7 @@ impl Tables {
     pub fn close_up_to(&mut self, timestamp: Timestamp) -> Result<(), anyhow::Error> {
         // For all tables, indicate that <timestamp> is now the min timestamp going
         // forward
-        for (_, table) in self.tables.iter_mut() {
+        for (_, table) in self.wal.iter_mut() {
             table.close_up_to(timestamp)?;
         }
 
@@ -921,6 +923,30 @@ impl TableIter {
             lower: None,
         }
     }
+}
+
+// Stuff to deal with proper batches of updates
+// CDCv2 / Differential batches style
+
+struct BatchDescription {
+    upper: Timestamp,
+    lower: Timestamp,
+    since: Timestamp, // as-of
+    num_updates: usize,
+}
+
+enum BatchHandle {
+    File(PathBuf),
+}
+
+struct Batch {
+    description: BatchDescription,
+    handle: BatchHandle,
+}
+
+struct Trace {
+    id: GlobalId,
+    batches: Vec<Batch>,
 }
 
 #[test]
