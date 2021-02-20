@@ -1,0 +1,9 @@
+[ ] - Generate Kafka topics at benchmark setup for benchmark metrics and system metrics
+[ ] - Start perf-dash in `setup-benchmark`
+[ ] - Prettify the dashboard views some?
+[ ] - Track ingest performance by time
+[ ] - mzbench write benchmark metadata per iteration, mapping cluster_id to benchmark_id, iteration
+[ ] - mzbench write benchmark metadata per iteration, mapping params to benchmark_id, iteration
+[ ] - metric verifier should use cluster_id, not benchmark_id
+[ ] - generate plot showing worker balance by git revision
+[ ] - add plot showing memory consumption?
