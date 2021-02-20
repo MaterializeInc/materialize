@@ -293,8 +293,18 @@ impl Coordinator {
                 CatalogItem::Table(_) => {
                     if !id.is_system() {
                         // TODO gross hack for now
-                        let updates = self.tables.reload_table(*id)?;
-                        self.broadcast(SequencedCommand::Insert { id: *id, updates });
+                        let mut table_updates = self.tables.reload_table(*id)?;
+                        // Probably could be more careful to read in sorted order
+                        table_updates.sort_by_key(|u| (u.lower, u.upper));
+                        for update in table_updates.into_iter() {
+                            self.broadcast(SequencedCommand::Insert {
+                                id: *id,
+                                updates: update.updates,
+                            });
+                            self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
+                                advance_to: update.upper,
+                            });
+                        }
                     }
                 }
                 CatalogItem::Sink(sink) => {
@@ -441,6 +451,9 @@ impl Coordinator {
                         > self.closed_up_to / self.logging_granularity.unwrap()
             {
                 if next_ts > self.closed_up_to {
+                    self.tables
+                        .close_up_to(next_ts)
+                        .expect("TODO handle this better");
                     self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
                         advance_to: next_ts,
                     });

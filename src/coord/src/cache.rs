@@ -24,14 +24,14 @@ use dataflow::source::cache::RecordFileMetadata;
 use dataflow::CacheMessage;
 use dataflow_types::{ExternalSourceConnector, SourceConnector, Update};
 use expr::GlobalId;
-use repr::{CachedRecord, Row};
+use repr::{CachedRecord, Row, Timestamp};
 
 // Interval at which Cacher will try to flush out pending records
 static CACHE_FLUSH_INTERVAL: Duration = Duration::from_secs(600);
 
 // Limit at which we will make a new log segment
 // TODO: make this configurable and / or bump default to be larger.
-static TABLE_MAX_LOG_SEGMENT_SIZE: usize = 10;
+static TABLE_MAX_LOG_SEGMENT_SIZE: usize = 50;
 
 #[derive(Clone, Debug)]
 pub struct CacheConfig {
@@ -501,17 +501,26 @@ impl TableLogSegments {
                 )
             })?;
 
-        Ok(Self {
+        let mut ret = Self {
             id,
             base_path,
             current_file: file,
             current_bytes_written: 0,
             total_bytes_written: 0,
             next_sequence_number: 1,
-        })
+        };
+
+        // Write a timestamp message here so we can establish `lower` for the first log
+        // segment.
+        ret.write_progress(0)?;
+        Ok(ret)
     }
 
     fn write_updates(&mut self, updates: &[Update]) -> Result<(), anyhow::Error> {
+        // TODO The allocation discipline for writes could probably be a lot
+        // better - each WAL writer could keep a buffer that it writes into
+        // for everything and fall back to allocating stuff if we run out of
+        // space.
         let mut buf = Vec::new();
         for update in updates {
             encode_update(update, &mut buf)?;
@@ -523,8 +532,30 @@ impl TableLogSegments {
         self.current_bytes_written += len;
         self.total_bytes_written += len;
 
+        Ok(())
+    }
+
+    fn write_progress(&mut self, timestamp: Timestamp) -> Result<(), anyhow::Error> {
+        let buf = encode_progress(timestamp)?;
+        let len = buf.len();
+        self.current_file.write_all(&buf)?;
+        self.current_file.flush()?;
+        self.current_bytes_written += len;
+        self.total_bytes_written += len;
+
+        Ok(())
+    }
+
+    fn close_up_to(&mut self, timestamp: Timestamp) -> Result<(), anyhow::Error> {
+        self.write_progress(timestamp)?;
+
+        // We only want to rotate the log segments at progress messages
+        // so that we can extract batches.
         if self.current_bytes_written > TABLE_MAX_LOG_SEGMENT_SIZE {
             self.rotate_log_segment()?;
+            // Write the progress update to the new file to make sure we
+            // know the `lower` for the new file
+            self.write_progress(timestamp)?;
         }
 
         Ok(())
@@ -581,7 +612,7 @@ impl TableLogSegments {
     fn reload_table(
         id: GlobalId,
         base_path: PathBuf,
-    ) -> Result<(Self, Vec<Update>), anyhow::Error> {
+    ) -> Result<(Self, Vec<TableUpdates>), anyhow::Error> {
         // First lets create the directory
         fs::create_dir_all(&base_path).with_context(|| {
             anyhow!(
@@ -719,7 +750,7 @@ impl Tables {
         Ok(())
     }
 
-    pub fn reload_table(&mut self, id: GlobalId) -> Result<Vec<Update>, anyhow::Error> {
+    pub fn reload_table(&mut self, id: GlobalId) -> Result<Vec<TableUpdates>, anyhow::Error> {
         let table_base_path = self.get_path(id);
         let (table, updates) = TableLogSegments::reload_table(id, table_base_path)?;
         self.tables.insert(id, table);
@@ -727,10 +758,14 @@ impl Tables {
         Ok(updates)
     }
 
-    fn close_up_to(&mut self, timestamp: Timestamp) -> Result<(), anyhow::Error> {
+    pub fn close_up_to(&mut self, timestamp: Timestamp) -> Result<(), anyhow::Error> {
         // For all tables, indicate that <timestamp> is now the min timestamp going
         // forward
-        unimplemented!()
+        for (_, table) in self.tables.iter_mut() {
+            table.close_up_to(timestamp)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -761,41 +796,90 @@ fn encode_update(update: &Update, buf: &mut Vec<u8>) -> Result<(), anyhow::Error
     Ok(())
 }
 
-fn read_update(buf: &[u8], offset: usize) -> Option<(Update, usize)> {
+fn encode_progress(timestamp: Timestamp) -> Result<Vec<u8>, anyhow::Error> {
+    let mut buf: Vec<u8> = Vec::with_capacity(12);
+    // This is a progress update so - 1
+    buf.write_u32::<NetworkEndian>(1).unwrap();
+    buf.write_u64::<NetworkEndian>(timestamp).unwrap();
+
+    Ok(buf)
+}
+
+fn read_updates(
+    buf: &[u8],
+    mut offset: usize,
+    mut lower: Option<Timestamp>,
+) -> Option<(TableUpdates, usize)> {
     if offset >= buf.len() {
         return None;
     }
 
-    // Let's start by only looking at the buffer at the offset.
-    let (_, data) = buf.split_at(offset);
+    let mut updates = Vec::new();
+    let mut upper = None;
+    while offset < buf.len() {
+        // Let's start by only looking at the buffer at the offset.
+        let (_, data) = buf.split_at(offset);
 
-    // Let's read the header first
-    let mut cursor = Cursor::new(&data);
+        // Let's read the header first
+        let mut cursor = Cursor::new(&data);
 
-    let is_progress = cursor.read_u32::<NetworkEndian>().unwrap();
-    let timestamp = cursor.read_u64::<NetworkEndian>().unwrap();
-    let diff = cursor.read_i64::<NetworkEndian>().unwrap() as isize;
-    let len = cursor.read_u32::<NetworkEndian>().unwrap() as usize;
+        let is_progress = cursor.read_u32::<NetworkEndian>().unwrap();
 
-    // TODO: change this later
-    assert!(is_progress == 0);
-    assert!(timestamp > 0);
-    assert!(diff != 0);
+        if is_progress != 0 {
+            // If this is a progress message let's seal a new
+            // set of updates.
 
-    // Grab the next len bytes after the 24 byte length header, and turn
-    // it into a vector so that we can extract things from it as a Row.
-    // TODO: could we avoid the extra allocation here?
-    let (_, rest) = data.split_at(24);
-    let row = rest[..len].to_vec();
+            // Lets figure out the upper bound.
+            let timestamp = cursor.read_u64::<NetworkEndian>().unwrap();
+            upper = Some(timestamp);
+            if lower.is_none() {
+                lower = Some(timestamp);
+            }
+            // Advance the offset past what we've read.
+            offset += 12;
+            break;
+        }
 
-    let row = unsafe { Row::new(row) };
-    Some((
-        Update {
+        // Otherwise lets read the data.
+        let timestamp = cursor.read_u64::<NetworkEndian>().unwrap();
+        let diff = cursor.read_i64::<NetworkEndian>().unwrap() as isize;
+        let len = cursor.read_u32::<NetworkEndian>().unwrap() as usize;
+
+        //assert!(timestamp > 0);
+        assert!(diff != 0);
+
+        // Grab the next len bytes after the 24 byte length header, and turn
+        // it into a vector so that we can extract things from it as a Row.
+        // TODO: could we avoid the extra allocation here?
+        let (_, rest) = data.split_at(24);
+        let row = rest[..len].to_vec();
+
+        let row = unsafe { Row::new(row) };
+        updates.push(Update {
             row,
             timestamp,
             diff,
+        });
+
+        // Update the offset to account for the data we just read
+        offset = offset + 24 + len
+    }
+
+    // At the end of the loop lets check some invariants.
+    let lower = lower.unwrap();
+    let upper = upper.unwrap();
+    assert!(upper >= lower);
+    if upper == lower {
+        assert!(updates.len() == 0);
+    }
+
+    Some((
+        TableUpdates {
+            upper,
+            lower,
+            updates,
         },
-        offset + 24 + len,
+        offset,
     ))
 }
 
@@ -806,15 +890,23 @@ pub struct TableIter {
     pub data: Vec<u8>,
     /// Offset into the data.
     pub offset: usize,
+    pub lower: Option<Timestamp>,
+}
+
+pub struct TableUpdates {
+    pub upper: Timestamp,
+    pub lower: Timestamp,
+    pub updates: Vec<Update>,
 }
 
 impl Iterator for TableIter {
-    type Item = Update;
+    type Item = TableUpdates;
 
-    fn next(&mut self) -> Option<Update> {
-        if let Some((update, next_offset)) = read_update(&self.data, self.offset) {
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((updates, next_offset)) = read_updates(&self.data, self.offset, self.lower) {
             self.offset = next_offset;
-            Some(update)
+            self.lower = Some(updates.upper);
+            Some(updates)
         } else {
             None
         }
@@ -823,7 +915,11 @@ impl Iterator for TableIter {
 
 impl TableIter {
     pub fn new(data: Vec<u8>) -> Self {
-        Self { data, offset: 0 }
+        Self {
+            data,
+            offset: 0,
+            lower: None,
+        }
     }
 }
 
