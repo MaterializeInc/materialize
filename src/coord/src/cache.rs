@@ -690,7 +690,8 @@ impl TableLogSegments {
             Ok((ret, updates))
         } else {
             // Then if its empty, we are probably migrating from a version that didn't
-            // have persistent tables. Go ahead and set things up normally as you
+            // have persistent tables. Go ahead and set things up normally as you would
+            assert!(finished_files.is_empty());
             let ret = Self::create_table(id, base_path)?;
             Ok((ret, vec![]))
         }
@@ -932,7 +933,7 @@ struct BatchDescription {
     upper: Timestamp,
     lower: Timestamp,
     since: Timestamp, // as-of
-    num_updates: usize,
+    counts: Vec<(Timestamp, usize)>,
 }
 
 enum BatchHandle {
@@ -946,7 +947,106 @@ struct Batch {
 
 struct Trace {
     id: GlobalId,
+    base_path: PathBuf,
     batches: Vec<Batch>,
+    current_upper: Timestamp,
+}
+
+impl Batch {
+    fn from_table_updates(
+        table_updates: TableUpdates,
+        base_path: PathBuf,
+        current_upper: Timestamp,
+    ) -> Result<Option<Batch>, anyhow::Error> {
+        if table_updates.updates.is_empty() {
+            return Ok(None);
+        }
+
+        let mut buf = Vec::new();
+        let mut time_counts = Vec::new();
+        assert!(table_updates.lower >= current_upper);
+        assert!(table_updates.upper > table_updates.lower);
+        let mut times: BTreeMap<Timestamp, _> = BTreeMap::new();
+
+        for update in table_updates.updates.into_iter() {
+            let update_set = times.entry(update.timestamp).or_insert_with(BTreeMap::new);
+
+            let diff: &mut isize = update_set.entry(update.row).or_insert(0);
+            *diff += update.diff;
+        }
+        for (timestamp, data) in times.into_iter() {
+            let mut time_count = 0;
+            for (row, diff) in data.into_iter() {
+                if diff == 0 {
+                    continue;
+                }
+
+                let update = Update {
+                    row,
+                    timestamp,
+                    diff,
+                };
+
+                encode_update(&update, &mut buf)?;
+                time_count += 1;
+            }
+            time_counts.push((timestamp, time_count));
+        }
+
+        let lower = std::cmp::min(current_upper, table_updates.lower);
+        let batch_name = format!(
+            "batch-{}-{}-{}",
+            table_updates.upper, lower, table_updates.lower
+        );
+        let tmp_path = base_path.join(format!("{}-tmp", batch_name));
+        let path = base_path.join(batch_name);
+
+        // TODO we still need to write the time information
+
+        std::fs::write(&tmp_path, buf)?;
+        std::fs::rename(tmp_path, path.clone())?;
+
+        Ok(Some(Batch {
+            description: BatchDescription {
+                upper: table_updates.upper,
+                lower: lower,
+                since: table_updates.lower,
+                counts: time_counts,
+            },
+            handle: BatchHandle::File(path),
+        }))
+    }
+}
+
+impl Trace {
+    fn new(id: GlobalId, base_path: PathBuf) -> Self {
+        Self {
+            id,
+            base_path,
+            batches: Vec::new(),
+            // TODO hack
+            current_upper: 0,
+        }
+    }
+
+    fn ingest_wal_segment(&mut self, wal_path: &Path) -> Result<(), anyhow::Error> {
+        // First, lets re-read that finished segment
+        let data = fs::read(wal_path).unwrap();
+        let mut updates: Vec<_> = TableIter::new(data).collect();
+        updates.sort_by_key(|u| (u.lower, u.upper));
+
+        for update in updates.into_iter() {
+            let batch =
+                Batch::from_table_updates(update, self.base_path.clone(), self.current_upper)?;
+
+            if let Some(batch) = batch {
+                self.current_upper = batch.description.upper;
+                self.batches.push(batch);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[test]
