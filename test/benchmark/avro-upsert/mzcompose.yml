@@ -24,6 +24,8 @@ version: '3.7'
 services:
   create-views:
     mzbuild: avro-upsert-create-views
+  perf-dash-scraper:
+    mzbuild: perf-dash-scraper
   materialized:
     mzbuild: materialized
     ports:
@@ -142,10 +144,10 @@ mzworkflows:
       MZ_WORKERS: ${MZ_WORKERS:-16}
     steps:
     - step: remove-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
       destroy_volumes: true
     - step: start-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
     - step: run
       service: metric-verifier
       daemon: true
@@ -183,10 +185,10 @@ mzworkflows:
       MZ_WORKERS: ${MZ_WORKERS:-8}
     steps:
     - step: remove-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
       destroy_volumes: true
     - step: start-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
     - step: run
       service: metric-verifier
       daemon: true
@@ -222,10 +224,10 @@ mzworkflows:
       MZ_WORKERS: ${MZ_WORKERS:-16}
     steps:
     - step: remove-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
       destroy_volumes: true
     - step: start-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
     - step: run
       service: metric-verifier
       daemon: true
@@ -265,10 +267,10 @@ mzworkflows:
       MZ_WORKERS: ${MZ_WORKERS:-1}
     steps:
     - step: remove-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
       destroy_volumes: true
     - step: start-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
     - step: run
       service: metric-verifier
       daemon: true
@@ -291,9 +293,9 @@ mzworkflows:
   rerun-benchmark:
     steps:
     - step: remove-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
       destroy_volumes: true
     - step: start-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
     - step: run
       service: create-views

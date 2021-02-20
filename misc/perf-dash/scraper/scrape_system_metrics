@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+import argparse
+import dateparser
+import datetime
+import io
+import os
+import pathlib
+import sys
+import time
+import typing
+import urllib
+
+import confluent_kafka.avro
+import psycopg2
+import psycopg2.extensions
+import psycopg2.extras
+import random_name
+
+
+METRICS_DIRECTORY = "/usr/share/perf-scraper/metrics"
+
+
+class Scraper:
+
+    def __init__(self, metric_dir: pathlib.Path, kafka_config: typing.Dict[str, str]):
+        """Construct a producer for writing to the given topic, using the given config."""
+        self.topic_name = metric_dir.name
+
+        key_schema = confluent_kafka.avro.load(pathlib.Path(metric_dir, 'key-schema.avsc'))
+        value_schema = confluent_kafka.avro.load(pathlib.Path(metric_dir, 'value-schema.avsc'))
+
+        self.query = pathlib.Path(metric_dir, 'query.sql').read_text().strip()
+
+        # Namespace for both schemas should be the name of the topic
+        assert key_schema.namespace == value_schema.namespace
+        assert self.topic_name == key_schema.namespace
+
+        self.producer = confluent_kafka.avro.AvroProducer(kafka_config,
+                                                default_key_schema=key_schema,
+                                                default_value_schema=value_schema)
+
+    def scrape(self, cursor: psycopg2.extensions.cursor) -> None:
+        """Issue a query against the system tables and write the data to Kafka."""
+        cursor.execute(self.query)
+        for row in cursor:
+            key = {"mz_cluster_id": row["mz_cluster_id"]}
+            self.producer.produce(topic=self.topic_name, key=key, value=row)
+        self.producer.flush()
+
+
+class MetricsScrapers:
+
+    def __init__(self, args: argparse.Namespace):
+        """Create an instance responsible for recording benchmark metrics."""
+        self.scrapers: typing.Dict[str, Scraper] = {}
+
+        self.dsn = f'postgresql://{args.dbuser}@{args.dbhost}:{args.dbport}/{args.dbname}'
+
+        # See https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
+        kafka_config = {'bootstrap.servers': f"{args.kafka_host}:{args.kafka_port}",
+                        'schema.registry.url': f'http://{args.csr_host}:{args.csr_port}'}
+        for metric_dir in pathlib.Path(args.metrics_directory).iterdir():
+            self.scrapers[metric_dir.name] = Scraper(metric_dir, kafka_config)
+
+    def scrape(self) -> None:
+        """Encode key and value using Avro and send event to Kafka."""
+        with psycopg2.connect(self.dsn) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cursor:
+                for scraper in self.scrapers.values():
+                    scraper.scrape(cursor)
+
+
+def run(args: argparse.Namespace) -> None:
+    """Wait for the query to settle or timeout and then dump ingest metrics."""
+
+    metrics_scrapers = MetricsScrapers(args)
+    while True:
+        metrics_scrapers.scrape()
+        time.sleep(args.scrape_interval)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging to print the results of each prometheus query",
+    )
+
+    parser.add_argument(
+        "--metrics-directory",
+        type=str,
+        default=METRICS_DIRECTORY,
+        help="Directory containing metrics definitions and source queries",
+    )
+
+    parser.add_argument(
+        "--dbhost", help="materialized hostname", default="materialized", type=str
+    )
+    parser.add_argument(
+        "--dbname", help="materialized database name", default="materialize", type=str
+    )
+    parser.add_argument(
+        "--dbport", help="materialized port number", default=6875, type=int
+    )
+    parser.add_argument(
+        "--dbuser", help="materialized username", default="materialize", type=str
+    )
+
+    parser.add_argument(
+        "--kafka-host",
+        help="Name of the kafka broker",
+        type=str,
+        default="kafka",
+    )
+
+    parser.add_argument(
+        "--kafka-port", help="Port the connect to the broker over", type=int, default=9092
+    )
+
+    parser.add_argument(
+        "--csr-host", help="Hostname of the schema registry", type=str,
+        default="schema-registry"
+    )
+    parser.add_argument(
+        "--csr-port", help="Port that schema registry is listening on", type=int,
+        default=8081
+    )
+
+    parser.add_argument(
+        "--scrape-interval", help="How often, in seconds, to scrape metrics", type=int,
+        default=1
+    )
+
+    run(parser.parse_args())
