@@ -787,9 +787,7 @@ pub fn plan_create_source(
     // TODO(brennan): They should not depend on the envelope either. Figure out a way to
     // make all of this more tasteful.
     match (&encoding, &envelope) {
-        (DataEncoding::Avro { .. }, _)
-        | (DataEncoding::Protobuf { .. }, _)
-        | (_, SourceEnvelope::Debezium(_)) => (),
+        (DataEncoding::Avro { .. }, _) | (_, SourceEnvelope::Debezium(_)) => (),
         _ => {
             for (name, ty) in external_connector.metadata_columns() {
                 bare_desc = bare_desc.with_column(name, ty);
