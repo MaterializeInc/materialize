@@ -58,6 +58,7 @@ use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
+use crate::plan::error::PlanError;
 use crate::plan::expr::{ColumnRef, HirScalarExpr, JoinKind};
 use crate::plan::query::{resolve_names_data_type, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -1120,6 +1121,10 @@ pub fn plan_create_sink(
         let typ = RelationType::new(types);
         (RelationDesc::new(typ, names), key_indices)
     });
+
+    if key_desc_and_indices.is_none() && envelope == SinkEnvelope::Upsert {
+        return Err(PlanError::UpsertSinkWithoutKey.into());
+    }
 
     let value_desc = match envelope {
         SinkEnvelope::Debezium => envelopes::dbz_desc(desc.clone()),
