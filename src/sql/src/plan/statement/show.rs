@@ -15,19 +15,24 @@
 
 use anyhow::bail;
 
+use expr::Id;
 use ore::collections::CollectionExt;
 use repr::{Datum, RelationDesc, Row, ScalarType};
+use sql_parser::ast::display::AstDisplay;
 
+use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     ObjectType, Raw, SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement,
     ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
     ShowCreateViewStatement, ShowDatabasesStatement, ShowIndexesStatement, ShowObjectsStatement,
     ShowStatementFilter, Statement, UnresolvedObjectName, Value,
 };
-use crate::catalog::CatalogItemType;
+use crate::catalog::{Catalog, CatalogItemType};
+use crate::names::PartialName;
 use crate::parse;
+use crate::plan::query::{resolve_names_stmt, ResolvedObjectName};
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
-use crate::plan::{Params, Plan};
+use crate::plan::{Aug, Params, Plan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -40,15 +45,43 @@ pub fn describe_show_create_view(
     )))
 }
 
+// Used when displaying a view's source for human creation. If the name
+// specified is the same as the name in the catalog, we don't use the ID format.
+#[derive(Debug)]
+struct NameSimplifier<'a> {
+    catalog: &'a dyn Catalog,
+}
+
+impl<'ast, 'a> VisitMut<'ast, Aug> for NameSimplifier<'a> {
+    fn visit_object_name_mut(&mut self, name: &mut ResolvedObjectName) {
+        if let Id::Global(id) = name.id {
+            let item = self.catalog.get_item_by_id(&id);
+            if PartialName::from(item.name().clone()) == name.raw_name() {
+                name.print_id = false;
+            }
+        }
+    }
+}
+
 pub fn plan_show_create_view(
     scx: &StatementContext,
     ShowCreateViewStatement { view_name }: ShowCreateViewStatement,
 ) -> Result<Plan, anyhow::Error> {
     let view = scx.resolve_item(view_name)?;
+    let view_sql = view.create_sql();
+
+    let parsed = parse::parse(view_sql)?;
+    let parsed = parsed[0].clone();
+    let mut resolved = resolve_names_stmt(scx, parsed)?;
+    let mut s = NameSimplifier {
+        catalog: scx.catalog,
+    };
+    s.visit_statement_mut(&mut resolved);
+
     if let CatalogItemType::View = view.item_type() {
         Ok(Plan::SendRows(vec![Row::pack_slice(&[
             Datum::String(&view.name().to_string()),
-            Datum::String(view.create_sql()),
+            Datum::String(&resolved.to_ast_string_stable()),
         ])]))
     } else {
         bail!("{} is not a view", view.name());

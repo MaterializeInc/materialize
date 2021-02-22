@@ -7,6 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+mode cockroach
+
 statement ok
 CREATE TABLE x (a int)
 
@@ -51,3 +53,43 @@ SELECT y.a FROM [u6 AS materialize.public.y]
 
 statement error invalid digit
 SELECT y.a FROM [xx AS materialize.public.y]
+
+statement ok
+CREATE VIEW foo AS SELECT * FROM x
+
+mode standard
+
+# If the name in the catalog matches that which is specified in the view
+# definition, we should output it as its (fully qualified) name.
+
+query TT
+SHOW CREATE VIEW foo
+----
+materialize.public.foo
+CREATE VIEW "materialize"."public"."foo" AS SELECT * FROM "materialize"."public"."x"
+
+statement ok
+DROP VIEW foo;
+
+statement ok
+CREATE VIEW foo AS SELECT * FROM [u1 AS materialize.public.x]
+
+query TT
+SHOW CREATE VIEW foo
+----
+materialize.public.foo
+CREATE VIEW "materialize"."public"."foo" AS SELECT * FROM "materialize"."public"."x"
+
+# If the name *differs*, fall back to the id version.
+
+statement ok
+DROP VIEW foo;
+
+statement ok
+CREATE VIEW foo AS SELECT * FROM [u1 AS materialize.public.y]
+
+query TT
+SHOW CREATE VIEW foo
+----
+materialize.public.foo
+CREATE VIEW "materialize"."public"."foo" AS SELECT * FROM [u1 AS "materialize"."public"."y"]
