@@ -484,10 +484,8 @@ SELECT pg_typeof('1'::JSONB)
 ----
 jsonb
 
-query T
+query error EOF while parsing an object at line 1
 SELECT '{'::JSONB
-----
-NULL
 
 query T
 SELECT '{"a":1}'::JSONB->'a'
@@ -1798,10 +1796,8 @@ SELECT ('1'::jsonb)::int;
 1
 
 # too big to fit in an int32
-query T
+query error 9999999999999999999 is out of range for a jsonb number at line 1
 SELECT ('9999999999999999999'::jsonb)::int;
-----
-NULL
 
 # not a number
 query T

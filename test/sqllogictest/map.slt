@@ -330,7 +330,7 @@ SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>text]] @> '{hello=>{world
 true
 
 query T
-SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>jsonb]] @> '{hello=>{world=>nested}, extra=>{elements=>here}}'::map[text=>map[text=>jsonb]]
+SELECT '{hello=>{world=>nested}}'::map[text=>map[text=>text]] @> '{hello=>{world=>nested}, extra=>{elements=>here}}'::map[text=>map[text=>text]]
 ----
 false
 
