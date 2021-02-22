@@ -215,7 +215,7 @@ discard ::=
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name
 drop_index ::=
-    'DROP' 'INDEX' index_name
+    'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')
 drop_role ::=
     'DROP' 'ROLE' ('IF EXISTS')? role_name
 drop_schema ::=
@@ -224,6 +224,8 @@ drop_sink ::=
   'DROP' 'SINK' ('IF' 'EXISTS')? sink_name
 drop_source ::=
   'DROP' 'SOURCE' ('IF' 'EXISTS')? source_name ('RESTRICT' | 'CASCADE')?
+drop_type ::=
+  'DROP' 'TYPE' ('IF' 'EXISTS')? data_type_name ('RESTRICT' | 'CASCADE')?
 drop_view ::=
   'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
 drop_table ::=
@@ -325,6 +327,8 @@ show_sources ::=
   'SHOW' 'FULL'? 'MATERIALIZED'? 'SOURCES' ('FROM' schema_name)?
 show_tables ::=
   'SHOW' 'TABLES' ('FROM' schema_name)?
+show_types ::=
+    'SHOW' 'EXTENDED'? 'FULL'?
 show_views ::=
   'SHOW' 'FULL'? 'MATERIALIZED'? 'VIEWS' ('FROM' schema_name)?
 show_objects ::=
