@@ -1086,6 +1086,7 @@ impl Catalog {
         } else {
             schema.items.insert(entry.name.item.clone(), entry.id);
         }
+
         self.by_oid.insert(oid, entry.id);
         self.by_id.insert(entry.id, entry);
 
