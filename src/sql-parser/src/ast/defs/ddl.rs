@@ -237,7 +237,7 @@ impl AstDisplay for Compression {
 impl_display!(Compression);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Connector {
+pub enum Connector<T: AstInfo> {
     File {
         path: String,
         compression: Compression,
@@ -260,9 +260,21 @@ pub enum Connector {
         /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
         pattern: Option<String>,
     },
+    Postgres {
+        /// The postgres connection string
+        conn: String,
+        /// The name of the publication to sync
+        publication: String,
+        /// The namespace the synced table belongs to
+        namespace: String,
+        /// The name of the table to sync
+        table: String,
+        /// The expected column schema of the synced table
+        columns: Vec<ColumnDef<T>>,
+    },
 }
 
-impl AstDisplay for Connector {
+impl<T: AstInfo> AstDisplay for Connector<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Connector::File { path, compression } => {
@@ -309,10 +321,29 @@ impl AstDisplay for Connector {
                     f.write_str("'");
                 }
             }
+            Connector::Postgres {
+                conn,
+                publication,
+                namespace,
+                table,
+                columns,
+            } => {
+                f.write_str("POSTGRES HOST '");
+                f.write_str(&display::escape_single_quote_string(conn));
+                f.write_str("' PUBLICATION '");
+                f.write_str(&display::escape_single_quote_string(publication));
+                f.write_str("' NAMESPACE '");
+                f.write_str(&display::escape_single_quote_string(namespace));
+                f.write_str("' TABLE '");
+                f.write_str(&display::escape_single_quote_string(table));
+                f.write_str("' (");
+                f.write_node(&display::comma_separated(columns));
+                f.write_str(")");
+            }
         }
     }
 }
-impl_display!(Connector);
+impl_display_t!(Connector);
 
 /// The key sources specified in the S3 source's `OBJECTS FROM` clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

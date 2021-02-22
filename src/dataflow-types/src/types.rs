@@ -306,6 +306,7 @@ pub enum DataEncoding {
     Protobuf(ProtobufEncoding),
     Csv(CsvEncoding),
     Regex(RegexEncoding),
+    Postgres(RelationDesc),
     Bytes,
     Text,
 }
@@ -422,6 +423,7 @@ impl DataEncoding {
                 })
             }
             DataEncoding::Text => key_desc.with_column("text", ScalarType::String.nullable(false)),
+            DataEncoding::Postgres(desc) => desc.clone(),
         })
     }
 
@@ -434,6 +436,7 @@ impl DataEncoding {
             DataEncoding::Regex { .. } => "Regex",
             DataEncoding::Csv(_) => "Csv",
             DataEncoding::Text => "Text",
+            DataEncoding::Postgres(_) => "Postgres",
         }
     }
 }
@@ -566,6 +569,7 @@ pub enum ExternalSourceConnector {
     File(FileSourceConnector),
     AvroOcf(FileSourceConnector),
     S3(S3SourceConnector),
+    Postgres(PostgresSourceConnector),
 }
 
 impl ExternalSourceConnector {
@@ -586,6 +590,7 @@ impl ExternalSourceConnector {
             Self::AvroOcf(_) => vec![("mz_obj_no".into(), ScalarType::Int64.nullable(false))],
             // TODO: should we include object key and possibly object-internal offset here?
             Self::S3(_) => vec![("mz_record".into(), ScalarType::Int64.nullable(false))],
+            Self::Postgres(_) => vec![],
         }
     }
 
@@ -597,6 +602,7 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::File(_) => "file",
             ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
             ExternalSourceConnector::S3(_) => "s3",
+            ExternalSourceConnector::Postgres(_) => "postgres",
         }
     }
 
@@ -696,6 +702,14 @@ pub struct FileSourceConnector {
     pub path: PathBuf,
     pub tail: bool,
     pub compression: Compression,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PostgresSourceConnector {
+    pub conn: String,
+    pub publication: String,
+    pub namespace: String,
+    pub table: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

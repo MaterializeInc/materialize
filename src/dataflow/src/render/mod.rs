@@ -354,6 +354,8 @@ where
                         decode_avro_values(&source, &envelope, reader_schema, &self.debug_name),
                         capability,
                     )
+                } else if let ExternalSourceConnector::Postgres(_pg_connector) = connector {
+                    unimplemented!("Postgres sources are not supported yet");
                 } else {
                     let ((ok_source, err_source), capability) = match connector {
                         ExternalSourceConnector::Kafka(_) => {
@@ -375,6 +377,7 @@ where
                             )
                         }
                         ExternalSourceConnector::AvroOcf(_) => unreachable!(),
+                        ExternalSourceConnector::Postgres(_) => unreachable!(),
                     };
                     err_collection = err_collection.concat(
                         &err_source
