@@ -454,6 +454,8 @@ impl Coordinator {
                     self.tables
                         .close_up_to(next_ts)
                         .expect("TODO handle this better");
+
+                    self.tables.update_traces().expect("todo handle this better");
                     self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
                         advance_to: next_ts,
                     });

@@ -546,19 +546,22 @@ impl TableLogSegments {
         Ok(())
     }
 
-    fn close_up_to(&mut self, timestamp: Timestamp) -> Result<(), anyhow::Error> {
+    // In the future we probably want a more asynchronous
+    // communication method between the WAL and the LSM portion
+    fn close_up_to(&mut self, timestamp: Timestamp) -> Result<Option<PathBuf>, anyhow::Error> {
         self.write_progress(timestamp)?;
 
         // We only want to rotate the log segments at progress messages
         // so that we can extract batches.
         if self.current_bytes_written > TABLE_MAX_LOG_SEGMENT_SIZE {
-            self.rotate_log_segment()?;
+            let finished_path = self.rotate_log_segment()?;
             // Write the progress update to the new file to make sure we
             // know the `lower` for the new file
             self.write_progress(timestamp)?;
+            Ok(Some(finished_path))
+        } else {
+            Ok(None)
         }
-
-        Ok(())
     }
 
     fn drop_table(self) -> Result<(), anyhow::Error> {
@@ -574,7 +577,7 @@ impl TableLogSegments {
         Ok(())
     }
 
-    fn rotate_log_segment(&mut self) -> Result<(), anyhow::Error> {
+    fn rotate_log_segment(&mut self) -> Result<PathBuf, anyhow::Error> {
         let old_file_path = self
             .base_path
             .join(format!("log-{}", self.next_sequence_number - 1));
@@ -601,12 +604,12 @@ impl TableLogSegments {
         let old_file = std::mem::replace(&mut self.current_file, file);
         old_file.sync_all()?;
         drop(old_file);
-        fs::rename(old_file_path, old_file_rename)?;
+        fs::rename(&old_file_path, &old_file_rename)?;
 
         // Update our own local state
         self.next_sequence_number += 1;
         self.current_bytes_written = 0;
-        Ok(())
+        Ok(old_file_rename)
     }
 
     fn reload_table(
@@ -726,8 +729,9 @@ impl Tables {
         }
 
         let table_base_path = self.get_path(id);
-        let table_log = TableLogSegments::create_table(id, table_base_path)?;
+        let table_log = TableLogSegments::create_table(id, table_base_path.clone())?;
         self.wal.insert(id, table_log);
+        self.traces.insert(id, Trace::new(id, table_base_path));
         Ok(())
     }
 
@@ -738,6 +742,8 @@ impl Tables {
 
         let table = self.wal.remove(&id).expect("table known to exist");
         table.drop_table()?;
+
+        self.traces.remove(&id).expect("table known to exist");
 
         Ok(())
     }
@@ -755,8 +761,9 @@ impl Tables {
 
     pub fn reload_table(&mut self, id: GlobalId) -> Result<Vec<TableUpdates>, anyhow::Error> {
         let table_base_path = self.get_path(id);
-        let (table, updates) = TableLogSegments::reload_table(id, table_base_path)?;
+        let (table, updates) = TableLogSegments::reload_table(id, table_base_path.clone())?;
         self.wal.insert(id, table);
+        self.traces.insert(id, Trace::new(id, table_base_path));
 
         Ok(updates)
     }
@@ -764,12 +771,26 @@ impl Tables {
     pub fn close_up_to(&mut self, timestamp: Timestamp) -> Result<(), anyhow::Error> {
         // For all tables, indicate that <timestamp> is now the min timestamp going
         // forward
-        for (_, table) in self.wal.iter_mut() {
-            table.close_up_to(timestamp)?;
+        for (id, table) in self.wal.iter_mut() {
+            let finished = table.close_up_to(timestamp)?;
+
+            if let Some(finished) = finished {
+                // TODO decouple these things
+                let trace = self.traces.get_mut(id).expect("trace must exist for wal");
+                trace.add_wal_segment(finished);
+            }
         }
 
         Ok(())
     }
+
+    pub fn update_traces(&mut self) -> Result<(), anyhow::Error> {
+        for (_, trace) in self.traces.iter_mut() {
+            trace.ingest_pending()?;
+        }
+
+        Ok(())
+    }   
 }
 
 /// Write a 20 byte header + length-prefixed Row to a buffer
@@ -807,6 +828,25 @@ fn encode_progress(timestamp: Timestamp) -> Result<Vec<u8>, anyhow::Error> {
 
     Ok(buf)
 }
+
+fn encode_batch_counts(counts: Vec<(Timestamp, usize)>) -> Result<Vec<u8>, anyhow::Error> {
+    // seriously could do a lot better allocation management
+    assert!(counts.len() > 0);
+    let encoded_size = 4 + 16 * counts.len();
+    let mut buf: Vec<_> = Vec::with_capacity(encoded_size);
+
+    // This is a batch ts header - so 3
+    buf.write_u32::<NetworkEndian>(2).unwrap();
+
+    for (time, count) in counts {
+        assert!(time > 0);
+        assert!(count > 0);
+        buf.write_u64::<NetworkEndian>(time).unwrap();
+        buf.write_u64::<NetworkEndian>(count).unwrap();
+    }
+
+    Ok(buf)
+}       
 
 fn read_updates(
     buf: &[u8],
@@ -886,6 +926,30 @@ fn read_updates(
     ))
 }
 
+fn read_batch(buf: &[u8], upper: Timestamp, since: Timestamp, lower: Timestamp)
+-> Result<(Vec<(Timestamp, usize)>, TableUpdates), anyhow::Error> {
+        let mut time_counts = vec![];
+        let mut updates = vec![];
+        let mut cursor = Cursor::new(&data);
+
+        let is_batch = cursor.read_u32::<NetworkEndian>().unwrap();
+
+        if is_batch != 3 {
+            panic!("Failed to read batch expected 3 got {}", is_batch);
+        }
+
+        let num_counts = cursor.read_usize::<NetworkEndian>().unwrap();
+
+        for _ in (0..num_counts) {
+            let time = cursor.read_u64::<NetworkEndian>().unwrap();
+            let count = cursor.read_u64::<NetworkEndian>().unwrap();
+
+            time_counts.push((time, count));
+        }
+
+        unimplemented!()
+}
+
 /// Iterator through a set of table updates.
 #[derive(Debug)]
 pub struct TableIter {
@@ -950,6 +1014,7 @@ struct Trace {
     base_path: PathBuf,
     batches: Vec<Batch>,
     current_upper: Timestamp,
+    pending_segments: Vec<PathBuf>,
 }
 
 impl Batch {
@@ -1016,6 +1081,22 @@ impl Batch {
             handle: BatchHandle::File(path),
         }))
     }
+
+    fn reload_from(path: &Path) -> Result<(Self, Vec<TableUpdates>), anyhow::Error> {
+        let file_name = path
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+
+        let parts: Vec<_> = file_name.split_at('-').collect();
+        let upper = parts[1].parse::<usize>()?;
+        let lower = parts[2].parse::<usize>()?;
+        let since  = parts[3].parse::<usize>()?;
+        
+        let data = fs::read(path)?;
+        let mut updates: Vec<_> = TableIter::new(data).collect();
+
 }
 
 impl Trace {
@@ -1026,12 +1107,13 @@ impl Trace {
             batches: Vec::new(),
             // TODO hack
             current_upper: 0,
+            pending_segments: Vec::new(),
         }
     }
 
     fn ingest_wal_segment(&mut self, wal_path: &Path) -> Result<(), anyhow::Error> {
         // First, lets re-read that finished segment
-        let data = fs::read(wal_path).unwrap();
+        let data = fs::read(wal_path)?;
         let mut updates: Vec<_> = TableIter::new(data).collect();
         updates.sort_by_key(|u| (u.lower, u.upper));
 
@@ -1045,7 +1127,81 @@ impl Trace {
             }
         }
 
+        // We can remove this log segment.
+        fs::remove_file(wal_path)?;
         Ok(())
+    }
+
+    fn add_wal_segment(&mut self, path: PathBuf) {
+        self.pending_segments.push(path);
+    }
+
+    fn ingest_pending(&mut self) -> Result<(), anyhow::Error> {
+        let buf = vec![];
+        let pending = std::mem::replace(&mut self.pending_segments, buf);
+
+        for segment in pending {
+            self.ingest_wal_segment(&segment)?;
+        }
+
+        Ok(())
+    }
+
+    fn reload_tables(id: GlobalId, base_path: PathBuf) -> Result<(Self, Vec<TableUpdates>), anyhow::Error> {
+        let mut batch_paths = vec![];
+        let entries = std::fs::read_dir(&base_path)?;
+        for entry in entries {
+            if let Ok(file) = entry {
+                let path = file.path();
+                let file_name = path.file_name();
+                if file_name.is_none() {
+                    continue;
+                }
+
+                let file_name = file_name.unwrap().to_str();
+
+                if file_name.is_none() {
+                    continue;
+                }
+
+                let file_name = file_name.unwrap();
+
+                if !file_name.starts_with("batch-") {
+                    continue;
+                }
+
+                if file_name.ends_with("tmp") {
+                    continue;
+                }
+                batch_paths.push(path.to_path_buf());
+            }
+        }
+
+        if !batch_paths.is_empty() {
+            // Go ahead and load the old data
+            let mut batches = vec![];
+            let mut updates = vec![];
+            let mut current_upper = 0;
+            for path in batch_paths {
+                let (batch, update) = Batch::reload_from(path);
+                current_upper = std::cmp::max(batch.description.upper, current_upper);
+                batches.push(batch);
+                updates.push(update);
+            }
+
+            batches.sort_by_key(|batch| batch.description.lower);
+            let ret = Self {
+                id,
+                base_path,
+                batches,
+                current_upper,
+                pending_segments: Vec::new(),
+            };
+            Ok((ret, updates))
+        } else {
+            let ret = Self::new(id, base_path);
+            Ok((ret, vec![]))
+        }
     }
 }
 
