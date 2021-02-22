@@ -113,3 +113,8 @@ SELECT '{a=>{a=>1}}'::int4_map_map::text AS custom_nested_map;
 -------------------
 {a=>{a=>1}}
 ```
+
+## Related pages
+
+* [`DROP TYPE`](../drop-type)
+* [`SHOW TYPES`](../show-types)
