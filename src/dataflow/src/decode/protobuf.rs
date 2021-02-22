@@ -35,7 +35,7 @@ impl ProtobufDecoderState {
 
 impl DecoderState for ProtobufDecoderState {
     fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
-        match self.decoder.decode(bytes) {
+        match self.decoder.decode(bytes, None) {
             Ok(row) => {
                 if let Some(row) = row {
                     self.events_success += 1;
@@ -56,10 +56,10 @@ impl DecoderState for ProtobufDecoderState {
     fn decode_upsert_value<'a>(
         &mut self,
         bytes: &[u8],
-        _: Option<i64>,
+        position: Option<i64>,
         _upstream_time_millis: Option<i64>,
     ) -> Result<Option<Row>, String> {
-        match self.decoder.decode(bytes) {
+        match self.decoder.decode(bytes, position) {
             Ok(row) => {
                 self.events_success += 1;
                 Ok(row)
@@ -75,12 +75,12 @@ impl DecoderState for ProtobufDecoderState {
     fn give_value<'a>(
         &mut self,
         bytes: &[u8],
-        _: Option<i64>,
+        position: Option<i64>,
         _: Option<i64>,
         session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
         time: Timestamp,
     ) {
-        match self.decoder.decode(bytes) {
+        match self.decoder.decode(bytes, position) {
             Ok(row) => {
                 if let Some(row) = row {
                     self.events_success += 1;
