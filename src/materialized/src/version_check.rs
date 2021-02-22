@@ -19,9 +19,7 @@ use uuid::Uuid;
 
 use ore::retry::RetryBuilder;
 
-use crate::server_metrics::{
-    filter_metrics, load_prom_metrics, METRIC_SERVER_METADATA, METRIC_WORKER_COUNT,
-};
+use crate::server_metrics::{filter_metrics, load_prom_metrics, METRIC_WORKER_COUNT};
 use crate::BUILD_INFO;
 
 /// How often we report telemetry
@@ -102,18 +100,73 @@ async fn fetch_latest_version(
 }
 
 fn telemetry_data(start_time: Instant, session_id: Uuid) -> Status {
-    let metrics_to_collect: HashSet<_> = [METRIC_SERVER_METADATA, METRIC_WORKER_COUNT]
-        .iter()
-        .copied()
-        .collect();
+    const SOURCE_COUNT: &str = "mz_source_count";
+    const VIEW_COUNT: &str = "mz_view_count";
+    const SINK_COUNT: &str = "mz_sink_count";
+    let metrics_to_collect: HashSet<_> =
+        [METRIC_WORKER_COUNT, SOURCE_COUNT, VIEW_COUNT, SINK_COUNT]
+            .iter()
+            .copied()
+            .collect();
 
     let metrics = load_prom_metrics(start_time);
     let filtered = filter_metrics(&metrics, &metrics_to_collect);
-    let value_default = |name| filtered.get(name).map(|m| m.value()).unwrap_or(0.0);
+
+    let first_value_default = |name| {
+        filtered
+            .get(name)
+            .and_then(|m| m.get(0).map(|m| m.value()))
+            .unwrap_or(0.0)
+    };
+    let label_value = |name, label, value| {
+        filtered
+            .get(name)
+            .and_then(|m| {
+                m.iter()
+                    .find(|m| m.label(label).map(|l| l == value).unwrap_or(false))
+                    // all counts are guaranteed to be integers
+                    .map(|m| m.value() as u32)
+            })
+            .unwrap_or(0)
+    };
     Status {
         session_id,
         uptime_seconds: start_time.elapsed().as_secs(),
-        num_workers: value_default(METRIC_WORKER_COUNT),
+        num_workers: first_value_default(METRIC_WORKER_COUNT),
+        sources: Sources {
+            avro_ocf: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "avro-ocf"),
+            },
+            file: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "file"),
+            },
+            kinesis: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "kinesis"),
+            },
+            postgres: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "postgres"),
+            },
+            s3: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "s3"),
+            },
+            table: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "table"),
+            },
+        },
+        views: InnerStatus {
+            count: first_value_default(VIEW_COUNT) as u32,
+        },
+        sinks: Sinks {
+            avro_ocf: InnerStatus {
+                count: label_value(SINK_COUNT, "type", "avro-ocf"),
+            },
+            kafka: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "kafka"),
+            },
+            tail: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "tail"),
+            },
+        },
     }
 }
 
@@ -130,6 +183,33 @@ struct Status {
     session_id: Uuid,
     uptime_seconds: u64,
     num_workers: f64,
+    sources: Sources,
+    views: InnerStatus,
+    sinks: Sinks,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Sources {
+    avro_ocf: InnerStatus,
+    file: InnerStatus,
+    kinesis: InnerStatus,
+    postgres: InnerStatus,
+    s3: InnerStatus,
+    table: InnerStatus,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Sinks {
+    tail: InnerStatus,
+    kafka: InnerStatus,
+    avro_ocf: InnerStatus,
+}
+
+#[derive(Serialize)]
+struct InnerStatus {
+    count: u32,
 }
 
 #[derive(Deserialize)]
