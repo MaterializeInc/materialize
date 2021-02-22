@@ -104,16 +104,19 @@ fn test_persistence() -> Result<(), Box<dyn Error>> {
 
     {
         let config = config.logging_granularity(None);
-        match util::start_server(config) {
-            Ok(_) => panic!("server unexpectedly booted with corrupted catalog"),
-            Err(e) => {}
-            // DNM: Is there a nice way to recover this error message?
-            // assert_eq!(
-            //     e.to_string(),
-            //     "catalog item 'materialize.public.logging_derived' depends on system logging, \
-            //      but logging is disabled"
-            // ),
-        }
+        if util::start_server(config).is_ok() {
+            panic!("server unexpectedly booted with corrupted catalog")
+        };
+        // match util::start_server(config) {
+        //     Ok(_) => panic!("server unexpectedly booted with corrupted catalog"),
+        //     Err(_) => {}
+        //     // DNM: Is there a nice way to recover this error message?
+        //     // assert_eq!(
+        //     //     e.to_string(),
+        //     //     "catalog item 'materialize.public.logging_derived' depends on system logging, \
+        //     //      but logging is disabled"
+        //     // ),
+        // }
     }
 
     Ok(())
