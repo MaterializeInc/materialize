@@ -46,5 +46,5 @@ serde_json = "1.0.62"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.2.0", features = ["fs", "rt"] }
 tokio-util = { version = "0.6.3", features = ["codec"] }
-url = { version = "2.2.0", features = ["serde"] }
+url = { version = "2.2.1", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
