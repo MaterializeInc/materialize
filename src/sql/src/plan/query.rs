@@ -71,20 +71,31 @@ pub struct Aug;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ResolvedObjectName {
-    id: Id,
-    raw_name: PartialName,
+    pub id: Id,
+    pub raw_name: PartialName,
     // Whether this object, when printed out, should use [id AS name] syntax. We
     // want this for things like tables and sources, but not for things like
     // types.
-    print_id: bool,
+    pub print_id: bool,
 }
 
 impl AstDisplay for ResolvedObjectName {
     fn fmt(&self, f: &mut AstFormatter) {
         if self.print_id {
-            f.write_str(format!("[{} AS {}]", self.id, self.raw_name));
-        } else {
-            f.write_str(format!("{}", self.raw_name));
+            f.write_str(format!("[{} AS ", self.id));
+        }
+        let n = self.raw_name();
+        if let Some(database) = n.database {
+            f.write_node(&Ident::new(database));
+            f.write_str(".");
+        }
+        if let Some(schema) = n.schema {
+            f.write_node(&Ident::new(schema));
+            f.write_str(".");
+        }
+        f.write_node(&Ident::new(n.item));
+        if self.print_id {
+            f.write_str("]");
         }
     }
 }
@@ -195,10 +206,10 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 match self.catalog.resolve_item(&name) {
                     Ok(item) => {
                         self.ids.insert(item.id());
-                        let print_id = match item.item_type() {
-                            CatalogItemType::Func | CatalogItemType::Type => false,
-                            _ => true,
-                        };
+                        let print_id = !matches!(
+                            item.item_type(),
+                            CatalogItemType::Func | CatalogItemType::Type
+                        );
                         ResolvedObjectName {
                             id: Id::Global(item.id()),
                             raw_name: item.name().clone().into(),
@@ -243,11 +254,9 @@ pub fn resolve_names_stmt(
     scx: &StatementContext,
     query: Statement<Raw>,
 ) -> Result<Statement<Aug>, anyhow::Error> {
-    // DNM: I think this is wrong!
-    let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let mut n = NameResolver {
         status: Ok(()),
-        catalog: qcx.scx.catalog,
+        catalog: scx.catalog,
         ctes: HashMap::new(),
         ids: HashSet::new(),
     };
