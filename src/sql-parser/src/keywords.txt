@@ -110,6 +110,7 @@ Having
 Header
 Headers
 Hold
+Host
 Hour
 Hours
 If
@@ -151,6 +152,7 @@ Minute
 Minutes
 Month
 Months
+Namespace
 Natural
 Next
 No
@@ -176,10 +178,12 @@ Over
 Partition
 Plan
 Plans
+Postgres
 Preceding
 Precision
 Primary
 Protobuf
+Publication
 Range
 Raw
 Read
