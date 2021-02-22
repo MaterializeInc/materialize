@@ -1,6 +1,6 @@
 # Fast compiles
 
-This document attempts to capture the various lessons learned by Materialize 
+This document attempts to capture the various lessons learned by Materialize
 engineers when optimizing machines for compiling Rust.
 
 ## Run Linux
