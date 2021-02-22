@@ -32,8 +32,9 @@ use reqwest::Url;
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
     DataEncoding, ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder,
-    KafkaSourceConnector, KinesisSourceConnector, ProtobufEncoding, RegexEncoding,
-    S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceEnvelope,
+    KafkaSourceConnector, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
+    RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector,
+    SourceEnvelope,
 };
 use expr::GlobalId;
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -543,6 +544,57 @@ pub fn plan_create_source(
             let encoding = get_encoding(format)?;
             (connector, encoding)
         }
+        Connector::Postgres {
+            conn,
+            publication,
+            namespace,
+            table,
+            columns,
+        } => {
+            scx.require_experimental_mode("Postgres Sources")?;
+            let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
+                conn: conn.clone(),
+                publication: publication.clone(),
+                namespace: namespace.clone(),
+                table: table.clone(),
+            });
+
+            // Build the expecte relation description
+            let col_names: Vec<_> = columns
+                .iter()
+                .map(|c| Some(normalize::column_name(c.name.clone())))
+                .collect();
+
+            let mut col_types = vec![];
+            for c in columns {
+                if let Some(collation) = &c.collation {
+                    unsupported!(format!(
+                        "CREATE SOURCE FROM POSTGRES with column collation: {}",
+                        collation
+                    ));
+                }
+
+                let (aug_data_type, _ids) = resolve_names_data_type(scx, c.data_type.clone())?;
+                let scalar_ty = plan::scalar_type_from_sql(scx, &aug_data_type)?;
+
+                let mut nullable = true;
+                for option in &c.options {
+                    match &option.option {
+                        ColumnOption::NotNull => nullable = false,
+                        other => unsupported!(format!(
+                            "CREATE SOURCE FROM POSTGRES with column constraint: {}",
+                            other
+                        )),
+                    }
+                }
+
+                col_types.push(scalar_ty.nullable(nullable));
+            }
+
+            let desc = RelationDesc::new(RelationType::new(col_types), col_names);
+
+            (connector, DataEncoding::Postgres(desc))
+        }
         Connector::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
                 None => false,
@@ -1049,6 +1101,7 @@ pub fn plan_create_sink(
         Connector::Kinesis { .. } => None,
         Connector::AvroOcf { .. } => None,
         Connector::S3 { .. } => None,
+        Connector::Postgres { .. } => None,
     };
 
     let key_desc_and_indices = key_indices.map(|key_indices| {
@@ -1082,6 +1135,7 @@ pub fn plan_create_sink(
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
         Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix, value_desc)?,
         Connector::S3 { .. } => unsupported!("S3 sinks"),
+        Connector::Postgres { .. } => unsupported!("Postgres sinks"),
     };
 
     if !with_options.is_empty() {
