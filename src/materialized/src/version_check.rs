@@ -39,7 +39,8 @@ pub async fn check_version_loop(telemetry_url: String, cluster_id: String, start
     let session_id = Uuid::new_v4();
 
     let version_url = format!("{}/api/v1/version/{}", telemetry_url, cluster_id);
-    let latest_version = fetch_latest_version(&version_url, start_time, session_id).await;
+    let latest_version =
+        fetch_latest_version(&version_url, start_time, &cluster_id, session_id).await;
 
     match Version::parse(&latest_version) {
         Ok(latest_version) if latest_version > current_version => {
@@ -63,13 +64,14 @@ pub async fn check_version_loop(telemetry_url: String, cluster_id: String, start
     loop {
         time::sleep(TELEMETRY_FREQUENCY).await;
 
-        fetch_latest_version(&version_url, start_time, session_id).await;
+        fetch_latest_version(&version_url, start_time, &cluster_id, session_id).await;
     }
 }
 
 async fn fetch_latest_version(
     telemetry_url: &str,
     start_time: Instant,
+    cluster_id: &str,
     session_id: Uuid,
 ) -> String {
     RetryBuilder::new()
@@ -80,7 +82,7 @@ async fn fetch_latest_version(
         .retry(|_state| async {
             let version_request = V1VersionRequest {
                 version: BUILD_INFO.version,
-                status: telemetry_data(start_time, session_id),
+                status: telemetry_data(start_time, cluster_id, session_id),
             };
 
             let resp = reqwest::Client::new()
@@ -99,7 +101,7 @@ async fn fetch_latest_version(
         .expect("retry loop never terminates")
 }
 
-fn telemetry_data(start_time: Instant, session_id: Uuid) -> Status {
+fn telemetry_data<'a>(start_time: Instant, cluster_id: &'a str, session_id: Uuid) -> Status<'a> {
     const SOURCE_COUNT: &str = "mz_source_count";
     const VIEW_COUNT: &str = "mz_view_count";
     const SINK_COUNT: &str = "mz_sink_count";
@@ -130,6 +132,7 @@ fn telemetry_data(start_time: Instant, session_id: Uuid) -> Status {
             .unwrap_or(0)
     };
     Status {
+        cluster_id,
         session_id,
         uptime_seconds: start_time.elapsed().as_secs(),
         num_workers: first_value_default(METRIC_WORKER_COUNT),
@@ -151,7 +154,7 @@ fn telemetry_data(start_time: Instant, session_id: Uuid) -> Status {
             },
         },
         views: InnerStatus {
-            count: first_value_default(VIEW_COUNT) as i32,
+            count: first_value_default(VIEW_COUNT) as u32,
         },
         sinks: Sinks {
             avro_ocf: InnerStatus {
@@ -170,13 +173,13 @@ fn telemetry_data(start_time: Instant, session_id: Uuid) -> Status {
 #[derive(Serialize)]
 struct V1VersionRequest<'a> {
     version: &'a str,
-    status: Status,
+    status: Status<'a>,
 }
 
 /// General status of the materialized server, for telemetry
 #[derive(Serialize)]
-struct Status {
-    /// Unique token for every time materialized is restarted
+struct Status<'a> {
+    cluster_id: &'a str,
     session_id: Uuid,
     uptime_seconds: u64,
     num_workers: f64,
