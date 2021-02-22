@@ -854,7 +854,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#2b12f29d951b60c6c1ef3db77fbba1568db5a2c3"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#508caffe34ee91aaec61e1a5446bdcb5caa14a77"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -904,7 +904,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#2b12f29d951b60c6c1ef3db77fbba1568db5a2c3"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#508caffe34ee91aaec61e1a5446bdcb5caa14a77"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4253,11 +4253,12 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#a5ca77655247dd2be5ee49eb9d89aabfcfa2402f"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#84b11167d3aa26f69b04a12477af8afa06142566"
 dependencies = [
  "abomonation",
  "abomonation_derive",
  "crossbeam-channel",
+ "futures-util",
  "getopts",
  "serde",
  "serde_derive",
@@ -4269,12 +4270,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#a5ca77655247dd2be5ee49eb9d89aabfcfa2402f"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#84b11167d3aa26f69b04a12477af8afa06142566"
 
 [[package]]
 name = "timely_communication"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#a5ca77655247dd2be5ee49eb9d89aabfcfa2402f"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#84b11167d3aa26f69b04a12477af8afa06142566"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4290,7 +4291,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#a5ca77655247dd2be5ee49eb9d89aabfcfa2402f"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#84b11167d3aa26f69b04a12477af8afa06142566"
 
 [[package]]
 name = "timely_sort"
