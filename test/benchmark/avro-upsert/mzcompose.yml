@@ -14,8 +14,8 @@
 # to change these you must restart the docker-compose cluster.
 x-port-mappings:
   - &kafka-internal ${KAFKA_PORT:-9092}
-  - &kafka-external 9093
-  - &schema-registry ${SR_PORT:-8081}
+  - &kafka-external 9093:9093
+  - &schema-registry ${SR_PORT:-8081:8081}
   - &materialized ${MZ_PORT:-6875}
   - &grafana 3000:3000
   - &prometheus 9090

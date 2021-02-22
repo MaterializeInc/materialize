@@ -1,0 +1,11 @@
+{
+    "name": "key",
+    "type" : "record",
+    "namespace": "dev.mtrlz.benchmarks.results.v0",
+    "fields": [
+     {
+       "name": "benchmark_id",
+       "type": "string"
+     }
+    ]
+}
