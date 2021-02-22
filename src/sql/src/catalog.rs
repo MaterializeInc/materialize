@@ -224,7 +224,7 @@ pub trait CatalogItem {
 
     /// Returns the IDs of the catalog items upon which this catalog item
     /// depends.
-    fn uses(&self) -> Vec<GlobalId>;
+    fn uses(&self) -> &[GlobalId];
 
     /// Returns the IDs of the catalog items that depend upon this catalog item.
     fn used_by(&self) -> &[GlobalId];

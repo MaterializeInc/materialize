@@ -163,9 +163,10 @@ pub fn plan_create_table(
     // and NOT NULL constraints.
     let mut column_types = Vec::with_capacity(columns.len());
     let mut defaults = Vec::with_capacity(columns.len());
+    let mut depends_on = Vec::new();
 
     for c in columns {
-        let (aug_data_type, _ids) = resolve_names_data_type(scx, c.data_type.clone())?;
+        let (aug_data_type, ids) = resolve_names_data_type(scx, c.data_type.clone())?;
         let ty = plan::scalar_type_from_sql(scx, &aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
@@ -175,7 +176,8 @@ pub fn plan_create_table(
                 ColumnOption::Default(expr) => {
                     // Ensure expression can be planned and yields the correct
                     // type.
-                    query::plan_default_expr(scx, expr, &ty)?;
+                    let (_, expr_depends_on) = query::plan_default_expr(scx, expr, &ty)?;
+                    depends_on.extend(expr_depends_on);
                     default = expr.clone();
                 }
                 other => unsupported!(format!("CREATE TABLE with column constraint: {}", other)),
@@ -183,6 +185,7 @@ pub fn plan_create_table(
         }
         column_types.push(ty.nullable(nullable));
         defaults.push(default);
+        depends_on.extend(ids);
     }
 
     let typ = RelationType::new(column_types);
@@ -206,6 +209,7 @@ pub fn plan_create_table(
         name,
         table,
         if_not_exists: *if_not_exists,
+        depends_on,
     })
 }
 
@@ -857,12 +861,16 @@ pub fn plan_create_view(
     } else {
         scx.allocate_name(normalize::unresolved_object_name(name.to_owned())?)
     };
-    let (mut relation_expr, mut desc, finishing) =
-        query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
-    relation_expr.bind_parameters(&params)?;
+    let query::PlannedQuery {
+        mut expr,
+        mut desc,
+        finishing,
+        depends_on,
+    } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
+    expr.bind_parameters(&params)?;
     //TODO: materialize#724 - persist finishing information with the view?
-    relation_expr.finish(finishing);
-    let relation_expr = relation_expr.lower();
+    expr.finish(finishing);
+    let relation_expr = expr.lower();
     let replace = if *if_exists == IfExistsBehavior::Replace {
         if let Ok(item) = scx.catalog.resolve_item(&name.clone().into()) {
             if relation_expr.global_uses().contains(&item.id()) {
@@ -894,6 +902,7 @@ pub fn plan_create_view(
         replace,
         materialize,
         if_not_exists,
+        depends_on,
     })
 }
 
@@ -1144,6 +1153,8 @@ pub fn plan_create_sink(
             with_options.keys().join(",")
         )
     }
+    let mut depends_on = vec![from.id()];
+    depends_on.extend(from.uses());
 
     Ok(Plan::CreateSink {
         name,
@@ -1156,6 +1167,7 @@ pub fn plan_create_sink(
         with_snapshot,
         as_of,
         if_not_exists,
+        depends_on,
     })
 }
 
@@ -1209,7 +1221,7 @@ pub fn plan_create_index(
                 .collect()
         }
     };
-    let keys = query::plan_index_exprs(scx, on_desc, filled_key_parts.clone())?;
+    let (keys, exprs_depend_on) = query::plan_index_exprs(scx, on_desc, filled_key_parts.clone())?;
 
     let index_name = if let Some(name) = name {
         FullName {
@@ -1266,6 +1278,8 @@ pub fn plan_create_index(
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
+    let mut depends_on = vec![on.id()];
+    depends_on.extend(exprs_depend_on);
 
     Ok(Plan::CreateIndex {
         name: index_name,
@@ -1276,6 +1290,7 @@ pub fn plan_create_index(
         },
         options,
         if_not_exists,
+        depends_on,
     })
 }
 
@@ -1366,10 +1381,10 @@ pub fn plan_create_type(
 
     let inner = match as_type {
         CreateTypeAs::List => TypeInner::List {
-            element_id: ids.remove(0),
+            element_id: *ids.get(0).expect("custom type to have element id"),
         },
         CreateTypeAs::Map => {
-            let key_id = ids.remove(0);
+            let key_id = *ids.get(0).expect("key");
             match scx.catalog.try_get_lossy_scalar_type_by_id(&key_id) {
                 Some(ScalarType::String) => {}
                 Some(t) => bail!(
@@ -1381,16 +1396,15 @@ pub fn plan_create_type(
 
             TypeInner::Map {
                 key_id,
-                value_id: ids.remove(0),
+                value_id: *ids.get(1).expect("value"),
             }
         }
     };
 
-    assert!(ids.is_empty());
-
     Ok(Plan::CreateType {
         name,
         typ: Type { create_sql, inner },
+        depends_on: ids,
     })
 }
 
@@ -1624,20 +1638,27 @@ pub fn plan_drop_item(
     if !cascade {
         for id in catalog_entry.used_by() {
             let dep = scx.catalog.get_item_by_id(id);
-            match dep.item_type() {
-                CatalogItemType::Func
-                | CatalogItemType::Table
-                | CatalogItemType::Source
-                | CatalogItemType::View
-                | CatalogItemType::Sink
-                | CatalogItemType::Type => {
-                    bail!(
-                        "cannot drop {}: still depended upon by catalog item '{}'",
-                        catalog_entry.name(),
-                        dep.name()
-                    );
-                }
-                CatalogItemType::Index => (),
+            match object_type {
+                ObjectType::Type => bail!(
+                    "cannot drop {}: still depended upon by catalog item '{}'",
+                    catalog_entry.name(),
+                    dep.name()
+                ),
+                _ => match dep.item_type() {
+                    CatalogItemType::Func
+                    | CatalogItemType::Table
+                    | CatalogItemType::Source
+                    | CatalogItemType::View
+                    | CatalogItemType::Sink
+                    | CatalogItemType::Type => {
+                        bail!(
+                            "cannot drop {}: still depended upon by catalog item '{}'",
+                            catalog_entry.name(),
+                            dep.name()
+                        );
+                    }
+                    CatalogItemType::Index => (),
+                },
             }
         }
     }
