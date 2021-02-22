@@ -1,9 +1,7 @@
 # Fast compiles
 
-Rust has notoriously slow compile times for the simplest of projects, and
-Materialize is not a simple project. This document attempts to capture the
-various lessons learned by Materialize engineers when optimizing machines for
-compiling Rust.
+This document attempts to capture the various lessons learned by Materialize
+engineers when optimizing machines for compiling Rust.
 
 ## Run Linux
 
