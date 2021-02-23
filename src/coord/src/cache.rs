@@ -790,7 +790,7 @@ impl Tables {
         }
 
         Ok(())
-    }   
+    }
 }
 
 /// Write a 20 byte header + length-prefixed Row to a buffer
@@ -842,11 +842,11 @@ fn encode_batch_counts(counts: Vec<(Timestamp, usize)>) -> Result<Vec<u8>, anyho
         assert!(time > 0);
         assert!(count > 0);
         buf.write_u64::<NetworkEndian>(time).unwrap();
-        buf.write_u64::<NetworkEndian>(count).unwrap();
+        buf.write_u64::<NetworkEndian>(count as u64).unwrap();
     }
 
     Ok(buf)
-}       
+}
 
 fn read_updates(
     buf: &[u8],
@@ -926,28 +926,13 @@ fn read_updates(
     ))
 }
 
-fn read_batch(buf: &[u8], upper: Timestamp, since: Timestamp, lower: Timestamp)
--> Result<(Vec<(Timestamp, usize)>, TableUpdates), anyhow::Error> {
-        let mut time_counts = vec![];
-        let mut updates = vec![];
-        let mut cursor = Cursor::new(&data);
-
-        let is_batch = cursor.read_u32::<NetworkEndian>().unwrap();
-
-        if is_batch != 3 {
-            panic!("Failed to read batch expected 3 got {}", is_batch);
-        }
-
-        let num_counts = cursor.read_usize::<NetworkEndian>().unwrap();
-
-        for _ in (0..num_counts) {
-            let time = cursor.read_u64::<NetworkEndian>().unwrap();
-            let count = cursor.read_u64::<NetworkEndian>().unwrap();
-
-            time_counts.push((time, count));
-        }
-
-        unimplemented!()
+fn read_batch(
+    buf: &[u8],
+    upper: Timestamp,
+    since: Timestamp,
+    lower: Timestamp,
+) -> Result<(Vec<(Timestamp, usize)>, TableUpdates), anyhow::Error> {
+    unimplemented!()
 }
 
 /// Iterator through a set of table updates.
@@ -1083,20 +1068,18 @@ impl Batch {
     }
 
     fn reload_from(path: &Path) -> Result<(Self, Vec<TableUpdates>), anyhow::Error> {
-        let file_name = path
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap();
+        let file_name = path.file_name().unwrap().to_str().unwrap();
 
-        let parts: Vec<_> = file_name.split_at('-').collect();
+        let parts: Vec<_> = file_name.split('-').collect();
         let upper = parts[1].parse::<usize>()?;
         let lower = parts[2].parse::<usize>()?;
-        let since  = parts[3].parse::<usize>()?;
-        
+        let since = parts[3].parse::<usize>()?;
+
         let data = fs::read(path)?;
         let mut updates: Vec<_> = TableIter::new(data).collect();
 
+        unimplemented!()
+    }
 }
 
 impl Trace {
@@ -1147,7 +1130,10 @@ impl Trace {
         Ok(())
     }
 
-    fn reload_tables(id: GlobalId, base_path: PathBuf) -> Result<(Self, Vec<TableUpdates>), anyhow::Error> {
+    fn reload_tables(
+        id: GlobalId,
+        base_path: PathBuf,
+    ) -> Result<(Self, Vec<TableUpdates>), anyhow::Error> {
         let mut batch_paths = vec![];
         let entries = std::fs::read_dir(&base_path)?;
         for entry in entries {
@@ -1183,10 +1169,10 @@ impl Trace {
             let mut updates = vec![];
             let mut current_upper = 0;
             for path in batch_paths {
-                let (batch, update) = Batch::reload_from(path);
+                let (batch, update) = Batch::reload_from(&path)?;
                 current_upper = std::cmp::max(batch.description.upper, current_upper);
                 batches.push(batch);
-                updates.push(update);
+                updates.extend(update);
             }
 
             batches.sort_by_key(|batch| batch.description.lower);
