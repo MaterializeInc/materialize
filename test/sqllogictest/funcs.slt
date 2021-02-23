@@ -933,3 +933,17 @@ SELECT tanh('-inf'::double)
 
 query error function cot is only defined for finite arguments
 SELECT cot('-inf'::double)
+
+query error function log10 is not defined for zero
+SELECT log10(0.0::double)
+
+query error function log10 is not defined for zero
+SELECT log10(+0.0::double)
+
+query error function log10 is not defined for negative numbers
+SELECT log10(-1.0::double)
+
+query R
+SELECT log10(10.0::double)
+----
+1.000
