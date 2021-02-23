@@ -1,0 +1,48 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Portions of this file are derived from
+# https://github.com/vdesabou/kafka-docker-playground/blob/master/environment/kerberos/docker-compose.yml
+
+version: "3.7"
+
+mzworkflows:
+  testdrive:
+    steps:
+     - step: start-services
+       services: [materialized, postgres]
+     - step: wait-for-mz
+     - step: wait-for-postgres
+       dbname: postgres
+     - step: run
+       service: testdrive-svc
+
+services:
+  materialized:
+    mzbuild: materialized
+    command: --dev -w1 --disable-telemetry
+    ports:
+      - 6875
+
+  testdrive-svc:
+    mzbuild: testdrive
+    entrypoint: testdrive --materialized-url=postgres://materialize@materialized:6875
+    command: test/pgcdc/smoketest.td
+    volumes:
+      - ../../:/workdir
+    propagate-uid-gid: true
+    init: true
+    depends_on: [materialized]
+
+  postgres:
+    image: postgres:13.2
+    ports:
+      - 5432
+    environment:
+      - POSTGRES_PASSWORD=postgres
