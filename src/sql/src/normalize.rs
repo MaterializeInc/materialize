@@ -419,8 +419,14 @@ macro_rules! with_option_type {
 
 /// This macro accepts a struct definition and will generate it and a `try_from`
 /// method that takes a `Vec<WithOption>` which will extract and type check
-/// options based on the struct field names and types. Field names must match
-/// exactly the lowercased option name. Supported types are:
+/// options based on the struct field names and types.
+///
+/// The macro wraps all field types in an `Option` in the generated struct. The
+/// `TryFrom` implementation sets fields to `None` if they are not present in
+/// the provided `WITH` options.
+///
+/// Field names must match exactly the lowercased option name. Supported types
+/// are:
 ///
 /// - `String`: expects a SQL string (`WITH (name = "value")`) or identifier
 ///   (`WITH (name = text)`).
