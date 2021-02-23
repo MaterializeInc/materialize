@@ -9,6 +9,7 @@
   </head>
   <body>
       <div id="benchmark_results"></div>
+      <div id="benchmark_progress"></div>
       <div id="time_per_worker"></div>
 
     <script type="text/javascript">
@@ -22,8 +23,8 @@
 	      description: "A scatterplot showing ingest performance by number of workers and git revision",
               data: {name: 'data'},
 	      mark: "point",
-              height: 400,
-              width: 400,
+              height: 600,
+              width: 600,
 	      encoding: {
 		x: {
 		  field: "num_workers",
@@ -74,6 +75,73 @@
         }
 
         setup_view("benchmark_results");
+    </script>
+    <script type="text/javascript">
+        "use strict";
+
+        function setup_view(view_name) {
+
+            var chart = {
+	      $schema: "https://vega.github.io/schema/vega-lite/v4.json",
+	      title: "Benchmark Progress",
+	      description: "A Gantt chart benchmkark progress by run",
+              data: {name: 'data'},
+	      mark: "bar",
+              height: 400,
+              width: 800,
+	      encoding: {
+		x: {field: "start_time", type: "temporal", timeUnit: "utcyearmonthdatehoursminutesseconds"},
+		x2: {field: "end_time"},
+		y: {field: "git_ref", type: "ordinal"},
+		color: {field: "result", type: "nominal"}
+	      }
+	    };
+
+            var config = {
+                actions: false
+            }
+
+            vegaEmbed('#' + view_name, chart, config).then(function(chart) {
+
+                var path = "ws://" + location.host + "{{reverse_url('api/stream', '')}}" + view_name;
+                var connection = new WebSocket(path);
+
+               function convert_to_progress(row) {
+                    var start_ms = parseInt(row[1]);
+                    return {
+                            run_id: row[0],
+                            start_time: new Date(start_ms),
+                            runtime: row[2] ? parseInt(row[2]) : Date().getTime - start_ms,
+                            git_ref: row[3],
+                            mz_workers: parseInt(row[4]),
+                            end_time: row[5] ? new Date(row[5]) : new Date(),
+                            result: row[6]
+                           };
+                }
+
+                function progress_in_array(e, arr) {
+                    return arr.find(i => i.run_id === e.run_id);
+                }
+
+                connection.onmessage = function(event) {
+                        var data = JSON.parse(event.data);
+                        var insert_values = data.inserted.map(convert_to_progress);
+                        var delete_values = data.deleted.map(convert_to_progress);
+                        console.log(insert_values);
+                        console.log(delete_values);
+                        var changeSet = vega.changeset()
+                                .insert(insert_values)
+                                .remove(d => progress_in_array(d, delete_values));
+
+                        chart.view.change('data', changeSet).resize().run();
+                }
+            });
+
+        }
+
+        setup_view("benchmark_progress");
+    </script>
+    <script>
 
         function setup_chart(view_name) {
 
@@ -127,7 +195,7 @@
 
         }
 
-        setup_chart("time_per_worker");
+        // setup_chart("time_per_worker");
 
     </script>
   </body>
