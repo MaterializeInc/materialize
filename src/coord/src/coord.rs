@@ -68,10 +68,11 @@ use sql::plan::{
     AlterIndexLogicalCompactionWindow, CopyFormat, LogicalCompactionWindow, MutationKind, Params,
     PeekWhen, Plan, PlanContext,
 };
+use storage::WriteAheadLogs;
 use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
-use crate::cache::{CacheConfig, Cacher, Tables};
+use crate::cache::{CacheConfig, Cacher};
 use crate::catalog::builtin::{
     BUILTINS, MZ_ARRAY_TYPES, MZ_AVRO_OCF_SINKS, MZ_BASE_TYPES, MZ_COLUMNS, MZ_DATABASES,
     MZ_FUNCTIONS, MZ_INDEXES, MZ_INDEX_COLUMNS, MZ_KAFKA_SINKS, MZ_LIST_TYPES, MZ_MAP_TYPES,
@@ -185,7 +186,7 @@ pub struct Coordinator {
     /// signal to the receiver end that a cancel message has been sent.
     cancel: HashMap<u32, Arc<watch::Sender<Cancelled>>>,
     /// Map of all persisted tables.
-    tables: Tables,
+    table_wals: WriteAheadLogs,
 }
 
 impl Coordinator {
@@ -291,20 +292,9 @@ impl Coordinator {
             match item {
                 CatalogItem::View(_) => (),
                 CatalogItem::Table(_) => {
+                    // TODO gross hack for now
                     if !id.is_system() {
-                        // TODO gross hack for now
-                        let mut table_updates = self.tables.reload_table(*id)?;
-                        // Probably could be more careful to read in sorted order
-                        table_updates.sort_by_key(|u| (u.lower, u.upper));
-                        for update in table_updates.into_iter() {
-                            self.broadcast(SequencedCommand::Insert {
-                                id: *id,
-                                updates: update.updates,
-                            });
-                            self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
-                                advance_to: update.upper,
-                            });
-                        }
+                        self.table_wals.resume(*id)?;
                     }
                 }
                 CatalogItem::Sink(sink) => {
@@ -451,16 +441,9 @@ impl Coordinator {
                         > self.closed_up_to / self.logging_granularity.unwrap()
             {
                 if next_ts > self.closed_up_to {
-                    self.tables
-                        .close_up_to(next_ts)
+                    self.table_wals
+                        .write_progress(next_ts)
                         .expect("TODO handle this better");
-
-                    self.tables
-                        .update_traces()
-                        .expect("todo handle this better");
-                    self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
-                        advance_to: next_ts,
-                    });
                     self.closed_up_to = next_ts;
                 }
             }
@@ -1878,7 +1861,7 @@ impl Coordinator {
                 // TODO what do we do when this errors?
                 // We should maybe create the file before commit
                 // the catalog
-                self.tables.create_table(table_id)?;
+                self.table_wals.create(table_id)?;
                 self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
                     .await?;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
@@ -2214,7 +2197,7 @@ impl Coordinator {
             ObjectType::View => ExecuteResponse::DroppedView,
             ObjectType::Table => {
                 for id in items.iter() {
-                    self.tables.drop_table(*id)?;
+                    self.table_wals.destroy(*id)?;
                 }
 
                 ExecuteResponse::DroppedTable
@@ -2305,10 +2288,7 @@ impl Coordinator {
                                 })
                                 .collect();
 
-                            // TODO this is almost certainly going
-                            // to cause problems with things that aren't
-                            // tables
-                            self.tables.write_updates(id, &updates)?;
+                            self.table_wals.write(id, &updates)?;
                             self.broadcast(SequencedCommand::Insert { id, updates });
                         }
                     }
@@ -3441,7 +3421,7 @@ pub async fn serve(
         need_advance: true,
         transient_id_counter: 1,
         cancel: HashMap::new(),
-        tables: Tables::new(data_directory.join("tables"))?,
+        table_wals: WriteAheadLogs::new(data_directory.join("table_wals"))?,
     };
     coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
     if let Some(config) = &logging {
