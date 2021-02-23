@@ -185,7 +185,7 @@ $ kafka-ingest format=avro topic=avro-data-no-registry schema=${reader-schema} p
 
 > CREATE MATERIALIZED SOURCE avro_data_no_registry
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-data-no-registry-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA '${reader-schema}'
+  FORMAT AVRO USING SCHEMA '${reader-schema}' WITH (records_have_schema_id = false)
 
 > SELECT f2
   FROM avro_data_no_registry
