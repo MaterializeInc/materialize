@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
@@ -22,32 +22,6 @@ use repr::{Diff, Row, Timestamp};
 
 use crate::decode::DecoderState;
 use crate::source::{SourceData, SourceOutput};
-
-/// This operator changes the timestamp from capability to message payload,
-/// and applies `as_of` frontier compaction. The compaction is important as
-/// downstream upsert preparation can compact away updates for the same keys
-/// at the same times, and by advancing times we make more of them the same.
-fn apply_as_of_frontier<G>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
-    as_of_frontier: Antichain<Timestamp>,
-) -> Stream<G, (SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    stream.unary(Pipeline, "AppendTimestamp", move |_, _| {
-        let mut vector = Vec::new();
-        move |input, output| {
-            input.for_each(|cap, data| {
-                data.swap(&mut vector);
-                let mut time = cap.time().clone();
-                time.advance_by(as_of_frontier.borrow());
-                output
-                    .session(&cap)
-                    .give_iterator(vector.drain(..).map(|x| (x, time.clone())));
-            });
-        }
-    })
-}
 
 /// Entrypoint to the upsert-specific transformations involved
 /// in rendering a stream that came from an upsert source.
@@ -66,8 +40,10 @@ where
 {
     // Currently, the upsert-specific transformations run in the
     // following order:
-    // 1. as_of
-    // 2. deduplicating records by key
+    // 1. Applies `as_of` frontier compaction. The compaction is important as
+    // downstream upsert preparation can compact away updates for the same keys
+    // at the same times, and by advancing times we make more of them the same.
+    // 2. compact away updates for the same keys at the same times
     // 3. decoding records
     // 4. prepending the key to the value so that the stream becomes
     //        of the format (key, <entire record>)
@@ -80,8 +56,8 @@ where
     // to specify that they believe that they have a large number of unique
     // keys, at which point materialize may be more performant if it runs
     // decoding/linear operators before deduplicating.
-    (&apply_as_of_frontier(stream, as_of_frontier)).unary_frontier(
-        Exchange::new(move |x: &(SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)| x.0.key.hashed()),
+    stream.unary_frontier(
+        Exchange::new(move |x: &SourceOutput<Vec<u8>, Vec<u8>>| x.key.hashed()),
         "Upsert",
         |_cap, _info| {
             // this is a map of (time) -> (capability, ((key) -> (value with max
@@ -101,16 +77,15 @@ where
                 // Digest each input, reduce by presented timestamp.
                 input.for_each(|cap, data| {
                     data.swap(&mut vector);
-                    for (
-                        SourceOutput {
-                            key,
-                            value: new_value,
-                            position: new_position,
-                            upstream_time_millis: new_upstream_time_millis,
-                        },
-                        time,
-                    ) in vector.drain(..)
+                    for SourceOutput {
+                        key,
+                        value: new_value,
+                        position: new_position,
+                        upstream_time_millis: new_upstream_time_millis,
+                    } in vector.drain(..)
                     {
+                        let mut time = cap.time().clone();
+                        time.advance_by(as_of_frontier.borrow());
                         if key.is_empty() {
                             error!("Encountered empty key for value {:?}", new_value);
                             continue;

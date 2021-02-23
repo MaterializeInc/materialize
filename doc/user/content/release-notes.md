@@ -53,6 +53,16 @@ Wrap your release notes at the 80 character mark.
 
   Thanks to external contributor [@andrioni](https://github.com/andrioni).
 
+- Add the [`encode` and `decode` functions](/sql/functions/encode/) to convert
+  binary data to and from several textual representations.
+
+  Thanks to external contributor [@Posnet](https://github.com/Posnet).
+
+- Add many of the basic
+  [trigonometric functions](/sql/functions/#trigonometric-func).
+
+  Thanks again to external contributor [@andrioni](https://github.com/andrioni).
+
 - Multipartition Kafka sinks with consistency enabled will create single-partition
   consistency topics.
 - **Breaking change.** Change the behavior of the
@@ -75,7 +85,35 @@ Wrap your release notes at the 80 character mark.
   versions, setting these parameters required a separate call to [`ALTER
   INDEX`](/sql/alter-index).
 
+- Fix a bug that prevented upgrading v0.6.1 or earlier nodes to v0.7.0 if they
+  contained:
+  -  Views whose embdedded queries contain functions whose arguments are functions {{% gh 5802 %}}.
+  -  Sinks using `WITH SNAPSHOT AS OF` {{% gh 5808 %}}.
+
+- Reduce memory usage and increase processing speed in materialized views
+  involving sources with the "upsert" envelope. {{% gh 5509 %}}.
+
+  Users of the [memory usage visualization](/ops/monitoring#memory-usage-visualization)
+  will see that the operator "UpsertArrange" has changed to "Upsert", and that
+  the "Upsert" operator no longer shows any records. Actually, the "Upsert"
+  operator still has a memory footprint proportional to the number of unique
+  keys in the source.
+
 {{% version-header v0.7.0 %}}
+
+- **Known issue.** You cannot upgrade nodes created with versions v0.6.1 or
+  earlier to v0.7.0 if they contain:
+
+  -  Views whose embdedded queries contain functions whose arguments are functions {{% gh 5802 %}}.
+  -  Sinks using `WITH SNAPSHOT AS OF...` {{% gh 5808 %}}.
+
+  If you encounter this issue, you can:
+
+  - Use a previous version of Materialize to drop the view or sink before upgrading.
+  - Skip upgrading to v0.7.0, and instead upgrade to v0.7.1 which contains fixes
+    for these bugs.
+
+  The next release (v0.7.1) contains fixes for these bugs.
 
 - **Known issue.** The `-D` command-line option, shorthand for the
   `--data-directory` option, was inadvertently removed.

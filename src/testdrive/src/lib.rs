@@ -103,6 +103,9 @@ async fn run_line_reader(config: &Config, line_reader: &mut LineReader<'_>) -> R
         if let Err(e) = state.reset_s3().await {
             errors.push(e);
         }
+        if let Err(e) = state.reset_sqs().await {
+            errors.push(e);
+        }
         if let Err(e) = state.reset_kinesis().await {
             errors.push(e);
         }

@@ -15,12 +15,11 @@ use log::{debug, log, Level};
 use semver::{Identifier, Version};
 use serde::{Deserialize, Serialize};
 use tokio::time::{self, Duration};
+use uuid::Uuid;
 
 use ore::retry::RetryBuilder;
 
-use crate::server_metrics::{
-    filter_metrics, load_prom_metrics, METRIC_SERVER_METADATA, METRIC_WORKER_COUNT,
-};
+use crate::server_metrics::{filter_metrics, load_prom_metrics, METRIC_WORKER_COUNT};
 use crate::BUILD_INFO;
 
 /// How often we report telemetry
@@ -37,8 +36,10 @@ pub async fn check_version_loop(telemetry_url: String, cluster_id: String, start
     let current_version =
         Version::parse(BUILD_INFO.version).expect("crate version is not valid semver");
 
+    let session_id = Uuid::new_v4();
+
     let version_url = format!("{}/api/v1/version/{}", telemetry_url, cluster_id);
-    let latest_version = fetch_latest_version(&version_url, start_time).await;
+    let latest_version = fetch_latest_version(&version_url, start_time, session_id).await;
 
     match Version::parse(&latest_version) {
         Ok(latest_version) if latest_version > current_version => {
@@ -62,11 +63,15 @@ pub async fn check_version_loop(telemetry_url: String, cluster_id: String, start
     loop {
         time::sleep(TELEMETRY_FREQUENCY).await;
 
-        fetch_latest_version(&version_url, start_time).await;
+        fetch_latest_version(&version_url, start_time, session_id).await;
     }
 }
 
-async fn fetch_latest_version(telemetry_url: &str, start_time: Instant) -> String {
+async fn fetch_latest_version(
+    telemetry_url: &str,
+    start_time: Instant,
+    session_id: Uuid,
+) -> String {
     RetryBuilder::new()
         .max_sleep(None)
         .max_backoff(TELEMETRY_FREQUENCY)
@@ -75,7 +80,7 @@ async fn fetch_latest_version(telemetry_url: &str, start_time: Instant) -> Strin
         .retry(|_state| async {
             let version_request = V1VersionRequest {
                 version: BUILD_INFO.version,
-                status: telemetry_data(start_time),
+                status: telemetry_data(start_time, session_id),
             };
 
             let resp = reqwest::Client::new()
@@ -94,18 +99,74 @@ async fn fetch_latest_version(telemetry_url: &str, start_time: Instant) -> Strin
         .expect("retry loop never terminates")
 }
 
-fn telemetry_data(start_time: Instant) -> Status {
-    let metrics_to_collect: HashSet<_> = [METRIC_SERVER_METADATA, METRIC_WORKER_COUNT]
-        .iter()
-        .copied()
-        .collect();
+fn telemetry_data(start_time: Instant, session_id: Uuid) -> Status {
+    const SOURCE_COUNT: &str = "mz_source_count";
+    const VIEW_COUNT: &str = "mz_view_count";
+    const SINK_COUNT: &str = "mz_sink_count";
+    let metrics_to_collect: HashSet<_> =
+        [METRIC_WORKER_COUNT, SOURCE_COUNT, VIEW_COUNT, SINK_COUNT]
+            .iter()
+            .copied()
+            .collect();
 
     let metrics = load_prom_metrics(start_time);
     let filtered = filter_metrics(&metrics, &metrics_to_collect);
-    let value_default = |name| filtered.get(name).map(|m| m.value()).unwrap_or(0.0);
+
+    let first_value_default = |name| {
+        filtered
+            .get(name)
+            .and_then(|m| m.get(0).map(|m| m.value()))
+            .unwrap_or(0.0)
+    };
+    let label_value = |name, label, value| {
+        filtered
+            .get(name)
+            .and_then(|m| {
+                m.iter()
+                    .find(|m| m.label(label).map(|l| l == value).unwrap_or(false))
+                    // all counts are guaranteed to be integers
+                    .map(|m| m.value() as u32)
+            })
+            .unwrap_or(0)
+    };
     Status {
+        session_id,
         uptime_seconds: start_time.elapsed().as_secs(),
-        num_workers: value_default(METRIC_WORKER_COUNT),
+        num_workers: first_value_default(METRIC_WORKER_COUNT),
+        sources: Sources {
+            avro_ocf: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "avro-ocf"),
+            },
+            file: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "file"),
+            },
+            kinesis: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "kinesis"),
+            },
+            postgres: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "postgres"),
+            },
+            s3: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "s3"),
+            },
+            table: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "table"),
+            },
+        },
+        views: InnerStatus {
+            count: first_value_default(VIEW_COUNT) as u32,
+        },
+        sinks: Sinks {
+            avro_ocf: InnerStatus {
+                count: label_value(SINK_COUNT, "type", "avro-ocf"),
+            },
+            kafka: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "kafka"),
+            },
+            tail: InnerStatus {
+                count: label_value(SOURCE_COUNT, "type", "tail"),
+            },
+        },
     }
 }
 
@@ -115,10 +176,40 @@ struct V1VersionRequest<'a> {
     status: Status,
 }
 
+/// General status of the materialized server, for telemetry
 #[derive(Serialize)]
 struct Status {
+    /// Unique token for every time materialized is restarted
+    session_id: Uuid,
     uptime_seconds: u64,
     num_workers: f64,
+    sources: Sources,
+    views: InnerStatus,
+    sinks: Sinks,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Sources {
+    avro_ocf: InnerStatus,
+    file: InnerStatus,
+    kinesis: InnerStatus,
+    postgres: InnerStatus,
+    s3: InnerStatus,
+    table: InnerStatus,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Sinks {
+    tail: InnerStatus,
+    kafka: InnerStatus,
+    avro_ocf: InnerStatus,
+}
+
+#[derive(Serialize)]
+struct InnerStatus {
+    count: u32,
 }
 
 #[derive(Deserialize)]

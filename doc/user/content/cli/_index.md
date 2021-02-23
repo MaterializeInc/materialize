@@ -269,10 +269,12 @@ logged.
 
 Information reported to Materialize:
 
-* Cluster ID
+* Cluster ID, a unique ID which is persistent across materialized restarts
+* Session ID, a unique ID which is reset on each materialized restart
 * Current Version
 * Number of worker threads
 * Uptime
+* Count of sinks, sources, and views by type
 
 ### Dataflow tuning
 

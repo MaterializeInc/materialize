@@ -116,7 +116,6 @@ services:
     depends_on: [schema-registry, control-center]
   control-center:
     image: confluentinc/cp-enterprise-control-center:5.5.3
-    restart: always
     depends_on: [zookeeper, kafka, connect]
     ports:
       - *control-center

@@ -41,9 +41,7 @@ use tokio::sync::mpsc;
 use super::source::util::source;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::StreamExt;
-use crate::server::{
-    TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate, TimestampMetadataUpdates,
-};
+use crate::server::{TimestampDataUpdate, TimestampDataUpdates};
 use crate::CacheMessage;
 
 mod file;
@@ -77,8 +75,6 @@ pub struct SourceConfig<'a, G> {
     // Timestamping fields.
     /// Data-timestamping updates: information about (timestamp, source offset)
     pub timestamp_histories: TimestampDataUpdates,
-    /// Control-timestamping updates: information about when to start/stop timestamping a source
-    pub timestamp_tx: TimestampMetadataUpdates,
     /// A source can use Real-Time consistency timestamping or BYO consistency information.
     pub consistency: Consistency,
     /// Source Type
@@ -192,12 +188,8 @@ where
 ///
 /// When the `SourceToken` is dropped the associated source will be stopped.
 pub struct SourceToken {
-    id: SourceInstanceId,
     capability: Rc<RefCell<Option<Capability<Timestamp>>>>,
     activator: Activator,
-    /// A reference to the timestamper control channel. Inserts a timestamp drop message
-    /// when this source token is dropped
-    timestamp_drop: Option<TimestampMetadataUpdates>,
 }
 
 impl SourceToken {
@@ -211,13 +203,6 @@ impl Drop for SourceToken {
     fn drop(&mut self) {
         *self.capability.borrow_mut() = None;
         self.activator.activate();
-        if self.timestamp_drop.is_some() {
-            self.timestamp_drop
-                .as_ref()
-                .unwrap()
-                .borrow_mut()
-                .push(TimestampMetadataUpdate::StopTimestamping(self.id));
-        }
     }
 }
 
@@ -288,18 +273,6 @@ impl MaybeLength for Value {
 /// Each source must implement this trait. Sources will then get created as part of the
 /// [`create_source`] function.
 pub(crate) trait SourceInfo<Out> {
-    /// Activates timestamping for a given source. The actions
-    /// taken are a function of the source type and the consistency
-    fn activate_source_timestamping(
-        id: &SourceInstanceId,
-        consistency: &Consistency,
-        active: bool,
-        timestamp_data_updates: TimestampDataUpdates,
-        timestamp_metadata_channel: TimestampMetadataUpdates,
-    ) -> Option<TimestampMetadataUpdates>
-    where
-        Self: Sized;
-
     // BYO consistency methods
 
     /// This function determines whether it is safe to close the current timestamp.
@@ -573,15 +546,25 @@ impl ConsistencyInfo {
             // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
             // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
             // in next_partition_ts
-            if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
+            if let Some(entries) = timestamp_histories.borrow().get(&id.source_id) {
                 match entries {
                     TimestampDataUpdate::BringYourOwn(entries) => {
                         // Iterate over each partition that we know about
                         for (pid, entries) in entries {
                             source.ensure_has_partition(self, pid.clone());
 
+                            let existing_ts = self.partition_metadata.get(pid).unwrap().ts;
                             // Check whether timestamps can be closed on this partition
-                            while let Some((partition_count, ts, offset)) = entries.front() {
+
+                            // TODO(rkhaitan): this code performs a linear scan through the full
+                            // set of timestamp bindings to find a match every time. This is
+                            // clearly suboptimal and can be improved upon with a better
+                            // API for sources to interact with timestamp binding information.
+                            for (partition_count, ts, offset) in entries {
+                                if existing_ts >= *ts {
+                                    //skip old records
+                                    continue;
+                                }
                                 let partition_start_offset = self.get_partition_start_offset(pid);
                                 assert!(
                                     *offset >= partition_start_offset,
@@ -611,7 +594,6 @@ impl ConsistencyInfo {
                                     // again
                                     // We can close the timestamp (on this partition) and remove the associated metadata
                                     self.partition_metadata.get_mut(&pid).unwrap().ts = *ts;
-                                    entries.pop_front();
                                     changed = true;
                                 } else {
                                     // Offset isn't at a timestamp boundary, we take no action
@@ -642,7 +624,7 @@ impl ConsistencyInfo {
         } else {
             // This a RT source. It is always possible to close the timestamp and downgrade the
             // capability
-            if let Some(entries) = timestamp_histories.borrow_mut().get_mut(id) {
+            if let Some(entries) = timestamp_histories.borrow().get(&id.source_id) {
                 match entries {
                     TimestampDataUpdate::RealTime(partition_count) => {
                         source.update_partition_count(self, *partition_count)
@@ -682,7 +664,7 @@ impl ConsistencyInfo {
             Some(self.find_matching_rt_timestamp())
         } else {
             // The source is a BYO source. Must check the list of timestamp updates for the given partition
-            match timestamp_histories.borrow().get(id) {
+            match timestamp_histories.borrow().get(&id.source_id) {
                 None => None,
                 Some(TimestampDataUpdate::BringYourOwn(entries)) => match entries.get(partition) {
                     Some(entries) => {
@@ -883,7 +865,6 @@ where
         id,
         scope,
         timestamp_histories,
-        timestamp_tx,
         worker_id,
         worker_count,
         consistency,
@@ -894,16 +875,7 @@ where
         logger,
         ..
     } = config;
-
-    let timestamp_channel = S::activate_source_timestamping(
-        &id,
-        &consistency,
-        active,
-        timestamp_histories.clone(),
-        timestamp_tx,
-    );
-
-    let (stream, capability) = source(id, timestamp_channel, scope, name.clone(), move |info| {
+    let (stream, capability) = source(scope, name.clone(), move |info| {
         // Create activator for source
         let activator = scope.activator_for(&info.address[..]);
 
