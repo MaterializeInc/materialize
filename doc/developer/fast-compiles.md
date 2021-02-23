@@ -70,6 +70,10 @@ cycle.
 To date, no one has attempted to build a Linux laptop optimized for compilation
 performance.
 
+## Use a hosted machine
+
+Hetzner provides reasonably-priced many-core AMD machines hosted Germany or Finland. While some may be using workstation rather than true server-grade hardware, they provide significantly faster compilation times than a standard laptop.
+
 ## Community resources
 
 Many folks in the Rust community have tips too. Some of those are collected
