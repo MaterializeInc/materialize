@@ -83,7 +83,7 @@ tracing = "0.1.23"
 # TODO(benesch): we can use the default features here once tracing-subscriber
 # does not enable chrono's "oldtime" feature.
 tracing-subscriber = { version = "0.2.7", default-features = false, features = ["ansi", "env-filter", "fmt", "tracing-log"] }
-url = "2.0.0"
+url = "2.2.1"
 uuid = "0.8.2"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
