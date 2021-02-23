@@ -192,7 +192,6 @@ pub struct Sink {
     pub connector: SinkConnectorState,
     pub envelope: SinkEnvelope,
     pub with_snapshot: bool,
-    pub as_of: Option<u64>,
     pub depends_on: Vec<GlobalId>,
 }
 
@@ -1773,7 +1772,6 @@ impl Catalog {
             Plan::CreateSink {
                 sink,
                 with_snapshot,
-                as_of,
                 depends_on,
                 ..
             } => CatalogItem::Sink(Sink {
@@ -1783,7 +1781,6 @@ impl Catalog {
                 connector: SinkConnectorState::Pending(sink.connector_builder),
                 envelope: sink.envelope,
                 with_snapshot,
-                as_of,
                 depends_on,
             }),
             Plan::CreateType {

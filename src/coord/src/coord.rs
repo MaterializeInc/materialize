@@ -42,11 +42,11 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use build_info::BuildInfo;
 use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
-use dataflow_types::SinkEnvelope;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, SinkConnector,
     SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
 };
+use dataflow_types::{SinkAsOf, SinkEnvelope};
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -318,14 +318,9 @@ impl Coordinator {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connector = sink_connector::build(
-                        builder.clone(),
-                        sink.with_snapshot,
-                        self.determine_frontier(sink.as_of, sink.from)?,
-                        *id,
-                    )
-                    .await
-                    .with_context(|| format!("recreating sink {}", name))?;
+                    let connector = sink_connector::build(builder.clone(), *id)
+                        .await
+                        .with_context(|| format!("recreating sink {}", name))?;
                     self.handle_sink_connector_ready(*id, *oid, connector)
                         .await?;
                 }
@@ -1033,13 +1028,17 @@ impl Coordinator {
             },
         ];
         self.catalog_transact(ops).await?;
-
+        let as_of = SinkAsOf {
+            frontier: self.determine_frontier(sink.from),
+            strict: !sink.with_snapshot,
+        };
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
             name.to_string(),
             id,
             sink.from,
             connector,
             sink.envelope,
+            as_of,
         ))
         .await
     }
@@ -1498,7 +1497,6 @@ impl Coordinator {
                 name,
                 sink,
                 with_snapshot,
-                as_of,
                 if_not_exists,
                 depends_on,
             } => {
@@ -1509,7 +1507,6 @@ impl Coordinator {
                     name,
                     sink,
                     with_snapshot,
-                    as_of,
                     if_not_exists,
                     depends_on,
                 )
@@ -1935,7 +1932,6 @@ impl Coordinator {
         name: FullName,
         sink: sql::plan::Sink,
         with_snapshot: bool,
-        as_of: Option<u64>,
         if_not_exists: bool,
         depends_on: Vec<GlobalId>,
     ) {
@@ -1951,14 +1947,6 @@ impl Coordinator {
             Ok(id) => id,
             Err(e) => {
                 tx.send(Err(e.into()), session);
-                return;
-            }
-        };
-
-        let frontier = match self.determine_frontier(as_of, sink.from) {
-            Ok(frontier) => frontier,
-            Err(e) => {
-                tx.send(Err(e), session);
                 return;
             }
         };
@@ -1980,7 +1968,6 @@ impl Coordinator {
                 connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
                 envelope: sink.envelope,
                 with_snapshot,
-                as_of,
                 depends_on,
             }),
         };
@@ -2007,8 +1994,7 @@ impl Coordinator {
                     tx,
                     id,
                     oid,
-                    result: sink_connector::build(connector_builder, with_snapshot, frontier, id)
-                        .await,
+                    result: sink_connector::build(connector_builder, id).await,
                 }))
                 .expect("sending to internal_cmd_tx cannot fail");
         });
@@ -2474,7 +2460,19 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
-        let frontier = self.determine_frontier(ts, source_id)?;
+        let frontier = if let Some(ts) = ts {
+            // If a timestamp was explicitly requested, use that.
+            Antichain::from_elem(self.determine_timestamp(
+                &MirRelationExpr::Get {
+                    id: Id::Global(source_id),
+                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
+                    typ: RelationType::empty(),
+                },
+                PeekWhen::AtTimestamp(ts),
+            )?)
+        } else {
+            self.determine_frontier(source_id)
+        };
         let sink_name = format!(
             "tail-source-{}",
             self.catalog
@@ -2492,13 +2490,15 @@ impl Coordinator {
             source_id,
             SinkConnector::Tail(TailSinkConnector {
                 tx,
-                frontier,
-                strict: !with_snapshot,
                 emit_progress,
                 object_columns,
                 value_desc: desc,
             }),
             SinkEnvelope::Tail { emit_progress },
+            SinkAsOf {
+                frontier,
+                strict: !with_snapshot,
+            },
         ))
         .await?;
 
@@ -2635,28 +2635,15 @@ impl Coordinator {
         }
     }
 
-    /// Determine the frontier of updates to start *from*.
+    /// Determine the frontier of updates to start *from* for a sink based on
+    /// `source_id`.
+    ///
     /// Updates greater or equal to this frontier will be produced.
-    fn determine_frontier(
-        &mut self,
-        as_of: Option<u64>,
-        source_id: GlobalId,
-    ) -> Result<Antichain<u64>, CoordError> {
-        let frontier = if let Some(ts) = as_of {
-            // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(self.determine_timestamp(
-                &MirRelationExpr::Get {
-                    id: Id::Global(source_id),
-                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
-                    typ: RelationType::empty(),
-                },
-                PeekWhen::AtTimestamp(ts),
-            )?)
-        }
+    fn determine_frontier(&self, source_id: GlobalId) -> Antichain<Timestamp> {
         // TODO: The logic that follows is at variance from PEEK logic which consults the
         // "queryable" state of its inputs. We might want those to line up, but it is only
         // a "might".
-        else if let Some(index_id) = self.catalog.default_index_for(source_id) {
+        if let Some(index_id) = self.catalog.default_index_for(source_id) {
             let upper = self
                 .indexes
                 .upper_of(&index_id)
@@ -2671,8 +2658,7 @@ impl Coordinator {
             // Use the earliest time that is still valid for all sources.
             let (index_ids, _indexes_complete) = self.catalog.nearest_indexes(&[source_id]);
             self.indexes.least_valid_since(index_ids)
-        };
-        Ok(frontier)
+        }
     }
 
     fn sequence_explain_plan(
