@@ -68,22 +68,13 @@ SHOW TYPES;
 ```
 ```
 CREATE TYPE
- custom_list
--------------
- {1,2}
-(1 row)
 CREATE TYPE
- custom_nested_list
---------------------
- {{1,2}}
-(1 row)
 CREATE TABLE
       name
 ----------------
-  int4_list
-  int4_list_list
+ int4_list
+ int4_list_list
 (2 rows)
-
 ```
 
 ```sql
