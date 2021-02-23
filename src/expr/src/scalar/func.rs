@@ -1244,6 +1244,21 @@ fn cot<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
     Ok(Datum::from(1.0 / f.tan()))
 }
 
+fn log<'a, 'b, F: Fn(f64) -> f64>(
+    a: Datum<'a>,
+    logic: F,
+    name: &'b str,
+) -> Result<Datum<'a>, EvalError> {
+    let f = a.unwrap_float64();
+    if f.is_sign_negative() {
+        return Err(EvalError::NegativeOutOfDomain(name.to_owned()));
+    }
+    if f == 0.0 {
+        return Err(EvalError::ZeroOutOfDomain(name.to_owned()));
+    }
+    Ok(Datum::from(logic(f)))
+}
+
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -2987,6 +3002,7 @@ pub enum UnaryFunc {
     Tan,
     Tanh,
     Cot,
+    Log10,
 }
 
 impl UnaryFunc {
@@ -3155,6 +3171,8 @@ impl UnaryFunc {
             UnaryFunc::Tan => tan(a),
             UnaryFunc::Tanh => Ok(tanh(a)),
             UnaryFunc::Cot => cot(a),
+            UnaryFunc::Log10 => log(a, f64::log10, "log10"),
+            // UnaryFunc::Ln => ln(a),
         }
     }
 
@@ -3311,6 +3329,7 @@ impl UnaryFunc {
             Tan => ScalarType::Float64.nullable(in_nullable),
             Tanh => ScalarType::Float64.nullable(in_nullable),
             Cot => ScalarType::Float64.nullable(in_nullable),
+            Log10 => ScalarType::Float64.nullable(in_nullable),
         }
     }
 
@@ -3484,6 +3503,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::Tan => f.write_str("tan"),
             UnaryFunc::Tanh => f.write_str("tanh"),
             UnaryFunc::Cot => f.write_str("cot"),
+            UnaryFunc::Log10 => f.write_str("log10"),
         }
     }
 }

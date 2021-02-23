@@ -1457,6 +1457,9 @@ lazy_static! {
                 params!(String) => UnaryFunc::CharLength, 1317;
                 params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength, 1713;
             },
+            "log10" => Scalar {
+                params!(Float64) => UnaryFunc::Log10, 1194;
+            },
             "lower" => Scalar {
                 params!(String) => UnaryFunc::Lower, 870;
             },
