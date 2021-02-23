@@ -13,6 +13,7 @@ import argparse
 import dateparser
 import datetime
 import io
+import os
 import pathlib
 import sys
 import time
@@ -104,6 +105,9 @@ def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: d
                          {"benchmark_id": args.benchmark_id},
                          {"passed": passed,
                           "rows_per_second": rows_per_second,
+                          "git_ref": args.mz_git_ref,
+                          "mzbench_iteration": args.mzbench_iteration,
+                          "mz_workers": args.mz_workers,
                           "start_ms": int(start.timestamp()) * 1000,
                           "end_ms": int(dateparser.parse('now').timestamp()) *  1000,
                           "dashboard_url": dashboard_url
@@ -189,6 +193,26 @@ if __name__ == "__main__":
         default=8081
     )
 
+    parser.add_argument(
+        "--mz-git-ref",
+        type=str,
+        default=os.environ.get('MZ_GIT_REF', 'undefined'),
+        help="The materialized image tag",
+    )
+
+    parser.add_argument(
+        "--mz-workers",
+        type=int,
+        default=os.environ.get('MZ_WORKERS', 0),
+        help="Hostname of the prometheus instance to query",
+    )
+
+    parser.add_argument(
+        "--mzbench-iteration",
+        type=int,
+        default=os.environ.get('MZBENCH_ITERATION', 0),
+        help="Hostname of the prometheus instance to query",
+    )
 
     parser.add_argument(
         "--prometheus-host",

@@ -8,6 +8,18 @@
        "type": "boolean"
      },
      {
+       "name": "git_ref",
+       "type": "string"
+     },
+     {
+       "name": "mzbench_iteration",
+       "type": "int"
+     },
+     {
+       "name": "mz_workers",
+       "type": "int"
+     },
+     {
        "name": "rows_per_second",
        "type": "long"
      },

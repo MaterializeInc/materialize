@@ -85,6 +85,10 @@ services:
     mzbuild: avro-upsert-generator
   metric-verifier:
     mzbuild: metric-verifier
+    environment:
+      MZ_GIT_REF: ${MZ_GIT_REF:-None}
+      MZBENCH_ITERATION: ${MZBENCH_ITERATION:-0}
+      MZ_WORKERS: ${MZ_WORKERS:-0}
   # All monitoring
   dashboard:
     mzbuild: dashboard

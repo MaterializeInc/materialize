@@ -114,8 +114,10 @@ def main(args: argparse.Namespace) -> None:
         child_env = os.environ.copy()
         child_env["MZ_ROOT"] = mz_root
         child_env["MZ_WORKERS"] = str(worker_count)
+        child_env["MZBENCH_ITERATION"] = str(iteration)
         child_env["MZBUILD_WAIT_FOR_IMAGE"] = "true"
         if git_ref:
+            child_env["MZ_GIT_REF"] = git_ref
             child_env["MZBUILD_MATERIALIZED_TAG"] = mzbuild_tag(git_ref)
 
         try:
@@ -141,7 +143,7 @@ def main(args: argparse.Namespace) -> None:
 
         results_writer.writerow(
             {
-                "git_revision": git_ref if git_ref else "NONE",
+                "git_revision": git_ref if git_ref else "None",
                 "num_workers": worker_count,
                 "iteration": iteration,
                 "seconds_taken": seconds_taken,
