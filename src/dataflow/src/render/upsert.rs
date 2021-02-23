@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::{AsCollection, Collection};
 
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::generic::Operator;
@@ -34,7 +35,10 @@ pub fn decode_stream<G>(
     as_of_frontier: Antichain<Timestamp>,
     mut key_decoder_state: Box<dyn DecoderState>,
     mut value_decoder_state: Box<dyn DecoderState>,
-) -> Stream<G, (Row, Timestamp, Diff)>
+) -> (
+    Collection<G, Row, Diff>,
+    Option<Collection<G, dataflow_types::DataflowError, Diff>>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -56,7 +60,7 @@ where
     // to specify that they believe that they have a large number of unique
     // keys, at which point materialize may be more performant if it runs
     // decoding/linear operators before deduplicating.
-    stream.unary_frontier(
+    let ok_stream = stream.unary_frontier(
         Exchange::new(move |x: &SourceOutput<Vec<u8>, Vec<u8>>| x.key.hashed()),
         "Upsert",
         |_cap, _info| {
@@ -195,5 +199,7 @@ where
                 value_decoder_state.log_error_count();
             }
         },
-    )
+    );
+
+    (ok_stream.as_collection(), None)
 }
