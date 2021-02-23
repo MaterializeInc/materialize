@@ -100,49 +100,31 @@
 //! stream. This reduces the amount of recomputation that must be performed
 //! if/when the errors are retracted.
 
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::iter;
 use std::rc::Rc;
 use std::rc::Weak;
-use std::{any::Any, cell::RefCell};
 
-use differential_dataflow::hashable::Hashable;
-use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
-use differential_dataflow::operators::Consolidate;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
-use timely::dataflow::operators::exchange::Exchange;
 use timely::dataflow::operators::to_stream::ToStream;
-use timely::dataflow::operators::unordered_input::UnorderedInput;
-use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
 use dataflow_types::*;
-use expr::{GlobalId, Id, MapFilterProject, MirRelationExpr, SourceInstanceId};
-use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
-use mz_avro::types::Value;
-use mz_avro::Schema;
-use ore::cast::CastFrom;
+use expr::{GlobalId, Id, MapFilterProject, MirRelationExpr};
 use ore::collections::CollectionExt as _;
 use ore::iter::IteratorExt;
-use repr::adt::decimal::Significand;
-use repr::{Datum, RelationType, Row, RowArena, RowPacker, Timestamp};
+use repr::{RelationType, Row, RowArena, Timestamp};
 
-use crate::decode::{decode_avro_values, decode_values, get_decoder};
-use crate::operator::{CollectionExt, StreamExt};
+use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::server::{CacheMessage, LocalInput, TimestampDataUpdates};
-use crate::sink;
-use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo, S3SourceInfo};
-use crate::source::{SourceConfig, SourceToken};
-use crate::{
-    arrangement::manager::{TraceBundle, TraceManager},
-    logging::materialized::Logger,
-};
+use crate::source::SourceToken;
 
 mod arrange_by;
 mod context;
@@ -150,6 +132,8 @@ pub(crate) mod filter;
 mod flat_map;
 mod join;
 mod reduce;
+mod sinks;
+mod sources;
 mod threshold;
 mod top_k;
 mod upsert;
@@ -238,295 +222,6 @@ impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, Timestamp>
 where
     G: Scope<Timestamp = Timestamp>,
 {
-    fn import_source(
-        &mut self,
-        render_state: &mut RenderState,
-        scope: &mut Child<'g, G, G::Timestamp>,
-        materialized_logging: Option<Logger>,
-        src_id: GlobalId,
-        mut src: SourceDesc,
-    ) {
-        if let Some(operator) = &src.operators {
-            if operator.is_trivial(src.arity()) {
-                src.operators = None;
-            }
-        }
-
-        match src.connector {
-            SourceConnector::Local => {
-                let ((handle, capability), stream) = scope.new_unordered_input();
-                render_state
-                    .local_inputs
-                    .insert(src_id, LocalInput { handle, capability });
-                let err_collection = Collection::empty(scope);
-                self.collections.insert(
-                    MirRelationExpr::global_get(src_id, src.bare_desc.typ().clone()),
-                    (stream.as_collection(), err_collection),
-                );
-            }
-
-            SourceConnector::External {
-                connector,
-                encoding,
-                envelope,
-                consistency,
-                ts_frequency,
-            } => {
-                // TODO(benesch): this match arm is hard to follow. Refactor.
-
-                // This uid must be unique across all different instantiations of a source
-                let uid = SourceInstanceId {
-                    source_id: src_id,
-                    dataflow_id: self.dataflow_id,
-                };
-
-                // TODO(benesch): we force all sources to have an empty
-                // error stream. Likely we will want to plumb this
-                // collection into the source connector so that sources
-                // can produce errors.
-                let mut err_collection = Collection::empty(scope);
-
-                let fast_forwarded = match &connector {
-                    ExternalSourceConnector::Kafka(KafkaSourceConnector {
-                        start_offsets, ..
-                    }) => start_offsets.values().any(|&val| val > 0),
-                    _ => false,
-                };
-
-                // All workers are responsible for reading in Kafka sources. Other sources
-                // support single-threaded ingestion only. Note that in all cases we want all
-                // readers of the same source or same partition to reside on the same worker,
-                // and only load-balance responsibility across distinct sources.
-                let active_read_worker = if let ExternalSourceConnector::Kafka(_) = connector {
-                    true
-                } else {
-                    (usize::cast_from(src_id.hashed()) % scope.peers()) == scope.index()
-                };
-
-                let caching_tx = if let (true, Some(caching_tx)) =
-                    (connector.caching_enabled(), render_state.caching_tx.clone())
-                {
-                    Some(caching_tx)
-                } else {
-                    None
-                };
-
-                let source_config = SourceConfig {
-                    name: format!("{}-{}", connector.name(), uid),
-                    id: uid,
-                    scope,
-                    // Distribute read responsibility among workers.
-                    active: active_read_worker,
-                    timestamp_histories: render_state.ts_histories.clone(),
-                    consistency,
-                    timestamp_frequency: ts_frequency,
-                    worker_id: scope.index(),
-                    worker_count: scope.peers(),
-                    logger: materialized_logging,
-                    encoding: encoding.clone(),
-                    caching_tx,
-                };
-
-                let (stream, capability) = if let ExternalSourceConnector::AvroOcf(_) = connector {
-                    let ((source, err_source), capability) =
-                        source::create_source::<_, FileSourceInfo<Value>, Value>(
-                            source_config,
-                            connector,
-                        );
-                    err_collection = err_collection.concat(
-                        &err_source
-                            .map(DataflowError::SourceError)
-                            .pass_through("AvroOCF-errors")
-                            .as_collection(),
-                    );
-                    let reader_schema = match &encoding {
-                        DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => reader_schema,
-                        _ => unreachable!(
-                            "Internal error: \
-                                     Avro OCF schema should have already been resolved.\n\
-                                    Encoding is: {:?}",
-                            encoding
-                        ),
-                    };
-
-                    let reader_schema: Schema = reader_schema.parse().unwrap();
-                    (
-                        decode_avro_values(&source, &envelope, reader_schema, &self.debug_name),
-                        capability,
-                    )
-                } else if let ExternalSourceConnector::Postgres(_pg_connector) = connector {
-                    unimplemented!("Postgres sources are not supported yet");
-                } else {
-                    let ((ok_source, err_source), capability) = match connector {
-                        ExternalSourceConnector::Kafka(_) => {
-                            source::create_source::<_, KafkaSourceInfo, _>(source_config, connector)
-                        }
-                        ExternalSourceConnector::Kinesis(_) => {
-                            source::create_source::<_, KinesisSourceInfo, _>(
-                                source_config,
-                                connector,
-                            )
-                        }
-                        ExternalSourceConnector::S3(_) => {
-                            source::create_source::<_, S3SourceInfo, _>(source_config, connector)
-                        }
-                        ExternalSourceConnector::File(_) => {
-                            source::create_source::<_, FileSourceInfo<Vec<u8>>, Vec<u8>>(
-                                source_config,
-                                connector,
-                            )
-                        }
-                        ExternalSourceConnector::AvroOcf(_) => unreachable!(),
-                        ExternalSourceConnector::Postgres(_) => unreachable!(),
-                    };
-                    err_collection = err_collection.concat(
-                        &err_source
-                            .map(DataflowError::SourceError)
-                            .pass_through("source-errors")
-                            .as_collection(),
-                    );
-
-                    let stream = if let SourceEnvelope::Upsert(key_encoding) = &envelope {
-                        let value_decoder = get_decoder(encoding, &self.debug_name, scope.index());
-                        let key_decoder =
-                            get_decoder(key_encoding.clone(), &self.debug_name, scope.index());
-                        upsert::decode_stream(
-                            &ok_source,
-                            self.as_of_frontier.clone(),
-                            key_decoder,
-                            value_decoder,
-                        )
-                    } else {
-                        // TODO(brennan) -- this should just be a MirRelationExpr::FlatMap using regexp_extract, csv_extract,
-                        // a hypothetical future avro_extract, protobuf_extract, etc.
-                        let (stream, extra_token) = decode_values(
-                            &ok_source,
-                            encoding,
-                            &self.debug_name,
-                            &envelope,
-                            &mut src.operators,
-                            fast_forwarded,
-                            src.desc,
-                        );
-                        if let Some(tok) = extra_token {
-                            self.additional_tokens
-                                .entry(src_id)
-                                .or_insert_with(Vec::new)
-                                .push(Rc::new(tok));
-                        }
-                        stream
-                    };
-                    (stream, capability)
-                };
-
-                let mut collection = stream.as_collection();
-
-                // Implement source filtering and projection.
-                // At the moment this is strictly optional, but we perform it anyhow
-                // to demonstrate the intended use.
-                if let Some(mut operators) = src.operators.clone() {
-                    // Determine replacement values for unused columns.
-                    let source_type = src.bare_desc.typ();
-                    let position_or = (0..source_type.arity())
-                        .map(|col| {
-                            if operators.projection.contains(&col) {
-                                Some(col)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>();
-
-                    // Apply predicates and insert dummy values into undemanded columns.
-                    let (collection2, errors) = collection.inner.flat_map_fallible({
-                        let mut datums = crate::render::datum_vec::DatumVec::new();
-                        let mut row_packer = repr::RowPacker::new();
-                        let predicates = std::mem::take(&mut operators.predicates);
-                        // The predicates may be temporal, which requires the nuance
-                        // of an explicit plan capable of evaluating the predicates.
-                        let filter_plan = filter::FilterPlan::create_from(predicates)
-                            .unwrap_or_else(|e| panic!(e));
-                        move |(input_row, time, diff)| {
-                            let mut datums_local = datums.borrow_with(&input_row);
-                            let times_diffs = filter_plan.evaluate(&mut datums_local, time, diff);
-                            // The output row may need to have `Datum::Dummy` values stitched in.
-                            let output_row =
-                                row_packer.pack(position_or.iter().map(|pos_or| match pos_or {
-                                    Some(index) => datums_local[*index],
-                                    None => Datum::Dummy,
-                                }));
-                            // Each produced (time, diff) results in a copy of `output_row` in the output.
-                            // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
-                            times_diffs.map(move |time_diff| {
-                                time_diff.map(|(t, d)| (output_row.clone(), t, d))
-                            })
-                        }
-                    });
-
-                    collection = collection2.as_collection();
-                    err_collection = err_collection.concat(&errors.as_collection());
-                };
-
-                // Apply `as_of` to each timestamp.
-                match envelope {
-                    SourceEnvelope::Upsert(_) => {}
-                    _ => {
-                        let as_of_frontier1 = self.as_of_frontier.clone();
-                        collection = collection
-                            .inner
-                            .map_in_place(move |(_, time, _)| {
-                                time.advance_by(as_of_frontier1.borrow())
-                            })
-                            .as_collection();
-
-                        let as_of_frontier2 = self.as_of_frontier.clone();
-                        err_collection = err_collection
-                            .inner
-                            .map_in_place(move |(_, time, _)| {
-                                time.advance_by(as_of_frontier2.borrow())
-                            })
-                            .as_collection();
-                    }
-                }
-
-                let get = MirRelationExpr::Get {
-                    id: Id::BareSource(src_id),
-                    typ: src.bare_desc.typ().clone(),
-                };
-                // Introduce the stream by name, as an unarranged collection.
-                self.collections
-                    .insert(get.clone(), (collection, err_collection));
-
-                let mut expr = src.optimized_expr.0;
-                expr.visit_mut(&mut |node| {
-                    if let MirRelationExpr::Get {
-                        id: Id::LocalBareSource,
-                        ..
-                    } = node
-                    {
-                        *node = get.clone()
-                    }
-                });
-
-                // Do whatever envelope processing is required.
-                self.ensure_rendered(&expr, scope, scope.index());
-                let new_get = MirRelationExpr::global_get(src_id, expr.typ());
-                self.clone_from_to(&expr, &new_get);
-
-                let token = Rc::new(capability);
-                self.source_tokens.insert(src_id, token.clone());
-
-                // We also need to keep track of this mapping globally to activate sources
-                // on timestamp advancement queries
-                render_state
-                    .ts_source_mapping
-                    .entry(uid.source_id)
-                    .or_insert_with(Vec::new)
-                    .push(Rc::downgrade(&token));
-            }
-        }
-    }
-
     fn import_index(
         &mut self,
         render_state: &mut RenderState,
@@ -640,169 +335,6 @@ where
                 panic!("Arrangement alarmingly absent!");
             }
         };
-    }
-
-    fn export_sink(
-        &mut self,
-        render_state: &mut RenderState,
-        import_ids: HashSet<GlobalId>,
-        sink_id: GlobalId,
-        sink: &SinkDesc,
-    ) {
-        // put together tokens that belong to the export
-        let mut needed_source_tokens = Vec::new();
-        let mut needed_additional_tokens = Vec::new();
-        let mut needed_sink_tokens = Vec::new();
-        for import_id in import_ids {
-            if let Some(addls) = self.additional_tokens.get(&import_id) {
-                needed_additional_tokens.extend_from_slice(addls);
-            }
-            if let Some(source_token) = self.source_tokens.get(&import_id) {
-                needed_source_tokens.push(source_token.clone());
-            }
-        }
-        let (collection, _err_collection) = self
-            .collection(&MirRelationExpr::global_get(
-                sink.from,
-                sink.from_desc.typ().clone(),
-            ))
-            .expect("Sink source collection not loaded");
-
-        // Some connectors support keys - extract them.
-        let key_indices = sink
-            .connector
-            .get_key_indices()
-            .map(|key_indices| key_indices.to_vec());
-        let keyed = collection.map(move |row| {
-            let key = key_indices.as_ref().map(|key_indices| {
-                // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
-                // Does it matter?
-                let datums = row.unpack();
-                Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()))
-            });
-            (key, row)
-        });
-
-        // Each partition needs to be handled by its own worker, so that we can write messages in order.
-        // For now, we only support single-partition sinks.
-        let keyed = keyed
-            .inner
-            .exchange(move |_| sink_id.hashed())
-            .as_collection();
-
-        // Apply the envelope.
-        // * "Debezium" consolidates the stream, sorts it by time, and produces DiffPairs from it.
-        //   It then renders those as Avro.
-        // * Upsert" does the same, except at the last step, it renders the diff pair in upsert format.
-        //   (As part of doing so, it asserts that there are not multiple conflicting values at the same timestamp)
-        // * "Tail" writes some metadata.
-        let collection = match sink.envelope {
-            SinkEnvelope::Debezium => {
-                let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
-                // This has to be an `Rc<RefCell<...>>` because the inner closure (passed to `Iterator::map`) references it, and it might outlive the outer closure.
-                let rp = Rc::new(RefCell::new(RowPacker::new()));
-                let collection = combined.flat_map(move |(mut k, v)| {
-                    let max_idx = v.len() - 1;
-                    let rp = rp.clone();
-                    v.into_iter().enumerate().map(move |(idx, dp)| {
-                        let k = if idx == max_idx { k.take() } else { k.clone() };
-                        (k, Some(dbz_format(&mut *rp.borrow_mut(), dp)))
-                    })
-                });
-                collection
-            }
-            SinkEnvelope::Upsert => {
-                let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
-
-                let collection = combined.map(|(k, v)| {
-                    let v = upsert_format(v);
-                    (k, v)
-                });
-                collection
-            }
-            SinkEnvelope::Tail { emit_progress } => keyed
-                .consolidate()
-                .inner
-                .map({
-                    let mut rp = RowPacker::new();
-                    move |((k, v), time, diff)| {
-                        rp.push(Datum::Decimal(Significand::new(i128::from(time))));
-                        if emit_progress {
-                            rp.push(Datum::False);
-                        }
-                        rp.push(Datum::Int64(i64::cast_from(diff)));
-                        rp.extend_by_row(&v);
-                        let v = rp.finish_and_reuse();
-                        ((k, Some(v)), time, 1)
-                    }
-                })
-                .as_collection(),
-        };
-
-        // Some sinks require that the timestamp be appended to the end of the value.
-        let append_timestamp = match &sink.connector {
-            SinkConnector::Kafka(c) => c.consistency.is_some(),
-            SinkConnector::Tail(_) => false,
-            SinkConnector::AvroOcf(_) => false,
-        };
-        let collection = if append_timestamp {
-            collection
-                .inner
-                .map(|((k, v), t, diff)| {
-                    let v = v.map(|v| {
-                        let mut rp = RowPacker::new();
-                        rp.extend_by_row(&v);
-                        let t = t.to_string();
-                        rp.push_list_with(|rp| {
-                            rp.push(Datum::String(&t));
-                        });
-                        rp.finish()
-                    });
-                    ((k, v), t, diff)
-                })
-                .as_collection()
-        } else {
-            collection
-        };
-
-        // TODO(benesch): errors should stream out through the sink,
-        // if we figure out a protocol for that.
-
-        match sink.connector.clone() {
-            SinkConnector::Kafka(c) => {
-                let token = sink::kafka(
-                    collection,
-                    sink_id,
-                    c,
-                    sink.key_desc.clone(),
-                    sink.value_desc.clone(),
-                );
-                needed_sink_tokens.push(token);
-            }
-            SinkConnector::Tail(c) => {
-                let batches = collection
-                    .map(move |(k, v)| {
-                        assert!(k.is_none(), "tail does not support keys");
-                        let v = v.expect("tail must have values");
-                        (sink_id, v)
-                    })
-                    .arrange_by_key()
-                    .stream;
-                sink::tail(batches, sink_id, c);
-            }
-            SinkConnector::AvroOcf(c) => {
-                sink::avro_ocf(collection, sink_id, c, sink.value_desc.clone());
-            }
-        };
-
-        let tokens = Rc::new((
-            needed_sink_tokens,
-            needed_source_tokens,
-            needed_additional_tokens,
-        ));
-        render_state
-            .dataflow_tokens
-            .insert(sink_id, Box::new(tokens));
     }
 }
 
