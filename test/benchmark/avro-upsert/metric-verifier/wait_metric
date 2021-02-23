@@ -13,6 +13,7 @@ import argparse
 import dateparser
 import datetime
 import io
+import math
 import os
 import pathlib
 import sys
@@ -78,15 +79,26 @@ def run(args: argparse.Namespace) -> int:
     start = dateparser.parse('now')
     metrics = BenchmarkMetrics(args, SCHEMAS_DIRECTORY)
 
+    # TODO: Break this into two distinct metrics. The first should be recorded by mzbench
+    # directly and contain the benchmark arguments passed into this script. The second should be
+    # the start time only (however, if this queue were distributed, we'd also want a runner_id).
+    metrics.write_metric('dev.mtrlz.benchmarks.runs.begin.v0',
+                         {"run_id": args.mzbench_run_id},
+                         {"benchmark_id": args.mzbench_id,
+                          "git_ref": args.mzbench_git_ref,
+                          "mz_workers": args.mz_workers,
+                          "start_ms": int(time.time() * 1000),
+                        })
+
     try:
         return wait_metric(args, metrics, start)
     except:
-        record_results(args, metrics, start, passed=False)
+        record_results(args, metrics, start, result="error")
         raise
 
 
 def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: datetime.datetime,
-        rows_per_second: int = 0, passed: bool = False):
+        rows_per_second: int = 0, result: str = "passed"):
     """Write the results of this benchmark to the Kafka topic"""
 
     # TODO: Construct the URL externally from this script
@@ -101,12 +113,17 @@ def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: d
              })
     dashboard_url = urllib.parse.urlunparse(('http', args.grafana_location, path, '', query, ''))
 
+    metrics.write_metric('dev.mtrlz.benchmarks.runs.results.v0',
+                         {"run_id": args.mzbench_run_id},
+                         {"end_ms": int(time.time() * 1000),
+                          "result": result})
+
     metrics.write_metric('dev.mtrlz.benchmarks.results.v0',
-                         {"benchmark_id": args.benchmark_id},
-                         {"passed": passed,
+                         {"benchmark_id": args.mzbench_id},
+                         {"passed": result == "passed",
                           "rows_per_second": rows_per_second,
-                          "git_ref": args.mz_git_ref,
-                          "mzbench_iteration": args.mzbench_iteration,
+                          "git_ref": args.mzbench_git_ref,
+                          "mzbench_iteration": 0,
                           "mz_workers": args.mz_workers,
                           "start_ms": int(start.timestamp()) * 1000,
                           "end_ms": int(dateparser.parse('now').timestamp()) *  1000,
@@ -194,24 +211,31 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--mz-git-ref",
+        "--mz-workers",
+        type=int,
+        default=os.environ.get('MZ_WORKERS', 0),
+        help="How many workers materialized is configured to use",
+    )
+
+    parser.add_argument(
+        "--mzbench-git-ref",
         type=str,
-        default=os.environ.get('MZ_GIT_REF', 'undefined'),
+        default=os.environ.get('MZBENCH_GIT_REF', 'undefined'),
         help="The materialized image tag",
     )
 
     parser.add_argument(
-        "--mz-workers",
-        type=int,
-        default=os.environ.get('MZ_WORKERS', 0),
-        help="Hostname of the prometheus instance to query",
+        "--mzbench-id",
+        type=str,
+        default=os.environ.get('MZBENCH_ID', random_name.generate_name()),
+        help="Unique string that identifies the grouping of benchmark runs",
     )
 
     parser.add_argument(
-        "--mzbench-iteration",
-        type=int,
-        default=os.environ.get('MZBENCH_ITERATION', 0),
-        help="Hostname of the prometheus instance to query",
+        "--mzbench-run-id",
+        type=str,
+        default=os.environ.get('MZBENCH_RUN_ID', random_name.generate_name()),
+        help="Unique string that identifies this particular benchmark run",
     )
 
     parser.add_argument(

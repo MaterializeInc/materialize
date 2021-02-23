@@ -4,4 +4,5 @@ humanize==2.3.0
 mypy==0.790
 pdoc3==0.8.1
 pytest==5.4.2
+random_name==0.1.1
 requests==2.23.0

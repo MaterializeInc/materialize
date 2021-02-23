@@ -1,0 +1,15 @@
+{
+    "name": "value",
+    "type" : "record",
+    "namespace": "dev.mtrlz.benchmarks.runs.results.v0",
+    "fields": [
+     {
+       "name": "result",
+       "type": "string"
+     },
+     {
+       "name": "end_ms",
+       "type": "long"
+     }
+    ]
+}
