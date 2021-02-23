@@ -444,6 +444,9 @@ impl Coordinator {
                     self.table_wals
                         .write_progress(next_ts)
                         .expect("TODO handle this better");
+                    self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
+                        advance_to: next_ts,
+                    });
                     self.closed_up_to = next_ts;
                 }
             }
