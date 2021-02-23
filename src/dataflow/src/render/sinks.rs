@@ -172,6 +172,7 @@ where
                     c,
                     sink.key_desc.clone(),
                     sink.value_desc.clone(),
+                    sink.as_of.clone(),
                 );
                 needed_sink_tokens.push(token);
             }
@@ -184,7 +185,7 @@ where
                     })
                     .arrange_by_key()
                     .stream;
-                sink::tail(batches, sink_id, c);
+                sink::tail(batches, sink_id, c, sink.as_of.clone());
             }
             SinkConnector::AvroOcf(c) => {
                 sink::avro_ocf(collection, sink_id, c, sink.value_desc.clone());
