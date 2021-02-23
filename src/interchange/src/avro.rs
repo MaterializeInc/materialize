@@ -2076,33 +2076,34 @@ impl ConfluentAvroResolver {
         &'a mut self,
         mut bytes: &'b [u8],
     ) -> anyhow::Result<(&'b [u8], &'a Schema)> {
-        // The first byte is a magic byte (0) that indicates the Confluent
-        // serialization format version, and the next four bytes are a big
-        // endian 32-bit schema ID.
-        //
-        // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
-        if bytes.len() < 5 {
-            bail!(
-                "Confluent-style avro datum is too few bytes: expected at least 5 bytes, got {}",
-                bytes.len()
-            );
-        }
-        let magic = bytes[0];
-        let schema_id = BigEndian::read_i32(&bytes[1..5]);
-        bytes = &bytes[5..];
-
-        if magic != 0 {
-            bail!(
-                "wrong Confluent-style avro serialization magic: expected 0, got {}",
-                magic
-            );
-        }
-
         let resolved_schema = match &mut self.writer_schemas {
-            Some(cache) => cache
-                .get(schema_id, &self.reader_schema)
-                .await
-                .with_context(|| format!("Failed to fetch schema with ID {}", schema_id))?,
+            Some(cache) => {
+                // The first byte is a magic byte (0) that indicates the Confluent
+                // serialization format version, and the next four bytes are a big
+                // endian 32-bit schema ID.
+                //
+                // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+                if bytes.len() < 5 {
+                    bail!(
+                        "Confluent-style avro datum is too few bytes: expected at least 5 bytes, got {}",
+                        bytes.len()
+                    );
+                }
+                let magic = bytes[0];
+                let schema_id = BigEndian::read_i32(&bytes[1..5]);
+                bytes = &bytes[5..];
+
+                if magic != 0 {
+                    bail!(
+                        "wrong Confluent-style avro serialization magic: expected 0, got {}",
+                        magic
+                    );
+                }
+                cache
+                    .get(schema_id, &self.reader_schema)
+                    .await
+                    .with_context(|| format!("Failed to fetch schema with ID {}", schema_id))?
+            }
             // If we haven't been asked to use a schema registry, we have no way
             // to discover the writer's schema. That's ok; we'll just use the
             // reader's schema and hope it lines up.
