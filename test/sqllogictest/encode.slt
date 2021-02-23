@@ -1,0 +1,101 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for the `encode` and `decode` functions.
+
+mode cockroach
+
+statement ok
+CREATE TABLE unencoded (val bytea)
+
+statement ok
+INSERT INTO unencoded VALUES (NULL), ('\x00fffe65'), ('a'), ('ab'), ('abc'), ('abcd')
+
+# ==> base64 format
+
+query TT
+SELECT encode(val, 'base64'), decode(encode(val, 'base64'), 'base64') FROM unencoded ORDER BY val
+----
+NULL      NULL
+AP/+ZQ==  [0,␠255,␠254,␠101]
+YQ==      a
+YWI=      ab
+YWJj      abc
+YWJjZA==  abcd
+
+# base64 special case: test that the encoded output is wrapped at 76 characters.
+
+mode standard
+
+query T multiline
+SELECT encode('abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz', 'base64')
+----
+YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXphYmNkZWZnaGlqa2xtbm9wcXJzdHV2d3h5emFiY2Rl
+ZmdoaWprbG1ub3BxcnN0dXZ3eHl6YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXphYmNkZWZnaGlq
+a2xtbm9wcXJzdHV2d3h5emFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6
+EOF
+
+mode cockroach
+
+query error invalid base64 end sequence
+SELECT decode('a', 'base64')
+
+query error unexpected "=" while decoding base64 sequence
+SELECT decode('=', 'base64')
+
+query error invalid symbol "@" found while decoding base64 sequence
+SELECT decode('aaa@', 'base64')
+
+query error invalid symbol "\\u\{2\}" found while decoding base64 sequence
+SELECT decode(e'aaa\u0002', 'base64')
+
+# ==> hex format
+
+query TT
+SELECT encode(val, 'hex'), decode(encode(val, 'hex'), 'hex') FROM unencoded ORDER BY val
+----
+NULL      NULL
+00fffe65  [0,␠255,␠254,␠101]
+61        a
+6162      ab
+616263    abc
+61626364  abcd
+
+# hex special case: encoded bytes can be separated by whitespace.
+
+query T
+SELECT decode(E'41 42\t43', 'hex')
+----
+ABC
+
+# Though individual digits within a byte cannot.
+
+query error invalid hexadecimal digit: " "
+SELECT decode('a a', 'hex')
+
+query error invalid hexadecimal digit: "x"
+SELECT decode('xx', 'hex')
+
+query error invalid hexadecimal data: odd number of digits
+SELECT decode('0', 'hex')
+
+# ==> escape format
+
+query TT
+SELECT encode(val, 'escape'), decode(encode(val, 'escape'), 'escape') FROM unencoded ORDER BY val
+----
+NULL           NULL
+\000\377\376e  [0,␠255,␠254,␠101]
+a              a
+ab             ab
+abc            abc
+abcd           abcd
+
+query error invalid input syntax for type bytea
+SELECT decode('\9', 'escape')

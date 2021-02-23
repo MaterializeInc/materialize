@@ -57,7 +57,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 
                 // Verify that the provided security options are valid and then test them.
                 config_options = kafka_util::extract_config(&mut with_options_map)?;
-                kafka_util::test_config(&config_options)?;
+                kafka_util::test_config(&broker, &config_options)?;
             }
             Connector::AvroOcf { path, .. } => {
                 let path = path.clone();
@@ -94,6 +94,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 let aws_info = normalize::aws_connect_info(&mut with_options_map, Some(region))?;
                 aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
             }
+            Connector::Postgres { .. } => (),
         }
 
         purify_format(format, connector, col_names, file, &config_options).await?;
@@ -106,7 +107,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 
 async fn purify_format(
     format: &mut Option<Format<Raw>>,
-    connector: &mut Connector,
+    connector: &mut Connector<Raw>,
     col_names: &mut Vec<Ident>,
     file: Option<tokio::fs::File>,
     connector_options: &BTreeMap<String, String>,

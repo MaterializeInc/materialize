@@ -7,12 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::HashMap;
 use std::default::Default;
 
 use async_trait::async_trait;
 use rusoto_core::RusotoError;
 use rusoto_s3::{
-    CreateBucketConfiguration, CreateBucketError, CreateBucketRequest, PutObjectRequest, S3,
+    CreateBucketConfiguration, CreateBucketError, CreateBucketRequest,
+    GetBucketNotificationConfigurationRequest, PutBucketNotificationConfigurationRequest,
+    PutObjectRequest, QueueConfiguration, S3,
+};
+use rusoto_sqs::{
+    CreateQueueError, CreateQueueRequest, GetQueueAttributesRequest, GetQueueUrlRequest,
+    SetQueueAttributesRequest, Sqs,
 };
 
 use crate::action::{Action, State};
@@ -92,4 +99,172 @@ impl Action for PutObjectAction {
             .map(|_| ())
             .map_err(|e| format!("putting s3 object: {}", e))
     }
+}
+
+pub struct AddBucketNotifications {
+    bucket: String,
+    events: Vec<String>,
+
+    queue: String,
+
+    bucket_prefix: String,
+}
+
+pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotifications, String> {
+    let events = cmd
+        .args
+        .opt_string("events")
+        .map(|a| a.split(',').map(|s| s.to_string()).collect())
+        .unwrap_or_else(|| vec!["s3:ObjectCreated:*".to_string()]);
+
+    let bucket_prefix = cmd
+        .args
+        .opt_string("bucket_prefix")
+        .unwrap_or_else(|| "materialize-ci-*".into());
+
+    Ok(AddBucketNotifications {
+        bucket: cmd.args.string("bucket")?,
+        events,
+        queue: cmd.args.string("queue")?,
+        bucket_prefix,
+    })
+}
+
+#[async_trait]
+impl Action for AddBucketNotifications {
+    async fn undo(&self, _state: &mut State) -> Result<(), String> {
+        Ok(())
+    }
+
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
+        let result = state
+            .sqs_client
+            .create_queue(CreateQueueRequest {
+                queue_name: self.queue.clone(),
+                ..Default::default()
+            })
+            .await;
+
+        // get queue properties used for the rest of the mutations
+
+        let queue_url = match result {
+            Ok(r) => r
+                .queue_url
+                .expect("queue creation should always return the url"),
+            Err(RusotoError::Service(CreateQueueError::QueueNameExists(q))) => {
+                let resp = state
+                    .sqs_client
+                    .get_queue_url(GetQueueUrlRequest {
+                        queue_name: q,
+                        queue_owner_aws_account_id: None,
+                    })
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "when trying to get sqs queue url for already-existing queue: {}",
+                            e
+                        )
+                    })?;
+                resp.queue_url
+                    .expect("successfully getting the url gets the url")
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+
+        let queue_arn = state
+            .sqs_client
+            .get_queue_attributes(GetQueueAttributesRequest {
+                attribute_names: Some(vec!["QueueArn".to_string()]),
+                queue_url: queue_url.clone(),
+            })
+            .await
+            .map_err(|e| format!("getting queue {} attributes: {}", self.queue, e))?
+            .attributes
+            .ok_or_else(|| "the result should not be empty".to_string())?
+            .remove("QueueArn")
+            .ok_or_else(|| "QueueArn should be present in arn request".to_string())?;
+
+        // Configure the queue to allow the S3 bucket to write to this queue
+        let mut attributes = HashMap::new();
+        attributes.insert(
+            "Policy".to_string(),
+            allow_s3_policy(&queue_arn, &self.bucket_prefix, &state.aws_account),
+        );
+        state
+            .sqs_client
+            .set_queue_attributes(SetQueueAttributesRequest {
+                queue_url: queue_url.clone(),
+                attributes,
+            })
+            .await
+            .map_err(|e| format!("setting aws queue attributes: {}", e))?;
+
+        state.sqs_queues_created.insert(queue_url.clone());
+
+        // Configure the s3 bucket to write to the queue, without overwriting any existing configs
+        let mut config = state
+            .s3_client
+            .get_bucket_notification_configuration(GetBucketNotificationConfigurationRequest {
+                bucket: self.bucket.clone(),
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| format!("getting bucket notification_configuration: {}", e))?;
+
+        {
+            let queue_configs = config.queue_configurations.get_or_insert_with(Vec::new);
+
+            queue_configs.push(QueueConfiguration {
+                events: self.events.clone(),
+                queue_arn,
+                ..Default::default()
+            });
+        }
+
+        state
+            .s3_client
+            .put_bucket_notification_configuration(PutBucketNotificationConfigurationRequest {
+                bucket: self.bucket.clone(),
+                notification_configuration: config,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| {
+                format!(
+                    "Putting s3 bucket configuration notification {} \n{:?}",
+                    e, e
+                )
+            })?;
+
+        Ok(())
+    }
+}
+
+fn allow_s3_policy(queue_arn: &str, bucket_prefix: &str, self_account: &str) -> String {
+    format!(
+        r#"{{
+ "Version": "2012-10-17",
+ "Id": "AllowS3Pushing",
+ "Statement": [
+  {{
+   "Sid": "AllowS3Pushing",
+   "Effect": "Allow",
+   "Principal": {{
+    "AWS":"*"
+   }},
+   "Action": [
+    "SQS:SendMessage"
+   ],
+   "Resource": "{queue_arn}",
+   "Condition": {{
+      "ArnLike": {{ "aws:SourceArn": "arn:aws:s3:*:*:{bucket_prefix}" }},
+      "StringEquals": {{ "aws:SourceAccount": "{self_account}" }}
+   }}
+  }}
+ ]
+}}"#,
+        queue_arn = queue_arn,
+        bucket_prefix = bucket_prefix,
+        self_account = self_account
+    )
 }

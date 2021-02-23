@@ -13,8 +13,9 @@ use ore::collections::CollectionExt;
 use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::{self, VisitMut};
 use sql::ast::{
-    CreateIndexStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType,
-    Function, Ident, Raw, RawName, Statement, TableFactor, UnresolvedObjectName,
+    CreateIndexStatement, CreateSinkStatement, CreateTableStatement, CreateTypeStatement,
+    CreateViewStatement, DataType, Function, Ident, Raw, RawName, Statement, TableFactor,
+    UnresolvedObjectName,
 };
 
 use crate::catalog::{Catalog, SerializedCatalogItem};
@@ -219,10 +220,25 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                     }
                 }
 
-                // At the time the migration was written, tables, sinks,
-                // sources, and types could not contain references to functions.
+                Statement::CreateSink(CreateSinkStatement {
+                    name: _,
+                    from: _,
+                    connector: _,
+                    with_options: _,
+                    format: _,
+                    envelope: _,
+                    with_snapshot: _,
+                    as_of,
+                    if_not_exists: _,
+                }) => {
+                    if let Some(expr) = as_of {
+                        FuncNormalizer.visit_expr_mut(expr);
+                    }
+                }
+
+                // At the time the migration was written, tables, sources, and
+                // types could not contain references to functions.
                 Statement::CreateTable(_)
-                | Statement::CreateSink(_)
                 | Statement::CreateSource(_)
                 | Statement::CreateType(_) => continue,
 

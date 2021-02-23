@@ -468,5 +468,8 @@ where
             ),
             None,
         ),
+        (DataEncoding::Postgres(_), _) => {
+            unreachable!("Internal error: postgres sources are never decoded");
+        }
     }
 }

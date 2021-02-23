@@ -135,7 +135,7 @@ use repr::{Datum, RelationType, Row, RowArena, RowPacker, Timestamp};
 use crate::decode::{decode_avro_values, decode_values, get_decoder};
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::server::{CacheMessage, LocalInput, TimestampDataUpdates, TimestampMetadataUpdates};
+use crate::server::{CacheMessage, LocalInput, TimestampDataUpdates};
 use crate::sink;
 use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo, S3SourceInfo};
 use crate::source::{SourceConfig, SourceToken};
@@ -161,12 +161,9 @@ pub struct RenderState {
     /// Handles to local inputs, keyed by ID.
     pub local_inputs: HashMap<GlobalId, LocalInput>,
     /// Handles to external sources, keyed by ID.
-    pub ts_source_mapping: HashMap<SourceInstanceId, Weak<Option<SourceToken>>>,
+    pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
     pub ts_histories: TimestampDataUpdates,
-    /// Communication channel for enabling/disabling timestamping on new/dropped
-    /// sources.
-    pub ts_source_updates: TimestampMetadataUpdates,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
@@ -321,7 +318,6 @@ where
                     // Distribute read responsibility among workers.
                     active: active_read_worker,
                     timestamp_histories: render_state.ts_histories.clone(),
-                    timestamp_tx: render_state.ts_source_updates.clone(),
                     consistency,
                     timestamp_frequency: ts_frequency,
                     worker_id: scope.index(),
@@ -358,6 +354,8 @@ where
                         decode_avro_values(&source, &envelope, reader_schema, &self.debug_name),
                         capability,
                     )
+                } else if let ExternalSourceConnector::Postgres(_pg_connector) = connector {
+                    unimplemented!("Postgres sources are not supported yet");
                 } else {
                     let ((ok_source, err_source), capability) = match connector {
                         ExternalSourceConnector::Kafka(_) => {
@@ -379,6 +377,7 @@ where
                             )
                         }
                         ExternalSourceConnector::AvroOcf(_) => unreachable!(),
+                        ExternalSourceConnector::Postgres(_) => unreachable!(),
                     };
                     err_collection = err_collection.concat(
                         &err_source
@@ -519,10 +518,11 @@ where
 
                 // We also need to keep track of this mapping globally to activate sources
                 // on timestamp advancement queries
-                let prev = render_state
+                render_state
                     .ts_source_mapping
-                    .insert(uid, Rc::downgrade(&token));
-                assert!(prev.is_none());
+                    .entry(uid.source_id)
+                    .or_insert_with(Vec::new)
+                    .push(Rc::downgrade(&token));
             }
         }
     }

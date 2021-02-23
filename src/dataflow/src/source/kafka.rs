@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::fs;
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionLi
 use timely::scheduling::activate::{Activator, SyncActivator};
 
 use dataflow_types::{
-    Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
+    DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
 };
 use expr::{GlobalId, PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
@@ -38,13 +38,7 @@ use crate::source::cache::{RecordFileMetadata, WorkerCacheData};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
-use crate::{
-    logging::materialized::Logger,
-    server::{
-        CacheMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-        TimestampMetadataUpdates,
-    },
-};
+use crate::{logging::materialized::Logger, server::CacheMessage};
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceInfo {
@@ -102,32 +96,6 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
 }
 
 impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
-    fn activate_source_timestamping(
-        id: &SourceInstanceId,
-        consistency: &Consistency,
-        _active: bool,
-        timestamp_data_updates: TimestampDataUpdates,
-        timestamp_metadata_channel: TimestampMetadataUpdates,
-    ) -> Option<TimestampMetadataUpdates> {
-        let prev = if let Consistency::BringYourOwn(_) = consistency {
-            timestamp_data_updates.borrow_mut().insert(
-                id.clone(),
-                TimestampDataUpdate::BringYourOwn(HashMap::new()),
-            )
-        } else {
-            timestamp_data_updates
-                .borrow_mut()
-                .insert(id.clone(), TimestampDataUpdate::RealTime(1))
-        };
-        // Check that this is the first time this source id is registered
-        assert!(prev.is_none());
-        timestamp_metadata_channel
-            .as_ref()
-            .borrow_mut()
-            .push(TimestampMetadataUpdate::StartTimestamping(*id));
-        Some(timestamp_metadata_channel)
-    }
-
     /// This function determines whether it is safe to close the current timestamp.
     /// It is safe to close the current timestamp if
     /// 1) this worker does not own the current partition
