@@ -48,6 +48,10 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.7.1 %}}
 
+- **Breaking change.** Remove `CREATE SINK ... AS OF`, which did not have
+  sensible behavior after Materialize restarted. The intent is to reintroduce
+  this feature with a more formal model of `AS OF` timestamps. {{% gh 3467 %}}
+
 - Add the [`cbrt` function](/sql/functions/#numbers-func) for computing the
   cube root of a [`double precision`](/sql/types/float).
 
@@ -678,7 +682,7 @@ Document new timezone stuff and add a release note about it.
   alongside the data topic; the combination of these two topics is considered
   the Materialize change data capture (CDC) format.
 
-- Introduce the [`AS OF`](/sql/create-sink/#as-of) and
+- Introduce the `AS OF` and
   [`WITH SNAPSHOT`](/sql/create-sink/#with-snapshot-or-without-snapshot) options
   for `CREATE SINK` to provide more control over what data the sink will
   produce.

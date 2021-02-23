@@ -197,6 +197,7 @@ impl DataflowDesc {
         from_desc: RelationDesc,
         connector: SinkConnector,
         envelope: SinkEnvelope,
+        as_of: SinkAsOf,
     ) {
         let key_desc = connector.get_key_desc().cloned();
         let value_desc = connector.get_value_desc().clone();
@@ -209,6 +210,7 @@ impl DataflowDesc {
                 value_desc,
                 connector,
                 envelope,
+                as_of,
             },
         ));
     }
@@ -507,6 +509,7 @@ pub struct SinkDesc {
     pub key_desc: Option<RelationDesc>,
     pub connector: SinkConnector,
     pub envelope: SinkEnvelope,
+    pub as_of: SinkAsOf,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -514,6 +517,12 @@ pub enum SinkEnvelope {
     Debezium,
     Upsert,
     Tail { emit_progress: bool },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SinkAsOf {
+    pub frontier: Antichain<Timestamp>,
+    pub strict: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -756,8 +765,6 @@ pub struct KafkaSinkConnector {
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,
-    pub frontier: Antichain<Timestamp>,
-    pub strict: bool,
     pub config_options: BTreeMap<String, String>,
 }
 
@@ -765,19 +772,9 @@ pub struct KafkaSinkConnector {
 pub struct AvroOcfSinkConnector {
     pub value_desc: RelationDesc,
     pub path: PathBuf,
-    pub frontier: Antichain<Timestamp>,
-    pub strict: bool,
 }
 
 impl SinkConnector {
-    pub fn get_frontier(&self) -> Antichain<Timestamp> {
-        match self {
-            SinkConnector::AvroOcf(avro) => avro.frontier.clone(),
-            SinkConnector::Kafka(kafka) => kafka.frontier.clone(),
-            SinkConnector::Tail(tail) => tail.frontier.clone(),
-        }
-    }
-
     pub fn get_key_desc(&self) -> Option<&RelationDesc> {
         match self {
             SinkConnector::Kafka(k) => k.key_desc_and_indices.as_ref().map(|(desc, _indices)| desc),
@@ -810,8 +807,6 @@ impl SinkConnector {
 pub struct TailSinkConnector {
     #[serde(skip)]
     pub tx: mpsc::UnboundedSender<Vec<Row>>,
-    pub frontier: Antichain<Timestamp>,
-    pub strict: bool,
     pub emit_progress: bool,
     pub object_columns: usize,
     pub value_desc: RelationDesc,

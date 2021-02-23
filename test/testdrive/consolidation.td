@@ -85,7 +85,7 @@ $ kafka-create-topic topic=tx
 # ==> Test consolidation.
 
 # Ingest several updates that consolidate. Some of these updates are in one
-# transaction, and some of them are in their own transactinos.
+# transaction, and some of them are in their own transactions.
 
 $ kafka-ingest format=avro topic=nums schema=${nums-schema}
 {"before": null, "after": {"row": {"num": 1}}}
@@ -102,16 +102,28 @@ $ kafka-ingest format=avro topic=tx schema=${tx-schema}
 {"status": "BEGIN", "id": "3", "event_count": null, "data_collections": null}
 {"status": "END", "id": "3", "event_count": {"long": 1}, "data_collections": {"array": [{"event_count": 1, "data_collection": "testdrive-nums-${testdrive.seed}"}]}}
 
-# Test that a Debezium sink created `AS OF 3` (the latest completed timestamp)
-# is fully consolidated.
+# Test that by default updates that occurred at the same time are consolidated,
+# but updates that occurred at distinct times are not.
 
 > CREATE SINK nums_sink FROM nums
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'nums-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  AS OF 3
 
 $ kafka-verify format=avro sink=materialize.public.nums_sink
-{"before": null, "after": {"row": {"num": 5}}}
+{"before": null, "after": {"row": {"num": 3}}}
+{"before": {"row": {"num": 3}}, "after": {"row": {"num": 4}}}
+{"before": {"row": {"num": 4}}, "after": {"row": {"num": 5}}}
+
+# TODO(benesch): re-enable when we support `CREATE SINK ... AS OF`.
+# # Test that a Debezium sink created `AS OF 3` (the latest completed timestamp)
+# # is fully consolidated.
+# > CREATE SINK nums_sink FROM nums
+#   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'nums-sink'
+#   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+#   AS OF 3
+#
+# $ kafka-verify format=avro sink=materialize.public.nums_sink
+# {"before": null, "after": {"row": {"num": 5}}}
 
 # Validate that `TAIL` is similarly consolidated.
 # This protects against regression of #5421.

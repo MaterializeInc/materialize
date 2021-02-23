@@ -27,9 +27,12 @@ Field | Use
 _sink&lowbar;name_ | A name for the sink. This name is only used within Materialize.
 _item&lowbar;name_ | The name of the source or view you want to send to the sink.
 **AVRO OCF** _path_ | The absolute path and file name of the Avro Object Container file (OCF) to create and write to. The filename will be modified to let Materialize create a unique file each time Materialize starts, but the file extension will not be modified. You can find more details [here](#avro-ocf-sinks).
-**AS OF** _timestamp&lowbar;expression_ | The logical time to tail from onwards (either a number of milliseconds since the Unix epoch, or a `TIMESTAMP` or `timestamp with time zone`).
 **ENVELOPE DEBEZIUM** | The generated schemas have a [Debezium-style diff envelope](#debezium-envelope-details) to capture changes in the input view or source. This is the default.
 **ENVELOPE UPSERT** | The sink emits data with upsert semantics: updates and inserts for the given key are expressed as a value, and deletes are expressed as a null value payload in Kafka. For more detail, see [Upsert source details](/sql/create-source/text-kafka/#upsert-envelope-details).
+
+{{< version-changed v0.7.1 >}}
+The `AS OF` option was removed.
+{{< /version-changed >}}
 
 ### Kafka connector
 
@@ -82,16 +85,11 @@ Field | Value | Description
 `sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required if `sasl_mechanism` is `gssapi`.
 `sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`. Required if `sasl_mechanism` is `gssapi`.
 
-### `AS OF`
-
-`AS OF` is the specific point in time to start emitting all events for a given `SINK`. If you don't
-use `AS OF`, Materialize will pick a timestamp itself.
-
 ### `WITH SNAPSHOT` or `WITHOUT SNAPSHOT`
 
-By default, each `SINK` is created with a `SNAPSHOT` which contains the results of the query at its `AS OF` timestamp.
-Any further updates to these results are produced at the time when they occur. To only see results after the
-`AS OF` timestamp, specify `WITHOUT SNAPSHOT`.
+By default, each `SINK` is created with a `SNAPSHOT` which contains the consolidated results of the
+query before the sink was created. Any further updates to these results are produced at the time when
+they occur. To only see results after the sink is created, specify `WITHOUT SNAPSHOT`.
 
 ## Detail
 

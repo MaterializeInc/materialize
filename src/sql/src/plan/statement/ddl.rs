@@ -1134,7 +1134,10 @@ pub fn plan_create_sink(
         }
     };
 
-    let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
+    if as_of.is_some() {
+        bail!("CREATE SINK ... AS OF is no longer supported");
+    }
+
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
         Connector::Kafka { broker, topic, .. } => kafka_sink_builder(
@@ -1170,7 +1173,6 @@ pub fn plan_create_sink(
             envelope,
         },
         with_snapshot,
-        as_of,
         if_not_exists,
         depends_on,
     })

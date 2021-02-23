@@ -14,6 +14,8 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
+use dataflow_types::SinkAsOf;
+
 use super::*;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
@@ -186,12 +188,13 @@ impl<'a> DataflowBuilder<'a> {
         from: GlobalId,
         connector: SinkConnector,
         envelope: SinkEnvelope,
+        as_of: SinkAsOf,
     ) -> DataflowDesc {
         let mut dataflow = DataflowDesc::new(name);
-        dataflow.set_as_of(connector.get_frontier());
+        dataflow.set_as_of(as_of.frontier.clone());
         self.import_into_dataflow(&from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
-        dataflow.add_sink_export(id, from, from_type, connector, envelope);
+        dataflow.add_sink_export(id, from, from_type, connector, envelope, as_of);
         dataflow
     }
 }
