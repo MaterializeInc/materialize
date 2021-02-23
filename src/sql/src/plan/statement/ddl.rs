@@ -299,15 +299,33 @@ pub fn plan_create_source(
                     key_schema,
                     value_schema,
                     schema_registry_config,
+                    confluent_wire_format,
                 } = match schema {
                     // TODO(jldlaughlin): we need a way to pass in primary key information
                     // when building a source from a string or file.
-                    AvroSchema::Schema(sql_parser::ast::Schema::Inline(schema)) => Schema {
-                        key_schema: None,
-                        value_schema: schema.clone(),
-                        schema_registry_config: None,
-                    },
-                    AvroSchema::Schema(sql_parser::ast::Schema::File(_)) => {
+                    AvroSchema::Schema {
+                        schema: sql_parser::ast::Schema::Inline(schema),
+                        with_options,
+                    } => {
+                        with_options! {
+                            struct ConfluentMagic {
+                                confluent_wire_format: bool,
+                            }
+                        }
+
+                        Schema {
+                            key_schema: None,
+                            value_schema: schema.clone(),
+                            schema_registry_config: None,
+                            confluent_wire_format: ConfluentMagic::try_from(with_options.clone())?
+                                .confluent_wire_format
+                                .unwrap_or(true),
+                        }
+                    }
+                    AvroSchema::Schema {
+                        schema: sql_parser::ast::Schema::File(_),
+                        ..
+                    } => {
                         unreachable!("File schema should already have been inlined")
                     }
                     AvroSchema::CsrUrl {
@@ -329,6 +347,7 @@ pub fn plan_create_source(
                                 key_schema: seed.key_schema.clone(),
                                 value_schema: seed.value_schema.clone(),
                                 schema_registry_config: Some(ccsr_config),
+                                confluent_wire_format: true,
                             }
                         } else {
                             unreachable!("CSR seed resolution should already have been called")
@@ -340,6 +359,7 @@ pub fn plan_create_source(
                     key_schema,
                     value_schema,
                     schema_registry_config,
+                    confluent_wire_format,
                 })
             }
             Format::Protobuf {

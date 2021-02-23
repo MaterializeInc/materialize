@@ -241,6 +241,7 @@ pub(crate) fn get_decoder(
                 worker_index,
                 None,
                 None,
+                val_enc.confluent_wire_format,
             )
             .expect(avro_err),
         ),
@@ -296,6 +297,7 @@ fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     schema: &str,
     registry: Option<ccsr::ClientConfig>,
+    confluent_wire_format: bool,
 ) -> (
     (
         Collection<G, Row, Diff>,
@@ -303,7 +305,8 @@ fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     ),
     Option<Box<dyn Any>>,
 ) {
-    let mut resolver = ConfluentAvroResolver::new(schema, registry).unwrap(); // We will have already checked validity of the schema by now, so this can't fail.
+    // We will have already checked validity of the schema by now, so this can't fail.
+    let mut resolver = ConfluentAvroResolver::new(schema, registry, confluent_wire_format).unwrap();
     let channel = Rc::new(RefCell::new(VecDeque::new()));
     let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
     let mut vector = Vec::new();
@@ -394,9 +397,12 @@ where
             csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators),
             None,
         ),
-        (DataEncoding::Avro(enc), SourceEnvelope::CdcV2) => {
-            decode_cdcv2(stream, &enc.value_schema, enc.schema_registry_config)
-        }
+        (DataEncoding::Avro(enc), SourceEnvelope::CdcV2) => decode_cdcv2(
+            stream,
+            &enc.value_schema,
+            enc.schema_registry_config,
+            enc.confluent_wire_format,
+        ),
         (_, SourceEnvelope::CdcV2) => {
             unreachable!("Internal error: CDCv2 is not supported yet on non-Avro sources.")
         }
@@ -428,6 +434,7 @@ where
                         worker_index,
                         Some(dedup_strat),
                         dbz_key_indices,
+                        enc.confluent_wire_format,
                     )
                     .expect("Failed to create Avro decoder"),
                     &op_name,
@@ -448,6 +455,7 @@ where
                     worker_index,
                     None,
                     None,
+                    enc.confluent_wire_format,
                 )
                 .expect("Failed to create Avro decoder"),
                 &op_name,
