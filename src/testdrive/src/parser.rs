@@ -520,21 +520,18 @@ impl ArgMap {
         }
     }
 
-    /// Get a boolean, if it is missing return false
-    pub fn opt_bool(&mut self, name: &str) -> Result<bool, String> {
-        self.bool_(name).unwrap_or(Ok(false))
-    }
-
-    pub fn bool_(&mut self, name: &str) -> Option<Result<bool, String>> {
-        self.opt_string(name).map(|val| {
-            if val == "true" {
-                Ok(true)
-            } else if val == "false" {
-                Ok(false)
-            } else {
-                Err(format!("bad value for boolean parameter {}: {}", name, val))
-            }
-        })
+    pub fn opt_bool(&mut self, name: &str) -> Result<Option<bool>, String> {
+        self.opt_string(name)
+            .map(|val| {
+                if val == "true" {
+                    Ok(true)
+                } else if val == "false" {
+                    Ok(false)
+                } else {
+                    Err(format!("bad value for boolean parameter {}: {}", name, val))
+                }
+            })
+            .transpose()
     }
 
     pub fn done(&self) -> Result<(), String> {

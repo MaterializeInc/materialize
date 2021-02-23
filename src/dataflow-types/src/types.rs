@@ -449,6 +449,7 @@ pub struct AvroEncoding {
     pub key_schema: Option<String>,
     pub value_schema: String,
     pub schema_registry_config: Option<ccsr::ClientConfig>,
+    pub confluent_wire_format: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

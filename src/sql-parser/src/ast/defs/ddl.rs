@@ -24,7 +24,7 @@
 use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, DataType, Expr, Ident, SqlOption, UnresolvedObjectName};
+use crate::ast::{AstInfo, DataType, Expr, Ident, SqlOption, UnresolvedObjectName, WithOption};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -59,7 +59,10 @@ pub enum AvroSchema<T: AstInfo> {
         seed: Option<CsrSeed>,
         with_options: Vec<SqlOption<T>>,
     },
-    Schema(Schema),
+    Schema {
+        schema: Schema,
+        with_options: Vec<WithOption>,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for AvroSchema<T> {
@@ -83,7 +86,17 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
                     f.write_str(")");
                 }
             }
-            Self::Schema(schema) => schema.fmt(f),
+            Self::Schema {
+                schema,
+                with_options,
+            } => {
+                schema.fmt(f);
+                if !with_options.is_empty() {
+                    f.write_str(" WITH (");
+                    f.write_node(&display::comma_separated(with_options));
+                    f.write_str(")");
+                }
+            }
         }
     }
 }

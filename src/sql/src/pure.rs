@@ -144,9 +144,15 @@ async fn purify_format(
                     });
                 }
             }
-            AvroSchema::Schema(sql_parser::ast::Schema::File(path)) => {
+            AvroSchema::Schema {
+                schema: sql_parser::ast::Schema::File(path),
+                with_options,
+            } => {
                 let value_schema = tokio::fs::read_to_string(path).await?;
-                *schema = AvroSchema::Schema(sql_parser::ast::Schema::Inline(value_schema));
+                *schema = AvroSchema::Schema {
+                    schema: sql_parser::ast::Schema::Inline(value_schema),
+                    with_options: with_options.clone(),
+                };
             }
             _ => {}
         },
@@ -190,6 +196,7 @@ pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
     pub schema_registry_config: Option<ccsr::ClientConfig>,
+    pub confluent_wire_format: bool,
 }
 
 async fn get_remote_avro_schema(
@@ -214,5 +221,6 @@ async fn get_remote_avro_schema(
         key_schema: key_schema.map(|s| s.raw),
         value_schema: value_schema.raw,
         schema_registry_config: Some(schema_registry_config),
+        confluent_wire_format: true,
     })
 }

@@ -2059,16 +2059,22 @@ impl DebeziumDecodeState {
 pub struct ConfluentAvroResolver {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
+    confluent_wire_format: bool,
 }
 
 impl ConfluentAvroResolver {
-    pub fn new(reader_schema: &str, config: Option<ccsr::ClientConfig>) -> anyhow::Result<Self> {
+    pub fn new(
+        reader_schema: &str,
+        config: Option<ccsr::ClientConfig>,
+        confluent_wire_format: bool,
+    ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
         let writer_schemas =
             config.map(|sr| SchemaCache::new(sr, reader_schema.fingerprint::<Sha256>()));
         Ok(Self {
             reader_schema,
             writer_schemas,
+            confluent_wire_format,
         })
     }
 
@@ -2076,38 +2082,54 @@ impl ConfluentAvroResolver {
         &'a mut self,
         mut bytes: &'b [u8],
     ) -> anyhow::Result<(&'b [u8], &'a Schema)> {
-        let resolved_schema = match &mut self.writer_schemas {
-            Some(cache) => {
-                // The first byte is a magic byte (0) that indicates the Confluent
-                // serialization format version, and the next four bytes are a big
-                // endian 32-bit schema ID.
-                //
-                // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
-                if bytes.len() < 5 {
-                    bail!(
+        let mut extract_schema_id = || {
+            // The first byte is a magic byte (0) that indicates the Confluent
+            // serialization format version, and the next four bytes are a big
+            // endian 32-bit schema ID.
+            //
+            // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+            if bytes.len() < 5 {
+                bail!(
                         "Confluent-style avro datum is too few bytes: expected at least 5 bytes, got {}",
                         bytes.len()
                     );
-                }
-                let magic = bytes[0];
-                let schema_id = BigEndian::read_i32(&bytes[1..5]);
-                bytes = &bytes[5..];
+            }
+            let magic = bytes[0];
+            let schema_id = BigEndian::read_i32(&bytes[1..5]);
+            bytes = &bytes[5..];
 
-                if magic != 0 {
-                    bail!(
-                        "wrong Confluent-style avro serialization magic: expected 0, got {}",
-                        magic
-                    );
-                }
+            if magic != 0 {
+                bail!(
+                    "wrong Confluent-style avro serialization magic: expected 0, got {}",
+                    magic
+                );
+            }
+            Ok(schema_id)
+        };
+        let resolved_schema = match &mut self.writer_schemas {
+            Some(cache) => {
+                debug_assert!(
+                    self.confluent_wire_format,
+                    "We should have set 'confluent_wire_format' everywhere \
+                     that can lead to this branch"
+                );
+                let schema_id = extract_schema_id()?;
                 cache
                     .get(schema_id, &self.reader_schema)
                     .await
                     .with_context(|| format!("Failed to fetch schema with ID {}", schema_id))?
             }
+
             // If we haven't been asked to use a schema registry, we have no way
             // to discover the writer's schema. That's ok; we'll just use the
             // reader's schema and hope it lines up.
-            None => &self.reader_schema,
+            None => {
+                if self.confluent_wire_format {
+                    // validate and just move the bytes buffer ahead
+                    extract_schema_id()?;
+                }
+                &self.reader_schema
+            }
         };
         Ok((bytes, resolved_schema))
     }
@@ -2158,6 +2180,7 @@ impl Decoder {
     /// The provided schema is called the "reader schema", which is the schema
     /// that we are expecting to use to decode records. The records may indicate
     /// that they are encoded with a different schema; as long as those.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         reader_schema: &str,
         schema_registry: Option<ccsr::ClientConfig>,
@@ -2166,6 +2189,7 @@ impl Decoder {
         worker_index: usize,
         debezium_dedup: Option<DebeziumDeduplicationStrategy>,
         key_indices: Option<Vec<usize>>,
+        confluent_wire_format: bool,
     ) -> anyhow::Result<Decoder> {
         assert!(
             (envelope == EnvelopeType::Debezium && debezium_dedup.is_some())
@@ -2173,7 +2197,8 @@ impl Decoder {
         );
         let debezium_dedup =
             debezium_dedup.map(|strat| DebeziumDeduplicationState::new(strat, key_indices));
-        let csr_avro = ConfluentAvroResolver::new(reader_schema, schema_registry)?;
+        let csr_avro =
+            ConfluentAvroResolver::new(reader_schema, schema_registry, confluent_wire_format)?;
 
         Ok(Decoder {
             csr_avro,

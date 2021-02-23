@@ -249,6 +249,9 @@ format_spec_avro_kafka ::=
             'FILE' schema_file_path |
             inline_schema
             )
+            (
+                'WITH' '(' inline_schema_with_options ')'
+            )?
         )
     )
 format_spec ::=
