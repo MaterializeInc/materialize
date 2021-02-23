@@ -601,7 +601,7 @@ class WaitForPgStep(WorkflowStep):
     def __init__(
         self,
         *,
-        dbname: str,
+        dbname: str = "postgres",
         port: Optional[int] = None,
         host: str = "localhost",
         timeout_secs: int = 30,
@@ -645,6 +645,66 @@ class WaitForPgStep(WorkflowStep):
             expected=self._expected,
             print_result=self._print_result,
         )
+
+
+@Steps.register("run-postgres")
+class RunPostgres(WorkflowStep):
+    """
+    Params:
+        host: The host postgres is running on
+        port: The port postgres is listening on (Default: discover host port)
+        user: The user to connect as (Default: postgres)
+        password: The password to use (Default: postgres)
+        dbname: The database to connect to (Default: postgres)
+        service: The name postgres is running as (Default: postgres)
+        query: The query to execute
+    """
+
+    def __init__(
+        self,
+        *,
+        user: str = "postgres",
+        password: str = "postgres",
+        host: str = "localhost",
+        port: Optional[int] = None,
+        dbname: str = "postgres",
+        service: str = "postgres",
+        queries: List[str],
+    ) -> None:
+        self._user = user
+        self._password = password
+        self._host = host
+        self._port = port
+        self._dbname = dbname
+        self._service = service
+        self._queries = queries
+
+    def run(self, workflow: Workflow) -> None:
+        if self._port is None:
+            ports = workflow.composition.find_host_ports(self._service)
+            if len(ports) != 1:
+                raise errors.Failed(
+                    f"Could not unambiguously determine port for {self._service} "
+                    f"found: {','.join(ports)}"
+                )
+            port = int(ports[0])
+        else:
+            port = self._port
+
+        conn = pg8000.connect(
+            database=self._dbname,
+            host=self._host,
+            port=port,
+            user=self._user,
+            password=self._password,
+            timeout=10,
+        )
+
+        # The default (autocommit = false) wraps everything in a transaction.
+        conn.autocommit = True
+
+        for query in self._queries:
+            conn.run(query)
 
 
 @Steps.register("wait-for-mz")
