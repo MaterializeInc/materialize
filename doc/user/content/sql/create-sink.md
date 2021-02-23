@@ -161,6 +161,8 @@ When creating Kafka sinks, Materialize uses the Kafka Admin API to create a new 
 ```
 You can find the topic name for each Kafka sink by querying `mz_kafka_sinks`.
 
+{{% kafka-sink-drop  %}}
+
 #### Consistency metadata
 
 When requested, Materialize will send consistency metadata that describes timestamps (also called transaction IDs) and relates the change data stream to them.
