@@ -40,17 +40,17 @@ SHOW TYPES;
 SHOW EXTENDED FULL TYPES;
 ```
 ```
-name     |  type
---------------+--------
-_bool        | system
-_bytea       | system
-_date        | system
-_float4      | system
-_float8      | system
-int4_list    | user
-int4_list_list  | user
-int4_map  | user
-int5_map  | user
+     name       |  type
+----------------+--------
+ _bool          | system
+ _bytea         | system
+ _date          | system
+ _float4        | system
+ _float8        | system
+ int4_list      | user
+ int4_list_list | user
+ int4_map       | user
+ int5_map       | user
 ...
 ```
 
