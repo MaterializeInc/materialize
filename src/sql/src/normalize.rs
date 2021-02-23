@@ -388,31 +388,31 @@ pub fn create_statement(
 
 macro_rules! with_option_type {
     ($name:ident, String) => {
-        if let Some(crate::ast::WithOptionValue::Value(crate::ast::Value::String(value))) = $name {
-            value
-        } else if let Some(crate::ast::WithOptionValue::ObjectName(name)) = $name {
-            crate::ast::display::AstDisplay::to_ast_string(&name)
-        } else {
-            ::anyhow::bail!("expected String");
+        match $name {
+            Some(crate::ast::WithOptionValue::Value(crate::ast::Value::String(value))) => value,
+            Some(crate::ast::WithOptionValue::ObjectName(name)) => {
+                crate::ast::display::AstDisplay::to_ast_string(&name)
+            }
+            _ => ::anyhow::bail!("expected String"),
         }
     };
     ($name:ident, bool) => {
-        if let Some(crate::ast::WithOptionValue::Value(crate::ast::Value::Boolean(value))) = $name {
-            value
-        } else if $name.is_none() {
+        match $name {
+            Some(crate::ast::WithOptionValue::Value(crate::ast::Value::Boolean(value))) => value,
             // Bools, if they have no '= value', are true.
-            true
-        } else {
-            ::anyhow::bail!("expected bool");
+            None => true,
+            _ => ::anyhow::bail!("expected bool"),
         }
     };
     ($name:ident, Interval) => {
-        if let Some(crate::ast::WithOptionValue::Value(Value::String(value))) = $name {
-            ::repr::strconv::parse_interval(&value)?
-        } else if let Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) = $name {
-            ::repr::strconv::parse_interval(&interval.value)?
-        } else {
-            ::anyhow::bail!("expected Interval");
+        match $name {
+            Some(crate::ast::WithOptionValue::Value(Value::String(value))) => {
+                ::repr::strconv::parse_interval(&value)?
+            }
+            Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) => {
+                ::repr::strconv::parse_interval(&interval.value)?
+            }
+            _ => ::anyhow::bail!("expected Interval"),
         }
     };
 }
