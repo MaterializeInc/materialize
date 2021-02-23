@@ -34,6 +34,7 @@ impl AvroDecoderState {
         worker_index: usize,
         dedup_strat: Option<DebeziumDeduplicationStrategy>,
         dbz_key_indices: Option<Vec<usize>>,
+        records_have_schema_id: bool,
     ) -> Result<Self, anyhow::Error> {
         Ok(AvroDecoderState {
             decoder: Decoder::new(
@@ -44,6 +45,7 @@ impl AvroDecoderState {
                 worker_index,
                 dedup_strat,
                 dbz_key_indices,
+                records_have_schema_id,
             )?,
             events_success: 0,
             events_error: 0,

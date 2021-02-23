@@ -447,6 +447,7 @@ pub struct AvroEncoding {
     pub key_schema: Option<String>,
     pub value_schema: String,
     pub schema_registry_config: Option<ccsr::ClientConfig>,
+    pub records_have_schema_id: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
