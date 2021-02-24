@@ -2911,7 +2911,10 @@ pub fn scalar_type_from_sql(
                         ScalarType::Decimal(precision, scale)
                     }
                     ScalarType::String => {
-                        match name.raw_name().to_string().as_str() {
+                        // TODO(justin): we should look up in the catalog to see
+                        // if this type is actually a length-parameterized
+                        // string.
+                        match name.raw_name().item.as_str() {
                             n @ "char" | n @ "varchar" => {
                                 validate_typ_mod(n, &typ_mod, &[("length", 1, 10_485_760)])?
                             }
