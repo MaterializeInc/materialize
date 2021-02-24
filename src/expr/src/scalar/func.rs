@@ -3033,6 +3033,8 @@ pub enum UnaryFunc {
     Cot,
     Log10,
     Log10Decimal(u8),
+    Ln,
+    LnDecimal(u8),
 }
 
 impl UnaryFunc {
@@ -3203,7 +3205,8 @@ impl UnaryFunc {
             UnaryFunc::Cot => cot(a),
             UnaryFunc::Log10 => log(a, f64::log10, "log10"),
             UnaryFunc::Log10Decimal(scale) => log_dec(a, f64::log10, "log10", *scale),
-            // UnaryFunc::Ln => ln(a),
+            UnaryFunc::Ln => log(a, f64::ln, "ln"),
+            UnaryFunc::LnDecimal(scale) => log_dec(a, f64::ln, "ln", *scale),
         }
     }
 
@@ -3360,8 +3363,8 @@ impl UnaryFunc {
             Tan => ScalarType::Float64.nullable(in_nullable),
             Tanh => ScalarType::Float64.nullable(in_nullable),
             Cot => ScalarType::Float64.nullable(in_nullable),
-            Log10 => ScalarType::Float64.nullable(in_nullable),
-            Log10Decimal(_) => input_type,
+            Log10 | Ln => ScalarType::Float64.nullable(in_nullable),
+            Log10Decimal(_) | LnDecimal(_) => input_type,
         }
     }
 
@@ -3536,7 +3539,9 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::Tanh => f.write_str("tanh"),
             UnaryFunc::Cot => f.write_str("cot"),
             UnaryFunc::Log10 => f.write_str("log10f64"),
-            UnaryFunc::Log10Decimal(_) => f.write_str("log10"),
+            UnaryFunc::Log10Decimal(_) => f.write_str("log10dec"),
+            UnaryFunc::Ln => f.write_str("lnf64"),
+            UnaryFunc::LnDecimal(_) => f.write_str("lndec"),
         }
     }
 }

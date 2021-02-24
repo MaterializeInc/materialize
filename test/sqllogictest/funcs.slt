@@ -976,3 +976,13 @@ query R
 SELECT log10(10::decimal(15, 5))
 ----
 1.0000
+
+query R
+SELECT ln(13::float)
+----
+2.565
+
+query R
+SELECT ln(13.0000::decimal(15, 5))
+----
+2.565
