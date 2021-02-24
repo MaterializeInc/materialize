@@ -86,7 +86,6 @@ pub enum Plan {
         name: FullName,
         sink: Sink,
         with_snapshot: bool,
-        as_of: Option<Timestamp>,
         if_not_exists: bool,
         depends_on: Vec<GlobalId>,
     },
