@@ -22,7 +22,7 @@ use std::convert::{TryFrom, TryInto};
 use std::iter;
 use std::mem;
 use std::os::unix::ffi::OsStringExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
@@ -68,7 +68,10 @@ use sql::plan::{
     AlterIndexLogicalCompactionWindow, CopyFormat, LogicalCompactionWindow, MutationKind, Params,
     PeekWhen, Plan, PlanContext,
 };
-use storage::{Compacter, CompacterMessage, Trace as PersistedTrace, WriteAheadLogs};
+use storage::{
+    Compacter, CompacterMessage, Message as PersistedMessage, Trace as PersistedTrace,
+    WriteAheadLogs,
+};
 use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
@@ -155,6 +158,7 @@ pub struct Config<'a> {
 
 /// Glues the external world to the Timely workers.
 pub struct Coordinator {
+    data_directory: PathBuf,
     worker_guards: WorkerGuards<()>,
     worker_txs: Vec<crossbeam_channel::Sender<SequencedCommand>>,
     optimizer: Optimizer,
@@ -296,6 +300,31 @@ impl Coordinator {
                     // TODO gross hack for now
                     if !id.is_system() {
                         self.table_wals.resume(*id)?;
+                        let wals_path = self.data_directory.join("table_wals");
+                        let traces_path = self.data_directory.join("table_traces");
+                        let persisted_table = PersistedTrace::resume(*id, traces_path, wals_path)?;
+                        let messages = persisted_table.read()?;
+
+                        let mut updates = vec![];
+                        for persisted_message in messages.into_iter() {
+                            match persisted_message {
+                                PersistedMessage::Progress(time) => {
+                                    // Send the messages accumulated so far + update
+                                    // progress
+                                    let updates = std::mem::replace(&mut updates, vec![]);
+                                    self.broadcast(SequencedCommand::Insert { id: *id, updates });
+                                    self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
+                                        advance_to: time,
+                                    });
+                                }
+                                PersistedMessage::Data(update) => {
+                                    updates.push(update);
+                                }
+                            }
+                        }
+                        self.compacter_tx
+                            .send(CompacterMessage::Resume(*id, persisted_table))
+                            .expect("compacter receiver should not drop first");
                     }
                 }
                 CatalogItem::Sink(sink) => {
@@ -3418,6 +3447,7 @@ pub async fn serve(
     })
     .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
     let mut coord = Coordinator {
+        data_directory: data_directory.to_path_buf(),
         worker_guards,
         worker_txs,
         optimizer: Default::default(),

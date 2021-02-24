@@ -281,6 +281,7 @@ impl Trace {
 
         out.append(&mut read_segment(&unfinished_segment)?);
 
+        out.dedup();
         Ok(out)
     }
 }
@@ -357,7 +358,15 @@ impl Compacter {
                 let trace = self.traces.remove(&id).expect("trace known to exist");
                 trace.destroy()?;
             }
-            CompacterMessage::Resume(_, _) => unimplemented!(),
+            CompacterMessage::Resume(id, trace) => {
+                if self.traces.contains_key(&id) {
+                    bail!(
+                        "asked to resume trace for relation {} which already exists.",
+                        id
+                    );
+                }
+                self.traces.insert(id, trace);
+            }
             CompacterMessage::AllowCompaction(frontier) => {
                 for (_, trace) in self.traces.iter_mut() {
                     if let Some(compaction_frontier) = trace.compaction {
@@ -410,6 +419,7 @@ fn read_dir_regex(path: &Path, regex: &Regex) -> Result<Vec<PathBuf>, anyhow::Er
     Ok(results)
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Message {
     Data(Update),
     Progress(Timestamp),

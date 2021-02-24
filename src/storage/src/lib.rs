@@ -1,5 +1,5 @@
 mod compacter;
 mod wal;
 
-pub use compacter::{Compacter, CompacterMessage, Trace};
+pub use compacter::{Compacter, CompacterMessage, Message, Trace};
 pub use wal::WriteAheadLogs;
