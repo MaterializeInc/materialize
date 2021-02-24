@@ -559,16 +559,16 @@ where
                 let empty_frontier = Antichain::new();
                 trace_bundle
                     .oks_mut()
-                    .advance_by(timestamp_frontier.borrow());
+                    .set_logical_compaction(timestamp_frontier.borrow());
                 trace_bundle
                     .errs_mut()
-                    .advance_by(timestamp_frontier.borrow());
+                    .set_logical_compaction(timestamp_frontier.borrow());
                 trace_bundle
                     .oks_mut()
-                    .distinguish_since(empty_frontier.borrow());
+                    .set_physical_compaction(empty_frontier.borrow());
                 trace_bundle
                     .errs_mut()
-                    .distinguish_since(empty_frontier.borrow());
+                    .set_physical_compaction(empty_frontier.borrow());
                 // Prepare a description of the peek work to do.
                 let mut peek = PendingPeek {
                     id,
