@@ -30,7 +30,6 @@ CREATE TYPE int4_map AS MAP (key_type=text, value_type=int4);
 SHOW TYPES;
 ```
 ```
-CREATE TYPE
     name
 --------------
   int4_map
@@ -39,10 +38,10 @@ CREATE TYPE
 
 ```sql
 DROP TYPE int4_map;
+
 SHOW TYPES;
 ```
 ```
-DROP TYPE
   name
 --------------
 (0 rows)
@@ -50,9 +49,7 @@ DROP TYPE
 
 ### Remove a data type with dependent objects
 
-{{< warning >}}
 By default, `DROP TYPE` will not remove a type with dependent objects. The `CASCADE` switch will remove both the specified type and *all its dependent objects*.
-{{< /warning >}}
 
 In the example below, the `CASCADE` switch removes `int4_list`, `int4_list_list` (which depends on `int4_list`), and the table *t* which has a column of data type `int4_list`.
 
@@ -66,9 +63,6 @@ CREATE TABLE t (a int4_list);
 SHOW TYPES;
 ```
 ```
-CREATE TYPE
-CREATE TYPE
-CREATE TABLE
       name
 ----------------
  int4_list
@@ -78,16 +72,18 @@ CREATE TABLE
 
 ```sql
 DROP TYPE int4_list CASCADE;
+
 SHOW TYPES;
+
 SELECT * FROM t;
 ```
 ```
-DROP TYPE
  name
 ------
 (0 rows)
 ERROR:  unknown catalog item 't'
 ```
+
 ## Related pages
 
 * [`CREATE TYPE`](../create-type)

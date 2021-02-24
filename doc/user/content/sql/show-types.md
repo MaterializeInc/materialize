@@ -6,7 +6,7 @@ menu:
     parent: 'sql'
 ---
 
-`SHOW TYPES` returns a list of the data types in your Materialize instance. By default, only user-created types are returned.
+`SHOW TYPES` returns a list of the data types in your Materialize instance. By default, only custom types are returned.
 
 ## Syntax
 
@@ -22,20 +22,22 @@ Field | Use
 ### Show custom data types
 
 ```sql
+CREATE TYPE int4_list AS LIST (element_type = int4);
+
 SHOW TYPES;
 ```
 ```
       name
 ----------------
   int4_list
-  int4_list_list
-  int4_map
-(3 rows)
+(1 rows)
 ```
 
 ### Show all data types
 
 ```sql
+CREATE TYPE int4_list AS LIST (element_type = int4);
+
 SHOW EXTENDED FULL TYPES;
 ```
 ```
@@ -47,8 +49,6 @@ SHOW EXTENDED FULL TYPES;
  _float4        | system
  _float8        | system
  int4_list      | user
- int4_list_list | user
- int4_map       | user
 ...
 ```
 
