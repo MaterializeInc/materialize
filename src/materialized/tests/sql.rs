@@ -49,7 +49,7 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:{}'",
             listener_port,
         ));
-        println!("test_no_block: in thread; create source done");
+        eprintln!("test_no_block: in thread; create source done");
         result
     });
 
