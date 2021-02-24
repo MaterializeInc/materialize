@@ -228,7 +228,7 @@ impl Trace {
 
         let batches: Vec<Batch> = batches
             .into_iter()
-            .map(|path| Batch::reinit(path))
+            .map(Batch::reinit)
             .collect::<Result<_, _>>()
             .unwrap();
         Ok(batches)
