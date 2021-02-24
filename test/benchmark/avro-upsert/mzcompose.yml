@@ -26,6 +26,7 @@ services:
     mzbuild: avro-upsert-create-views
   perf-dash-scraper:
     mzbuild: perf-dash-scraper
+    command: scrape
   materialized:
     mzbuild: materialized
     ports:
@@ -125,6 +126,14 @@ mzworkflows:
     - step: wait-for-tcp
       host: schema-registry
       port: 8081
+    - step: run
+      service: perf-dash-scraper
+      command: >-
+        create-topics
+    - step: run
+      service: metric-verifier
+      command: >-
+        create-topics
 
   benchmark:
     steps:
@@ -156,6 +165,7 @@ mzworkflows:
       service: metric-verifier
       daemon: true
       command: >-
+        scrape
         --timeout-seconds=3600
         "sum(mz_messages_ingested)"
         "400000000"
@@ -197,6 +207,7 @@ mzworkflows:
       service: metric-verifier
       daemon: true
       command: >-
+        scrape
         --timeout-seconds=900
         "sum(mz_messages_ingested)"
         "20000000"
@@ -236,6 +247,7 @@ mzworkflows:
       service: metric-verifier
       daemon: true
       command: >-
+        scrape
         --timeout-seconds=900
         "sum(mz_messages_ingested)"
         "400000000"
@@ -279,6 +291,7 @@ mzworkflows:
       service: metric-verifier
       daemon: true
       command: >-
+        scrape
         --timeout-seconds=30
         "sum(mz_messages_ingested)"
         "100000"

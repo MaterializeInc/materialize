@@ -25,3 +25,4 @@ COPY metrics /usr/share/perf-scraper/metrics
 
 COPY scrape_system_metrics /usr/local/bin
 ENTRYPOINT ["scrape_system_metrics"]
+CMD ["scrape"]

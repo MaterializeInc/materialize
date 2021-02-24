@@ -1,4 +1,5 @@
 [ ] - Generate Kafka topics at benchmark setup for benchmark metrics and system metrics
+    - Move wait_metric script into `scraper` directory under perf-dash
 [ ] - Start perf-dash in `setup-benchmark`
 [ ] - Prettify the dashboard views some?
 [ ] - Track ingest performance by time

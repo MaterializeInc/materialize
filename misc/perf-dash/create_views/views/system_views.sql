@@ -31,12 +31,6 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS time_per_operator_per_worker AS
 CREATE MATERIALIZED VIEW IF NOT EXISTS time_per_operator AS
     SELECT * FROM time_per_operator_v0;
 
-CREATE SOURCE time_per_worker_v0
-FROM KAFKA BROKER 'localhost:9093'
-TOPIC 'dev.mtrlz.time_per_worker.v0'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
-ENVELOPE NONE;
-
-CREATE MATERIALIZED IF NOT EXISTS VIEW time_per_worker AS
+CREATE MATERIALIZED VIEW IF NOT EXISTS VIEW time_per_worker AS
     SELECT mz_cluster_id, mz_scheduling_worker_id, mz_scheduling_elapsed_ns FROM time_per_worker_v0
     WHERE mz_logical_timestamp = (SELECT max(mz_logical_timestamp) FROM time_per_worker_v0);
