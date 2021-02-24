@@ -40,7 +40,7 @@ window into the state at the start of the window.
 ```
 
 Materialize will only perform this compaction on data that falls outside the
-logical compaction window. The default compaction window is 60 seconds behind
+logical compaction window. The default compaction window is 1 millisecond behind
 the current time, but the window can be adjusted via the
 [`--logical-compaction-window`](/cli/#compaction-window) option.
 
@@ -56,7 +56,7 @@ fully. This can result in higher-than-expected memory usage.
 
 This phenomenon is particularly evident when ingesting a source with a large
 amount of historical data (e.g, a several gigabyte Kafka topic that is no longer
-changing). With the default compaction window of 60 seconds, it is likely that
+changing). With a compaction window of 60 seconds, for example, it is likely that
 the source will be fully ingested within the compaction window. By the time the
 data is eligible for compaction, the source is fully ingested, no new updates
 are arriving, and therefore no compaction is ever triggered.

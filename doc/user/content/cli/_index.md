@@ -19,7 +19,7 @@ Flag | Default | Modifies
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
 [`--introspection-frequency`](#introspection-sources) | 1s | The frequency at which to update [introspection sources](#introspection-sources).
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
-[`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
+[`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements
 [`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
 [`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA) {{< version-added v0.7.1 />}}
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
@@ -115,11 +115,11 @@ lazily, so Materialize may retain more historical detail than requested, but it
 will never retain less.
 
 The value of the option is a duration string like `10ms` (10 milliseconds) or
-`1min 30s` (1 minute, 30 seconds).  The special value `off` indicates disables
-logical compaction.
+`1min 30s` (1 minute, 30 seconds).  The special value `off` disables logical
+compaction and corresponds to an unboundedly large duration.
 
 The logical compaction window ends at the current time and extends backwards in
-time for the configured duration. The default window is 60 seconds.
+time for the configured duration. The default window is 1 millisecond.
 
 See the [Deployment section](/ops/deployment#compaction) for guidance on tuning
 the compaction window.

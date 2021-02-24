@@ -82,6 +82,10 @@ $ kafka-create-topic topic=tx
   FORMAT AVRO USING SCHEMA '${nums-schema}'
   ENVELOPE DEBEZIUM
 
+# Disable logical compaction, to ensure we can view historical detail.
+> ALTER INDEX materialize.public.nums_primary_idx
+  SET (logical_compaction_window = 'off')
+
 # ==> Test consolidation.
 
 # Ingest several updates that consolidate. Some of these updates are in one
