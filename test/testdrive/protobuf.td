@@ -37,5 +37,5 @@ $ kafka-ingest format=protobuf topic=messages message=struct timestamp=1
 
 # TODO: these should be fully json
 > SELECT * FROM pm
-1 1 ONE  my-string
-2 2 ONE  something-valid
+1 1 ONE  my-string 1
+2 2 ONE  something-valid 2
