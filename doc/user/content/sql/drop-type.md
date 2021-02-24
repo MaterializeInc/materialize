@@ -17,10 +17,9 @@ menu:
 Field | Use
 ------|-----
 _data_type_name_ | The name of the type to remove.
-`CASCADE` | Automatically removes objects that depend on the type, such as tables or other types.
+`CASCADE` | Automatically removes any objects that depend on the type, such as tables or other types.
 `IF EXISTS`  |  Issue a notice, but not an error, if the type doesn't exist.
 `RESTRICT`  |  Refuse to remove the type if any objects depend on it. This is the default.
-
 
 ## Examples
 
