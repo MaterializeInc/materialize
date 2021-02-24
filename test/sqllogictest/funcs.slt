@@ -949,9 +949,9 @@ SELECT log10(10.0::double)
 1.000
 
 query R
-SELECT log(10.0)
+SELECT log(10.0::decimal(15, 5))
 ----
-1.000
+1.0000
 
 query error function log is not defined for zero
 SELECT log(10, 0.0)
@@ -973,6 +973,6 @@ SELECT log(400.0::double, 20)
 2.000
 
 query R
-SELECT log10(10::numeric)
+SELECT log10(10::decimal(15, 5))
 ----
 1.0000
