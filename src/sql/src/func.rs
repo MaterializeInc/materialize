@@ -1397,6 +1397,13 @@ lazy_static! {
                 params!(String, String) => BinaryFunc::DigestString, 44154;
                 params!(Bytes, String) => BinaryFunc::DigestBytes, 44155;
             },
+            "exp" => Scalar {
+                params!(Float64) => UnaryFunc::Exp, 1346;
+                params!(DecimalAny) => Operation::unary(|ecx, e| {
+                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
+                    Ok(e.call_unary(UnaryFunc::ExpDecimal(s)))
+                }), 1732;
+            },
             "floor" => Scalar {
                 params!(Float32) => UnaryFunc::FloorFloat32, oid::FUNC_FLOOR_F32_OID;
                 params!(Float64) => UnaryFunc::FloorFloat64, 2309;

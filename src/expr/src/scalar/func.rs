@@ -1283,6 +1283,21 @@ fn log<'a, 'b, F: Fn(f64) -> f64>(
     Ok(Datum::from(logic(f)))
 }
 
+fn exp<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    Ok(Datum::from(a.unwrap_float64().exp()))
+}
+
+fn exp_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
+    let significand = cast_significand_to_float64(a);
+    let scale = i32::from(scale);
+    let a = significand.unwrap_float64() / 10_f64.powi(scale);
+
+    Ok(cast_float64_to_decimal(
+        Datum::from(a.exp()),
+        Datum::from(scale),
+    )?)
+}
+
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -3035,6 +3050,8 @@ pub enum UnaryFunc {
     Log10Decimal(u8),
     Ln,
     LnDecimal(u8),
+    Exp,
+    ExpDecimal(u8),
 }
 
 impl UnaryFunc {
@@ -3207,6 +3224,8 @@ impl UnaryFunc {
             UnaryFunc::Log10Decimal(scale) => log_dec(a, f64::log10, "log10", *scale),
             UnaryFunc::Ln => log(a, f64::ln, "ln"),
             UnaryFunc::LnDecimal(scale) => log_dec(a, f64::ln, "ln", *scale),
+            UnaryFunc::Exp => exp(a),
+            UnaryFunc::ExpDecimal(scale) => exp_dec(a, *scale),
         }
     }
 
@@ -3363,8 +3382,8 @@ impl UnaryFunc {
             Tan => ScalarType::Float64.nullable(in_nullable),
             Tanh => ScalarType::Float64.nullable(in_nullable),
             Cot => ScalarType::Float64.nullable(in_nullable),
-            Log10 | Ln => ScalarType::Float64.nullable(in_nullable),
-            Log10Decimal(_) | LnDecimal(_) => input_type,
+            Log10 | Ln | Exp => ScalarType::Float64.nullable(in_nullable),
+            Log10Decimal(_) | LnDecimal(_) | ExpDecimal(_) => input_type,
         }
     }
 
@@ -3542,6 +3561,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::Log10Decimal(_) => f.write_str("log10dec"),
             UnaryFunc::Ln => f.write_str("lnf64"),
             UnaryFunc::LnDecimal(_) => f.write_str("lndec"),
+            UnaryFunc::ExpDecimal(_) => f.write_str("expdec"),
+            UnaryFunc::Exp => f.write_str("expf64"),
         }
     }
 }
