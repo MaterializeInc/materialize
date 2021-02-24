@@ -73,6 +73,10 @@ Wrap your release notes at the 80 character mark.
 
 - Multipartition Kafka sinks with consistency enabled will create single-partition
   consistency topics.
+
+- Kafka sinks are now written via an idempotent producer to avoid duplicate or out
+  of order messages.
+
 - **Breaking change.** Change the behavior of the
   [`round` function](/sql/functions/#numbers-func) when applied to a `real` or
   `double precision` argument to round ties to the nearest even number,
