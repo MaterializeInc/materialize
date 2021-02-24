@@ -1244,6 +1244,17 @@ fn cot<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
     Ok(Datum::from(1.0 / f.tan()))
 }
 
+fn log_base<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let base = b.unwrap_float64();
+    if base.is_sign_negative() {
+        return Err(EvalError::NegativeOutOfDomain("log".to_owned()));
+    }
+    if base == 0.0 {
+        return Err(EvalError::ZeroOutOfDomain("log".to_owned()));
+    }
+    log(a, |f| f.log(base), "log")
+}
+
 fn log<'a, 'b, F: Fn(f64) -> f64>(
     a: Datum<'a>,
     logic: F,
@@ -2220,6 +2231,7 @@ pub enum BinaryFunc {
     MzRenderTypemod,
     Encode,
     Decode,
+    Log,
 }
 
 impl BinaryFunc {
@@ -2369,6 +2381,7 @@ impl BinaryFunc {
             BinaryFunc::DigestString => eager!(digest_string, temp_storage),
             BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
             BinaryFunc::MzRenderTypemod => Ok(eager!(mz_render_typemod, temp_storage)),
+            BinaryFunc::Log => eager!(log_base),
         }
     }
 
@@ -2538,6 +2551,7 @@ impl BinaryFunc {
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
             Encode => ScalarType::String.nullable(in_nullable),
             Decode => ScalarType::Bytes.nullable(in_nullable),
+            Log => ScalarType::Float64.nullable(in_nullable),
         }
     }
 
@@ -2718,7 +2732,8 @@ impl BinaryFunc {
             | DigestBytes
             | MzRenderTypemod
             | Encode
-            | Decode => false,
+            | Decode
+            | Log => false,
         }
     }
 }
@@ -2834,6 +2849,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MzRenderTypemod => f.write_str("mz_render_typemod"),
             BinaryFunc::Encode => f.write_str("encode"),
             BinaryFunc::Decode => f.write_str("decode"),
+            BinaryFunc::Log => f.write_str("log"),
         }
     }
 }
