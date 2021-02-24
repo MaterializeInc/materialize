@@ -1457,6 +1457,13 @@ lazy_static! {
                 params!(String) => UnaryFunc::CharLength, 1317;
                 params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength, 1713;
             },
+            "ln" => Scalar {
+                params!(Float64) => UnaryFunc::Ln, 1341;
+                params!(DecimalAny) => Operation::unary(|ecx, e| {
+                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
+                    Ok(e.call_unary(UnaryFunc::LnDecimal(s)))
+                }), 1734;
+            },
             "log10" => Scalar {
                 params!(Float64) => UnaryFunc::Log10, 1194;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
