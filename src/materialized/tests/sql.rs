@@ -31,18 +31,18 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     // Create a listener that will simulate a slow Confluent Schema Registry.
-    println!("test_no_block: creating listener");
+    eprintln!("test_no_block: creating listener");
     let listener = TcpListener::bind("localhost:0")?;
     let listener_port = listener.local_addr()?.port();
 
-    println!("test_no_block: starting server");
+    eprintln!("test_no_block: starting server");
     let server = util::start_server(util::Config::default())?;
-    println!("test_no_block: connecting to server");
+    eprintln!("test_no_block: connecting to server");
     let mut client = server.connect(postgres::NoTls)?;
 
-    println!("test_no_block: spawning thread");
+    eprintln!("test_no_block: spawning thread");
     let slow_thread = thread::spawn(move || {
-        println!("test_no_block: in thread; executing create source");
+        eprintln!("test_no_block: in thread; executing create source");
         let result = client.batch_execute(&format!(
             "CREATE SOURCE foo \
              FROM KAFKA BROKER 'localhost:9092' TOPIC 'foo' \
@@ -56,33 +56,33 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
     // Wait for materialized to contact the schema registry, which indicates
     // the coordinator is processing the CREATE SOURCE command. It will be
     // unable to complete the query until we respond.
-    println!("test_no_block: accepting fake schema registry connection");
+    eprintln!("test_no_block: accepting fake schema registry connection");
     let (mut stream, _) = listener.accept()?;
 
     // Verify that the coordinator can still process other requests from other
     // sessions.
-    println!("test_no_block: connecting to server again");
+    eprintln!("test_no_block: connecting to server again");
     let mut client = server.connect(postgres::NoTls)?;
-    println!("test_no_block: executing query");
+    eprintln!("test_no_block: executing query");
     let answer: i32 = client.query_one("SELECT 1 + 1", &[])?.get(0);
     assert_eq!(answer, 2);
 
     // Return an error to the coordinator, so that we can shutdown cleanly.
-    println!("test_no_block: writing fake schema registry error");
+    eprintln!("test_no_block: writing fake schema registry error");
     write!(stream, "HTTP/1.1 503 Service Unavailable\r\n\r\n")?;
-    println!("test_no_block: dropping fake schema registry connection");
+    eprintln!("test_no_block: dropping fake schema registry connection");
     drop(stream);
 
     // Verify that the schema registry error was returned to the client, for
     // good measure.
-    println!("test_no_block: joining thread");
+    eprintln!("test_no_block: joining thread");
     let slow_res = slow_thread.join().unwrap();
     assert!(slow_res
         .unwrap_err()
         .to_string()
         .contains("server error 503"));
 
-    println!("test_no_block: returning");
+    eprintln!("test_no_block: returning");
     Ok(())
 }
 
