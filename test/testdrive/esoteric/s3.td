@@ -204,7 +204,7 @@ d
 # S3 has a very loose idea of how fast items should show up:
 # > Typically, event notifications are delivered in seconds but can sometimes take a minute or longer.
 # https://docs.aws.amazon.com/AmazonS3/latest/userguide/NotificationHowTo.html
-$ set-sql-timeout duration=32seconds
+$ set-sql-timeout duration=2minutes
 
 > SELECT text FROM s3_scan_notifications ORDER BY text;
 a1
