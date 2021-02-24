@@ -147,10 +147,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => Format::Avro {
             schema: cmd.args.string("schema")?,
-            confluent_wire_format: cmd
-                .args
-                .bool_("confluent-wire-format")
-                .unwrap_or(Ok(true))?,
+            confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
         },
         "protobuf" => Format::Protobuf {
             message: cmd.args.parse("message")?,
@@ -161,10 +158,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let key_format = match cmd.args.opt_string("key-format").as_deref() {
         Some("avro") => Some(Format::Avro {
             schema: cmd.args.string("key-schema")?,
-            confluent_wire_format: cmd
-                .args
-                .bool_("confluent-wire-format")
-                .unwrap_or(Ok(true))?,
+            confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
         }),
         Some("protobuf") => Some(Format::Protobuf {
             message: cmd.args.parse("key-message")?,
@@ -180,7 +174,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
         None => None,
     };
     let timestamp = cmd.args.opt_parse("timestamp")?;
-    let publish = cmd.args.opt_bool("publish")?;
+    let publish = cmd.args.opt_bool("publish")?.unwrap_or(false);
     cmd.args.done()?;
 
     Ok(IngestAction {
