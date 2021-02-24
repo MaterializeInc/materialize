@@ -112,6 +112,21 @@ impl Batch {
             path: batch_path,
         })
     }
+
+    fn reinit(path: PathBuf) -> Result<Self, anyhow::Error> {
+        let batch_name = path
+            .file_name()
+            .expect("batch name known to exist")
+            .to_str()
+            .expect("batch name known to be valid utf8");
+        let parts: Vec<_> = batch_name.split('-').collect();
+        assert!(parts.len() == 3);
+        Ok(Self {
+            upper: parts[2].parse()?,
+            lower: parts[1].parse()?,
+            path,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -155,29 +170,66 @@ impl Trace {
 
     // Try to consume more completed log segments from the wal directory
     fn consume_wal(&mut self) -> Result<(), anyhow::Error> {
-        let finished_segments = self.get_finished_wal_segments()?;
+        let finished_segments = self.find_finished_wal_segments()?;
 
         for segment in finished_segments {
             let batch = Batch::create(&segment, &self.trace_path)?;
             self.batches.push(batch);
         }
 
-        if self.batches.len() > 10 {
-            self.compact()?;
-        }
-
         Ok(())
     }
 
-    fn get_finished_wal_segments(&self) -> Result<Vec<PathBuf>, anyhow::Error> {
+    fn find_finished_wal_segments(&self) -> Result<Vec<PathBuf>, anyhow::Error> {
         lazy_static! {
-            static ref WAL_SEGMENT_REGEX: Regex = Regex::new("^log-[0-9]+-final$").unwrap();
+            static ref FINISHED_WAL_SEGMENT_REGEX: Regex =
+                Regex::new("^log-[0-9]+-final$").unwrap();
         }
 
-        let mut segments = read_dir_regex(&self.wal_path, &WAL_SEGMENT_REGEX)?;
+        let mut segments = read_dir_regex(&self.wal_path, &FINISHED_WAL_SEGMENT_REGEX)?;
         segments.sort();
 
         Ok(segments)
+    }
+
+    fn find_unfinished_wal_segment(&self) -> Result<PathBuf, anyhow::Error> {
+        lazy_static! {
+            static ref UNFINISHED_WAL_SEGMENT_REGEX: Regex = Regex::new("^log-[0-9]+$").unwrap();
+        }
+
+        let mut segments = read_dir_regex(&self.wal_path, &UNFINISHED_WAL_SEGMENT_REGEX)?;
+        if segments.len() > 1 {
+            bail!(
+                "Expected only a single unfinished wal segment at {}. Found {}",
+                self.wal_path.display(),
+                segments.len()
+            );
+        }
+
+        if segments.len() == 0 {
+            bail!(
+                "Expected at least a single unfinished wal segment at {}. Found none.",
+                self.wal_path.display()
+            );
+        }
+
+        Ok(segments.pop().unwrap())
+    }
+
+    fn find_batches(&self) -> Result<Vec<Batch>, anyhow::Error> {
+        lazy_static! {
+            static ref BATCH_REGEX: Regex = Regex::new("^batch-[0-9]+-[0-9]+$").unwrap();
+        }
+
+        let mut batches = read_dir_regex(&self.trace_path, &BATCH_REGEX)?;
+        batches.sort();
+
+        let batches: Vec<Batch> = batches
+            .into_iter()
+            .map(|path| Batch::reinit(path))
+            .collect::<Result<_, _>>()
+            .unwrap();
+        Ok(batches)
     }
 
     // Try to compact all of the batches we know about into a single batch from
@@ -188,13 +240,25 @@ impl Trace {
     }
 
     pub fn resume(
-        _id: GlobalId,
-        _traces_path: PathBuf,
-        _wals_path: PathBuf,
+        id: GlobalId,
+        traces_path: PathBuf,
+        wals_path: PathBuf,
     ) -> Result<Self, anyhow::Error> {
         // Need to instantiate a new trace and figure out what batches
         // we have access to.
-        unimplemented!()
+        let trace_path = traces_path.join(id.to_string());
+        let wal_path = wals_path.join(id.to_string());
+        let mut ret = Self {
+            trace_path,
+            wal_path,
+            batches: Vec::new(),
+            compaction: None,
+        };
+
+        let batches = ret.find_batches()?;
+        ret.batches.extend(batches);
+
+        Ok(ret)
     }
 }
 
