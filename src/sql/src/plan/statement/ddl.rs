@@ -946,10 +946,10 @@ fn kafka_sink_builder(
         value_desc.clone(),
         include_consistency,
     );
-    let value_schema = encoder.value_writer_schema().canonical_form();
+    let value_schema = encoder.value_writer_schema().to_string();
     let key_schema = encoder
         .key_writer_schema()
-        .map(|key_schema| key_schema.canonical_form());
+        .map(|key_schema| key_schema.to_string());
 
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
