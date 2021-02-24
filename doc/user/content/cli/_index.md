@@ -115,8 +115,8 @@ lazily, so Materialize may retain more historical detail than requested, but it
 will never retain less.
 
 The value of the option is a duration string like `10ms` (10 milliseconds) or
-`1min 30s` (1 minute, 30 seconds).  The special value `off` indicates disables
-logical compaction and corresponds to an unboundedly large duration.
+`1min 30s` (1 minute, 30 seconds).  The special value `off` disables logical
+compaction and corresponds to an unboundedly large duration.
 
 The logical compaction window ends at the current time and extends backwards in
 time for the configured duration. The default window is 1 millisecond.
