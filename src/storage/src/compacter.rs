@@ -46,9 +46,7 @@ struct Batch {
 
 impl Batch {
     fn create(log_segment_path: &Path, trace_path: &Path) -> Result<Self, anyhow::Error> {
-        // First, lets re-read that finished segment
-        let data = fs::read(log_segment_path)?;
-        let messages: Vec<_> = LogSegmentIter::new(data).collect();
+        let messages = read_segment(log_segment_path)?;
 
         let mut upper: Option<Timestamp> = None;
         let mut lower: Option<Timestamp> = None;
@@ -126,6 +124,10 @@ impl Batch {
             lower: parts[1].parse()?,
             path,
         })
+    }
+
+    fn read(&self) -> Result<Vec<Message>, anyhow::Error> {
+        read_segment(&self.path)
     }
 }
 
@@ -255,10 +257,31 @@ impl Trace {
             compaction: None,
         };
 
-        let batches = ret.find_batches()?;
-        ret.batches.extend(batches);
+        let mut batches = ret.find_batches()?;
+        ret.batches.append(&mut batches);
 
         Ok(ret)
+    }
+
+    pub fn read(&self) -> Result<Vec<Message>, anyhow::Error> {
+        let mut out = vec![];
+
+        for batch in self.batches.iter() {
+            let mut messages = batch.read()?;
+            out.append(&mut messages);
+        }
+
+        let finished_segments = self.find_finished_wal_segments()?;
+        let unfinished_segment = self.find_unfinished_wal_segment()?;
+
+        for segment in finished_segments {
+            let mut messages = read_segment(&segment)?;
+            out.append(&mut messages);
+        }
+
+        out.append(&mut read_segment(&unfinished_segment)?);
+
+        Ok(out)
     }
 }
 
@@ -469,4 +492,9 @@ impl LogSegmentIter {
     pub fn new(data: Vec<u8>) -> Self {
         Self { data, offset: 0 }
     }
+}
+
+fn read_segment(path: &Path) -> Result<Vec<Message>, anyhow::Error> {
+    let data = fs::read(path)?;
+    Ok(LogSegmentIter::new(data).collect())
 }
