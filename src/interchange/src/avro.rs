@@ -2059,14 +2059,14 @@ impl DebeziumDecodeState {
 pub struct ConfluentAvroResolver {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
-    records_have_schema_id: bool,
+    confluent_wire_format: bool,
 }
 
 impl ConfluentAvroResolver {
     pub fn new(
         reader_schema: &str,
         config: Option<ccsr::ClientConfig>,
-        records_have_schema_id: bool,
+        confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
         let writer_schemas =
@@ -2074,7 +2074,7 @@ impl ConfluentAvroResolver {
         Ok(Self {
             reader_schema,
             writer_schemas,
-            records_have_schema_id,
+            confluent_wire_format,
         })
     }
 
@@ -2119,7 +2119,7 @@ impl ConfluentAvroResolver {
             // to discover the writer's schema. That's ok; we'll just use the
             // reader's schema and hope it lines up.
             None => {
-                if self.records_have_schema_id {
+                if self.confluent_wire_format {
                     // validate and just move the bytes buffer ahead
                     extract_schema_id()?;
                 }
@@ -2184,7 +2184,7 @@ impl Decoder {
         worker_index: usize,
         debezium_dedup: Option<DebeziumDeduplicationStrategy>,
         key_indices: Option<Vec<usize>>,
-        records_have_schema_id: bool,
+        confluent_wire_format: bool,
     ) -> anyhow::Result<Decoder> {
         assert!(
             (envelope == EnvelopeType::Debezium && debezium_dedup.is_some())
@@ -2193,7 +2193,7 @@ impl Decoder {
         let debezium_dedup =
             debezium_dedup.map(|strat| DebeziumDeduplicationState::new(strat, key_indices));
         let csr_avro =
-            ConfluentAvroResolver::new(reader_schema, schema_registry, records_have_schema_id)?;
+            ConfluentAvroResolver::new(reader_schema, schema_registry, confluent_wire_format)?;
 
         Ok(Decoder {
             csr_avro,

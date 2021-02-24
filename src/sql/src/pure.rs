@@ -196,7 +196,7 @@ pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
     pub schema_registry_config: Option<ccsr::ClientConfig>,
-    pub records_have_schema_id: bool,
+    pub confluent_wire_format: bool,
 }
 
 async fn get_remote_avro_schema(
@@ -221,6 +221,6 @@ async fn get_remote_avro_schema(
         key_schema: key_schema.map(|s| s.raw),
         value_schema: value_schema.raw,
         schema_registry_config: Some(schema_registry_config),
-        records_have_schema_id: true,
+        confluent_wire_format: true,
     })
 }

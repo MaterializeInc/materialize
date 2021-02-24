@@ -36,7 +36,7 @@ pub struct IngestAction {
 enum Format {
     Avro {
         schema: String,
-        registry_bytes: bool,
+        confluent_wire_format: bool,
     },
     Protobuf {
         message: protobuf::MessageType,
@@ -50,7 +50,7 @@ enum Transcoder {
     Avro {
         schema: Schema,
         schema_id: i32,
-        registry_bytes: bool,
+        confluent_wire_format: bool,
     },
     Protobuf {
         message: protobuf::MessageType,
@@ -83,17 +83,17 @@ impl Transcoder {
             Transcoder::Avro {
                 schema,
                 schema_id,
-                registry_bytes,
+                confluent_wire_format,
             } => {
                 if let Some(val) = Self::decode_json(row)? {
                     let val = avro::from_json(&val, schema.top_node())?;
                     let mut out = vec![];
-                    if *registry_bytes {
+                    if *confluent_wire_format {
                         // The first byte is a magic byte (0) that indicates the Confluent
                         // serialization format version, and the next four bytes are a
                         // 32-bit schema ID.
                         //
-                        // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+                        // https://docs.confluent.io/3.3.0/schema-registry/docs/serializer-formatter.html#wire-format
                         out.write_u8(0).unwrap();
                         out.write_i32::<NetworkEndian>(*schema_id).unwrap();
                     }
@@ -147,7 +147,10 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => Format::Avro {
             schema: cmd.args.string("schema")?,
-            registry_bytes: cmd.args.bool_("registry-bytes").unwrap_or(Ok(true))?,
+            confluent_wire_format: cmd
+                .args
+                .bool_("confluent-wire-format")
+                .unwrap_or(Ok(true))?,
         },
         "protobuf" => Format::Protobuf {
             message: cmd.args.parse("message")?,
@@ -158,7 +161,10 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let key_format = match cmd.args.opt_string("key-format").as_deref() {
         Some("avro") => Some(Format::Avro {
             schema: cmd.args.string("key-schema")?,
-            registry_bytes: cmd.args.bool_("registry-bytes").unwrap_or(Ok(true))?,
+            confluent_wire_format: cmd
+                .args
+                .bool_("confluent-wire-format")
+                .unwrap_or(Ok(true))?,
         }),
         Some("protobuf") => Some(Format::Protobuf {
             message: cmd.args.parse("key-message")?,
@@ -222,7 +228,7 @@ impl Action for IngestAction {
             match format {
                 Format::Avro {
                     schema,
-                    registry_bytes,
+                    confluent_wire_format,
                 } => {
                     let schema_id = if self.publish {
                         let ccsr_subject = format!("{}-{}", topic_name, typ);
@@ -239,7 +245,7 @@ impl Action for IngestAction {
                     Ok::<_, String>(Transcoder::Avro {
                         schema,
                         schema_id,
-                        registry_bytes,
+                        confluent_wire_format,
                     })
                 }
                 Format::Protobuf { message } => Ok(Transcoder::Protobuf { message }),

@@ -299,7 +299,7 @@ pub fn plan_create_source(
                     key_schema,
                     value_schema,
                     schema_registry_config,
-                    records_have_schema_id,
+                    confluent_wire_format,
                 } = match schema {
                     // TODO(jldlaughlin): we need a way to pass in primary key information
                     // when building a source from a string or file.
@@ -309,7 +309,7 @@ pub fn plan_create_source(
                     } => {
                         with_options! {
                             struct ConfluentMagic {
-                                records_have_schema_id: bool,
+                                confluent_wire_format: bool,
                             }
                         }
 
@@ -317,8 +317,8 @@ pub fn plan_create_source(
                             key_schema: None,
                             value_schema: schema.clone(),
                             schema_registry_config: None,
-                            records_have_schema_id: ConfluentMagic::try_from(with_options.clone())?
-                                .records_have_schema_id
+                            confluent_wire_format: ConfluentMagic::try_from(with_options.clone())?
+                                .confluent_wire_format
                                 .unwrap_or(true),
                         }
                     }
@@ -347,7 +347,7 @@ pub fn plan_create_source(
                                 key_schema: seed.key_schema.clone(),
                                 value_schema: seed.value_schema.clone(),
                                 schema_registry_config: Some(ccsr_config),
-                                records_have_schema_id: true,
+                                confluent_wire_format: true,
                             }
                         } else {
                             unreachable!("CSR seed resolution should already have been called")
@@ -359,7 +359,7 @@ pub fn plan_create_source(
                     key_schema,
                     value_schema,
                     schema_registry_config,
-                    records_have_schema_id,
+                    confluent_wire_format,
                 })
             }
             Format::Protobuf {
