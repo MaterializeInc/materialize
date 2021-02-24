@@ -1244,15 +1244,34 @@ fn cot<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
     Ok(Datum::from(1.0 / f.tan()))
 }
 
+fn log_guard(val: f64, function_name: &str) -> Result<f64, EvalError> {
+    if val.is_sign_negative() {
+        return Err(EvalError::NegativeOutOfDomain(function_name.to_owned()));
+    }
+    if val == 0.0 {
+        return Err(EvalError::ZeroOutOfDomain(function_name.to_owned()));
+    }
+    Ok(val)
+}
+
 fn log_base<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let base = b.unwrap_float64();
-    if base.is_sign_negative() {
-        return Err(EvalError::NegativeOutOfDomain("log".to_owned()));
-    }
-    if base == 0.0 {
-        return Err(EvalError::ZeroOutOfDomain("log".to_owned()));
-    }
+    let base = log_guard(b.unwrap_float64(), "log")?;
     log(a, |f| f.log(base), "log")
+}
+
+fn log_dec<'a, 'b, F: Fn(f64) -> f64>(
+    a: Datum<'a>,
+    logic: F,
+    name: &'b str,
+    scale: u8,
+) -> Result<Datum<'a>, EvalError> {
+    let significand = cast_significand_to_float64(a);
+    let scale = i32::from(scale);
+    let a = log_guard(significand.unwrap_float64() / 10_f64.powi(scale), name)?;
+    Ok(cast_float64_to_decimal(
+        Datum::from(logic(a)),
+        Datum::from(scale),
+    )?)
 }
 
 fn log<'a, 'b, F: Fn(f64) -> f64>(
@@ -1260,13 +1279,7 @@ fn log<'a, 'b, F: Fn(f64) -> f64>(
     logic: F,
     name: &'b str,
 ) -> Result<Datum<'a>, EvalError> {
-    let f = a.unwrap_float64();
-    if f.is_sign_negative() {
-        return Err(EvalError::NegativeOutOfDomain(name.to_owned()));
-    }
-    if f == 0.0 {
-        return Err(EvalError::ZeroOutOfDomain(name.to_owned()));
-    }
+    let f = log_guard(a.unwrap_float64(), name)?;
     Ok(Datum::from(logic(f)))
 }
 
@@ -3019,6 +3032,7 @@ pub enum UnaryFunc {
     Tanh,
     Cot,
     Log10,
+    Log10Decimal(u8),
 }
 
 impl UnaryFunc {
@@ -3188,6 +3202,7 @@ impl UnaryFunc {
             UnaryFunc::Tanh => Ok(tanh(a)),
             UnaryFunc::Cot => cot(a),
             UnaryFunc::Log10 => log(a, f64::log10, "log10"),
+            UnaryFunc::Log10Decimal(scale) => log_dec(a, f64::log10, "log10", *scale),
             // UnaryFunc::Ln => ln(a),
         }
     }
@@ -3346,6 +3361,7 @@ impl UnaryFunc {
             Tanh => ScalarType::Float64.nullable(in_nullable),
             Cot => ScalarType::Float64.nullable(in_nullable),
             Log10 => ScalarType::Float64.nullable(in_nullable),
+            Log10Decimal(_) => input_type,
         }
     }
 
@@ -3519,7 +3535,8 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::Tan => f.write_str("tan"),
             UnaryFunc::Tanh => f.write_str("tanh"),
             UnaryFunc::Cot => f.write_str("cot"),
-            UnaryFunc::Log10 => f.write_str("log10"),
+            UnaryFunc::Log10 => f.write_str("log10f64"),
+            UnaryFunc::Log10Decimal(_) => f.write_str("log10"),
         }
     }
 }
