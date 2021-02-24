@@ -2236,11 +2236,7 @@ impl Decoder {
             let dedup = self.debezium_dedup.as_mut().unwrap();
             let (row, coords) = dsr.deserialize(&mut bytes, dec)?;
             if self.reject_non_inserts {
-                let row_has_before = match row.iter().next() {
-                    None | Some(Datum::Null) => false,
-                    _ => true,
-                };
-                if row_has_before {
+                if !matches!(row.iter().next(), None | Some(Datum::Null)) {
                     panic!("[customer-data] Updates and deletes are not allowed for this source! This probably means it was started with `start_offset`. Got row: {:?}", row)
                 }
             }
