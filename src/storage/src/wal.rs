@@ -17,7 +17,7 @@ use byteorder::{NetworkEndian, WriteBytesExt};
 
 use dataflow_types::Update;
 use expr::GlobalId;
-use repr::Timestamp;
+use repr::{Row, Timestamp};
 
 // Limit at which we will make a new log segment
 // TODO: make this configurable and bump default to be larger.
@@ -88,14 +88,15 @@ impl WriteAheadLog {
         // space.
         let mut buf = Vec::new();
         for update in updates {
-            encode_update(update, &mut buf)?;
+            encode_update(&update.row, update.timestamp, update.diff, &mut buf)?;
         }
 
         self.write_inner(&buf)
     }
 
     fn write_progress_inner(&mut self, timestamp: Timestamp) -> Result<(), anyhow::Error> {
-        let buf = encode_progress(timestamp)?;
+        let mut buf = Vec::new();
+        encode_progress(timestamp, &mut buf)?;
         self.write_inner(&buf)
     }
 
@@ -302,20 +303,25 @@ impl WriteAheadLogs {
 
 // Write a 20 byte header + length-prefixed Row to a buffer
 // TODO: change the on-disk representation to be more compact.
-fn encode_update(update: &Update, buf: &mut Vec<u8>) -> Result<(), anyhow::Error> {
-    assert!(update.diff != 0);
-    assert!(update.timestamp > 0);
-    let data = update.row.data();
+pub fn encode_update(
+    row: &Row,
+    timestamp: Timestamp,
+    diff: isize,
+    buf: &mut Vec<u8>,
+) -> Result<(), anyhow::Error> {
+    assert!(diff != 0);
+    assert!(timestamp > 0);
+    let data = row.data();
 
     if data.len() >= u32::MAX as usize {
         bail!("failed to encode row: row too large");
     }
 
     // Write out the header
-    // Not a progress update so - 0
+    // Not a progress message so - 0
     buf.write_u32::<NetworkEndian>(0).unwrap();
-    buf.write_u64::<NetworkEndian>(update.timestamp).unwrap();
-    buf.write_i64::<NetworkEndian>(update.diff as i64).unwrap();
+    buf.write_u64::<NetworkEndian>(timestamp).unwrap();
+    buf.write_i64::<NetworkEndian>(diff as i64).unwrap();
 
     // Now write out the data
     buf.write_u32::<NetworkEndian>(data.len() as u32)
@@ -324,13 +330,12 @@ fn encode_update(update: &Update, buf: &mut Vec<u8>) -> Result<(), anyhow::Error
     Ok(())
 }
 
-fn encode_progress(timestamp: Timestamp) -> Result<Vec<u8>, anyhow::Error> {
-    let mut buf: Vec<u8> = Vec::with_capacity(12);
+pub fn encode_progress(timestamp: Timestamp, buf: &mut Vec<u8>) -> Result<(), anyhow::Error> {
     // This is a progress update so - 1
     buf.write_u32::<NetworkEndian>(1).unwrap();
     buf.write_u64::<NetworkEndian>(timestamp).unwrap();
 
-    Ok(buf)
+    Ok(())
 }
 
 fn create_log_segment(path: &Path) -> Result<File, anyhow::Error> {

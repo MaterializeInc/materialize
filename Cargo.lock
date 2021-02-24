@@ -3920,7 +3920,9 @@ dependencies = [
  "crossbeam-channel",
  "dataflow-types",
  "expr",
+ "lazy_static",
  "log",
+ "regex",
  "repr",
  "tokio",
 ]
