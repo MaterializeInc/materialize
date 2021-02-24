@@ -13,6 +13,7 @@ use dataflow_types::LinearOperator;
 
 use log::error;
 
+use differential_dataflow::{AsCollection, Collection};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
@@ -26,7 +27,10 @@ pub fn csv<G>(
     n_cols: usize,
     delimiter: u8,
     operators: &mut Option<LinearOperator>,
-) -> Stream<G, (Row, Timestamp, Diff)>
+) -> (
+    Collection<G, Row, Diff>,
+    Option<Collection<G, dataflow_types::DataflowError, Diff>>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -43,6 +47,7 @@ where
         })
         .collect::<Vec<_>>();
 
+    let stream =
     stream.unary(
         SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
         "CsvDecode",
@@ -161,5 +166,7 @@ where
                 }
             }
         },
-    )
+    );
+
+    (stream.as_collection(), None)
 }
