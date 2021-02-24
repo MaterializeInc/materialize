@@ -68,7 +68,7 @@ use sql::plan::{
     AlterIndexLogicalCompactionWindow, CopyFormat, LogicalCompactionWindow, MutationKind, Params,
     PeekWhen, Plan, PlanContext,
 };
-use storage::WriteAheadLogs;
+use storage::{Compacter, CompacterMessage, Trace as PersistedTrace, WriteAheadLogs};
 use transform::Optimizer;
 
 use self::arrangement_state::{ArrangementFrontiers, Frontiers};
@@ -172,6 +172,7 @@ pub struct Coordinator {
     // Channel to communicate source status updates and shutdown notifications to the cacher
     // thread.
     cache_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
+    compacter_tx: mpsc::UnboundedSender<CompacterMessage>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -1865,6 +1866,9 @@ impl Coordinator {
                 // We should maybe create the file before commit
                 // the catalog
                 self.table_wals.create(table_id)?;
+                self.compacter_tx
+                    .send(CompacterMessage::Add(table_id))
+                    .expect("compacter receiver should not drop first");
                 self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
                     .await?;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
@@ -2201,6 +2205,9 @@ impl Coordinator {
             ObjectType::Table => {
                 for id in items.iter() {
                     self.table_wals.destroy(*id)?;
+                    self.compacter_tx
+                        .send(CompacterMessage::Drop(*id))
+                        .expect("compacter receiver should not drop first");
                 }
 
                 ExecuteResponse::DroppedTable
@@ -3381,6 +3388,12 @@ pub async fn serve(
         None
     };
 
+    let (compacter_tx, compacter_rx) = mpsc::unbounded_channel();
+    let wals_path = data_directory.join("table_wals");
+    let traces_path = data_directory.join("table_traces");
+    let mut compacter = Compacter::new(compacter_rx, traces_path, wals_path.clone());
+    tokio::spawn(async move { compacter.run().await });
+
     let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
         Some(symbiosis::Postgres::open_and_erase(symbiosis_url).await?)
     } else {
@@ -3417,6 +3430,7 @@ pub async fn serve(
             .and_then(|c| c.granularity.as_millis().try_into().ok()),
         timestamp_config,
         logical_compaction_window_ms: logical_compaction_window.map(duration_to_timestamp_millis),
+        compacter_tx,
         cache_tx,
         closed_up_to: 1,
         read_lower_bound: 1,
@@ -3424,7 +3438,7 @@ pub async fn serve(
         need_advance: true,
         transient_id_counter: 1,
         cancel: HashMap::new(),
-        table_wals: WriteAheadLogs::new(data_directory.join("table_wals"))?,
+        table_wals: WriteAheadLogs::new(wals_path)?,
     };
     coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
     if let Some(config) = &logging {

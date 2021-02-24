@@ -7,16 +7,16 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::{self, File};
-use std::io::{Cursor, Write};
+use std::collections::{BTreeMap, HashMap};
+use std::fs::{self};
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context};
-use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
+use byteorder::{NetworkEndian, ReadBytesExt};
 use lazy_static::lazy_static;
-use log::{error, info, trace};
+use log::error;
 use regex::Regex;
 use tokio::select;
 use tokio::sync::mpsc;
@@ -29,6 +29,7 @@ use crate::wal::{encode_progress, encode_update};
 
 static COMPACTER_INTERVAL: Duration = Duration::from_secs(600);
 
+#[derive(Debug)]
 pub enum CompacterMessage {
     Add(GlobalId),
     Drop(GlobalId),
@@ -36,6 +37,7 @@ pub enum CompacterMessage {
     AllowCompaction(Timestamp),
 }
 
+#[derive(Debug)]
 struct Batch {
     upper: Timestamp,
     lower: Timestamp,
@@ -92,10 +94,10 @@ impl Batch {
                 continue;
             }
 
-            encode_update(row, *timestamp, diff, &mut buf);
+            encode_update(row, *timestamp, diff, &mut buf)?;
         }
 
-        encode_progress(upper, &mut buf);
+        encode_progress(upper, &mut buf)?;
 
         let batch_name = format!("batch-{}-{}", lower, upper);
         let batch_path = trace_path.join(&batch_name);
@@ -112,8 +114,8 @@ impl Batch {
     }
 }
 
+#[derive(Debug)]
 pub struct Trace {
-    id: GlobalId,
     trace_path: PathBuf,
     wal_path: PathBuf,
     batches: Vec<Batch>,
@@ -136,7 +138,6 @@ impl Trace {
         })?;
 
         Ok(Self {
-            id,
             trace_path,
             wal_path,
             batches: Vec::new(),
@@ -144,22 +145,19 @@ impl Trace {
         })
     }
 
-    // Let's delete the trace directory
+    // Let's delete the trace directory and the WAL directory.
     fn destroy(self) -> Result<(), anyhow::Error> {
         fs::remove_dir_all(self.trace_path)?;
+        fs::remove_dir_all(self.wal_path)?;
 
         Ok(())
     }
 
     // Try to consume more completed log segments from the wal directory
-    // return false if the wal directory no longer exists, or if any
-    // files stop existing while we are trying to consume them.
-    fn consume_wal(&mut self) -> Result<bool, anyhow::Error> {
-        // TODO: handle ENOENT
+    fn consume_wal(&mut self) -> Result<(), anyhow::Error> {
         let finished_segments = self.get_finished_wal_segments()?;
 
         for segment in finished_segments {
-            // TODO: handle ENOENT
             let batch = Batch::create(&segment, &self.trace_path)?;
             self.batches.push(batch);
         }
@@ -168,7 +166,7 @@ impl Trace {
             self.compact()?;
         }
 
-        Ok(true)
+        Ok(())
     }
 
     fn get_finished_wal_segments(&self) -> Result<Vec<PathBuf>, anyhow::Error> {
@@ -185,13 +183,14 @@ impl Trace {
     // Try to compact all of the batches we know about into a single batch from
     // [compaction_frontier, upper)
     fn compact(&mut self) -> Result<(), anyhow::Error> {
-        unimplemented!()
+        self.consume_wal()?;
+        Ok(())
     }
 
     pub fn resume(
-        id: GlobalId,
-        traces_path: PathBuf,
-        wals_path: PathBuf,
+        _id: GlobalId,
+        _traces_path: PathBuf,
+        _wals_path: PathBuf,
     ) -> Result<Self, anyhow::Error> {
         // Need to instantiate a new trace and figure out what batches
         // we have access to.
@@ -202,21 +201,21 @@ impl Trace {
 pub struct Compacter {
     rx: mpsc::UnboundedReceiver<CompacterMessage>,
     traces: HashMap<GlobalId, Trace>,
-    wals_path: PathBuf,
     traces_path: PathBuf,
+    wals_path: PathBuf,
 }
 
 impl Compacter {
     pub fn new(
         rx: mpsc::UnboundedReceiver<CompacterMessage>,
-        wals_path: PathBuf,
         traces_path: PathBuf,
+        wals_path: PathBuf,
     ) -> Self {
         Self {
             rx,
             traces: HashMap::new(),
-            wals_path,
             traces_path,
+            wals_path,
         }
     }
 
@@ -232,13 +231,12 @@ impl Compacter {
                     }
                 }
                 _ = interval.tick() => {
-                    for (_, s) in self.traces.iter_mut() {
+                    for (_, trace) in self.traces.iter_mut() {
                         // Check to see if the WAL still exists
                         // if so, check to see if there are any pending log segments to ingest
                         // finally, check to see if we can compact the data.
-                        unimplemented!()
+                        trace.compact()?;
                     }
-
                 }
             }
         }
@@ -248,11 +246,41 @@ impl Compacter {
 
     fn handle_message(&mut self, message: CompacterMessage) -> Result<(), anyhow::Error> {
         match message {
-            CompacterMessage::Add(_) => unimplemented!(),
-            CompacterMessage::Drop(_) => unimplemented!(),
+            CompacterMessage::Add(id) => {
+                if self.traces.contains_key(&id) {
+                    bail!(
+                        "asked to create trace for relation {} which already exists.",
+                        id
+                    );
+                }
+                let trace_path = self.traces_path.join(id.to_string());
+                let wal_path = self.wals_path.join(id.to_string());
+
+                let trace = Trace::create(id, trace_path, wal_path)?;
+                self.traces.insert(id, trace);
+            }
+            CompacterMessage::Drop(id) => {
+                if !self.traces.contains_key(&id) {
+                    bail!(
+                        "asked to drop trace for relation {} which doesn't exist.",
+                        id
+                    );
+                }
+
+                let trace = self.traces.remove(&id).expect("trace known to exist");
+                trace.destroy()?;
+            }
             CompacterMessage::Resume(_, _) => unimplemented!(),
-            CompacterMessage::AllowCompaction(_) => unimplemented!(),
-        }
+            CompacterMessage::AllowCompaction(frontier) => {
+                for (_, trace) in self.traces.iter_mut() {
+                    if let Some(compaction_frontier) = trace.compaction {
+                        assert!(frontier >= compaction_frontier);
+                    }
+
+                    trace.compaction = Some(frontier);
+                }
+            }
+        };
         Ok(())
     }
 

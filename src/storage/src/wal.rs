@@ -115,12 +115,6 @@ impl WriteAheadLog {
         Ok(())
     }
 
-    fn destroy(self) -> Result<(), anyhow::Error> {
-        fs::remove_dir_all(self.base_path)?;
-
-        Ok(())
-    }
-
     /// Switch to writing a new log segment file.
     ///
     /// Mark the previous one as finished by prepending `-final` to its name.
@@ -259,9 +253,7 @@ impl WriteAheadLogs {
             )
         }
 
-        let wal = self.wals.remove(&id).expect("wal known to exist");
-        wal.destroy()?;
-
+        self.wals.remove(&id);
         Ok(())
     }
 
