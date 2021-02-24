@@ -48,6 +48,10 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.7.1 %}}
 
+- **Breaking change.** Change the default
+  [`--logical-compaction-window`](/cli/#compaction-window) from 60 seconds to
+  1 millisecond.
+
 - **Breaking change.** Remove `CREATE SINK ... AS OF`, which did not have
   sensible behavior after Materialize restarted. The intent is to reintroduce
   this feature with a more formal model of `AS OF` timestamps. {{% gh 3467 %}}
