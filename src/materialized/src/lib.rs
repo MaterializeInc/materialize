@@ -20,13 +20,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use async_stream::try_stream;
 use compile_time_run::run_command_str;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
+use tokio_stream::wrappers::TcpListenerStream;
 
 use build_info::BuildInfo;
 use coord::{CacheConfig, LoggingConfig};
@@ -238,12 +238,7 @@ pub async fn serve(
     tokio::spawn(async move {
         // TODO(benesch): replace with `listener.incoming()` if that is
         // restored when the `Stream` trait stabilizes.
-        let mut incoming = Box::pin(try_stream! {
-            loop {
-                let (conn, _addr) = listener.accept().await?;
-                yield conn;
-            }
-        });
+        let mut incoming = TcpListenerStream::new(listener);
 
         let mut mux = Mux::new();
         mux.add_handler(pgwire::Server::new(pgwire::Config {
