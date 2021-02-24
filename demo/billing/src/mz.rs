@@ -313,7 +313,7 @@ SELECT
 FROM
     {src}, billing_monthly_statement
 WHERE
-    to_timestamp(reingested_sink.month / 1000000) = billing_monthly_statement.month AND
+    {src}.month = billing_monthly_statement.month AND
     {src}.client_id = billing_monthly_statement.client_id AND
     {src}.cpu_num = billing_monthly_statement.cpu_num AND
     {src}.memory_gb = billing_monthly_statement.memory_gb",

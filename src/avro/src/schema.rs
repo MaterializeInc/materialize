@@ -319,6 +319,13 @@ pub struct Schema {
     pub top: SchemaPieceOrNamed,
 }
 
+impl ToString for Schema {
+    fn to_string(&self) -> String {
+        let json = serde_json::to_value(self).unwrap();
+        json.to_string()
+    }
+}
+
 impl std::fmt::Debug for Schema {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if f.alternate() {
