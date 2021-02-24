@@ -1460,6 +1460,10 @@ lazy_static! {
             "log10" => Scalar {
                 params!(Float64) => UnaryFunc::Log10, 1194;
             },
+            "log" => Scalar {
+                params!(Float64) => UnaryFunc::Log10, 1340;
+                params!(Float64, Float64) => BinaryFunc::Log, 1736;
+            },
             "lower" => Scalar {
                 params!(String) => UnaryFunc::Lower, 870;
             },

@@ -947,3 +947,13 @@ query R
 SELECT log10(10.0::double)
 ----
 1.000
+
+query R
+SELECT log(10.0::double, 10)
+----
+1.000
+
+query R
+SELECT log(400.0::double, 20)
+----
+2.000
