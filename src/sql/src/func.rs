@@ -1466,6 +1466,10 @@ lazy_static! {
             },
             "log" => Scalar {
                 params!(Float64) => UnaryFunc::Log10, 1340;
+                params!(DecimalAny) => Operation::unary(|ecx, e| {
+                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
+                    Ok(e.call_unary(UnaryFunc::Log10Decimal(s)))
+                }), 1340;
                 params!(Float64, Float64) => BinaryFunc::Log, 1736;
             },
             "lower" => Scalar {
