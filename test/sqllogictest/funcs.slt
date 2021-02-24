@@ -986,3 +986,19 @@ query R
 SELECT ln(13.0000::decimal(15, 5))
 ----
 2.565
+
+query R
+SELECT exp(2)
+----
+7.389
+
+query R
+SELECT exp(ln(2))
+----
+2.000
+
+# TODO: This is suuuuuper wrong.
+query R
+SELECT exp(ln(2::decimal(15, 5)))
+----
+2.000

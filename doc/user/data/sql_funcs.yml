@@ -107,6 +107,9 @@
   - signature: 'ceil(x: N) -> N'
     description: The largest integer >= `x`
 
+  - signature: 'exp(x: N) -> N'
+    description: Exponential of `x` (e raised to the given power)
+
   - signature: 'floor(x: N) -> N'
     description: The largest integer <= `x`
 
