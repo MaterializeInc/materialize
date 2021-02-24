@@ -949,6 +949,20 @@ SELECT log10(10.0::double)
 1.000
 
 query R
+SELECT log(10.0)
+----
+1.000
+
+query error function log is not defined for zero
+SELECT log(10, 0.0)
+
+query error function log is not defined for zero
+SELECT log(10, +0.0)
+
+query error function log is not defined for negative numbers
+SELECT log(10.0, -10)
+
+query R
 SELECT log(10.0::double, 10)
 ----
 1.000
