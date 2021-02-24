@@ -13,7 +13,7 @@ use std::rc::Rc;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{collection, AsCollection, Collection};
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
@@ -83,11 +83,9 @@ where
                     dataflow_id: self.dataflow_id,
                 };
 
-                // TODO(benesch): we force all sources to have an empty
-                // error stream. Likely we will want to plumb this
-                // collection into the source connector so that sources
-                // can produce errors.
-                let mut err_collection = Collection::empty(scope);
+                // All sources should push their various error streams into this vector,
+                // whose contents will be concatenated and inserted along the collection.
+                let mut error_collections = Vec::<Collection<_, _>>::new();
 
                 let fast_forwarded = match &connector {
                     ExternalSourceConnector::Kafka(KafkaSourceConnector {
@@ -130,18 +128,25 @@ where
                     caching_tx,
                 };
 
-                let (stream, capability) = if let ExternalSourceConnector::AvroOcf(_) = connector {
+                // AvroOcf is a special case as its delimiters are discovered in the couse of decoding.
+                // This means that unlike the other sources, there is not a decode step that follows.
+                let (mut collection, capability) = if let ExternalSourceConnector::AvroOcf(_) =
+                    connector
+                {
                     let ((source, err_source), capability) =
                         source::create_source::<_, FileSourceInfo<Value>, Value>(
                             source_config,
                             connector,
                         );
-                    err_collection = err_collection.concat(
-                        &err_source
+
+                    // Include any source errors.
+                    error_collections.push(
+                        err_source
                             .map(DataflowError::SourceError)
                             .pass_through("AvroOCF-errors")
                             .as_collection(),
                     );
+
                     let reader_schema = match &encoding {
                         DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => reader_schema,
                         _ => unreachable!(
@@ -153,10 +158,13 @@ where
                     };
 
                     let reader_schema: Schema = reader_schema.parse().unwrap();
-                    (
-                        decode_avro_values(&source, &envelope, reader_schema, &self.debug_name),
-                        capability,
-                    )
+                    let (collection, errors) =
+                        decode_avro_values(&source, &envelope, reader_schema, &self.debug_name);
+                    if let Some(errors) = errors {
+                        error_collections.push(errors);
+                    }
+
+                    (collection, capability)
                 } else if let ExternalSourceConnector::Postgres(_pg_connector) = connector {
                     unimplemented!("Postgres sources are not supported yet");
                 } else {
@@ -182,14 +190,16 @@ where
                         ExternalSourceConnector::AvroOcf(_) => unreachable!(),
                         ExternalSourceConnector::Postgres(_) => unreachable!(),
                     };
-                    err_collection = err_collection.concat(
-                        &err_source
+
+                    // Include any source errors.
+                    error_collections.push(
+                        err_source
                             .map(DataflowError::SourceError)
                             .pass_through("source-errors")
                             .as_collection(),
                     );
 
-                    let stream = if let SourceEnvelope::Upsert(key_encoding) = &envelope {
+                    let (stream, errors) = if let SourceEnvelope::Upsert(key_encoding) = &envelope {
                         let value_decoder = get_decoder(encoding, &self.debug_name, scope.index());
                         let key_decoder =
                             get_decoder(key_encoding.clone(), &self.debug_name, scope.index());
@@ -202,7 +212,7 @@ where
                     } else {
                         // TODO(brennan) -- this should just be a MirRelationExpr::FlatMap using regexp_extract, csv_extract,
                         // a hypothetical future avro_extract, protobuf_extract, etc.
-                        let (stream, extra_token) = decode_values(
+                        let ((stream, errors), extra_token) = decode_values(
                             &ok_source,
                             encoding,
                             &self.debug_name,
@@ -217,12 +227,15 @@ where
                                 .or_insert_with(Vec::new)
                                 .push(Rc::new(tok));
                         }
-                        stream
+                        (stream, errors)
                     };
+
+                    if let Some(errors) = errors {
+                        error_collections.push(errors);
+                    }
+
                     (stream, capability)
                 };
-
-                let mut collection = stream.as_collection();
 
                 // Implement source filtering and projection.
                 // At the moment this is strictly optional, but we perform it anyhow
@@ -267,7 +280,14 @@ where
                     });
 
                     collection = collection2.as_collection();
-                    err_collection = err_collection.concat(&errors.as_collection());
+                    error_collections.push(errors.as_collection());
+                };
+
+                // Flatten the error collections.
+                let mut err_collection = match error_collections.len() {
+                    0 => Collection::empty(scope),
+                    1 => error_collections.pop().unwrap(),
+                    _ => collection::concatenate(scope, error_collections),
                 };
 
                 // Apply `as_of` to each timestamp.
@@ -296,6 +316,7 @@ where
                     id: Id::BareSource(src_id),
                     typ: src.bare_desc.typ().clone(),
                 };
+
                 // Introduce the stream by name, as an unarranged collection.
                 self.collections
                     .insert(get.clone(), (collection, err_collection));
