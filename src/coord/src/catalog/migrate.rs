@@ -13,9 +13,10 @@ use ore::collections::CollectionExt;
 use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::{self, VisitMut};
 use sql::ast::{
-    CreateIndexStatement, CreateSinkStatement, CreateTableStatement, CreateTypeStatement,
-    CreateViewStatement, DataType, Function, Ident, Raw, RawName, Statement, TableFactor,
-    UnresolvedObjectName,
+    AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType, Format, Function,
+    Ident, Raw, RawName, Statement, TableFactor, UnresolvedObjectName, Value, WithOption,
+    WithOptionValue,
 };
 
 use crate::catalog::{Catalog, SerializedCatalogItem};
@@ -255,6 +256,67 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
             tx.update_item(id, &name.item, &serialized_item)?;
         }
         tx.commit()?;
+        Ok(())
+    },
+    // Insert default value for confluent_wire_format
+    //
+    // This PR introduced a new with options block attached specifically to the
+    // inline schema clause. Previously-created versions of this object must
+    // have no options specified, so we explicitly set them to their existing
+    // behavior.
+    //
+    // The existing behavior is that we expected all Avro-encoded messages over
+    // Kafka to come prepended with a magic byte and a schema registry ID (the
+    // "confluent wire format"), and so some folks modified their input stream
+    // to include those magic bytes. In case we change the default to a
+    // possibly more reasonable one in the future, we ensure that the current
+    // default is encoded in the on-disk catalog.
+    //
+    // Introduced for v0.7.1
+    |catalog: &mut Catalog| {
+        let mut storage = catalog.storage();
+        let items = storage.load_items()?;
+        let tx = storage.transaction()?;
+
+        for (id, name, def) in items {
+            let SerializedCatalogItem::V1 {
+                create_sql,
+                eval_env,
+            } = serde_json::from_slice(&def)?;
+
+            let mut stmt = sql::parse::parse(&create_sql)?.into_element();
+
+            // the match arm is long enough that this is easier to understand
+            #[allow(clippy::single_match)]
+            match stmt {
+                Statement::CreateSource(CreateSourceStatement {
+                    format:
+                        Some(Format::Avro(AvroSchema::Schema {
+                            ref mut with_options,
+                            ..
+                        })),
+                    ..
+                }) => {
+                    if with_options.is_empty() {
+                        with_options.push(WithOption {
+                            key: Ident::new("confluent_wire_format"),
+                            value: Some(WithOptionValue::Value(Value::Boolean(true))),
+                        })
+                    }
+                }
+                _ => {}
+            }
+
+            let serialized_item = SerializedCatalogItem::V1 {
+                create_sql: stmt.to_ast_string_stable(),
+                eval_env,
+            };
+
+            let serialized_item =
+                serde_json::to_vec(&serialized_item).expect("catalog serialization cannot fail");
+            tx.update_item(id, &name.item, &serialized_item)?;
+        }
+
         Ok(())
     },
     // Add new migrations here.
