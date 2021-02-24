@@ -245,38 +245,6 @@ impl PredicatePushdown {
                             }
                         }
 
-                        // Push down equality constraints supported by the same single input.
-                        for equivalence in equivalences.iter_mut() {
-                            equivalence.sort();
-                            equivalence.dedup(); // <-- not obviously necessary.
-
-                            let mut pos = 0;
-                            while pos + 1 < equivalence.len() {
-                                let support = equivalence[pos].support();
-                                if let Some(pos2) = (0..equivalence.len()).find(|i| {
-                                    support.len() == 1
-                                        && i != &pos
-                                        && equivalence[*i].support() == support
-                                }) {
-                                    let expr1 =
-                                        input_mapper.map_expr_to_local(equivalence[pos].clone());
-                                    let expr2 =
-                                        input_mapper.map_expr_to_local(equivalence[pos2].clone());
-                                    use expr::BinaryFunc;
-                                    push_downs[support.into_iter().next().unwrap()].push(
-                                        MirScalarExpr::CallBinary {
-                                            func: BinaryFunc::Eq,
-                                            expr1: Box::new(expr1),
-                                            expr2: Box::new(expr2),
-                                        },
-                                    );
-                                    equivalence.remove(pos);
-                                } else {
-                                    pos += 1;
-                                }
-                            }
-                        }
-
                         let new_inputs = inputs
                             .drain(..)
                             .zip(push_downs)
@@ -457,6 +425,82 @@ impl PredicatePushdown {
                     .entry(*id)
                     .or_insert_with(HashSet::new)
                     .clear();
+            }
+            MirRelationExpr::Join {
+                inputs,
+                equivalences,
+                ..
+            } => {
+                // Push down equality constraints supported by the same single input.
+                let input_mapper = expr::JoinInputMapper::new(inputs);
+
+                // Predicates to push at each input, and to retain.
+                let mut push_downs = vec![Vec::new(); inputs.len()];
+
+                for equivalence in equivalences.iter_mut() {
+                    equivalence.sort();
+                    equivalence.dedup(); // <-- not obviously necessary.
+
+                    let mut pos = 0;
+                    while pos + 1 < equivalence.len() {
+                        let mut inputs = input_mapper.lookup_inputs(&equivalence[pos]);
+                        if let Some(input) = inputs.next() {
+                            if inputs.next().is_none() {
+                                // if the expression is single-input, see if
+                                // there is another expression belonging to no
+                                // inputs or the same input
+                                if let Some(pos2) = (0..equivalence.len()).find(|i| {
+                                    if i == &pos {
+                                        false
+                                    } else {
+                                        let mut other_inputs =
+                                            input_mapper.lookup_inputs(&equivalence[*i]);
+                                        if let Some(other_input) = other_inputs.next() {
+                                            other_inputs.next().is_none() && input == other_input
+                                        } else {
+                                            true
+                                        }
+                                    }
+                                }) {
+                                    let expr1 =
+                                        input_mapper.map_expr_to_local(equivalence[pos].clone());
+                                    let expr2 =
+                                        input_mapper.map_expr_to_local(equivalence[pos2].clone());
+                                    use expr::BinaryFunc;
+                                    push_downs[input].push(MirScalarExpr::CallBinary {
+                                        func: BinaryFunc::Eq,
+                                        expr1: Box::new(expr1),
+                                        expr2: Box::new(expr2),
+                                    });
+                                    equivalence.remove(pos);
+                                    continue;
+                                }
+                            }
+                        }
+                        pos += 1;
+                    }
+                }
+
+                equivalences.retain(|equivalence| equivalence.len() > 1);
+
+                let new_inputs = inputs
+                    .drain(..)
+                    .zip(push_downs)
+                    .enumerate()
+                    .map(|(_index, (input, push_down))| {
+                        if !push_down.is_empty() {
+                            input.filter(push_down)
+                        } else {
+                            input
+                        }
+                    })
+                    .collect();
+
+                *inputs = new_inputs;
+                // Recursively descend on each of the inputs.
+                for input in inputs.iter_mut() {
+                    self.action(input, get_predicates);
+                }
             }
             x => {
                 // Recursively descend.
