@@ -246,6 +246,11 @@ where
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &connector.addrs.to_string());
 
+    // Ensure that messages are sinked in order and without duplicates. Note that
+    // this only applies to a single instance of a producer - in the case of restarts,
+    // all bets are off and full exactly once support is required.
+    config.set("enable.idempotence", "true");
+
     // Increase limits for the Kafka producer's internal buffering of messages
     // Currently we don't have a great backpressure mechanism to tell indexes or
     // views to slow down, so the only thing we can do with a message that we
