@@ -1005,3 +1005,18 @@ query T
 SELECT exp(ln(2::decimal(15, 5)))
 ----
 2
+
+query R
+SELECT power(382, 5);
+----
+8134236862432
+
+query T
+SELECT power(9, 0.5);
+----
+3.000
+
+query T
+SELECT power(9::decimal(15, 5), 0.5::decimal(15, 5));
+----
+3.000

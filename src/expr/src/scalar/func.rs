@@ -1298,6 +1298,19 @@ fn exp_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
     )?)
 }
 
+fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_float64();
+    let b = b.unwrap_float64();
+    Ok(Datum::from(a.powf(b)))
+}
+
+fn power_dec<'a>(a: Datum<'a>, b: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
+    let scale = i32::from(scale);
+    let a = cast_significand_to_float64(a).unwrap_float64() / 10_f64.powi(scale);
+    let b = cast_significand_to_float64(b).unwrap_float64() / 10_f64.powi(scale);
+    cast_float64_to_decimal(Datum::from(a.powf(b)), Datum::from(scale))
+}
+
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -2260,6 +2273,8 @@ pub enum BinaryFunc {
     Encode,
     Decode,
     Log,
+    Power,
+    PowerDecimal(u8),
 }
 
 impl BinaryFunc {
@@ -2410,6 +2425,8 @@ impl BinaryFunc {
             BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
             BinaryFunc::MzRenderTypemod => Ok(eager!(mz_render_typemod, temp_storage)),
             BinaryFunc::Log => eager!(log_base),
+            BinaryFunc::Power => eager!(power),
+            BinaryFunc::PowerDecimal(scale) => eager!(power_dec, *scale),
         }
     }
 
@@ -2580,6 +2597,8 @@ impl BinaryFunc {
             Encode => ScalarType::String.nullable(in_nullable),
             Decode => ScalarType::Bytes.nullable(in_nullable),
             Log => ScalarType::Float64.nullable(in_nullable),
+            Power => ScalarType::Float64.nullable(in_nullable),
+            PowerDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
         }
     }
 
@@ -2761,7 +2780,9 @@ impl BinaryFunc {
             | MzRenderTypemod
             | Encode
             | Decode
-            | Log => false,
+            | Log
+            | Power
+            | PowerDecimal(_) => false,
         }
     }
 }
@@ -2878,6 +2899,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Encode => f.write_str("encode"),
             BinaryFunc::Decode => f.write_str("decode"),
             BinaryFunc::Log => f.write_str("log"),
+            BinaryFunc::Power => f.write_str("power"),
+            BinaryFunc::PowerDecimal(_) => f.write_str("power_decimal"),
         }
     }
 }

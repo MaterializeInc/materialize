@@ -1555,6 +1555,13 @@ lazy_static! {
                     Ok(HirScalarExpr::literal(Datum::String(&name), ScalarType::String))
                 }), 1619;
             },
+            "power" => Scalar {
+                params!(Float64, Float64) => BinaryFunc::Power, 1368;
+                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
+                    let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
+                    Ok(lhs.call_binary(rhs, BinaryFunc::PowerDecimal(s)))
+                }), 2169;
+            },
             "regexp_match" => Scalar {
                 params!(String, String) => VariadicFunc::RegexpMatch, 3396;
                 params!(String, String, String) => VariadicFunc::RegexpMatch, 3397;
