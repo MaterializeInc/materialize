@@ -986,6 +986,12 @@ SELECT round(ln(13::float)::decimal(15, 5), 3)
 ----
 2.5650
 
+query error function ln is not defined for negative numbers
+SELECT ln(-1)
+
+query error function ln is not defined for zero
+SELECT ln(0)
+
 query R
 SELECT ln(13.0000::decimal(15, 5))
 ----
