@@ -1254,9 +1254,10 @@ fn log_guard(val: f64, function_name: &str) -> Result<f64, EvalError> {
     Ok(val)
 }
 
-fn log_base<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let base = log_guard(b.unwrap_float64(), "log")?;
-    log(a, |f| f.log(base), "log")
+fn log_base<'a>(a: Datum<'a>, b: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
+    let b = cast_significand_to_float64(b).unwrap_float64() / 10_f64.powi(i32::from(scale));
+    let base = log_guard(b, "log")?;
+    log_dec(a, |f| f.log(base), "log", scale)
 }
 
 fn log_dec<'a, 'b, F: Fn(f64) -> f64>(
@@ -2272,7 +2273,7 @@ pub enum BinaryFunc {
     MzRenderTypemod,
     Encode,
     Decode,
-    Log,
+    LogDecimal(u8),
     Power,
     PowerDecimal(u8),
 }
@@ -2424,7 +2425,7 @@ impl BinaryFunc {
             BinaryFunc::DigestString => eager!(digest_string, temp_storage),
             BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
             BinaryFunc::MzRenderTypemod => Ok(eager!(mz_render_typemod, temp_storage)),
-            BinaryFunc::Log => eager!(log_base),
+            BinaryFunc::LogDecimal(scale) => eager!(log_base, *scale),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerDecimal(scale) => eager!(power_dec, *scale),
         }
@@ -2596,7 +2597,7 @@ impl BinaryFunc {
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
             Encode => ScalarType::String.nullable(in_nullable),
             Decode => ScalarType::Bytes.nullable(in_nullable),
-            Log => ScalarType::Float64.nullable(in_nullable),
+            LogDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
             Power => ScalarType::Float64.nullable(in_nullable),
             PowerDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
         }
@@ -2780,7 +2781,7 @@ impl BinaryFunc {
             | MzRenderTypemod
             | Encode
             | Decode
-            | Log
+            | LogDecimal(_)
             | Power
             | PowerDecimal(_) => false,
         }
@@ -2898,7 +2899,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MzRenderTypemod => f.write_str("mz_render_typemod"),
             BinaryFunc::Encode => f.write_str("encode"),
             BinaryFunc::Decode => f.write_str("decode"),
-            BinaryFunc::Log => f.write_str("log"),
+            BinaryFunc::LogDecimal(_) => f.write_str("log"),
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerDecimal(_) => f.write_str("power_decimal"),
         }
