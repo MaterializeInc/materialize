@@ -997,8 +997,7 @@ SELECT exp(ln(2))
 ----
 2.000
 
-# TODO: This is suuuuuper wrong.
-query R
+query T
 SELECT exp(ln(2::decimal(15, 5)))
 ----
-2.000
+2
