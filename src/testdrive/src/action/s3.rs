@@ -18,8 +18,9 @@ use rusoto_s3::{
     PutObjectRequest, QueueConfiguration, S3,
 };
 use rusoto_sqs::{
-    CreateQueueError, CreateQueueRequest, GetQueueAttributesRequest, GetQueueUrlRequest,
-    SetQueueAttributesRequest, Sqs,
+    CreateQueueError, CreateQueueRequest, DeleteMessageBatchRequest,
+    DeleteMessageBatchRequestEntry, GetQueueAttributesRequest, GetQueueUrlRequest,
+    ReceiveMessageRequest, SetQueueAttributesRequest, Sqs,
 };
 
 use crate::action::{Action, State};
@@ -108,6 +109,8 @@ pub struct AddBucketNotifications {
     queue: String,
 
     bucket_prefix: String,
+
+    sqs_test_prefix: String,
 }
 
 pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotifications, String> {
@@ -127,6 +130,10 @@ pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotif
         events,
         queue: cmd.args.string("queue")?,
         bucket_prefix,
+        sqs_test_prefix: cmd
+            .args
+            .opt_string("sqs-test-prefix")
+            .unwrap_or_else(|| "sqs-test".into()),
     })
 }
 
@@ -236,7 +243,78 @@ impl Action for AddBucketNotifications {
                 )
             })?;
 
-        Ok(())
+        // Wait until we are sure that the configuration has taken effect
+        //
+        // AWS doesn't specify anywhere how long it should take for
+        // newly-configured buckets to start generating sqs notifications, so
+        // we continuously put new objects into the bucket and wait for any
+        // message to show up.
+
+        let mut attempts = 0;
+        let mut success = false;
+        print!("Verifying SQS notification configuration for up to 2 minutes");
+        for i in 0..120u8 {
+            // a maximum of ~2 minutes
+            state
+                .s3_client
+                .put_object(PutObjectRequest {
+                    bucket: self.bucket.clone(),
+                    body: Some(Vec::new().into()),
+                    key: format!("{}/{}", self.sqs_test_prefix, i),
+                    ..Default::default()
+                })
+                .await
+                .map_err(|e| format!("creating object to verify sqs: {}", e))?;
+            attempts = i;
+
+            let resp = state
+                .sqs_client
+                .receive_message(ReceiveMessageRequest {
+                    queue_url: queue_url.clone(),
+                    wait_time_seconds: Some(1),
+                    ..Default::default()
+                })
+                .await
+                .map_err(|e| format!("reading from sqs for verification: {}", e))?;
+
+            if let Some(ms) = resp.messages {
+                if !ms.is_empty() {
+                    let found_real_message = ms
+                        .iter()
+                        .any(|m| m.body.as_ref().unwrap().contains("ObjectCreated:Put"));
+                    if found_real_message {
+                        success = true;
+                    }
+                    state
+                        .sqs_client
+                        .delete_message_batch(DeleteMessageBatchRequest {
+                            queue_url: queue_url.to_string(),
+                            entries: ms
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, m)| DeleteMessageBatchRequestEntry {
+                                    id: i.to_string(),
+                                    receipt_handle: m.receipt_handle.unwrap(),
+                                })
+                                .collect(),
+                        })
+                        .await
+                        .map_err(|e| format!("Deleting validation messages from sqs: {}", e))?;
+                }
+            }
+            if success {
+                break;
+            }
+
+            print!(".");
+        }
+        if success {
+            println!(" Success! (in {} attempts)", attempts + 1);
+            Ok(())
+        } else {
+            println!(" Error, never got messages");
+            Err("Never got messages on S3 bucket notification queue".to_string())
+        }
     }
 }
 
