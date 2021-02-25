@@ -344,19 +344,19 @@ impl DataEncoding {
         // Add columns for the data, based on the encoding format.
         Ok(match self {
             DataEncoding::Bytes => key_desc.with_column("data", ScalarType::Bytes.nullable(false)),
-            DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
-                let desc =
-                    avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
-                        .context("validating avro ocf reader schema")?
-                        .into_iter()
-                        .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
-                desc
-            }
-            DataEncoding::Avro(AvroEncoding {
-                value_schema,
-                key_schema,
-                ..
-            }) => {
+            DataEncoding::AvroOcf(AvroOcfEncoding { .. })
+            | DataEncoding::Avro(AvroEncoding { .. }) => {
+                let (value_schema, key_schema) = match self {
+                    DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
+                        (reader_schema, None)
+                    }
+                    DataEncoding::Avro(AvroEncoding {
+                        key_schema,
+                        value_schema,
+                        ..
+                    }) => (value_schema, key_schema.as_ref()),
+                    _ => unreachable!(),
+                };
                 let mut columns =
                     avro::validate_value_schema(value_schema, envelope.get_avro_envelope_type())
                         .context("validating avro value schema")?
