@@ -8,11 +8,11 @@
 -- by the Apache License, Version 2.0.
 
 CREATE SOURCE benchmark_results_v0
-FROM KAFKA BROKER 'localhost:9093'
+FROM KAFKA BROKER 'kafka:9093'
 TOPIC 'dev.mtrlz.benchmarks.results.v0'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
 ENVELOPE UPSERT
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
 
 CREATE MATERIALIZED VIEW benchmark_results AS SELECT
     benchmark_id,
@@ -25,18 +25,18 @@ CREATE MATERIALIZED VIEW benchmark_results AS SELECT
 FROM benchmark_results_v0;
 
 CREATE SOURCE benchmark_run_begin_v0
-FROM KAFKA BROKER 'localhost:9093'
+FROM KAFKA BROKER 'kafka:9093'
 TOPIC 'dev.mtrlz.benchmarks.runs.begin.v0'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
 ENVELOPE UPSERT
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
 
 CREATE SOURCE benchmark_run_results_v0
-FROM KAFKA BROKER 'localhost:9093'
+FROM KAFKA BROKER 'kafka:9093'
 TOPIC 'dev.mtrlz.benchmarks.runs.results.v0'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
 ENVELOPE UPSERT
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081';
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
 
 CREATE OR REPLACE MATERIALIZED VIEW benchmark_progress AS
     SELECT bb.run_id,

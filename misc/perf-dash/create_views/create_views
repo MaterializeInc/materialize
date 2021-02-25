@@ -11,7 +11,7 @@
 set -euo pipefail
 
 view_file="/data/system_views.sql"
-psql -h materialized -p 6875 -U materialize -f "${view_file}" materialize
+psql -h perf-dash-metrics -p 8675 -U materialize -f "${view_file}" materialize
 
 view_file2="/data/benchmark_views.sql"
-psql -h materialized -p 6875 -U materialize -f "${view_file2}" materialize
+psql -h perf-dash-metrics -p 8675 -U materialize -f "${view_file2}" materialize

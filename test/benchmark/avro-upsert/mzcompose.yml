@@ -19,14 +19,25 @@ x-port-mappings:
   - &materialized ${MZ_PORT:-6875}
   - &grafana 3000:3000
   - &prometheus 9090
+  - &perf-metrics ${PERF_METRICS_PORT:-8675}
 
 version: '3.7'
 services:
   create-views:
     mzbuild: avro-upsert-create-views
+  perf-dash-metrics:
+    mzbuild: materialized
+    ports:
+      - *perf-metrics
+    command:
+      - --disable-telemetry
+      - --listen-addr=0.0.0.0:${PERF_METRICS_PORT:-8675}
+      - --logical-compaction-window=1ms
   perf-dash-scraper:
     mzbuild: perf-dash-scraper
     command: scrape
+  perf-dash-create-views:
+    mzbuild: perf-dash-create-views
   materialized:
     mzbuild: materialized
     ports:
@@ -119,7 +130,7 @@ mzworkflows:
     - step: start-services
       services: [dashboard]
     - step: start-services
-      services: [kafka, schema-registry]
+      services: [kafka, schema-registry, perf-dash-metrics]
     - step: wait-for-tcp
       host: kafka
       port: 9092
@@ -134,6 +145,8 @@ mzworkflows:
       service: metric-verifier
       command: >-
         create-topics
+    - step: run
+      service: perf-dash-create-views
 
   benchmark:
     steps:
