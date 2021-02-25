@@ -967,12 +967,12 @@ query error function log is not defined for negative numbers
 SELECT log(10.0, -10)
 
 query R
-SELECT log(10.0::double, 10)
+SELECT log(10, 10)
 ----
 1
 
 query R
-SELECT log(400.0::double, 20)
+SELECT log(400, 20)
 ----
 2
 
