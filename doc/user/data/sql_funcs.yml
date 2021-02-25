@@ -113,20 +113,23 @@
   - signature: 'floor(x: N) -> N'
     description: The largest integer <= `x`
 
-  - signature: 'ln(x: N) -> N'
+  - signature: 'ln(x: numeric) -> numeric'
     description: Natural logarithm of `x`
 
-  - signature: 'log(x: N) -> N'
+  - signature: 'log(x: numeric) -> numeric'
     description: Base 10 logarithm of `x`
 
-  - signature: 'log10(x: N) -> N'
+  - signature: 'log10(x: numeric) -> numeric'
     description: Base 10 logarithm of `x`, same as `log`
 
-  - signature: 'log(x: N, b: N) -> N'
+  - signature: 'log(x: numeric, b: numeric) -> numeric'
     description: Base `b` logarithm of `x`
 
   - signature: 'mod(x: N, y: N) -> N'
     description: "`x % y`"
+
+  - signature: 'power(x: numeric, y: numeric) -> numeric'
+    description: "`x` raised to the power of `y`"
 
   - signature: 'round(x: N) -> N'
     description: >-
