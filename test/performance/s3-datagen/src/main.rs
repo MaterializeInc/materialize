@@ -100,7 +100,7 @@ async fn run() -> anyhow::Result<()> {
     let conn_info =
         aws_util::aws::ConnectInfo::new(rusoto_core::Region::default(), None, None, None)?;
 
-    let client = aws_util::s3::client(conn_info)
+    let client = aws_util::client::s3(conn_info)
         .await
         .context("creating s3 client")?;
 

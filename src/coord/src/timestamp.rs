@@ -35,7 +35,7 @@ use rdkafka::ClientConfig;
 use rusoto_kinesis::KinesisClient;
 use tokio::sync::mpsc;
 
-use aws_util::kinesis;
+use aws_util::{client, kinesis};
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
@@ -1121,7 +1121,7 @@ impl Timestamper {
         _id: GlobalId,
         kinc: KinesisSourceConnector,
     ) -> Option<RtKinesisConnector> {
-        let (kinesis_client, cached_shard_ids) = match block_on(kinesis::client(kinc.aws_info)) {
+        let (kinesis_client, cached_shard_ids) = match block_on(client::kinesis(kinc.aws_info)) {
             Ok(kinesis_client) => {
                 let cached_shard_ids =
                     match block_on(kinesis::get_shard_ids(&kinesis_client, &kinc.stream_name)) {
