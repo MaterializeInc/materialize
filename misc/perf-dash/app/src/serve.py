@@ -261,13 +261,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "--dbhost", help="materialized hostname", default="materialized", type=str
+        "--dbhost", help="materialized hostname", default="perf-dash-metrics", type=str
     )
     parser.add_argument(
         "--dbname", help="materialized database name", default="materialize", type=str
     )
     parser.add_argument(
-        "--dbport", help="materialized port number", default=6875, type=int
+        "--dbport", help="materialized port number", default=8675, type=int
     )
     parser.add_argument(
         "--dbuser", help="materialized username", default="materialize", type=str

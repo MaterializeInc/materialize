@@ -20,6 +20,7 @@ x-port-mappings:
   - &grafana 3000:3000
   - &prometheus 9090
   - &perf-metrics ${PERF_METRICS_PORT:-8675}
+  - &perf-dash-web ${PERF_DASH_PORT:-8875:8875}
 
 version: '3.7'
 services:
@@ -38,6 +39,10 @@ services:
     command: scrape
   perf-dash-create-views:
     mzbuild: perf-dash-create-views
+  perf-dash-web:
+    mzbuild: perf-dash-web
+    ports:
+      - *perf-dash-web
   materialized:
     mzbuild: materialized
     ports:
@@ -147,6 +152,8 @@ mzworkflows:
         create-topics
     - step: run
       service: perf-dash-create-views
+    - step: start-services
+      services: [perf-dash-web]
 
   benchmark:
     steps:

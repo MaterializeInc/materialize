@@ -23,3 +23,4 @@ COPY utils /usr/local/bin
 
 WORKDIR /app
 ENTRYPOINT ["python3", "serve.py"]
+CMD ["benchmark_results", "benchmark_progress", "time_per_worker"]
