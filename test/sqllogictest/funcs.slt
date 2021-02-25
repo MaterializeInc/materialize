@@ -958,6 +958,15 @@ SELECT log(10.0::decimal(15, 5))
 1
 
 query error function log is not defined for zero
+SELECT log(0.0, 10)
+
+query error function log is not defined for zero
+SELECT log(+0.0, 10)
+
+query error function log is not defined for negative numbers
+SELECT log(-10, 10)
+
+query error function log is not defined for zero
 SELECT log(10, 0.0)
 
 query error function log is not defined for zero
