@@ -106,7 +106,7 @@ pub async fn validate_credentials(
 ) -> Result<(), anyhow::Error> {
     if let Some(creds) = conn_info.credentials {
         let provider = StaticProvider::from(AwsCredentials::from(creds));
-        crate::aws::account(provider.clone(), conn_info.region, timeout)
+        account(provider.clone(), conn_info.region, timeout)
             .await
             .context("Using statically provided credentials")?;
     } else {
@@ -114,7 +114,7 @@ pub async fn validate_credentials(
         provider.set_timeout(Duration::from_secs(10));
         let provider =
             AutoRefreshingProvider::new(provider).context("generating AWS credentials")?;
-        crate::aws::account(provider.clone(), conn_info.region, timeout)
+        account(provider.clone(), conn_info.region, timeout)
             .await
             .context("Looking through the environment for credentials")?;
     }

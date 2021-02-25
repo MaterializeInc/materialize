@@ -12,6 +12,5 @@
 #![deny(missing_docs, missing_debug_implementations)]
 
 pub mod aws;
+pub mod client;
 pub mod kinesis;
-pub mod s3;
-pub mod sqs;
