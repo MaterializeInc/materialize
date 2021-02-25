@@ -278,7 +278,7 @@ fn plan_dbz_flatten(
     };
     let after_expr = HirRelationExpr::Map {
         input: Box::new(HirRelationExpr::Filter {
-            input: Box::new(input.clone()),
+            input: Box::new(input),
             predicates: vec![HirScalarExpr::CallUnary {
                 func: UnaryFunc::Not,
                 expr: Box::new(HirScalarExpr::CallUnary {
