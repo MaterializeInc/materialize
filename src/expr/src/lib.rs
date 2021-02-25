@@ -24,6 +24,8 @@ mod scalar;
 
 pub mod explain;
 
+pub use relation::canonicalize;
+
 pub use id::{GlobalId, Id, LocalId, PartitionId, SourceInstanceId};
 pub use linear::MapFilterProject;
 pub use relation::func::{AggregateFunc, TableFunc};

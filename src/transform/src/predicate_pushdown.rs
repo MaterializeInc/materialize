@@ -12,6 +12,11 @@
 //! This action generally improves the quality of the query, in that selective per-record
 //! filters reduce the volume of data before they arrive at more expensive operators.
 //!
+//! The one time when this action might not improve the quality of a query is
+//! if a filter gets pushed down on an arrangement because that blocks arrangement
+//! reuse. It assumed that actions that need an arrangement are responsible for
+//! lifting filters out of the way.
+//!
 //! ```rust
 //! use expr::{BinaryFunc, IdGen, MirRelationExpr, MirScalarExpr};
 //! use repr::{ColumnType, Datum, RelationType, ScalarType};
@@ -50,6 +55,17 @@
 //!   id_gen: &mut Default::default(),
 //!   indexes: &std::collections::HashMap::new(),
 //! });
+//!
+//! let predicate00 = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(0), BinaryFunc::AddInt64);
+//! let expected_expr = MirRelationExpr::join(
+//!     vec![
+//!         input1.clone().filter(vec![predicate0.clone(), predicate00.clone()]),
+//!         input2.clone().filter(vec![predicate0.clone()]),
+//!         input3.clone().filter(vec![predicate0, predicate00])
+//!     ],
+//!     vec![vec![(0, 0), (2, 0)].into_iter().collect()],
+//! ).filter(vec![predicate012]);
+//! assert_eq!(expected_expr, expr)
 //! ```
 
 use std::collections::{HashMap, HashSet};
@@ -179,25 +195,67 @@ impl PredicatePushdown {
                         equivalences,
                         ..
                     } => {
-                        // We want to scan `predicates` for any that can apply
-                        // to individual elements of `inputs`.
+                        // We want to scan `predicates` for any that can
+                        // 1) become join variable constraints
+                        // 2) apply to individual elements of `inputs`.
+                        // Figuring out the set of predicates that belong to
+                        //    the latter group requires 1) knowing which predicates
+                        //    are in the former group and 2) that the variable
+                        //    constraints be in canonical form.
+                        // Thus, there is a first scan across `predicates` to
+                        //    populate the join variable constraints
+                        //    and a second scan across the remaining predicates
+                        //    to see which ones can become individual elements of
+                        //    `inputs`.
 
                         let input_mapper = expr::JoinInputMapper::new(inputs);
 
-                        // Predicates to push at each input, and to retain.
+                        // Predicates not translated into join variable
+                        // constraints
+                        let mut pred_not_translated = Vec::new();
+
+                        for predicate in predicates.drain(..) {
+                            // Translate `col1 == col2` constraints into join variable constraints.
+                            use expr::BinaryFunc;
+                            use expr::UnaryFunc;
+                            if let MirScalarExpr::CallBinary {
+                                func: BinaryFunc::Eq,
+                                expr1,
+                                expr2,
+                            } = &predicate
+                            {
+                                // An equality predicate implies that both
+                                // expressions are not null.
+                                // Since we try to push non-equality predicates
+                                // at all inputs, we only need to push one
+                                // predicate into `pred_not_translated` for it
+                                // to be pushed at both expressions.
+                                pred_not_translated.push(
+                                    expr1
+                                        .clone()
+                                        .call_unary(UnaryFunc::IsNull)
+                                        .call_unary(UnaryFunc::Not),
+                                );
+                                equivalences.push(vec![(**expr1).clone(), (**expr2).clone()]);
+                            } else {
+                                pred_not_translated.push(predicate)
+                            }
+                        }
+
+                        expr::canonicalize::fuse_equivalences(equivalences);
+
+                        // // Predicates to push at each input, and to retain.
                         let mut push_downs = vec![Vec::new(); inputs.len()];
                         let mut retain = Vec::new();
 
-                        for predicate in predicates.drain(..) {
+                        for predicate in pred_not_translated.drain(..) {
                             // Track if the predicate has been pushed to at least one input.
-                            // If so, then we do not need to include it in an equivalence class.
                             let mut pushed = false;
-                            // Attempt to push down each predicate to each input.
+                            // For each input, try and see if the join
+                            // equivalences allow the predicate to be rewritten
+                            // in terms of only columns from that input.
                             for (index, push_down) in push_downs.iter_mut().enumerate() {
-                                if let MirRelationExpr::ArrangeBy { .. } = inputs[index] {
-                                    // do nothing. We do not want to push down a filter and block
-                                    // usage of an index
-                                } else if let Some(localized) = input_mapper
+                                if let Some(localized) = input_mapper
                                     .try_map_to_input_with_bound_expr(
                                         predicate.clone(),
                                         index,
@@ -205,37 +263,6 @@ impl PredicatePushdown {
                                     )
                                 {
                                     push_down.push(localized);
-                                    pushed = true;
-                                }
-                            }
-
-                            // Translate `col1 == col2` constraints into join variable constraints.
-                            if !pushed {
-                                use expr::BinaryFunc;
-                                use expr::UnaryFunc;
-                                if let MirScalarExpr::CallBinary {
-                                    func: BinaryFunc::Eq,
-                                    expr1,
-                                    expr2,
-                                } = &predicate
-                                {
-                                    // TODO: We could attempt to localize these here, otherwise they'll be localized
-                                    // and pushed down in the next iteration of the fixed point optimization.
-                                    // TODO: Retaining *both* predicates is not strictly necessary, as either
-                                    // will ensure no matches on `Datum::Null`.
-                                    retain.push(
-                                        expr1
-                                            .clone()
-                                            .call_unary(UnaryFunc::IsNull)
-                                            .call_unary(UnaryFunc::Not),
-                                    );
-                                    retain.push(
-                                        expr2
-                                            .clone()
-                                            .call_unary(UnaryFunc::IsNull)
-                                            .call_unary(UnaryFunc::Not),
-                                    );
-                                    equivalences.push(vec![(**expr1).clone(), (**expr2).clone()]);
                                     pushed = true;
                                 }
                             }
@@ -260,10 +287,8 @@ impl PredicatePushdown {
 
                         *inputs = new_inputs;
 
-                        // Recursively descend on each of the inputs.
-                        for input in inputs.iter_mut() {
-                            self.action(input, get_predicates);
-                        }
+                        // Recursively descend on the join
+                        self.action(input, get_predicates);
 
                         if retain.is_empty() {
                             *relation = (**input).clone();
@@ -431,24 +456,36 @@ impl PredicatePushdown {
                 equivalences,
                 ..
             } => {
-                // Push down equality constraints supported by the same single input.
-                let input_mapper = expr::JoinInputMapper::new(inputs);
+                expr::canonicalize::sort_dedup_equivalences(equivalences);
+                // Push down:
+                // 1) equality constraints supported by the same single
+                //    input.
+                // 2) equality constraints consisting of an expression
+                //    supported by a single input + a literal
 
-                // Predicates to push at each input, and to retain.
+                let input_mapper = expr::JoinInputMapper::new(inputs);
+                // Predicates to push at each input.
                 let mut push_downs = vec![Vec::new(); inputs.len()];
 
                 for equivalence in equivalences.iter_mut() {
-                    equivalence.sort();
-                    equivalence.dedup(); // <-- not obviously necessary.
+                    if equivalence.iter().filter(|expr| expr.is_literal()).count() > 1 {
+                        // Because of equivalences have been dedupped, this
+                        // means that everything in the equivalence class must
+                        // be equal to two different literals, so the entire
+                        // relation zeroes out
+                        relation.take_safely();
+                        return;
+                    }
 
+                    // Go through the equivalence class and remove an expression
+                    // if the expression is single-input, and there is another
+                    // expression still in the equivalence class that belongs to
+                    // no inputs or the same input.
                     let mut pos = 0;
-                    while pos + 1 < equivalence.len() {
+                    while pos < equivalence.len() {
                         let mut inputs = input_mapper.lookup_inputs(&equivalence[pos]);
                         if let Some(input) = inputs.next() {
                             if inputs.next().is_none() {
-                                // if the expression is single-input, see if
-                                // there is another expression belonging to no
-                                // inputs or the same input
                                 if let Some(pos2) = (0..equivalence.len()).find(|i| {
                                     if i == &pos {
                                         false
@@ -467,11 +504,22 @@ impl PredicatePushdown {
                                     let expr2 =
                                         input_mapper.map_expr_to_local(equivalence[pos2].clone());
                                     use expr::BinaryFunc;
-                                    push_downs[input].push(MirScalarExpr::CallBinary {
-                                        func: BinaryFunc::Eq,
-                                        expr1: Box::new(expr1),
-                                        expr2: Box::new(expr2),
-                                    });
+                                    use expr::UnaryFunc;
+                                    if expr2.is_literal_null() {
+                                        // Push down an `expr1 is null`
+                                        // predicate because `expr1 = null`
+                                        // always evaluates to false
+                                        push_downs[input].push(MirScalarExpr::CallUnary {
+                                            func: UnaryFunc::IsNull,
+                                            expr: Box::new(expr1),
+                                        });
+                                    } else {
+                                        push_downs[input].push(MirScalarExpr::CallBinary {
+                                            func: BinaryFunc::Eq,
+                                            expr1: Box::new(expr1),
+                                            expr2: Box::new(expr2),
+                                        });
+                                    }
                                     equivalence.remove(pos);
                                     continue;
                                 }

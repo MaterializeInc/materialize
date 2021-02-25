@@ -59,6 +59,25 @@ select b, c from foo, (select 5 as a) bar where foo.a = bar.a
 this
 -4.400
 
+query T multiline
+explain plan for select * from foo, bar where foo.a = mod(bar.a, 5) and foo.a = 5
+----
+%0 =
+| Get materialize.public.foo (u1)
+| Filter (#0 = 5)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.bar (u3)
+| Filter (5 = (#0 % 5))
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#5)
+
+EOF
+
 statement ok
 create index foo_idx on foo(a);
 
