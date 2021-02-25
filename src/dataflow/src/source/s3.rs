@@ -178,7 +178,7 @@ async fn download_objects_task(
     aws_info: aws::ConnectInfo,
     activator: SyncActivator,
 ) {
-    let client = match aws_util::s3::client(aws_info).await {
+    let client = match aws_util::client::s3(aws_info).await {
         Ok(client) => client,
         Err(e) => {
             tx.send(Err(anyhow!("Unable to create s3 client: {}", e)))
@@ -246,7 +246,7 @@ async fn scan_bucket_task(
     aws_info: aws::ConnectInfo,
     tx: tokio_mpsc::Sender<anyhow::Result<KeyInfo>>,
 ) {
-    let client = match aws_util::s3::client(aws_info).await {
+    let client = match aws_util::client::s3(aws_info).await {
         Ok(client) => client,
         Err(e) => {
             tx.send(Err(anyhow!("Unable to create s3 client: {}", e)))
@@ -346,7 +346,7 @@ async fn read_sqs_task(
         source_id
     );
 
-    let client = match aws_util::sqs::client(aws_info).await {
+    let client = match aws_util::client::sqs(aws_info).await {
         Ok(client) => client,
         Err(e) => {
             tx.send(Err(anyhow!("Unable to create sqs client: {}", e)))
