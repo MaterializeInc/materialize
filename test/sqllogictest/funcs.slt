@@ -931,6 +931,10 @@ SELECT tanh('-inf'::double)
 ----
 -1.000
 
+# Use the more reasonable number representation, as the standard mode
+# causes all sorts of weird representation issues with exp and log:
+mode cockroach
+
 query error function cot is only defined for finite arguments
 SELECT cot('-inf'::double)
 
@@ -946,12 +950,12 @@ SELECT log10(-1.0::double)
 query R
 SELECT log10(10.0::double)
 ----
-1.000
+1
 
 query R
 SELECT log(10.0::decimal(15, 5))
 ----
-1.0000
+1
 
 query error function log is not defined for zero
 SELECT log(10, 0.0)
@@ -965,37 +969,37 @@ SELECT log(10.0, -10)
 query R
 SELECT log(10.0::double, 10)
 ----
-1.000
+1
 
 query R
 SELECT log(400.0::double, 20)
 ----
-2.000
+2
 
 query R
 SELECT log10(10::decimal(15, 5))
 ----
-1.0000
+1
 
 query R
-SELECT ln(13::float)
+SELECT round(ln(13::float)::decimal(15, 5), 3)
 ----
-2.565
+2.5650
 
 query R
 SELECT ln(13.0000::decimal(15, 5))
 ----
-2.565
+2.56494
 
 query R
-SELECT exp(2)
+SELECT round(exp(2)::decimal(15, 5), 3)
 ----
-7.389
+7.3890
 
 query R
 SELECT exp(ln(2))
 ----
-2.000
+2
 
 query T
 SELECT exp(ln(2::decimal(15, 5)))
