@@ -127,8 +127,6 @@
                         var data = JSON.parse(event.data);
                         var insert_values = data.inserted.map(convert_to_progress);
                         var delete_values = data.deleted.map(convert_to_progress);
-                        console.log(insert_values);
-                        console.log(delete_values);
                         var changeSet = vega.changeset()
                                 .insert(insert_values)
                                 .remove(d => progress_in_array(d, delete_values));
