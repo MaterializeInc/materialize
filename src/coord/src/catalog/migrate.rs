@@ -260,12 +260,17 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
     },
     // Insert default value for confluent_wire_format
     //
-    // Before this change we expected all Avro-encoded messages over Kafka to
-    // come prepended with a magic byte and a schema registry ID, and so some
-    // folks modified their input stream to include those magic bytes. To
-    // preserve the old behavior for existing catalogs in case we change the
-    // default to a possibly more reasonable one in the future, we ensure that
-    // the current default is encoded in the on-disk catalog.
+    // This PR introduced a new with options block attached specifically to the
+    // inline schema clause. Previously-created versions of this object must
+    // have no options specified, so we explicitly set them to their existing
+    // behavior.
+    //
+    // The existing behavior is that we expected all Avro-encoded messages over
+    // Kafka to come prepended with a magic byte and a schema registry ID (the
+    // "confluent wire format"), and so some folks modified their input stream
+    // to include those magic bytes. In case we change the default to a
+    // possibly more reasonable one in the future, we ensure that the current
+    // default is encoded in the on-disk catalog.
     //
     // Introduced for v0.7.1
     |catalog: &mut Catalog| {
