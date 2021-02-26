@@ -14,7 +14,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection};
 
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::{generic::Operator, OkErr};
+use timely::dataflow::operators::{generic::Operator, Concat, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
@@ -24,6 +24,7 @@ use log::error;
 use repr::{Datum, Diff, Row, RowArena, Timestamp};
 
 use crate::decode::DecoderState;
+use crate::operator::StreamExt;
 use crate::source::{SourceData, SourceOutput};
 
 /// Entrypoint to the upsert-specific transformations involved
@@ -72,10 +73,44 @@ where
     // `None` value to ensure that it prompts dropping any held values with the
     // same key. If the predicates produce errors, we should notice these as well
     // and retract them if non-erroring records overwrite them.
+
+    // Extract predicates, and "dummy column" information.
+    // Predicates are distinguished into temporal and non-temporal,
+    // as the non-temporal determine if a record is retained at all,
+    // and the temporal indicate how we should transform its timestamps
+    // when it is transmitted.
+    let mut temporal = Vec::new();
+    let mut predicates = Vec::new();
+    let mut position_or = (0..source_arity).map(|x| Some(x)).collect::<Vec<_>>();
+    if let Some(mut operators) = operators.take() {
+        for predicate in operators.predicates.drain(..) {
+            if predicate.contains_temporal() {
+                temporal.push(predicate);
+            } else {
+                predicates.push(predicate);
+            }
+        }
+        // Overwrite `position_or` to reflect `operators.projection`.
+        position_or = (0..source_arity)
+            .map(|col| {
+                if operators.projection.contains(&col) {
+                    Some(col)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+    }
+    let temporal_plan = if !temporal.is_empty() {
+        Some(crate::FilterPlan::create_from(temporal).unwrap_or_else(|e| panic!(e)))
+    } else {
+        None
+    };
+
     let result_stream = stream.unary_frontier(
         Exchange::new(move |x: &SourceOutput<Vec<u8>, Vec<u8>>| x.key.hashed()),
         "Upsert",
-        |_cap, _info| {
+        move |_cap, _info| {
             // this is a map of (time) -> (capability, ((key) -> (value with max
             // offset))) This is a BTreeMap because we want to ensure that if we
             // receive (key1, value1, time 5) and (key1, value2, time 7) that we
@@ -88,34 +123,6 @@ where
 
             let mut vector = Vec::new();
             let mut row_packer = repr::RowPacker::new();
-
-            // Extract predicates, and "dummy column" information.
-            // Predicates are distinguished into temporal and non-temporal,
-            // as the non-temporal determine if a record is retained at all,
-            // and the temporal indicate how we should transform its timestamps
-            // when it is transmitted.
-            let mut temporal = Vec::new();
-            let mut predicates = Vec::new();
-            let mut position_or = (0..source_arity).map(|x| Some(x)).collect::<Vec<_>>();
-            if let Some(mut operators) = operators.take() {
-                for predicate in operators.predicates.drain(..) {
-                    if predicate.contains_temporal() {
-                        temporal.push(predicate);
-                    } else {
-                        predicates.push(predicate);
-                    }
-                }
-                // Overwrite `position_or` to reflect `operators.projection`.
-                position_or = (0..source_arity)
-                    .map(|col| {
-                        if operators.projection.contains(&col) {
-                            Some(col)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>();
-            }
 
             move |input, output| {
                 // Digest each input, reduce by presented timestamp.
@@ -270,10 +277,26 @@ where
         },
     );
 
-    let (oks, errs) = result_stream.ok_err(|(data, time, diff)| match data {
+    let (mut oks, mut errs) = result_stream.ok_err(|(data, time, diff)| match data {
         Ok(data) => Ok((data, time, diff)),
         Err(err) => Err((err, time, diff)),
     });
+
+    // If we have temporal predicates do the thing they have to do.
+    if let Some(plan) = temporal_plan {
+        let (oks2, errs2) = oks.flat_map_fallible({
+            let mut datums = crate::render::datum_vec::DatumVec::new();
+            move |(row, time, diff)| {
+                let mut datums_local = datums.borrow_with(&row);
+                let row_clone = row.clone();
+                plan.evaluate(&mut datums_local, time, diff)
+                    .map(move |time_diff| time_diff.map(|(t, d)| (row_clone.clone(), t, d)))
+            }
+        });
+
+        oks = oks2;
+        errs = errs.concat(&errs2);
+    }
 
     (oks.as_collection(), Some(errs.as_collection()))
 }
