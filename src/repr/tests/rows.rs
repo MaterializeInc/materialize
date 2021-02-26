@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
-use repr::{Datum, RowPacker};
+use repr::{adt::decimal::Significand, Datum, RowPacker};
 use uuid::Uuid;
 
 /// A type similar to [`Datum`] that can be proptest-generated.
@@ -14,24 +14,33 @@ enum PropertizedDatum {
     Float32(f32),
     Float64(f64),
 
-    // TODO:
+    // TODO: these variants just need a strategy defined:
     // #[proptest()]
     // Date(NaiveDate),
     // Time(NaiveTime),
     // Timestamp(NaiveDateTime),
     // TimestampTz(DateTime<Utc>),
     // Interval(Interval),
-    // Decimal(Significand),
+    #[proptest(strategy = "arb_significand().prop_map(PropertizedDatum::Decimal)")]
+    Decimal(Significand),
+
     Bytes(Vec<u8>),
     String(String),
-    // TODO:
+
+    // TODO: these variants need reimplementation of the corresponding types:
     // Array(Array<'a>),
     // List(DatumList<'a>),
     // Map(DatumMap<'a>),
     JsonNull,
-    // TODO:
-    // Uuid(Uuid),
+
+    #[proptest(value = "PropertizedDatum::Uuid(Uuid::nil())")]
+    Uuid(Uuid),
+
     Dummy,
+}
+
+fn arb_significand() -> BoxedStrategy<Significand> {
+    any::<i128>().prop_map(|v| Significand::new(v)).boxed()
 }
 
 impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
@@ -44,9 +53,11 @@ impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
             Int64(i) => Datum::from(*i),
             Float32(f) => Datum::from(*f),
             Float64(f) => Datum::from(*f),
+            Decimal(s) => Datum::from(*s),
             Bytes(b) => Datum::from(&b[..]),
             String(s) => Datum::from(s.as_str()),
             JsonNull => Datum::JsonNull,
+            Uuid(u) => Datum::from(*u),
             Dummy => Datum::Dummy,
         }
     }
