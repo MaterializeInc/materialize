@@ -49,9 +49,11 @@
 
                function convert_to_result(row) {
                     return {benchmark_id: row[0],
-                            git_revision: row[1],
-                            num_workers: parseInt(row[2]),
-                            rows_per_second: parseInt(row[4])
+                            run_id: row[1],
+                            git_revision: row[2],
+                            num_workers: parseInt(row[3]),
+                            result: row[4],
+                            rows_per_second: parseInt(row[5])
                            };
                 }
 
@@ -106,15 +108,16 @@
                 var connection = new WebSocket(path);
 
                function convert_to_progress(row) {
-                    var start_ms = parseInt(row[1]);
+                    var start_ms = parseInt(row[2]);
                     return {
-                            run_id: row[0],
+                            benchmark_id: row[0],
+                            run_id: row[1],
                             start_time: new Date(start_ms),
-                            runtime: row[2] ? parseInt(row[2]) : Date().getTime - start_ms,
-                            git_ref: row[3],
-                            mz_workers: parseInt(row[4]),
-                            end_time: row[5] ? new Date(row[5]) : new Date(),
-                            result: row[6]
+                            runtime: row[3] ? parseInt(row[3]) : Date().getTime - start_ms,
+                            git_ref: row[4],
+                            mz_workers: parseInt(row[5]),
+                            end_time: row[6] ? new Date(row[6]) : new Date(),
+                            result: row[7]
                            };
                 }
 

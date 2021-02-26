@@ -13,4 +13,4 @@ MZFROM wikirecent-app
 COPY templates /app/templates
 
 # Override the views that we expose via TAIL
-CMD ["benchmark_results", "benchmark_progress"]
+CMD ["--dbhost=perf-dash-metrics", "--dbport=8675", "benchmark_results", "benchmark_progress"]

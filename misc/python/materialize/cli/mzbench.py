@@ -18,6 +18,7 @@ import pathlib
 import subprocess
 import sys
 import typing
+import uuid
 
 
 def mzbuild_tag(git_ref: str) -> str:
