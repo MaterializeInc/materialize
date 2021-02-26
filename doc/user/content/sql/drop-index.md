@@ -16,6 +16,9 @@ do not have any indexes.)
 Field | Use
 ------|-----
 _view&lowbar;name_ | The name of the index you want to remove.
+`CASCADE` | Automatically removes any objects that depend on the index, as well as the index.
+`IF EXISTS`  |  Do not issue an error if the named index doesn't exist.
+`RESTRICT`  |  Prevents removal of the index if any objects depend on it. This is the default.
 
 ## Details
 
@@ -27,8 +30,8 @@ VIEW`](../create-view).
 
 ### Primary indexes
 
-By default, materialized views only have one index, which we call the "primary
-index," and stores the result set of the materialized view's embedded `SELECT`
+By default, materialized views only have one index, called the "primary
+index," which stores the result set of the materialized view's embedded `SELECT`
 statement. You can identify the primary index by its name, which follows the
 format `<view name>_primary_idx`.
 
@@ -43,6 +46,35 @@ Alternatively, you can also [`CREATE INDEX`](../create-index) to materialize any
 view.
 
 ## Examples
+
+### Drop indexes (no dependencies)
+
+```sql
+SHOW VIEWS;
+```
+```nofmt
++-----------------------------------+
+| VIEWS                             |
+|-----------------------------------|
+| ...                               |
+| q01                               |
++-----------------------------------+
+```
+```sql
+SHOW INDEXES FROM q01;
+```
+```nofmt
++------------------------+--------------------------------+-----
+| View                   | Key_name                       | ...
+|------------------------+--------------------------------+----
+| materialize.public.q01 | materialize.public.q01_geo_idx | ...
++------------------------+--------------------------------+-----
+```
+```sql
+DROP INDEX materialize.public.q01_geo_idx;
+```
+
+### Drop indexes with dependent objects
 
 ```sql
 SHOW VIEWS;
