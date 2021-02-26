@@ -128,6 +128,11 @@ def scrape(args: argparse.Namespace) -> int:
 def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: datetime.datetime,
         rows_per_second: int = 0, result: str = "passed"):
     """Write the results of this benchmark to the Kafka topic"""
+    metrics.write_metric('dev.mtrlz.benchmarks.runs.results.v0',
+                         {"run_id": args.mzbench_run_id},
+                         {"end_ms": int(time.time() * 1000),
+                          "rows_per_second": rows_per_second,
+                          "result": result})
 
     # TODO: Construct the URL externally from this script
     # Create parameters to see a dashboard with the metrics from this benchmark run
@@ -140,24 +145,6 @@ def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: d
                 "tz": "UTC"
              })
     dashboard_url = urllib.parse.urlunparse(('http', args.grafana_location, path, '', query, ''))
-
-    metrics.write_metric('dev.mtrlz.benchmarks.runs.results.v0',
-                         {"run_id": args.mzbench_run_id},
-                         {"end_ms": int(time.time() * 1000),
-                          "result": result})
-
-    metrics.write_metric('dev.mtrlz.benchmarks.results.v0',
-                         {"benchmark_id": args.mzbench_id},
-                         {"passed": result == "passed",
-                          "rows_per_second": rows_per_second,
-                          "git_ref": args.mzbench_git_ref,
-                          "mzbench_iteration": 0,
-                          "mz_workers": args.mz_workers,
-                          "start_ms": int(start.timestamp()) * 1000,
-                          "end_ms": int(dateparser.parse('now').timestamp()) *  1000,
-                          "dashboard_url": dashboard_url
-                        })
-
 
     print(f'Grafana URL: {dashboard_url}')
 

@@ -7,23 +7,6 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
-CREATE SOURCE benchmark_results_v0
-FROM KAFKA BROKER 'kafka:9093'
-TOPIC 'dev.mtrlz.benchmarks.results.v0'
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
-ENVELOPE UPSERT
-FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
-
-CREATE MATERIALIZED VIEW benchmark_results AS SELECT
-    benchmark_id,
-    git_ref,
-    mz_workers,
-    passed,
-    rows_per_second,
-    start_ms,
-    end_ms
-FROM benchmark_results_v0;
-
 CREATE SOURCE benchmark_run_begin_v0
 FROM KAFKA BROKER 'kafka:9093'
 TOPIC 'dev.mtrlz.benchmarks.runs.begin.v0'
@@ -48,3 +31,12 @@ CREATE OR REPLACE MATERIALIZED VIEW benchmark_progress AS
         CASE WHEN br.result IS NOT NULL THEN br.result ELSE 'running' END AS result
     FROM benchmark_run_begin_v0 AS bb
     LEFT JOIN benchmark_run_results_v0 AS br ON bb.run_id = br.run_id;
+
+CREATE OR REPLACE MATERIALIZED VIEW benchmark_results AS
+    SELECT bb.run_id,
+           bb.git_ref,
+           bb.mz_workers,
+           br.result,
+           br.rows_per_second
+    FROM benchmark_run_begin_v0 AS bb
+    JOIN benchmark_run_results_v0 AS br ON bb.run_id = br.run_id;
