@@ -111,11 +111,15 @@ def main(args: argparse.Namespace) -> None:
         iterations, worker_counts, git_references
     ):
 
+        # Sadly, environment variables are the only way to pass this information into containers
+        # started by mzcompose
         child_env = os.environ.copy()
         child_env["MZ_ROOT"] = mz_root
         child_env["MZ_WORKERS"] = str(worker_count)
+        child_env["MZBENCH_ID"] = args.benchmark_id
         child_env["MZBUILD_WAIT_FOR_IMAGE"] = "true"
         if git_ref:
+            child_env["MZBENCH_GIT_REF"] = git_ref
             child_env["MZBUILD_MATERIALIZED_TAG"] = mzbuild_tag(git_ref)
 
         try:
@@ -123,6 +127,7 @@ def main(args: argparse.Namespace) -> None:
                 run_benchmark, env=child_env, stderr=subprocess.STDOUT
             )
         except (subprocess.CalledProcessError,) as e:
+            # TODO: Don't exit with error on simple benchmark failure
             print(
                 f"Setup benchmark failed! Output from failed command:\n{e.output.decode()}"
             )
@@ -141,7 +146,7 @@ def main(args: argparse.Namespace) -> None:
 
         results_writer.writerow(
             {
-                "git_revision": git_ref if git_ref else "NONE",
+                "git_revision": git_ref if git_ref else "None",
                 "num_workers": worker_count,
                 "iteration": iteration,
                 "seconds_taken": seconds_taken,
@@ -179,6 +184,14 @@ def enumerate_cpu_counts() -> typing.List[int]:
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "-b",
+        "--benchmark-id",
+        type=str,
+        default=uuid.uuid4(),
+        help="Pseudo-unique identifier to use for this benchmark",
+    )
 
     parser.add_argument(
         "-n",
