@@ -18,9 +18,6 @@ RUN pip install -r /tmp/requirements.txt
 RUN mkdir /app
 COPY src /app
 
-# Add our executable scripts into the container
-COPY utils /usr/local/bin
-
 WORKDIR /app
 ENTRYPOINT ["python3", "serve.py"]
 CMD ["benchmark_results", "benchmark_progress", "time_per_worker"]
