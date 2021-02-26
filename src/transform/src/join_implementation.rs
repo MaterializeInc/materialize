@@ -85,6 +85,12 @@ impl JoinImplementation {
             ..
         } = relation
         {
+            // Canonicalize the equivalence classes
+            for equivalence in equivalences.iter_mut() {
+                equivalence.sort();
+            }
+            equivalences.sort();
+
             let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
             // Common information of broad utility.
             let input_mapper = JoinInputMapper::new_from_input_types(&input_types);
@@ -286,11 +292,6 @@ mod differential {
             implementation,
         } = &mut new_join
         {
-            for equivalence in equivalences.iter_mut() {
-                equivalence.sort();
-            }
-            equivalences.sort();
-
             // We prefer a starting point based on the characteristics of the other input arrangements.
             // We could change this preference at any point, but the list of orders should still inform.
             // Important, we should choose something stable under re-ordering, to converge under fixed
