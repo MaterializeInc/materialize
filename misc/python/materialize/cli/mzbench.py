@@ -190,7 +190,7 @@ if __name__ == "__main__":
         "-b",
         "--benchmark-id",
         type=str,
-        default=uuid.uuid4(),
+        default=str(uuid.uuid4()),
         help="Pseudo-unique identifier to use for this benchmark",
     )
 
