@@ -14,12 +14,14 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection};
 
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::generic::Operator;
+use timely::dataflow::operators::{generic::Operator, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
+use dataflow_types::{DataflowError, DecodeError, LinearOperator};
+use expr::{EvalError, MirScalarExpr};
 use log::error;
-use repr::{Diff, Row, Timestamp};
+use repr::{Datum, Diff, Row, RowArena, Timestamp};
 
 use crate::decode::DecoderState;
 use crate::source::{SourceData, SourceOutput};
@@ -35,6 +37,8 @@ pub fn decode_stream<G>(
     as_of_frontier: Antichain<Timestamp>,
     mut key_decoder_state: Box<dyn DecoderState>,
     mut value_decoder_state: Box<dyn DecoderState>,
+    operators: &mut Option<LinearOperator>,
+    source_arity: usize,
 ) -> (
     Collection<G, Row, Diff>,
     Option<Collection<G, dataflow_types::DataflowError, Diff>>,
@@ -60,7 +64,15 @@ where
     // to specify that they believe that they have a large number of unique
     // keys, at which point materialize may be more performant if it runs
     // decoding/linear operators before deduplicating.
-    let ok_stream = stream.unary_frontier(
+    //
+    // The method also takes in `operators` which describes predicates that can
+    // be applied and columns of the data that can be blanked out. We can apply
+    // these operations but must be careful: for example, we can apply predicates
+    // before staging the records, but we need to record observe the result as a
+    // `None` value to ensure that it prompts dropping any held values with the
+    // same key. If the predicates produce errors, we should notice these as well
+    // and retract them if non-erroring records overwrite them.
+    let result_stream = stream.unary_frontier(
         Exchange::new(move |x: &SourceOutput<Vec<u8>, Vec<u8>>| x.key.hashed()),
         "Upsert",
         |_cap, _info| {
@@ -76,6 +88,34 @@ where
 
             let mut vector = Vec::new();
             let mut row_packer = repr::RowPacker::new();
+
+            // Extract predicates, and "dummy column" information.
+            // Predicates are distinguished into temporal and non-temporal,
+            // as the non-temporal determine if a record is retained at all,
+            // and the temporal indicate how we should transform its timestamps
+            // when it is transmitted.
+            let mut temporal = Vec::new();
+            let mut predicates = Vec::new();
+            let mut position_or = (0..source_arity).map(|x| Some(x)).collect::<Vec<_>>();
+            if let Some(mut operators) = operators.take() {
+                for predicate in operators.predicates.drain(..) {
+                    if predicate.contains_temporal() {
+                        temporal.push(predicate);
+                    } else {
+                        predicates.push(predicate);
+                    }
+                }
+                // Overwrite `position_or` to reflect `operators.projection`.
+                position_or = (0..source_arity)
+                    .map(|col| {
+                        if operators.projection.contains(&col) {
+                            Some(col)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+            }
 
             move |input, output| {
                 // Digest each input, reduce by presented timestamp.
@@ -150,36 +190,65 @@ where
                                             Ok(value) => {
                                                 if let Some(value) = value {
                                                     // prepend key to row
-                                                    row_packer.extend_by_row(&decoded_key);
-                                                    row_packer.extend_by_row(&value);
-                                                    Ok(Some(row_packer.finish_and_reuse()))
+                                                    let temp_storage = RowArena::new();
+                                                    // Unpack rows to apply predicates and projections.
+                                                    // This could be optimized with MapFilterProject.
+                                                    let mut datums =
+                                                        Vec::with_capacity(source_arity);
+                                                    datums.extend(decoded_key.iter());
+                                                    datums.extend(value.iter());
+
+                                                    match evaluate_predicates(
+                                                        &predicates,
+                                                        &datums[..],
+                                                        &temp_storage,
+                                                    ) {
+                                                        Ok(true) => {
+                                                            row_packer.clear();
+                                                            row_packer.extend(
+                                                                position_or.iter().map(
+                                                                    |x| match x {
+                                                                        Some(column) => {
+                                                                            datums[*column]
+                                                                        }
+                                                                        None => Datum::Dummy,
+                                                                    },
+                                                                ),
+                                                            );
+                                                            Ok(Some(row_packer.finish_and_reuse()))
+                                                        }
+                                                        Ok(false) => Ok(None),
+                                                        Err(e) => Err(DataflowError::from(e)),
+                                                    }
                                                 } else {
                                                     Ok(None)
                                                 }
                                             }
-                                            Err(err) => Err(err),
+                                            Err(err) => Err(DataflowError::DecodeError(
+                                                DecodeError::Text(err),
+                                            )),
                                         }
                                     };
-                                    if let Ok(decoded_value) = decoded_value {
-                                        // TODO: add linear operators such as
-                                        // filters and projects?
-                                        let old_value = if let Some(new_value) = &decoded_value {
-                                            current_values.insert(decoded_key, new_value.clone())
-                                        } else {
-                                            current_values.remove(&decoded_key)
-                                        };
-                                        if let Some(old_value) = old_value {
-                                            // retract old value
-                                            session.give((old_value, cap.time().clone(), -1));
-                                        }
-                                        if let Some(new_value) = decoded_value {
-                                            // give new value
-                                            session.give((new_value, cap.time().clone(), 1));
-                                        }
+                                    // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
+                                    // We store errors as well as non-None values, so that they can be
+                                    // retracted if new rows show up for the same key.
+                                    let new_value = decoded_value.transpose();
+                                    let old_value = if let Some(new_value) = &new_value {
+                                        current_values.insert(decoded_key, new_value.clone())
+                                    } else {
+                                        current_values.remove(&decoded_key)
+                                    };
+                                    if let Some(old_value) = old_value {
+                                        // retract old value
+                                        session.give((old_value, cap.time().clone(), -1));
+                                    }
+                                    if let Some(new_value) = new_value {
+                                        // give new value
+                                        session.give((new_value, cap.time().clone(), 1));
                                     }
                                 }
                                 Err(err) => {
-                                    error!("{}", err);
+                                    error!("key decoding error: {}", err);
                                 }
                             }
                         }
@@ -201,5 +270,23 @@ where
         },
     );
 
-    (ok_stream.as_collection(), None)
+    let (oks, errs) = result_stream.ok_err(|(data, time, diff)| match data {
+        Ok(data) => Ok((data, time, diff)),
+        Err(err) => Err((err, time, diff)),
+    });
+
+    (oks.as_collection(), Some(errs.as_collection()))
+}
+
+fn evaluate_predicates<'a>(
+    predicates: &[MirScalarExpr],
+    datums: &[Datum<'a>],
+    arena: &'a RowArena,
+) -> Result<bool, EvalError> {
+    for predicate in predicates.iter() {
+        if predicate.eval(&datums[..], &arena)? != Datum::True {
+            return Ok(false);
+        }
+    }
+    return Ok(true);
 }
