@@ -918,6 +918,9 @@ impl Coordinator {
             .retain(|(_, frontier)| frontier != &Antichain::new());
         if !self.since_updates.is_empty() {
             let since_updates = mem::take(&mut self.since_updates);
+            if let Some(tables) = &mut self.persisted_tables {
+                tables.allow_compaction(&since_updates);
+            }
             self.broadcast(SequencedCommand::AllowCompaction(since_updates));
         }
     }

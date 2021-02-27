@@ -9,7 +9,8 @@
 
 use std::path::PathBuf;
 
-use log::error;
+use log::{debug, error};
+use timely::progress::Antichain;
 use tokio::sync::mpsc;
 
 use dataflow_types::Update;
@@ -131,9 +132,10 @@ impl PersistentTables {
             self.disabled = true;
             return;
         }
-        self.compacter_tx
-            .send(CompacterMessage::Add(id))
-            .expect("compacter receiver should not drop first");
+        if let Err(e) = self.compacter_tx.send(CompacterMessage::Add(id)) {
+            debug!("compacter dropped, disabling WAL: {}", e);
+            self.disabled = true;
+        }
     }
 
     pub fn destroy(&mut self, id: GlobalId) {
@@ -149,9 +151,10 @@ impl PersistentTables {
             self.disabled = true;
             return;
         }
-        self.compacter_tx
-            .send(CompacterMessage::Drop(id))
-            .expect("compacter receiver should not drop first");
+        if let Err(e) = self.compacter_tx.send(CompacterMessage::Drop(id)) {
+            debug!("compacter dropped, disabling WAL: {}", e);
+            self.disabled = true;
+        }
     }
 
     pub fn write(&mut self, id: GlobalId, updates: &[Update]) {
@@ -164,6 +167,26 @@ impl PersistentTables {
                 id, e
             );
             self.disabled = true;
+        }
+    }
+
+    pub fn allow_compaction(&mut self, since_updates: &[(GlobalId, Antichain<Timestamp>)]) {
+        if self.disabled {
+            return;
+        }
+
+        for (id, times) in since_updates {
+            let times_list = times.elements();
+
+            if times_list.len() == 1 {
+                if let Err(e) = self
+                    .compacter_tx
+                    .send(CompacterMessage::AllowCompaction(*id, times_list[0]))
+                {
+                    debug!("compacter dropped, disabling WAL: {}", e);
+                    self.disabled = true;
+                }
+            }
         }
     }
 }

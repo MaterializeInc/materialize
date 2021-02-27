@@ -36,7 +36,7 @@ pub enum CompacterMessage {
     Add(GlobalId),
     Drop(GlobalId),
     Resume(GlobalId, Trace),
-    AllowCompaction(Timestamp),
+    AllowCompaction(GlobalId, Timestamp),
 }
 
 /// A Batch contains all of the updates that originated within some time range [lower, upper)
@@ -475,12 +475,13 @@ impl Compacter {
                 }
                 self.traces.insert(id, trace);
             }
-            CompacterMessage::AllowCompaction(frontier) => {
-                for (_, trace) in self.traces.iter_mut() {
+            CompacterMessage::AllowCompaction(id, frontier) => {
+                // We might get a lot of messages for relations we don't
+                // know about here so ignore those.
+                if let Some(trace) = self.traces.get_mut(&id) {
                     if let Some(compaction_frontier) = trace.compaction {
                         assert!(frontier >= compaction_frontier);
                     }
-
                     trace.compaction = Some(frontier);
                 }
             }
