@@ -21,7 +21,7 @@ serde = { version = "1.0.123", features = ["derive"] }
 serde_regex = "1.1.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.1.0" }
-url = { version = "2.2.0", features = ["serde"] }
+url = { version = "2.2.1", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 
 [dev-dependencies]

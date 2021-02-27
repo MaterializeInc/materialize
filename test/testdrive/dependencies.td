@@ -133,7 +133,6 @@ catalog item 's1' already exists
 > CREATE SINK s2 FROM s
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'v3'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  AS OF 0
 
 # Test that sinks cannot be depended upon.
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;

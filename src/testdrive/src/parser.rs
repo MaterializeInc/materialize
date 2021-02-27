@@ -520,9 +520,9 @@ impl ArgMap {
         }
     }
 
-    pub fn opt_bool(&mut self, name: &str) -> Result<bool, String> {
-        match self.opt_string(name) {
-            Some(val) => {
+    pub fn opt_bool(&mut self, name: &str) -> Result<Option<bool>, String> {
+        self.opt_string(name)
+            .map(|val| {
                 if val == "true" {
                     Ok(true)
                 } else if val == "false" {
@@ -530,9 +530,8 @@ impl ArgMap {
                 } else {
                     Err(format!("bad value for boolean parameter {}: {}", name, val))
                 }
-            }
-            None => Ok(false),
-        }
+            })
+            .transpose()
     }
 
     pub fn done(&self) -> Result<(), String> {

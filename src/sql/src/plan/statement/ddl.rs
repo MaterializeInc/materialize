@@ -299,15 +299,33 @@ pub fn plan_create_source(
                     key_schema,
                     value_schema,
                     schema_registry_config,
+                    confluent_wire_format,
                 } = match schema {
                     // TODO(jldlaughlin): we need a way to pass in primary key information
                     // when building a source from a string or file.
-                    AvroSchema::Schema(sql_parser::ast::Schema::Inline(schema)) => Schema {
-                        key_schema: None,
-                        value_schema: schema.clone(),
-                        schema_registry_config: None,
-                    },
-                    AvroSchema::Schema(sql_parser::ast::Schema::File(_)) => {
+                    AvroSchema::Schema {
+                        schema: sql_parser::ast::Schema::Inline(schema),
+                        with_options,
+                    } => {
+                        with_options! {
+                            struct ConfluentMagic {
+                                confluent_wire_format: bool,
+                            }
+                        }
+
+                        Schema {
+                            key_schema: None,
+                            value_schema: schema.clone(),
+                            schema_registry_config: None,
+                            confluent_wire_format: ConfluentMagic::try_from(with_options.clone())?
+                                .confluent_wire_format
+                                .unwrap_or(true),
+                        }
+                    }
+                    AvroSchema::Schema {
+                        schema: sql_parser::ast::Schema::File(_),
+                        ..
+                    } => {
                         unreachable!("File schema should already have been inlined")
                     }
                     AvroSchema::CsrUrl {
@@ -329,6 +347,7 @@ pub fn plan_create_source(
                                 key_schema: seed.key_schema.clone(),
                                 value_schema: seed.value_schema.clone(),
                                 schema_registry_config: Some(ccsr_config),
+                                confluent_wire_format: true,
                             }
                         } else {
                             unreachable!("CSR seed resolution should already have been called")
@@ -340,6 +359,7 @@ pub fn plan_create_source(
                     key_schema,
                     value_schema,
                     schema_registry_config,
+                    confluent_wire_format,
                 })
             }
             Format::Protobuf {
@@ -787,9 +807,7 @@ pub fn plan_create_source(
     // TODO(brennan): They should not depend on the envelope either. Figure out a way to
     // make all of this more tasteful.
     match (&encoding, &envelope) {
-        (DataEncoding::Avro { .. }, _)
-        | (DataEncoding::Protobuf { .. }, _)
-        | (_, SourceEnvelope::Debezium(_)) => (),
+        (DataEncoding::Avro { .. }, _) | (_, SourceEnvelope::Debezium(_)) => (),
         _ => {
             for (name, ty) in external_connector.metadata_columns() {
                 bare_desc = bare_desc.with_column(name, ty);
@@ -946,10 +964,10 @@ fn kafka_sink_builder(
         value_desc.clone(),
         include_consistency,
     );
-    let value_schema = encoder.value_writer_schema().canonical_form();
+    let value_schema = encoder.value_writer_schema().to_string();
     let key_schema = encoder
         .key_writer_schema()
-        .map(|key_schema| key_schema.canonical_form());
+        .map(|key_schema| key_schema.to_string());
 
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
@@ -1134,7 +1152,10 @@ pub fn plan_create_sink(
         }
     };
 
-    let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
+    if as_of.is_some() {
+        bail!("CREATE SINK ... AS OF is no longer supported");
+    }
+
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
         Connector::Kafka { broker, topic, .. } => kafka_sink_builder(
@@ -1170,7 +1191,6 @@ pub fn plan_create_sink(
             envelope,
         },
         with_snapshot,
-        as_of,
         if_not_exists,
         depends_on,
     })

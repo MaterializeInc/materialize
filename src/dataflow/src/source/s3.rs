@@ -178,7 +178,7 @@ async fn download_objects_task(
     aws_info: aws::ConnectInfo,
     activator: SyncActivator,
 ) {
-    let client = match aws_util::s3::client(aws_info).await {
+    let client = match aws_util::client::s3(aws_info).await {
         Ok(client) => client,
         Err(e) => {
             tx.send(Err(anyhow!("Unable to create s3 client: {}", e)))
@@ -246,7 +246,7 @@ async fn scan_bucket_task(
     aws_info: aws::ConnectInfo,
     tx: tokio_mpsc::Sender<anyhow::Result<KeyInfo>>,
 ) {
-    let client = match aws_util::s3::client(aws_info).await {
+    let client = match aws_util::client::s3(aws_info).await {
         Ok(client) => client,
         Err(e) => {
             tx.send(Err(anyhow!("Unable to create s3 client: {}", e)))
@@ -346,7 +346,7 @@ async fn read_sqs_task(
         source_id
     );
 
-    let client = match aws_util::sqs::client(aws_info).await {
+    let client = match aws_util::client::sqs(aws_info).await {
         Ok(client) => client,
         Err(e) => {
             tx.send(Err(anyhow!("Unable to create sqs client: {}", e)))
@@ -472,7 +472,17 @@ async fn process_message(
         let event: Result<Event, _> = serde_json::from_str(body);
         match event {
             Ok(event) => {
+                if event.records.is_empty() {
+                    log::debug!("sqs event is surpsingly empty {:#?}", event);
+                }
+
                 for record in event.records {
+                    log::trace!(
+                        "processing message from sqs for key={} type={:?}",
+                        record.s3.object.key,
+                        record.event_type
+                    );
+
                     if matches!(
                         record.event_type,
                         EventType::ObjectCreatedPut
@@ -504,7 +514,9 @@ async fn process_message(
             Err(_) => {
                 let test: Result<TestEvent, _> = serde_json::from_str(&body);
                 match test {
-                    Ok(_) => {} // expected when connecting to a new queue
+                    Ok(_) => {
+                        log::trace!("got test event for new queue");
+                    }
                     Err(_) => {
                         log::error!(
                             "[customer-data] Unrecognized message from SQS queue {}: {}",

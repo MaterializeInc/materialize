@@ -11,6 +11,7 @@ use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration
 
 use anyhow::anyhow;
 use differential_dataflow::capture::YieldingIter;
+use differential_dataflow::{AsCollection, Collection};
 use futures::executor::block_on;
 use log::warn;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
@@ -50,7 +51,10 @@ pub fn decode_avro_values<G>(
     envelope: &SourceEnvelope,
     schema: Schema,
     debug_name: &str,
-) -> Stream<G, (Row, Timestamp, Diff)>
+) -> (
+    Collection<G, Row, Diff>,
+    Option<Collection<G, dataflow_types::DataflowError, Diff>>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -69,7 +73,8 @@ where
     } else {
         None
     };
-    stream.pass_through("AvroValues").flat_map(
+
+    let stream = stream.pass_through("AvroValues").flat_map(
         move |(
             SourceOutput {
                 value,
@@ -116,7 +121,9 @@ where
                 .chain(diffs.after.into_iter())
                 .map(move |row| (row, r, d))
         },
-    )
+    );
+
+    (stream.as_collection(), None)
 }
 
 pub type PushSession<'a, R> =
@@ -234,6 +241,7 @@ pub(crate) fn get_decoder(
                 worker_index,
                 None,
                 None,
+                val_enc.confluent_wire_format,
             )
             .expect(avro_err),
         ),
@@ -248,13 +256,16 @@ fn decode_values_inner<G, V, C>(
     mut value_decoder_state: V,
     op_name: &str,
     contract: C,
-) -> Stream<G, (Row, Timestamp, Diff)>
+) -> (
+    Collection<G, Row, Diff>,
+    Option<Collection<G, dataflow_types::DataflowError, Diff>>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
     V: DecoderState + 'static,
     C: ParallelizationContract<Timestamp, SourceOutput<Vec<u8>, Vec<u8>>>,
 {
-    stream.unary(contract, &op_name, move |_, _| {
+    let stream = stream.unary(contract, &op_name, move |_, _| {
         move |input, output| {
             input.for_each(|cap, data| {
                 let mut session = output.session(&cap);
@@ -278,15 +289,24 @@ where
             });
             value_decoder_state.log_error_count();
         }
-    })
+    });
+    (stream.as_collection(), None)
 }
 
 fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     schema: &str,
     registry: Option<ccsr::ClientConfig>,
-) -> (Stream<G, (Row, Timestamp, Diff)>, Option<Box<dyn Any>>) {
-    let mut resolver = ConfluentAvroResolver::new(schema, registry).unwrap(); // We will have already checked validity of the schema by now, so this can't fail.
+    confluent_wire_format: bool,
+) -> (
+    (
+        Collection<G, Row, Diff>,
+        Option<Collection<G, dataflow_types::DataflowError, Diff>>,
+    ),
+    Option<Box<dyn Any>>,
+) {
+    // We will have already checked validity of the schema by now, so this can't fail.
+    let mut resolver = ConfluentAvroResolver::new(schema, registry, confluent_wire_format).unwrap();
     let channel = Rc::new(RefCell::new(VecDeque::new()));
     let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
     let mut vector = Vec::new();
@@ -339,7 +359,7 @@ fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
             *activator.borrow_mut() = Some(ac);
             YieldingIter::new_from(VdIterator(channel), Duration::from_millis(10))
         });
-    (stream, Some(token))
+    ((stream.as_collection(), None), Some(token))
 }
 
 /// Decode a stream of values from a stream of bytes.
@@ -357,7 +377,13 @@ pub fn decode_values<G>(
     operators: &mut Option<LinearOperator>,
     fast_forwarded: bool,
     desc: RelationDesc,
-) -> (Stream<G, (Row, Timestamp, Diff)>, Option<Box<dyn Any>>)
+) -> (
+    (
+        Collection<G, Row, Diff>,
+        Option<Collection<G, dataflow_types::DataflowError, Diff>>,
+    ),
+    Option<Box<dyn Any>>,
+)
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -371,9 +397,12 @@ where
             csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators),
             None,
         ),
-        (DataEncoding::Avro(enc), SourceEnvelope::CdcV2) => {
-            decode_cdcv2(stream, &enc.value_schema, enc.schema_registry_config)
-        }
+        (DataEncoding::Avro(enc), SourceEnvelope::CdcV2) => decode_cdcv2(
+            stream,
+            &enc.value_schema,
+            enc.schema_registry_config,
+            enc.confluent_wire_format,
+        ),
         (_, SourceEnvelope::CdcV2) => {
             unreachable!("Internal error: CDCv2 is not supported yet on non-Avro sources.")
         }
@@ -405,6 +434,7 @@ where
                         worker_index,
                         Some(dedup_strat),
                         dbz_key_indices,
+                        enc.confluent_wire_format,
                     )
                     .expect("Failed to create Avro decoder"),
                     &op_name,
@@ -425,6 +455,7 @@ where
                     worker_index,
                     None,
                     None,
+                    enc.confluent_wire_format,
                 )
                 .expect("Failed to create Avro decoder"),
                 &op_name,
@@ -439,7 +470,7 @@ where
             "Internal error: A non-Avro Debezium-envelope source should not have been created."
         ),
         (DataEncoding::Regex(RegexEncoding { regex }), SourceEnvelope::None) => {
-            (regex_fn(stream, regex, debug_name), None)
+            ((regex_fn(stream, regex, debug_name), None), None)
         }
         (DataEncoding::Protobuf(enc), SourceEnvelope::None) => (
             decode_values_inner(
