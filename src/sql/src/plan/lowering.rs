@@ -478,6 +478,9 @@ impl HirRelationExpr {
                 // Threshold is uncomplicated.
                 input.applied_to(id_gen, get_outer, col_map).threshold()
             }
+            DeclareKeys { input, keys } => input
+                .applied_to(id_gen, get_outer, col_map)
+                .declare_keys(keys),
         }
     }
 }

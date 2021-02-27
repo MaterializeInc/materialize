@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::HashMap;
-use std::future::Future;
 
 use anyhow::bail;
 use hyper::{header, Body, Request, Response, StatusCode};
@@ -16,72 +15,80 @@ use serde::Serialize;
 use serde_json::{Number, Value};
 use url::form_urlencoded;
 
-use crate::http::{util, Server};
+use crate::http::util;
 use coord::ExecuteResponse;
 use dataflow_types::PeekResponse;
 use ore::collections::CollectionExt;
 use repr::{Datum, ScalarType};
-use sql::plan::Params;
 use sql_parser::parser::parse_statements;
 
-impl Server {
-    pub fn handle_sql(
-        &self,
-        req: Request<Body>,
-        user: &str,
-    ) -> impl Future<Output = anyhow::Result<Response<Body>>> {
-        let coord_client = self.coord_client.clone();
-        let user = user.to_owned();
-        async move {
-            let res = async {
-                let body = hyper::body::to_bytes(req).await?;
-                let body: HashMap<_, _> = form_urlencoded::parse(&body).collect();
-                let sql = match body.get("sql") {
-                    Some(sql) => sql,
-                    None => bail!("expected `sql` parameter"),
-                };
-                let res = query_sql(coord_client, sql.to_string(), Params::empty(), user).await?;
-                Ok(Response::builder()
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(serde_json::to_string(&res)?))
-                    .unwrap())
-            }
-            .await;
-            match res {
-                Ok(res) => Ok(res),
-                Err(e) => Ok(util::error_response(StatusCode::BAD_REQUEST, e.to_string())),
-            }
-        }
+pub async fn handle_sql(
+    req: Request<Body>,
+    coord_client: &mut coord::SessionClient,
+) -> Result<Response<Body>, anyhow::Error> {
+    let res = async {
+        let body = hyper::body::to_bytes(req).await?;
+        let body: HashMap<_, _> = form_urlencoded::parse(&body).collect();
+        let sql = match body.get("sql") {
+            Some(sql) => sql,
+            None => bail!("expected `sql` parameter"),
+        };
+        let res = query_sql(coord_client, sql.to_string()).await?;
+        Ok(Response::builder()
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_string(&res)?))
+            .unwrap())
+    }
+    .await;
+    match res {
+        Ok(res) => Ok(res),
+        Err(e) => Ok(util::error_response(StatusCode::BAD_REQUEST, e.to_string())),
     }
 }
 
 /// Executes a single SQL statement as the specified user.
 async fn query_sql(
-    mut coord_client: coord::Client,
+    coord_client: &mut coord::SessionClient,
     sql: String,
-    params: Params,
-    user: String,
 ) -> anyhow::Result<SqlResult> {
     let stmts = parse_statements(&sql)?;
     if stmts.len() != 1 {
         bail!("expected exactly 1 statement");
     }
     let stmt = stmts.into_element();
-    let res = coord_client.execute(stmt, params, user).await?;
-    let rows = match res.response {
+
+    coord_client.session().start_transaction();
+
+    const EMPTY_PORTAL: &str = "";
+    let params = vec![];
+    coord_client
+        .declare(EMPTY_PORTAL.into(), stmt, params)
+        .await?;
+    let desc = coord_client
+        .session()
+        .get_portal(EMPTY_PORTAL)
+        .map(|portal| portal.desc.clone())
+        .expect("unnamed portal should be present");
+    if !desc.param_types.is_empty() {
+        bail!("parameters are not supported");
+    }
+
+    let res = coord_client.execute(EMPTY_PORTAL.into()).await?;
+
+    let rows = match res {
         ExecuteResponse::SendingRows(rows) => {
             let response = rows.await;
             response
         }
-        _ => bail!("unexpected ExecuteResponse type"),
+        _ => bail!("unsupported statement type"),
     };
     let rows = match rows {
         PeekResponse::Rows(rows) => rows,
         PeekResponse::Error(e) => bail!("{}", e),
-        _ => bail!("unexpected PeekResponse type"),
+        PeekResponse::Canceled => bail!("execution canceled"),
     };
     let mut sql_rows: Vec<Vec<Value>> = vec![];
-    let (col_names, col_types) = match res.desc {
+    let (col_names, col_types) = match desc.relation_desc {
         Some(desc) => (
             desc.iter_names()
                 .map(|name| name.map(|name| name.to_string()))

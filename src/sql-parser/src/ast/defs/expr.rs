@@ -87,7 +87,7 @@ pub enum Expr<T: AstInfo> {
     /// CAST an expression to a different data type e.g. `CAST(foo AS VARCHAR(123))`
     Cast {
         expr: Box<Expr<T>>,
-        data_type: DataType,
+        data_type: DataType<T>,
     },
     /// `expr COLLATE collation`
     Collate {

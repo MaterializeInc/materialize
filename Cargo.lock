@@ -164,27 +164,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-stream"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3670df70cbc01729f901f94c887814b3c68db038aad1329a418bae178bc5295c"
-dependencies = [
- "async-stream-impl",
- "futures-core",
-]
-
-[[package]]
-name = "async-stream-impl"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3548b8efc9f8e8a5a0a2808c5bd8451a9031b9e5b879a79590304ae928b0a70"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "async-trait"
 version = "0.1.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -241,6 +220,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_s3",
+ "rusoto_sqs",
  "rusoto_sts",
  "serde",
  "tokio",
@@ -693,13 +673,14 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02d96d1e189ef58269ebe5b97953da3274d83a93af647c2ddd6f9dab28cedb8d"
+checksum = "bae8f328835f8f5a6ceb6a7842a7f2d0c03692adb5c889347235d59194731fe3"
 dependencies = [
  "autocfg",
  "cfg-if 1.0.0",
  "lazy_static",
+ "loom",
 ]
 
 [[package]]
@@ -781,6 +762,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_s3",
+ "rusoto_sqs",
  "serde",
  "serde_json",
  "timely",
@@ -852,7 +834,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#2b12f29d951b60c6c1ef3db77fbba1568db5a2c3"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#e229d54f98224c59a72c83fee9192b03a2ce61aa"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -902,7 +884,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#2b12f29d951b60c6c1ef3db77fbba1568db5a2c3"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#e229d54f98224c59a72c83fee9192b03a2ce61aa"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -1043,9 +1025,9 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f26ecb66b4bdca6c1409b40fb255eefc2bd4f6d135dab3c3124f80ffa2a9661e"
+checksum = "17392a012ea30ef05a610aa97dfb49496e71c9f676b27879922ea5bdf60d9d3f"
 dependencies = [
  "atty",
  "humantime",
@@ -1064,6 +1046,7 @@ dependencies = [
  "csv",
  "encoding",
  "enum-iterator",
+ "hex",
  "hmac",
  "itertools",
  "md-5",
@@ -1322,6 +1305,19 @@ dependencies = [
  "honggfuzz",
  "repr",
  "sql-parser",
+]
+
+[[package]]
+name = "generator"
+version = "0.6.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9fed24fd1e18827652b4d55652899a1e9da8e54d91624dc3437a5bc3a9f9a9c"
+dependencies = [
+ "cc",
+ "libc",
+ "log",
+ "rustversion",
+ "winapi",
 ]
 
 [[package]]
@@ -1900,6 +1896,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "loom"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d44c73b4636e497b4917eb21c33539efa3816741a2d3ff26c6316f1b529481a4"
+dependencies = [
+ "cfg-if 1.0.0",
+ "generator",
+ "scoped-tls",
+]
+
+[[package]]
 name = "matchers"
 version = "0.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1921,7 +1928,6 @@ dependencies = [
  "anyhow",
  "askama",
  "assert_cmd",
- "async-stream",
  "async-trait",
  "backtrace",
  "build-info",
@@ -1988,9 +1994,11 @@ dependencies = [
  "tokio",
  "tokio-openssl",
  "tokio-postgres",
+ "tokio-stream",
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
  "walkdir",
 ]
 
@@ -2647,7 +2655,6 @@ dependencies = [
  "pgrepr",
  "postgres",
  "prometheus",
- "rand 0.8.3",
  "repr",
  "sql",
  "tokio",
@@ -2839,9 +2846,9 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.4.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffccebf7f721f18477a39f99a7bae543edd02a9850a2cbfe6c407f8cc291dd89"
+checksum = "a066eee7dbaf89a91078ceb15f56642c8d934eb2a639e7f098dd3f365651f55a"
 dependencies = [
  "backtrace",
  "lazy_static",
@@ -3047,9 +3054,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.8"
+version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "991431c3519a3f36861882da93630ce66b52918dcf1b8e2fd66b397fc96f28df"
+checksum = "c3d0b9745dc2debf507c8422de05d7226cc1f0644216dfdfead988f9b1ab32a7"
 dependencies = [
  "proc-macro2",
 ]
@@ -3082,7 +3089,7 @@ checksum = "0ef9e7e66b4468674bfcb0c81af8b7fa0bb154fa9f28eb840da5c447baeb8d7e"
 dependencies = [
  "libc",
  "rand_chacha 0.3.0",
- "rand_core 0.6.0",
+ "rand_core 0.6.2",
  "rand_hc 0.3.0",
 ]
 
@@ -3103,7 +3110,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e12735cf05c9e10bf21534da50a147b924d555dc7a547c42e6bb2d5b6017ae0d"
 dependencies = [
  "ppv-lite86",
- "rand_core 0.6.0",
+ "rand_core 0.6.2",
 ]
 
 [[package]]
@@ -3117,9 +3124,9 @@ dependencies = [
 
 [[package]]
 name = "rand_core"
-version = "0.6.0"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8b34ba8cfb21243bd8df91854c830ff0d785fff2e82ebd4434c2644cb9ada18"
+checksum = "34cf66eb183df1c5876e2dcf6b13d57340741e8dc255b48e40a26de954d06ae7"
 dependencies = [
  "getrandom 0.2.1",
 ]
@@ -3149,7 +3156,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3190ef7066a446f2e7f42e239d161e905420ccab01eb967c9eb27d21b2322a73"
 dependencies = [
- "rand_core 0.6.0",
+ "rand_core 0.6.2",
 ]
 
 [[package]]
@@ -3292,10 +3299,13 @@ dependencies = [
  "fast-float",
  "hex",
  "itertools",
+ "lazy_static",
+ "num-traits",
  "ordered-float",
  "ore",
  "rand 0.8.3",
  "regex",
+ "ryu",
  "serde",
  "serde_json",
  "serde_regex",
@@ -3439,6 +3449,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusoto_sqs"
+version = "0.46.0"
+source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "rusoto_core",
+ "serde_urlencoded",
+ "xml-rs",
+]
+
+[[package]]
 name = "rusoto_sts"
 version = "0.46.0"
 source = "git+https://github.com/rusoto/rusoto.git#31cf1506f9f4bd7af7a1f86ced3cec436913d518"
@@ -3483,10 +3506,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "ryu"
-version = "1.0.2"
+name = "rustversion"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfa8506c1de11c9c4e4c38863ccbe02a305c8188e85a05a784c9e11e1c3910c8"
+checksum = "cb5d2a036dc6d2d8fd16fde3498b04306e29bd193bf306a57427019b823d5acd"
+
+[[package]]
+name = "ryu"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71d301d4193d031abdd79ff7e3dd721168a9572ef3fe51a1517aba235bd8f86e"
 
 [[package]]
 name = "s3-datagen"
@@ -3538,6 +3567,12 @@ dependencies = [
  "lazy_static",
  "winapi",
 ]
+
+[[package]]
+name = "scoped-tls"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea6a9290e3c9cf0f18145ef7ffa62d68ee0bf5fcd651017e586dc7fd5da448c2"
 
 [[package]]
 name = "scopeguard"
@@ -3673,9 +3708,9 @@ dependencies = [
 
 [[package]]
 name = "sha-1"
-version = "0.9.3"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4b312c3731e3fe78a185e6b9b911a7aa715b8e31cce117975219aab2acf285d"
+checksum = "dfebf75d25bd900fd1e7d11501efab59bc846dbc76196839663e6637bba9f25f"
 dependencies = [
  "block-buffer",
  "cfg-if 1.0.0",
@@ -3781,9 +3816,9 @@ dependencies = [
 
 [[package]]
 name = "snap"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98d3306e84bf86710d6cd8b4c9c3b721d5454cc91a603180f8f8cd06cfd317b4"
+checksum = "dc725476a1398f0480d56cd0ad381f6f32acf2642704456f8f59a35df464b59a"
 
 [[package]]
 name = "socket2"
@@ -3808,6 +3843,7 @@ dependencies = [
  "chrono",
  "datadriven",
  "dataflow-types",
+ "enum-kinds",
  "expr",
  "futures",
  "globset",
@@ -4034,11 +4070,10 @@ dependencies = [
 
 [[package]]
 name = "sysinfo"
-version = "0.16.1"
+version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7c14e2f7068e99d8d3e3580787ffc6c7d21ad90393ff5e54523435197ccb43e6"
+checksum = "6c280c91abd1aed2e36be1bc8f56fbc7a2acbb2b58fbcac9641510179cc72dd9"
 dependencies = [
- "cc",
  "cfg-if 1.0.0",
  "core-foundation-sys",
  "doc-comment",
@@ -4177,6 +4212,7 @@ dependencies = [
  "rusoto_credential",
  "rusoto_kinesis",
  "rusoto_s3",
+ "rusoto_sqs",
  "rusoto_sts",
  "serde",
  "serde-protobuf",
@@ -4233,11 +4269,12 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#1cbfc99c12c45e8731ac284d8692abafc696ba02"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#84b11167d3aa26f69b04a12477af8afa06142566"
 dependencies = [
  "abomonation",
  "abomonation_derive",
  "crossbeam-channel",
+ "futures-util",
  "getopts",
  "serde",
  "serde_derive",
@@ -4249,12 +4286,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.11.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#1cbfc99c12c45e8731ac284d8692abafc696ba02"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#84b11167d3aa26f69b04a12477af8afa06142566"
 
 [[package]]
 name = "timely_communication"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#1cbfc99c12c45e8731ac284d8692abafc696ba02"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#84b11167d3aa26f69b04a12477af8afa06142566"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4270,7 +4307,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.11.1"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#1cbfc99c12c45e8731ac284d8692abafc696ba02"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#84b11167d3aa26f69b04a12477af8afa06142566"
 
 [[package]]
 name = "timely_sort"
@@ -4453,9 +4490,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-log"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e0f8c7178e13481ff6765bd169b33e8d554c5d2bbede5e32c356194be02b9b9"
+checksum = "a6923477a48e41c1951f1999ef8bb5a3023eb723ceadafe78ffb65dc366761e3"
 dependencies = [
  "lazy_static",
  "log",
@@ -4464,9 +4501,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-subscriber"
-version = "0.2.15"
+version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1fa8f0c8f4c594e4fc9debc1990deab13238077271ba84dd853d54902ee3401"
+checksum = "8ab8966ac3ca27126141f7999361cc97dd6fb4b71da04c02044fa9045d98bb96"
 dependencies = [
  "ansi_term 0.12.1",
  "lazy_static",
@@ -4562,9 +4599,9 @@ checksum = "826e7639553986605ec5979c7dd957c7895e93eabed50ab2ffa7f6128a75097c"
 
 [[package]]
 name = "url"
-version = "2.2.0"
+version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5909f2b0817350449ed73e8bcd81c8c3c8d9a7a5d8acba4b27db277f1868976e"
+checksum = "9ccd964113622c8e9322cfac19eb1004a07e636c545f325da085d5cdde6f1f8b"
 dependencies = [
  "form_urlencoded",
  "idna",

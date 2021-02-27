@@ -1029,7 +1029,10 @@ impl RowPacker {
 
         // Check that the number of elements written matches the dimension
         // information.
-        let cardinality = dims.iter().map(|d| d.length).product();
+        let cardinality = match dims {
+            [] => 0,
+            dims => dims.iter().map(|d| d.length).product(),
+        };
         if nelements != cardinality {
             self.data.truncate(start);
             return Err(InvalidArrayError::WrongCardinality {

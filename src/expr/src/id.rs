@@ -21,6 +21,12 @@ pub enum Id {
     Local(LocalId),
     /// An identifier that refers to a global dataflow.
     Global(GlobalId),
+    /// Bare sources don't (yet?) live in the same namespace as catalog items (including the final, possibly transformed source.)
+    /// This gives us a way to refer to them in relation expressions
+    BareSource(GlobalId),
+    /// Used to refer to a bare source within the RelationExpr defining the transformation of that source (before an ID has been
+    /// allocated for the bare source).
+    LocalBareSource,
 }
 
 impl fmt::Display for Id {
@@ -28,6 +34,8 @@ impl fmt::Display for Id {
         match self {
             Id::Local(id) => id.fmt(f),
             Id::Global(id) => id.fmt(f),
+            Id::BareSource(id) => write!(f, "{}(bare)", id),
+            Id::LocalBareSource => write!(f, "(bare source for this source)"),
         }
     }
 }
@@ -125,20 +133,20 @@ impl fmt::Display for SourceInstanceId {
 ///     Kafka -> partition
 ///     Kinesis -> shard
 ///     File -> only one
-///     S3 -> bucket
+///     S3 -> https://github.com/MaterializeInc/materialize/issues/5715
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
     Kinesis(String),
     File,
-    S3 { bucket: String },
+    S3,
 }
 
 impl fmt::Display for PartitionId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PartitionId::Kafka(id) => write!(f, "{}", id.to_string()),
-            PartitionId::S3 { bucket } => write!(f, "{}", bucket),
+            PartitionId::S3 => write!(f, "s3"),
             _ => write!(f, "0"),
         }
     }

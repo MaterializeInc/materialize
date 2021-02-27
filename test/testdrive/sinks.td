@@ -196,3 +196,32 @@ snk7        user
 snk8        user
 sink9       user
 sink10      user
+
+# test explicit partition count
+> CREATE SINK sink11 FROM foo
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink11'
+  WITH (partition_count=1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+# test explicit replication factor
+> CREATE SINK sink12 FROM foo
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink12'
+  WITH (replication_factor=1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+# test explicit partition count and replication factor
+> CREATE SINK sink13 FROM foo
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink13'
+  WITH (partition_count=1, replication_factor=1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+# test broker defaulted partition count and replication factor
+> CREATE SINK sink14 FROM foo
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink14'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+# test explicit request for broker defaulted partition count and replication factor
+> CREATE SINK sink15 FROM foo
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sink15'
+  WITH (partition_count=-1, replication_factor=-1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

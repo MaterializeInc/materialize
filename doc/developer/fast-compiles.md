@@ -1,9 +1,7 @@
 # Fast compiles
 
-Rust has notoriously slow compile times for the simplest of projects, and
-Materialize is not a simple project. This document attempts to capture the
-various lessons learned by Materialize engineers when optimizing machines for
-compiling Rust.
+This document attempts to capture the various lessons learned by Materialize
+engineers when optimizing machines for compiling Rust.
 
 ## Run Linux
 
@@ -65,12 +63,16 @@ hardware. A few Materialize employees have embarked on this quest so far:
   * Eli is building a similar desktop to Matt (early 2021).
     See: https://pcpartpicker.com/user/elindsey_/saved/BnTk99
 
-The jury is still out on whether more, slower cores (e.g., 5950x) is better than
-less, faster cores (e.g., 3970x) for the standard `cargo build` development
+The jury is still out on whether more, slower cores (e.g., 3970x) is better than
+less, faster cores (e.g., 5950x) for the standard `cargo build` development
 cycle.
 
 To date, no one has attempted to build a Linux laptop optimized for compilation
 performance.
+
+## Use a hosted machine
+
+Hetzner provides reasonably-priced many-core AMD machines hosted Germany or Finland. While some may be using workstation rather than true server-grade hardware, they provide significantly faster compilation times than a standard laptop.
 
 ## Community resources
 

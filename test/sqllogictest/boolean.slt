@@ -45,7 +45,7 @@ tR                true
 tRuE              true
 TRUE              true
 
-query error invalid input syntax for boolean: "blah"
+query error invalid input syntax for type boolean: "blah"
 SELECT 'blah'::bool
 
 query error NOT argument must have type boolean, not type integer

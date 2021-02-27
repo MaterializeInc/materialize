@@ -48,10 +48,89 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.7.1 %}}
 
+- **Breaking change.** Change the default
+  [`--logical-compaction-window`](/cli/#compaction-window) from 60 seconds to
+  1 millisecond.
+
+- **Breaking change.** Remove `CREATE SINK ... AS OF`, which did not have
+  sensible behavior after Materialize restarted. The intent is to reintroduce
+  this feature with a more formal model of `AS OF` timestamps. {{% gh 3467 %}}
+
+- Add the [`cbrt` function](/sql/functions/#numbers-func) for computing the
+  cube root of a [`double precision`](/sql/types/float).
+
+  Thanks to external contributor [@andrioni](https://github.com/andrioni).
+
+- Add the [`encode` and `decode` functions](/sql/functions/encode/) to convert
+  binary data to and from several textual representations.
+
+  Thanks to external contributor [@Posnet](https://github.com/Posnet).
+
+- Add many of the basic
+  [trigonometric functions](/sql/functions/#trigonometric-func).
+
+  Thanks again to external contributor [@andrioni](https://github.com/andrioni).
+
 - Multipartition Kafka sinks with consistency enabled will create single-partition
   consistency topics.
 
+- Kafka sinks are now written via an idempotent producer to avoid duplicate or out
+  of order messages.
+
+- **Breaking change.** Change the behavior of the
+  [`round` function](/sql/functions/#numbers-func) when applied to a `real` or
+  `double precision` argument to round ties to the nearest even number,
+  rather than away from zero. When applied to `numeric`, ties are rounded away
+  from zero, as before.
+
+  The new behavior matches PostgreSQL.
+
+- Support [multi-partition](/sql/create-sink/#with-options) kafka sinks {{% gh 5537 %}}.
+
+- Support [gzip-compressed](/sql/create-source/text-file/#compression) file sources {{% gh 5392 %}}.
+
+- Restore the `-D` command-line option as the short form of the
+  [`--data-directory`](/cli/#data-directory) option.
+
+- Allow setting [index parameters](/sql/alter-index/#available-parameters) when
+  creating an index via the new `WITH` clause to [`CREATE INDEX`]. In older
+  versions, setting these parameters required a separate call to [`ALTER
+  INDEX`](/sql/alter-index).
+
+- Fix a bug that prevented upgrading v0.6.1 or earlier nodes to v0.7.0 if they
+  contained:
+  -  Views whose embdedded queries contain functions whose arguments are functions {{% gh 5802 %}}.
+  -  Sinks using `WITH SNAPSHOT AS OF` {{% gh 5808 %}}.
+
+- Reduce memory usage and increase processing speed in materialized views
+  involving sources with the "upsert" envelope. {{% gh 5509 %}}.
+
+  Users of the [memory usage visualization](/ops/monitoring#memory-usage-visualization)
+  will see that the operator "UpsertArrange" has changed to "Upsert", and that
+  the "Upsert" operator no longer shows any records. Actually, the "Upsert"
+  operator still has a memory footprint proportional to the number of unique
+  keys in the source.
+
 {{% version-header v0.7.0 %}}
+
+- **Known issue.** You cannot upgrade nodes created with versions v0.6.1 or
+  earlier to v0.7.0 if they contain:
+
+  -  Views whose embdedded queries contain functions whose arguments are functions {{% gh 5802 %}}.
+  -  Sinks using `WITH SNAPSHOT AS OF...` {{% gh 5808 %}}.
+
+  If you encounter this issue, you can:
+
+  - Use a previous version of Materialize to drop the view or sink before upgrading.
+  - Skip upgrading to v0.7.0, and instead upgrade to v0.7.1 which contains fixes
+    for these bugs.
+
+  The next release (v0.7.1) contains fixes for these bugs.
+
+- **Known issue.** The `-D` command-line option, shorthand for the
+  `--data-directory` option, was inadvertently removed.
+
+  It will be restored in the next release.
 
 - **Breaking change.** Require a valid user name when [connecting to
   Materialize](/connect/cli#connection-details). Previously, Materialize did not
@@ -611,7 +690,7 @@ Document new timezone stuff and add a release note about it.
   alongside the data topic; the combination of these two topics is considered
   the Materialize change data capture (CDC) format.
 
-- Introduce the [`AS OF`](/sql/create-sink/#as-of) and
+- Introduce the `AS OF` and
   [`WITH SNAPSHOT`](/sql/create-sink/#with-snapshot-or-without-snapshot) options
   for `CREATE SINK` to provide more control over what data the sink will
   produce.
@@ -970,6 +1049,8 @@ Document new timezone stuff and add a release note about it.
 * [Architecture overview](/overview/architecture/)
 
 [`bytea`]: /sql/types/bytea
+[`ALTER INDEX`]: /sql/alter-index
+[`CREATE INDEX`]: /sql/create-index
 [`CREATE MATERIALIZED VIEW`]: /sql/create-materialized-view
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE VIEW`]: /sql/create-view

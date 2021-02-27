@@ -10,7 +10,10 @@
 //! System support functions.
 
 use std::alloc::{self, Layout};
+use std::io::{self, Write};
+use std::process;
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{bail, Context};
 use log::{trace, warn};
@@ -173,5 +176,22 @@ extern "C" fn handle_sigbus_sigsegv(_: i32) {
     // SIGSEGV.
     //
     // [0]: https://man7.org/linux/man-pages/man7/signal-safety.7.html
-    panic!("received SIGSEGV or SIGBUS (maybe a stack overflow?)");
+
+    static SEEN: AtomicUsize = AtomicUsize::new(0);
+    match SEEN.fetch_add(1, Ordering::SeqCst) {
+        0 => {
+            // First SIGSEGV. See if we can defer to our slick panic handler,
+            // which will emit a backtrace and details on where to submit bugs.
+            panic!("received SIGSEGV or SIGBUS (maybe a stack overflow?)");
+        }
+        _ => {
+            // Second SIGSEGV, which means the panic handler itself segfaulted.
+            // This usually indicates that the memory allocator state is
+            // corrupt, which can happen if we overflow the stack while inside
+            // the allocator. Just try to eke out a message and crash.
+            let _ = io::stderr().write_all(b"SIGBUS or SIGSEGV while handling SIGSEGV or SIGBUS\n");
+            let _ = io::stderr().write_all(b"(maybe a stack overflow while allocating?)\n");
+            process::abort();
+        }
+    }
 }

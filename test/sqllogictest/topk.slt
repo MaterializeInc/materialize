@@ -90,3 +90,35 @@ EXPLAIN PLAN FOR SELECT state, name FROM
 | Project (#0, #1)
 
 EOF
+
+# Test that LIMIT 0 is optimized out
+query T multiline
+EXPLAIN PLAN FOR SELECT state, COUNT(*) FROM (
+    SELECT state, name FROM
+        (SELECT DISTINCT state FROM cities) grp,
+        LATERAL (SELECT name, pop FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 0)
+    )
+    GROUP BY state
+----
+%0 =
+| Constant
+
+EOF
+
+
+# Test that LIMIT 1 results in a unique key
+query T multiline
+EXPLAIN PLAN FOR SELECT state, COUNT(*) FROM (
+    SELECT state, name FROM
+        (SELECT DISTINCT state FROM cities) grp,
+        LATERAL (SELECT name, pop FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 1)
+    )
+    GROUP BY state
+----
+%0 =
+| Get materialize.public.cities (u1)
+| TopK group=(#1) order=(#2 desc) limit=1 offset=0
+| Map 1
+| Project (#1, #3)
+
+EOF

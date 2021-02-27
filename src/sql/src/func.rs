@@ -1315,6 +1315,9 @@ lazy_static! {
                 params!(String) => UnaryFunc::TrimWhitespace, 885;
                 params!(String, String) => BinaryFunc::Trim, 884;
             },
+            "cbrt" => Scalar {
+                params!(Float64) => UnaryFunc::CbrtFloat64, 1345;
+            },
             "ceil" => Scalar {
                 params!(Float32) => UnaryFunc::CeilFloat32, oid::FUNC_CEIL_F32_OID;
                 params!(Float64) => UnaryFunc::CeilFloat64, 2308;
@@ -1347,6 +1350,15 @@ lazy_static! {
             },
             "convert_from" => Scalar {
                 params!(Bytes, String) => BinaryFunc::ConvertFrom, 1714;
+            },
+            "cos" => Scalar {
+                params!(Float64) => UnaryFunc::Cos, 1605;
+            },
+            "cosh" => Scalar {
+                params!(Float64) => UnaryFunc::Cosh, 2463;
+            },
+            "cot" => Scalar {
+                params!(Float64) => UnaryFunc::Cot, 1607;
             },
             "current_schema" => Scalar {
                 params!() => sql_op!("current_schemas(false)[1]"), 1402;
@@ -1537,6 +1549,12 @@ lazy_static! {
                 params!(String) => UnaryFunc::TrimTrailingWhitespace, 882;
                 params!(String, String) => BinaryFunc::TrimTrailing, 876;
             },
+            "sin" => Scalar {
+                params!(Float64) => UnaryFunc::Sin, 1604;
+            },
+            "sinh" => Scalar {
+                params!(Float64) => UnaryFunc::Sinh, 2462;
+            },
             "split_part" => Scalar {
                 params!(String, String, Int64) => VariadicFunc::SplitPart, 2088;
             },
@@ -1570,12 +1588,17 @@ lazy_static! {
                 params!(String, Int64, Int64) => VariadicFunc::Substr, 936;
             },
             "sqrt" => Scalar {
-                params!(Float32) => UnaryFunc::SqrtFloat32, oid::FUNC_SQRT_F32_OID;
                 params!(Float64) => UnaryFunc::SqrtFloat64, 1344;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
                 }), 1730;
+            },
+            "tan" => Scalar {
+                params!(Float64) => UnaryFunc::Tan, 1606;
+            },
+            "tanh" => Scalar {
+                params!(Float64) => UnaryFunc::Tanh, 246;
             },
             "timezone" => Scalar {
                 params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp, 2069;
@@ -1780,6 +1803,12 @@ lazy_static! {
                         column_names: vec![Some("jsonb_object_keys".into())],
                     })
                 }), 3931;
+            },
+            "encode" => Scalar {
+                params!(Bytes, String) => BinaryFunc::Encode, 1946;
+            },
+            "decode" => Scalar {
+                params!(String, String) => BinaryFunc::Decode, 1947;
             }
         }
     };

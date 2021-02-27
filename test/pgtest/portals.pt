@@ -93,3 +93,68 @@ PortalSuspended
 ReadyForQuery {"status":"I"}
 ErrorResponse {"fields":[{"typ":"M","value":"cursor \"c\" does not exist"}]}
 ReadyForQuery {"status":"I"}
+
+# Verify portal reuse errors.
+
+send
+Query {"query": "BEGIN; DECLARE c CURSOR FOR SELECT 1; DECLARE c CURSOR FOR SELECT 1"}
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ErrorResponse {"fields":[{"typ":"C","value":"42P03"},{"typ":"M","value":"cursor \"c\" already exists"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "BEGIN; DECLARE c CURSOR FOR SELECT 1"}
+Parse {"query": "VALUES (1), (2)"}
+Bind {"portal": "c"}
+Sync
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+ErrorResponse {"fields":[{"typ":"C","value":"42P03"},{"typ":"M","value":"cursor \"c\" already exists"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "BEGIN"}
+Parse {"query": "VALUES (1), (2)"}
+Bind {"portal": "c"}
+Sync
+Query {"query": "DECLARE c CURSOR FOR SELECT 1"}
+Query {"query": "ROLLBACK"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+BindComplete
+ReadyForQuery {"status":"T"}
+ErrorResponse {"fields":[{"typ":"C","value":"42P03"},{"typ":"M","value":"cursor \"c\" already exists"}]}
+ReadyForQuery {"status":"E"}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}

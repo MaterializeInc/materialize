@@ -33,7 +33,8 @@ impl AvroDecoderState {
         debug_name: String,
         worker_index: usize,
         dedup_strat: Option<DebeziumDeduplicationStrategy>,
-        key_indices: Option<Vec<usize>>,
+        dbz_key_indices: Option<Vec<usize>>,
+        confluent_wire_format: bool,
     ) -> Result<Self, anyhow::Error> {
         Ok(AvroDecoderState {
             decoder: Decoder::new(
@@ -43,7 +44,8 @@ impl AvroDecoderState {
                 debug_name,
                 worker_index,
                 dedup_strat,
-                key_indices,
+                dbz_key_indices,
+                confluent_wire_format,
             )?,
             events_success: 0,
             events_error: 0,
@@ -72,23 +74,20 @@ impl DecoderState for AvroDecoderState {
     }
 
     /// give a session a key-value pair
-    fn give_key_value<'a>(
+    fn decode_upsert_value<'a>(
         &mut self,
-        key: Row,
         bytes: &[u8],
         coord: Option<i64>,
         upstream_time_millis: Option<i64>,
-        session: &mut PushSession<'a, (Row, Option<Row>, Timestamp)>,
-        time: Timestamp,
-    ) {
+    ) -> Result<Option<Row>, String> {
         match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
             Ok(diff_pair) => {
                 self.events_success += 1;
-                session.give((key, diff_pair.after, time));
+                Ok(diff_pair.after)
             }
             Err(err) => {
                 self.events_error += 1;
-                error!("avro deserialization error: {}", err)
+                Err(format!("avro deserialization error: {}", err))
             }
         }
     }

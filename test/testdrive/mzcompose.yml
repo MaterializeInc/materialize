@@ -39,11 +39,12 @@ mzworkflows:
       - step: start-services
         services: [kafka, schema-registry, materialized]
       - step: wait-for-tcp
-        host: schema-registry
-        port: 8081
-      - step: wait-for-tcp
         host: kafka
         port: 9092
+        timeout_secs: 120
+      - step: wait-for-tcp
+        host: schema-registry
+        port: 8081
       - step: wait-for-mz
 
 services:
@@ -77,7 +78,6 @@ services:
   materialized:
     mzbuild: materialized
     command: >-
-      --logging-granularity=10ms
       --data-directory=/share/mzdata
       -w1 --experimental
       --cache-max-pending-records 1
@@ -86,7 +86,7 @@ services:
       - 6875
     environment:
     - MZ_DEV=1
-    - MZ_LOG
+    - MZ_LOG=${MZ_LOG:-dataflow::source::s3=trace,info}
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - AWS_SESSION_TOKEN
@@ -114,7 +114,8 @@ services:
   localstack:
     image: localstack/localstack:0.12.5
     environment:
-    - SERVICES=sts,iam,kinesis,s3
+    - SERVICES=sqs,sts,iam,kinesis,s3
+    - HOSTNAME_EXTERNAL=localstack
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 

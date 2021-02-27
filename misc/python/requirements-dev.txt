@@ -3,6 +3,5 @@ black==19.10b0
 humanize==2.3.0
 mypy==0.790
 pdoc3==0.8.1
-psutil==5.8.0
 pytest==5.4.2
 requests==2.23.0

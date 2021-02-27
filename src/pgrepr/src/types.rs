@@ -92,13 +92,16 @@ impl Type {
             postgres_types::Type::DATE => Some(Type::Date),
             postgres_types::Type::FLOAT4 => Some(Type::Float4),
             postgres_types::Type::FLOAT8 => Some(Type::Float8),
+            postgres_types::Type::INT2 => Some(Type::Int4),
             postgres_types::Type::INT4 => Some(Type::Int4),
             postgres_types::Type::INT8 => Some(Type::Int8),
             postgres_types::Type::INTERVAL => Some(Type::Interval),
             postgres_types::Type::JSONB => Some(Type::Jsonb),
             postgres_types::Type::NUMERIC => Some(Type::Numeric),
             postgres_types::Type::OID => Some(Type::Oid),
-            postgres_types::Type::TEXT | postgres_types::Type::VARCHAR => Some(Type::Text),
+            postgres_types::Type::TEXT
+            | postgres_types::Type::CHAR
+            | postgres_types::Type::VARCHAR => Some(Type::Text),
             postgres_types::Type::TIME => Some(Type::Time),
             postgres_types::Type::TIMESTAMP => Some(Type::Timestamp),
             postgres_types::Type::TIMESTAMPTZ => Some(Type::TimestampTz),

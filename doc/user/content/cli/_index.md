@@ -12,21 +12,21 @@ The `materialized` binary supports the following command line flags:
 Flag | Default | Modifies
 -----|---------|----------
 [`--cache-max-pending-records`](#source-cache) | 1000000 | Maximum number of input records buffered before flushing immediately to disk.
-[`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted
+[`-D`](#data-directory) / [`--data-directory`](#data-directory) | `./mzdata` | Where data is persisted<br><br>**Known issue.** The short form of this option was inadvertently removed in v0.7.0. It will be restored in v0.7.1.
 [`--differential-idle-merge-effort`](#dataflow-tuning) | N/A | *Advanced.* Amount of compaction to perform when idle.
 `--help` | N/A | NOP&mdash;prints binary's list of command line flags
 [`--disable-telemetry`](#telemetry) | N/A | Disables telemetry reporting.
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
+[`--introspection-frequency`](#introspection-sources) | 1s | The frequency at which to update [introspection sources](#introspection-sources).
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
-[`--logical-compaction-window`](#compaction-window) | 60s | The amount of historical detail to retain in arrangements
+[`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements
 [`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
 [`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA) {{< version-added v0.7.1 />}}
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
 [`--tls-mode`](#tls-encryption) | N/A | How stringently to demand TLS authentication and encryption {{< version-added v0.7.1 />}}
 [`--tls-key`](#tls-encryption) | N/A | Path to TLS private key file
-[`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
-[`-w`](#worker-threads) | REQ |  Dataflow worker threads
-`-v` | N/A | Print version and exit
+[`-w`](#worker-threads) / [`--workers`](#worker-threads) | NCPUs / 2 | Dataflow worker threads
+`-v` / `--version` | N/A | Print version and exit
 `-vv` | N/A | Print version and additional build information, and exit
 
 If a command line flag takes an argument, you can alternatively set that flag
@@ -115,14 +115,33 @@ lazily, so Materialize may retain more historical detail than requested, but it
 will never retain less.
 
 The value of the option is a duration string like `10ms` (10 milliseconds) or
-`1min 30s` (1 minute, 30 seconds).  The special value `off` indicates disables
-logical compaction.
+`1min 30s` (1 minute, 30 seconds).  The special value `off` disables logical
+compaction and corresponds to an unboundedly large duration.
 
 The logical compaction window ends at the current time and extends backwards in
-time for the configured duration. The default window is 60 seconds.
+time for the configured duration. The default window is 1 millisecond.
 
 See the [Deployment section](/ops/deployment#compaction) for guidance on tuning
 the compaction window.
+
+### Introspection sources
+
+{{< version-changed v0.7.1 >}}
+In prior versions of Materialize, this option was undocumented but available
+under the name `--logging-granularity`.
+{{< /version-changed >}}
+
+Materialize maintains several built-in sources and views in
+[`mz_catalog`](/sql/system-catalog) that describe the internal state of the
+dataflow execution layer, like `mz_scheduling_elapsed`.
+
+The `--introspection-frequency` option determines the frequency at which the
+base sources are updated. The default frequency is `1s`. To disable
+introspection entirely, use the special value `off`.
+
+Higher frequencies provide more up-to-date introspection but increase load on
+the system. Lower frequencies increase staleness in exchange for decreased load.
+The default frequency is a good choice for most deployments.
 
 ### TLS encryption
 
@@ -243,9 +262,19 @@ parameter.
 
 ### Telemetry
 
-Unless disabled with `--disable-telemetry`, upon startup `materialized`
-reports its current version and cluster id to a central server operated by
-materialize.com. If a newer version is available a warning will be logged.
+Unless disabled with `--disable-telemetry`, upon startup and once an hour
+`materialized` reports some anonymous telemetry data to a central server operated
+by materialize.com. If a newer version is available at startup a warning will be
+logged.
+
+Information reported to Materialize:
+
+* Cluster ID, a unique ID which is persistent across materialized restarts
+* Session ID, a unique ID which is reset on each materialized restart
+* Current Version
+* Number of worker threads
+* Uptime
+* Count of sinks, sources, and views by type
 
 ### Dataflow tuning
 

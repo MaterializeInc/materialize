@@ -24,6 +24,7 @@ create_index ::=
         'INDEX' index_name 'ON' obj_name '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')'
         | 'DEFAULT INDEX ON' obj_name
     )
+    ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
 create_materialized_view ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' view_name 'AS' select_stmt |
   'CREATE' ('TEMP' | 'TEMPORARY')? 'MATERIALIZED VIEW' 'IF NOT EXISTS' view_name 'AS' select_stmt |
@@ -66,6 +67,11 @@ create_source_csv_file ::=
   'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'CSV WITH' ( 'HEADER' | n 'COLUMNS')
   ('DELIMITED BY' char)?
+create_source_json ::=
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )* ')')?
+  'FROM' 'FILE' path ('COMPRESSION' ('NONE' | 'GZIP'))? ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
+  'FORMAT' 'BYTES'
 create_source_csv_kafka ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
@@ -106,10 +112,12 @@ create_source_protobuf_kinesis ::=
 create_source_s3_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM S3 OBJECTS FROM ' (
-      'SCAN BUCKET' bucket_name
-  )
-  (
-    ',' 'SCAN BUCKET' bucket_name
+      'SCAN BUCKET' bucket_name |
+      'SQS NOTIFICATIONS' queue_name
+  ) ( ',' (
+      'SCAN BUCKET' bucket_name |
+      'SQS NOTIFICATIONS' queue_name
+    )
   )*
   ('MATCHING' pattern)?
   'WITH' '('
@@ -124,10 +132,12 @@ create_source_s3_text ::=
 create_source_s3_json ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM S3 OBJECTS FROM ' (
-      'SCAN BUCKET' bucket_name
-  )
-  (
-    ',' 'SCAN BUCKET' bucket_name
+      'SCAN BUCKET' bucket_name |
+      'SQS NOTIFICATIONS' queue_name
+  ) ( ',' (
+      'SCAN BUCKET' bucket_name |
+      'SQS NOTIFICATIONS' queue_name
+    )
   )*
   ('MATCHING' pattern)?
   'WITH' '('
@@ -139,10 +149,12 @@ create_source_s3_csv ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')?
   src_name ( '(' col_name (',' col_name)* ')' )?
   'FROM S3 OBJECTS FROM ' (
-      'SCAN BUCKET' bucket_name
-  )
-  (
-    ',' 'SCAN BUCKET' bucket_name
+      'SCAN BUCKET' bucket_name |
+      'SQS NOTIFICATIONS' queue_name
+  ) ( ',' (
+      'SCAN BUCKET' bucket_name |
+      'SQS NOTIFICATIONS' queue_name
+    )
   )*
   ('MATCHING' pattern)?
   'WITH' '('
@@ -203,7 +215,7 @@ discard ::=
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name
 drop_index ::=
-    'DROP' 'INDEX' index_name
+    'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')
 drop_role ::=
     'DROP' 'ROLE' ('IF EXISTS')? role_name
 drop_schema ::=
@@ -212,6 +224,8 @@ drop_sink ::=
   'DROP' 'SINK' ('IF' 'EXISTS')? sink_name
 drop_source ::=
   'DROP' 'SOURCE' ('IF' 'EXISTS')? source_name ('RESTRICT' | 'CASCADE')?
+drop_type ::=
+  'DROP' 'TYPE' ('IF' 'EXISTS')? data_type_name ('RESTRICT' | 'CASCADE')?
 drop_view ::=
   'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
 drop_table ::=
@@ -235,6 +249,9 @@ format_spec_avro_kafka ::=
             'FILE' schema_file_path |
             inline_schema
             )
+            (
+                'WITH' '(' inline_schema_with_options ')'
+            )?
         )
     )
 format_spec ::=
@@ -313,6 +330,8 @@ show_sources ::=
   'SHOW' 'FULL'? 'MATERIALIZED'? 'SOURCES' ('FROM' schema_name)?
 show_tables ::=
   'SHOW' 'TABLES' ('FROM' schema_name)?
+show_types ::=
+    'SHOW' 'EXTENDED'? 'FULL'?
 show_views ::=
   'SHOW' 'FULL'? 'MATERIALIZED'? 'VIEWS' ('FROM' schema_name)?
 show_objects ::=

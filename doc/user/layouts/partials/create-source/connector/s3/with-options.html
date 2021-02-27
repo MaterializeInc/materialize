@@ -18,13 +18,15 @@ source (as in **OBJECTS FORM SCAN**) must perform repeated `ListObjects` actions
 of key names to download, specifying **OBJECTS FROM SCAN BUCKET** means that **MATERIALIZED** requires
 the `ListObjects` permission.
 
-| Key Name Source | Permissions Required                                                        |
-|-----------------|-----------------------------------------------------------------------------|
-| All             | [`GetObject` permission][getobject] for the objects that they will download |
-| **SCAN**        | [`ListObject` permission][listobject] for the buckets it will scan          |
+| Key Name Source       | Permissions Required                                                                     |
+|-----------------------|------------------------------------------------------------------------------------------|
+| All                   | [`GetObject` permission][getobject] for the objects that they will download              |
+| **SCAN BUCKET**       | [`ListObject` permission][listobject] for the buckets it will scan                       |
+| **SQS NOTIFICATIONS** | `GetMessage`, `GetQueueUrl` [SQS Permissions][sqs-perms] for the queue it will listen to |
 
 The root AWS documentation for S3 permissions is [available here][s3-permissions].
 
 [getobject]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html
 [listobject]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
+[sqs-perms]: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazonsqs.html
 [s3-permissions]: https://docs.aws.amazon.com/service-authorization/latest/reference/list_amazons3.html

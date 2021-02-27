@@ -17,19 +17,7 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-for arg
-do
-    case "$arg" in
-        -h|--help)
-            printf "usage: %s\n\nBuild the rust documentation site\n" "$0"
-            exit 0
-            ;;
-        -*) die "unknown option $arg" ;;
-        *) die "usage: $0" ;;
-    esac
-done
-
-cargo doc
+cargo doc "$@"
 
 crates=$(cargo metadata --format-version=1 \
   | jq -r -f misc/doc/crates.jq --arg pwd "$(pwd)")

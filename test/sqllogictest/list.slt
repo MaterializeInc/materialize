@@ -665,7 +665,7 @@ SELECT (LIST[1,2,3][LIST[1][2.0 / 2]])::text
 
 # 🔬🔬 Err
 
-query error invalid input syntax for bigint: invalid digit found in string: "dog"
+query error invalid input syntax for type bigint: invalid digit found in string: "dog"
 SELECT LIST[1,2,3]['dog']
 
 query error subscript \(indexing\) does not support casting from date to bigint
@@ -674,7 +674,7 @@ SELECT LIST [[1, 2, 3], [4, 5]][DATE '2001-01-01']
 query error subscript \(indexing\) does not support casting from timestamp to bigint
 SELECT LIST [[1, 2, 3], [4, 5]][TIMESTAMP '2001-01-01']
 
-query error invalid input syntax for bigint: invalid digit found in string: "dog"
+query error invalid input syntax for type bigint: invalid digit found in string: "dog"
 SELECT (LIST[1,2,3][1:'dog'])::text
 
 query error subscript \(slicing\) does not support casting from date to bigint
@@ -1241,7 +1241,7 @@ NULL
 
 # 🔬🔬🔬🔬 Errors
 
-query error invalid input syntax for integer: invalid digit found in string: "dog"
+query error invalid input syntax for type integer: invalid digit found in string: "dog"
 SELECT (LIST['1', 'dog']::int list)::text
 
 query error CAST does not support casting from date list to integer list
@@ -1252,12 +1252,12 @@ SELECT LIST[DATE '2008-02-01']::int list
 query T
 SELECT (LIST[[1.4::float], [-1.5::float, 2.5::float]]::int list list)::text
 ----
-{{1},{-2,3}}
+{{1},{-2,2}}
 
 query T
 SELECT (LIST[[1.4::float], [-1.5::float, 2.5::float], NULL::float list]::int list list)::text
 ----
-{{1},{-2,3},NULL}
+{{1},{-2,2},NULL}
 
 # 🔬🔬🔬 Non-numeric types
 
@@ -1448,23 +1448,23 @@ SELECT ('{{a, "", "\""}, "{a, \"\", \"\\\"\"}"}'::text list list)::text
 {{a,"","\""},{a,"","\""}}
 
 # Unquoted elements cannot have special characters interleaved within them
-query error invalid input syntax for list: malformed literal; must escape special character '"'
+query error invalid input syntax for type list: malformed literal; must escape special character '"'
 SELECT ('{a"b"}'::text list)::text
 
-query error invalid input syntax for list: malformed literal; must escape special character '\{'
+query error invalid input syntax for type list: malformed literal; must escape special character '\{'
 SELECT ('{a{b}'::text list)::text
 
-query error invalid input syntax for list: malformed array literal; contains 'b' after terminal '\}'
+query error invalid input syntax for type list: malformed array literal; contains 'b' after terminal '\}'
 SELECT ('{a}b}'::text list)::text
 
 # No non-whitespace characters after the escape
-query error invalid input syntax for list: expected ',' or '\}', got 'b'
+query error invalid input syntax for type list: expected ',' or '\}', got 'b'
 SELECT ('{"a"b}'::text list)::text
 
-query error invalid input syntax for list: expected ',' or '\}', got '"'
+query error invalid input syntax for type list: expected ',' or '\}', got '"'
 SELECT ('{""""}'::text list)::text
 
-query error invalid input syntax for list: expected ',' or '\}', got '"'
+query error invalid input syntax for type list: expected ',' or '\}', got '"'
 SELECT ('{"""}'::text list)::text
 
 # 🔬🔬🔬🔬 Unquoted escapes
@@ -1580,10 +1580,10 @@ SELECT ('{N\ULL}'::text list)::text
 {"NULL"}
 
 # Escaping terminal character means it isn't available to close the list
-query error invalid input syntax for list: unterminated element
+query error invalid input syntax for type list: unterminated element
 SELECT ('{\}'::text list)::text
 
-query error invalid input syntax for list: unexpected end of input
+query error invalid input syntax for type list: unexpected end of input
 SELECT ('{{\}}'::text list list)::text
 
 # 🔬🔬🔬 text to other lists
@@ -1641,44 +1641,44 @@ SELECT ('{ {   } }'::text list list)::text
 # 🔬🔬🔬 errors
 
 # Empty string is invalid
-query error invalid input syntax for list: expected '\{', found empty string: ""
+query error invalid input syntax for type list: expected '\{', found empty string: ""
 SELECT (''::text list)::text
 
 # Not a list
-query error invalid input syntax for list: expected '\{', found 1: "1"
+query error invalid input syntax for type list: expected '\{', found 1: "1"
 SELECT ('1'::int list)::text
 
 # Invalid element
-query error invalid input syntax for list: invalid input syntax for integer: invalid digit found in string: "a": "\{a\}"
+query error invalid input syntax for type list: invalid input syntax for type integer: invalid digit found in string: "a": "\{a\}"
 SELECT ('{a}'::int list)::text
 
 # 'NULL' isn't a valid string for a list; just use unescaped NULL
-query error invalid input syntax for list: expected '\{', found N: "NULL"
+query error invalid input syntax for type list: expected '\{', found N: "NULL"
 SELECT ('NULL'::int list)::text
 
 # Too many leading brackets
-query error invalid input syntax for list: unescaped '\{' at beginning of element
+query error invalid input syntax for type list: unescaped '\{' at beginning of element
 SELECT ('{{1}}'::int list)::text
 
 # Too many leading brackets
-query error invalid input syntax for list: unescaped '\{' at beginning of element
+query error invalid input syntax for type list: unescaped '\{' at beginning of element
 SELECT ('{{1}'::int list)::text
 
-query error invalid input syntax for list: unexpected end of input: "\{\{1\}"
+query error invalid input syntax for type list: unexpected end of input: "\{\{1\}"
 SELECT ('{{1}'::int list list)::text
 
 # Too many following brackets
-query error invalid input syntax for list: malformed array literal; contains '\}' after terminal '\}': "\{1\}\}"
+query error invalid input syntax for type list: malformed array literal; contains '\}' after terminal '\}': "\{1\}\}"
 SELECT ('{1}}'::int list)::text
 
-query error invalid input syntax for list: invalid input syntax for list: expected '\{', found 1: "1": "\{1\}\}"
+query error invalid input syntax for type list: invalid input syntax for type list: expected '\{', found 1: "1": "\{1\}\}"
 SELECT ('{1}}'::int list list)::text
 
 # Cannot have commas followed or preceded by empty elements
-query error invalid input syntax for list: malformed literal; missing element: "\{a,  \}"
+query error invalid input syntax for type list: malformed literal; missing element: "\{a,  \}"
 SELECT ('{a,  }'::text list)::text
 
-query error invalid input syntax for list: malformed literal; missing element: "\{  ,a\}"
+query error invalid input syntax for type list: malformed literal; missing element: "\{  ,a\}"
 SELECT ('{  ,a}'::text list)::text
 
 # 🔬 Built-in operations
@@ -2042,7 +2042,7 @@ SELECT '{\{\"1\":2\}}'::jsonb_list_c::text;
 statement ok
 CREATE TYPE bool AS LIST (element_type=int4)
 
-query error invalid input syntax for boolean: "\{1,2\}"
+query error invalid input syntax for type boolean: "\{1,2\}"
 SELECT '{1,2}'::bool;
 
 query T

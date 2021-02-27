@@ -105,8 +105,12 @@ struct CommandsProcessedMetrics {
     allow_compaction: IntCounter,
     append_log_int: i32,
     append_log: IntCounter,
+    add_source_timestamping_int: i32,
+    add_source_timestamping: IntCounter,
     advance_source_timestamp_int: i32,
     advance_source_timestamp: IntCounter,
+    drop_source_timestamping_int: i32,
+    drop_source_timestamping: IntCounter,
     enable_feedback_int: i32,
     enable_feedback: IntCounter,
     enable_logging_int: i32,
@@ -145,9 +149,15 @@ impl CommandsProcessedMetrics {
                 .with_label_values(&[worker, "allow_compaction"]),
             append_log_int: 0,
             append_log: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "append_log"]),
+            add_source_timestamping_int: 0,
+            add_source_timestamping: COMMANDS_PROCESSED_RAW
+                .with_label_values(&[worker, "add_source_timestamping"]),
             advance_source_timestamp_int: 0,
             advance_source_timestamp: COMMANDS_PROCESSED_RAW
                 .with_label_values(&[worker, "advance_source_timestamp"]),
+            drop_source_timestamping_int: 0,
+            drop_source_timestamping: COMMANDS_PROCESSED_RAW
+                .with_label_values(&[worker, "drop_source_timestamping"]),
             enable_feedback_int: 0,
             enable_feedback: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "enable_feedback"]),
             enable_logging_int: 0,
@@ -172,8 +182,12 @@ impl CommandsProcessedMetrics {
             SequencedCommand::CancelPeek { .. } => self.cancel_peek_int += 1,
             SequencedCommand::Insert { .. } => self.insert_int += 1,
             SequencedCommand::AllowCompaction(..) => self.allow_compaction_int += 1,
+            SequencedCommand::AddSourceTimestamping { .. } => self.add_source_timestamping_int += 1,
             SequencedCommand::AdvanceSourceTimestamp { .. } => {
                 self.advance_source_timestamp_int += 1
+            }
+            SequencedCommand::DropSourceTimestamping { .. } => {
+                self.drop_source_timestamping_int += 1
             }
             SequencedCommand::EnableFeedback(..) => self.enable_feedback_int += 1,
             SequencedCommand::EnableCaching(..) => self.enable_caching_int += 1,
@@ -220,10 +234,20 @@ impl CommandsProcessedMetrics {
                 .inc_by(self.allow_compaction_int as i64);
             self.allow_compaction_int = 0;
         }
+        if self.add_source_timestamping_int > 0 {
+            self.add_source_timestamping
+                .inc_by(self.add_source_timestamping_int as i64);
+            self.add_source_timestamping_int = 0;
+        }
         if self.advance_source_timestamp_int > 0 {
             self.advance_source_timestamp
                 .inc_by(self.advance_source_timestamp_int as i64);
             self.advance_source_timestamp_int = 0;
+        }
+        if self.drop_source_timestamping_int > 0 {
+            self.drop_source_timestamping
+                .inc_by(self.drop_source_timestamping_int as i64);
+            self.drop_source_timestamping_int = 0;
         }
         if self.enable_feedback_int > 0 {
             self.enable_feedback.inc_by(self.enable_feedback_int as i64);

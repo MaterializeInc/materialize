@@ -167,8 +167,9 @@ pub fn extract_config(
 /// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
 ///   For example, when using Kerberos auth, and the named principal does not
 ///   exist.
-pub fn test_config(options: &BTreeMap<String, String>) -> Result<(), anyhow::Error> {
+pub fn test_config(broker: &str, options: &BTreeMap<String, String>) -> Result<(), anyhow::Error> {
     let mut config = rdkafka::ClientConfig::new();
+    config.set("bootstrap.servers", broker);
     for (k, v) in options {
         config.set(k, v);
     }

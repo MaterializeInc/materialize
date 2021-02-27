@@ -13,6 +13,7 @@ build-info = { path = "../build-info" }
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 dataflow-types = { path = "../dataflow-types" }
+enum-kinds = "0.5.0"
 expr = { path = "../expr" }
 futures = "0.3.12"
 globset = "0.4.0"
@@ -35,7 +36,7 @@ serde_json = "1.0.62"
 sql-parser = { path = "../sql-parser" }
 tokio = { version = "1.2.0", features = ["fs"] }
 unicase = "2.6.0"
-url = "2.2.0"
+url = "2.2.1"
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 
 [dev-dependencies]

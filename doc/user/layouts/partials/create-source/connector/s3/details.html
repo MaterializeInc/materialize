@@ -1,21 +1,75 @@
 ### S3 source details
 
-The S3 source is designed to ingest a large volume of static data from S3.
+The S3 source is designed to ingest a large volume of static data from [AWS's Simple Storage
+Service][aws-s3]. S3 is Amazon Web Services' cloud object store. It is important to note that an
+object store behaves differently than a file system does, and that those differences affect how
+Materialize interacts with objects in it.
+
+Some key differences from file systems include:
+
+* Latency on individual S3 operations is much higher than even cloud-network filesystems.
+* It is not possible to seek to a point in an object, the entire object must be downloaded from
+  the beginning in order to read to a point.
+* All object operations are atomic, and it is not possible to modify just part of an S3 object,
+  you can only entirely replace or delete objects.
+
+The primary effect of this is that we do not handle *updates* to S3 objects, and we may interleave
+multiple object ingestion to speed it up.
+
+[aws-s3]: https://aws.amazon.com/s3/
 
 #### S3 Limitations
 
-* Currently S3 sources do not support Avro-encoded objects.
+* Currently S3 sources do not support Avro- or Protobuf- encoded objects. Implementation issues:
+  [Avro](https://github.com/MaterializeInc/materialize/issues/5596),
+  [Protobuf](https://github.com/MaterializeInc/materialize/issues/5597)
+* Object ingest order is not guaranteed.
 * **All S3 sources are append-only** -- deleted and updated [S3 Objects][] are silently ignored.
 
 [S3 Objects]: https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingObjects.html
 
-#### Scanning S3 Buckets
+#### Object discovery strategies
 
-The **OBJECTS FROM SCAN BUCKET** syntax causes S3 sources to issue [ListBucket][] requests to collect the
-names of objects to collect. After collecting the list of keys, their names are checked against
-the **MATCHING** clause, if present, before downloading and extracting objects line by line.
+Materialize has several techniques to discover the objects to download, with [more
+planned][object-specifiers] for the future. Strategies may be specified multiple times within one
+**CREATE SOURCE** statement, so for example this is a legal invocation: `OBJECTS FROM SCAN BUCKET
+'example', SCAN BUCKET 'other', SQS NOTIFICATIONS 'example-notifications'`.
+
+All strategies follow the same basic pattern, `materialized` will:
+
+* Interact with a collection of AWS APIs.
+* Deduplicate objects such that the same object is never downloaded twice.
+* Filter the list of objects discovered via those APIs against the [**MATCHING** clause
+  patterns](#patterns).
+* Treat each object downloaded as a newline-delimited file for the purposes of record
+  delimitation.
+
+No guarantees are made about the relative order of records sent from the object discovery process
+and the Materialize SQL engine, as usual with SQL you must impose your own order.
+
+[object-specifies]: https://github.com/MaterializeInc/materialize/issues/5502
+
+##### Scanning S3 Buckets
+
+The **OBJECTS FROM SCAN BUCKET** syntax causes S3 sources to issue [ListBucket][] requests to
+collect the names of objects to collect. After collecting the list of keys, their names are
+checked against the **MATCHING** clause, if present, before downloading and extracting objects
+line by line.
 
 [ListBucket]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
+
+##### Listening to SQS Notifications
+
+AWS S3 has a built-in method for notifying downstream applications of bucket modification, the
+[Event Notification API][notification-aws]. For the purpose of `materialized` the only interesting
+modifications are object creation, aka the `s3:ObjectCreated:*` event namespace. Following [the
+AWS Tutorial][notification-tutorial] will configure a bucket for exactly this namespace.
+
+Once you have configured S3 notifications to go to an SQS queue you can point materialized at that
+queue via **OBJECTS FROM SQS NOTIFICATIONS `'queue-name'`**.
+
+[notification-aws]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/NotificationHowTo.html
+[notification-tutorial]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ways-to-add-notification-config-to-bucket.html
 
 #### Patterns
 

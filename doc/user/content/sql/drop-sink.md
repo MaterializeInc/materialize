@@ -8,6 +8,8 @@ menu:
 
 `DROP SINK` removes a sink from your Materialize instances.
 
+{{% kafka-sink-drop  %}}
+
 ## Syntax
 
 {{< diagram "drop-sink.svg" >}}

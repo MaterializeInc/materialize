@@ -110,6 +110,7 @@ Having
 Header
 Headers
 Hold
+Host
 Hour
 Hours
 If
@@ -151,6 +152,7 @@ Minute
 Minutes
 Month
 Months
+Namespace
 Natural
 Next
 No
@@ -158,6 +160,7 @@ Nologin
 None
 Nosuperuser
 Not
+Notifications
 Null
 Nullif
 Objects
@@ -175,10 +178,12 @@ Over
 Partition
 Plan
 Plans
+Postgres
 Preceding
 Precision
 Primary
 Protobuf
+Publication
 Range
 Raw
 Read
@@ -213,10 +218,12 @@ Set
 Show
 Sink
 Sinks
+Smallint
 Snapshot
 Some
 Source
 Sources
+Sqs
 Start
 Stdin
 Stdout

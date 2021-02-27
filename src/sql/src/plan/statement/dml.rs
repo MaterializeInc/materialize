@@ -12,11 +12,12 @@
 //! This module houses the handlers for statements that manipulate data, like
 //! `INSERT`, `SELECT`, `TAIL`, and `COPY`.
 
+use std::collections::HashSet;
 use std::convert::TryFrom;
 
 use anyhow::bail;
 
-use expr::RowSetFinishing;
+use expr::MirRelationExpr;
 use ore::collections::CollectionExt;
 use repr::{RelationDesc, ScalarType};
 
@@ -100,7 +101,7 @@ pub fn describe_select(
     scx: &StatementContext,
     SelectStatement { query, .. }: SelectStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    let (_relation_expr, desc, _finishing) =
+    let query::PlannedQuery { desc, .. } =
         query::plan_root_query(scx, query, QueryLifetime::OneShot)?;
     Ok(StatementDesc::new(Some(desc)))
 }
@@ -111,14 +112,16 @@ pub fn plan_select(
     params: &Params,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, anyhow::Error> {
-    let (relation_expr, _, finishing) = plan_query(scx, query, params, QueryLifetime::OneShot)?;
+    let query::PlannedQuery {
+        expr, finishing, ..
+    } = plan_query(scx, query, params, QueryLifetime::OneShot)?;
     let when = match as_of.map(|e| query::eval_as_of(scx, e)).transpose()? {
         Some(ts) => PeekWhen::AtTimestamp(ts),
         None => PeekWhen::Immediately,
     };
 
     Ok(Plan::Peek {
-        source: relation_expr,
+        source: expr,
         when,
         finishing,
         copy_to,
@@ -179,6 +182,7 @@ pub fn plan_explain(
             let scx = StatementContext {
                 pcx: view.plan_cx(),
                 catalog: scx.catalog,
+                ids: HashSet::new(),
                 param_types: scx.param_types.clone(),
             };
             (scx, query)
@@ -187,22 +191,26 @@ pub fn plan_explain(
     };
     // Previouly we would bail here for ORDER BY and LIMIT; this has been relaxed to silently
     // report the plan without the ORDER BY and LIMIT decorations (which are done in post).
-    let (mut sql_expr, desc, finishing) =
-        query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
+    let query::PlannedQuery {
+        mut expr,
+        desc,
+        finishing,
+        ..
+    } = query::plan_root_query(&scx, query, QueryLifetime::OneShot)?;
     let finishing = if is_view {
         // views don't use a separate finishing
-        sql_expr.finish(finishing);
+        expr.finish(finishing);
         None
     } else if finishing.is_trivial(desc.arity()) {
         None
     } else {
         Some(finishing)
     };
-    sql_expr.bind_parameters(&params)?;
-    let expr = sql_expr.clone().lower();
+    expr.bind_parameters(&params)?;
+    let decorrelated_expr = expr.clone().lower();
     Ok(Plan::ExplainPlan {
-        raw_plan: sql_expr,
-        decorrelated_plan: expr,
+        raw_plan: expr,
+        decorrelated_plan: decorrelated_expr,
         row_set_finishing: finishing,
         stage,
         options,
@@ -216,10 +224,20 @@ pub fn plan_query(
     query: Query<Raw>,
     params: &Params,
     lifetime: QueryLifetime,
-) -> Result<(::expr::MirRelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
-    let (mut expr, desc, finishing) = query::plan_root_query(scx, query, lifetime)?;
+) -> Result<query::PlannedQuery<MirRelationExpr>, anyhow::Error> {
+    let query::PlannedQuery {
+        mut expr,
+        desc,
+        finishing,
+        depends_on,
+    } = query::plan_root_query(scx, query, lifetime)?;
     expr.bind_parameters(&params)?;
-    Ok((expr.lower(), desc, finishing))
+    Ok(query::PlannedQuery {
+        expr: expr.lower(),
+        desc,
+        finishing,
+        depends_on,
+    })
 }
 
 with_options! {

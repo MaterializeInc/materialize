@@ -1405,7 +1405,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_format(&mut self) -> Result<Format, ParserError> {
+    fn parse_format(&mut self) -> Result<Format<Raw>, ParserError> {
         let format = if self.parse_keyword(AVRO) {
             self.expect_keyword(USING)?;
             Format::Avro(self.parse_avro_schema()?)
@@ -1461,7 +1461,7 @@ impl<'a> Parser<'a> {
         Ok(format)
     }
 
-    fn parse_avro_schema(&mut self) -> Result<AvroSchema, ParserError> {
+    fn parse_avro_schema(&mut self) -> Result<AvroSchema<Raw>, ParserError> {
         let avro_schema = if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
             let url = self.parse_literal_string()?;
 
@@ -1497,7 +1497,19 @@ impl<'a> Parser<'a> {
             }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
-            AvroSchema::Schema(self.parse_schema()?)
+            let schema = self.parse_schema()?;
+            // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
+            // accept `WITH (...)` here.
+            let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
+                self.expect_keyword(WITH)?;
+                self.parse_with_options(false)?
+            } else {
+                vec![]
+            };
+            AvroSchema::Schema {
+                schema,
+                with_options,
+            }
         } else {
             return self.expected(
                 self.peek_pos(),
@@ -1518,7 +1530,7 @@ impl<'a> Parser<'a> {
         Ok(schema)
     }
 
-    fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
+    fn parse_envelope(&mut self) -> Result<Envelope<Raw>, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
@@ -1635,8 +1647,36 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_connector(&mut self) -> Result<Connector, ParserError> {
-        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3])? {
+    fn parse_connector(&mut self) -> Result<Connector<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES])? {
+            POSTGRES => {
+                self.expect_keyword(HOST)?;
+                let conn = self.parse_literal_string()?;
+                self.expect_keyword(PUBLICATION)?;
+                let publication = self.parse_literal_string()?;
+                self.expect_keyword(NAMESPACE)?;
+                let namespace = self.parse_literal_string()?;
+                self.expect_keyword(TABLE)?;
+                let table = self.parse_literal_string()?;
+
+                let (columns, constraints) = self.parse_columns()?;
+
+                if !constraints.is_empty() {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        "Cannot specify constraints in postgres table definition"
+                    );
+                }
+
+                Ok(Connector::Postgres {
+                    conn,
+                    publication,
+                    namespace,
+                    table,
+                    columns,
+                })
+            }
             FILE => {
                 let path = self.parse_literal_string()?;
                 let compression = if self.parse_keyword(COMPRESSION) {
@@ -1669,15 +1709,22 @@ impl<'a> Parser<'a> {
                 Ok(Connector::AvroOcf { path })
             }
             S3 => {
-                // FROM S3 OBJECTS FROM (SCAN '<bucket>')+ MATCHING '<pattern>'
+                // FROM S3 OBJECTS FROM
+                // (SCAN BUCKET '<bucket>' | SQS NOTIFICATIONS '<channel>')+
+                // MATCHING '<pattern>'
                 self.expect_keywords(&[OBJECTS, FROM])?;
                 let mut key_sources = Vec::new();
-                while let Some(keyword) = self.parse_one_of_keywords(&[SCAN]) {
+                while let Some(keyword) = self.parse_one_of_keywords(&[SCAN, SQS]) {
                     match keyword {
                         SCAN => {
                             self.expect_keyword(BUCKET)?;
                             let bucket = self.parse_literal_string()?;
                             key_sources.push(S3KeySource::Scan { bucket });
+                        }
+                        SQS => {
+                            self.expect_keyword(NOTIFICATIONS)?;
+                            let queue = self.parse_literal_string()?;
+                            key_sources.push(S3KeySource::SqsNotifications { queue });
                         }
                         key => unreachable!("Keyword {} is not expected after OBJECTS FROM", key),
                     }
@@ -1767,10 +1814,13 @@ impl<'a> Parser<'a> {
             }
         };
 
+        let with_options = self.parse_opt_with_options()?;
+
         Ok(Statement::CreateIndex(CreateIndexStatement {
             name,
             on_name,
             key_parts,
+            with_options,
             if_not_exists,
         }))
     }
@@ -1821,7 +1871,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_data_type_option(&mut self) -> Result<SqlOption, ParserError> {
+    fn parse_data_type_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {
         let name = self.parse_identifier()?;
         self.expect_token(&Token::Eq)?;
         Ok(SqlOption::DataType {
@@ -2072,7 +2122,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_opt_with_sql_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
+    fn parse_opt_with_sql_options(&mut self) -> Result<Vec<SqlOption<Raw>>, ParserError> {
         if self.parse_keyword(WITH) {
             self.parse_options()
         } else {
@@ -2080,14 +2130,14 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
+    fn parse_options(&mut self) -> Result<Vec<SqlOption<Raw>>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let options = self.parse_comma_separated(Parser::parse_sql_option)?;
         self.expect_token(&Token::RParen)?;
         Ok(options)
     }
 
-    fn parse_sql_option(&mut self) -> Result<SqlOption, ParserError> {
+    fn parse_sql_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {
         let name = self.parse_identifier()?;
         self.expect_token(&Token::Eq)?;
         let token = self.peek_token();
@@ -2171,9 +2221,7 @@ impl<'a> Parser<'a> {
                     Some(AlterIndexOptionsList::Reset(reset_options))
                 }
                 Some(SET) => {
-                    self.expect_token(&Token::LParen)?;
-                    let set_options = self.parse_comma_separated(Parser::parse_sql_option)?;
-                    self.expect_token(&Token::RParen)?;
+                    let set_options = self.parse_with_options(true)?;
 
                     Some(AlterIndexOptionsList::Set(set_options))
                 }
@@ -2357,9 +2405,9 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
-    fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
+    fn parse_data_type(&mut self) -> Result<DataType<Raw>, ParserError> {
         let other = |name: &str| DataType::Other {
-            name: UnresolvedObjectName::unqualified(name),
+            name: RawName::Name(UnresolvedObjectName::unqualified(name)),
             typ_mod: vec![],
         };
 
@@ -2373,7 +2421,7 @@ impl<'a> Parser<'a> {
                         "char"
                     };
                     DataType::Other {
-                        name: UnresolvedObjectName::unqualified(name),
+                        name: RawName::Name(UnresolvedObjectName::unqualified(name)),
                         typ_mod: match self.parse_optional_precision()? {
                             Some(u) => vec![u],
                             None => vec![],
@@ -2381,7 +2429,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 VARCHAR => DataType::Other {
-                    name: UnresolvedObjectName::unqualified("varchar"),
+                    name: RawName::Name(UnresolvedObjectName::unqualified("varchar")),
                     typ_mod: match self.parse_optional_precision()? {
                         Some(u) => vec![u],
                         None => vec![],
@@ -2391,8 +2439,9 @@ impl<'a> Parser<'a> {
 
                 // Number-like types
                 BIGINT => other("int8"),
+                SMALLINT => other("int2"),
                 DEC | DECIMAL => DataType::Other {
-                    name: UnresolvedObjectName::unqualified("numeric"),
+                    name: RawName::Name(UnresolvedObjectName::unqualified("numeric")),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 DOUBLE => {
@@ -2450,7 +2499,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.prev_token();
                     DataType::Other {
-                        name: self.parse_object_name()?,
+                        name: RawName::Name(self.parse_object_name()?),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
@@ -2458,7 +2507,7 @@ impl<'a> Parser<'a> {
             Some(Token::Ident(_)) => {
                 self.prev_token();
                 DataType::Other {
-                    name: self.parse_object_name()?,
+                    name: RawName::Name(self.parse_object_name()?),
                     typ_mod: self.parse_typ_mod()?,
                 }
             }
@@ -2652,7 +2701,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_map(&mut self) -> Result<DataType, ParserError> {
+    fn parse_map(&mut self) -> Result<DataType<Raw>, ParserError> {
         self.expect_token(&Token::LBracket)?;
         let key_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::Op("=>".to_owned()))?;
@@ -3310,7 +3359,10 @@ impl<'a> Parser<'a> {
                 alias: self.parse_optional_table_alias()?,
             })
         } else if self.consume_token(&Token::LBracket) {
-            let id = self.parse_literal_uint()?;
+            let id = match self.next_token() {
+                Some(Token::Ident(id)) => id,
+                _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
+            };
             self.expect_keyword(AS)?;
             let name = self.parse_object_name()?;
             // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?

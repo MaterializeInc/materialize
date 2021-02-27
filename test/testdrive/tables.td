@@ -152,7 +152,7 @@ null value in column "b" violates not-null constraint
 null value in column "b" violates not-null constraint
 
 ! INSERT INTO t VALUES ('d', 4);
-invalid input syntax for integer: invalid digit found in string: "d"
+invalid input syntax for type integer: invalid digit found in string: "d"
 
 # Test that the INSERT body can be a SELECT query.
 > INSERT INTO t SELECT 3, 'd'
@@ -308,10 +308,10 @@ a      b    c
 column "notpresent" of relation "materialize.public.t" does not exist
 
 ! INSERT INTO t (a, b, c) VALUES ('str', 1, 2);
-invalid input syntax for integer: invalid digit found in string: "str"
+invalid input syntax for type integer: invalid digit found in string: "str"
 
 ! INSERT INTO t (b, a, c) VALUES (1, 'str', 2);
-invalid input syntax for integer: invalid digit found in string: "str"
+invalid input syntax for type integer: invalid digit found in string: "str"
 
 ! INSERT INTO t (d, c, b, a) VALUES (1, 1, 1, 'str');
 column "d" of relation "materialize.public.t" does not exist

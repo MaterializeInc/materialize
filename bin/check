@@ -19,64 +19,14 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source misc/shlib/shlib.bash
 
-extra_lints=(
-    # All compiler warnings should be considered errors.
-    warnings
-
-    # Wildcard dependencies are, by definition, incorrect. It is impossible
-    # to be compatible with all future breaking changes in a crate.
-    clippy::wildcard_dependencies
-
-    # the `todo!` macro should not appear in production code.
-    clippy::todo
-
-    # The dbg macro should only be used when debugging, not in production code
-    clippy::dbg_macro
-)
-
-# Add lints to this list freely, but please add a comment with justification
-# along with the lint. The goal is to ever-so-slightly increase the barrier to
-# turning off a lint.
-#
-# Please keep this list alphabetically sorted.
 disabled_lints=(
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#blocks_in_if_conditions
-    #
-    # clippy::blocks_in_if_conditions prohibits complicated blocks in `if`
-    # statements, like:
-    #
-    #     if { let difficult_answer = big_computation(); difficult_answer == 42 } { .. }
-    #
-    # Unfortunately it also fires incorrectly on perfectly readable
-    # constructions, like:
-    #
-    #    assert!(vec.iter().all(|item| {
-    #        // ...
-    #    }))
-    clippy::blocks_in_if_conditions
+    # The style and complexity lints frustrated too many engineers and caused
+    # more bikeshedding than they saved. These lint categories are largely a
+    # matter of opinion. A few of the worthwhile lints in these categories are
+    # reenabled below.
+    clippy::style
+    clippy::complexity
 
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#clone_on_copy
-    #
-    # Several types happen to be Copy, but might change in the future. A call
-    # to `clone()` compiles to a copy for Copy types, so there is no specific
-    # harm from calling `clone()` and some line-noise as types become or cease
-    # being Copy.
-    clippy::clone-on-copy
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#cognitive_complexity
-    #
-    # Clippy's cognitive complexity is too easily reached.
-    clippy::cognitive-complexity
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#flat_map_identity
-    #
-    # Clippy asks that you replace `flat_map(|x| x)` with `flatten()`, but the
-    # replacement is not sufficiently more readable to justify the cost of the
-    # CI cycle.
-    clippy::flat-map-identity
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#large_enum_variant
-    #
     # clippy::large_enum_variant complains when enum variants have divergent
     # sizes, as the size of an enum is determined by the size of its largest
     # element. Obeying this lint is nearly always a premature optimization,
@@ -84,107 +34,56 @@ disabled_lints=(
     # in slower code due to the allocation.
     clippy::large_enum_variant
 
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#len_zero
-    #
-    # clippy::len_zero suggests replacing `collection.len() == 0` with a call to
-    # `collection.is_empty()`, but the argument that `.is_empty()` is faster is
-    # dubious, and it often breaks symmetry in a chain of length comparisons,
-    # like `if c.len() == 0 { .. } else if c.len() == 1 { .. } else { .. }`.
-    clippy::len_zero
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#let_and_return
-    #
-    # clippy::let_and_return protects against creating a let binding that is
-    # returned from a block without otherwise being used, like so:
-    #     {
-    #       let x = String::new();
-    #       // TODO(frank): figure out why sorting here is broken.
-    #       // x.sort()
-    #       x
-    #     }
-    #
-    # This situation can arise naturally when commenting out intermediate code,
-    # like in the example above, and working around the lint requires corrupting
-    # the original intent of the code.
-    clippy::let_and_return
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#match_bool
-    #
-    # clippy::match_bool prohibits matching in bools, like so
-    #
-    #     match cond {
-    #       true => (),
-    #       false => (),
-    #     }
-    #
-    # and instead mandates use of an if/else statement. This is needlessly
-    # nitpicky. For one, matching on bools uses one fewer lines than using an
-    # if/else statement; for another, the author may be maintaining a consistent
-    # style with similar blocks of nearby code.
-    clippy::match_bool
-
-    # Upstream description: https://github.com/rust-lang/rust-clippy/issues/5991
-    #
-    # This lint has too many false positives in Rust v1.47.0.
-    # See: https://github.com/rust-lang/rust-clippy/issues/5991
-    clippy::needless-collect
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#needless_lifetimes
-    #
-    # Lifetime elision sometimes gives surprising results, and especially in
-    # unsafe code it's useful to spell out lifetimes explicitly to be sure.
-    clippy::needless-lifetimes
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#needless_range_loop
-    #
-    # clippy::needless_range_loop encourages use of `for item in collection`
-    # instead of `for i in 0..collection.len()`. The lint is overly aggressive,
-    # however, and often forces the creation of complicated stacks of iterators
-    # when the for loop is clearer.
-    clippy::needless_range_loop
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#type_complexity
-    #
-    # clippy::type_complexity disallows types that are excessively nested.
-    # Unfortunately Frank McSherry loves highly nested types, and, indeed,
-    # sometimes extracting the type alias that Clippy demands makes the types
-    # less readable.
-    clippy::type_complexity
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/#unneeded_field_pattern
-    #
-    # clippy::unneeded_field_patterns disallows wildcard struct patterns, like
-    # `obj { field1, field2: _ }`, in favor of using `obj { field1, .. }`. This
-    # lint is actively harmful. Explicitly matching on every extant field
-    # ensures that when a new field is added to the struct in the future,
-    # whoever adds the field will be forced to inspect the match site. Using
-    # `..`, while sometimes convenient, can cause match sites that need to be
-    # updated for the new field to be overlooked.
-    clippy::unneeded_field_pattern
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#mutable_key_type
-    #
     # clippy::mutable_key_type disallows using internally mutable types as keys in `HashMap`,
     # because their order could change. This is a good lint in principle, but its current
     # implementation is too strict -- it disallows anything containing an `Arc` or `Rc`,
     # for example.
     clippy::mutable_key_type
 
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#naive_bytecount
-    # Clippy unnecessarily forces use of the bytecount crates for counting bytes
-    clippy::naive-bytecount
+    # This lint has too many false positives in Rust v1.47.0.
+    # See: https://github.com/rust-lang/rust-clippy/issues/5991
+    clippy::needless-collect
 
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
-    # Collapsing if statements can render code unreadable, and should not be mandated.
-    clippy::collapsible-if
-
-    # Upstream description: https://rust-lang.github.io/rust-clippy/master/index.html#stable_sort_primitive
-    # Unstable sort is not strictly better than sort, notably on partially sorted inputs.
+    # Unstable sort is not strictly better than sort, notably on partially
+    # sorted inputs.
     clippy::stable-sort-primitive
+)
 
-    # Upstream description https://rust-lang.github.io/rust-clippy/master/index.html#needless_return
-    # Breaking symmetry for the sake of this lint can make code harder to read.
-    clippy::needless-return
+extra_lints=(
+    # All compiler warnings should be considered errors.
+    warnings
+
+    # Comparison of a bool with `true` or `false` is indeed clearer as `x` or
+    # `!x`.
+    clippy::bool_comparison
+
+    # These can catch real bugs, because something that is expected (a cast, a
+    # conversion, a statement) is not happening.
+    clippy::no_effect
+    clippy::useless_asref
+    clippy::unnecessary_cast
+    clippy::unnecessary_unwrap
+    clippy::useless_conversion
+
+    # Prevent code using the `dbg!` macro from being merged to the main branch.
+    #
+    # To mark a debugging print as intentional (e.g., in a test), use
+    # `println!("{:?}", obj)` instead.
+    clippy::dbg_macro
+
+    # Prevent code containing the `todo!` macro from being merged to the main
+    # branch.
+    #
+    # To mark something as intentionally unimplemented, use the `unimplemented!`
+    # macro instead.
+    clippy::todo
+
+    # Wildcard dependencies are, by definition, incorrect. It is impossible
+    # to be compatible with all future breaking changes in a crate.
+    clippy::wildcard_dependencies
+
+    # Zero-prefixed literals may be incorrectly interpreted as octal literals.
+    clippy::zero_prefixed_literal
 )
 
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word

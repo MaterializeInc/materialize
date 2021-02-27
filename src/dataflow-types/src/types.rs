@@ -130,11 +130,15 @@ impl DataflowDesc {
         &mut self,
         id: GlobalId,
         connector: SourceConnector,
+        bare_desc: RelationDesc,
+        optimized_expr: OptimizedMirRelationExpr,
         desc: RelationDesc,
     ) {
         let source_description = SourceDesc {
             connector,
             operators: None,
+            bare_desc,
+            optimized_expr,
             desc,
         };
         self.source_imports.insert(id, source_description);
@@ -193,6 +197,7 @@ impl DataflowDesc {
         from_desc: RelationDesc,
         connector: SinkConnector,
         envelope: SinkEnvelope,
+        as_of: SinkAsOf,
     ) {
         let key_desc = connector.get_key_desc().cloned();
         let value_desc = connector.get_value_desc().clone();
@@ -205,6 +210,7 @@ impl DataflowDesc {
                 value_desc,
                 connector,
                 envelope,
+                as_of,
             },
         ));
     }
@@ -276,7 +282,7 @@ impl DataflowDesc {
     pub fn arity_of(&self, id: &GlobalId) -> usize {
         for (source_id, desc) in self.source_imports.iter() {
             if source_id == id {
-                return desc.desc.typ().arity();
+                return desc.arity();
             }
         }
         for (_index_id, (desc, typ)) in self.index_imports.iter() {
@@ -302,6 +308,7 @@ pub enum DataEncoding {
     Protobuf(ProtobufEncoding),
     Csv(CsvEncoding),
     Regex(RegexEncoding),
+    Postgres(RelationDesc),
     Bytes,
     Text,
 }
@@ -338,10 +345,22 @@ impl DataEncoding {
         Ok(match self {
             DataEncoding::Bytes => key_desc.with_column("data", ScalarType::Bytes.nullable(false)),
             DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
-                avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
-                    .context("validating avro ocf reader schema")?
-                    .into_iter()
-                    .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty))
+                let desc =
+                    avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
+                        .context("validating avro ocf reader schema")?
+                        .into_iter()
+                        .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
+                if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
+                    desc.with_column(
+                        "diff",
+                        ColumnType {
+                            nullable: false,
+                            scalar_type: ScalarType::Int64,
+                        },
+                    )
+                } else {
+                    desc
+                }
             }
             DataEncoding::Avro(AvroEncoding {
                 value_schema,
@@ -353,16 +372,28 @@ impl DataEncoding {
                         .context("validating avro value schema")?
                         .into_iter()
                         .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
-                if let Some(key_schema) = key_schema {
-                    match avro::validate_key_schema(key_schema, &desc) {
-                        Ok(key) => desc.with_key(key),
-                        Err(e) => {
+                let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
+                    avro::validate_key_schema(key_schema, &desc)
+                        .map(Some)
+                        .unwrap_or_else(|e| {
                             warn!("Not using key due to error: {}", e);
-                            desc
-                        }
-                    }
+                            None
+                        })
+                });
+                if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
+                    desc.with_column(
+                        "diff",
+                        ColumnType {
+                            nullable: false,
+                            scalar_type: ScalarType::Int64,
+                        },
+                    )
                 } else {
-                    desc
+                    if let Some(key) = key_schema_indices {
+                        desc.with_key(key)
+                    } else {
+                        desc
+                    }
                 }
             }
             DataEncoding::Protobuf(ProtobufEncoding {
@@ -394,6 +425,7 @@ impl DataEncoding {
                 })
             }
             DataEncoding::Text => key_desc.with_column("text", ScalarType::String.nullable(false)),
+            DataEncoding::Postgres(desc) => desc.clone(),
         })
     }
 
@@ -406,6 +438,7 @@ impl DataEncoding {
             DataEncoding::Regex { .. } => "Regex",
             DataEncoding::Csv(_) => "Csv",
             DataEncoding::Text => "Text",
+            DataEncoding::Postgres(_) => "Postgres",
         }
     }
 }
@@ -416,6 +449,7 @@ pub struct AvroEncoding {
     pub key_schema: Option<String>,
     pub value_schema: String,
     pub schema_registry_config: Option<ccsr::ClientConfig>,
+    pub confluent_wire_format: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -455,13 +489,15 @@ pub struct SourceDesc {
     /// Optionally, filtering and projection that may optimistically be applied
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
+    pub bare_desc: RelationDesc,
+    pub optimized_expr: OptimizedMirRelationExpr,
     pub desc: RelationDesc,
 }
 
 impl SourceDesc {
     /// Computes the arity of this source.
     pub fn arity(&self) -> usize {
-        self.desc.arity()
+        self.optimized_expr.0.arity()
     }
 }
 
@@ -474,6 +510,7 @@ pub struct SinkDesc {
     pub key_desc: Option<RelationDesc>,
     pub connector: SinkConnector,
     pub envelope: SinkEnvelope,
+    pub as_of: SinkAsOf,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -481,6 +518,12 @@ pub enum SinkEnvelope {
     Debezium,
     Upsert,
     Tail { emit_progress: bool },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SinkAsOf {
+    pub frontier: Antichain<Timestamp>,
+    pub strict: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -536,6 +579,7 @@ pub enum ExternalSourceConnector {
     File(FileSourceConnector),
     AvroOcf(FileSourceConnector),
     S3(S3SourceConnector),
+    Postgres(PostgresSourceConnector),
 }
 
 impl ExternalSourceConnector {
@@ -556,6 +600,7 @@ impl ExternalSourceConnector {
             Self::AvroOcf(_) => vec![("mz_obj_no".into(), ScalarType::Int64.nullable(false))],
             // TODO: should we include object key and possibly object-internal offset here?
             Self::S3(_) => vec![("mz_record".into(), ScalarType::Int64.nullable(false))],
+            Self::Postgres(_) => vec![],
         }
     }
 
@@ -567,6 +612,7 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::File(_) => "file",
             ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
             ExternalSourceConnector::S3(_) => "s3",
+            ExternalSourceConnector::Postgres(_) => "postgres",
         }
     }
 
@@ -669,6 +715,14 @@ pub struct FileSourceConnector {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PostgresSourceConnector {
+    pub conn: String,
+    pub publication: String,
+    pub namespace: String,
+    pub table: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct S3SourceConnector {
     pub key_sources: Vec<S3KeySource>,
     pub pattern: Option<Glob>,
@@ -680,6 +734,11 @@ pub struct S3SourceConnector {
 pub enum S3KeySource {
     /// Scan the S3 Bucket to discover keys to download
     Scan { bucket: String },
+    /// Load object keys based on the contents of an S3 Notifications channel
+    ///
+    /// S3 notifications channels can be configured to go to SQS, which is the
+    /// only target we currently support.
+    SqsNotifications { queue: String },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -707,8 +766,6 @@ pub struct KafkaSinkConnector {
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,
-    pub frontier: Antichain<Timestamp>,
-    pub strict: bool,
     pub config_options: BTreeMap<String, String>,
 }
 
@@ -716,19 +773,9 @@ pub struct KafkaSinkConnector {
 pub struct AvroOcfSinkConnector {
     pub value_desc: RelationDesc,
     pub path: PathBuf,
-    pub frontier: Antichain<Timestamp>,
-    pub strict: bool,
 }
 
 impl SinkConnector {
-    pub fn get_frontier(&self) -> Antichain<Timestamp> {
-        match self {
-            SinkConnector::AvroOcf(avro) => avro.frontier.clone(),
-            SinkConnector::Kafka(kafka) => kafka.frontier.clone(),
-            SinkConnector::Tail(tail) => tail.frontier.clone(),
-        }
-    }
-
     pub fn get_key_desc(&self) -> Option<&RelationDesc> {
         match self {
             SinkConnector::Kafka(k) => k.key_desc_and_indices.as_ref().map(|(desc, _indices)| desc),
@@ -761,8 +808,6 @@ impl SinkConnector {
 pub struct TailSinkConnector {
     #[serde(skip)]
     pub tx: mpsc::UnboundedSender<Vec<Row>>,
-    pub frontier: Antichain<Timestamp>,
-    pub strict: bool,
     pub emit_progress: bool,
     pub object_columns: usize,
     pub value_desc: RelationDesc,

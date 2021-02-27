@@ -397,6 +397,7 @@ impl LiteralLifting {
                 // Literals can just be lifted out of threshold.
                 self.action(input, gets)
             }
+            MirRelationExpr::DeclareKeys { input, .. } => self.action(input, gets),
             MirRelationExpr::Union { base, inputs } => {
                 let mut base_literals = self.action(base, gets);
                 let mut input_literals = inputs

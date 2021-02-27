@@ -24,8 +24,12 @@ pub enum CoordError {
     Catalog(catalog::Error),
     /// The specified session parameter is constrained to its current value.
     ConstrainedParameter(&'static (dyn Var + Send + Sync)),
+    /// The cursor already exists.
+    DuplicateCursor(String),
     /// An error while evaluating an expression.
     Eval(EvalError),
+    /// The ID allocator exhausted all valid IDs.
+    IdExhaustionError,
     /// The value for the specified parameter does not have the right type.
     InvalidParameterType(&'static (dyn Var + Send + Sync)),
     /// The named operation cannot be run in a transaction.
@@ -59,6 +63,7 @@ impl CoordError {
     pub fn detail(&self) -> Option<String> {
         match self {
             CoordError::Catalog(c) => c.detail(),
+            CoordError::Eval(e) => e.detail(),
             _ => None,
         }
     }
@@ -67,6 +72,7 @@ impl CoordError {
     pub fn hint(&self) -> Option<String> {
         match self {
             CoordError::Catalog(c) => c.hint(),
+            CoordError::Eval(e) => e.hint(),
             CoordError::UnknownLoginRole(_) => {
                 // TODO(benesch): this will be a bad hint when people are used
                 // to creating roles in Materialize, since they might drop the
@@ -92,7 +98,11 @@ impl fmt::Display for CoordError {
                 p.name().quoted(),
                 p.value().quoted()
             ),
+            CoordError::DuplicateCursor(name) => {
+                write!(f, "cursor {} already exists", name.quoted())
+            }
             CoordError::Eval(e) => e.fmt(f),
+            CoordError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
             CoordError::InvalidParameterType(p) => write!(
                 f,
                 "parameter {} requires a {} value",

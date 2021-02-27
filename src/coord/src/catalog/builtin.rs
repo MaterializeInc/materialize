@@ -128,6 +128,11 @@ pub struct BuiltinFunc {
     pub inner: &'static sql::func::Func,
 }
 
+pub struct BuiltinRole {
+    pub name: &'static str,
+    pub id: i64,
+}
+
 // Builtin definitions below. Keep these sorted by global ID, and ensure you
 // add new builtins to the `BUILTINS` map.
 //
@@ -385,6 +390,30 @@ pub const TYPE_ANYNONARRAY: BuiltinType = BuiltinType {
     schema: PG_CATALOG_SCHEMA,
     id: GlobalId::System(1037),
     pgtype: &postgres_types::Type::ANYNONARRAY,
+};
+
+pub const TYPE_CHAR: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1038),
+    pgtype: &postgres_types::Type::CHAR,
+};
+
+pub const TYPE_VARCHAR: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1039),
+    pgtype: &postgres_types::Type::VARCHAR,
+};
+
+pub const TYPE_INT2: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1040),
+    pgtype: &postgres_types::Type::INT2,
+};
+
+pub const TYPE_INT2_ARRAY: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1041),
+    pgtype: &postgres_types::Type::INT2_ARRAY,
 };
 
 lazy_static! {
@@ -1161,6 +1190,11 @@ pub const PG_ENUM: BuiltinView = BuiltinView {
     needs_logs: false,
 };
 
+pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
+    name: "mz_system",
+    id: -1,
+};
+
 lazy_static! {
     pub static ref BUILTINS: BTreeMap<GlobalId, Builtin> = {
         let mut builtins = vec![
@@ -1172,6 +1206,7 @@ lazy_static! {
             Builtin::Type(&TYPE_BOOL_ARRAY),
             Builtin::Type(&TYPE_BYTEA),
             Builtin::Type(&TYPE_BYTEA_ARRAY),
+            Builtin::Type(&TYPE_CHAR),
             Builtin::Type(&TYPE_DATE),
             Builtin::Type(&TYPE_DATE_ARRAY),
             Builtin::Type(&TYPE_FLOAT4),
@@ -1190,8 +1225,12 @@ lazy_static! {
             Builtin::Type(&TYPE_MAP),
             Builtin::Type(&TYPE_NUMERIC),
             Builtin::Type(&TYPE_NUMERIC_ARRAY),
+            Builtin::Type(&TYPE_OID),
+            Builtin::Type(&TYPE_OID_ARRAY),
             Builtin::Type(&TYPE_RECORD),
             Builtin::Type(&TYPE_RECORD_ARRAY),
+            Builtin::Type(&TYPE_INT2),
+            Builtin::Type(&TYPE_INT2_ARRAY),
             Builtin::Type(&TYPE_TEXT),
             Builtin::Type(&TYPE_TEXT_ARRAY),
             Builtin::Type(&TYPE_TIME),
@@ -1202,8 +1241,7 @@ lazy_static! {
             Builtin::Type(&TYPE_TIMESTAMPTZ_ARRAY),
             Builtin::Type(&TYPE_UUID),
             Builtin::Type(&TYPE_UUID_ARRAY),
-            Builtin::Type(&TYPE_OID),
-            Builtin::Type(&TYPE_OID_ARRAY),
+            Builtin::Type(&TYPE_VARCHAR),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS),
             Builtin::Log(&MZ_DATAFLOW_OPERATORS_ADDRESSES),
             Builtin::Log(&MZ_DATAFLOW_CHANNELS),
@@ -1289,6 +1327,8 @@ lazy_static! {
 
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };
+
+    pub static ref BUILTIN_ROLES: Vec<BuiltinRole> = vec![MZ_SYSTEM];
 }
 
 impl BUILTINS {

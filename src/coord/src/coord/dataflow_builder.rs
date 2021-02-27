@@ -14,6 +14,8 @@
 //! and indicate which identifiers have arrangements available. This module
 //! isolates that logic from the rest of the somewhat complicated coordinator.
 
+use dataflow_types::SinkAsOf;
+
 use super::*;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
@@ -60,7 +62,20 @@ impl<'a> DataflowBuilder<'a> {
         } else {
             match self.catalog.get_by_id(id).item() {
                 CatalogItem::Table(table) => {
-                    dataflow.add_source_import(*id, SourceConnector::Local, table.desc.clone());
+                    let optimized_expr = OptimizedMirRelationExpr::declare_optimized(
+                        sql::plan::HirRelationExpr::Get {
+                            id: Id::BareSource(*id),
+                            typ: table.desc.typ().clone(),
+                        }
+                        .lower(),
+                    );
+                    dataflow.add_source_import(
+                        *id,
+                        SourceConnector::Local,
+                        table.desc.clone(),
+                        optimized_expr,
+                        table.desc.clone(),
+                    );
                 }
                 CatalogItem::Source(source) => {
                     // If Materialize has caching enabled, check to see if the source has any
@@ -93,7 +108,13 @@ impl<'a> DataflowBuilder<'a> {
                     // Default back to the regular connector if we didn't get a augmented one.
                     let connector = connector.unwrap_or_else(|| source.connector.clone());
 
-                    dataflow.add_source_import(*id, connector, source.desc.clone());
+                    dataflow.add_source_import(
+                        *id,
+                        connector,
+                        source.bare_desc.clone(),
+                        source.optimized_expr.clone(),
+                        source.desc.clone(),
+                    );
                 }
                 CatalogItem::View(view) => {
                     self.import_view_into_dataflow(id, &view.optimized_expr, dataflow);
@@ -167,12 +188,13 @@ impl<'a> DataflowBuilder<'a> {
         from: GlobalId,
         connector: SinkConnector,
         envelope: SinkEnvelope,
+        as_of: SinkAsOf,
     ) -> DataflowDesc {
         let mut dataflow = DataflowDesc::new(name);
-        dataflow.set_as_of(connector.get_frontier());
+        dataflow.set_as_of(as_of.frontier.clone());
         self.import_into_dataflow(&from, &mut dataflow);
         let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
-        dataflow.add_sink_export(id, from, from_type, connector, envelope);
+        dataflow.add_sink_export(id, from, from_type, connector, envelope, as_of);
         dataflow
     }
 }

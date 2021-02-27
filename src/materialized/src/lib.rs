@@ -13,28 +13,29 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
+use std::convert::TryInto;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use async_stream::try_stream;
 use compile_time_run::run_command_str;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
+use tokio_stream::wrappers::TcpListenerStream;
 
 use build_info::BuildInfo;
 use coord::{CacheConfig, LoggingConfig};
-use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 
 use crate::mux::Mux;
 
 mod http;
 mod mux;
+mod server_metrics;
 mod version_check;
 
 // Disable jemalloc on macOS, as it is not well supported [0][1][2].
@@ -161,11 +162,6 @@ pub async fn serve(
     let start_time = Instant::now();
     let workers = config.workers;
 
-    // Construct shared channels for SQL command and result exchange, and
-    // dataflow command and result exchange.
-    let (cmdq_tx, cmd_rx) = mpsc::unbounded_channel();
-    let coord_client = coord::Client::new(cmdq_tx);
-
     // Validate TLS configuration, if present.
     let (pgwire_tls, http_tls) = match &config.tls {
         None => (None, None),
@@ -204,9 +200,32 @@ pub async fn serve(
         }
     };
 
+    // Set this metric once so that it shows up in the metric export.
+    crate::server_metrics::WORKER_COUNT
+        .with_label_values(&[&workers.to_string()])
+        .set(workers.try_into().unwrap());
+
     // Initialize network listener.
     let listener = TcpListener::bind(&config.listen_addr).await?;
     let local_addr = listener.local_addr()?;
+
+    // Initialize coordinator.
+    let (coord_handle, coord_client) = coord::serve(
+        coord::Config {
+            workers,
+            timely_worker: config.timely_worker,
+            symbiosis_url: config.symbiosis_url.as_deref(),
+            logging: config.logging,
+            data_directory: &config.data_directory,
+            timestamp_frequency: config.timestamp_frequency,
+            cache: config.cache,
+            logical_compaction_window: config.logical_compaction_window,
+            experimental_mode: config.experimental_mode,
+            build_info: &BUILD_INFO,
+        },
+        runtime,
+    )
+    .await?;
 
     // Launch task to serve connections.
     //
@@ -219,12 +238,7 @@ pub async fn serve(
     tokio::spawn(async move {
         // TODO(benesch): replace with `listener.incoming()` if that is
         // restored when the `Stream` trait stabilizes.
-        let mut incoming = Box::pin(try_stream! {
-            loop {
-                let (conn, _addr) = listener.accept().await?;
-                yield conn;
-            }
-        });
+        let mut incoming = TcpListenerStream::new(listener);
 
         let mut mux = Mux::new();
         mux.add_handler(pgwire::Server::new(pgwire::Config {
@@ -235,49 +249,25 @@ pub async fn serve(
             tls: http_tls,
             coord_client,
             start_time,
-            // TODO(benesch): passing this to `http::Server::new` just
-            // so it can set a static metric is silly. We should just
-            // set the metric directly here.
-            worker_count: workers,
         }));
         mux.serve(incoming.by_ref().take_until(drain_tripwire))
             .await;
     });
-
-    // Initialize coordinator.
-    let (coord_thread, cluster_id) = coord::serve(
-        coord::Config {
-            cmd_rx,
-            workers,
-            timely_worker: config.timely_worker,
-            symbiosis_url: config.symbiosis_url.as_deref(),
-            logging: config.logging,
-            data_directory: &config.data_directory,
-            timestamp: coord::TimestampConfig {
-                frequency: config.timestamp_frequency,
-            },
-            cache: config.cache,
-            logical_compaction_window: config.logical_compaction_window,
-            experimental_mode: config.experimental_mode,
-            build_info: &BUILD_INFO,
-        },
-        runtime,
-    )
-    .await?;
 
     // Start a task that checks for the latest version and prints a warning if
     // it finds a different version than currently running.
     if let Some(telemetry_url) = config.telemetry_url {
         tokio::spawn(version_check::check_version_loop(
             telemetry_url,
-            cluster_id.to_string(),
+            coord_handle.cluster_id().to_string(),
+            start_time,
         ));
     }
 
     Ok(Server {
         local_addr,
         _drain_trigger: drain_trigger,
-        _coord_thread: coord_thread.join_on_drop(),
+        _coord_handle: coord_handle,
     })
 }
 
@@ -286,7 +276,7 @@ pub struct Server {
     local_addr: SocketAddr,
     // Drop order matters for these fields.
     _drain_trigger: oneshot::Sender<()>,
-    _coord_thread: JoinOnDropHandle<()>,
+    _coord_handle: coord::Handle,
 }
 
 impl Server {

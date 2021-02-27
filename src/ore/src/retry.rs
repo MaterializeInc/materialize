@@ -25,6 +25,11 @@ pub struct RetryState {
     /// before the next attempt. If this is the last attempt, then this
     /// field will be `None`.
     pub next_backoff: Option<Duration>,
+    /// If this try fails, the maximum amount of time that `retry_for` will sleep
+    /// before the next attempt.
+    ///
+    /// If this is none, there is no max backoff.
+    pub max_backoff: Option<Duration>,
     /// If the operation is still failing after a cumulative delay of `max_sleep`,
     /// its last error is returned. Set to `None` to retry forever.
     pub max_sleep: Option<Duration>,
@@ -51,13 +56,18 @@ impl RetryState {
                         time::sleep(backoff).await;
                         self.i += 1;
                         backoff *= 2;
-                        self.next_backoff = match self.max_sleep {
+                        let mut next_backoff = match self.max_sleep {
                             None => Some(backoff),
                             Some(max_sleep) => match cmp::min(backoff, max_sleep - total_backoff) {
                                 ZERO_DURATION => None,
                                 b => Some(b),
                             },
                         };
+                        if let (Some(b), Some(max_backoff)) = (next_backoff, self.max_backoff) {
+                            next_backoff = Some(cmp::min(b, max_backoff));
+                        }
+
+                        self.next_backoff = next_backoff;
                     }
                 },
             }
@@ -85,6 +95,7 @@ where
 #[derive(Debug)]
 pub struct RetryBuilder {
     initial_backoff: Duration,
+    max_backoff: Option<Duration>,
     max_sleep: Option<Duration>,
 }
 
@@ -93,6 +104,7 @@ impl RetryBuilder {
     pub fn new() -> Self {
         RetryBuilder {
             initial_backoff: Duration::from_millis(125),
+            max_backoff: None,
             max_sleep: None,
         }
     }
@@ -101,6 +113,7 @@ impl RetryBuilder {
         RetryState {
             i: 0,
             next_backoff: Some(self.initial_backoff),
+            max_backoff: self.max_backoff,
             max_sleep: self.max_sleep,
         }
     }
@@ -114,6 +127,15 @@ impl RetryBuilder {
     /// before the next attempt.
     pub fn initial_backoff(mut self, duration: Duration) -> Self {
         self.initial_backoff = duration;
+        self
+    }
+
+    /// If a try fails repeateadly, the maximum time that `retry_for` will
+    /// sleep between attempts.
+    ///
+    /// Default is to allow infinite sleep between retries.
+    pub fn max_backoff(mut self, duration: Duration) -> Self {
+        self.max_backoff = Some(duration);
         self
     }
 }

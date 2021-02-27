@@ -40,6 +40,11 @@ name = "Connect"
 weight = 40
 
 [[menu.main]]
+name = "Sources"
+parent = "connections"
+url = "/sql/create-source"
+
+[[menu.main]]
 identifier = "sql"
 name = "SQL"
 weight = 60

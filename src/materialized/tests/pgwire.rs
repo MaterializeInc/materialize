@@ -193,7 +193,7 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
         match notice_rx.recv().await {
             Some(tokio_postgres::AsyncMessage::Notice(n)) => {
                 assert_eq!(*n.code(), SqlState::SUCCESSFUL_COMPLETION);
-                assert_eq!(n.message(), "session database \'newdb\' does not exist");
+                assert_eq!(n.message(), "session database \"newdb\" does not exist");
             }
             _ => panic!("missing database notice not generated"),
         }

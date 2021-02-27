@@ -88,6 +88,11 @@ impl FoldConstants {
                     *relation = input.take_dangerous();
                 }
             }
+            MirRelationExpr::DeclareKeys { input, keys: _ } => {
+                if let MirRelationExpr::Constant { rows: _, .. } = &mut **input {
+                    *relation = input.take_dangerous();
+                }
+            }
             MirRelationExpr::Threshold { input } => {
                 if let MirRelationExpr::Constant { rows, .. } = &mut **input {
                     if let Ok(rows) = rows {
