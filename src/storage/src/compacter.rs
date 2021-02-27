@@ -218,7 +218,16 @@ impl Trace {
         }
 
         let mut segments = read_dir_regex(&self.wal_path, &FINISHED_WAL_SEGMENT_REGEX)?;
-        segments.sort();
+        segments.sort_by_key(|segment| {
+            segment
+                .to_str()
+                .unwrap()
+                .split('-')
+                .nth(1)
+                .unwrap()
+                .parse::<usize>()
+                .unwrap()
+        });
 
         Ok(segments)
     }
@@ -252,14 +261,14 @@ impl Trace {
             static ref BATCH_REGEX: Regex = Regex::new("^batch-[0-9]+-[0-9]+$").unwrap();
         }
 
-        let mut batches = read_dir_regex(&self.trace_path, &BATCH_REGEX)?;
-        batches.sort();
+        let batches = read_dir_regex(&self.trace_path, &BATCH_REGEX)?;
 
-        let batches: Vec<Batch> = batches
+        let mut batches: Vec<Batch> = batches
             .into_iter()
             .map(Batch::reinit)
             .collect::<Result<_, _>>()
             .unwrap();
+        batches.sort_by_key(|batch| batch.lower);
         Ok(batches)
     }
 
