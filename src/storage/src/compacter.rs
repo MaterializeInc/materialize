@@ -13,7 +13,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use byteorder::{NetworkEndian, ReadBytesExt};
 use lazy_static::lazy_static;
 use log::error;
@@ -27,10 +27,9 @@ use repr::{Row, Timestamp};
 
 use crate::wal::{encode_progress, encode_update};
 
-// TODO: change this to be a longer time interval. Keeping it short for tests.
 // TODO: Lets add some jitter to compaction so we aren't compacting every single
 // table at the same time maybe?
-static COMPACTER_INTERVAL: Duration = Duration::from_secs(30);
+static COMPACTER_INTERVAL: Duration = Duration::from_secs(300);
 
 #[derive(Debug)]
 pub enum CompacterMessage {
@@ -314,8 +313,8 @@ impl Trace {
 
     pub fn resume(
         id: GlobalId,
-        traces_path: PathBuf,
-        wals_path: PathBuf,
+        traces_path: &Path,
+        wals_path: &Path,
     ) -> Result<Self, anyhow::Error> {
         // Need to instantiate a new trace and figure out what batches
         // we have access to.
@@ -370,12 +369,6 @@ impl Compacter {
         traces_path: PathBuf,
         wals_path: PathBuf,
     ) -> Result<Self, anyhow::Error> {
-        fs::create_dir_all(&traces_path).with_context(|| {
-            format!(
-                "trying to create traces directory: {}",
-                traces_path.display()
-            )
-        })?;
         Ok(Self {
             rx,
             traces: HashMap::new(),

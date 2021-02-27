@@ -12,7 +12,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use byteorder::{NetworkEndian, WriteBytesExt};
 
 use dataflow_types::Update;
@@ -20,8 +20,8 @@ use expr::GlobalId;
 use repr::{Row, Timestamp};
 
 // Limit at which we will make a new log segment
-// TODO: make this configurable and bump default to be larger.
-static MAX_LOG_SEGMENT_SIZE: usize = 50;
+// TODO: make this configurable..
+static MAX_LOG_SEGMENT_SIZE: usize = 1usize << 24;
 
 /// Segmented write ahead log to persist (data, time, records) from a relation
 /// to disk.
@@ -260,8 +260,6 @@ pub struct WriteAheadLogs {
 
 impl WriteAheadLogs {
     pub fn new(path: PathBuf) -> Result<Self, anyhow::Error> {
-        fs::create_dir_all(&path)
-            .with_context(|| format!("trying to create wal directory: {:#?}", path))?;
         Ok(Self {
             path,
             wals: HashMap::new(),
