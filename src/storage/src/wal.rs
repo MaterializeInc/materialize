@@ -54,7 +54,7 @@ impl WriteAheadLog {
         // We expect that this directory should not exist and will error if it
         // does.
         fs::create_dir(&base_path).with_context(|| {
-            anyhow!(
+            format!(
                 "trying to create wal directory for relation: {} path: {}",
                 id,
                 base_path.display(),
@@ -83,17 +83,15 @@ impl WriteAheadLog {
     fn write_inner(&mut self, buf: &[u8]) -> Result<(), anyhow::Error> {
         let len = buf.len();
         self.current_file.write_all(&buf).with_context(|| {
-            anyhow!(
+            format!(
                 "failed to write to relation: {} wal segment {}",
-                self.id,
-                self.current_sequence_number
+                self.id, self.current_sequence_number
             )
         })?;
         self.current_file.flush().with_context(|| {
-            anyhow!(
+            format!(
                 "failed to flush write to relation: {} wal segment {}",
-                self.id,
-                self.current_sequence_number
+                self.id, self.current_sequence_number
             )
         })?;
         self.current_bytes_written += len;
@@ -162,13 +160,13 @@ impl WriteAheadLog {
 
         // Let's close the file descriptor from the old file and mark it as final.
         old_file.sync_all().with_context(|| {
-            anyhow!(
+            format!(
                 "failed to sync state for finished log segment: {}",
                 old_file_path.display()
             )
         })?;
         fs::rename(&old_file_path, &old_file_rename).with_context(|| {
-            anyhow!(
+            format!(
                 "failed to rename finished log segment from: {} to: {}",
                 old_file_path.display(),
                 old_file_rename.display()
@@ -187,7 +185,8 @@ impl WriteAheadLog {
         // List out all of the files in the write-ahead log directory. There should
         // be exactly one unfinished file, and potentially more than one finished
         // file. If that's not the case, we need to error out.
-        let entries = std::fs::read_dir(&base_path)?;
+        let entries = std::fs::read_dir(&base_path)
+            .with_context(|| format!("failed to read wal directory {}", base_path.display()))?;
         for entry in entries {
             if let Ok(file) = entry {
                 let path = file.path();
@@ -232,7 +231,7 @@ impl WriteAheadLog {
                 .append(true)
                 .open(&unfinished_file)
                 .with_context(|| {
-                    anyhow!(
+                    format!(
                         "trying to reopen wal segment file at path: {}",
                         unfinished_file.display()
                     )
@@ -262,7 +261,7 @@ pub struct WriteAheadLogs {
 impl WriteAheadLogs {
     pub fn new(path: PathBuf) -> Result<Self, anyhow::Error> {
         fs::create_dir_all(&path)
-            .with_context(|| anyhow!("trying to create wal directory: {:#?}", path))?;
+            .with_context(|| format!("trying to create wal directory: {:#?}", path))?;
         Ok(Self {
             path,
             wals: HashMap::new(),
@@ -380,7 +379,7 @@ fn create_log_segment(path: &Path) -> Result<File, anyhow::Error> {
         .create_new(true)
         .open(path)
         .with_context(|| {
-            anyhow!(
+            format!(
                 "trying to create wal segment file at path: {}",
                 path.display()
             )

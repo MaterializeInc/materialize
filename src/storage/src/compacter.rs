@@ -116,9 +116,9 @@ impl Batch {
         let batch_path = trace_path.join(&batch_name);
         let batch_tmp_path = trace_path.join(format!("{}-tmp", batch_name));
         fs::write(&batch_tmp_path, buf)
-            .with_context(|| anyhow!("failed to write batch file {}", batch_tmp_path.display()))?;
+            .with_context(|| format!("failed to write batch file {}", batch_tmp_path.display()))?;
         fs::rename(&batch_tmp_path, &batch_path).with_context(|| {
-            anyhow!(
+            format!(
                 "failed to rename batch file from: {} to: {}",
                 batch_tmp_path.display(),
                 batch_path.display()
@@ -177,7 +177,7 @@ pub struct Trace {
 impl Trace {
     fn create(id: GlobalId, trace_path: PathBuf, wal_path: PathBuf) -> Result<Self, anyhow::Error> {
         let _ = fs::read_dir(&wal_path).with_context(|| {
-            anyhow!(
+            format!(
                 "trying to ensure wal directory {} exists for trace of relation {}",
                 id,
                 wal_path.display()
@@ -186,7 +186,7 @@ impl Trace {
 
         // Create a new directory to store the trace
         fs::create_dir(&trace_path).with_context(|| {
-            anyhow!("trying to create trace directory: {}", trace_path.display())
+            format!("trying to create trace directory: {}", trace_path.display())
         })?;
 
         Ok(Self {
@@ -200,13 +200,13 @@ impl Trace {
     // Let's delete the trace directory and the WAL directory.
     fn destroy(self) -> Result<(), anyhow::Error> {
         fs::remove_dir_all(&self.trace_path).with_context(|| {
-            anyhow!(
+            format!(
                 "failed to remove trace directory {}",
                 self.trace_path.display()
             )
         })?;
         fs::remove_dir_all(&self.wal_path).with_context(|| {
-            anyhow!("failed to remove wal directory {}", self.wal_path.display())
+            format!("failed to remove wal directory {}", self.wal_path.display())
         })?;
 
         Ok(())
@@ -220,7 +220,7 @@ impl Trace {
             let batch = Batch::create(&segment, &self.trace_path)?;
             self.batches.push(batch);
             fs::remove_file(&segment).with_context(|| {
-                anyhow!(
+                format!(
                     "failed to remove consumed wal segment {}",
                     segment.display()
                 )
@@ -304,7 +304,7 @@ impl Trace {
             // TODO: This seems like potentially a place with a weird failure mode.
             for batch in batches {
                 fs::remove_file(&batch.path).with_context(|| {
-                    anyhow!("failed to remove replaced batch {}", batch.path.display())
+                    format!("failed to remove replaced batch {}", batch.path.display())
                 })?;
             }
         }
@@ -371,7 +371,7 @@ impl Compacter {
         wals_path: PathBuf,
     ) -> Result<Self, anyhow::Error> {
         fs::create_dir_all(&traces_path).with_context(|| {
-            anyhow!(
+            format!(
                 "trying to create traces directory: {}",
                 traces_path.display()
             )
@@ -471,7 +471,7 @@ impl Compacter {
 
 fn read_dir_regex(path: &Path, regex: &Regex) -> Result<Vec<PathBuf>, anyhow::Error> {
     let entries = std::fs::read_dir(path).with_context(|| {
-        anyhow!(
+        format!(
             "failed to read {} looking for {}",
             path.display(),
             regex.as_str()
@@ -588,6 +588,6 @@ impl LogSegmentIter {
 }
 
 fn read_segment(path: &Path) -> Result<Vec<Message>, anyhow::Error> {
-    let data = fs::read(path).with_context(|| anyhow!("failed to read {}", path.display()))?;
+    let data = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     Ok(LogSegmentIter::new(data).collect())
 }
