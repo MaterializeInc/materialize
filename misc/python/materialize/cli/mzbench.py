@@ -117,13 +117,9 @@ def main(args: argparse.Namespace) -> None:
                 "web",
                 f"perf-dash-web",
             ]
-            output = subprocess.check_output(
-                web_command, stderr=subprocess.STDOUT
-            )
+            output = subprocess.check_output(web_command, stderr=subprocess.STDOUT)
         except (subprocess.CalledProcessError,) as e:
-            print(
-                f"Failed to open browser to perf-dash:\n{e.output.decode()}"
-            )
+            print(f"Failed to open browser to perf-dash:\n{e.output.decode()}")
             raise
 
     iterations = range(0, args.num_measurements)
@@ -241,7 +237,10 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "-w", "--web", action="store_true", help="Open a web browser showing results visualizations",
+        "-w",
+        "--web",
+        action="store_true",
+        help="Open a web browser showing results visualizations",
     )
 
     parser.add_argument(
