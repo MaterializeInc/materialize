@@ -23,7 +23,7 @@ use repr::{Row, Timestamp};
 // TODO: make this configurable and bump default to be larger.
 static MAX_LOG_SEGMENT_SIZE: usize = 50;
 
-/// Segmented write ahead log to persist (data, time, records) from relation `id`
+/// Segmented write ahead log to persist (data, time, records) from a relation
 /// to disk.
 ///
 /// Each log segment is named `log-{sequence-number}` where sequence numbers are
@@ -33,10 +33,18 @@ static MAX_LOG_SEGMENT_SIZE: usize = 50;
 /// begin and end with a progress message that indicates a [lower, upper) bound
 /// for the data in that log segment.
 pub struct WriteAheadLog {
+    /// Id of the relation.
+    id: GlobalId,
+    /// Directory where we store this relation's log files.
     base_path: PathBuf,
+    /// Log file we are currently writing to.
     current_file: File,
+    /// Sequence number of the current log segment.
     current_sequence_number: usize,
+    /// Number of bytes written to the current log segment.
     current_bytes_written: usize,
+    /// Total number of bytes written to this write ahead log.
+    /// TODO: this number is not accurate across restarts.
     total_bytes_written: usize,
 }
 
@@ -47,9 +55,9 @@ impl WriteAheadLog {
         // does.
         fs::create_dir(&base_path).with_context(|| {
             anyhow!(
-                "trying to create directory for relation: {} path: {:#?}",
+                "trying to create wal directory for relation: {} path: {}",
                 id,
-                base_path
+                base_path.display(),
             )
         })?;
 
@@ -58,6 +66,7 @@ impl WriteAheadLog {
         let current_file = create_log_segment(&file_path)?;
 
         let mut ret = Self {
+            id,
             base_path,
             current_file,
             current_sequence_number: 0,
@@ -73,14 +82,27 @@ impl WriteAheadLog {
 
     fn write_inner(&mut self, buf: &[u8]) -> Result<(), anyhow::Error> {
         let len = buf.len();
-        self.current_file.write_all(&buf)?;
-        self.current_file.flush()?;
+        self.current_file.write_all(&buf).with_context(|| {
+            anyhow!(
+                "failed to write to relation: {} wal segment {}",
+                self.id,
+                self.current_sequence_number
+            )
+        })?;
+        self.current_file.flush().with_context(|| {
+            anyhow!(
+                "failed to flush write to relation: {} wal segment {}",
+                self.id,
+                self.current_sequence_number
+            )
+        })?;
         self.current_bytes_written += len;
         self.total_bytes_written += len;
 
         Ok(())
     }
 
+    /// Write a set of (Row, Timestamp, Diff) updates to the write-ahead log.
     fn write(&mut self, updates: &[Update]) -> Result<(), anyhow::Error> {
         // TODO: The allocation discipline for writes could probably be a lot
         // better. Each WAL writer could keep a buffer that it writes into
@@ -100,6 +122,11 @@ impl WriteAheadLog {
         self.write_inner(&buf)
     }
 
+    /// Write a progress (alternatively, timestamp closure) message to the write-ahead
+    /// log.
+    ///
+    /// Optionally also switch to a new log segment file if the current log segment file
+    /// grows too large.
     fn write_progress(&mut self, timestamp: Timestamp) -> Result<(), anyhow::Error> {
         self.write_progress_inner(timestamp)?;
 
@@ -134,9 +161,19 @@ impl WriteAheadLog {
         let old_file = std::mem::replace(&mut self.current_file, new_file);
 
         // Let's close the file descriptor from the old file and mark it as final.
-        old_file.sync_all()?;
-        drop(old_file);
-        fs::rename(&old_file_path, &old_file_rename)?;
+        old_file.sync_all().with_context(|| {
+            anyhow!(
+                "failed to sync state for finished log segment: {}",
+                old_file_path.display()
+            )
+        })?;
+        fs::rename(&old_file_path, &old_file_rename).with_context(|| {
+            anyhow!(
+                "failed to rename finished log segment from: {} to: {}",
+                old_file_path.display(),
+                old_file_rename.display()
+            )
+        })?;
 
         // Update our own local state
         self.current_sequence_number += 1;
@@ -144,12 +181,12 @@ impl WriteAheadLog {
         Ok(())
     }
 
+    /// Continue writing to the write-ahead log after a restart.
     fn resume(id: GlobalId, base_path: PathBuf) -> Result<WriteAheadLog, anyhow::Error> {
         let mut unfinished_file: Option<(PathBuf, usize)> = None;
-        // If its not empty, list out all of the files. There should be
-        // exactly one unfinished file, and potentially more than one
-        // finished file. If that's not the case, let's fail to resume
-        // the WAL.
+        // List out all of the files in the write-ahead log directory. There should
+        // be exactly one unfinished file, and potentially more than one finished
+        // file. If that's not the case, we need to error out.
         let entries = std::fs::read_dir(&base_path)?;
         for entry in entries {
             if let Ok(file) = entry {
@@ -190,13 +227,19 @@ impl WriteAheadLog {
         }
 
         if let Some((unfinished_file, sequence_number)) = unfinished_file {
-            // lets start writing to the previously created file.
+            // Lets start writing to the previously created file.
             let file = fs::OpenOptions::new()
                 .append(true)
                 .open(&unfinished_file)
-                .unwrap();
+                .with_context(|| {
+                    anyhow!(
+                        "trying to reopen wal segment file at path: {}",
+                        unfinished_file.display()
+                    )
+                })?;
 
             let ret = Self {
+                id,
                 base_path,
                 current_file: file,
                 current_sequence_number: sequence_number,
@@ -259,8 +302,7 @@ impl WriteAheadLogs {
 
     pub fn write(&mut self, id: GlobalId, updates: &[Update]) -> Result<(), anyhow::Error> {
         if !self.wals.contains_key(&id) {
-            // TODO get rid of this later
-            panic!("asked to write to unknown table: {}", id)
+            bail!("asked to write to unknown relation: {}", id)
         }
 
         let wal = self.wals.get_mut(&id).expect("wal known to exist");
@@ -330,10 +372,17 @@ pub fn encode_progress(timestamp: Timestamp, buf: &mut Vec<u8>) -> Result<(), an
     Ok(())
 }
 
+// Open a new log segment file to write into. Importantly, we need to open this
+// file with O_APPEND and we should fail if the log segment file already exists.
 fn create_log_segment(path: &Path) -> Result<File, anyhow::Error> {
     fs::OpenOptions::new()
         .append(true)
         .create_new(true)
         .open(path)
-        .with_context(|| anyhow!("trying to create wal segment file at path: {:#?}", path))
+        .with_context(|| {
+            anyhow!(
+                "trying to create wal segment file at path: {}",
+                path.display()
+            )
+        })
 }

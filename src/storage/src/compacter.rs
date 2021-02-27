@@ -115,8 +115,15 @@ impl Batch {
         let batch_name = format!("batch-{}-{}", lower, upper);
         let batch_path = trace_path.join(&batch_name);
         let batch_tmp_path = trace_path.join(format!("{}-tmp", batch_name));
-        fs::write(&batch_tmp_path, buf)?;
-        fs::rename(&batch_tmp_path, &batch_path)?;
+        fs::write(&batch_tmp_path, buf)
+            .with_context(|| anyhow!("failed to write batch file {}", batch_tmp_path.display()))?;
+        fs::rename(&batch_tmp_path, &batch_path).with_context(|| {
+            anyhow!(
+                "failed to rename batch file from: {} to: {}",
+                batch_tmp_path.display(),
+                batch_path.display()
+            )
+        })?;
 
         Ok(Batch {
             upper,
@@ -192,8 +199,15 @@ impl Trace {
 
     // Let's delete the trace directory and the WAL directory.
     fn destroy(self) -> Result<(), anyhow::Error> {
-        fs::remove_dir_all(self.trace_path)?;
-        fs::remove_dir_all(self.wal_path)?;
+        fs::remove_dir_all(&self.trace_path).with_context(|| {
+            anyhow!(
+                "failed to remove trace directory {}",
+                self.trace_path.display()
+            )
+        })?;
+        fs::remove_dir_all(&self.wal_path).with_context(|| {
+            anyhow!("failed to remove wal directory {}", self.wal_path.display())
+        })?;
 
         Ok(())
     }
@@ -205,7 +219,12 @@ impl Trace {
         for segment in finished_segments {
             let batch = Batch::create(&segment, &self.trace_path)?;
             self.batches.push(batch);
-            fs::remove_file(&segment)?;
+            fs::remove_file(&segment).with_context(|| {
+                anyhow!(
+                    "failed to remove consumed wal segment {}",
+                    segment.display()
+                )
+            })?;
         }
 
         Ok(())
@@ -284,7 +303,9 @@ impl Trace {
 
             // TODO: This seems like potentially a place with a weird failure mode.
             for batch in batches {
-                fs::remove_file(batch.path)?;
+                fs::remove_file(&batch.path).with_context(|| {
+                    anyhow!("failed to remove replaced batch {}", batch.path.display())
+                })?;
             }
         }
 
@@ -449,7 +470,13 @@ impl Compacter {
 }
 
 fn read_dir_regex(path: &Path, regex: &Regex) -> Result<Vec<PathBuf>, anyhow::Error> {
-    let entries = std::fs::read_dir(path)?;
+    let entries = std::fs::read_dir(path).with_context(|| {
+        anyhow!(
+            "failed to read {} looking for {}",
+            path.display(),
+            regex.as_str()
+        )
+    })?;
     let mut results = vec![];
     for entry in entries {
         if let Ok(file) = entry {
@@ -561,6 +588,6 @@ impl LogSegmentIter {
 }
 
 fn read_segment(path: &Path) -> Result<Vec<Message>, anyhow::Error> {
-    let data = fs::read(path)?;
+    let data = fs::read(path).with_context(|| anyhow!("failed to read {}", path.display()))?;
     Ok(LogSegmentIter::new(data).collect())
 }
