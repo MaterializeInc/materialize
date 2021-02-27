@@ -19,6 +19,7 @@ import subprocess
 import sys
 import typing
 import uuid
+import webbrowser
 
 
 def mzbuild_tag(git_ref: str) -> str:
@@ -106,6 +107,24 @@ def main(args: argparse.Namespace) -> None:
             f"Setup benchmark failed! Output from failed command:\n{e.output.decode()}"
         )
         raise
+
+    if args.web:
+        try:
+            web_command = [
+                mzcompose_location(mz_root),
+                "--mz-find",
+                args.composition,
+                "web",
+                f"perf-dash-web",
+            ]
+            output = subprocess.check_output(
+                web_command, stderr=subprocess.STDOUT
+            )
+        except (subprocess.CalledProcessError,) as e:
+            print(
+                f"Failed to open browser to perf-dash:\n{e.output.decode()}"
+            )
+            raise
 
     iterations = range(0, args.num_measurements)
     for (iteration, worker_count, git_ref) in itertools.product(
@@ -219,6 +238,10 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable verbose logging output",
+    )
+
+    parser.add_argument(
+        "-w", "--web", action="store_true", help="Open a web browser showing results visualizations",
     )
 
     parser.add_argument(

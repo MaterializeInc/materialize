@@ -21,7 +21,7 @@ It will print a CSV that looks something like the following to your console:
     git_revision,num_workers,iteration,seconds_taken,rows_per_second,grafana_url
     NONE,1,0,3,333333,http://localhost:3000/d/materialize-overview/materialize-overview?from=1612572459000&to=1612573285000&tz=UTC
 
-## Comparing Results Between Materialize Versions
+### Comparing Results Between Materialize Versions
 
 Benchmark results can be considered either absolute (X operations per second) or relative
 (10% faster than the previous release). Our current crop of benchmarks are written to test
@@ -40,13 +40,25 @@ benchmarking in the cloud, you can supply the `--no-benchmark-this-checkout` fla
 
     ./bin/mzbench --no-benchmark-this-checkout <composition> origin/main v0.7.0 v0.6.1
 
-## Controlling the Number of Iterations
+### Controlling the Number of Iterations
 
 Our benchmarks are not sufficiently advanced to provide an accurate picture after only a single
 run. By default, mzbench will run each measurement 6 times. This can be controlled via the
 `--num-measurements` flag:
 
     ./bin/mzbench --num-measurements 3 <composition>
+
+## Visualizing Results
+
+If the benchmark is configured to start `perf-dash` services during the setup step, then you can
+visualize results in your browser. These results are update in real-time, as the results are
+written to the persistent datastore for perf-dash. To view the benchmark results in your browser,
+you can run `mzbench` with the `--web` flag:
+
+    ./bin/mzbench --web ...
+
+This will open a new browser window, pointed at the web interface for perf-dash, once the services
+have started up.
 
 ## Adding New Benchmarks (Compositions)
 
