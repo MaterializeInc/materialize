@@ -28,7 +28,7 @@ use repr::{Row, Timestamp};
 use crate::wal::{encode_progress, encode_update};
 
 // TODO: Lets add some jitter to compaction so we aren't compacting every single
-// table at the same time maybe?
+// relation at the same time maybe?
 static COMPACTER_INTERVAL: Duration = Duration::from_secs(300);
 
 #[derive(Debug)]
@@ -39,6 +39,15 @@ pub enum CompacterMessage {
     AllowCompaction(Timestamp),
 }
 
+/// A Batch contains all of the updates that originated within some time range [lower, upper)
+/// but the data live the file at `path`.
+///
+/// The data stored in each batch are triples of (Row, Timestamp, Diff) such that there is
+/// exactly one copy of each (Row, Timestamp) in each batch. Batches also have a header
+/// and a footer indicating the upper and lower bound timestamps.
+/// TODO: Batches are meant to mimic differential / cdcv2 batches but do not do so
+/// currently. Let's fix that. Specifically, introduce a `since` field, and counts
+/// for the number of updates at each time.
 #[derive(Debug)]
 struct Batch {
     upper: Timestamp,
@@ -47,11 +56,16 @@ struct Batch {
 }
 
 impl Batch {
+    /// Create a batch from a finished log segment file.
     fn create(log_segment_path: &Path, trace_path: &Path) -> Result<Self, anyhow::Error> {
         let messages = read_segment(log_segment_path)?;
         Batch::create_from_messages(messages, trace_path, None)
     }
 
+    /// Read in and consolidate a list of messages, and write them to a new batch file
+    /// in `trace_path`.
+    ///
+    /// Will also compact updates up to `compaction_frontier` if provided..
     fn create_from_messages(
         messages: Vec<Message>,
         trace_path: &Path,
@@ -100,6 +114,9 @@ impl Batch {
         let lower = lower.unwrap();
         let upper = upper.unwrap();
 
+        // Frame each batch with its lower and upper bound timestamp.
+        // TODO: match the behavior of CDCv2 updates with a count of messages
+        // at each timestamp.
         encode_progress(lower, &mut buf)?;
         for ((timestamp, row), diff) in time_data.into_iter() {
             if diff == 0 {
@@ -114,6 +131,8 @@ impl Batch {
         let batch_name = format!("batch-{}-{}", lower, upper);
         let batch_path = trace_path.join(&batch_name);
         let batch_tmp_path = trace_path.join(format!("{}-tmp", batch_name));
+        // Write the file first suffixed with "-tmp" and then rename to guard against
+        // partial writes.
         fs::write(&batch_tmp_path, buf)
             .with_context(|| format!("failed to write batch file {}", batch_tmp_path.display()))?;
         fs::rename(&batch_tmp_path, &batch_path).with_context(|| {
@@ -131,6 +150,8 @@ impl Batch {
         })
     }
 
+    /// Reintroduce a batch based on an available file in the trace
+    /// directory.
     fn reinit(path: PathBuf) -> Result<Self, anyhow::Error> {
         let batch_name = path
             .file_name()
@@ -146,10 +167,13 @@ impl Batch {
         })
     }
 
+    /// Read the data from a batch stored on disk into memory.
     fn read(&self) -> Result<Vec<Message>, anyhow::Error> {
         read_segment(&self.path)
     }
 
+    /// Physically concatenate all batches together into a single batch
+    /// and consolidate updates up to the frontier if provided.
     fn compact(
         batches: &[Batch],
         trace_path: &Path,
@@ -165,6 +189,12 @@ impl Batch {
     }
 }
 
+/// A Trace is an on-disk representation of data meant to mimic a differential Trace.
+///
+/// A Trace listens to the `wal_path` and checks for WAL segments that it can consolidate
+/// into Batches (stored in the `trace_path`). Once it exceeds a certain number of Batches
+/// it tries to physically and logically compact them into a single batch that is
+/// compacted up to the `compaction` frontier.
 #[derive(Debug)]
 pub struct Trace {
     trace_path: PathBuf,
@@ -196,7 +226,10 @@ impl Trace {
         })
     }
 
-    // Let's delete the trace directory and the WAL directory.
+    /// Remove all on-disk data for this trace.
+    ///
+    /// Importantly, we also delete the WAL directory here (the WAL writer
+    /// only gets to add new files and can't do anything else)
     fn destroy(self) -> Result<(), anyhow::Error> {
         fs::remove_dir_all(&self.trace_path).with_context(|| {
             format!(
@@ -211,7 +244,7 @@ impl Trace {
         Ok(())
     }
 
-    // Try to consume more completed log segments from the wal directory
+    /// Checks if there are finished WAL segments and if so, forms them into batches.
     fn consume_wal(&mut self) -> Result<(), anyhow::Error> {
         let finished_segments = self.find_finished_wal_segments()?;
 
@@ -290,8 +323,10 @@ impl Trace {
         Ok(batches)
     }
 
-    // Try to compact all of the batches we know about into a single batch from
-    // [compaction_frontier, upper)
+    /// Try to compact all of the batches we know about into a single batch from
+    /// [compaction_frontier, upper)
+    ///
+    /// TODO: the approach to compacting is likely very suboptimal.
     fn compact(&mut self) -> Result<(), anyhow::Error> {
         self.consume_wal()?;
 
@@ -311,6 +346,7 @@ impl Trace {
         Ok(())
     }
 
+    /// Re-initialize a trace based on the available batch files on disk.
     pub fn resume(
         id: GlobalId,
         traces_path: &Path,
@@ -333,6 +369,8 @@ impl Trace {
         Ok(ret)
     }
 
+    /// Read in the data for this relation, from all available batches and
+    /// WAL segments back into memory.
     pub fn read(&self) -> Result<Vec<Message>, anyhow::Error> {
         let mut out = vec![];
 
@@ -462,6 +500,7 @@ impl Compacter {
     }
 }
 
+/// Read a directory and return all (non-subdirectory) files matching `regex`.
 fn read_dir_regex(path: &Path, regex: &Regex) -> Result<Vec<PathBuf>, anyhow::Error> {
     let entries = std::fs::read_dir(path).with_context(|| {
         format!(
@@ -509,6 +548,15 @@ fn read_message(buf: &[u8], mut offset: usize) -> Option<(Message, usize)> {
     // Let's start by only looking at the buffer at the offset.
     let (_, data) = buf.split_at(offset);
 
+    if data.len() < 12 {
+        error!(
+            "invalid offset while reading file: {}. Expected at least 12 more bytes have {}",
+            offset,
+            data.len()
+        );
+        return None;
+    }
+
     // Let's read the header first
     let mut cursor = Cursor::new(&data);
 
@@ -525,6 +573,15 @@ fn read_message(buf: &[u8], mut offset: usize) -> Option<(Message, usize)> {
 
         Some((Message::Progress(timestamp), offset))
     } else {
+        // Let's make sure we have an appropriate number of bytes in the buffer.
+        if data.len() < 24 {
+            error!(
+                "invalid offset while reading file: {}. Expected at least 24 more bytes have {}",
+                offset,
+                data.len()
+            );
+            return None;
+        }
         // Otherwise lets read the data.
         let timestamp = cursor.read_u64::<NetworkEndian>().unwrap();
         let diff = cursor.read_i64::<NetworkEndian>().unwrap() as isize;
@@ -536,6 +593,15 @@ fn read_message(buf: &[u8], mut offset: usize) -> Option<(Message, usize)> {
         // it into a vector so that we can extract things from it as a Row.
         // TODO: could we avoid the extra allocation here?
         let (_, rest) = data.split_at(24);
+
+        if rest.len() < len {
+            error!(
+                "invalid row length: expected {} bytes but only have {} remaining",
+                len,
+                rest.len()
+            );
+            return None;
+        }
         let row = rest[..len].to_vec();
 
         let row = unsafe { Row::new(row) };
