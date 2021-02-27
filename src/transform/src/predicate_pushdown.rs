@@ -428,6 +428,7 @@ impl PredicatePushdown {
                         *relation = result;
                     }
                     MirRelationExpr::Union { base, inputs } => {
+                        let predicates = std::mem::replace(predicates, Vec::new());
                         *base = Box::new(base.take_dangerous().filter(predicates.clone()));
                         for input in inputs {
                             *input = input.take_dangerous().filter(predicates.clone());
@@ -494,6 +495,7 @@ impl PredicatePushdown {
                                             input_mapper.lookup_inputs(&equivalence[*i]);
                                         if let Some(other_input) = other_inputs.next() {
                                             other_inputs.next().is_none() && input == other_input
+                                        //false
                                         } else {
                                             true
                                         }
@@ -515,9 +517,23 @@ impl PredicatePushdown {
                                         });
                                     } else {
                                         push_downs[input].push(MirScalarExpr::CallBinary {
-                                            func: BinaryFunc::Eq,
-                                            expr1: Box::new(expr1),
-                                            expr2: Box::new(expr2),
+                                            func: BinaryFunc::Or,
+                                            expr1: Box::new(MirScalarExpr::CallBinary {
+                                                func: BinaryFunc::Eq,
+                                                expr1: Box::new(expr1.clone()),
+                                                expr2: Box::new(expr2.clone()),
+                                            }),
+                                            expr2: Box::new(MirScalarExpr::CallBinary {
+                                                func: BinaryFunc::And,
+                                                expr1: Box::new(MirScalarExpr::CallUnary {
+                                                    func: UnaryFunc::IsNull,
+                                                    expr: Box::new(expr1),
+                                                }),
+                                                expr2: Box::new(MirScalarExpr::CallUnary {
+                                                    func: UnaryFunc::IsNull,
+                                                    expr: Box::new(expr2),
+                                                }),
+                                            }),
                                         });
                                     }
                                     equivalence.remove(pos);
