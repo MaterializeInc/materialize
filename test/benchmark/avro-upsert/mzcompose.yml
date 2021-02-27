@@ -34,6 +34,9 @@ services:
       - --disable-telemetry
       - --listen-addr=0.0.0.0:${PERF_METRICS_PORT:-8675}
       - --logical-compaction-window=1ms
+  perf-dash-scraper:
+    mzbuild: perf-dash-scraper
+    command: scrape
   perf-dash-create-views:
     mzbuild: perf-dash-create-views
   perf-dash-web:
@@ -140,6 +143,10 @@ mzworkflows:
       host: schema-registry
       port: 8081
     - step: run
+      service: perf-dash-scraper
+      command: >-
+        create-topics
+    - step: run
       service: metric-verifier
       command: >-
         create-topics
@@ -170,10 +177,10 @@ mzworkflows:
       MZ_WORKERS: ${MZ_WORKERS:-16}
     steps:
     - step: remove-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
       destroy_volumes: true
     - step: start-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
     - step: run
       service: metric-verifier
       daemon: true
@@ -212,10 +219,10 @@ mzworkflows:
       MZ_WORKERS: ${MZ_WORKERS:-8}
     steps:
     - step: remove-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
       destroy_volumes: true
     - step: start-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
     - step: run
       service: metric-verifier
       daemon: true
@@ -252,10 +259,10 @@ mzworkflows:
       MZ_WORKERS: ${MZ_WORKERS:-16}
     steps:
     - step: remove-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
       destroy_volumes: true
     - step: start-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
     - step: run
       service: metric-verifier
       daemon: true
@@ -296,10 +303,10 @@ mzworkflows:
       MZ_WORKERS: ${MZ_WORKERS:-1}
     steps:
     - step: remove-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
       destroy_volumes: true
     - step: start-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
     - step: run
       service: metric-verifier
       daemon: true
@@ -323,9 +330,9 @@ mzworkflows:
   rerun-benchmark:
     steps:
     - step: remove-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
       destroy_volumes: true
     - step: start-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
     - step: run
       service: create-views
