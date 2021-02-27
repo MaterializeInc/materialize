@@ -90,6 +90,16 @@ where
                 predicates.push(predicate);
             }
         }
+        // Temporal predicates will be applied after blanking out column,
+        // so ensure that their support is preserved.
+        // TODO: consider blanking out columns added by this processes in
+        // the temporal filtering operator.
+        for predicate in temporal.iter() {
+            operators.projection.extend(predicate.support());
+        }
+        operators.projection.sort();
+        operators.projection.dedup();
+
         // Overwrite `position_or` to reflect `operators.projection`.
         position_or = (0..source_arity)
             .map(|col| {
