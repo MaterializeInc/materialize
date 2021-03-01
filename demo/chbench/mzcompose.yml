@@ -34,7 +34,7 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
     volumes:
-      - ${MZ_KAFKA_SHARED_DIR}:/snapshot
+      - ${MZ_KAFKA_SHARED:-kafka-data}:/snapshot
   materialized:
     mzbuild: materialized
     ports:
