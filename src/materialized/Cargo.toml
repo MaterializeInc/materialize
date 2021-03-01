@@ -79,7 +79,7 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = { version = "1.2.0", features = ["sync"] }
 tokio-openssl = "0.6.1"
 tokio-stream = { version = "0.1.3", features = ["net"] }
-tracing = "0.1.23"
+tracing = "0.1.25"
 # TODO(benesch): we can use the default features here once tracing-subscriber
 # does not enable chrono's "oldtime" feature.
 tracing-subscriber = { version = "0.2.16", default-features = false, features = ["ansi", "env-filter", "fmt", "tracing-log"] }
