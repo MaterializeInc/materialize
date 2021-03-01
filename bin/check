@@ -60,10 +60,7 @@ extra_lints=(
     # These can catch real bugs, because something that is expected (a cast, a
     # conversion, a statement) is not happening.
     clippy::no_effect
-    clippy::useless_asref
-    clippy::unnecessary_cast
     clippy::unnecessary_unwrap
-    clippy::useless_conversion
 
     # Prevent code using the `dbg!` macro from being merged to the main branch.
     #
@@ -84,6 +81,77 @@ extra_lints=(
 
     # Zero-prefixed literals may be incorrectly interpreted as octal literals.
     clippy::zero_prefixed_literal
+
+    # Purely redundant tokens
+    clippy::borrowed_box
+    clippy::double_must_use
+    clippy::double_parens
+    clippy::extra_unused_lifetimes
+    clippy::single_component_path_imports
+    clippy::unnecessary_cast
+    clippy::useless_asref
+    clippy::useless_conversion
+
+    # Very likely to be confusing
+    clippy::builtin_type_shadow
+    clippy::duplicate_underscore_argument
+
+    # Purely redundant tokens; very likely to be confusing
+    clippy::double_neg
+
+    # Purely redundant tokens; code is misleading
+    clippy::unnecessary_mut_passed
+
+    # Purely redundant tokens; probably a mistake
+    clippy::wildcard_in_or_patterns
+
+    # Semantically wrong level of nesting
+    clippy::collapsible_if
+    # TODO: uncomment once we're on Rust 1.51.
+    # clippy::collapsible_else_if
+
+    # Transmuting between T and T* seems 99% likely to be buggy code
+    clippy::crosspointer_transmute
+
+    # Confusing and likely buggy
+    clippy::excessive_precision
+    clippy::fn_to_numeric_cast
+    clippy::fn_to_numeric_cast_with_truncation
+    clippy::overflow_check_conditional
+
+    # Confusing
+    clippy::match_overlapping_arm
+
+    # Confusing; possibly a mistake
+    clippy::zero_divided_by_zero
+
+    # Probably a mistake
+    clippy::must_use_unit
+    clippy::suspicious_assignment_formatting
+    clippy::suspicious_else_formatting
+    clippy::suspicious_unary_op_formatting
+
+    # Legit performance impact
+    clippy::mut_mutex_lock
+    clippy::print_literal
+    clippy::same_item_push
+    clippy::write_literal
+
+    # Extra closures slow down compiles
+    clippy::redundant_closure
+    clippy::redundant_closure_call
+    clippy::unnecessary_lazy_evaluations
+
+    # Provably either redundant or wrong
+    clippy::partialeq_ne_impl
+
+    # This one is debatable, but it's so ingrained at this point that we might as well keep it
+    clippy::redundant_field_names
+
+    # Needless unsafe
+    clippy::transmutes_expressible_as_ptr_casts
+
+
 )
 
 # NOTE(benesch): we ignore some ShellCheck complaints about sloppy word
