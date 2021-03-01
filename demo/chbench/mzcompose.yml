@@ -122,7 +122,7 @@ services:
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT_KAFKA_DATA:-kafka-data}:/var/lib/kafka/data
+      - ${MZ_CHBENCH_SNAPSHOT_KAFKA_DATA:-mzsnap-data}:/var/lib/kafka/data
   connect:
     image: debezium/connect:1.4
     environment:
@@ -192,11 +192,11 @@ services:
   mzutil:
     mzbuild: mzutil
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT:-kafka-data}:/snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
   kafka-util:
     mzbuild: kafka-util
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT:-kafka-data}:/snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -259,7 +259,7 @@ services:
     command: ${PEEKER_CMD:---queries q01,q02,q17}
     volumes:
       - ./peeker-config:/etc/peeker
-      - ${MZ_CHBENCH_SNAPSHOT:-kafka-data}:/snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
   test-correctness:
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: test-correctness
@@ -280,7 +280,7 @@ volumes:
   view-snapshots:
 
   # shared volumes for load tests, but a mounted directories for benchmarks
-  kafka-data:
+  mzsnap-data:
   zk-data:
 
 mzworkflows:
