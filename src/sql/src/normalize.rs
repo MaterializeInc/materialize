@@ -114,7 +114,7 @@ pub fn create_statement(
     scx: &StatementContext,
     stmt: Statement<Raw>,
 ) -> Result<String, anyhow::Error> {
-    let mut stmt = resolve_names_stmt(scx, stmt)?;
+    let mut stmt = resolve_names_stmt(scx.catalog, stmt)?;
 
     let allocate_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
         Ok(unresolve(

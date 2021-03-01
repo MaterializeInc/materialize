@@ -197,7 +197,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         return ResolvedObjectName {
                             id: Id::Local(*id),
                             raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
-                            print_id: true,
+                            print_id: false,
                         };
                     }
                 }
@@ -251,16 +251,16 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
 }
 
 pub fn resolve_names_stmt(
-    scx: &StatementContext,
-    query: Statement<Raw>,
+    catalog: &dyn Catalog,
+    stmt: Statement<Raw>,
 ) -> Result<Statement<Aug>, anyhow::Error> {
     let mut n = NameResolver {
         status: Ok(()),
-        catalog: scx.catalog,
+        catalog,
         ctes: HashMap::new(),
         ids: HashSet::new(),
     };
-    let result = n.fold_statement(query);
+    let result = n.fold_statement(stmt);
     n.status?;
     Ok(result)
 }
