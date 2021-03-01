@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-futures = "0.3.12"
+futures = "0.3.13"
 native-tls = "0.2.7"
 openssl = { version = "0.10.32", features = ["vendored"] }
 reqwest = { version = "0.11.1", features = ["blocking", "json", "native-tls-vendored"] }
