@@ -762,34 +762,40 @@ impl PartitionMetrics {
         partition_id: &str,
         logger: Option<Logger>,
     ) -> PartitionMetrics {
+        const LABELS: &[&str] = &["topic", "source_id", "source_instance", "partition_id"];
         lazy_static! {
             static ref OFFSET_INGESTED: IntGaugeVec = register_int_gauge_vec!(
                 "mz_partition_offset_ingested",
                 "The most recent offset that we have ingested into a dataflow. This correspond to \
                 data that we have 1)ingested 2) assigned a timestamp",
-                &["topic", "source_id", "partition_id"]
+                LABELS
             )
             .unwrap();
             static ref OFFSET_RECEIVED: IntGaugeVec = register_int_gauge_vec!(
                 "mz_partition_offset_received",
                 "The most recent offset that we have been received by this source.",
-                &["topic", "source_id", "partition_id"]
+                LABELS
             )
             .unwrap();
             static ref CLOSED_TS: UIntGaugeVec = register_uint_gauge_vec!(
                 "mz_partition_closed_ts",
                 "The highest closed timestamp for each partition in this dataflow",
-                &["topic", "source_id", "partition_id"]
+                LABELS
             )
             .unwrap();
             static ref MESSAGES_INGESTED: IntCounterVec = register_int_counter_vec!(
                 "mz_messages_ingested",
                 "The number of messages ingested per partition.",
-                &["topic", "source_id", "partition_id"]
+                LABELS
             )
             .unwrap();
         }
-        let labels = &[source_name, &source_id.to_string(), partition_id];
+        let labels = &[
+            source_name,
+            &source_id.source_id.to_string(),
+            &source_id.dataflow_id.to_string(),
+            partition_id,
+        ];
         PartitionMetrics {
             offset_ingested: DeleteOnDropGauge::new_with_error_handler(
                 OFFSET_INGESTED.with_label_values(labels),
