@@ -342,9 +342,9 @@ mzworkflows:
   # Leaves the cluster running
   setup-ingest-benchmark:
     env:
-      MZ_KAFKA_SHARED: './tmp'
-      MZ_KAFKA_SHARED_SNAPSHOT: './tmp/kafka-data'
-      MZ_KAFKA_SHARED_ZK_DATA: './tmp/zookeeper'
+      MZ_KAFKA_SHARED: '${MZ_KAFKA_SHARED:-./tmp}'
+      MZ_KAFKA_SHARED_SNAPSHOT: '${MZ_KAFKA_SHARED:-./tmp}/kafka-data'
+      MZ_KAFKA_SHARED_ZK_DATA: '${MZ_KAFKA_SHARED:-./tmp}/zookeeper'
     steps:
     - step: workflow
       workflow: bring-up-source-data-mysql
@@ -380,9 +380,9 @@ mzworkflows:
   # already called setup-ingest-benchmark and the cluster is still running
   measure-ingest-performance:
     env:
-      MZ_KAFKA_SHARED: './tmp'
-      MZ_KAFKA_SHARED_SNAPSHOT: './tmp/kafka-data'
-      MZ_KAFKA_SHARED_ZK_DATA: './tmp/zookeeper'
+      MZ_KAFKA_SHARED: ${MZ_KAFKA_SHARED:-'./tmp'}
+      MZ_KAFKA_SHARED_SNAPSHOT: '${MZ_KAFKA_SHARED:-./tmp}/kafka-data'
+      MZ_KAFKA_SHARED_ZK_DATA: '${MZ_KAFKA_SHARED:-./tmp}/zookeeper'
     steps:
     - step: restart-services
       services: [materialized]
@@ -396,9 +396,9 @@ mzworkflows:
   # Take a snapshot of topic schemas and contents
   generate-snapshot:
     env:
-      MZ_KAFKA_SHARED: './tmp'
-      MZ_KAFKA_SHARED_SNAPSHOT: './tmp/kafka-data'
-      MZ_KAFKA_SHARED_ZK_DATA: './tmp/zookeeper'
+      MZ_KAFKA_SHARED: ${MZ_KAFKA_SHARED:-'./tmp'}
+      MZ_KAFKA_SHARED_SNAPSHOT: '${MZ_KAFKA_SHARED:-./tmp}/kafka-data'
+      MZ_KAFKA_SHARED_ZK_DATA: '${MZ_KAFKA_SHARED:-./tmp}/zookeeper'
     steps:
     - step: run
       service: peeker
@@ -410,9 +410,9 @@ mzworkflows:
   # Then run Materialize and measure time until it catches up to snapshotted view state
   setup-replay-benchmark:
     env:
-      MZ_KAFKA_SHARED: './tmp'
-      MZ_KAFKA_SHARED_SNAPSHOT: './tmp/kafka-data'
-      MZ_KAFKA_SHARED_ZK_DATA: './tmp/zookeeper'
+      MZ_KAFKA_SHARED: ${MZ_KAFKA_SHARED:-'./tmp'}
+      MZ_KAFKA_SHARED_SNAPSHOT: '${MZ_KAFKA_SHARED:-./tmp}/kafka-data'
+      MZ_KAFKA_SHARED_ZK_DATA: '${MZ_KAFKA_SHARED:-./tmp}/zookeeper'
     steps:
     # start the dashboard before the load data get started so that we have data from
     # the beginning of time
@@ -437,9 +437,9 @@ mzworkflows:
 
   download-snapshot:
     env:
-      MZ_KAFKA_SHARED: './tmp'
-      MZ_KAFKA_SHARED_SNAPSHOT: './tmp/kafka-data'
-      MZ_KAFKA_SHARED_ZK_DATA: './tmp/zookeeper'
+      MZ_KAFKA_SHARED: ${MZ_KAFKA_SHARED:-'./tmp'}
+      MZ_KAFKA_SHARED_SNAPSHOT: '${MZ_KAFKA_SHARED:-./tmp}/kafka-data'
+      MZ_KAFKA_SHARED_ZK_DATA: '${MZ_KAFKA_SHARED:-./tmp}/zookeeper'
     steps:
       - step: run
         service: aws-cli
