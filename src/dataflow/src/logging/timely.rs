@@ -57,6 +57,7 @@ pub fn construct<A: Allocate>(
         let (mut channels_out, channels) = demux.new_output();
         let (mut addresses_out, addresses) = demux.new_output();
         let (mut parks_out, parks) = demux.new_output();
+        let (mut messages_out, messages) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
@@ -72,6 +73,7 @@ pub fn construct<A: Allocate>(
                 let mut channels = channels_out.activate();
                 let mut addresses = addresses_out.activate();
                 let mut parks = parks_out.activate();
+                let mut messages = messages_out.activate();
 
                 input.for_each(|time, data| {
                     data.swap(&mut demux_buffer);
@@ -80,6 +82,7 @@ pub fn construct<A: Allocate>(
                     let mut channels_session = channels.session(&time);
                     let mut addresses_session = addresses.session(&time);
                     let mut parks_sesssion = parks.session(&time);
+                    let mut messages_session = messages.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ns = time.as_nanos();
@@ -231,6 +234,10 @@ pub fn construct<A: Allocate>(
                                     }
                                 }
                             },
+
+                            TimelyEvent::Messages(event) => {
+                                messages_session.give(((event.channel, event.length), time_ms, 1));
+                            }
                             _ => {}
                         }
                     }
@@ -374,6 +381,18 @@ pub fn construct<A: Allocate>(
                 }
             });
 
+        use differential_dataflow::operators::Count;
+        let messages = messages
+            .as_collection()
+            .explode(|(key, count)| Some((key, count as i64)))
+            .count()
+            .map({
+                let mut row_packer = repr::RowPacker::new();
+                move |(channel, count)| {
+                    row_packer.pack(&[Datum::Int64(channel as i64), Datum::Int64(count as i64)])
+                }
+            });
+
         use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 
         // Restrict results by those logs that are meant to be active.
@@ -384,6 +403,7 @@ pub fn construct<A: Allocate>(
             (LogVariant::Timely(TimelyLog::Histogram), histogram),
             (LogVariant::Timely(TimelyLog::Addresses), addresses),
             (LogVariant::Timely(TimelyLog::Parks), parks),
+            (LogVariant::Timely(TimelyLog::Messages), messages),
         ];
 
         let mut result = std::collections::HashMap::new();
