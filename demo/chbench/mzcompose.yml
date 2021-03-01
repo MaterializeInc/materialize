@@ -122,7 +122,7 @@ services:
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT_SNAPSHOT:-kafka-data}:/var/lib/kafka/data
+      - ${MZ_CHBENCH_SNAPSHOT_KAFKA_DATA:-kafka-data}:/var/lib/kafka/data
   connect:
     image: debezium/connect:1.4
     environment:
@@ -344,7 +344,7 @@ mzworkflows:
   setup-ingest-benchmark:
     env:
       MZ_CHBENCH_SNAPSHOT: '${MZ_CHBENCH_SNAPSHOT:-./tmp}'
-      MZ_CHBENCH_SNAPSHOT_SNAPSHOT: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
       MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
     steps:
     - step: workflow
@@ -382,7 +382,7 @@ mzworkflows:
   measure-ingest-performance:
     env:
       MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
-      MZ_CHBENCH_SNAPSHOT_SNAPSHOT: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
       MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
     steps:
     - step: restart-services
@@ -398,7 +398,7 @@ mzworkflows:
   generate-snapshot:
     env:
       MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
-      MZ_CHBENCH_SNAPSHOT_SNAPSHOT: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
       MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
     steps:
     - step: run
@@ -412,7 +412,7 @@ mzworkflows:
   setup-replay-benchmark:
     env:
       MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
-      MZ_CHBENCH_SNAPSHOT_SNAPSHOT: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
       MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
     steps:
     # start the dashboard before the load data get started so that we have data from
@@ -439,7 +439,7 @@ mzworkflows:
   download-snapshot:
     env:
       MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
-      MZ_CHBENCH_SNAPSHOT_SNAPSHOT: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
       MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
     steps:
       - step: run
