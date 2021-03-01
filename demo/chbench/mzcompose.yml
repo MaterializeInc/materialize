@@ -98,8 +98,7 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
     volumes:
-      - ${MZ_KAFKA_SHARED:-kafka-data}/zookeeper-data:/var/lib/zookeeper/data
-      - ${MZ_KAFKA_SHARED:-kafka-data}/zookeeper-log:/var/lib/zookeeper/log
+      - ${MZ_KAFKA_SHARED_ZK_DATA:-zk-data}:/var/lib/zookeeper
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.3
     ports:
@@ -122,7 +121,7 @@ services:
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
     volumes:
-      - ${MZ_KAFKA_SHARED_INTERNAL:-kafka-data}:/var/lib/kafka/data
+      - ${MZ_KAFKA_SHARED_SNAPSHOT:-kafka-data}:/var/lib/kafka/data
   connect:
     image: debezium/connect:1.4
     environment:
@@ -278,8 +277,10 @@ volumes:
   grafana:
   prometheus:
   view-snapshots:
-  # a shared volume for load tests, but a mounted directory for benchmarks
+
+  # shared volumes for load tests, but a mounted directories for benchmarks
   kafka-data:
+  zk-data:
 
 mzworkflows:
   ci:
@@ -342,7 +343,8 @@ mzworkflows:
   setup-ingest-benchmark:
     env:
       MZ_KAFKA_SHARED: './tmp'
-      MZ_KAFKA_SHARED_INTERNAL: './tmp/kafka-data'
+      MZ_KAFKA_SHARED_SNAPSHOT: './tmp/kafka-data'
+      MZ_KAFKA_SHARED_ZK_DATA: './tmp/zookeeper'
     steps:
     - step: workflow
       workflow: bring-up-source-data-mysql
@@ -379,7 +381,8 @@ mzworkflows:
   measure-ingest-performance:
     env:
       MZ_KAFKA_SHARED: './tmp'
-      MZ_KAFKA_SHARED_INTERNAL: './tmp/kafka-data'
+      MZ_KAFKA_SHARED_SNAPSHOT: './tmp/kafka-data'
+      MZ_KAFKA_SHARED_ZK_DATA: './tmp/zookeeper'
     steps:
     - step: restart-services
       services: [materialized]
@@ -394,7 +397,8 @@ mzworkflows:
   generate-snapshot:
     env:
       MZ_KAFKA_SHARED: './tmp'
-      MZ_KAFKA_SHARED_INTERNAL: './tmp/kafka-data'
+      MZ_KAFKA_SHARED_SNAPSHOT: './tmp/kafka-data'
+      MZ_KAFKA_SHARED_ZK_DATA: './tmp/zookeeper'
     steps:
     - step: run
       service: peeker
@@ -407,7 +411,8 @@ mzworkflows:
   setup-replay-benchmark:
     env:
       MZ_KAFKA_SHARED: './tmp'
-      MZ_KAFKA_SHARED_INTERNAL: './tmp/kafka-data'
+      MZ_KAFKA_SHARED_SNAPSHOT: './tmp/kafka-data'
+      MZ_KAFKA_SHARED_ZK_DATA: './tmp/zookeeper'
     steps:
     # start the dashboard before the load data get started so that we have data from
     # the beginning of time
