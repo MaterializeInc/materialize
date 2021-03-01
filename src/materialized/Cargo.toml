@@ -63,7 +63,7 @@ prof = { path = "../prof", features = ["auto-jemalloc"] }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 repr = { path = "../repr" }
-reqwest = { version = "0.11.0", features = ["json"] }
+reqwest = { version = "0.11.1", features = ["json"] }
 rlimit = "0.5.3"
 semver = "0.11.0"
 serde = { version = "1.0.123", features = ["derive"] }
@@ -109,7 +109,7 @@ postgres-protocol = "0.6.0"
 postgres_array = "0.11.0"
 predicates = "1.0.7"
 repr = { path = "../repr" }
-reqwest = { version = "0.11.0", features = ["blocking"] }
+reqwest = { version = "0.11.1", features = ["blocking"] }
 serde_json = "1.0.62"
 tokio-postgres = { version = "0.7.0", features = ["with-chrono-0_4"] }
 
@@ -118,7 +118,7 @@ anyhow = "1.0.38"
 flate2 = "1.0.20"
 hex = "0.4.2"
 hex-literal = "0.3.1"
-reqwest = { version = "0.11.0", features = ["blocking"] }
+reqwest = { version = "0.11.1", features = ["blocking"] }
 sha2 = "0.9.3"
 tar = "0.4.30"
 walkdir = "2.3.1"
