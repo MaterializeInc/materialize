@@ -38,6 +38,7 @@ pub enum TimelyLog {
     Histogram,
     Addresses,
     Parks,
+    Messages,
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
@@ -116,6 +117,11 @@ impl LogVariant {
                 .with_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
 
+            LogVariant::Timely(TimelyLog::Messages) => RelationDesc::empty()
+                .with_column("channel", ScalarType::Int64.nullable(false))
+                .with_column("total", ScalarType::Int64.nullable(false))
+                .with_key(vec![0]),
+
             LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()
                 .with_column("operator", ScalarType::Int64.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false))
@@ -189,6 +195,10 @@ impl LogVariant {
                 vec![(0, 0), (1, 1)],
             )],
             LogVariant::Timely(TimelyLog::Parks) => vec![],
+            LogVariant::Timely(TimelyLog::Messages) => vec![(
+                LogVariant::Timely(TimelyLog::Channels),
+                vec![(0, 0), (0, 0)],
+            )],
             LogVariant::Differential(DifferentialLog::Arrangement) => vec![(
                 LogVariant::Timely(TimelyLog::Operates),
                 vec![(0, 0), (1, 1)],
