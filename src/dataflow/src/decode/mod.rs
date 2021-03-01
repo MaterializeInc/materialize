@@ -98,7 +98,7 @@ where
                         ))
                     }
                 }
-                SourceEnvelope::Upsert(_) => unreachable!("Upsert is not supported for AvroOCF"),
+                SourceEnvelope::Upsert(_, _) => unreachable!("Upsert is not supported for AvroOCF"),
                 SourceEnvelope::CdcV2 => unreachable!("CDC envelope is not supported for AvroOCF"),
             }
             .unwrap_or_else(|e| {
@@ -389,7 +389,7 @@ where
     let op_name = format!("{}Decode", encoding.op_name());
     let worker_index = stream.scope().index();
     match (encoding, envelope) {
-        (_, SourceEnvelope::Upsert(_)) => {
+        (_, SourceEnvelope::Upsert(_, _)) => {
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
         }
         (DataEncoding::Csv(enc), SourceEnvelope::None) => (

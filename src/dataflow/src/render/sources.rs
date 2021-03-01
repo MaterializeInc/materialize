@@ -253,7 +253,9 @@ where
                             .as_collection(),
                     );
 
-                    let (stream, errors) = if let SourceEnvelope::Upsert(key_encoding) = &envelope {
+                    let (stream, errors) = if let SourceEnvelope::Upsert(key_encoding, mode) =
+                        &envelope
+                    {
                         let value_decoder = get_decoder(encoding, &self.debug_name, scope.index());
                         let key_decoder =
                             get_decoder(key_encoding.clone(), &self.debug_name, scope.index());
@@ -264,6 +266,7 @@ where
                             value_decoder,
                             &mut linear_operators,
                             src.bare_desc.typ().arity(),
+                            *mode,
                         )
                     } else {
                         // TODO(brennan) -- this should just be a MirRelationExpr::FlatMap using regexp_extract, csv_extract,
@@ -348,7 +351,7 @@ where
 
                 // Apply `as_of` to each timestamp.
                 match envelope {
-                    SourceEnvelope::Upsert(_) => {}
+                    SourceEnvelope::Upsert(_, _) => {}
                     _ => {
                         let as_of_frontier1 = self.as_of_frontier.clone();
                         collection = collection

@@ -18,7 +18,7 @@ use timely::dataflow::operators::{generic::Operator, Concat, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use dataflow_types::{DataflowError, DecodeError, LinearOperator};
+use dataflow_types::{DataflowError, DecodeError, LinearOperator, UpsertMode};
 use expr::{EvalError, MirScalarExpr};
 use log::error;
 use repr::{Datum, Diff, Row, RowArena, Timestamp};
@@ -40,6 +40,7 @@ pub fn decode_stream<G>(
     mut value_decoder_state: Box<dyn DecoderState>,
     operators: &mut Option<LinearOperator>,
     source_arity: usize,
+    mode: UpsertMode,
 ) -> (
     Collection<G, Row, Diff>,
     Option<Collection<G, dataflow_types::DataflowError, Diff>>,

@@ -40,7 +40,7 @@ use dataflow_types::{
     DataEncoding, ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder,
     KafkaSourceConnector, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
     RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector,
-    SourceEnvelope,
+    SourceEnvelope, UpsertMode,
 };
 use expr::GlobalId;
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -854,7 +854,7 @@ pub fn plan_create_source(
                     DataEncoding::Bytes | DataEncoding::Text => {}
                     _ => unsupported!("format for upsert key"),
                 }
-                SourceEnvelope::Upsert(key_encoding)
+                SourceEnvelope::Upsert(key_encoding, UpsertMode::Value)
             }
             _ => unsupported!("upsert envelope for non-Kafka sources"),
         },
@@ -873,7 +873,7 @@ pub fn plan_create_source(
         }
     };
 
-    if let SourceEnvelope::Upsert(key_encoding) = &envelope {
+    if let SourceEnvelope::Upsert(key_encoding, _) = &envelope {
         match &mut encoding {
             DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
                 *key_schema = None;
