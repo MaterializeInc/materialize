@@ -224,22 +224,24 @@ impl PredicatePushdown {
                                 expr2,
                             } = &predicate
                             {
-                                // An equality predicate implies that both
-                                // expressions are not null.
-                                // Since we try to push non-equality predicates
-                                // at all inputs, we only need to push one
-                                // predicate into `pred_not_translated` for it
-                                // to be pushed at both expressions.
-                                pred_not_translated.push(
-                                    expr1
-                                        .clone()
-                                        .call_unary(UnaryFunc::IsNull)
-                                        .call_unary(UnaryFunc::Not),
-                                );
-                                equivalences.push(vec![(**expr1).clone(), (**expr2).clone()]);
-                            } else {
-                                pred_not_translated.push(predicate)
+                                if !expr1.is_literal() && !expr2.is_literal() {
+                                    // An equality predicate implies that both
+                                    // expressions are not null.
+                                    // Since we try to push non-equality predicates
+                                    // at all inputs, we only need to push one
+                                    // predicate into `pred_not_translated` for it
+                                    // to be pushed at both expressions.
+                                    pred_not_translated.push(
+                                        expr1
+                                            .clone()
+                                            .call_unary(UnaryFunc::IsNull)
+                                            .call_unary(UnaryFunc::Not),
+                                    );
+                                    equivalences.push(vec![(**expr1).clone(), (**expr2).clone()]);
+                                    continue;
+                                }
                             }
+                            pred_not_translated.push(predicate)
                         }
 
                         expr::canonicalize::fuse_equivalences(equivalences);

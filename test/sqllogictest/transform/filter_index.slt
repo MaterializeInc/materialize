@@ -65,15 +65,15 @@ explain plan for select * from foo, bar where foo.a = mod(bar.a, 5) and foo.a = 
 %0 =
 | Get materialize.public.foo (u1)
 | Filter (#0 = 5)
-| ArrangeBy ()
+| ArrangeBy (#0)
 
 %1 =
 | Get materialize.public.bar (u3)
 | Filter (5 = (#0 % 5))
 
 %2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
+| Join %0 %1 (= #0 (#3 % 5))
+| | implementation = Differential %1 %0.(#0)
 | | demand = (#0..#5)
 
 EOF
