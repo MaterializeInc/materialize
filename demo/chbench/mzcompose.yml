@@ -437,10 +437,6 @@ mzworkflows:
       seconds: 1
 
   download-snapshot:
-    env:
-      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
-      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
-      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
     steps:
       - step: run
         service: aws-cli
