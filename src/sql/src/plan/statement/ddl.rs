@@ -227,6 +227,48 @@ pub fn describe_create_source(
     Ok(StatementDesc::new(None))
 }
 
+// Flatten one Debezium entry ("before" or "after")
+// into its corresponding data fields, plus an extra column for the diff.
+fn plan_dbz_flatten_one(
+    input: HirRelationExpr,
+    bare_column: usize,
+    diff: i64,
+    n_flattened_cols: usize,
+) -> HirRelationExpr {
+    HirRelationExpr::Map {
+        input: Box::new(HirRelationExpr::Filter {
+            input: Box::new(input),
+            predicates: vec![HirScalarExpr::CallUnary {
+                func: UnaryFunc::Not,
+                expr: Box::new(HirScalarExpr::CallUnary {
+                    func: UnaryFunc::IsNull,
+                    expr: Box::new(HirScalarExpr::Column(ColumnRef {
+                        level: 0,
+                        column: bare_column,
+                    })),
+                }),
+            }],
+        }),
+        scalars: (0..n_flattened_cols)
+            .into_iter()
+            .map(|idx| HirScalarExpr::CallUnary {
+                func: UnaryFunc::RecordGet(idx),
+                expr: Box::new(HirScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: bare_column,
+                })),
+            })
+            .chain(iter::once(HirScalarExpr::Literal(
+                Row::pack(iter::once(Datum::Int64(diff))),
+                ColumnType {
+                    nullable: false,
+                    scalar_type: ScalarType::Int64,
+                },
+            )))
+            .collect(),
+    }
+}
+
 fn plan_dbz_flatten(
     bare_desc: &RelationDesc,
     input: HirRelationExpr,
@@ -238,77 +280,33 @@ fn plan_dbz_flatten(
     // plus a "diff" column whose value is -1 for before, and +1 for after.
     //
     // They will then be joined with `repeat(diff)` to get the correct stream out.
-    let flattened_cols = match &bare_desc.typ().column_types[0].scalar_type {
+    let before_idx = bare_desc
+        .iter_names()
+        .position(|maybe_name| match maybe_name {
+            Some(name) => name.as_str() == "before",
+            None => false,
+        })
+        .ok_or_else(|| anyhow!("Debezium-formatted data must contain a `before` field."))?;
+    let after_idx = bare_desc
+        .iter_names()
+        .position(|maybe_name| match maybe_name {
+            Some(name) => name.as_str() == "after",
+            None => false,
+        })
+        .ok_or_else(|| anyhow!("Debezium-formatted data must contain an `after` field."))?;
+    let before_flattened_cols = match &bare_desc.typ().column_types[before_idx].scalar_type {
         ScalarType::Record { fields, .. } => fields.clone(),
         _ => unreachable!(), // This was verified in `Encoding::desc`
     };
+    let after_flattened_cols = match &bare_desc.typ().column_types[after_idx].scalar_type {
+        ScalarType::Record { fields, .. } => fields.clone(),
+        _ => unreachable!(), // This was verified in `Encoding::desc`
+    };
+    assert!(before_flattened_cols == after_flattened_cols);
+    let n_flattened_cols = before_flattened_cols.len();
     let old_arity = input.arity();
-    let before_expr = HirRelationExpr::Map {
-        input: Box::new(HirRelationExpr::Filter {
-            input: Box::new(input.clone()),
-            predicates: vec![HirScalarExpr::CallUnary {
-                func: UnaryFunc::Not,
-                expr: Box::new(HirScalarExpr::CallUnary {
-                    func: UnaryFunc::IsNull,
-                    expr: Box::new(HirScalarExpr::Column(ColumnRef {
-                        level: 0,
-                        column: 0,
-                    })),
-                }),
-            }],
-        }),
-        scalars: flattened_cols
-            .iter()
-            .enumerate()
-            .map(|(idx, _)| HirScalarExpr::CallUnary {
-                func: UnaryFunc::RecordGet(idx),
-                expr: Box::new(HirScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: 0,
-                })),
-            })
-            .chain(iter::once(HirScalarExpr::Literal(
-                Row::pack(iter::once(Datum::Int64(-1))),
-                ColumnType {
-                    nullable: false,
-                    scalar_type: ScalarType::Int64,
-                },
-            )))
-            .collect(),
-    };
-    let after_expr = HirRelationExpr::Map {
-        input: Box::new(HirRelationExpr::Filter {
-            input: Box::new(input),
-            predicates: vec![HirScalarExpr::CallUnary {
-                func: UnaryFunc::Not,
-                expr: Box::new(HirScalarExpr::CallUnary {
-                    func: UnaryFunc::IsNull,
-                    expr: Box::new(HirScalarExpr::Column(ColumnRef {
-                        level: 0,
-                        column: 1,
-                    })),
-                }),
-            }],
-        }),
-        scalars: flattened_cols
-            .iter()
-            .enumerate()
-            .map(|(idx, _)| HirScalarExpr::CallUnary {
-                func: UnaryFunc::RecordGet(idx),
-                expr: Box::new(HirScalarExpr::Column(ColumnRef {
-                    level: 0,
-                    column: 1,
-                })),
-            })
-            .chain(iter::once(HirScalarExpr::Literal(
-                Row::pack(iter::once(Datum::Int64(1))),
-                ColumnType {
-                    nullable: false,
-                    scalar_type: ScalarType::Int64,
-                },
-            )))
-            .collect(),
-    };
+    let before_expr = plan_dbz_flatten_one(input.clone(), before_idx, -1, n_flattened_cols);
+    let after_expr = plan_dbz_flatten_one(input, after_idx, 1, n_flattened_cols);
     let new_arity = before_expr.arity();
     assert!(new_arity == after_expr.arity());
     let before_expr = before_expr.project((old_arity..new_arity).collect());
@@ -317,7 +315,7 @@ fn plan_dbz_flatten(
         base: Box::new(before_expr),
         inputs: vec![after_expr],
     };
-    let mut col_names = flattened_cols
+    let mut col_names = before_flattened_cols
         .into_iter()
         .map(|(name, _)| Some(name))
         .collect::<Vec<_>>();
