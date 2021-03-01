@@ -32,7 +32,7 @@ rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 regex = "1.4.3"
 repr = { path = "../repr" }
-reqwest = { version = "0.11.0", features = ["native-tls-vendored"] }
+reqwest = { version = "0.11.1", features = ["native-tls-vendored"] }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
