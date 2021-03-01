@@ -303,6 +303,7 @@ mz_dataflow_operator_addresses
 mz_dataflow_operators
 mz_materialization_dependencies
 mz_materializations
+mz_message_counts
 mz_peek_active
 mz_peek_durations
 mz_scheduling_elapsed
@@ -321,6 +322,7 @@ mz_dataflow_operator_addresses       system true
 mz_dataflow_operators                system true
 mz_materialization_dependencies      system true
 mz_materializations                  system true
+mz_message_counts                    system true
 mz_peek_active                       system true
 mz_peek_durations                    system true
 mz_scheduling_elapsed                system true
@@ -386,7 +388,7 @@ SHOW EXTENDED TABLES not yet supported
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-35
+36
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

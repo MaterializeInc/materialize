@@ -46,6 +46,10 @@
 > SELECT count(*) FROM count_peek_durations;
 1
 
+> CREATE MATERIALIZED VIEW count_messages AS SELECT count(*) FROM mz_message_counts;
+> SELECT count(*) FROM count_messages;
+1
+
 ! DROP SCHEMA mz_catalog
 cannot drop schema mz_catalog because it is required by the database system
 

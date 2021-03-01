@@ -57,6 +57,8 @@ pub fn construct<A: Allocate>(
         let (mut channels_out, channels) = demux.new_output();
         let (mut addresses_out, addresses) = demux.new_output();
         let (mut parks_out, parks) = demux.new_output();
+        let (mut messages_sent_out, messages_sent) = demux.new_output();
+        let (mut messages_received_out, messages_received) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
@@ -72,6 +74,8 @@ pub fn construct<A: Allocate>(
                 let mut channels = channels_out.activate();
                 let mut addresses = addresses_out.activate();
                 let mut parks = parks_out.activate();
+                let mut messages_sent = messages_sent_out.activate();
+                let mut messages_received = messages_received_out.activate();
 
                 input.for_each(|time, data| {
                     data.swap(&mut demux_buffer);
@@ -80,6 +84,8 @@ pub fn construct<A: Allocate>(
                     let mut channels_session = channels.session(&time);
                     let mut addresses_session = addresses.session(&time);
                     let mut parks_sesssion = parks.session(&time);
+                    let mut messages_sent_session = messages_sent.session(&time);
+                    let mut messages_received_session = messages_received.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ns = time.as_nanos();
@@ -121,14 +127,13 @@ pub fn construct<A: Allocate>(
 
                                 // Present channel description.
                                 channels_session.give((
-                                    row_packer.pack(&[
-                                        Datum::Int64(event.id as i64),
-                                        Datum::Int64(worker as i64),
-                                        Datum::Int64(event.source.0 as i64),
-                                        Datum::Int64(event.source.1 as i64),
-                                        Datum::Int64(event.target.0 as i64),
-                                        Datum::Int64(event.target.1 as i64),
-                                    ]),
+                                    (
+                                        (event.id, worker),
+                                        event.source.0,
+                                        event.source.1,
+                                        event.target.0,
+                                        event.target.1,
+                                    ),
                                     time_ms,
                                     1,
                                 ));
@@ -180,14 +185,13 @@ pub fn construct<A: Allocate>(
                                             for event in events {
                                                 // Retract channel description.
                                                 channels_session.give((
-                                                    row_packer.pack(&[
-                                                        Datum::Int64(event.id as i64),
-                                                        Datum::Int64(worker as i64),
-                                                        Datum::Int64(event.source.0 as i64),
-                                                        Datum::Int64(event.source.1 as i64),
-                                                        Datum::Int64(event.target.0 as i64),
-                                                        Datum::Int64(event.target.1 as i64),
-                                                    ]),
+                                                    (
+                                                        (event.id, worker),
+                                                        event.source.0,
+                                                        event.source.1,
+                                                        event.target.0,
+                                                        event.target.1,
+                                                    ),
                                                     time_ms,
                                                     -1,
                                                 ));
@@ -231,6 +235,28 @@ pub fn construct<A: Allocate>(
                                     }
                                 }
                             },
+
+                            TimelyEvent::Messages(event) => {
+                                if event.is_send {
+                                    messages_sent_session.give((
+                                        (
+                                            (event.channel, event.source),
+                                            (event.target, event.length),
+                                        ),
+                                        time_ms,
+                                        1,
+                                    ));
+                                } else {
+                                    messages_received_session.give((
+                                        (
+                                            (event.channel, event.target),
+                                            (event.source, event.length),
+                                        ),
+                                        time_ms,
+                                        1,
+                                    ));
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -345,8 +371,8 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        let channels = channels.as_collection();
         let addresses = addresses.as_collection();
+        let channels = channels.as_collection();
 
         let parks = parks
             .map(|(w, d, r, t)| {
@@ -374,6 +400,52 @@ pub fn construct<A: Allocate>(
                 }
             });
 
+        use differential_dataflow::operators::Count;
+        let messages_sent = thin_collection(messages_sent.as_collection(), delay, |c| {
+            c.semijoin(&channels.map(|(k, _, _, _, _)| k))
+        })
+        .map(|((channel, source), (target, count))| ((channel, source, target), count))
+        .explode(|(key, count)| Some((key, count as isize)))
+        .count();
+
+        let messages_received = thin_collection(messages_received.as_collection(), delay, |c| {
+            c.semijoin(&channels.map(|(k, _, _, _, _)| k))
+        })
+        .map(|((channel, target), (source, count))| ((channel, source, target), count))
+        .explode(|(key, count)| Some((key, count as isize)))
+        .count();
+
+        let messages = messages_received
+            .join_map(&messages_sent, |&key, &sent, &received| {
+                (key, sent, received)
+            })
+            .map({
+                let mut row_packer = repr::RowPacker::new();
+                move |((channel, source, target), sent, received)| {
+                    row_packer.pack(&[
+                        Datum::Int64(channel as i64),
+                        Datum::Int64(source as i64),
+                        Datum::Int64(target as i64),
+                        Datum::Int64(sent as i64),
+                        Datum::Int64(received as i64),
+                    ])
+                }
+            });
+
+        let channels = channels.map({
+            let mut row_packer = repr::RowPacker::new();
+            move |((id, worker), source_node, source_port, target_node, target_port)| {
+                row_packer.pack(&[
+                    Datum::Int64(id as i64),
+                    Datum::Int64(worker as i64),
+                    Datum::Int64(source_node as i64),
+                    Datum::Int64(source_port as i64),
+                    Datum::Int64(target_node as i64),
+                    Datum::Int64(target_port as i64),
+                ])
+            }
+        });
+
         use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 
         // Restrict results by those logs that are meant to be active.
@@ -384,6 +456,7 @@ pub fn construct<A: Allocate>(
             (LogVariant::Timely(TimelyLog::Histogram), histogram),
             (LogVariant::Timely(TimelyLog::Addresses), addresses),
             (LogVariant::Timely(TimelyLog::Parks), parks),
+            (LogVariant::Timely(TimelyLog::Messages), messages),
         ];
 
         let mut result = std::collections::HashMap::new();
