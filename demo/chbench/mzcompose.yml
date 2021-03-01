@@ -192,11 +192,11 @@ services:
   mzutil:
     mzbuild: mzutil
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT}:/snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-mzutil}:/snapshot
   kafka-util:
     mzbuild: kafka-util
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT}:/snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-kafkautil}:/snapshot
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -278,6 +278,8 @@ volumes:
   grafana:
   prometheus:
   view-snapshots:
+  mzutil:
+  kafkautil:
 
 mzworkflows:
   ci:
