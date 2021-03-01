@@ -74,6 +74,13 @@ where
     // same key. If the predicates produce errors, we should notice these as well
     // and retract them if non-erroring records overwrite them.
 
+    // TODO: We could move the decoding before the staging grounds, which would
+    // allow us to stage potentially less data. The motivation for the current
+    // design is to support bulk deduplication without decoding, but we expect
+    // this is most likely to happen in the loading of data; consequently, we
+    // could use this implementation until `as_of_frontier` is reached, and then
+    // switch over to eager decoding. A work-in-progress idea that needs thought.
+
     // Extract predicates, and "dummy column" information.
     // Predicates are distinguished into temporal and non-temporal,
     // as the non-temporal determine if a record is retained at all,
@@ -194,6 +201,10 @@ where
                         removed_times.push(time.clone());
                         for (key, data) in map.drain() {
                             // decode key and value
+                            // TODO(mcsherry): we could record key decoding errors as the value
+                            // which would allow us to recover from key decoding errors by a
+                            // later retraction of the key (it will never decode correctly, but
+                            // we could produce and then remove the error from the output).
                             match key_decoder_state.decode_key(&key) {
                                 Ok(decoded_key) => {
                                     let decoded_value = if data.value.is_empty() {
