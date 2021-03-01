@@ -87,7 +87,7 @@ pub const FIRST_USER_OID: u32 = 20_000;
 /// The catalog also maintains special "ambient schemas": virtual schemas,
 /// implicitly present in all databases, that house various system views.
 /// The big examples of ambient schemas are `pg_catalog` and `mz_catalog`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Catalog {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
@@ -116,7 +116,7 @@ impl ConnCatalog<'_> {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Database {
     pub name: String,
     pub id: i64,
@@ -125,7 +125,7 @@ pub struct Database {
     pub schemas: BTreeMap<String, Schema>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Schema {
     pub name: SchemaName,
     pub id: i64,
@@ -135,7 +135,7 @@ pub struct Schema {
     pub functions: BTreeMap<String, GlobalId>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Role {
     pub name: String,
     pub id: i64,
@@ -720,7 +720,19 @@ impl Catalog {
                 .set_catalog_content_version(catalog_content_version)?;
         }
 
-        let items = catalog.storage().load_items()?;
+        let (catalog, extra_events) = Self::open_from(catalog)?;
+        events.extend(extra_events.into_iter());
+
+        Ok((catalog, events))
+    }
+
+    // Takes a catalog which is not "loaded" and thus cannot yet resolve names
+    // and loads it, returning the loaded catalog and a vec of events denoting
+    // what was loaded.
+    // TODO(justin): it might be nice if these were two different types.
+    pub fn open_from(mut c: Catalog) -> Result<(Catalog, Vec<Event>), Error> {
+        let mut events = Vec::new();
+        let items = c.storage().load_items()?;
         for (id, name, def) in items {
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
@@ -730,7 +742,7 @@ impl Catalog {
                 static ref LOGGING_ERROR: Regex =
                     Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap();
             }
-            let item = match catalog.deserialize_item(def) {
+            let item = match c.deserialize_item(def) {
                 Ok(item) => item,
                 Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
@@ -743,10 +755,10 @@ impl Catalog {
                     }))
                 }
             };
-            let oid = catalog.allocate_oid()?;
-            events.push(catalog.insert_item(id, oid, name, item));
+            let oid = c.allocate_oid()?;
+            events.push(c.insert_item(id, oid, name, item));
         }
-        Ok((catalog, events))
+        Ok((c, events))
     }
 
     /// Opens the catalog at `path` with parameters set appropriately for debug

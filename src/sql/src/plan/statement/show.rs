@@ -72,7 +72,7 @@ pub fn plan_show_create_view(
 
     let parsed = parse::parse(view_sql)?;
     let parsed = parsed[0].clone();
-    let mut resolved = resolve_names_stmt(scx, parsed)?;
+    let mut resolved = resolve_names_stmt(scx.catalog, parsed)?;
     let mut s = NameSimplifier {
         catalog: scx.catalog,
     };
