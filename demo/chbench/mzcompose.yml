@@ -191,11 +191,11 @@ services:
   mzutil:
     mzbuild: mzutil
     volumes:
-      - ${MZ_KAFKA_SHARED}:/snapshot
+      - ${MZ_KAFKA_SHARED:-kafka-data}:/snapshot
   kafka-util:
     mzbuild: kafka-util
     volumes:
-      - ${MZ_KAFKA_SHARED}:/snapshot
+      - ${MZ_KAFKA_SHARED:-kafka-data}:/snapshot
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
