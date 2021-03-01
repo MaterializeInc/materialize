@@ -69,7 +69,7 @@ where
     // The method also takes in `operators` which describes predicates that can
     // be applied and columns of the data that can be blanked out. We can apply
     // these operations but must be careful: for example, we can apply predicates
-    // before staging the records, but we need to record observe the result as a
+    // before staging the records, but we need to present filtered results as a
     // `None` value to ensure that it prompts dropping any held values with the
     // same key. If the predicates produce errors, we should notice these as well
     // and retract them if non-erroring records overwrite them.
@@ -199,52 +199,37 @@ where
                                     let decoded_value = if data.value.is_empty() {
                                         Ok(None)
                                     } else {
-                                        match value_decoder_state.decode_upsert_value(
-                                            &data.value,
-                                            data.position,
-                                            data.upstream_time_millis,
-                                        ) {
-                                            Ok(value) => {
-                                                if let Some(value) = value {
-                                                    // prepend key to row
-                                                    let temp_storage = RowArena::new();
+                                        value_decoder_state
+                                            // Start with an attempt to decode the value.
+                                            .decode_upsert_value(
+                                                &data.value,
+                                                data.position,
+                                                data.upstream_time_millis,
+                                            )
+                                            // Convert decoding errors into `DataflowError`s.
+                                            .map_err(|text| {
+                                                DataflowError::DecodeError(DecodeError::Text(text))
+                                            })
+                                            // Apply the predicates and projections
+                                            .and_then(|value_option| {
+                                                if let Some(value) = value_option {
                                                     // Unpack rows to apply predicates and projections.
                                                     // This could be optimized with MapFilterProject.
                                                     let mut datums =
                                                         Vec::with_capacity(source_arity);
                                                     datums.extend(decoded_key.iter());
                                                     datums.extend(value.iter());
-
-                                                    match evaluate_predicates(
+                                                    evaluate(
+                                                        &datums,
                                                         &predicates,
-                                                        &datums[..],
-                                                        &temp_storage,
-                                                    ) {
-                                                        Ok(true) => {
-                                                            row_packer.clear();
-                                                            row_packer.extend(
-                                                                position_or.iter().map(
-                                                                    |x| match x {
-                                                                        Some(column) => {
-                                                                            datums[*column]
-                                                                        }
-                                                                        None => Datum::Dummy,
-                                                                    },
-                                                                ),
-                                                            );
-                                                            Ok(Some(row_packer.finish_and_reuse()))
-                                                        }
-                                                        Ok(false) => Ok(None),
-                                                        Err(e) => Err(DataflowError::from(e)),
-                                                    }
+                                                        &position_or,
+                                                        &mut row_packer,
+                                                    )
+                                                    .map_err(DataflowError::from)
                                                 } else {
                                                     Ok(None)
                                                 }
-                                            }
-                                            Err(err) => Err(DataflowError::DecodeError(
-                                                DecodeError::Text(err),
-                                            )),
-                                        }
+                                            })
                                     };
                                     // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
                                     // We store errors as well as non-None values, so that they can be
@@ -298,9 +283,10 @@ where
             let mut datums = crate::render::datum_vec::DatumVec::new();
             move |(row, time, diff)| {
                 let mut datums_local = datums.borrow_with(&row);
-                let row_clone = row.clone();
-                plan.evaluate(&mut datums_local, time, diff)
-                    .map(move |time_diff| time_diff.map(|(t, d)| (row_clone.clone(), t, d)))
+                let time_diffs = plan.evaluate(&mut datums_local, time, diff);
+                // Explicitly drop `datums_local` to release the borrow.
+                drop(datums_local);
+                time_diffs.map(move |time_diff| time_diff.map(|(t, d)| (row.clone(), t, d)))
             }
         });
 
@@ -311,15 +297,31 @@ where
     (oks.as_collection(), Some(errs.as_collection()))
 }
 
-fn evaluate_predicates<'a>(
+/// Evaluates predicates and dummy column information.
+///
+/// This method takes decoded datums and prepares as output
+/// a row which contains only those positions of `position_or`.
+/// If any predicate is failed, no row is produced, and if an
+/// error is encounted it is returned instead.
+fn evaluate(
+    datums: &[Datum],
     predicates: &[MirScalarExpr],
-    datums: &[Datum<'a>],
-    arena: &'a RowArena,
-) -> Result<bool, EvalError> {
+    position_or: &[Option<usize>],
+    row_packer: &mut repr::RowPacker,
+) -> Result<Option<Row>, EvalError> {
+    let arena = RowArena::new();
+    // Each predicate is tested in order.
     for predicate in predicates.iter() {
         if predicate.eval(&datums[..], &arena)? != Datum::True {
-            return Ok(false);
+            return Ok(None);
         }
     }
-    return Ok(true);
+    // We pack dummy values in locations that do not reference
+    // specific columns.
+    row_packer.clear();
+    row_packer.extend(position_or.iter().map(|x| match x {
+        Some(column) => datums[*column],
+        None => Datum::Dummy,
+    }));
+    Ok(Some(row_packer.finish_and_reuse()))
 }
