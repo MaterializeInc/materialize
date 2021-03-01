@@ -438,6 +438,15 @@ class Workflow:
         for step in self._steps:
             step.run(self)
 
+    def run_with_env(self, env: Dict[str, str]) -> None:
+        """Run a workflow with a parent environment"""
+        old_env = self.env
+        self.env = dict(**old_env, **env)
+        try:
+            self.run()
+        finally:
+            self.env = old_env
+
     def run_compose(
         self, args: List[str], capture: bool = False
     ) -> subprocess.CompletedProcess:
@@ -1088,7 +1097,7 @@ class WorkflowWorkflowStep(WorkflowStep):
         try:
             # Run the specified workflow with the context of the parent workflow
             sub_workflow = workflow.composition.workflows[self._workflow]
-            sub_workflow.run()
+            sub_workflow.run_with_env(workflow.env)
         except KeyError:
             raise errors.UnknownItem(
                 f"workflow in {workflow.composition.name}",
