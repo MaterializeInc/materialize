@@ -113,7 +113,7 @@ extra_lints=(
     clippy::crosspointer_transmute
 
     # Confusing and likely buggy
-    clippy::excessive_precisions
+    clippy::excessive_precision
     clippy::fn_to_numeric_cast
     clippy::fn_to_numeric_cast_with_truncation
     clippy::overflow_check_conditional
