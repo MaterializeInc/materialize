@@ -67,10 +67,12 @@ several non-free Confluent tools, like the [Confluent Schema Registry] and
 [Control Center]. For local development, the [Confluent CLI] allows easy
 management of these services.
 
-**Confluent Platform is only required if you need to test Kafka sources and
-sinks against a *local* Kafka installation.** If possible, we recommend that you
-avoid installing the Confluent Platform, as the installation is tricky and the
-stack is very memory hungry.
+**Confluent Platform is not be required for changes that don't need
+Kafka integration**. If your changes don't affect integration with external systems
+and can be fully exercised by SQL logic tests, we recommend not installing
+the Confluent Platform, as it is a rather heavy dependency. Most Materialize employees,
+or other major contributors, will probably need to run the full test suite and
+should therefore install the Confluent Platform.
 
 #### All platforms
 
