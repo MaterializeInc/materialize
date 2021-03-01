@@ -436,6 +436,10 @@ mzworkflows:
       seconds: 1
 
   download-snapshot:
+    env:
+      MZ_KAFKA_SHARED: './tmp'
+      MZ_KAFKA_SHARED_SNAPSHOT: './tmp/kafka-data'
+      MZ_KAFKA_SHARED_ZK_DATA: './tmp/zookeeper'
     steps:
       - step: run
         service: aws-cli
