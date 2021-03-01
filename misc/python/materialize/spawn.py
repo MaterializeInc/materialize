@@ -63,7 +63,7 @@ def runv(
         stdout = subprocess.PIPE
         stderr = subprocess.PIPE
     return subprocess.run(
-        args, cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr, check=True, env=env,
+        args, cwd=cwd, stdin=stdin, stdout=stdout, stderr=stderr, check=True, env=env
     )
 
 

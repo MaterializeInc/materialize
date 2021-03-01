@@ -65,8 +65,7 @@ def confirm(question: str) -> bool:
 def progress(
     msg: str = "", prefix: Optional[str] = None, *, finish: bool = False
 ) -> None:
-    """Print a progress message to stderr, using the same prefix format as speaker
-    """
+    """Print a progress message to stderr, using the same prefix format as speaker"""
     if prefix is not None:
         msg = f"{prefix}> {msg}"
     end = "" if not finish else "\n"
@@ -124,8 +123,7 @@ def env_is_truthy(env_var: str) -> bool:
 
 
 def warn_docker_resource_limits() -> None:
-    """Check docker for recommended resource limits
-    """
+    """Check docker for recommended resource limits"""
     warn = speaker("WARN:")
 
     limits = docker.resource_limits()

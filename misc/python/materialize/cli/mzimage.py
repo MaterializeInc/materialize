@@ -68,8 +68,7 @@ def main() -> int:
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse known args, or exit the program
-    """
+    """Parse known args, or exit the program"""
     parser = argparse.ArgumentParser(
         prog="mzimage",
         formatter_class=argparse.RawDescriptionHelpFormatter,

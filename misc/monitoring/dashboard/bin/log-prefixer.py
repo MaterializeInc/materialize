@@ -22,8 +22,7 @@ def main() -> None:
 
 
 def echo_files_with_prefixes(outfile: str, prefixes_files: Dict[str, str]) -> None:
-    """Start as many threads as there are files in prefixes_files, writing their output
-    """
+    """Start as many threads as there are files in prefixes_files, writing their output"""
     max_prefix_len = max(len(prefix) for prefix in prefixes_files)
     threads = []
     for prefix, fname in prefixes_files.items():
@@ -75,9 +74,7 @@ def parse_args() -> argparse.Namespace:
         description="Print all lines from files with different prefixes"
     )
     parser.add_argument("--output-file", default="/dev/stdout")
-    parser.add_argument(
-        "prefix_file", help="prefix=/the/file/to/read", nargs="*",
-    )
+    parser.add_argument("prefix_file", help="prefix=/the/file/to/read", nargs="*")
     args = parser.parse_args()
     print(args.prefix_file)
     args.prefix_file = [pf.split("=", 1) for pf in args.prefix_file]

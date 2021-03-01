@@ -199,7 +199,7 @@ class Composition:
                 if isinstance(env, dict):
                     env = {k: str(v) for k, v in env.items()}
                 self.workflows[workflow_name] = Workflow(
-                    workflow_name, built_steps, env=env, composition=self,
+                    workflow_name, built_steps, env=env, composition=self
                 )
 
         # Resolve all services that reference an `mzbuild` image to a specific
@@ -304,9 +304,7 @@ class Composition:
         # however, and we can pipe the container IDs into `docker inspect`,
         # which supports machine-readable output.
         containers = self.run(["ps", "-q"], capture=True).stdout.splitlines()
-        metadata = spawn.capture(
-            ["docker", "inspect", "-f", "{{json .}}", *containers,]
-        )
+        metadata = spawn.capture(["docker", "inspect", "-f", "{{json .}}", *containers])
         metadata = [json.loads(line) for line in metadata.splitlines()]
         ports = []
         for md in metadata:
@@ -349,7 +347,7 @@ class Composition:
         except subprocess.CalledProcessError as e:
             ui.log_in_automation(
                 "docker inspect ({}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
-                    container_id, ui.shell_quote(cmd), e, e.stdout, e.stderr,
+                    container_id, ui.shell_quote(cmd), e, e.stdout, e.stderr
                 )
             )
             raise errors.Failed(f"failed to inspect Docker container: {e}")
@@ -805,9 +803,7 @@ class WaitForTcpStep(WorkflowStep):
         self._timeout_secs = timeout_secs
 
     def run(self, workflow: Workflow) -> None:
-        ui.progress(
-            f"waiting for {self._host}:{self._port}", "C",
-        )
+        ui.progress(f"waiting for {self._host}:{self._port}", "C")
         for remaining in ui.timeout_loop(self._timeout_secs):
             cmd = f"docker run --rm -t --network {workflow.composition.name}_default ubuntu:bionic-20200403".split()
             cmd.extend(
@@ -893,7 +889,7 @@ class RandomChaos(WorkflowStep):
     ]
 
     def __init__(
-        self, chaos: List[str] = [], services: List[str] = [], other_service: str = "",
+        self, chaos: List[str] = [], services: List[str] = [], other_service: str = ""
     ):
         self._chaos = chaos
         self._services = services

@@ -120,7 +120,7 @@ def docker_images() -> Set[str]:
     """List the Docker images available on the local machine."""
     return set(
         spawn.capture(
-            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"], unicode=True,
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"], unicode=True
         )
         .strip()
         .split("\n")
@@ -195,9 +195,7 @@ class CargoBuild(CargoPreImage):
         cargo_build = [self.rd.xcargo(), "build", "--bin", self.bin]
         if self.rd.release_mode:
             cargo_build.append("--release")
-        spawn.runv(
-            cargo_build, cwd=self.rd.root,
-        )
+        spawn.runv(cargo_build, cwd=self.rd.root)
         cargo_profile = "release" if self.rd.release_mode else "debug"
         shutil.copy(self.rd.xcargo_target_dir() / cargo_profile / self.bin, self.path)
         if self.strip:
@@ -693,14 +691,14 @@ class Repository:
     def resolve_dependencies(self, targets: Iterable[Image]) -> DependencySet:
         """Compute the dependency set necessary to build target images.
 
-         The dependencies of `targets` will be crawled recursively until the
-         complete set of transitive dependencies is determined or a circular
-         dependency is discovered. The returned dependency set will be sorted
-         in topological order.
+        The dependencies of `targets` will be crawled recursively until the
+        complete set of transitive dependencies is determined or a circular
+        dependency is discovered. The returned dependency set will be sorted
+        in topological order.
 
-         Raises:
-            ValueError: A circular dependency was discovered in the images
-                in the repository.
+        Raises:
+           ValueError: A circular dependency was discovered in the images
+               in the repository.
         """
         resolved = OrderedDict()
         visiting = set()
