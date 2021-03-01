@@ -17,6 +17,7 @@ use std::error::Error;
 use std::io::Write;
 use std::net::TcpListener;
 use std::thread;
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -31,6 +32,13 @@ pub mod util;
 fn test_no_block() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
+    ore::panic::set_abort_on_panic();
+    // This is better than relying on CI to time out,
+    // because an actual abort (as opposed to a CI timeout) causes `services.log` to be uploaded.
+    thread::spawn(|| {
+        sleep(Duration::from_secs(30));
+        panic!("test_no_block timed out")
+    });
     // Create a listener that will simulate a slow Confluent Schema Registry.
     info!("test_no_block: creating listener");
     let listener = TcpListener::bind("localhost:0")?;
