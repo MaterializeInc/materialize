@@ -541,6 +541,14 @@ pub const MZ_SOURCE_INFO: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3027),
 };
 
+pub const MZ_MESSAGE_COUNTS: BuiltinLog = BuiltinLog {
+    name: "mz_message_counts",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Timely(TimelyLog::Messages),
+    id: GlobalId::System(3028),
+    index_id: GlobalId::System(3029),
+};
+
 lazy_static! {
     pub static ref MZ_VIEW_KEYS: BuiltinTable = BuiltinTable {
         name: "mz_view_keys",
@@ -1256,6 +1264,7 @@ lazy_static! {
             Builtin::Log(&MZ_PEEK_ACTIVE),
             Builtin::Log(&MZ_PEEK_DURATIONS),
             Builtin::Log(&MZ_SOURCE_INFO),
+            Builtin::Log(&MZ_MESSAGE_COUNTS),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
             Builtin::Table(&MZ_KAFKA_SINKS),
