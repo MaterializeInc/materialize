@@ -15,7 +15,7 @@ bytes = "1.0.1"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 coord = { path = "../coord" }
-futures = "0.3.12"
+futures = "0.3.13"
 interchange = { path = "../interchange" }
 itertools = "0.9.0"
 kafka-util = { path = "../kafka-util" }
