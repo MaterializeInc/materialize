@@ -7,6 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+/// A Write-ahead log (WAL).
+///
+/// `WriteAheadLogs` is a map from relation ids, to the on-disk `WriteAheadLog` where
+/// we write down all of the updates in that relation as they occur.
+///
+/// Each `WriteAheadLog` lives in its own directory and consists of one or more files, or log
+/// segments. Only one log segment is open for writing, and we append new data updates of the form
+/// `(Row, timestamp, diff)` and timestamp progress messages (basically a message that indicates
+/// that no messages at t < closet_timestamp will be added to the log) to the end of the file.
+/// Each log segment has to start and end with a timestamp progress message so that we can
+/// derive lower and upper bounds for the timestamps contained in that log segment.
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
@@ -32,6 +43,12 @@ static MAX_LOG_SEGMENT_SIZE: usize = 1usize << 24;
 /// records with time < t will be present in the log. Each log segment file must
 /// begin and end with a progress message that indicates a [lower, upper) bound
 /// for the data in that log segment.
+///
+/// TODO: note that we currently keep an open file descriptor for each write ahead log.
+/// In the future this could lead to resource exhaustion problems.
+/// TODO: We currently write progress updates even for times where we know the times
+/// contain no records. We could potentially omit those progress messages and save
+/// space in the WAL.
 pub struct WriteAheadLog {
     /// Id of the relation.
     id: GlobalId,
@@ -49,6 +66,7 @@ pub struct WriteAheadLog {
 }
 
 impl WriteAheadLog {
+    /// Create a new write ahead log for relation `id` at directory `base_path`.
     fn create(id: GlobalId, base_path: PathBuf) -> Result<Self, anyhow::Error> {
         // First lets create the directory where these log segments will live.
         // We expect that this directory should not exist and will error if it
@@ -253,6 +271,7 @@ impl WriteAheadLog {
     }
 }
 
+/// The set of write ahead logs for all persisted relations.
 pub struct WriteAheadLogs {
     path: PathBuf,
     wals: HashMap<GlobalId, WriteAheadLog>,
@@ -369,8 +388,13 @@ pub fn encode_progress(timestamp: Timestamp, buf: &mut Vec<u8>) -> Result<(), an
     Ok(())
 }
 
-// Open a new log segment file to write into. Importantly, we need to open this
-// file with O_APPEND and we should fail if the log segment file already exists.
+// Open a new log segment file to write into.
+//
+// Importantly, we need to open this file with O_APPEND and we should fail if the
+// log segment file already exists.
+// TODO: We also want to open this file with `O_SYNC` or otherwise guarantee that
+// every write to the WAL is followed by a `fsync()` to make sure we durably
+// flush updates to disk.
 fn create_log_segment(path: &Path) -> Result<File, anyhow::Error> {
     fs::OpenOptions::new()
         .append(true)
