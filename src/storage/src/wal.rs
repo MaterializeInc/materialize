@@ -98,6 +98,10 @@ impl WriteAheadLog {
         Ok(ret)
     }
 
+    /// Append `buf` to the end of the current log segment
+    ///
+    /// TODO: We don't currently sync after every write so there is still the
+    /// potential for data loss here.
     fn write_inner(&mut self, buf: &[u8]) -> Result<(), anyhow::Error> {
         let len = buf.len();
         self.current_file.write_all(&buf).with_context(|| {
@@ -109,12 +113,6 @@ impl WriteAheadLog {
         self.current_file.flush().with_context(|| {
             format!(
                 "failed to flush write to relation: {} wal segment {}",
-                self.id, self.current_sequence_number
-            )
-        })?;
-        self.current_file.sync_all().with_context(|| {
-            format!(
-                "failed to sync write to relation: {} wal segment {}",
                 self.id, self.current_sequence_number
             )
         })?;
