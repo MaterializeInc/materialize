@@ -13,6 +13,7 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
+use std::env;
 use std::error::Error;
 use std::io::Write;
 use std::net::TcpListener;
@@ -24,6 +25,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use lazy_static::lazy_static;
 use log::info;
 use tempfile::NamedTempFile;
 
@@ -31,12 +33,14 @@ use util::{MzTimestamp, PostgresErrorExt};
 
 pub mod util;
 
-// TODO - figure out why this is broken and re-enable it.
-// This test is sporadically failing, apparently not due to any problem in
-// Materialize, but because of Kafka flakiness. We have marked it as `ignore`
-// to unblock CI for now.
+lazy_static! {
+    pub static ref KAFKA_ADDRS: kafka_util::KafkaAddrs = match env::var("KAFKA_ADDRS") {
+        Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
+        _ => "localhost:9092".parse().unwrap(),
+    };
+}
+
 #[test]
-#[ignore]
 fn test_no_block() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
@@ -68,9 +72,9 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
         info!("test_no_block: in thread; executing create source");
         let result = client.batch_execute(&format!(
             "CREATE SOURCE foo \
-            FROM KAFKA BROKER 'localhost:9092' TOPIC 'foo' \
-            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:{}'",
-            listener_port,
+             FROM KAFKA BROKER '{}' TOPIC 'foo' \
+             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:{}'",
+            &*KAFKA_ADDRS, listener_port,
         ));
         info!("test_no_block: in thread; create source done");
         result
