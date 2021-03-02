@@ -124,14 +124,14 @@ pub fn construct<A: Allocate>(
 
                                 // Present channel description.
                                 channels_session.give((
-                                    row_packer.pack(&[
-                                        Datum::Int64(event.id as i64),
-                                        Datum::Int64(worker as i64),
-                                        Datum::Int64(event.source.0 as i64),
-                                        Datum::Int64(event.source.1 as i64),
-                                        Datum::Int64(event.target.0 as i64),
-                                        Datum::Int64(event.target.1 as i64),
-                                    ]),
+                                    (
+                                        event.id,
+                                        worker,
+                                        event.source.0,
+                                        event.source.1,
+                                        event.target.0,
+                                        event.target.1,
+                                    ),
                                     time_ms,
                                     1,
                                 ));
@@ -183,14 +183,14 @@ pub fn construct<A: Allocate>(
                                             for event in events {
                                                 // Retract channel description.
                                                 channels_session.give((
-                                                    row_packer.pack(&[
-                                                        Datum::Int64(event.id as i64),
-                                                        Datum::Int64(worker as i64),
-                                                        Datum::Int64(event.source.0 as i64),
-                                                        Datum::Int64(event.source.1 as i64),
-                                                        Datum::Int64(event.target.0 as i64),
-                                                        Datum::Int64(event.target.1 as i64),
-                                                    ]),
+                                                    (
+                                                        event.id,
+                                                        worker,
+                                                        event.source.0,
+                                                        event.source.1,
+                                                        event.target.0,
+                                                        event.target.1,
+                                                    ),
                                                     time_ms,
                                                     -1,
                                                 ));
@@ -360,8 +360,15 @@ pub fn construct<A: Allocate>(
             }
         });
 
-        let channels = channels.as_collection();
         let addresses = addresses.as_collection();
+        let channels = channels.as_collection().map(
+            |(id, worker, source_node, source_port, target_node, target_port)| {
+                (
+                    id,
+                    (worker, source_node, source_port, target_node, target_port),
+                )
+            },
+        );
 
         let parks = parks
             .map(|(w, d, r, t)| {
@@ -390,7 +397,7 @@ pub fn construct<A: Allocate>(
             });
 
         use differential_dataflow::operators::Count;
-        let messages = messages
+        let mut messages = messages
             .as_collection()
             .explode(|(key, count, is_send)| {
                 Some((
@@ -403,24 +410,46 @@ pub fn construct<A: Allocate>(
                 ))
             })
             .count()
-            .map({
-                let mut row_packer = repr::RowPacker::new();
-                move |(
-                    (channel, source, target),
+            .map(|((channel, source, target), counts)| (channel, (source, target, counts)));
+        messages = thin_collection(messages, delay, |c| {
+            c.semijoin(&channels.map(|(channel, _)| channel))
+        });
+        let messages = messages.map({
+            let mut row_packer = repr::RowPacker::new();
+            move |(
+                channel,
+                (
+                    source,
+                    target,
                     DiffPair {
                         element1: sent,
                         element2: received,
                     },
-                )| {
-                    row_packer.pack(&[
-                        Datum::Int64(channel as i64),
-                        Datum::Int64(source as i64),
-                        Datum::Int64(target as i64),
-                        Datum::Int64(sent),
-                        Datum::Int64(received),
-                    ])
-                }
-            });
+                ),
+            )| {
+                row_packer.pack(&[
+                    Datum::Int64(channel as i64),
+                    Datum::Int64(source as i64),
+                    Datum::Int64(target as i64),
+                    Datum::Int64(sent),
+                    Datum::Int64(received),
+                ])
+            }
+        });
+
+        let channels = channels.map({
+            let mut row_packer = repr::RowPacker::new();
+            move |(id, (worker, source_node, source_port, target_node, target_port))| {
+                row_packer.pack(&[
+                    Datum::Int64(id as i64),
+                    Datum::Int64(worker as i64),
+                    Datum::Int64(source_node as i64),
+                    Datum::Int64(source_port as i64),
+                    Datum::Int64(target_node as i64),
+                    Datum::Int64(target_port as i64),
+                ])
+            }
+        });
 
         use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 
