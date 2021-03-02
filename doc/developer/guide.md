@@ -249,6 +249,24 @@ recommendations.
 
 See [Developer guide: submitting and reviewing changes](guide-changes.md).
 
+## Publishing code changes
+
+### crates.io
+
+Before publishing internal Rust crates to `crates.io`(https://crates.io/), be sure to
+indicate that `MaterializeInc` is the reponsible maintainer by running the following
+command:
+```shell
+cargo owner --rm <your personal login>
+cargo owner --add github:MaterializeInc:crate-owners
+```
+
+### PyPI
+
+Use the [`materializeinc`](https://pypi.org/user/materializeinc/) PyPI user to upload
+and update Materialize's Python packages on PyPI. Login information can be found in the
+shared 1Password account.
+
 ## Other repositories
 
 Where possible, we prefer to keep things in the main repository (a "monorepo"
