@@ -112,6 +112,12 @@ impl WriteAheadLog {
                 self.id, self.current_sequence_number
             )
         })?;
+        self.current_file.sync_all().with_context(|| {
+            format!(
+                "failed to sync write to relation: {} wal segment {}",
+                self.id, self.current_sequence_number
+            )
+        })?;
         self.current_bytes_written += len;
         self.total_bytes_written += len;
 
