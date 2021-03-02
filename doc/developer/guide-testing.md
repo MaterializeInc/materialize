@@ -46,7 +46,7 @@ the following will do the trick if you have the Confluent Platform 5.3+ CLI
 installed and configured:
 
 ```shell
-$ confluent local start schema-registry
+$ confluent local services schema-registry start
 ```
 
 `cargo test` supports many options for precisely controlling what tests get
