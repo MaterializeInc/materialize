@@ -17,8 +17,8 @@ use std::sync::Mutex;
 
 use anyhow::bail;
 use log::{debug, error, info, warn};
-use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::client::ClientContext;
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use reqwest::Url;
 use tokio::task;
 use tokio::time::Duration;
@@ -170,7 +170,10 @@ pub fn extract_config(
 /// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
 ///   For example, when using Kerberos auth, and the named principal does not
 ///   exist.
-pub async fn test_config(broker: &str, options: &BTreeMap<String, String>) -> Result<(), anyhow::Error> {
+pub async fn test_config(
+    broker: &str,
+    options: &BTreeMap<String, String>,
+) -> Result<(), anyhow::Error> {
     let mut config = rdkafka::ClientConfig::new();
     config.set("bootstrap.servers", broker);
     for (k, v) in options {
@@ -188,7 +191,8 @@ pub async fn test_config(broker: &str, options: &BTreeMap<String, String>) -> Re
             // unfortunately.
             task::spawn_blocking(move || {
                 let _ = consumer.fetch_metadata(None, Duration::from_secs(1));
-            }).await?;
+            })
+            .await?;
             let error = context.error.lock().expect("lock poisoned");
             if let Some(error) = &*error {
                 bail!("librdkafka: {}", error)
