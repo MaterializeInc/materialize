@@ -552,6 +552,21 @@ pub fn plan_coerce<'a>(
             plan_cast("string literal", ecx, CastContext::Explicit, lit, coerce_to)?
         }
 
+        LiteralArray(vals) => {
+            let elem_type = match coerce_to {
+                ScalarType::Array(typ) => *typ.clone(),
+                _ => ScalarType::String,
+            };
+            let out = vals
+                .into_iter()
+                .map(|v| plan_coerce(ecx, v, &elem_type))
+                .collect::<Result<Vec<HirScalarExpr>, anyhow::Error>>()?;
+            HirScalarExpr::CallVariadic {
+                func: VariadicFunc::ArrayCreate { elem_type },
+                exprs: out,
+            }
+        }
+
         LiteralRecord(exprs) => {
             let arity = exprs.len();
             let coercions = match coerce_to {
