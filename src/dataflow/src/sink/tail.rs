@@ -16,7 +16,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
-use dataflow_types::TailSinkConnector;
+use dataflow_types::{SinkAsOf, TailSinkConnector};
 use expr::GlobalId;
 use repr::adt::decimal::Significand;
 use repr::{Datum, Diff, Row, RowPacker, Timestamp};
@@ -25,6 +25,7 @@ pub fn tail<G>(
     stream: Stream<G, Rc<OrdValBatch<GlobalId, Row, Timestamp, Diff>>>,
     id: GlobalId,
     connector: TailSinkConnector,
+    as_of: SinkAsOf,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -46,10 +47,10 @@ pub fn tail<G>(
                         cursor.map_times(&batch, |time, diff| {
                             assert!(*diff >= 0, "negative multiplicities sinked in tail");
                             let diff = *diff as usize;
-                            let should_emit = if connector.strict {
-                                connector.frontier.less_than(time)
+                            let should_emit = if as_of.strict {
+                                as_of.frontier.less_than(time)
                             } else {
-                                connector.frontier.less_equal(time)
+                                as_of.frontier.less_equal(time)
                             };
                             if should_emit {
                                 for _ in 0..diff {

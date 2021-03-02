@@ -1244,6 +1244,74 @@ fn cot<'a>(a: Datum<'a>) -> Result<Datum, EvalError> {
     Ok(Datum::from(1.0 / f.tan()))
 }
 
+fn log_guard(val: f64, function_name: &str) -> Result<f64, EvalError> {
+    if val.is_sign_negative() {
+        return Err(EvalError::NegativeOutOfDomain(function_name.to_owned()));
+    }
+    if val == 0.0 {
+        return Err(EvalError::ZeroOutOfDomain(function_name.to_owned()));
+    }
+    Ok(val)
+}
+
+fn log_base<'a>(a: Datum<'a>, b: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
+    let b = cast_significand_to_float64(b).unwrap_float64() / 10_f64.powi(i32::from(scale));
+    let base = log_guard(b, "log")?;
+    log_dec(a, |f| f.log(base), "log", scale)
+}
+
+fn log_dec<'a, 'b, F: Fn(f64) -> f64>(
+    a: Datum<'a>,
+    logic: F,
+    name: &'b str,
+    scale: u8,
+) -> Result<Datum<'a>, EvalError> {
+    let significand = cast_significand_to_float64(a);
+    let scale = i32::from(scale);
+    let a = log_guard(significand.unwrap_float64() / 10_f64.powi(scale), name)?;
+    Ok(cast_float64_to_decimal(
+        Datum::from(logic(a)),
+        Datum::from(scale),
+    )?)
+}
+
+fn log<'a, 'b, F: Fn(f64) -> f64>(
+    a: Datum<'a>,
+    logic: F,
+    name: &'b str,
+) -> Result<Datum<'a>, EvalError> {
+    let f = log_guard(a.unwrap_float64(), name)?;
+    Ok(Datum::from(logic(f)))
+}
+
+fn exp<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    Ok(Datum::from(a.unwrap_float64().exp()))
+}
+
+fn exp_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
+    let significand = cast_significand_to_float64(a);
+    let scale = i32::from(scale);
+    let a = significand.unwrap_float64() / 10_f64.powi(scale);
+
+    Ok(cast_float64_to_decimal(
+        Datum::from(a.exp()),
+        Datum::from(scale),
+    )?)
+}
+
+fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let a = a.unwrap_float64();
+    let b = b.unwrap_float64();
+    Ok(Datum::from(a.powf(b)))
+}
+
+fn power_dec<'a>(a: Datum<'a>, b: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
+    let scale = i32::from(scale);
+    let a = cast_significand_to_float64(a).unwrap_float64() / 10_f64.powi(scale);
+    let b = cast_significand_to_float64(b).unwrap_float64() / 10_f64.powi(scale);
+    cast_float64_to_decimal(Datum::from(a.powf(b)), Datum::from(scale))
+}
+
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -2205,6 +2273,9 @@ pub enum BinaryFunc {
     MzRenderTypemod,
     Encode,
     Decode,
+    LogDecimal(u8),
+    Power,
+    PowerDecimal(u8),
 }
 
 impl BinaryFunc {
@@ -2354,6 +2425,9 @@ impl BinaryFunc {
             BinaryFunc::DigestString => eager!(digest_string, temp_storage),
             BinaryFunc::DigestBytes => eager!(digest_bytes, temp_storage),
             BinaryFunc::MzRenderTypemod => Ok(eager!(mz_render_typemod, temp_storage)),
+            BinaryFunc::LogDecimal(scale) => eager!(log_base, *scale),
+            BinaryFunc::Power => eager!(power),
+            BinaryFunc::PowerDecimal(scale) => eager!(power_dec, *scale),
         }
     }
 
@@ -2523,6 +2597,9 @@ impl BinaryFunc {
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
             Encode => ScalarType::String.nullable(in_nullable),
             Decode => ScalarType::Bytes.nullable(in_nullable),
+            LogDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
+            Power => ScalarType::Float64.nullable(in_nullable),
+            PowerDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
         }
     }
 
@@ -2703,7 +2780,10 @@ impl BinaryFunc {
             | DigestBytes
             | MzRenderTypemod
             | Encode
-            | Decode => false,
+            | Decode
+            | LogDecimal(_)
+            | Power
+            | PowerDecimal(_) => false,
         }
     }
 }
@@ -2819,6 +2899,9 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MzRenderTypemod => f.write_str("mz_render_typemod"),
             BinaryFunc::Encode => f.write_str("encode"),
             BinaryFunc::Decode => f.write_str("decode"),
+            BinaryFunc::LogDecimal(_) => f.write_str("log"),
+            BinaryFunc::Power => f.write_str("power"),
+            BinaryFunc::PowerDecimal(_) => f.write_str("power_decimal"),
         }
     }
 }
@@ -2987,6 +3070,12 @@ pub enum UnaryFunc {
     Tan,
     Tanh,
     Cot,
+    Log10,
+    Log10Decimal(u8),
+    Ln,
+    LnDecimal(u8),
+    Exp,
+    ExpDecimal(u8),
 }
 
 impl UnaryFunc {
@@ -3155,6 +3244,12 @@ impl UnaryFunc {
             UnaryFunc::Tan => tan(a),
             UnaryFunc::Tanh => Ok(tanh(a)),
             UnaryFunc::Cot => cot(a),
+            UnaryFunc::Log10 => log(a, f64::log10, "log10"),
+            UnaryFunc::Log10Decimal(scale) => log_dec(a, f64::log10, "log10", *scale),
+            UnaryFunc::Ln => log(a, f64::ln, "ln"),
+            UnaryFunc::LnDecimal(scale) => log_dec(a, f64::ln, "ln", *scale),
+            UnaryFunc::Exp => exp(a),
+            UnaryFunc::ExpDecimal(scale) => exp_dec(a, *scale),
         }
     }
 
@@ -3296,7 +3391,7 @@ impl UnaryFunc {
             JsonbPretty => ScalarType::String.nullable(in_nullable),
 
             RecordGet(i) => match input_type.scalar_type {
-                ScalarType::Record { mut fields, .. } => fields.swap_remove(*i).1.nullable(true),
+                ScalarType::Record { mut fields, .. } => fields.swap_remove(*i).1,
                 _ => unreachable!("RecordGet specified nonexistent field"),
             },
 
@@ -3311,6 +3406,8 @@ impl UnaryFunc {
             Tan => ScalarType::Float64.nullable(in_nullable),
             Tanh => ScalarType::Float64.nullable(in_nullable),
             Cot => ScalarType::Float64.nullable(in_nullable),
+            Log10 | Ln | Exp => ScalarType::Float64.nullable(in_nullable),
+            Log10Decimal(_) | LnDecimal(_) | ExpDecimal(_) => input_type,
         }
     }
 
@@ -3473,7 +3570,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::TrimWhitespace => f.write_str("btrim"),
             UnaryFunc::TrimLeadingWhitespace => f.write_str("ltrim"),
             UnaryFunc::TrimTrailingWhitespace => f.write_str("rtrim"),
-            UnaryFunc::RecordGet(_) => f.write_str("record_get"),
+            UnaryFunc::RecordGet(i) => write!(f, "record_get[{}]", i),
             UnaryFunc::ListLength => f.write_str("list_length"),
             UnaryFunc::Upper => f.write_str("upper"),
             UnaryFunc::Lower => f.write_str("lower"),
@@ -3484,6 +3581,12 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::Tan => f.write_str("tan"),
             UnaryFunc::Tanh => f.write_str("tanh"),
             UnaryFunc::Cot => f.write_str("cot"),
+            UnaryFunc::Log10 => f.write_str("log10f64"),
+            UnaryFunc::Log10Decimal(_) => f.write_str("log10dec"),
+            UnaryFunc::Ln => f.write_str("lnf64"),
+            UnaryFunc::LnDecimal(_) => f.write_str("lndec"),
+            UnaryFunc::ExpDecimal(_) => f.write_str("expdec"),
+            UnaryFunc::Exp => f.write_str("expf64"),
         }
     }
 }

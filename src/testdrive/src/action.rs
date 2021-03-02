@@ -37,6 +37,7 @@ mod avro_ocf;
 mod file;
 mod kafka;
 mod kinesis;
+mod postgres;
 mod s3;
 mod sleep;
 mod sql;
@@ -393,6 +394,12 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     }
                     "kinesis-ingest" => Box::new(kinesis::build_ingest(builtin).map_err(wrap_err)?),
                     "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),
+                    "postgres-execute" => {
+                        Box::new(postgres::build_execute(builtin).map_err(wrap_err)?)
+                    }
+                    "random-sleep" => {
+                        Box::new(sleep::build_random_sleep(builtin).map_err(wrap_err)?)
+                    }
                     "s3-create-bucket" => {
                         Box::new(s3::build_create_bucket(builtin).map_err(wrap_err)?)
                     }
@@ -413,9 +420,6 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     "set-execution-count" => {
                         // Skip, has already been handled
                         continue;
-                    }
-                    "random-sleep" => {
-                        Box::new(sleep::build_random_sleep(builtin).map_err(wrap_err)?)
                     }
                     "sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment" => {
                         Box::new(sleep::build_sleep(builtin).map_err(wrap_err)?)
@@ -610,17 +614,17 @@ pub async fn create_state(
     )
     .expect("both parts of AWS Credentials are present");
 
-    let kinesis_client = aws_util::kinesis::client(aws_info.clone()).await.err_hint(
+    let kinesis_client = aws_util::client::kinesis(aws_info.clone()).await.err_hint(
         "creating Kinesis client",
         &[format!("region: {}", aws_info.region.name())],
     )?;
 
-    let s3_client = aws_util::s3::client(aws_info.clone()).await.err_hint(
+    let s3_client = aws_util::client::s3(aws_info.clone()).await.err_hint(
         "creating S3 client",
         &[format!("region: {}", aws_info.region.name(),)],
     )?;
 
-    let sqs_client = aws_util::sqs::client(aws_info.clone()).await.err_hint(
+    let sqs_client = aws_util::client::sqs(aws_info.clone()).await.err_hint(
         "creating SQS client",
         &[format!("region: {}", aws_info.region.name(),)],
     )?;

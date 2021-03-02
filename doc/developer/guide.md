@@ -67,10 +67,12 @@ several non-free Confluent tools, like the [Confluent Schema Registry] and
 [Control Center]. For local development, the [Confluent CLI] allows easy
 management of these services.
 
-**Confluent Platform is only required if you need to test Kafka sources and
-sinks against a *local* Kafka installation.** If possible, we recommend that you
-avoid installing the Confluent Platform, as the installation is tricky and the
-stack is very memory hungry.
+**Confluent Platform is not be required for changes that don't need
+Kafka integration**. If your changes don't affect integration with external systems
+and can be fully exercised by SQL logic tests, we recommend not installing
+the Confluent Platform, as it is a rather heavy dependency. Most Materialize employees,
+or other major contributors, will probably need to run the full test suite and
+should therefore install the Confluent Platform.
 
 #### All platforms
 
@@ -147,24 +149,25 @@ If you do need the Confluent Platform running locally, execute the following
 commands:
 
 ```shell
-confluent local start kafka     # Also starts Zookeeper.
-confluent local start schema-registry
+confluent local services kafka start     # Also starts Zookeeper.
+confluent local services schema-registry start
 ```
 
 You can also use the included `confluent` CLI command to start and stop
 individual services. For example:
 
 ```shell
-confluent local status        # View what services are currently running.
-confluent local start kafka   # Start Kafka and any services it depends upon.
-confluent local log kafka     # View Kafka log file.
+confluent local services status        # View what services are currently running.
+confluent local services kafka start   # Start Kafka and any services it depends upon.
+confluent local services kafka log     # View Kafka log file.
 ```
 
 Beware that the CLI is fairly buggy, especially around service management.
 Putting your computer to sleep often causes the service status to get out of
-sync. In other words, trust the output of `confluent local log` and `ps ... |
-grep` over the output of `confluent local status`. Still, it's reliable enough
-to be more convenient than managing each service manually.
+sync. In other words, trust the output of `confluent local services <service>
+log` and `ps ... | grep` over the output of `confluent local services status`.
+Still, it's reliable enough to be more convenient than managing each service
+manually.
 
 ## Symbiosis mode
 

@@ -273,6 +273,13 @@ pub fn resolve_names_data_type(
     Ok((result, n.ids))
 }
 
+pub struct PlannedQuery<E> {
+    pub expr: E,
+    pub desc: RelationDesc,
+    pub finishing: RowSetFinishing,
+    pub depends_on: Vec<GlobalId>,
+}
+
 /// Plans a top-level query, returning the `HirRelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a
 /// `RowSetFinishing` describing post-processing that must occur before results
@@ -285,7 +292,7 @@ pub fn plan_root_query(
     scx: &StatementContext,
     mut query: Query<Raw>,
     lifetime: QueryLifetime,
-) -> Result<(HirRelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
+) -> Result<PlannedQuery<HirRelationExpr>, anyhow::Error> {
     transform_ast::transform_query(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
     let resolved_query = resolve_names(&mut qcx, query)?;
@@ -307,8 +314,14 @@ pub fn plan_root_query(
             .collect(),
     );
     let desc = RelationDesc::new(typ, scope.column_names());
+    let depends_on = qcx.ids.into_iter().collect();
 
-    Ok((expr, desc, finishing))
+    Ok(PlannedQuery {
+        expr,
+        desc,
+        finishing,
+        depends_on,
+    })
 }
 
 /// Attempts to push a projection through an order by.
@@ -482,9 +495,9 @@ pub fn plan_insert_query(
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
         } else {
-            let default_expr = plan_default_expr(scx, default, &col_typ.scalar_type)?;
+            let (hir, _) = plan_default_expr(scx, default, &col_typ.scalar_type)?;
             project_key.push(typ.arity() + map_exprs.len());
-            map_exprs.push(default_expr);
+            map_exprs.push(hir);
         }
     }
 
@@ -602,7 +615,7 @@ pub fn plan_default_expr(
     scx: &StatementContext,
     expr: &Expr<Raw>,
     target_ty: &ScalarType,
-) -> Result<HirScalarExpr, anyhow::Error> {
+) -> Result<(HirScalarExpr, Vec<GlobalId>), anyhow::Error> {
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let expr = resolve_names_expr(&mut qcx, expr.clone())?;
     let ecx = &ExprContext {
@@ -613,14 +626,15 @@ pub fn plan_default_expr(
         allow_aggregates: false,
         allow_subqueries: false,
     };
-    plan_expr(ecx, &expr)?.cast_to(ecx.name, ecx, CastContext::Assignment, target_ty)
+    let hir = plan_expr(ecx, &expr)?.cast_to(ecx.name, ecx, CastContext::Assignment, target_ty)?;
+    Ok((hir, qcx.ids.into_iter().collect()))
 }
 
 pub fn plan_index_exprs<'a>(
     scx: &'a StatementContext,
     on_desc: &RelationDesc,
     exprs: Vec<Expr<Raw>>,
-) -> Result<Vec<::expr::MirScalarExpr>, anyhow::Error> {
+) -> Result<(Vec<::expr::MirScalarExpr>, Vec<GlobalId>), anyhow::Error> {
     let scope = Scope::from_source(None, on_desc.iter_names(), Some(Scope::empty(None)));
     let mut qcx = QueryContext::root(scx, QueryLifetime::Static);
 
@@ -645,7 +659,7 @@ pub fn plan_index_exprs<'a>(
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         out.push(expr.lower_uncorrelated()?);
     }
-    Ok(out)
+    Ok((out, qcx.ids.into_iter().collect()))
 }
 
 fn plan_expr_or_col_index(
@@ -2897,7 +2911,10 @@ pub fn scalar_type_from_sql(
                         ScalarType::Decimal(precision, scale)
                     }
                     ScalarType::String => {
-                        match name.raw_name().to_string().as_str() {
+                        // TODO(justin): we should look up in the catalog to see
+                        // if this type is actually a length-parameterized
+                        // string.
+                        match name.raw_name().item.as_str() {
                             n @ "char" | n @ "varchar" => {
                                 validate_typ_mod(n, &typ_mod, &[("length", 1, 10_485_760)])?
                             }

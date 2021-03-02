@@ -15,7 +15,7 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::io::Read;
 use std::str::FromStr;
-use std::{cell::RefCell, iter, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use anyhow::Context;
 use anyhow::{anyhow, bail};
@@ -471,12 +471,12 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
         union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
     }
 }
-struct OptionalRowDecoder<'a> {
+struct OptionalRecordDecoder<'a> {
     pub packer: &'a mut RowPacker,
     pub buf: &'a mut Vec<u8>,
 }
 
-impl<'a> AvroDecode for OptionalRowDecoder<'a> {
+impl<'a> AvroDecode for OptionalRecordDecoder<'a> {
     type Out = bool;
     fn union_branch<'b, R: AvroRead, D: AvroDeserializer>(
         self,
@@ -493,7 +493,7 @@ impl<'a> AvroDecode for OptionalRowDecoder<'a> {
             let d = AvroFlatDecoder {
                 packer: self.packer,
                 buf: self.buf,
-                is_top: true,
+                is_top: false,
             };
             deserializer.deserialize(reader, d)?;
             Ok(true)
@@ -512,43 +512,33 @@ pub struct AvroDebeziumDecoder<'a> {
 }
 
 impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
-    type Out = (DiffPair<Row>, Option<DebeziumSourceCoordinates>);
+    type Out = (Row, Option<DebeziumSourceCoordinates>);
     fn record<R: AvroRead, A: AvroRecordAccess<R>>(
         self,
         a: &mut A,
     ) -> Result<Self::Out, AvroError> {
-        let mut before = None;
-        let mut after = None;
         let mut coords = None;
         let mut transaction = None;
         while let Some((name, _, field)) = a.next_field()? {
             match name {
                 "before" => {
-                    let d = OptionalRowDecoder {
+                    let d = OptionalRecordDecoder {
                         packer: self.packer,
                         buf: self.buf,
                     };
                     let decoded_row = field.decode_field(d)?;
-
-                    before = if decoded_row {
-                        self.packer.push(Datum::Int64(-1));
-                        Some(self.packer.finish_and_reuse())
-                    } else {
-                        None
+                    if !decoded_row {
+                        self.packer.push(Datum::Null);
                     }
                 }
                 "after" => {
-                    let d = OptionalRowDecoder {
+                    let d = OptionalRecordDecoder {
                         packer: self.packer,
                         buf: self.buf,
                     };
                     let decoded_row = field.decode_field(d)?;
-
-                    after = if decoded_row {
-                        self.packer.push(Datum::Int64(1));
-                        Some(self.packer.finish_and_reuse())
-                    } else {
-                        None
+                    if !decoded_row {
+                        self.packer.push(Datum::Null);
                     }
                 }
                 "source" => {
@@ -575,7 +565,7 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
                 *total_order = Some(transaction.total_order);
             }
         }
-        Ok((DiffPair { before, after }, coords))
+        Ok((self.packer.finish_and_reuse(), coords))
     }
     define_unexpected! {
         union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
@@ -960,7 +950,7 @@ pub fn validate_value_schema(
                                         bail!("Source schema 'before' and 'after' fields should be the same named record.");
                                     }
                                     match schema.lookup(*before_name).piece {
-                                        SchemaPiece::Record { .. } => node.step(before_piece),
+                                        SchemaPiece::Record { .. } => node,
                                         _ => bail!("Source schema 'before' and 'after' fields should contain a record."),
                                     }
                                 }
@@ -1552,7 +1542,7 @@ impl DebeziumDeduplicationState {
         debug_name: &str,
         worker_idx: usize,
         is_snapshot: bool,
-        update: &DiffPair<Row>,
+        update: &Row,
     ) -> bool {
         let (pos, row) = match row {
             RowCoordinates::MySql { pos, row } => (pos, row),
@@ -1630,21 +1620,21 @@ impl DebeziumDeduplicationState {
                         }
                         Some(ki) => ki,
                     };
-                    let mut row_iter = match update.after.as_ref() {
-                        None => {
+                    let mut after_iter = match update.iter().nth(1) {
+                        Some(Datum::List(after_elts)) => after_elts.iter(),
+                        _ => {
                             error!(
                                 "Snapshot row at pos {:?}, message_time={} source={} was not an insert.",
                                 coord, fmt_timestamp(upstream_time_millis), debug_name);
                             return false;
                         }
-                        Some(r) => r.iter(),
                     };
                     let key = {
                         let mut cumsum = 0;
                         for k in key_indices.iter() {
                             let adjusted_idx = *k - cumsum;
                             cumsum += adjusted_idx + 1;
-                            key_buf.push(row_iter.nth(adjusted_idx).unwrap());
+                            key_buf.push(after_iter.nth(adjusted_idx).unwrap());
                         }
                         key_buf.finish_and_reuse()
                     };
@@ -1935,6 +1925,8 @@ fn take_field_by_index(
     Ok(std::mem::replace(value, Value::Null))
 }
 
+// TODO [btv] - this entire struct is ONLY used in the OCF code path. It should be deleted and merged with
+// `Decoder` as part of the source-orthogonality refactor.
 impl DebeziumDecodeState {
     pub fn new(
         schema: &Schema,
@@ -1961,10 +1953,9 @@ impl DebeziumDecodeState {
     pub fn extract(
         &mut self,
         v: Value,
-        n: SchemaNode,
         coord: Option<i64>,
         upstream_time_millis: Option<i64>,
-    ) -> anyhow::Result<DiffPair<Row>> {
+    ) -> anyhow::Result<Option<Row>> {
         fn is_snapshot(v: Value) -> anyhow::Result<Option<bool>> {
             let answer = match v {
                 Value::Union { inner, .. } => is_snapshot(*inner)?,
@@ -2018,8 +2009,6 @@ impl DebeziumDecodeState {
                         .ok_or_else(|| anyhow!("\"row\" is not an integer"))?;
                         let pos = usize::try_from(pos_val)?;
                         let row = usize::try_from(row_val)?;
-                        // TODO(btv) Add LSN handling here too (OCF code path).
-                        // Better yet, just delete this and make it go through the same code path as Kafka
                         if !self.dedup.should_use_record(
                             file_val.as_bytes(),
                             RowCoordinates::MySql { pos, row },
@@ -2028,28 +2017,39 @@ impl DebeziumDecodeState {
                             &self.debug_name,
                             self.worker_idx,
                             false,
-                            &DiffPair {
-                                before: None,
-                                after: None,
-                            },
+                            &Row::default(),
                         ) {
-                            return Ok(DiffPair {
-                                before: None,
-                                after: None,
-                            });
+                            return Ok(None);
                         }
                     }
                 }
-                let before_val = take_field_by_index(self.before_idx, "before", &mut fields)?;
-                let after_val = take_field_by_index(self.after_idx, "after", &mut fields)?;
-                // we will not have gotten this far if before/after aren't records, so the unwrap is okay.
-                let before_node = n.step(&unwrap_record_fields(n)[self.before_idx].schema);
-                let after_node = n.step(&unwrap_record_fields(n)[self.after_idx].schema);
-                let before =
-                    extract_nullable_row(before_val, iter::once(Datum::Int64(-1)), before_node)?;
-                let after =
-                    extract_nullable_row(after_val, iter::once(Datum::Int64(1)), after_node)?;
-                Ok(DiffPair { before, after })
+                let before_idx = fields.iter().position(|(name, _value)| "before" == name);
+                let after_idx = fields.iter().position(|(name, _value)| "after" == name);
+                if let (Some(before_idx), Some(after_idx)) = (before_idx, after_idx) {
+                    let before = &fields[before_idx].1;
+                    let after = &fields[after_idx].1;
+                    let mut packer = RowPacker::new();
+                    let mut buf = vec![];
+                    give_value(
+                        AvroFlatDecoder {
+                            packer: &mut packer,
+                            buf: &mut buf,
+                            is_top: false,
+                        },
+                        before,
+                    )?;
+                    give_value(
+                        AvroFlatDecoder {
+                            packer: &mut packer,
+                            buf: &mut buf,
+                            is_top: false,
+                        },
+                        after,
+                    )?;
+                    Ok(Some(packer.finish()))
+                } else {
+                    bail!("avro envelope does not contain `before` and `after`");
+                }
             }
             _ => bail!("avro envelope had unexpected type: {:?}", v),
         }
@@ -2059,16 +2059,22 @@ impl DebeziumDecodeState {
 pub struct ConfluentAvroResolver {
     reader_schema: Schema,
     writer_schemas: Option<SchemaCache>,
+    confluent_wire_format: bool,
 }
 
 impl ConfluentAvroResolver {
-    pub fn new(reader_schema: &str, config: Option<ccsr::ClientConfig>) -> anyhow::Result<Self> {
+    pub fn new(
+        reader_schema: &str,
+        config: Option<ccsr::ClientConfig>,
+        confluent_wire_format: bool,
+    ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
         let writer_schemas =
             config.map(|sr| SchemaCache::new(sr, reader_schema.fingerprint::<Sha256>()));
         Ok(Self {
             reader_schema,
             writer_schemas,
+            confluent_wire_format,
         })
     }
 
@@ -2076,37 +2082,54 @@ impl ConfluentAvroResolver {
         &'a mut self,
         mut bytes: &'b [u8],
     ) -> anyhow::Result<(&'b [u8], &'a Schema)> {
-        // The first byte is a magic byte (0) that indicates the Confluent
-        // serialization format version, and the next four bytes are a big
-        // endian 32-bit schema ID.
-        //
-        // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
-        if bytes.len() < 5 {
-            bail!(
-                "Confluent-style avro datum is too few bytes: expected at least 5 bytes, got {}",
-                bytes.len()
-            );
-        }
-        let magic = bytes[0];
-        let schema_id = BigEndian::read_i32(&bytes[1..5]);
-        bytes = &bytes[5..];
+        let mut extract_schema_id = || {
+            // The first byte is a magic byte (0) that indicates the Confluent
+            // serialization format version, and the next four bytes are a big
+            // endian 32-bit schema ID.
+            //
+            // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
+            if bytes.len() < 5 {
+                bail!(
+                        "Confluent-style avro datum is too few bytes: expected at least 5 bytes, got {}",
+                        bytes.len()
+                    );
+            }
+            let magic = bytes[0];
+            let schema_id = BigEndian::read_i32(&bytes[1..5]);
+            bytes = &bytes[5..];
 
-        if magic != 0 {
-            bail!(
-                "wrong Confluent-style avro serialization magic: expected 0, got {}",
-                magic
-            );
-        }
-
+            if magic != 0 {
+                bail!(
+                    "wrong Confluent-style avro serialization magic: expected 0, got {}",
+                    magic
+                );
+            }
+            Ok(schema_id)
+        };
         let resolved_schema = match &mut self.writer_schemas {
-            Some(cache) => cache
-                .get(schema_id, &self.reader_schema)
-                .await
-                .with_context(|| format!("Failed to fetch schema with ID {}", schema_id))?,
+            Some(cache) => {
+                debug_assert!(
+                    self.confluent_wire_format,
+                    "We should have set 'confluent_wire_format' everywhere \
+                     that can lead to this branch"
+                );
+                let schema_id = extract_schema_id()?;
+                cache
+                    .get(schema_id, &self.reader_schema)
+                    .await
+                    .with_context(|| format!("Failed to fetch schema with ID {}", schema_id))?
+            }
+
             // If we haven't been asked to use a schema registry, we have no way
             // to discover the writer's schema. That's ok; we'll just use the
             // reader's schema and hope it lines up.
-            None => &self.reader_schema,
+            None => {
+                if self.confluent_wire_format {
+                    // validate and just move the bytes buffer ahead
+                    extract_schema_id()?;
+                }
+                &self.reader_schema
+            }
         };
         Ok((bytes, resolved_schema))
     }
@@ -2138,6 +2161,7 @@ pub struct Decoder {
     buf1: Vec<u8>,
     buf2: Vec<u8>,
     packer: RowPacker,
+    reject_non_inserts: bool,
 }
 
 impl fmt::Debug for Decoder {
@@ -2157,6 +2181,7 @@ impl Decoder {
     /// The provided schema is called the "reader schema", which is the schema
     /// that we are expecting to use to decode records. The records may indicate
     /// that they are encoded with a different schema; as long as those.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         reader_schema: &str,
         schema_registry: Option<ccsr::ClientConfig>,
@@ -2165,6 +2190,8 @@ impl Decoder {
         worker_index: usize,
         debezium_dedup: Option<DebeziumDeduplicationStrategy>,
         key_indices: Option<Vec<usize>>,
+        confluent_wire_format: bool,
+        reject_non_inserts: bool,
     ) -> anyhow::Result<Decoder> {
         assert!(
             (envelope == EnvelopeType::Debezium && debezium_dedup.is_some())
@@ -2172,7 +2199,8 @@ impl Decoder {
         );
         let debezium_dedup =
             debezium_dedup.map(|strat| DebeziumDeduplicationState::new(strat, key_indices));
-        let csr_avro = ConfluentAvroResolver::new(reader_schema, schema_registry)?;
+        let csr_avro =
+            ConfluentAvroResolver::new(reader_schema, schema_registry, confluent_wire_format)?;
 
         Ok(Decoder {
             csr_avro,
@@ -2183,6 +2211,7 @@ impl Decoder {
             buf1: vec![],
             buf2: vec![],
             packer: Default::default(),
+            reject_non_inserts,
         })
     }
 
@@ -2192,7 +2221,7 @@ impl Decoder {
         bytes: &[u8],
         coord: Option<i64>,
         upstream_time_millis: Option<i64>,
-    ) -> anyhow::Result<DiffPair<Row>> {
+    ) -> anyhow::Result<Option<Row>> {
         let (mut bytes, resolved_schema) = self.csr_avro.resolve(bytes).await?;
         let result = if self.envelope == EnvelopeType::Debezium {
             let dec = AvroDebeziumDecoder {
@@ -2205,7 +2234,12 @@ impl Decoder {
             };
             // Unwrap is OK: we assert in Decoder::new that this is non-none when envelope == dbz.
             let dedup = self.debezium_dedup.as_mut().unwrap();
-            let (diff, coords) = dsr.deserialize(&mut bytes, dec)?;
+            let (row, coords) = dsr.deserialize(&mut bytes, dec)?;
+            if self.reject_non_inserts {
+                if !matches!(row.iter().next(), None | Some(Datum::Null)) {
+                    panic!("[customer-data] Updates and deletes are not allowed for this source! This probably means it was started with `start_offset`. Got row: {:?}", row)
+                }
+            }
             let should_use = if let Some(source) = coords {
                 let mssql_fsn_buf;
                 // This would have ideally been `Option<&[u8]>`,
@@ -2228,18 +2262,15 @@ impl Decoder {
                     &self.debug_name,
                     self.worker_index,
                     source.snapshot,
-                    &diff,
+                    &row,
                 )
             } else {
                 true
             };
             if should_use {
-                diff
+                Some(row)
             } else {
-                DiffPair {
-                    before: None,
-                    after: None,
-                }
+                None
             }
         } else {
             let dec = AvroFlatDecoder {
@@ -2251,13 +2282,10 @@ impl Decoder {
                 schema: resolved_schema.top_node(),
             };
             dsr.deserialize(&mut bytes, dec)?;
-            DiffPair {
-                before: None,
-                after: Some(self.packer.finish_and_reuse()),
-            }
+            Some(self.packer.finish_and_reuse())
         };
         log::trace!(
-            "[customer-data] Decoded diff pair {:?}{} in {}",
+            "[customer-data] Decoded row {:?}{} in {}",
             result,
             if let Some(coord) = coord {
                 format!(" at offset {}", coord)

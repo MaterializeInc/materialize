@@ -730,6 +730,8 @@ pub enum EvalError {
     ParseHex(ParseHexError),
     Internal(String),
     InfinityOutOfDomain(String),
+    NegativeOutOfDomain(String),
+    ZeroOutOfDomain(String),
 }
 
 impl fmt::Display for EvalError {
@@ -789,6 +791,12 @@ impl fmt::Display for EvalError {
             EvalError::Internal(s) => write!(f, "internal error: {}", s),
             EvalError::InfinityOutOfDomain(s) => {
                 write!(f, "function {} is only defined for finite arguments", s)
+            }
+            EvalError::NegativeOutOfDomain(s) => {
+                write!(f, "function {} is not defined for negative numbers", s)
+            }
+            EvalError::ZeroOutOfDomain(s) => {
+                write!(f, "function {} is not defined for zero", s)
             }
         }
     }

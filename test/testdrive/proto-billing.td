@@ -28,11 +28,12 @@ id              true text
 interval_end    true text
 interval_start  true text
 records         true jsonb
+mz_offset       false bigint
 
 > SELECT * FROM billing
-0 0                   0                   []
-1 2020-01-01_00:00:00 2020-01-01_00:00:09 []
-2 2020-01-01_00:00:10 2020-01-01_00:00:19 "[{\"interval_end\":\"2020-01-01_00:00:15\",\"interval_start\":\"2020-01-01_00:00:10\",\"measurements\":[{\"measured_value\":5.0,\"resource\":\"CPU\"},{\"measured_value\":128.0,\"resource\":\"MEM\"}],\"meter\":\"user\",\"value\":25.0},{\"interval_end\":\"2020-01-01_00:00:19\",\"interval_start\":\"2020-01-01_00:00:16\",\"measurements\":[{\"measured_value\":13.0,\"resource\":\"CPU\"},{\"measured_value\":256.0,\"resource\":\"MEM\"}],\"meter\":\"user\",\"value\":125.0}]"
+0 0                   0                   [] 3
+1 2020-01-01_00:00:00 2020-01-01_00:00:09 [] 1
+2 2020-01-01_00:00:10 2020-01-01_00:00:19 "[{\"interval_end\":\"2020-01-01_00:00:15\",\"interval_start\":\"2020-01-01_00:00:10\",\"measurements\":[{\"measured_value\":5.0,\"resource\":\"CPU\"},{\"measured_value\":128.0,\"resource\":\"MEM\"}],\"meter\":\"user\",\"value\":25.0},{\"interval_end\":\"2020-01-01_00:00:19\",\"interval_start\":\"2020-01-01_00:00:16\",\"measurements\":[{\"measured_value\":13.0,\"resource\":\"CPU\"},{\"measured_value\":256.0,\"resource\":\"MEM\"}],\"meter\":\"user\",\"value\":125.0}]" 2
 
 > SELECT
     records->0->'value',

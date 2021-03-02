@@ -1497,7 +1497,19 @@ impl<'a> Parser<'a> {
             }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
-            AvroSchema::Schema(self.parse_schema()?)
+            let schema = self.parse_schema()?;
+            // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
+            // accept `WITH (...)` here.
+            let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
+                self.expect_keyword(WITH)?;
+                self.parse_with_options(false)?
+            } else {
+                vec![]
+            };
+            AvroSchema::Schema {
+                schema,
+                with_options,
+            }
         } else {
             return self.expected(
                 self.peek_pos(),

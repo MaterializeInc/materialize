@@ -31,6 +31,7 @@ SELECT date_trunc('hour', TIMESTAMP '2019-11-26 15:56:46.241150') AS hour_trunc;
  2019-11-26 15:00:00.000000000
 ```
 <hr/>
+
 ```sql
 SELECT date_trunc('year', TIMESTAMP '2019-11-26 15:56:46.241150') AS year_trunc;
 ```

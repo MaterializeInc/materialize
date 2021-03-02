@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.38"
 aws-util = { path = "../../../src/aws-util" }
 bytefmt = "0.1.7"
-futures = "0.3.12"
+futures = "0.3.13"
 indicatif = "0.15.0"
 ore = { path = "../../../src/ore" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
@@ -17,5 +17,5 @@ rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
 structopt = "0.3.21"
 tokio = { version = "1.2.0", features = ["macros", "net", "rt", "time"] }
-tracing = "0.1.23"
-tracing-subscriber = { version = "0.2.7", default-features = false, features = ["env-filter", "fmt"] }
+tracing = "0.1.25"
+tracing-subscriber = { version = "0.2.16", default-features = false, features = ["env-filter", "fmt"] }

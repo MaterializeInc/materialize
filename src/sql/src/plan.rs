@@ -56,8 +56,8 @@ pub use error::PlanError;
 pub use explain::Explanation;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
 pub use query::{
-    resolve_names, resolve_names_data_type, scalar_type_from_sql, unwrap_numeric_typ_mod, Aug,
-    QueryContext, QueryLifetime,
+    plan_default_expr, resolve_names, resolve_names_data_type, scalar_type_from_sql,
+    unwrap_numeric_typ_mod, Aug, QueryContext, QueryLifetime,
 };
 pub use statement::{describe, plan, StatementContext, StatementDesc};
 
@@ -86,13 +86,14 @@ pub enum Plan {
         name: FullName,
         sink: Sink,
         with_snapshot: bool,
-        as_of: Option<Timestamp>,
         if_not_exists: bool,
+        depends_on: Vec<GlobalId>,
     },
     CreateTable {
         name: FullName,
         table: Table,
         if_not_exists: bool,
+        depends_on: Vec<GlobalId>,
     },
     CreateView {
         name: FullName,
@@ -102,16 +103,19 @@ pub enum Plan {
         /// whether we should auto-materialize the view
         materialize: bool,
         if_not_exists: bool,
+        depends_on: Vec<GlobalId>,
     },
     CreateIndex {
         name: FullName,
         index: Index,
         options: Vec<IndexOption>,
         if_not_exists: bool,
+        depends_on: Vec<GlobalId>,
     },
     CreateType {
         name: FullName,
         typ: Type,
+        depends_on: Vec<GlobalId>,
     },
     DiscardTemp,
     DiscardAll,

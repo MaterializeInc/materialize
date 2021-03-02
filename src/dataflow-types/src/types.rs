@@ -197,6 +197,7 @@ impl DataflowDesc {
         from_desc: RelationDesc,
         connector: SinkConnector,
         envelope: SinkEnvelope,
+        as_of: SinkAsOf,
     ) {
         let key_desc = connector.get_key_desc().cloned();
         let value_desc = connector.get_value_desc().clone();
@@ -209,6 +210,7 @@ impl DataflowDesc {
                 value_desc,
                 connector,
                 envelope,
+                as_of,
             },
         ));
     }
@@ -342,34 +344,33 @@ impl DataEncoding {
         // Add columns for the data, based on the encoding format.
         Ok(match self {
             DataEncoding::Bytes => key_desc.with_column("data", ScalarType::Bytes.nullable(false)),
-            DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
-                let desc =
-                    avro::validate_value_schema(&*reader_schema, envelope.get_avro_envelope_type())
-                        .context("validating avro ocf reader schema")?
-                        .into_iter()
-                        .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
-                if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
-                    desc.with_column(
-                        "diff",
-                        ColumnType {
-                            nullable: false,
-                            scalar_type: ScalarType::Int64,
-                        },
-                    )
-                } else {
-                    desc
-                }
-            }
-            DataEncoding::Avro(AvroEncoding {
-                value_schema,
-                key_schema,
-                ..
-            }) => {
-                let desc =
+            DataEncoding::AvroOcf(AvroOcfEncoding { .. })
+            | DataEncoding::Avro(AvroEncoding { .. }) => {
+                let (value_schema, key_schema) = match self {
+                    DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => {
+                        (reader_schema, None)
+                    }
+                    DataEncoding::Avro(AvroEncoding {
+                        key_schema,
+                        value_schema,
+                        ..
+                    }) => (value_schema, key_schema.as_ref()),
+                    _ => unreachable!(),
+                };
+                let mut columns =
                     avro::validate_value_schema(value_schema, envelope.get_avro_envelope_type())
                         .context("validating avro value schema")?
                         .into_iter()
-                        .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
+                        .collect::<Vec<_>>();
+                if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
+                    // TODO [btv] - Get rid of this, when we can. Right now source processing is still not fully orthogonal,
+                    // so we have some special logic in the debezium processor that only passes on
+                    // the first two columns ("before" and "after"), and uses the information in the other ones itself
+                    columns.truncate(2);
+                }
+                let desc = columns
+                    .into_iter()
+                    .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
                 let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
                     avro::validate_key_schema(key_schema, &desc)
                         .map(Some)
@@ -379,13 +380,7 @@ impl DataEncoding {
                         })
                 });
                 if envelope.get_avro_envelope_type() == avro::EnvelopeType::Debezium {
-                    desc.with_column(
-                        "diff",
-                        ColumnType {
-                            nullable: false,
-                            scalar_type: ScalarType::Int64,
-                        },
-                    )
+                    desc
                 } else {
                     if let Some(key) = key_schema_indices {
                         desc.with_key(key)
@@ -447,6 +442,7 @@ pub struct AvroEncoding {
     pub key_schema: Option<String>,
     pub value_schema: String,
     pub schema_registry_config: Option<ccsr::ClientConfig>,
+    pub confluent_wire_format: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -507,6 +503,7 @@ pub struct SinkDesc {
     pub key_desc: Option<RelationDesc>,
     pub connector: SinkConnector,
     pub envelope: SinkEnvelope,
+    pub as_of: SinkAsOf,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -514,6 +511,12 @@ pub enum SinkEnvelope {
     Debezium,
     Upsert,
     Tail { emit_progress: bool },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SinkAsOf {
+    pub frontier: Antichain<Timestamp>,
+    pub strict: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -742,6 +745,10 @@ pub enum SinkConnector {
 pub struct KafkaSinkConsistencyConnector {
     pub topic: String,
     pub schema_id: i32,
+    // gate_ts is the most recent high watermark tailed from the consistency topic
+    // Exactly-once sinks use this to determine when they should start publishing again. This
+    // tells them when they have caught up to where the previous materialize instance stopped.
+    pub gate_ts: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -756,8 +763,6 @@ pub struct KafkaSinkConnector {
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,
-    pub frontier: Antichain<Timestamp>,
-    pub strict: bool,
     pub config_options: BTreeMap<String, String>,
 }
 
@@ -765,19 +770,9 @@ pub struct KafkaSinkConnector {
 pub struct AvroOcfSinkConnector {
     pub value_desc: RelationDesc,
     pub path: PathBuf,
-    pub frontier: Antichain<Timestamp>,
-    pub strict: bool,
 }
 
 impl SinkConnector {
-    pub fn get_frontier(&self) -> Antichain<Timestamp> {
-        match self {
-            SinkConnector::AvroOcf(avro) => avro.frontier.clone(),
-            SinkConnector::Kafka(kafka) => kafka.frontier.clone(),
-            SinkConnector::Tail(tail) => tail.frontier.clone(),
-        }
-    }
-
     pub fn get_key_desc(&self) -> Option<&RelationDesc> {
         match self {
             SinkConnector::Kafka(k) => k.key_desc_and_indices.as_ref().map(|(desc, _indices)| desc),
@@ -810,8 +805,6 @@ impl SinkConnector {
 pub struct TailSinkConnector {
     #[serde(skip)]
     pub tx: mpsc::UnboundedSender<Vec<Row>>,
-    pub frontier: Antichain<Timestamp>,
-    pub strict: bool,
     pub emit_progress: bool,
     pub object_columns: usize,
     pub value_desc: RelationDesc,
@@ -839,13 +832,14 @@ pub struct KafkaSinkConnectorBuilder {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub value_desc: RelationDesc,
     pub topic_prefix: String,
-    pub topic_suffix: String,
+    pub topic_suffix_nonce: String,
     pub partition_count: i32,
     pub replication_factor: i32,
     pub fuel: usize,
     pub consistency_value_schema: Option<String>,
     pub config_options: BTreeMap<String, String>,
     pub ccsr_config: ccsr::ClientConfig,
+    pub exactly_once: bool,
 }
 
 /// An index storing processed updates so they can be queried

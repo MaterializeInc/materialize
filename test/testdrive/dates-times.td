@@ -61,7 +61,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=10
 > CREATE MATERIALIZED VIEW data_view as SELECT * from data
 
 > SELECT * FROM data_view
-2019-08-27 "2019-08-27 00:17:09.000877"
+2019-08-27 "2019-08-27 00:17:09"
 1970-01-01 "1970-01-01 00:01:05"
 
 # Since the latest record in the topic is 10, the logical timestamp at which

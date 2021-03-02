@@ -418,6 +418,9 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
                 Type::DATE => row
                     .get::<_, Option<chrono::NaiveDate>>(i)
                     .map(|x| x.to_string()),
+                Type::TIME => row
+                    .get::<_, Option<chrono::NaiveTime>>(i)
+                    .map(|x| x.to_string()),
                 Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
                 Type::JSONB => row.get::<_, Option<Jsonb>>(i).map(|v| v.0.to_string()),
                 Type::UUID => row.get::<_, Option<uuid::Uuid>>(i).map(|v| v.to_string()),
