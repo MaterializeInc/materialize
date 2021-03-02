@@ -544,18 +544,31 @@ pub fn plan_create_source(
             // In particular, we almost certainly want the offsets to be specified per-partition.
             // The other major caveat is that by using this feature, you are opting in to
             // not using updates or deletes in CDC sources, and accepting panics if that constraint is violated.
-            let start_offset_err = "start_offset must be a nonnegative integer";
-            let start_offset = match with_options.remove("start_offset") {
-                None => 0,
-                Some(Value::Number(n)) => match n.parse::<i64>() {
-                    Ok(n) if n >= 0 => n,
-                    _ => bail!(start_offset_err),
-                },
-                Some(_) => bail!(start_offset_err),
+            if with_options.contains_key("start_offset") && consistency != Consistency::RealTime {
+                bail!("`start_offset` is not yet implemented for BYO consistency sources.")
+            }
+            let parse_offset = |s: &String| match s.parse::<i64>() {
+                Ok(n) => Ok(n),
+                _ => bail!("start_offset must be a nonnegative integer"),
             };
 
-            if start_offset != 0 && consistency != Consistency::RealTime {
-                bail!("`start_offset` is not yet implemented for BYO consistency sources.")
+            let mut start_offsets = HashMap::new();
+            match with_options.remove("start_offset") {
+                None => (),
+                Some(Value::Number(n)) => {
+                    start_offsets.insert(0, parse_offset(&n)?);
+                }
+                Some(Value::Array(ns)) => {
+                    for (i, n) in ns.iter().enumerate() {
+                        match n {
+                            Value::String(s) | Value::Number(s) => {
+                                start_offsets.insert(i as i32, parse_offset(s)?);
+                            }
+                            _ => bail!("invalid start_offset value: {}", n),
+                        }
+                    }
+                }
+                Some(v) => bail!("invalid start_offset value: {}", v),
             }
 
             let enable_caching = match with_options.remove("cache") {
@@ -567,9 +580,6 @@ pub fn plan_create_source(
             if enable_caching && consistency != Consistency::RealTime {
                 unsupported!("BYO source caching")
             }
-
-            let mut start_offsets = HashMap::new();
-            start_offsets.insert(0, start_offset);
 
             let connector = ExternalSourceConnector::Kafka(KafkaSourceConnector {
                 addrs: broker.parse()?,
