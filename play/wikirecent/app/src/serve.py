@@ -144,13 +144,12 @@ class View:
         """
         self.current_timestamp = int(timestamp)
 
-        # TODO: Insert new rows after deleting, once #5827 is fixed
-        # Add any rows that have been inserted
-        self.current_rows.extend(inserted)
-
         # Remove any rows that have been deleted
         for r in deleted:
             self.current_rows.remove(r)
+
+        # Add any rows that have been inserted
+        self.current_rows.extend(inserted)
 
         # If we have listeners configured, broadcast this diff
         if self.listeners:
