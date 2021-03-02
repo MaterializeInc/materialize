@@ -13,12 +13,15 @@ use std::collections::BTreeMap;
 use std::convert;
 use std::fs::File;
 use std::io::Read;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use anyhow::bail;
 use log::{debug, error, info, warn};
-use rdkafka::consumer::{BaseConsumer, Consumer};
+use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
+use rdkafka::client::ClientContext;
 use reqwest::Url;
+use tokio::task;
+use tokio::time::Duration;
 
 use ccsr::tls::{Certificate, Identity};
 use sql_parser::ast::Value;
@@ -167,21 +170,29 @@ pub fn extract_config(
 /// - `librdkafka` cannot create a BaseConsumer using the provided `options`.
 ///   For example, when using Kerberos auth, and the named principal does not
 ///   exist.
-pub fn test_config(broker: &str, options: &BTreeMap<String, String>) -> Result<(), anyhow::Error> {
+pub async fn test_config(broker: &str, options: &BTreeMap<String, String>) -> Result<(), anyhow::Error> {
     let mut config = rdkafka::ClientConfig::new();
     config.set("bootstrap.servers", broker);
     for (k, v) in options {
         config.set(k, v);
     }
 
-    match config.create_with_context(RDKafkaErrCheckContext::default()) {
+    match config.create_with_context(KafkaErrCheckContext::default()) {
         Ok(consumer) => {
-            let consumer: BaseConsumer<RDKafkaErrCheckContext> = consumer;
-            if let Ok(err_string) = consumer.context().error.lock() {
-                if !err_string.is_empty() {
-                    bail!("librdkafka: {}", *err_string)
-                }
-            };
+            let consumer: BaseConsumer<KafkaErrCheckContext> = consumer;
+            let context = consumer.context().clone();
+            // Wait for a metadata request for up to one second. This greatly
+            // increases the probability that we'll see a connection error if
+            // e.g. the hostname was mistyped. librdkafka doesn't expose a
+            // better API for asking whether a connection succeeded or failed,
+            // unfortunately.
+            task::spawn_blocking(move || {
+                let _ = consumer.fetch_metadata(None, Duration::from_secs(1));
+            }).await?;
+            let error = context.error.lock().expect("lock poisoned");
+            if let Some(error) = &*error {
+                bail!("librdkafka: {}", error)
+            }
         }
         Err(e) => {
             match e {
@@ -208,14 +219,14 @@ pub fn test_config(broker: &str, options: &BTreeMap<String, String>) -> Result<(
 }
 
 /// Gets error strings from `rdkafka` when creating test consumers.
-#[derive(Clone, Default)]
-struct RDKafkaErrCheckContext {
-    pub error: Arc<Mutex<String>>,
+#[derive(Default)]
+struct KafkaErrCheckContext {
+    pub error: Mutex<Option<String>>,
 }
 
-impl rdkafka::consumer::ConsumerContext for RDKafkaErrCheckContext {}
+impl ConsumerContext for KafkaErrCheckContext {}
 
-impl rdkafka::client::ClientContext for RDKafkaErrCheckContext {
+impl ClientContext for KafkaErrCheckContext {
     // `librdkafka` doesn't seem to propagate all Kerberos errors up the stack,
     // but does log them, so we are currently relying on the `log` callback for
     // error handling in situations we're aware of, e.g. cannot log into
@@ -224,13 +235,13 @@ impl rdkafka::client::ClientContext for RDKafkaErrCheckContext {
         use rdkafka::config::RDKafkaLogLevel::*;
         match level {
             Emerg | Alert | Critical | Error => {
-                let mut err_string = self.error.lock().expect("lock poisoned");
+                let mut error = self.error.lock().expect("lock poisoned");
                 // Do not allow logging to overwrite other values if
                 // present.
-                if err_string.is_empty() {
-                    *err_string = log_message.to_string();
+                if error.is_none() {
+                    *error = Some(log_message.to_string());
                 }
-                error!(target: "librdkafka", "{} {}", fac, log_message)
+                error!(target: "librdkafka", "{} {}", fac, log_message);
             }
             Warning => warn!(target: "librdkafka", "{} {}", fac, log_message),
             Notice => info!(target: "librdkafka", "{} {}", fac, log_message),
@@ -240,10 +251,9 @@ impl rdkafka::client::ClientContext for RDKafkaErrCheckContext {
     }
     // Refer to the comment on the `log` callback.
     fn error(&self, error: rdkafka::error::KafkaError, reason: &str) {
-        let mut err_string = self.error.lock().expect("lock poisoned");
         // Allow error to overwrite value irrespective of other conditions
         // (i.e. logging).
-        *err_string = reason.to_string();
+        *self.error.lock().expect("lock poisoned") = Some(reason.to_string());
         error!("librdkafka: {}: {}", error, reason);
     }
 }

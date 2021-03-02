@@ -57,7 +57,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 
                 // Verify that the provided security options are valid and then test them.
                 config_options = kafka_util::extract_config(&mut with_options_map)?;
-                kafka_util::test_config(&broker, &config_options)?;
+                kafka_util::test_config(&broker, &config_options).await?;
             }
             Connector::AvroOcf { path, .. } => {
                 let path = path.clone();
