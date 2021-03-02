@@ -109,7 +109,7 @@ answer in their once you solve it.
 1. Start/restart Kafka Connect.
 
     ```shell
-    confluent local stop connect && confluent local start connect
+    confluent local services connect stop && confluent local service connect start
     ```
 
 1. Connect MySQL and Kafka via Debezium.
@@ -200,7 +200,7 @@ To fix this particular version of this issue, remove any reference to the
 files), and then restart Kafka Connect.
 
 ```shell
-confluent local stop connect && confluent local start connect
+confluent local services connect stop && confluent local services connect start
 ```
 
 ### Missing rows
