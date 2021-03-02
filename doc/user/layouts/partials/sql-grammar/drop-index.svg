@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="313" height="37">
+<svg xmlns="http://www.w3.org/2000/svg" width="451" height="199">
    <polygon points="9 17 1 13 1 21"/>
    <polygon points="17 17 9 13 9 21"/>
    <rect x="31" y="3" width="58" height="32" rx="10"/>
@@ -17,11 +17,35 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="117" y="21">INDEX</text>
-   <rect x="191" y="3" width="94" height="32"/>
-   <rect x="189" y="1" width="94" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="199" y="21">index_name</text>
+   <rect x="211" y="35" width="84" height="32" rx="10"/>
+   <rect x="209"
+         y="33"
+         width="84"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="219" y="53">IF EXISTS</text>
+   <rect x="335" y="3" width="94" height="32"/>
+   <rect x="333" y="1" width="94" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="343" y="21">index_name</text>
+   <rect x="315" y="121" width="86" height="32" rx="10"/>
+   <rect x="313"
+         y="119"
+         width="86"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="323" y="139">CASCADE</text>
+   <rect x="315" y="165" width="88" height="32" rx="10"/>
+   <rect x="313"
+         y="163"
+         width="88"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="323" y="183">RESTRICT</text>
    <path class="line"
-         d="m17 17 h2 m0 0 h10 m58 0 h10 m0 0 h10 m62 0 h10 m0 0 h10 m94 0 h10 m3 0 h-3"/>
-   <polygon points="303 17 311 13 311 21"/>
-   <polygon points="303 17 295 13 295 21"/>
+         d="m17 17 h2 m0 0 h10 m58 0 h10 m0 0 h10 m62 0 h10 m20 0 h10 m0 0 h94 m-124 0 h20 m104 0 h20 m-144 0 q10 0 10 10 m124 0 q0 -10 10 -10 m-134 10 v12 m124 0 v-12 m-124 12 q0 10 10 10 m104 0 q10 0 10 -10 m-114 10 h10 m84 0 h10 m20 -32 h10 m94 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-178 86 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h98 m-128 0 h20 m108 0 h20 m-148 0 q10 0 10 10 m128 0 q0 -10 10 -10 m-138 10 v12 m128 0 v-12 m-128 12 q0 10 10 10 m108 0 q10 0 10 -10 m-118 10 h10 m86 0 h10 m0 0 h2 m-118 -10 v20 m128 0 v-20 m-128 20 v24 m128 0 v-24 m-128 24 q0 10 10 10 m108 0 q10 0 10 -10 m-118 10 h10 m88 0 h10 m23 -76 h-3"/>
+   <polygon points="441 103 449 99 449 107"/>
+   <polygon points="441 103 433 99 433 107"/>
 </svg>

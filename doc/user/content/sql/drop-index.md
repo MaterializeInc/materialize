@@ -18,7 +18,7 @@ Field | Use
 _view&lowbar;name_ | The name of the index you want to remove.
 `CASCADE` | Automatically removes any objects that depend on the index, as well as the index.
 `IF EXISTS`  |  Do not issue an error if the named index doesn't exist.
-`RESTRICT`  |  Prevents removal of the index if any objects depend on it. This is the default.
+`RESTRICT`  |  Remove the index, converting the materialized view to a non-materialized view. _(Default)._
 
 ## Details
 
@@ -44,6 +44,8 @@ If you drop the primary index and want to recreate it:
 
 Alternatively, you can also [`CREATE INDEX`](../create-index) to materialize any
 view.
+
+Dropping the only index on a materialized view does not remove the view entirely; it merely transforms it to a non-materialized view.
 
 ## Examples
 
@@ -74,7 +76,7 @@ SHOW INDEXES FROM q01;
 DROP INDEX materialize.public.q01_geo_idx;
 ```
 
-### Drop indexes with dependent objects
+### Drop indexes and dependent objects
 
 ```sql
 SHOW VIEWS;
@@ -98,7 +100,7 @@ SHOW INDEXES FROM q01;
 +------------------------+--------------------------------+-----
 ```
 ```sql
-DROP INDEX materialize.public.q01_geo_idx;
+DROP INDEX materialize.public.q01_geo_idx CASCADE;
 ```
 
 ## Related pages

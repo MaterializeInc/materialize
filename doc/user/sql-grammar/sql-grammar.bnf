@@ -215,21 +215,21 @@ discard ::=
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name
 drop_index ::=
-    'DROP' 'INDEX' index_name
+    'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')?
 drop_role ::=
     'DROP' 'ROLE' ('IF EXISTS')? role_name
 drop_schema ::=
-    'DROP' 'SCHEMA' ('IF EXISTS')? schema_name ('CASCADE' | 'RESTRICT')
+    'DROP' 'SCHEMA' ('IF EXISTS')? schema_name ('CASCADE' | 'RESTRICT')?
 drop_sink ::=
   'DROP' 'SINK' ('IF' 'EXISTS')? sink_name
 drop_source ::=
   'DROP' 'SOURCE' ('IF' 'EXISTS')? source_name ('RESTRICT' | 'CASCADE')?
+  drop_table ::=
+    'DROP' 'TABLE' ('IF' 'EXISTS')? table_name ('RESTRICT' | 'CASCADE')?
 drop_type ::=
   'DROP' data_type_name ('IF' 'EXISTS')? ('RESTRICT' | 'CASCADE')?
 drop_view ::=
   'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
-drop_table ::=
-  'DROP' 'TABLE' ('IF' 'EXISTS')? table_name
 drop_user ::=
     'DROP' 'USER' ('IF EXISTS')? role_name
 explain ::=
