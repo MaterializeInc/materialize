@@ -27,10 +27,44 @@ use repr::{Row, Timestamp};
 
 use crate::wal::{encode_progress, encode_update};
 
+/// Organize and maintain a compacted representation of persisted data.
+///
+/// The `Compacter` task keeps track of the persisted updates for each persisted relation and
+/// periodically compacts that representation to use space proportional to the number of
+/// distinct rows in the relation. In order to do so, the `Compacter` maintains a `Trace` for
+/// each persisted relation.
+///
+/// A `Trace` is basically a list of `Batch`s that represent a contiguous time interval, and a
+/// compaction frontier.
+///
+/// A `Batch` is a consolidated list of updates that occured between times [lower, upper)
+/// where each update is of the form `(Row, time, diff)` and each `(Row, time)` pair occurs
+/// exactly once and all diffs are nonzero.
+///
+/// Note that all `Batch`s keep their data on persistent storage. No data resides on disk
+/// (except currently we load all the data from batches into memory for compaction and on
+///  restart but this will get fixed!).
+///
+/// The `Coordinator` thread tells the `Compacter` when it needs to
+///  * start keeping track of a new relation
+///  * stop keeping track of a relation
+///  * resume keeping track of a relation with an already initialized Trace (on restart)
+///  * advance a relation's compaction frontier. Note that this doesn't automatically trigger
+///    any actual compaction. That happens later (keep reading).
+///
+/// The `Compacter` task periodically checks each relation's WAL directory to look
+/// for finished log segments, converts them to `Batch`s (basically consolidates the
+/// updates for a range of times) and adds them to the relation's `Trace`.
+///
+/// When a `Trace` contains too many `Batches`, the Trace physically
+/// combines all of them into a single large batch with updates
+/// forwarded to the compaction frontier.
+
 // TODO: Lets add some jitter to compaction so we aren't compacting every single
 // relation at the same time maybe?
 static COMPACTER_INTERVAL: Duration = Duration::from_secs(300);
 
+/// Instructions that the Coordinator sends the Compacter.
 #[derive(Debug)]
 pub enum CompacterMessage {
     Add(GlobalId),
@@ -496,6 +530,7 @@ impl Compacter {
             Ok(_) => (),
             Err(e) => {
                 error!("Compacter thread encountered an error: {:#}", e);
+                error!("Shutting down compacter thread. No further updates will be persisted.");
             }
         }
     }
@@ -535,9 +570,12 @@ fn read_dir_regex(path: &Path, regex: &Regex) -> Result<Vec<PathBuf>, anyhow::Er
     Ok(results)
 }
 
+// Data stored in Batches
 #[derive(Debug, PartialEq)]
 pub enum Message {
+    // (Row, time, diff) tuples
     Data(Update),
+    // Statements about which timestamps we might still receive data at.
     Progress(Timestamp),
 }
 
