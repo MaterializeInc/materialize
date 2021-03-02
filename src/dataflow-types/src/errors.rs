@@ -14,6 +14,19 @@ use expr::EvalError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum DecodeError {
+    Text(String),
+}
+
+impl Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DecodeError::Text(e) => write!(f, "Text: {}", e),
+        }
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum SourceError {
     FileIO(String),
 }
@@ -28,6 +41,7 @@ impl Display for SourceError {
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum DataflowError {
+    DecodeError(DecodeError),
     EvalError(EvalError),
     SourceError(SourceError),
 }
@@ -35,9 +49,16 @@ pub enum DataflowError {
 impl Display for DataflowError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            DataflowError::DecodeError(e) => write!(f, "Decode error: {}", e),
             DataflowError::EvalError(e) => write!(f, "Evaluation error: {}", e),
             DataflowError::SourceError(e) => write!(f, "Source error: {}", e),
         }
+    }
+}
+
+impl From<DecodeError> for DataflowError {
+    fn from(e: DecodeError) -> Self {
+        Self::DecodeError(e)
     }
 }
 

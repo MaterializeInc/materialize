@@ -14,14 +14,17 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Collection};
 
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::operators::generic::Operator;
+use timely::dataflow::operators::{generic::Operator, Concat, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
+use dataflow_types::{DataflowError, DecodeError, LinearOperator};
+use expr::{EvalError, MirScalarExpr};
 use log::error;
-use repr::{Diff, Row, Timestamp};
+use repr::{Datum, Diff, Row, RowArena, Timestamp};
 
 use crate::decode::DecoderState;
+use crate::operator::StreamExt;
 use crate::source::{SourceData, SourceOutput};
 
 /// Entrypoint to the upsert-specific transformations involved
@@ -35,6 +38,8 @@ pub fn decode_stream<G>(
     as_of_frontier: Antichain<Timestamp>,
     mut key_decoder_state: Box<dyn DecoderState>,
     mut value_decoder_state: Box<dyn DecoderState>,
+    operators: &mut Option<LinearOperator>,
+    source_arity: usize,
 ) -> (
     Collection<G, Row, Diff>,
     Option<Collection<G, dataflow_types::DataflowError, Diff>>,
@@ -60,10 +65,69 @@ where
     // to specify that they believe that they have a large number of unique
     // keys, at which point materialize may be more performant if it runs
     // decoding/linear operators before deduplicating.
-    let ok_stream = stream.unary_frontier(
+    //
+    // The method also takes in `operators` which describes predicates that can
+    // be applied and columns of the data that can be blanked out. We can apply
+    // these operations but must be careful: for example, we can apply predicates
+    // before staging the records, but we need to present filtered results as a
+    // `None` value to ensure that it prompts dropping any held values with the
+    // same key. If the predicates produce errors, we should notice these as well
+    // and retract them if non-erroring records overwrite them.
+
+    // TODO: We could move the decoding before the staging grounds, which would
+    // allow us to stage potentially less data. The motivation for the current
+    // design is to support bulk deduplication without decoding, but we expect
+    // this is most likely to happen in the loading of data; consequently, we
+    // could use this implementation until `as_of_frontier` is reached, and then
+    // switch over to eager decoding. A work-in-progress idea that needs thought.
+
+    // Extract predicates, and "dummy column" information.
+    // Predicates are distinguished into temporal and non-temporal,
+    // as the non-temporal determine if a record is retained at all,
+    // and the temporal indicate how we should transform its timestamps
+    // when it is transmitted.
+    let mut temporal = Vec::new();
+    let mut predicates = Vec::new();
+    let mut position_or = (0..source_arity).map(|x| Some(x)).collect::<Vec<_>>();
+    if let Some(mut operators) = operators.take() {
+        for predicate in operators.predicates.drain(..) {
+            if predicate.contains_temporal() {
+                temporal.push(predicate);
+            } else {
+                predicates.push(predicate);
+            }
+        }
+        // Temporal predicates will be applied after blanking out column,
+        // so ensure that their support is preserved.
+        // TODO: consider blanking out columns added by this processes in
+        // the temporal filtering operator.
+        for predicate in temporal.iter() {
+            operators.projection.extend(predicate.support());
+        }
+        operators.projection.sort();
+        operators.projection.dedup();
+
+        // Overwrite `position_or` to reflect `operators.projection`.
+        position_or = (0..source_arity)
+            .map(|col| {
+                if operators.projection.contains(&col) {
+                    Some(col)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+    }
+    let temporal_plan = if !temporal.is_empty() {
+        Some(crate::FilterPlan::create_from(temporal).unwrap_or_else(|e| panic!(e)))
+    } else {
+        None
+    };
+
+    let result_stream = stream.unary_frontier(
         Exchange::new(move |x: &SourceOutput<Vec<u8>, Vec<u8>>| x.key.hashed()),
         "Upsert",
-        |_cap, _info| {
+        move |_cap, _info| {
             // this is a map of (time) -> (capability, ((key) -> (value with max
             // offset))) This is a BTreeMap because we want to ensure that if we
             // receive (key1, value1, time 5) and (key1, value2, time 7) that we
@@ -137,50 +201,68 @@ where
                         removed_times.push(time.clone());
                         for (key, data) in map.drain() {
                             // decode key and value
+                            // TODO(mcsherry): we could record key decoding errors as the value
+                            // which would allow us to recover from key decoding errors by a
+                            // later retraction of the key (it will never decode correctly, but
+                            // we could produce and then remove the error from the output).
                             match key_decoder_state.decode_key(&key) {
                                 Ok(Some(decoded_key)) => {
                                     let decoded_value = if data.value.is_empty() {
                                         Ok(None)
                                     } else {
-                                        match value_decoder_state.decode_upsert_value(
-                                            &data.value,
-                                            data.position,
-                                            data.upstream_time_millis,
-                                        ) {
-                                            Ok(value) => {
-                                                if let Some(value) = value {
-                                                    // prepend key to row
-                                                    row_packer.extend_by_row(&decoded_key);
-                                                    row_packer.extend_by_row(&value);
-                                                    Ok(Some(row_packer.finish_and_reuse()))
+                                        value_decoder_state
+                                            // Start with an attempt to decode the value.
+                                            .decode_upsert_value(
+                                                &data.value,
+                                                data.position,
+                                                data.upstream_time_millis,
+                                            )
+                                            // Convert decoding errors into `DataflowError`s.
+                                            .map_err(|text| {
+                                                DataflowError::DecodeError(DecodeError::Text(text))
+                                            })
+                                            // Apply the predicates and projections
+                                            .and_then(|value_option| {
+                                                if let Some(value) = value_option {
+                                                    // Unpack rows to apply predicates and projections.
+                                                    // This could be optimized with MapFilterProject.
+                                                    let mut datums =
+                                                        Vec::with_capacity(source_arity);
+                                                    datums.extend(decoded_key.iter());
+                                                    datums.extend(value.iter());
+                                                    evaluate(
+                                                        &datums,
+                                                        &predicates,
+                                                        &position_or,
+                                                        &mut row_packer,
+                                                    )
+                                                    .map_err(DataflowError::from)
                                                 } else {
                                                     Ok(None)
                                                 }
-                                            }
-                                            Err(err) => Err(err),
-                                        }
+                                            })
                                     };
-                                    if let Ok(decoded_value) = decoded_value {
-                                        // TODO: add linear operators such as
-                                        // filters and projects?
-                                        let old_value = if let Some(new_value) = &decoded_value {
-                                            current_values.insert(decoded_key, new_value.clone())
-                                        } else {
-                                            current_values.remove(&decoded_key)
-                                        };
-                                        if let Some(old_value) = old_value {
-                                            // retract old value
-                                            session.give((old_value, cap.time().clone(), -1));
-                                        }
-                                        if let Some(new_value) = decoded_value {
-                                            // give new value
-                                            session.give((new_value, cap.time().clone(), 1));
-                                        }
+                                    // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
+                                    // We store errors as well as non-None values, so that they can be
+                                    // retracted if new rows show up for the same key.
+                                    let new_value = decoded_value.transpose();
+                                    let old_value = if let Some(new_value) = &new_value {
+                                        current_values.insert(decoded_key, new_value.clone())
+                                    } else {
+                                        current_values.remove(&decoded_key)
+                                    };
+                                    if let Some(old_value) = old_value {
+                                        // retract old value
+                                        session.give((old_value, cap.time().clone(), -1));
+                                    }
+                                    if let Some(new_value) = new_value {
+                                        // give new value
+                                        session.give((new_value, cap.time().clone(), 1));
                                     }
                                 }
                                 Ok(None) => {}
                                 Err(err) => {
-                                    error!("{}", err);
+                                    error!("key decoding error: {}", err);
                                 }
                             }
                         }
@@ -202,5 +284,56 @@ where
         },
     );
 
-    (ok_stream.as_collection(), None)
+    let (mut oks, mut errs) = result_stream.ok_err(|(data, time, diff)| match data {
+        Ok(data) => Ok((data, time, diff)),
+        Err(err) => Err((err, time, diff)),
+    });
+
+    // If we have temporal predicates do the thing they have to do.
+    if let Some(plan) = temporal_plan {
+        let (oks2, errs2) = oks.flat_map_fallible({
+            let mut datums = crate::render::datum_vec::DatumVec::new();
+            move |(row, time, diff)| {
+                let mut datums_local = datums.borrow_with(&row);
+                let time_diffs = plan.evaluate(&mut datums_local, time, diff);
+                // Explicitly drop `datums_local` to release the borrow.
+                drop(datums_local);
+                time_diffs.map(move |time_diff| time_diff.map(|(t, d)| (row.clone(), t, d)))
+            }
+        });
+
+        oks = oks2;
+        errs = errs.concat(&errs2);
+    }
+
+    (oks.as_collection(), Some(errs.as_collection()))
+}
+
+/// Evaluates predicates and dummy column information.
+///
+/// This method takes decoded datums and prepares as output
+/// a row which contains only those positions of `position_or`.
+/// If any predicate is failed, no row is produced, and if an
+/// error is encounted it is returned instead.
+fn evaluate(
+    datums: &[Datum],
+    predicates: &[MirScalarExpr],
+    position_or: &[Option<usize>],
+    row_packer: &mut repr::RowPacker,
+) -> Result<Option<Row>, EvalError> {
+    let arena = RowArena::new();
+    // Each predicate is tested in order.
+    for predicate in predicates.iter() {
+        if predicate.eval(&datums[..], &arena)? != Datum::True {
+            return Ok(None);
+        }
+    }
+    // We pack dummy values in locations that do not reference
+    // specific columns.
+    row_packer.clear();
+    row_packer.extend(position_or.iter().map(|x| match x {
+        Some(column) => datums[*column],
+        None => Datum::Dummy,
+    }));
+    Ok(Some(row_packer.finish_and_reuse()))
 }

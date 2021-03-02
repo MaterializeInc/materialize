@@ -208,6 +208,8 @@ where
                             self.as_of_frontier.clone(),
                             key_decoder,
                             value_decoder,
+                            &mut src.operators,
+                            src.bare_desc.typ().arity(),
                         )
                     } else {
                         // TODO(brennan) -- this should just be a MirRelationExpr::FlatMap using regexp_extract, csv_extract,
