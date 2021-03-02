@@ -34,7 +34,7 @@ impl ProtobufDecoderState {
 }
 
 impl DecoderState for ProtobufDecoderState {
-    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
+    fn decode_key(&mut self, bytes: &[u8]) -> Result<Option<Row>, String> {
         // Note that we're passing `None` as the offset for the key -
         // since the key must remain stable (and we don't have an
         // offset available here anyway), we instruct the decoder to
@@ -43,7 +43,7 @@ impl DecoderState for ProtobufDecoderState {
             Ok(row) => {
                 if let Some(row) = row {
                     self.events_success += 1;
-                    Ok(row)
+                    Ok(Some(row))
                 } else {
                     self.events_error += 1;
                     Err("protobuf deserialization returned None".to_string())
