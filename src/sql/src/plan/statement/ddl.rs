@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
+use std::iter;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -21,11 +22,16 @@ use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
 use expr::MirRelationExpr;
 use expr::TableFunc;
+use expr::UnaryFunc;
 use globset::GlobBuilder;
 use itertools::Itertools;
+use log::error;
 use log::warn;
 use ore::str::StrExt;
 use repr::ColumnName;
+use repr::ColumnType;
+use repr::Datum;
+use repr::Row;
 
 use reqwest::Url;
 
@@ -221,16 +227,112 @@ pub fn describe_create_source(
     Ok(StatementDesc::new(None))
 }
 
+// Flatten one Debezium entry ("before" or "after")
+// into its corresponding data fields, plus an extra column for the diff.
+fn plan_dbz_flatten_one(
+    input: HirRelationExpr,
+    bare_column: usize,
+    diff: i64,
+    n_flattened_cols: usize,
+) -> HirRelationExpr {
+    HirRelationExpr::Map {
+        input: Box::new(HirRelationExpr::Filter {
+            input: Box::new(input),
+            predicates: vec![HirScalarExpr::CallUnary {
+                func: UnaryFunc::Not,
+                expr: Box::new(HirScalarExpr::CallUnary {
+                    func: UnaryFunc::IsNull,
+                    expr: Box::new(HirScalarExpr::Column(ColumnRef {
+                        level: 0,
+                        column: bare_column,
+                    })),
+                }),
+            }],
+        }),
+        scalars: (0..n_flattened_cols)
+            .into_iter()
+            .map(|idx| HirScalarExpr::CallUnary {
+                func: UnaryFunc::RecordGet(idx),
+                expr: Box::new(HirScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: bare_column,
+                })),
+            })
+            .chain(iter::once(HirScalarExpr::Literal(
+                Row::pack(iter::once(Datum::Int64(diff))),
+                ColumnType {
+                    nullable: false,
+                    scalar_type: ScalarType::Int64,
+                },
+            )))
+            .collect(),
+    }
+}
+
+fn plan_dbz_flatten(
+    bare_desc: &RelationDesc,
+    input: HirRelationExpr,
+) -> Result<(HirRelationExpr, Vec<Option<ColumnName>>), anyhow::Error> {
+    // This looks horrible, but it is basically pretty simple:
+    // It aims to flatten rows of the shape
+    // (before, after)
+    // into rows whose columns are the individual fields of the before or after record,
+    // plus a "diff" column whose value is -1 for before, and +1 for after.
+    //
+    // They will then be joined with `repeat(diff)` to get the correct stream out.
+    let before_idx = bare_desc
+        .iter_names()
+        .position(|maybe_name| match maybe_name {
+            Some(name) => name.as_str() == "before",
+            None => false,
+        })
+        .ok_or_else(|| anyhow!("Debezium-formatted data must contain a `before` field."))?;
+    let after_idx = bare_desc
+        .iter_names()
+        .position(|maybe_name| match maybe_name {
+            Some(name) => name.as_str() == "after",
+            None => false,
+        })
+        .ok_or_else(|| anyhow!("Debezium-formatted data must contain an `after` field."))?;
+    let before_flattened_cols = match &bare_desc.typ().column_types[before_idx].scalar_type {
+        ScalarType::Record { fields, .. } => fields.clone(),
+        _ => unreachable!(), // This was verified in `Encoding::desc`
+    };
+    let after_flattened_cols = match &bare_desc.typ().column_types[after_idx].scalar_type {
+        ScalarType::Record { fields, .. } => fields.clone(),
+        _ => unreachable!(), // This was verified in `Encoding::desc`
+    };
+    assert!(before_flattened_cols == after_flattened_cols);
+    let n_flattened_cols = before_flattened_cols.len();
+    let old_arity = input.arity();
+    let before_expr = plan_dbz_flatten_one(input.clone(), before_idx, -1, n_flattened_cols);
+    let after_expr = plan_dbz_flatten_one(input, after_idx, 1, n_flattened_cols);
+    let new_arity = before_expr.arity();
+    assert!(new_arity == after_expr.arity());
+    let before_expr = before_expr.project((old_arity..new_arity).collect());
+    let after_expr = after_expr.project((old_arity..new_arity).collect());
+    let united_expr = HirRelationExpr::Union {
+        base: Box::new(before_expr),
+        inputs: vec![after_expr],
+    };
+    let mut col_names = before_flattened_cols
+        .into_iter()
+        .map(|(name, _)| Some(name))
+        .collect::<Vec<_>>();
+    col_names.push(Some("diff".into()));
+    Ok((united_expr, col_names))
+}
+
 fn plan_source_envelope(
     bare_desc: &RelationDesc,
     envelope: &SourceEnvelope,
     post_transform_key: Option<Vec<usize>>,
-) -> (MirRelationExpr, Vec<Option<ColumnName>>) {
+) -> Result<(MirRelationExpr, Vec<Option<ColumnName>>), anyhow::Error> {
     let get_expr = HirRelationExpr::Get {
         id: expr::Id::LocalBareSource,
         typ: bare_desc.typ().clone(),
     };
-    let hir_expr = if let SourceEnvelope::Debezium(_) = envelope {
+    let (hir_expr, column_names) = if let SourceEnvelope::Debezium(_) = envelope {
         // Debezium sources produce a diff in their last column.
         // Thus we need to select all rows but the last, which we repeat by.
         // I.e., for a source with four columns, we do
@@ -240,9 +342,12 @@ fn plan_source_envelope(
         // Then we would get some nice things; for example, automatic tracking of column names.
         //
         // For this simple case, it probably doesn't matter
-        let diff_col = get_expr.arity() - 1;
+
+        let (flattened, mut column_names) = plan_dbz_flatten(bare_desc, get_expr)?;
+
+        let diff_col = flattened.arity() - 1;
         let expr = HirRelationExpr::Join {
-            left: Box::new(get_expr),
+            left: Box::new(flattened),
             right: Box::new(HirRelationExpr::CallTable {
                 func: TableFunc::Repeat,
                 exprs: vec![HirScalarExpr::Column(ColumnRef {
@@ -254,23 +359,22 @@ fn plan_source_envelope(
             kind: JoinKind::Inner { lateral: true },
         }
         .project((0..diff_col).collect());
-        if let Some(post_transform_key) = post_transform_key {
+        let expr = if let Some(post_transform_key) = post_transform_key {
             expr.declare_keys(vec![post_transform_key])
         } else {
             expr
-        }
+        };
+        column_names.pop();
+        (expr, column_names)
     } else {
-        get_expr
+        (
+            get_expr,
+            bare_desc.iter_names().map(|name| name.cloned()).collect(),
+        )
     };
     let mir_expr = hir_expr.lower();
 
-    let column_names = bare_desc
-        .iter_names()
-        .map(|cn| cn.cloned())
-        .take(mir_expr.arity())
-        .collect();
-
-    (mir_expr, column_names)
+    Ok((mir_expr, column_names))
 }
 
 pub fn plan_create_source(
@@ -782,15 +886,26 @@ pub fn plan_create_source(
             if ignore_source_keys {
                 None
             } else {
-                let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
-                    avro::validate_key_schema(key_schema, &bare_desc)
-                        .map(Some)
-                        .unwrap_or_else(|e| {
-                            warn!("Not using key due to error: {}", e);
-                            None
-                        })
-                });
-                key_schema_indices
+                match &bare_desc.typ().column_types[0].scalar_type {
+                    ScalarType::Record { fields, .. } => {
+                        let row_desc = RelationDesc::from_names_and_types(
+                            fields.clone().into_iter().map(|(n, t)| (Some(n), t)),
+                        );
+                        let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
+                            avro::validate_key_schema(key_schema, &row_desc)
+                                .map(Some)
+                                .unwrap_or_else(|e| {
+                                    warn!("Not using key due to error: {}", e);
+                                    None
+                                })
+                        });
+                        key_schema_indices
+                    }
+                    _ => {
+                        error!("Not using key: expected `before` record in first column");
+                        None
+                    }
+                }
             }
         } else {
             None
@@ -820,7 +935,7 @@ pub fn plan_create_source(
     let name = scx.allocate_name(normalize::unresolved_object_name(name.clone())?);
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
-    let (expr, column_names) = plan_source_envelope(&bare_desc, &envelope, post_transform_key);
+    let (expr, column_names) = plan_source_envelope(&bare_desc, &envelope, post_transform_key)?;
     let source = Source {
         create_sql,
         connector: SourceConnector::External {

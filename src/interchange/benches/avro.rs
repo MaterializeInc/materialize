@@ -398,6 +398,7 @@ pub fn bench_avro(c: &mut Criterion) {
         Some(DebeziumDeduplicationStrategy::Ordered),
         None,
         false,
+        false,
     )
     .unwrap();
 
