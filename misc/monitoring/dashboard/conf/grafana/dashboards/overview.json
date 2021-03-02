@@ -26,7 +26,7 @@
   "gnetId": null,
   "graphTooltip": 1,
   "id": null,
-  "iteration": 1607382857384,
+  "iteration": 1614711973950,
   "links": [],
   "panels": [
     {
@@ -152,20 +152,27 @@
         },
         {
           "expr": "max(clamp_min(\nmz_kafka_partition_offset_max \n  - mz_partition_offset_ingested, \n  0))",
-          "hide": false,
+          "hide": true,
           "interval": "",
           "legendFormat": "{{topic}}/{{partition_id}} source={{source_id}}",
           "refId": "B"
+        },
+        {
+          "expr": "max(clamp_min(\n(mz_kafka_partition_offset_max\n  - on(id,source_id) group_right\n    max by(id,source_id,source_instance) (mz_partition_offset_ingested)),\n  0))",
+          "hide": false,
+          "interval": "",
+          "legendFormat": "{{id}} {{source_id}} {{topic}}",
+          "refId": "C"
         }
       ],
       "timeFrom": null,
       "timeShift": null,
-      "title": " Kafka Consumer Lag",
+      "title": "Max Kafka Consumer Lag",
       "type": "stat"
     },
     {
       "datasource": null,
-      "description": "This shows the CPU utilization as proportion of CPUs used. A value of `1.0` means that materialized is using the equivalent of 100% of 1 CPU.\n\nSee the CPU/Memory row below for more details.",
+      "description": "This shows the CPU utilization as proportion of CPUs used. A value of `100%` means that materialized is using the equivalent of 1 entire CPU.\n\nSee the CPU/Memory row below for more details.",
       "fieldConfig": {
         "defaults": {
           "custom": {},
@@ -182,14 +189,15 @@
                 "value": 80
               }
             ]
-          }
+          },
+          "unit": "percentunit"
         },
         "overrides": []
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 8,
+        "w": 2,
+        "x": 10,
         "y": 1
       },
       "id": 105,
@@ -285,25 +293,20 @@
     },
     {
       "datasource": null,
-      "description": "This encapsulates every kind of query error that materialize returns. \n\nIt includes errors caused by invalid SQL queries, as well as internal materialized errors. All query errors are reported to the materialized log file.",
       "fieldConfig": {
         "defaults": {
           "custom": {},
           "mappings": [],
-          "noValue": "0",
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
               }
             ]
-          }
+          },
+          "unit": "s"
         },
         "overrides": []
       },
@@ -313,11 +316,11 @@
         "x": 15,
         "y": 1
       },
-      "id": 76,
+      "id": 109,
       "options": {
         "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
+        "graphMode": "none",
+        "justifyMode": "center",
         "orientation": "auto",
         "reduceOptions": {
           "calcs": [
@@ -330,15 +333,15 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "sum(rate(mz_command_durations_count{status=\"error\"}[5m]))",
+          "expr": "mz_server_metadata_seconds{instance=~\".*:6875\"}",
           "interval": "",
-          "legendFormat": "{{purpose}}/{{test}}/{{workflow}}/{{id}}",
+          "legendFormat": "",
           "refId": "A"
         }
       ],
       "timeFrom": null,
       "timeShift": null,
-      "title": "SQL Query Error Rate",
+      "title": "Uptime",
       "type": "stat"
     },
     {
@@ -447,14 +450,14 @@
               }
             ]
           },
-          "unit": "bytes"
+          "unit": "percentunit"
         },
         "overrides": []
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 8,
+        "w": 2,
+        "x": 10,
         "y": 5
       },
       "id": 106,
@@ -474,7 +477,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "process_resident_memory_bytes{instance=~\".*:6875\"}",
+          "expr": "process_resident_memory_bytes{instance=~\".*:6875\"} / ($memory_total * 1024)",
           "hide": false,
           "interval": "",
           "legendFormat": "{{id}}",
@@ -545,7 +548,65 @@
       "type": "stat"
     },
     {
-      "content": "Timely Workers: $timely_workers<br/>\nBuilt At: $built_at<br/>\nBuild Version: $build_version<br/>\nBuild sha: $build_sha<br/>",
+      "datasource": null,
+      "description": "This encapsulates every kind of query error that materialize returns. \n\nIt includes errors caused by invalid SQL queries, as well as internal materialized errors. All query errors are reported to the materialized log file.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {},
+          "mappings": [],
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 2,
+        "x": 15,
+        "y": 5
+      },
+      "id": 76,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "pluginVersion": "7.0.3",
+      "targets": [
+        {
+          "expr": "sum(rate(mz_command_durations_count{status=\"error\"}[5m]))",
+          "interval": "",
+          "legendFormat": "{{purpose}}/{{test}}/{{workflow}}/{{id}}",
+          "refId": "A"
+        }
+      ],
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "SQL Query Error Rate",
+      "type": "stat"
+    },
+    {
+      "content": "Timely Workers: $timely_workers<br/>\nBuilt At: $built_at<br/>\nBuild Version: $build_version<br/>\nBuild sha: $build_sha<br/>\nOS: $os<br/>\nCPU: $cpu0<br/>\nCPUs physical/logical: $ncpus_physical / $ncpus_logical",
       "datasource": null,
       "description": "",
       "fieldConfig": {
@@ -564,7 +625,7 @@
       "mode": "html",
       "timeFrom": null,
       "timeShift": null,
-      "title": "Materialize Build Info",
+      "title": "Materialize Context",
       "type": "text"
     },
     {
@@ -1012,6 +1073,63 @@
       "id": 32,
       "panels": [
         {
+          "datasource": null,
+          "fieldConfig": {
+            "defaults": {
+              "custom": {},
+              "mappings": [],
+              "noValue": "0",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "rgb(52, 52, 52)",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 3,
+            "w": 4,
+            "x": 10,
+            "y": 11
+          },
+          "id": 111,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "orientation": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "pluginVersion": "7.0.3",
+          "targets": [
+            {
+              "expr": "mz_source_count{type=\"kafka\"}",
+              "interval": "",
+              "legendFormat": ".",
+              "refId": "A"
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Active Kafka Sources",
+          "type": "stat"
+        },
+        {
           "aliasColors": {},
           "bars": false,
           "dashLength": 10,
@@ -1030,7 +1148,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 11
+            "y": 14
           },
           "hiddenSeries": false,
           "id": 49,
@@ -1075,6 +1193,13 @@
               "interval": "",
               "legendFormat": "{{topic}}/{{partition_id}} source={{source_id}}",
               "refId": "B"
+            },
+            {
+              "expr": "topk(10, clamp_min(\n(mz_kafka_partition_offset_max{topic=~\".*stock\"}\n  - on(id,partition_id,source_id,topic) group_right\n    max by(instance,id,partition_id,source_id,topic,source_instance) (mz_partition_offset_ingested{topic=~\".*stock\"})),\n  0))",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "{{topic}}/{{partition_id}} source={{source_id}}/{{source_instance}}",
+              "refId": "C"
             }
           ],
           "thresholds": [],
@@ -1137,7 +1262,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 11
+            "y": 14
           },
           "hiddenSeries": false,
           "id": 57,
@@ -1246,7 +1371,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 19
+            "y": 22
           },
           "hiddenSeries": false,
           "id": 10,
@@ -1367,7 +1492,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 19
+            "y": 22
           },
           "hiddenSeries": false,
           "id": 12,
@@ -1467,7 +1592,7 @@
           }
         }
       ],
-      "title": "Ingest",
+      "title": "Kafka Ingest",
       "type": "row"
     },
     {
@@ -1481,6 +1606,63 @@
       },
       "id": 93,
       "panels": [
+        {
+          "datasource": null,
+          "fieldConfig": {
+            "defaults": {
+              "custom": {},
+              "mappings": [],
+              "noValue": "0",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "rgb(52, 52, 52)",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 3,
+            "w": 4,
+            "x": 10,
+            "y": 12
+          },
+          "id": 112,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "orientation": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "pluginVersion": "7.0.3",
+          "targets": [
+            {
+              "expr": "mz_source_count{type=\"kinesis\"}",
+              "interval": "",
+              "legendFormat": ".",
+              "refId": "A"
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Active Kinesis Sources",
+          "type": "stat"
+        },
         {
           "aliasColors": {},
           "bars": false,
@@ -1500,7 +1682,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 12
+            "y": 15
           },
           "hiddenSeries": false,
           "id": 47,
@@ -1584,7 +1766,7 @@
           }
         }
       ],
-      "title": "Kinesis",
+      "title": "Kinesis Ingest",
       "type": "row"
     },
     {
@@ -1598,6 +1780,63 @@
       },
       "id": 89,
       "panels": [
+        {
+          "datasource": null,
+          "fieldConfig": {
+            "defaults": {
+              "custom": {},
+              "mappings": [],
+              "noValue": "0",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "rgb(52, 52, 52)",
+                    "value": null
+                  },
+                  {
+                    "color": "green",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 3,
+            "w": 4,
+            "x": 10,
+            "y": 24
+          },
+          "id": 113,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "none",
+            "justifyMode": "center",
+            "orientation": "auto",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            }
+          },
+          "pluginVersion": "7.0.3",
+          "targets": [
+            {
+              "expr": "mz_sink_count",
+              "interval": "",
+              "legendFormat": "{{type}}",
+              "refId": "A"
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Active Sinks",
+          "type": "stat"
+        },
         {
           "aliasColors": {},
           "bars": false,
@@ -1617,7 +1856,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 13
+            "y": 27
           },
           "hiddenSeries": false,
           "id": 87,
@@ -1723,7 +1962,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 13
+            "y": 27
           },
           "hiddenSeries": false,
           "id": 91,
@@ -1831,7 +2070,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": null,
-          "description": "See also the CPU row in the [node-state dashboard](/d/node-state?var-job=load_test). \n\nYou will need to filter to the current instance: $instances",
+          "description": "",
           "fieldConfig": {
             "defaults": {
               "custom": {}
@@ -2032,12 +2271,16 @@
           }
         },
         {
-          "aliasColors": {},
+          "aliasColors": {
+            "RAM available": "super-light-red",
+            "swap available": "light-red",
+            "swap load_test": "semi-dark-blue"
+          },
           "bars": false,
           "dashLength": 10,
           "dashes": false,
           "datasource": null,
-          "description": "See also the Memory/Meminfo row in the [node-state dashboard](/d/node-state?var-job=load_test). \n\nYou will need to filter to the current instance: $instances",
+          "description": "",
           "fieldConfig": {
             "defaults": {
               "custom": {}
@@ -2079,7 +2322,20 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "process_resident_memory_bytes{instance=~\".*:6875\"}",
+              "expr": "$memory_total * 1024",
+              "interval": "",
+              "legendFormat": "RAM available",
+              "refId": "C"
+            },
+            {
+              "expr": "system_swap_memory_bytes{instance=~\".*:6875\"}",
+              "hide": true,
+              "interval": "",
+              "legendFormat": "swap available",
+              "refId": "D"
+            },
+            {
+              "expr": "process_resident_memory_bytes{instance=~\".*:6875\",instance=~\".*:6875\"}",
               "hide": false,
               "interval": "",
               "legendFormat": "rss {{job}}",
@@ -3918,7 +4174,7 @@
       "type": "row"
     }
   ],
-  "refresh": false,
+  "refresh": "",
   "schemaVersion": 25,
   "style": "dark",
   "tags": [],
@@ -4076,6 +4332,121 @@
         "name": "build_sha",
         "options": [],
         "query": "label_values(mz_server_metadata_seconds, build_sha)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "allFormat": "glob",
+        "allValue": null,
+        "current": {},
+        "datasource": "Prometheus",
+        "definition": "label_values(mz_server_metadata_seconds, os)",
+        "hide": 2,
+        "includeAll": false,
+        "label": "Git commit",
+        "multi": false,
+        "name": "os",
+        "options": [],
+        "query": "label_values(mz_server_metadata_seconds, os)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "allFormat": "glob",
+        "allValue": null,
+        "current": {},
+        "datasource": "Prometheus",
+        "definition": "label_values(mz_server_metadata_seconds, cpu0)",
+        "hide": 2,
+        "includeAll": false,
+        "label": "Git commit",
+        "multi": false,
+        "name": "cpu0",
+        "options": [],
+        "query": "label_values(mz_server_metadata_seconds, cpu0)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "allFormat": "glob",
+        "allValue": null,
+        "current": {},
+        "datasource": "Prometheus",
+        "definition": "label_values(mz_server_metadata_seconds, ncpus_physical)",
+        "hide": 2,
+        "includeAll": false,
+        "label": "Git commit",
+        "multi": false,
+        "name": "ncpus_physical",
+        "options": [],
+        "query": "label_values(mz_server_metadata_seconds, ncpus_physical)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "allFormat": "glob",
+        "allValue": null,
+        "current": {},
+        "datasource": "Prometheus",
+        "definition": "label_values(mz_server_metadata_seconds, ncpus_logical)",
+        "hide": 2,
+        "includeAll": false,
+        "label": "Git commit",
+        "multi": false,
+        "name": "ncpus_logical",
+        "options": [],
+        "query": "label_values(mz_server_metadata_seconds, ncpus_logical)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "allFormat": "glob",
+        "allValue": null,
+        "current": {},
+        "datasource": "Prometheus",
+        "definition": "label_values(mz_server_metadata_seconds, memory_total)",
+        "hide": 2,
+        "includeAll": false,
+        "label": "Git commit",
+        "multi": false,
+        "name": "memory_total",
+        "options": [],
+        "query": "label_values(mz_server_metadata_seconds, memory_total)",
         "refresh": 2,
         "regex": "",
         "skipUrlSync": false,
