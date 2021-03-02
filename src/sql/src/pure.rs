@@ -15,7 +15,9 @@ use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
+use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
+use tokio::task;
 use tokio::time::Duration;
 
 use repr::strconv;
@@ -61,19 +63,24 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             }
             Connector::AvroOcf { path, .. } => {
                 let path = path.clone();
-                let f = std::fs::File::open(path)?;
-                let r = mz_avro::Reader::new(f)?;
-                if !with_options_map.contains_key("reader_schema") {
-                    let schema = serde_json::to_string(r.writer_schema()).unwrap();
-                    with_options.push(sql_parser::ast::SqlOption::Value {
-                        name: sql_parser::ast::Ident::new("reader_schema"),
-                        value: sql_parser::ast::Value::String(schema),
-                    });
-                }
+                task::block_in_place(|| {
+                    // mz_avro::Reader has no async equivalent, so we're stuck
+                    // using blocking calls here.
+                    let f = std::fs::File::open(path)?;
+                    let r = mz_avro::Reader::new(f)?;
+                    if !with_options_map.contains_key("reader_schema") {
+                        let schema = serde_json::to_string(r.writer_schema()).unwrap();
+                        with_options.push(sql_parser::ast::SqlOption::Value {
+                            name: sql_parser::ast::Ident::new("reader_schema"),
+                            value: sql_parser::ast::Value::String(schema),
+                        });
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })?;
             }
             // Report an error if a file cannot be opened, or if it is a directory.
             Connector::File { path, .. } => {
-                let f = tokio::fs::File::open(&path).await?;
+                let f = File::open(&path).await?;
                 if f.metadata().await?.is_dir() {
                     bail!("Expected a regular file, but {} is a directory.", path);
                 }
@@ -109,7 +116,7 @@ async fn purify_format(
     format: &mut Option<Format<Raw>>,
     connector: &mut Connector<Raw>,
     col_names: &mut Vec<Ident>,
-    file: Option<tokio::fs::File>,
+    file: Option<File>,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
     match format {
@@ -127,11 +134,13 @@ async fn purify_format(
                 if seed.is_none() {
                     let url = url.parse()?;
 
-                    let ccsr_config = kafka_util::generate_ccsr_client_config(
-                        url,
-                        &connector_options,
-                        normalize::options(ccsr_options),
-                    )?;
+                    let ccsr_config = task::block_in_place(|| {
+                        kafka_util::generate_ccsr_client_config(
+                            url,
+                            &connector_options,
+                            normalize::options(ccsr_options),
+                        )
+                    })?;
 
                     let Schema {
                         key_schema,
