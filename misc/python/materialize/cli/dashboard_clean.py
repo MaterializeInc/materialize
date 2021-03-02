@@ -51,6 +51,11 @@ VAR_ALLOWLIST = set(
         "built_at",
         "build_version",
         "build_sha",
+        "os",
+        "cpu0",
+        "ncpus_physical",
+        "ncpus_logical",
+        "memory_total",
     ]
 )
 
