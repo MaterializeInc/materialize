@@ -20,7 +20,6 @@ pub struct AvroDecoderState {
     decoder: Decoder,
     events_success: i64,
     events_error: i64,
-    reject_non_inserts: bool,
 }
 
 impl AvroDecoderState {
@@ -46,26 +45,22 @@ impl AvroDecoderState {
                 dedup_strat,
                 dbz_key_indices,
                 confluent_wire_format,
+                reject_non_inserts,
             )?,
             events_success: 0,
             events_error: 0,
-            reject_non_inserts,
         })
     }
 }
 
 impl DecoderState for AvroDecoderState {
-    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
+    fn decode_key(&mut self, bytes: &[u8]) -> Result<Option<Row>, String> {
         match block_on(self.decoder.decode(bytes, None, None)) {
-            Ok(diff_pair) => {
-                if let Some(after) = diff_pair.after {
-                    self.events_success += 1;
-                    Ok(after)
-                } else {
-                    self.events_error += 1;
-                    Err("no avro key found for record".to_string())
-                }
+            Ok(Some(row)) => {
+                self.events_success += 1;
+                Ok(Some(row))
             }
+            Ok(None) => Ok(None),
             Err(err) => {
                 self.events_error += 1;
                 Err(format!("avro deserialization error: {}", err))
@@ -81,10 +76,11 @@ impl DecoderState for AvroDecoderState {
         upstream_time_millis: Option<i64>,
     ) -> Result<Option<Row>, String> {
         match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
-            Ok(diff_pair) => {
+            Ok(Some(row)) => {
                 self.events_success += 1;
-                Ok(diff_pair.after)
+                Ok(Some(row))
             }
+            Ok(None) => Ok(None),
             Err(err) => {
                 self.events_error += 1;
                 Err(format!("avro deserialization error: {}", err))
@@ -102,23 +98,11 @@ impl DecoderState for AvroDecoderState {
         time: Timestamp,
     ) {
         match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
-            Ok(diff_pair) => {
+            Ok(Some(row)) => {
                 self.events_success += 1;
-                if diff_pair.before.is_some() {
-                    if self.reject_non_inserts {
-                        panic!("Updates and deletes are not allowed for this source! This probably means it was started with `start_offset`. Got diff pair: {:#?}", diff_pair)
-                    }
-                    // Note - this is indeed supposed to be an insert,
-                    // not a retraction! `before` already contains a `-1` value as the last
-                    // element of the data, which will cause it to turn into a retraction
-                    // in a future call to `explode`
-                    // (currently in dataflow/render/mod.rs:299)
-                    session.give((diff_pair.before.unwrap(), time, 1));
-                }
-                if let Some(after) = diff_pair.after {
-                    session.give((after, time, 1));
-                }
+                session.give((row, time, 1));
             }
+            Ok(None) => {}
             Err(err) => {
                 self.events_error += 1;
                 error!("avro deserialization error: {}", err)

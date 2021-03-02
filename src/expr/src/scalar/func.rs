@@ -3391,7 +3391,7 @@ impl UnaryFunc {
             JsonbPretty => ScalarType::String.nullable(in_nullable),
 
             RecordGet(i) => match input_type.scalar_type {
-                ScalarType::Record { mut fields, .. } => fields.swap_remove(*i).1.nullable(true),
+                ScalarType::Record { mut fields, .. } => fields.swap_remove(*i).1,
                 _ => unreachable!("RecordGet specified nonexistent field"),
             },
 
@@ -3570,7 +3570,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::TrimWhitespace => f.write_str("btrim"),
             UnaryFunc::TrimLeadingWhitespace => f.write_str("ltrim"),
             UnaryFunc::TrimTrailingWhitespace => f.write_str("rtrim"),
-            UnaryFunc::RecordGet(_) => f.write_str("record_get"),
+            UnaryFunc::RecordGet(i) => write!(f, "record_get[{}]", i),
             UnaryFunc::ListLength => f.write_str("list_length"),
             UnaryFunc::Upper => f.write_str("upper"),
             UnaryFunc::Lower => f.write_str("lower"),

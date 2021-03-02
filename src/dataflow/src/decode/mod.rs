@@ -16,6 +16,7 @@ use futures::executor::block_on;
 use log::warn;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use repr::RelationDesc;
+use repr::ScalarType;
 use timely::{
     dataflow::{
         channels::pact::ParallelizationContract,
@@ -31,7 +32,7 @@ use timely::{
 use ::mz_avro::{types::Value, Schema};
 use dataflow_types::LinearOperator;
 use dataflow_types::{DataEncoding, RegexEncoding, SourceEnvelope};
-use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState, DiffPair};
+use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState};
 use log::error;
 use repr::Datum;
 use repr::{Diff, Row, RowPacker, Timestamp};
@@ -86,16 +87,11 @@ where
             d,
         )| {
             let top_node = schema.top_node();
-            let diffs = match envelope {
-                SourceEnvelope::None => {
-                    extract_row(value, index.map(Datum::from), top_node).map(|r| DiffPair {
-                        before: None,
-                        after: r,
-                    })
-                }
+            let maybe_row = match envelope {
+                SourceEnvelope::None => extract_row(value, index.map(Datum::from), top_node),
                 SourceEnvelope::Debezium(_) => {
                     if let Some(dbz_state) = dbz_state.as_mut() {
-                        dbz_state.extract(value, top_node, index, upstream_time_millis)
+                        dbz_state.extract(value, index, upstream_time_millis)
                     } else {
                         Err(anyhow!(
                             "No debezium schema information -- could not decode row"
@@ -109,17 +105,10 @@ where
                 // TODO(#489): Handle this in a better way,
                 // once runtime error handling exists.
                 error!("Failed to extract avro row: {}", e);
-                DiffPair {
-                    before: None,
-                    after: None,
-                }
+                None
             });
 
-            diffs
-                .before
-                .into_iter()
-                .chain(diffs.after.into_iter())
-                .map(move |row| (row, r, d))
+            maybe_row.into_iter().map(move |row| (row, r, d))
         },
     );
 
@@ -130,7 +119,7 @@ pub type PushSession<'a, R> =
     Session<'a, Timestamp, R, PushCounter<Timestamp, R, Tee<Timestamp, R>>>;
 
 pub trait DecoderState {
-    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String>;
+    fn decode_key(&mut self, bytes: &[u8]) -> Result<Option<Row>, String>;
     /// Decode the value in the upsert context, which means it might be a None.
     fn decode_upsert_value(
         &mut self,
@@ -186,8 +175,8 @@ impl<F> DecoderState for OffsetDecoderState<F>
 where
     F: Fn(&[u8]) -> Datum + Send,
 {
-    fn decode_key(&mut self, bytes: &[u8]) -> Result<Row, String> {
-        Ok(self.row_packer.pack(&[(self.datum_func)(bytes)]))
+    fn decode_key(&mut self, bytes: &[u8]) -> Result<Option<Row>, String> {
+        Ok(Some(self.row_packer.pack(&[(self.datum_func)(bytes)])))
     }
 
     fn decode_upsert_value<'a>(
@@ -413,9 +402,14 @@ where
                 SourceEnvelope::Debezium(ds) => *ds,
                 _ => unreachable!(),
             };
-
+            let fields = match &desc.typ().column_types[0].scalar_type {
+                ScalarType::Record { fields, .. } => fields.clone(),
+                _ => unreachable!(),
+            };
+            let row_desc =
+                RelationDesc::from_names_and_types(fields.into_iter().map(|(n, t)| (Some(n), t)));
             let dbz_key_indices = enc.key_schema.as_ref().and_then(|key_schema| {
-                interchange::avro::validate_key_schema(key_schema, &desc)
+                interchange::avro::validate_key_schema(key_schema, &row_desc)
                     .map(Some)
                     .unwrap_or_else(|e| {
                         warn!("Not using key due to error: {}", e);

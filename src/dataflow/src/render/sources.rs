@@ -219,7 +219,7 @@ where
                             &envelope,
                             &mut src.operators,
                             fast_forwarded,
-                            src.desc,
+                            src.bare_desc.clone(),
                         );
                         if let Some(tok) = extra_token {
                             self.additional_tokens
