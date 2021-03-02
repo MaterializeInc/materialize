@@ -98,9 +98,22 @@ impl PersistentTables {
             }
         };
 
-        self.compacter_tx
+        if let Err(e) = self.wals.resume(id) {
+            error!(
+                "encountered error trying to resume write-ahead log for persisted table {} {}",
+                id, e
+            );
+            self.disabled = true;
+            return None;
+        };
+
+        if let Err(e) = self
+            .compacter_tx
             .send(CompacterMessage::Resume(id, persisted_trace))
-            .unwrap();
+        {
+            debug!("compacter dropped, disabling WAL: {}", e);
+            self.disabled = true;
+        }
 
         messages
     }
