@@ -15,100 +15,100 @@
 
 use std::error::Error;
 use std::io::Write;
+use std::net::TcpListener;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::thread;
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use log::info;
 use tempfile::NamedTempFile;
 
 use util::{MzTimestamp, PostgresErrorExt};
 
 pub mod util;
 
-// use std::net::TcpListener;
-// use std::sync::atomic::AtomicBool;
-// use std::sync::atomic::Ordering;
-// use std::sync::Arc;
-// use log::info;
-// use std::thread::sleep;
-
-// TODO - figure out why this is broken and uncomment it.
+// TODO - figure out why this is broken and re-enable it.
 // This test is sporadically failing, apparently not due to any problem in
-// Materialize, but because of Kafka flakiness. We have commented it out
+// Materialize, but because of Kafka flakiness. We have marked it as `ignore`
 // to unblock CI for now.
-// #[test]
-// fn test_no_block() -> Result<(), Box<dyn Error>> {
-//    ore::test::init_logging();
-//
-//    ore::panic::set_abort_on_panic();
-//    // This is better than relying on CI to time out,
-//    // because an actual abort (as opposed to a CI timeout) causes `services.log` to be uploaded.
-//    let finished = Arc::new(AtomicBool::new(false));
-//    thread::spawn({
-//        let finished = finished.clone();
-//        move || {
-//            sleep(Duration::from_secs(30));
-//            if !finished.load(Ordering::SeqCst) {
-//                panic!("test_no_block timed out")
-//            }
-//        }
-//    });
-//    // Create a listener that will simulate a slow Confluent Schema Registry.
-//    info!("test_no_block: creating listener");
-//    let listener = TcpListener::bind("localhost:0")?;
-//    let listener_port = listener.local_addr()?.port();
-//
-//    info!("test_no_block: starting server");
-//    let server = util::start_server(util::Config::default())?;
-//    info!("test_no_block: connecting to server");
-//    let mut client = server.connect(postgres::NoTls)?;
-//
-//    info!("test_no_block: spawning thread");
-//    let slow_thread = thread::spawn(move || {
-//        info!("test_no_block: in thread; executing create source");
-//        let result = client.batch_execute(&format!(
-//            "CREATE SOURCE foo \
-//             FROM KAFKA BROKER 'localhost:9092' TOPIC 'foo' \
-//             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:{}'",
-//            listener_port,
-//        ));
-//        info!("test_no_block: in thread; create source done");
-//        result
-//    });
-//
-//    // Wait for materialized to contact the schema registry, which indicates
-//    // the coordinator is processing the CREATE SOURCE command. It will be
-//    // unable to complete the query until we respond.
-//    info!("test_no_block: accepting fake schema registry connection");
-//    let (mut stream, _) = listener.accept()?;
-//
-//    // Verify that the coordinator can still process other requests from other
-//    // sessions.
-//    info!("test_no_block: connecting to server again");
-//    let mut client = server.connect(postgres::NoTls)?;
-//    info!("test_no_block: executing query");
-//    let answer: i32 = client.query_one("SELECT 1 + 1", &[])?.get(0);
-//    assert_eq!(answer, 2);
-//
-//    // Return an error to the coordinator, so that we can shutdown cleanly.
-//    info!("test_no_block: writing fake schema registry error");
-//    write!(stream, "HTTP/1.1 503 Service Unavailable\r\n\r\n")?;
-//    info!("test_no_block: dropping fake schema registry connection");
-//    drop(stream);
-//
-//    // Verify that the schema registry error was returned to the client, for
-//    // good measure.
-//    info!("test_no_block: joining thread");
-//    let slow_res = slow_thread.join().unwrap();
-//    assert!(slow_res
-//        .unwrap_err()
-//        .to_string()
-//        .contains("server error 503"));
-//
-//    info!("test_no_block: returning");
-//    finished.store(true, Ordering::SeqCst);
-//    Ok(())
-// }
+#[test]
+#[ignore]
+fn test_no_block() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+
+    ore::panic::set_abort_on_panic();
+    // This is better than relying on CI to time out,
+    // because an actual abort (as opposed to a CI timeout) causes `services.log` to be uploaded.
+    let finished = Arc::new(AtomicBool::new(false));
+    thread::spawn({
+        let finished = finished.clone();
+        move || {
+            sleep(Duration::from_secs(30));
+            if !finished.load(Ordering::SeqCst) {
+                panic!("test_no_block timed out")
+            }
+        }
+    });
+    // Create a listener that will simulate a slow Confluent Schema Registry.
+    info!("test_no_block: creating listener");
+    let listener = TcpListener::bind("localhost:0")?;
+    let listener_port = listener.local_addr()?.port();
+
+    info!("test_no_block: starting server");
+    let server = util::start_server(util::Config::default())?;
+    info!("test_no_block: connecting to server");
+    let mut client = server.connect(postgres::NoTls)?;
+
+    info!("test_no_block: spawning thread");
+    let slow_thread = thread::spawn(move || {
+        info!("test_no_block: in thread; executing create source");
+        let result = client.batch_execute(&format!(
+            "CREATE SOURCE foo \
+            FROM KAFKA BROKER 'localhost:9092' TOPIC 'foo' \
+            FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:{}'",
+            listener_port,
+        ));
+        info!("test_no_block: in thread; create source done");
+        result
+    });
+
+    // Wait for materialized to contact the schema registry, which indicates
+    // the coordinator is processing the CREATE SOURCE command. It will be
+    // unable to complete the query until we respond.
+    info!("test_no_block: accepting fake schema registry connection");
+    let (mut stream, _) = listener.accept()?;
+
+    // Verify that the coordinator can still process other requests from other
+    // sessions.
+    info!("test_no_block: connecting to server again");
+    let mut client = server.connect(postgres::NoTls)?;
+    info!("test_no_block: executing query");
+    let answer: i32 = client.query_one("SELECT 1 + 1", &[])?.get(0);
+    assert_eq!(answer, 2);
+
+    // Return an error to the coordinator, so that we can shutdown cleanly.
+    info!("test_no_block: writing fake schema registry error");
+    write!(stream, "HTTP/1.1 503 Service Unavailable\r\n\r\n")?;
+    info!("test_no_block: dropping fake schema registry connection");
+    drop(stream);
+
+    // Verify that the schema registry error was returned to the client, for
+    // good measure.
+    info!("test_no_block: joining thread");
+    let slow_res = slow_thread.join().unwrap();
+    assert!(slow_res
+        .unwrap_err()
+        .to_string()
+        .contains("server error 503"));
+
+    info!("test_no_block: returning");
+    finished.store(true, Ordering::SeqCst);
+    Ok(())
+}
 
 #[test]
 fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
