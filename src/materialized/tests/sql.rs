@@ -15,16 +15,10 @@
 
 use std::error::Error;
 use std::io::Write;
-use std::net::TcpListener;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::thread;
-use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use log::info;
 use tempfile::NamedTempFile;
 
 use util::{MzTimestamp, PostgresErrorExt};
