@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use differential_dataflow::difference::Abelian;
+use differential_dataflow::difference::{Abelian, DiffPair};
 use differential_dataflow::operators::count::CountTotal;
 use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::operators::join::Join;
@@ -236,7 +236,15 @@ pub fn construct<A: Allocate>(
                             },
 
                             TimelyEvent::Messages(event) => {
-                                messages_session.give(((event.channel, event.length), time_ms, 1));
+                                messages_session.give((
+                                    (
+                                        (event.channel, event.source, event.target),
+                                        event.length,
+                                        event.is_send,
+                                    ),
+                                    time_ms,
+                                    1,
+                                ));
                             }
                             _ => {}
                         }
@@ -384,12 +392,33 @@ pub fn construct<A: Allocate>(
         use differential_dataflow::operators::Count;
         let messages = messages
             .as_collection()
-            .explode(|(key, count)| Some((key, count as i64)))
+            .explode(|(key, count, is_send)| {
+                Some((
+                    key,
+                    if is_send {
+                        DiffPair::new(count as i64, 0)
+                    } else {
+                        DiffPair::new(0, count as i64)
+                    },
+                ))
+            })
             .count()
             .map({
                 let mut row_packer = repr::RowPacker::new();
-                move |(channel, count)| {
-                    row_packer.pack(&[Datum::Int64(channel as i64), Datum::Int64(count as i64)])
+                move |(
+                    (channel, source, target),
+                    DiffPair {
+                        element1: sent,
+                        element2: received,
+                    },
+                )| {
+                    row_packer.pack(&[
+                        Datum::Int64(channel as i64),
+                        Datum::Int64(source as i64),
+                        Datum::Int64(target as i64),
+                        Datum::Int64(sent),
+                        Datum::Int64(received),
+                    ])
                 }
             });
 

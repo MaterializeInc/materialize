@@ -119,7 +119,10 @@ impl LogVariant {
 
             LogVariant::Timely(TimelyLog::Messages) => RelationDesc::empty()
                 .with_column("channel", ScalarType::Int64.nullable(false))
-                .with_column("total", ScalarType::Int64.nullable(false))
+                .with_column("source", ScalarType::Int64.nullable(false))
+                .with_column("target", ScalarType::Int64.nullable(false))
+                .with_column("sent", ScalarType::Int64.nullable(false))
+                .with_column("received", ScalarType::Int64.nullable(false))
                 .with_key(vec![0]),
 
             LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()
