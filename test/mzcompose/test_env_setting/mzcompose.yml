@@ -7,19 +7,24 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from alembic import op
-import sqlalchemy as sa
+version: '3.7'
 
+services:
+  check_env_set:
+    image: alpine:3
+    command: |
+      /bin/sh -c '
+      set -x ;
+      test "$ENV_IS_SET" == yeah ;'
 
-revision = "3da7700dba2d"
-down_revision = "c8a6f3f3a2ac"
-branch_labels = None
-depends_on = None
-
-
-def upgrade():
-    op.alter_column("slt", "inference_failure", new_column_name="wrong_column_count")
-
-
-def downgrade():
-    op.alter_column("slt", "wrong_column_count", new_column_name="inference_failure")
+mzworkflows:
+  ci:
+    env:
+      ENV_IS_SET: yeah
+    steps:
+      - step: workflow
+        workflow: inheritor
+  inheritor:
+    steps:
+      - step: run
+        service: check_env_set

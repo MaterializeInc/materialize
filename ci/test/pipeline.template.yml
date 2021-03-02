@@ -207,6 +207,12 @@ steps:
           composition: dbt-materialize
           run: ci
 
+  - id: mzcompose-self
+    label: "mzcompose self test"
+    timeout_in_minutes: 10
+    inputs: [test/mzcompose, 'misc/python/materialize']
+    command: bin/ci-mzcompose
+
   - id: lang-csharp
     label: ":csharp: tests"
     depends_on: build
