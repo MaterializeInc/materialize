@@ -15,21 +15,22 @@
 
 use std::error::Error;
 use std::io::Write;
-use std::net::TcpListener;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::thread;
-use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use log::info;
 use tempfile::NamedTempFile;
 
 use util::{MzTimestamp, PostgresErrorExt};
 
 pub mod util;
+
+// use std::net::TcpListener;
+// use std::sync::atomic::AtomicBool;
+// use std::sync::atomic::Ordering;
+// use std::sync::Arc;
+// use log::info;
+// use std::thread::sleep;
 
 // TODO - figure out why this is broken and uncomment it.
 // This test is sporadically failing, apparently not due to any problem in
