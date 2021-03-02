@@ -218,8 +218,8 @@ where
                 *start,
                 equivalences,
                 order,
-                input_mapper.clone(),
-                map_filter_project.clone(),
+                input_mapper,
+                map_filter_project,
             );
 
             // Collect all error streams, and concatenate them at the end.
