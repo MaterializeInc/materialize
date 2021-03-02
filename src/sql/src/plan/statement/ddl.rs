@@ -1048,7 +1048,7 @@ fn kafka_sink_builder(
     topic_prefix: String,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
-    topic_suffix: String,
+    topic_suffix_nonce: String,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let (schema_registry_url, ccsr_with_options) = match format {
         Some(Format::Avro(AvroSchema::CsrUrl {
@@ -1127,7 +1127,7 @@ fn kafka_sink_builder(
         schema_registry_url,
         value_schema,
         topic_prefix,
-        topic_suffix,
+        topic_suffix_nonce,
         partition_count,
         replication_factor,
         fuel: 10000,
@@ -1137,6 +1137,7 @@ fn kafka_sink_builder(
         key_schema,
         key_desc_and_indices,
         value_desc,
+        exactly_once: false,
     }))
 }
 
@@ -1196,7 +1197,7 @@ pub fn plan_create_sink(
     };
     let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     let from = scx.resolve_item(from)?;
-    let suffix = format!(
+    let suffix_nonce = format!(
         "{}-{}",
         scx.catalog
             .config()
@@ -1280,10 +1281,12 @@ pub fn plan_create_sink(
             topic,
             key_desc_and_indices,
             value_desc,
-            suffix,
+            suffix_nonce,
         )?,
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
-        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix, value_desc)?,
+        Connector::AvroOcf { path } => {
+            avro_ocf_sink_builder(format, path, suffix_nonce, value_desc)?
+        }
         Connector::S3 { .. } => unsupported!("S3 sinks"),
         Connector::Postgres { .. } => unsupported!("Postgres sinks"),
     };
