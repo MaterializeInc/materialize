@@ -1924,6 +1924,7 @@ dependencies = [
  "include_dir",
  "itertools",
  "jemallocator",
+ "kafka-util",
  "krb5-src",
  "lazy_static",
  "libc",

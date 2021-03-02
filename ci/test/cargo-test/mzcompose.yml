@@ -25,7 +25,7 @@ services:
     - ../../../:/workdir
     environment:
     - ZOOKEEPER_ADDR=zookeeper:2181
-    - KAFKA_ADDR=kafka:9092
+    - KAFKA_ADDRS=kafka:9092
     - SCHEMA_REGISTRY_URL=http://schema-registry:8081
     propagate-uid-gid: true
     depends_on: [kafka, zookeeper, schema-registry]

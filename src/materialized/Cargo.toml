@@ -101,6 +101,7 @@ chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 datadriven = "0.5.0"
 fallible-iterator = "0.2.0"
 itertools = "0.9.0"
+kafka-util = { path = "../kafka-util" }
 pgrepr = { path = "../pgrepr" }
 pgtest = { path = "../pgtest" }
 postgres = { version = "0.19.0", features = ["with-chrono-0_4"] }
