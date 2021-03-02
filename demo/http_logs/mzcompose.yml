@@ -25,6 +25,8 @@ services:
       - *materialized
     init: true
     command: -w4 --disable-telemetry
+    environment:
+      - MZ_DEV=1
     volumes:
       - logfile:/log
 

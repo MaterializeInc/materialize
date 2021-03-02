@@ -84,6 +84,8 @@ services:
     volumes:
       - secrets:/share/secrets
       - ./kdc/krb5.conf:/etc/krb5.conf
+    environment:
+      - MZ_DEV=1
 
   testdrive:
     mzbuild: testdrive
