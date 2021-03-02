@@ -16,7 +16,11 @@
 use std::error::Error;
 use std::io::Write;
 use std::net::TcpListener;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::thread;
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -31,6 +35,19 @@ pub mod util;
 fn test_no_block() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
+    ore::panic::set_abort_on_panic();
+    // This is better than relying on CI to time out,
+    // because an actual abort (as opposed to a CI timeout) causes `services.log` to be uploaded.
+    let finished = Arc::new(AtomicBool::new(false));
+    thread::spawn({
+        let finished = finished.clone();
+        move || {
+            sleep(Duration::from_secs(30));
+            if !finished.load(Ordering::SeqCst) {
+                panic!("test_no_block timed out")
+            }
+        }
+    });
     // Create a listener that will simulate a slow Confluent Schema Registry.
     info!("test_no_block: creating listener");
     let listener = TcpListener::bind("localhost:0")?;
@@ -84,6 +101,7 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
         .contains("server error 503"));
 
     info!("test_no_block: returning");
+    finished.store(true, Ordering::SeqCst);
     Ok(())
 }
 

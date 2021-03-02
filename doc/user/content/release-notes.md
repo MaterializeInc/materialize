@@ -111,6 +111,8 @@ Wrap your release notes at the 80 character mark.
   operator still has a memory footprint proportional to the number of unique
   keys in the source.
 
+- Add the basic exponentiation, power and [logarithm functions](/sql/functions/#numbers-func).
+
 {{% version-header v0.7.0 %}}
 
 - **Known issue.** You cannot upgrade nodes created with versions v0.6.1 or
