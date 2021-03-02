@@ -343,9 +343,9 @@ mzworkflows:
   # Leaves the cluster running
   setup-ingest-benchmark:
     env:
-      MZ_CHBENCH_SNAPSHOT: '${MZ_CHBENCH_SNAPSHOT:-./tmp}'
-      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
-      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-./tmp}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper
     steps:
     - step: workflow
       workflow: bring-up-source-data-mysql
@@ -381,9 +381,9 @@ mzworkflows:
   # already called setup-ingest-benchmark and the cluster is still running
   measure-ingest-performance:
     env:
-      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
-      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
-      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-./tmp}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper
     steps:
     - step: restart-services
       services: [materialized]
@@ -397,9 +397,9 @@ mzworkflows:
   # Take a snapshot of topic schemas and contents
   generate-snapshot:
     env:
-      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
-      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
-      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-./tmp}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper
     steps:
     - step: run
       service: peeker
@@ -411,9 +411,9 @@ mzworkflows:
   # Then run Materialize and measure time until it catches up to snapshotted view state
   setup-replay-benchmark:
     env:
-      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
-      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
-      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-./tmp}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper
     steps:
     # start the dashboard before the load data get started so that we have data from
     # the beginning of time
