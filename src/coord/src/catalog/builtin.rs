@@ -546,7 +546,7 @@ pub const MZ_MESSAGE_COUNTS: BuiltinLog = BuiltinLog {
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Timely(TimelyLog::Messages),
     id: GlobalId::System(3028),
-    index_id: GlobalId::System(3027),
+    index_id: GlobalId::System(3029),
 };
 
 lazy_static! {
