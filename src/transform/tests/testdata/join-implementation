@@ -39,28 +39,28 @@ opt
 ----
 %0 =
 | Get x (u0)
-| Filter ((#0 = #1) || (isnull(#0) && isnull(#1))), ((#1 = #2) || (isnull(#1) && isnull(#2)))
+| Filter ((#0 = #1) || (isnull(#0) && isnull(#1))), ((#0 = #2) || (isnull(#0) && isnull(#2)))
 
 opt
 (join [(get x)] [[#0 #2 #1 #2]])
 ----
 %0 =
 | Get x (u0)
-| Filter ((#0 = #1) || (isnull(#0) && isnull(#1))), ((#1 = #2) || (isnull(#1) && isnull(#2)))
+| Filter ((#0 = #1) || (isnull(#0) && isnull(#1))), ((#0 = #2) || (isnull(#0) && isnull(#2)))
 
 opt
 (join [(get x)] [[#0 #1 5]])
 ----
 %0 =
 | Get x (u0)
-| Filter ((#0 = #1) || (isnull(#0) && isnull(#1))), (#1 = 5)
+| Filter (#0 = 5), (#1 = 5)
 
 opt
 (join [(get x)] [[5 #0 #1]])
 ----
 %0 =
 | Get x (u0)
-| Filter ((#0 = #1) || (isnull(#0) && isnull(#1))), (#1 = 5)
+| Filter (#0 = 5), (#1 = 5)
 
 opt
 (join [(get x) (get x)] [[5 #0 5 #3]])

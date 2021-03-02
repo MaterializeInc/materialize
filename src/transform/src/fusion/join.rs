@@ -88,7 +88,7 @@ impl Join {
             *demand = None;
             *implementation = expr::JoinImplementation::Unimplemented;
 
-            expr::canonicalize::fuse_equivalences(equivalences);
+            expr::canonicalize::canonicalize_equivalences(equivalences);
         }
     }
 }

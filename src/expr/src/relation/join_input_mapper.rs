@@ -24,10 +24,11 @@ use repr::RelationType;
 /// the local input and re-expressing them in global terms and vice versa.
 ///
 /// Methods in this class that take an argument `equivalences` are only
-/// guaranteed to return a correct answer if equivalence classes are fused.
-/// (See [`canonicalize::fuse_equivalences`].)
+/// guaranteed to return a correct answer if equivalence classes are in
+/// canonical form.
+/// (See [`canonicalize::canonicalize_equivalences`].)
 ///
-/// [`canonicalize::fuse_equivalences`]: expr::canonicalize::fuse_dedup_equivalences
+/// [`canonicalize::canonicalize_equivalences`]: expr::canonicalize::fuse_dedup_equivalences
 #[derive(Debug)]
 pub struct JoinInputMapper {
     /// The number of columns per input. All other fields in this struct are

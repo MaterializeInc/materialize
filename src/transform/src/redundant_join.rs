@@ -167,7 +167,7 @@ impl RedundantJoin {
                             expr.permute(&projection[..]);
                         }
                     }
-                    expr::canonicalize::sort_dedup_equivalences(equivalences);
+                    expr::canonicalize::canonicalize_equivalences(equivalences);
 
                     // Unset demand and implementation, as irrevocably hosed by this transformation.
                     *demand = None;

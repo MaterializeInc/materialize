@@ -240,7 +240,7 @@ impl JoinBuildState {
             column_map.insert(column, column_map.len());
         }
         let mut equivalences = equivalences.to_vec();
-        expr::canonicalize::sort_dedup_equivalences(&mut equivalences);
+        expr::canonicalize::canonicalize_equivalences(&mut equivalences);
         Self {
             column_map,
             equivalences,
