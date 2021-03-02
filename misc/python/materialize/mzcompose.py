@@ -599,6 +599,26 @@ class StartServicesStep(WorkflowStep):
             raise errors.Failed(f"ERROR: services didn't come up cleanly: {services}")
 
 
+@Steps.register("kill-services")
+class KillServicesStep(WorkflowStep):
+    """
+    Params:
+      services: List of service names
+    """
+
+    def __init__(self, *, services: Optional[List[str]] = None) -> None:
+        self._services = services if services is not None else []
+        if not isinstance(self._services, list):
+            raise errors.BadSpec(f"services should be a list, got: {self._services}")
+
+    def run(self, workflow: Workflow) -> None:
+        try:
+            workflow.run_compose(["kill", *self._services])
+        except subprocess.CalledProcessError:
+            services = ", ".join(self._services)
+            raise errors.Failed(f"ERROR: services didn't die cleanly: {services}")
+
+
 @Steps.register("restart-services")
 class RestartServicesStep(WorkflowStep):
     """
