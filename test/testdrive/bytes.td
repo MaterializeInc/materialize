@@ -42,3 +42,31 @@ name       nullable  type
 --------------------------
 named_col  false     bytea
 mz_offset  false     bigint
+
+> CREATE MATERIALIZED SOURCE data_offset
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-${testdrive.seed}'
+  WITH (start_offset=1)
+  FORMAT BYTES
+
+> SELECT * FROM data_offset
+data           mz_offset
+------------------------
+"\\xc2\\xa92"  2
+
+$ kafka-create-topic topic=bytes-partitions partitions=2
+
+$ kafka-ingest format=bytes topic=bytes-partitions timestamp=1 partition=0
+©1
+
+$ kafka-ingest format=bytes topic=bytes-partitions timestamp=1 partition=1
+©2
+
+> CREATE MATERIALIZED SOURCE data_offset_2
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bytes-partitions-${testdrive.seed}'
+  WITH (start_offset=[0,1])
+  FORMAT BYTES
+
+> SELECT * FROM data_offset_2
+data           mz_offset
+------------------------
+"\\xc2\\xa91"  1
