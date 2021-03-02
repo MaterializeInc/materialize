@@ -1,10 +1,10 @@
 {
     "name": "key",
     "type" : "record",
-    "namespace": "dev.mtrlz.benchmarks.results.v0",
+    "namespace": "dev.mtrlz.benchmarks.runs.results.v0",
     "fields": [
      {
-       "name": "benchmark_id",
+       "name": "run_id",
        "type": "string"
      }
     ]

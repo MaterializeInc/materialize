@@ -144,12 +144,13 @@ class View:
         """
         self.current_timestamp = int(timestamp)
 
+        # TODO: Insert new rows after deleting, once #5827 is fixed
+        # Add any rows that have been inserted
+        self.current_rows.extend(inserted)
+
         # Remove any rows that have been deleted
         for r in deleted:
             self.current_rows.remove(r)
-
-        # And add any rows that have been inserted
-        self.current_rows.extend(inserted)
 
         # If we have listeners configured, broadcast this diff
         if self.listeners:
@@ -244,9 +245,8 @@ def run(dsn, views):
         dsn=dsn,
     )
 
-    port = 8875
-    log.info("Port %d ready to rumble!", port)
-    app.listen(port)
+    app.listen(args.listen_port, args.listen_addr)
+    log.info("Address %s:%d ready to rumble!", args.listen_addr, args.listen_port)
 
     ioloop = tornado.ioloop.IOLoop.current()
     app.tail_views(ioloop)
@@ -270,6 +270,14 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--dbuser", help="materialized username", default="materialize", type=str
+    )
+
+    parser.add_argument(
+        "--listen-port", help="Network port to bind to", default="8875", type=int
+    )
+
+    parser.add_argument(
+        "--listen-addr", help="Network address to bind to", default="0.0.0.0", type=str
     )
 
     parser.add_argument(

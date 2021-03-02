@@ -19,11 +19,27 @@ x-port-mappings:
   - &materialized ${MZ_PORT:-6875}
   - &grafana 3000:3000
   - &prometheus 9090
+  - &perf-metrics ${PERF_METRICS_PORT:-8675}
+  - &perf-dash-web ${PERF_DASH_PORT:-8875:8875}
 
 version: '3.7'
 services:
   create-views:
     mzbuild: avro-upsert-create-views
+  perf-dash-metrics:
+    mzbuild: materialized
+    ports:
+      - *perf-metrics
+    command:
+      - --disable-telemetry
+      - --listen-addr=0.0.0.0:${PERF_METRICS_PORT:-8675}
+      - --logical-compaction-window=1ms
+  perf-dash-create-views:
+    mzbuild: perf-dash-create-views
+  perf-dash-web:
+    mzbuild: perf-dash-web
+    ports:
+      - *perf-dash-web
   materialized:
     mzbuild: materialized
     ports:
@@ -83,6 +99,10 @@ services:
     mzbuild: avro-upsert-generator
   metric-verifier:
     mzbuild: metric-verifier
+    environment:
+      MZ_WORKERS: ${MZ_WORKERS:-0}
+      MZBENCH_GIT_REF: ${MZBENCH_GIT_REF:-None}
+      MZBENCH_ID: ${MZBENCH_ID:-0}
   # All monitoring
   dashboard:
     mzbuild: dashboard
@@ -112,13 +132,21 @@ mzworkflows:
     - step: start-services
       services: [dashboard]
     - step: start-services
-      services: [kafka, schema-registry]
+      services: [kafka, schema-registry, perf-dash-metrics]
     - step: wait-for-tcp
       host: kafka
       port: 9092
     - step: wait-for-tcp
       host: schema-registry
       port: 8081
+    - step: run
+      service: metric-verifier
+      command: >-
+        create-topics
+    - step: run
+      service: perf-dash-create-views
+    - step: start-services
+      services: [perf-dash-web]
 
   benchmark:
     steps:
@@ -150,6 +178,7 @@ mzworkflows:
       service: metric-verifier
       daemon: true
       command: >-
+        scrape
         --timeout-seconds=3600
         "sum(mz_messages_ingested)"
         "400000000"
@@ -191,6 +220,7 @@ mzworkflows:
       service: metric-verifier
       daemon: true
       command: >-
+        scrape
         --timeout-seconds=900
         "sum(mz_messages_ingested)"
         "20000000"
@@ -230,6 +260,7 @@ mzworkflows:
       service: metric-verifier
       daemon: true
       command: >-
+        scrape
         --timeout-seconds=900
         "sum(mz_messages_ingested)"
         "400000000"
@@ -273,6 +304,7 @@ mzworkflows:
       service: metric-verifier
       daemon: true
       command: >-
+        scrape
         --timeout-seconds=30
         "sum(mz_messages_ingested)"
         "100000"
