@@ -55,6 +55,8 @@ pub enum Value {
     /// ```
     /// e.g. `INTERVAL '123:45.678' MINUTE TO SECOND(2)`.
     Interval(IntervalValue),
+    /// Array of Values.
+    Array(Vec<Value>),
     /// `NULL` value.
     Null,
 }
@@ -122,6 +124,16 @@ impl AstDisplay for Value {
                         f.write_str(")");
                     }
                 }
+            }
+            Value::Array(values) => {
+                f.write_str("[");
+                for (i, v) in values.iter().enumerate() {
+                    f.write_node(v);
+                    if i < values.len() - 1 {
+                        f.write_str(",");
+                    }
+                }
+                f.write_str("]");
             }
             Value::Null => f.write_str("NULL"),
         }

@@ -2327,6 +2327,10 @@ impl<'a> Parser<'a> {
                 Token::Number(ref n) => Ok(Value::Number(n.to_string())),
                 Token::String(ref s) => Ok(Value::String(s.to_string())),
                 Token::HexString(ref s) => Ok(Value::HexString(s.to_string())),
+                Token::LBracket => {
+                    self.prev_token();
+                    self.parse_value_array()
+                }
                 _ => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -2339,6 +2343,22 @@ impl<'a> Parser<'a> {
                 "Expecting a value, but found EOF"
             ),
         }
+    }
+
+    fn parse_value_array(&mut self) -> Result<Value, ParserError> {
+        self.expect_token(&Token::LBracket)?;
+        let mut values = vec![];
+        loop {
+            if let Some(Token::RBracket) = self.peek_token() {
+                break;
+            }
+            values.push(self.parse_value()?);
+            if !self.consume_token(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect_token(&Token::RBracket)?;
+        Ok(Value::Array(values))
     }
 
     fn parse_array(&mut self) -> Result<Expr<Raw>, ParserError> {

@@ -2819,6 +2819,13 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> 
             (Datum::Interval(i), ScalarType::Interval)
         }
         Value::String(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
+        Value::Array(vals) => {
+            let coercible_vals = vals
+                .into_iter()
+                .map(|v| plan_literal(v))
+                .collect::<Result<Vec<CoercibleScalarExpr>, anyhow::Error>>()?;
+            return Ok(CoercibleScalarExpr::LiteralArray(coercible_vals));
+        }
         Value::Null => return Ok(CoercibleScalarExpr::LiteralNull),
     };
     let expr = HirScalarExpr::literal(datum, scalar_type);
