@@ -898,8 +898,8 @@ impl PendingPeek {
             });
             if copies < 0 {
                 return Err(format!(
-                    "Negative multiplicity: {} for {}",
-                    copies,
+                    "Invalid data in source, saw retractions ({}) for row that does not exist: {}",
+                    copies * -1,
                     cursor.key(&storage),
                 ));
             }
@@ -952,8 +952,8 @@ impl PendingPeek {
                     });
                     if copies < 0 {
                         return Err(format!(
-                            "Negative multiplicity: {} for {:?}",
-                            copies,
+                            "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
+                            copies * -1,
                             row.unpack(),
                         ));
                     }
