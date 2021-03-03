@@ -234,12 +234,12 @@ where
                 let arrangement_key = &linear_plan.stage_plans[0].stream_key;
                 assert_eq!(start_arr.as_ref().unwrap(), arrangement_key);
                 match self.arrangement(&inputs[linear_plan.source_relation], arrangement_key) {
-                    Some(ArrangementFlavor::Local(oks, es)) => {
-                        errors.push(es.as_collection(|k, _v| k.clone()));
+                    Some(ArrangementFlavor::Local(oks, errs)) => {
+                        errors.push(errs.as_collection(|k, _v| k.clone()));
                         JoinedFlavor::Local(oks)
                     }
-                    Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
-                        errors.push(es.as_collection(|k, _v| k.clone()));
+                    Some(ArrangementFlavor::Trace(_gid, oks, errs)) => {
+                        errors.push(errs.as_collection(|k, _v| k.clone()));
                         JoinedFlavor::Trace(oks)
                     }
                     None => {
@@ -257,7 +257,7 @@ where
                     // If there is no starting arrangement, then we can run filters
                     // directly on the starting collection.
                     // If there is only one input, we are done joining, so run filters
-                    let (j, es) = joined.flat_map_fallible({
+                    let (j, errs) = joined.flat_map_fallible({
                         // Reuseable allocation for unpacking.
                         let mut datums = DatumVec::new();
                         let mut row_packer = RowPacker::new();
@@ -272,7 +272,7 @@ where
                         }
                     });
                     joined = j;
-                    errors.push(es);
+                    errors.push(errs);
                 }
 
                 JoinedFlavor::Collection(joined)
@@ -318,9 +318,11 @@ where
                     errors.push(errs);
                 }
 
-                // Collect all produced errors in one collection.
-                let errors = differential_dataflow::collection::concatenate(scope, errors);
-                (joined, errors)
+                // Return joined results and all produced errors collected together.
+                (
+                    joined,
+                    differential_dataflow::collection::concatenate(scope, errors),
+                )
             } else {
                 panic!("Unexpectedly arranged join output");
             }
@@ -343,7 +345,7 @@ where
     ) -> Collection<G, Row> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
-            let (keyed, es) = stream.map_fallible({
+            let (keyed, errs) = stream.map_fallible({
                 // Reuseable allocation for unpacking.
                 let mut datums = DatumVec::new();
                 move |row| {
@@ -362,7 +364,7 @@ where
                     Ok((key, row))
                 }
             });
-            errors.push(es);
+            errors.push(errs);
             let arranged = keyed.arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage"));
             joined = JoinedFlavor::Local(arranged);
         }
@@ -393,16 +395,16 @@ where
             }
             JoinedFlavor::Local(local) => {
                 match self.arrangement(lookup_relation, &lookup_key[..]) {
-                    Some(ArrangementFlavor::Local(oks, es)) => {
-                        let (oks, err) = self.differential_join_inner(local, oks, closure);
-                        errors.push(es.as_collection(|k, _v| k.clone()));
-                        errors.push(err);
+                    Some(ArrangementFlavor::Local(oks, errs1)) => {
+                        let (oks, errs2) = self.differential_join_inner(local, oks, closure);
+                        errors.push(errs1.as_collection(|k, _v| k.clone()));
+                        errors.push(errs2);
                         oks
                     }
-                    Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
-                        let (oks, err) = self.differential_join_inner(local, oks, closure);
-                        errors.push(es.as_collection(|k, _v| k.clone()));
-                        errors.push(err);
+                    Some(ArrangementFlavor::Trace(_gid, oks, errs1)) => {
+                        let (oks, errs2) = self.differential_join_inner(local, oks, closure);
+                        errors.push(errs1.as_collection(|k, _v| k.clone()));
+                        errors.push(errs2);
                         oks
                     }
                     None => {
@@ -412,16 +414,16 @@ where
             }
             JoinedFlavor::Trace(trace) => {
                 match self.arrangement(lookup_relation, &lookup_key[..]) {
-                    Some(ArrangementFlavor::Local(oks, es)) => {
-                        let (oks, err) = self.differential_join_inner(trace, oks, closure);
-                        errors.push(es.as_collection(|k, _v| k.clone()));
-                        errors.push(err);
+                    Some(ArrangementFlavor::Local(oks, errs1)) => {
+                        let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
+                        errors.push(errs1.as_collection(|k, _v| k.clone()));
+                        errors.push(errs2);
                         oks
                     }
-                    Some(ArrangementFlavor::Trace(_gid, oks, es)) => {
-                        let (oks, err) = self.differential_join_inner(trace, oks, closure);
-                        errors.push(es.as_collection(|k, _v| k.clone()));
-                        errors.push(err);
+                    Some(ArrangementFlavor::Trace(_gid, oks, errs1)) => {
+                        let (oks, errs2) = self.differential_join_inner(trace, oks, closure);
+                        errors.push(errs1.as_collection(|k, _v| k.clone()));
+                        errors.push(errs2);
                         oks
                     }
                     None => {

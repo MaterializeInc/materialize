@@ -22,7 +22,7 @@ use repr::RelationType;
 /// 2) It has a position relative to the specific input it came from (local)
 /// This utility focuses on taking expressions that are in terms of
 /// the local input and re-expressing them in global terms and vice versa.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct JoinInputMapper {
     /// The number of columns per input. All other fields in this struct are
     /// derived using the information in this field.
