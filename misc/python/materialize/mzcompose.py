@@ -84,7 +84,7 @@ class LintError:
 def lint_composition(path: Path, composition: Any, errors: List[LintError]) -> None:
     for (name, service) in composition["services"].items():
         if service.get("mzbuild") == "materialized":
-            lint_materialized_service(path, service, errors)
+            lint_materialized_service(path, name, service, errors)
         elif "mzbuild" not in service and "image" in service:
             lint_image_name(path, service["image"], errors)
 
@@ -135,7 +135,7 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
 
 
 def lint_materialized_service(
-    path: Path, service: Any, errors: List[LintError]
+    path: Path, name: str, service: Any, errors: List[LintError]
 ) -> None:
     # command may be a string that is passed to the shell, or a list of
     # arguments.
@@ -147,6 +147,14 @@ def lint_materialized_service(
             LintError(
                 path,
                 "materialized service command does not include --disable-telemetry",
+            )
+        )
+    env = service.get("environment", [])
+    if "MZ_DEV=1" not in env:
+        errors.append(
+            LintError(
+                path,
+                f"materialized service '{name}' does not specify MZ_DEV=1 in its environment: {env}",
             )
         )
 
