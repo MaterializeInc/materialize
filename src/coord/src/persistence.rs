@@ -7,6 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+/// `PersistentTables` is a wrapper that encapsulates what the Coordinator needs
+/// to do to properly write data to persistent storage.
+///
+/// The intention here is to wrap the WAL and Compacter interactions in a simple
+/// API that insulates the Coordinator against potential errors and allows us to
+/// disable table persistence after any error.
 use std::path::PathBuf;
 
 use log::{debug, error};
@@ -25,14 +31,24 @@ pub struct PersistenceConfig {
 }
 
 pub struct PersistentTables {
+    // Map of each table's write-ahead log
     wals: WriteAheadLogs,
+    // Channel to send table creations, deletions and other messages to the
+    // compacter
     compacter_tx: mpsc::UnboundedSender<CompacterMessage>,
+    // Path where all WAL files are stored
     wals_path: PathBuf,
+    // Path where all Batch data are stored.
     traces_path: PathBuf,
+    // Flag that indicates whether we've encountered an error while trying to
+    // persist things. If true, every subsequent operation will be a no-op.
     disabled: bool,
 }
 
 impl PersistentTables {
+    /// Create the persistent tables subsystem.
+    ///
+    /// Have to spawn a Compacter task and initialize a map of WALs.
     pub fn new(config: &PersistenceConfig) -> Option<Self> {
         let (compacter_tx, compacter_rx) = mpsc::unbounded_channel();
         let mut compacter = match Compacter::new(
@@ -46,6 +62,7 @@ impl PersistentTables {
                     "Encountered error while trying to initialize compacter task: {}",
                     e
                 );
+                error!("No further records will be persisted.");
                 return None;
             }
         };
@@ -57,6 +74,7 @@ impl PersistentTables {
                     "encountered error while trying to initialize write-ahead log: {}",
                     e
                 );
+                error!("No additional records will be persisted.");
                 return None;
             }
         };
@@ -70,6 +88,16 @@ impl PersistentTables {
         })
     }
 
+    /// Permanently shut off table persistence.
+    fn disable(&mut self) {
+        self.disabled = true;
+        error!("No additional records will be persisted");
+    }
+
+    /// Reload all of the persisted data for `id` into memory.
+    ///
+    /// Reinstantiate a Trace, reread all of the batch data and unused WAL segments,
+    /// and tell the compacter to resume managing that trace.
     pub fn resume(&mut self, id: GlobalId) -> Option<Vec<Message>> {
         if self.disabled {
             return None;
@@ -82,7 +110,7 @@ impl PersistentTables {
                     "encountered error while trying to restart table {} {}",
                     id, e
                 );
-                self.disabled = true;
+                self.disable();
                 return None;
             }
         };
@@ -94,7 +122,8 @@ impl PersistentTables {
                     "encountered error trying to read from persisted table {} {}",
                     id, e
                 );
-                None
+                self.disable();
+                return None;
             }
         };
 
@@ -103,7 +132,7 @@ impl PersistentTables {
                 "encountered error trying to resume write-ahead log for persisted table {} {}",
                 id, e
             );
-            self.disabled = true;
+            self.disable();
             return None;
         };
 
@@ -112,12 +141,14 @@ impl PersistentTables {
             .send(CompacterMessage::Resume(id, persisted_trace))
         {
             debug!("compacter dropped, disabling WAL: {}", e);
-            self.disabled = true;
+            self.disable();
+            return None;
         }
 
         messages
     }
 
+    /// Write progress updates to all table WALs.
     pub fn write_progress(&mut self, timestamp: Timestamp) {
         if self.disabled {
             return;
@@ -128,10 +159,14 @@ impl PersistentTables {
                 "encountered error trying to write progress at ts {}: {}",
                 timestamp, e
             );
-            self.disabled = true;
+            self.disable();
         }
     }
 
+    /// Start persisting table `id`.
+    ///
+    /// Create a new WAL map entry and directory for `id` and tell the compacter
+    /// to start managing it.
     pub fn create(&mut self, id: GlobalId) {
         if self.disabled {
             return;
@@ -142,15 +177,20 @@ impl PersistentTables {
                 "encountered error creating table for relation {}: {}",
                 id, e
             );
-            self.disabled = true;
+            self.disable();
             return;
         }
         if let Err(e) = self.compacter_tx.send(CompacterMessage::Add(id)) {
             debug!("compacter dropped, disabling WAL: {}", e);
-            self.disabled = true;
+            self.disable();
         }
     }
 
+    /// Stop persisting table `id`.
+    ///
+    /// Tell the Compacter to drop relation `id` and also delete the persisted WAL
+    /// and batch files. Also, remove the relation from the table from the in-memory
+    /// WAL map.
     pub fn destroy(&mut self, id: GlobalId) {
         if self.disabled {
             return;
@@ -161,15 +201,16 @@ impl PersistentTables {
                 "encountered error destroying table for relation {}: {}",
                 id, e
             );
-            self.disabled = true;
+            self.disable();
             return;
         }
         if let Err(e) = self.compacter_tx.send(CompacterMessage::Drop(id)) {
             debug!("compacter dropped, disabling WAL: {}", e);
-            self.disabled = true;
+            self.disable();
         }
     }
 
+    /// Write updates to the WAL.
     pub fn write(&mut self, id: GlobalId, updates: &[Update]) {
         if self.disabled {
             return;
@@ -179,10 +220,14 @@ impl PersistentTables {
                 "encountered error writing to table for relation {}: {}",
                 id, e
             );
-            self.disabled = true;
+            self.disable();
         }
     }
 
+    /// Tell the Compacter to advance the compaction frontiers.
+    ///
+    /// Note that we might send frontier updates for relations that are not persisted
+    /// and the Compacter knows to ignore that.
     pub fn allow_compaction(&mut self, since_updates: &[(GlobalId, Antichain<Timestamp>)]) {
         if self.disabled {
             return;
@@ -197,7 +242,7 @@ impl PersistentTables {
                     .send(CompacterMessage::AllowCompaction(*id, times_list[0]))
                 {
                     debug!("compacter dropped, disabling WAL: {}", e);
-                    self.disabled = true;
+                    self.disable();
                 }
             }
         }
