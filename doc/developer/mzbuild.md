@@ -324,6 +324,18 @@ mzworkflows:
 To run the workflow, run `./mzcompose run load-test`, just like you would if
 `load-test` were a normal service.
 
+#### Release vs Development Builds
+
+Via `mzbuild`, `mzcompose` supports building binaries in either release or
+development mode. By default, binaries are built using release mode. You can
+specify the desired flavor by passing the `--mz-build-mode` flag to
+`mzcompose`:
+
+```shell
+$ bin/mzcompose --mz-build-mode=dev --mz-find fancy up
+$ bin/mzcompose --mz-build-mode=release --mz-find fancy up
+```
+
 ## Input addressability
 
 mzbuild is an *input-addressable* build system.
