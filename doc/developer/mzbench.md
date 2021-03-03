@@ -90,3 +90,37 @@ cloud, 6 workflows must exist:
 - `run-benchmark-ci`
 - `setup-benchmark-medium`
 - `run-benchmark-medium`
+
+## Worker Balance Visualization
+
+If run with the `--web` flag, `mzbench` will open a browser to the results visualizations. In
+addition to the results visualization, there is a demonstration visualization calling "Elapsed
+Time Per Worker" (you may need to scroll down to see it). This visualization is a "technology
+demostration" for replicating system tables to another materialized instance to power a real-time
+visualization.
+
+The code to make this all work lives under `misc/perf-dash` and consists of 3 major components:
+
+1. `perf-dash-scraper`. A utility that periodically queries system tables, encodes them as Avro and
+   writes them to a Kafka topic.
+2. `perf-dash-metrics`: A materialized instanced configured to read metrics from Kafka and
+   maintain a materialized view called `time_per_worker`.
+3. `perf-dash-web`: A web server configured serve the visualization, pushing updates to the
+   browser directly from tail.
+
+Similar metrics can be inferred by using Prometheus / Grafana, as many of the system table
+aggregations are also exported as prometheus metrics. So why go through the work of scraping
+system tables, writing avro schemas, writing materialized views and custom visualizations? There
+are a few motivations:
+
+1. Demonstrate materialize feature parity with an existing metrics / reporting stack.
+2. Demonstrate the value in replicating system tables as SQL to another materialized instance for
+   telemetry purposes.
+3. Demonstrate how to write an event-sourced application using materialized / using materialized
+   as a denormalizatin engine.
+4. Demonstrate the value of real-time visualizations over 5-second refresh, even for internal
+   engineering projects.
+5. Provide real data that can be used as a test-bed for features, particularly around temporal
+   features (aggregations, sliding / tumbling windows, etc).
+6. Lossless metrics collection. Instead of relying on Prometheus scrape intervals, metrics are
+   persistently recorded in Kafka. No more gaps in our metrics.
