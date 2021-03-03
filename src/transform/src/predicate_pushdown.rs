@@ -216,7 +216,10 @@ impl PredicatePushdown {
                         let mut pred_not_translated = Vec::new();
 
                         for predicate in predicates.drain(..) {
-                            // Translate `col1 == col2` constraints into join variable constraints.
+                            // Translate into join variable constraints:
+                            // 1) `nonliteral1 == nonliteral2` constraints
+                            // 2) `expr == literal` where `expr` refers to more
+                            //    than one input.
                             use expr::BinaryFunc;
                             use expr::UnaryFunc;
                             if let MirScalarExpr::CallBinary {
@@ -225,7 +228,9 @@ impl PredicatePushdown {
                                 expr2,
                             } = &predicate
                             {
-                                if !expr1.is_literal() && !expr2.is_literal() {
+                                let input_count = input_mapper.lookup_inputs(&predicate).count();
+                                if (!expr1.is_literal() && !expr2.is_literal()) || input_count >= 2
+                                {
                                     // `col1 == col2` as a `MirScalarExpr`
                                     // implies `!isnull(col1)` as well.
                                     // `col1 == col2` as a join constraint does
@@ -462,18 +467,17 @@ impl PredicatePushdown {
                 equivalences,
                 ..
             } => {
-                // The goal is to either push or lift out of the join
-                // equivalences:
-                // 1) equivalences of the form `expr = literal`
-                // 2) equivalences of the form `expr1 = expr2`, where both
-                //    expressions come from the same single input.
+                // The goal is to push
+                //   1) equivalences of the form `expr = literal`, where `expr`
+                //      comes from a single input.
+                //   2) equivalences of the form `expr1 = expr2`, where both
+                //      expressions come from the same single input.
 
                 expr::canonicalize::canonicalize_equivalences(equivalences);
 
                 let input_mapper = expr::JoinInputMapper::new(inputs);
-                // Predicates to push at each input, and to lift over the join.
+                // Predicates to push at each input, and to lift out the join.
                 let mut push_downs = vec![Vec::new(); inputs.len()];
-                let mut lifts = Vec::new();
 
                 for equivalence in equivalences.iter_mut() {
                     // Case 1: there are more than one literal in the
@@ -533,13 +537,6 @@ impl PredicatePushdown {
                             push_downs[input].push(gen_literal_equality_pred(expr));
                             equivalence.remove(expr_pos);
                         }
-                        // If any multi-input expression `expr` exists in the
-                        // same equivalence class as the literal, the predicate
-                        // `expr = literal` should be
-                        // lifted above the join.
-                        for multi_input_expr in equivalence.drain(..) {
-                            lifts.push(gen_literal_equality_pred(multi_input_expr));
-                        }
                     } else {
                         // Case 3: There are no literals in the equivalence
                         // class. For each single-input expression `expr1`,
@@ -547,16 +544,17 @@ impl PredicatePushdown {
                         // to see if there is another expression `expr2` from
                         // the same input. If there is, push down
                         // `(expr1 = expr2) || (isnull(expr1) &&
-                        // isnull(expr2))`. `expr1` can then
-                        // be removed from the equivalence class.
-                        while single_input_exprs.len() >= 2 {
-                            let (pos, input, expr1) = single_input_exprs.pop().unwrap();
+                        // isnull(expr2))`.
+                        // `expr1` can then be removed from the equivalence
+                        // class. Note that we keep `expr2` around so that the
+                        // join doesn't inadvertently become a cross join.
+                        while let Some((pos1, input1, expr1)) = single_input_exprs.pop() {
                             if let Some((_, _, expr2)) =
-                                single_input_exprs.iter().find(|(_, i, _)| *i == input)
+                                single_input_exprs.iter().find(|(_, i, _)| *i == input1)
                             {
                                 use expr::BinaryFunc;
                                 use expr::UnaryFunc;
-                                push_downs[input].push(MirScalarExpr::CallBinary {
+                                push_downs[input1].push(MirScalarExpr::CallBinary {
                                     func: BinaryFunc::Or,
                                     expr1: Box::new(MirScalarExpr::CallBinary {
                                         func: BinaryFunc::Eq,
@@ -575,7 +573,7 @@ impl PredicatePushdown {
                                         }),
                                     }),
                                 });
-                                equivalence.remove(pos);
+                                equivalence.remove(pos1);
                             }
                         }
                     };
@@ -600,11 +598,6 @@ impl PredicatePushdown {
                 // Recursively descend on each of the inputs.
                 for input in inputs.iter_mut() {
                     self.action(input, get_predicates);
-                }
-
-                if !lifts.is_empty() {
-                    // Apply filters to be lifted above this join
-                    *relation = relation.take_dangerous().filter(lifts);
                 }
             }
             x => {
