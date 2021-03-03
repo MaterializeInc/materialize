@@ -2,6 +2,7 @@ use chrono::NaiveDate;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use repr::{adt::decimal::Significand, Datum, RowPacker};
+use std::time::Duration;
 use uuid::Uuid;
 
 /// A type similar to [`Datum`] that can be proptest-generated.
@@ -15,8 +16,8 @@ enum PropertizedDatum {
     Float64(f64),
 
     // TODO: these variants just need a strategy defined:
-    // #[proptest()]
-    // Date(NaiveDate),
+    #[proptest(strategy = "arb_date().prop_map(PropertizedDatum::Date)")]
+    Date(NaiveDate),
     // Time(NaiveTime),
     // Timestamp(NaiveDateTime),
     // TimestampTz(DateTime<Utc>),
@@ -39,6 +40,12 @@ enum PropertizedDatum {
     Dummy,
 }
 
+fn arb_date() -> BoxedStrategy<NaiveDate> {
+    any::<i64>()
+        .prop_map(|v| NaiveDate::from_ymd(2000, 01, 01) + chrono::Duration::nanoseconds(v))
+        .boxed()
+}
+
 fn arb_significand() -> BoxedStrategy<Significand> {
     any::<i128>().prop_map(|v| Significand::new(v)).boxed()
 }
@@ -53,6 +60,7 @@ impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
             Int64(i) => Datum::from(*i),
             Float32(f) => Datum::from(*f),
             Float64(f) => Datum::from(*f),
+            Date(d) => Datum::from(*d),
             Decimal(s) => Datum::from(*s),
             Bytes(b) => Datum::from(&b[..]),
             String(s) => Datum::from(s.as_str()),
