@@ -34,6 +34,8 @@ services:
       - --disable-telemetry
       - --listen-addr=0.0.0.0:${PERF_METRICS_PORT:-8675}
       - --logical-compaction-window=1ms
+    environment:
+      - MZ_DEV=1
   perf-dash-scraper:
     mzbuild: perf-dash-scraper
     command: scrape
