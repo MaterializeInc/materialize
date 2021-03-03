@@ -397,47 +397,54 @@ pub fn construct<A: Allocate>(
             });
 
         use differential_dataflow::operators::Count;
-        let mut messages = messages
-            .as_collection()
-            .explode(|(key, count, is_send)| {
-                Some((
-                    key,
-                    if is_send {
-                        DiffPair::new(count as i64, 0)
-                    } else {
-                        DiffPair::new(0, count as i64)
-                    },
-                ))
-            })
-            .count()
-            .map(|((channel, source, target), counts)| (channel, (source, target, counts)));
-        messages = thin_collection(messages, delay, |c| {
+        let messages =
+            messages
+                .as_collection()
+                .map(|((channel, source, target), count, is_send)| {
+                    (channel, (source, target, count, is_send))
+                });
+
+        let messages = thin_collection(messages, delay, |c| {
             c.semijoin(&channels.map(|(channel, _)| channel))
-        });
-        let messages = messages.map({
+        })
+        .map(|(channel, (source, target, count, is_send))| {
+            ((channel, source, target), count, is_send)
+        })
+        .explode(|(key, count, is_send)| {
+            Some((
+                key,
+                if is_send {
+                    DiffPair::new(count as isize, 0)
+                } else {
+                    DiffPair::new(0, count as isize)
+                },
+            ))
+        })
+        .count()
+        .map({
             let mut row_packer = repr::RowPacker::new();
             move |(
-                channel,
-                (
-                    source,
-                    target,
-                    DiffPair {
-                        element1: sent,
-                        element2: received,
-                    },
-                ),
+                (channel, source, target),
+                DiffPair {
+                    element1: sent,
+                    element2: received,
+                },
             )| {
                 row_packer.pack(&[
                     Datum::Int64(channel as i64),
                     Datum::Int64(source as i64),
                     Datum::Int64(target as i64),
-                    Datum::Int64(sent),
-                    Datum::Int64(received),
+                    Datum::Int64(sent as i64),
+                    Datum::Int64(received as i64),
                 ])
             }
         });
 
-        let channels = channels.map({
+        let channels: Collection<
+            timely::dataflow::scopes::Child<timely::worker::Worker<A>, u64>,
+            repr::Row,
+            isize,
+        > = channels.map({
             let mut row_packer = repr::RowPacker::new();
             move |(id, (worker, source_node, source_port, target_node, target_port))| {
                 row_packer.pack(&[
