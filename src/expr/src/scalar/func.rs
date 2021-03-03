@@ -2254,6 +2254,7 @@ pub enum BinaryFunc {
     MapContainsAnyKeys,
     MapContainsMap,
     ConvertFrom,
+    Right,
     Trim,
     TrimLeading,
     TrimTrailing,
@@ -2408,6 +2409,7 @@ impl BinaryFunc {
             BinaryFunc::ConvertFrom => eager!(convert_from),
             BinaryFunc::Encode => eager!(encode, temp_storage),
             BinaryFunc::Decode => eager!(decode, temp_storage),
+            BinaryFunc::Right => Ok(eager!(right)),
             BinaryFunc::Trim => Ok(eager!(trim)),
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
@@ -2457,7 +2459,7 @@ impl BinaryFunc {
                 ScalarType::Bool.nullable(true)
             }
 
-            ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Trim | TrimLeading
+            ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Right | Trim | TrimLeading
             | TrimTrailing => ScalarType::String.nullable(in_nullable),
 
             AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 | EncodedBytesCharLength => {
@@ -2771,6 +2773,7 @@ impl BinaryFunc {
             | CastFloat64ToDecimal
             | RoundDecimal(_)
             | ConvertFrom
+            | Right
             | Trim
             | TrimLeading
             | TrimTrailing
@@ -2881,6 +2884,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MapContainsAnyKeys => f.write_str("?|"),
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
+            BinaryFunc::Right => f.write_str("right"),
             BinaryFunc::Trim => f.write_str("btrim"),
             BinaryFunc::TrimLeading => f.write_str("ltrim"),
             BinaryFunc::TrimTrailing => f.write_str("rtrim"),
@@ -4208,6 +4212,33 @@ fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
 
 fn trim_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_str().trim_matches(' '))
+}
+
+fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+    let string: &'a str = a.unwrap_str();
+    let n = b.unwrap_int64();
+
+    // the index of every char in bytes
+    let byte_indices = string.char_indices().map(|(i, _)| i);
+
+    let start_in_bytes = if n > 0 {
+        // pop off the last n-1 elements
+        let mut byte_indices = byte_indices.rev().skip((n - 1) as usize);
+
+        // this will be our byte index
+        // if we went to far we just take the whole string
+        byte_indices.next().unwrap_or(0)
+    } else {
+        let n = -n;
+        // pop off the first n elements
+        let mut byte_indices = byte_indices.skip(n as usize);
+
+        // this will be our byte index
+        // if we went to far, we should take the empty string
+        byte_indices.next().unwrap_or(string.len())
+    };
+
+    Datum::String(&string[start_in_bytes..])
 }
 
 fn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {

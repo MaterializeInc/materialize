@@ -863,3 +863,94 @@ SELECT ''::pg_catalog.CHAR(0)
 
 query error length for type char must be within \[1-10485760\], have 10485761
 SELECT ''::pg_catalog.CHAR(10485761)
+
+### right ###
+statement ok
+CREATE TABLE righttest (strcol char(15), vccol varchar(15), smicol smallint, intcol int)
+
+statement ok
+INSERT INTO righttest VALUES ('Mg', 'Mn', 1, -1), ('magnesium', 'manganese', 3, NULL),
+    (NULL, NULL, 0, 0), ('24.31', '54.94', 3, -3), ('长久不见', '爱不释手', NULL, 3),
+    ('', '', -1, 2)
+
+# invalid input
+statement error
+SELECT right(42)
+
+statement error
+SELECT right('str')
+
+statement error
+SELECT right(42, 'str')
+
+statement error
+SELECT right('str', 42, 17)
+
+# standard tests
+
+#TODO: materialize#589 select strcol from righttest
+#from the back
+#query T rowsort
+#SELECT right(strcol, 2) FROM righttest
+#----
+#(empty)
+#(empty)
+#NULL
+#(empty)
+#(empty)
+#(empty)
+
+## from the front
+#query T rowsort
+#SELECT right(strcol, -2) FROM righttest
+#----
+#(empty)
+#gnesium
+#NULL
+#.31
+#不见
+#(empty)
+
+# from the back
+query T rowsort
+SELECT right(vccol, 2) FROM righttest
+----
+Mn
+se
+NULL
+94
+释手
+(empty)
+
+# from the front
+query T rowsort
+SELECT right(vccol, -2) FROM righttest
+----
+(empty)
+nganese
+NULL
+.94
+释手
+(empty)
+
+query TT rowsort
+SELECT right(vccol, smicol), right(vccol, intcol) FROM righttest
+----
+n   n
+ese NULL
+NULL    NULL
+.94    94
+NULL    不释手
+(empty) (empty)
+
+
+# NULL inputs
+query I
+SELECT right(NULL, 99)
+----
+NULL
+
+query I
+SELECT right('str', NULL)
+----
+NULL
