@@ -10,6 +10,7 @@
   <body>
       <div id="benchmark_results"></div>
       <div id="benchmark_progress"></div>
+      <div id="time_per_worker"></div>
 
     <script type="text/javascript">
         "use strict";
@@ -140,6 +141,63 @@
         }
 
         setup_view("benchmark_progress");
+    </script>
+    <script>
+
+        function setup_chart(view_name) {
+
+            var chart = {
+                $schema: 'https://vega.github.io/schema/vega-lite/v4.json',
+		title: "Elapsed Time per Worker",
+		description: "A bar chart showing amount of time spent per worker",
+                data: {name: 'data'},
+                mark: 'bar',
+                height: 400,
+                width: 800,
+                encoding: {
+                    x: {field: 'worker_id', type: 'nominal', title: 'Worker ID'},
+                    y: {field: 'time_elapsed', type: 'quantitative', title: 'Time Elapsed ns'},
+                }
+            };
+
+            var config = {
+                actions: true // set to false to disable button that allows for exporting to png, etc
+            }
+
+            vegaEmbed('#' + view_name, chart, config).then(function(chart) {
+
+                var path = "ws://" + location.host + "{{reverse_url('api/stream', '')}}" + view_name;
+                var connection = new WebSocket(path);
+
+               function convert_to_row(row) {
+                    return {mz_cluster_id: row[0],
+                            worker_id: parseInt(row[1]),
+                            time_elapsed: parseInt(row[2])
+                           };
+                }
+
+                function row_in_array(e, arr) {
+                    return arr.find(i => i.mz_cluster_id === e.mz_cluster_id &&
+                                    i.worker_id === e.worker_id &&
+                                    i.time_elapsed && e.time_elapsed);
+                }
+
+                connection.onmessage = function(event) {
+                        var data = JSON.parse(event.data);
+                        var insert_values = data.inserted.map(convert_to_row);
+                        var delete_values = data.deleted.map(convert_to_row);
+                        var changeSet = vega.changeset()
+                                .insert(insert_values)
+                                .remove(d => row_in_array(d, delete_values));
+
+                        chart.view.change('data', changeSet).resize().run();
+                }
+            });
+
+        }
+
+        setup_chart("time_per_worker");
+
     </script>
   </body>
 </html>
