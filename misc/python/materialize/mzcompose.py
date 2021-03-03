@@ -149,6 +149,14 @@ def lint_materialized_service(
                 "materialized service command does not include --disable-telemetry",
             )
         )
+    env = service.get("environment", [])
+    if "MZ_DEV=1" not in env:
+        errors.append(
+            LintError(
+                path,
+                f"materialized service does not specify MZ_DEV=1 in its environment: {env}",
+            )
+        )
 
 
 class Composition:
