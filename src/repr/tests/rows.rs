@@ -1,8 +1,8 @@
-use chrono::NaiveDate;
+use chrono::TimeZone;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
-use repr::{adt::decimal::Significand, Datum, RowPacker};
-use std::time::Duration;
+use repr::{adt::decimal::Significand, adt::interval::Interval, Datum, RowPacker};
+use std::ops::Add;
 use uuid::Uuid;
 
 /// A type similar to [`Datum`] that can be proptest-generated.
@@ -15,13 +15,25 @@ enum PropertizedDatum {
     Float32(f32),
     Float64(f64),
 
-    // TODO: these variants just need a strategy defined:
-    #[proptest(strategy = "arb_date().prop_map(PropertizedDatum::Date)")]
-    Date(NaiveDate),
-    // Time(NaiveTime),
-    // Timestamp(NaiveDateTime),
-    // TimestampTz(DateTime<Utc>),
-    // Interval(Interval),
+    #[proptest(
+        strategy = "add_arb_duration(chrono::NaiveDate::from_ymd(2000, 01, 01)).prop_map(PropertizedDatum::Date)"
+    )]
+    Date(chrono::NaiveDate),
+    #[proptest(
+        strategy = "add_arb_duration(chrono::NaiveTime::from_hms(0, 0, 0)).prop_map(PropertizedDatum::Time)"
+    )]
+    Time(chrono::NaiveTime),
+    #[proptest(
+        strategy = "add_arb_duration(chrono::NaiveDateTime::from_timestamp(0, 0)).prop_map(PropertizedDatum::Timestamp)"
+    )]
+    Timestamp(chrono::NaiveDateTime),
+    #[proptest(
+        strategy = "add_arb_duration(chrono::Utc.timestamp(0, 0)).prop_map(PropertizedDatum::TimestampTz)"
+    )]
+    TimestampTz(chrono::DateTime<chrono::Utc>),
+
+    #[proptest(strategy = "arb_interval().prop_map(PropertizedDatum::Interval)")]
+    Interval(Interval),
     #[proptest(strategy = "arb_significand().prop_map(PropertizedDatum::Decimal)")]
     Decimal(Significand),
 
@@ -40,9 +52,23 @@ enum PropertizedDatum {
     Dummy,
 }
 
-fn arb_date() -> BoxedStrategy<NaiveDate> {
+fn arb_interval() -> BoxedStrategy<Interval> {
+    (
+        any::<i32>(),
+        (-193_273_528_233_599_999_999_000_i128..193_273_528_233_599_999_999_000_i128),
+    )
+        .prop_map(|(months, duration)| Interval { months, duration })
+        .boxed()
+}
+
+fn add_arb_duration<T: 'static + Copy + Add<chrono::Duration> + std::fmt::Debug>(
+    to: T,
+) -> BoxedStrategy<T::Output>
+where
+    T::Output: std::fmt::Debug,
+{
     any::<i64>()
-        .prop_map(|v| NaiveDate::from_ymd(2000, 01, 01) + chrono::Duration::nanoseconds(v))
+        .prop_map(move |v| to + chrono::Duration::nanoseconds(v))
         .boxed()
 }
 
@@ -61,6 +87,10 @@ impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
             Float32(f) => Datum::from(*f),
             Float64(f) => Datum::from(*f),
             Date(d) => Datum::from(*d),
+            Time(t) => Datum::from(*t),
+            Timestamp(t) => Datum::from(*t),
+            TimestampTz(t) => Datum::from(*t),
+            Interval(i) => Datum::from(*i),
             Decimal(s) => Datum::from(*s),
             Bytes(b) => Datum::from(&b[..]),
             String(s) => Datum::from(s.as_str()),
