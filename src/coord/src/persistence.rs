@@ -59,7 +59,7 @@ impl PersistentTables {
             Ok(compacter) => compacter,
             Err(e) => {
                 error!(
-                    "Encountered error while trying to initialize compacter task: {}",
+                    "Encountered error while trying to initialize compacter task: {:#}",
                     e
                 );
                 error!("No further records will be persisted.");
@@ -71,7 +71,7 @@ impl PersistentTables {
             Ok(wals) => wals,
             Err(e) => {
                 error!(
-                    "encountered error while trying to initialize write-ahead log: {}",
+                    "encountered error while trying to initialize write-ahead log: {:#}",
                     e
                 );
                 error!("No additional records will be persisted.");
@@ -107,7 +107,7 @@ impl PersistentTables {
             Ok(trace) => trace,
             Err(e) => {
                 error!(
-                    "encountered error while trying to restart table {} {}",
+                    "encountered error while trying to restart table {}: {:#}",
                     id, e
                 );
                 self.disable();
@@ -119,7 +119,7 @@ impl PersistentTables {
             Ok(messages) => Some(messages),
             Err(e) => {
                 error!(
-                    "encountered error trying to read from persisted table {} {}",
+                    "encountered error trying to read from persisted table {}: {:#}",
                     id, e
                 );
                 self.disable();
@@ -129,7 +129,7 @@ impl PersistentTables {
 
         if let Err(e) = self.wals.resume(id) {
             error!(
-                "encountered error trying to resume write-ahead log for persisted table {} {}",
+                "encountered error trying to resume write-ahead log for persisted table {}: {:#}",
                 id, e
             );
             self.disable();
@@ -156,7 +156,7 @@ impl PersistentTables {
 
         if let Err(e) = self.wals.write_progress(timestamp) {
             error!(
-                "encountered error trying to write progress at ts {}: {}",
+                "encountered error trying to write progress at ts {}: {:#}",
                 timestamp, e
             );
             self.disable();
@@ -174,14 +174,14 @@ impl PersistentTables {
 
         if let Err(e) = self.wals.create(id) {
             error!(
-                "encountered error creating table for relation {}: {}",
+                "encountered error creating table for relation {}: {:#}",
                 id, e
             );
             self.disable();
             return;
         }
         if let Err(e) = self.compacter_tx.send(CompacterMessage::Add(id)) {
-            debug!("compacter dropped, disabling WAL: {}", e);
+            error!("compacter dropped, disabling WAL: {:#}", e);
             self.disable();
         }
     }
@@ -198,14 +198,14 @@ impl PersistentTables {
 
         if let Err(e) = self.wals.destroy(id) {
             error!(
-                "encountered error destroying table for relation {}: {}",
+                "encountered error destroying table for relation {}: {:#}",
                 id, e
             );
             self.disable();
             return;
         }
         if let Err(e) = self.compacter_tx.send(CompacterMessage::Drop(id)) {
-            debug!("compacter dropped, disabling WAL: {}", e);
+            error!("compacter dropped, disabling WAL: {:#}", e);
             self.disable();
         }
     }
@@ -217,7 +217,7 @@ impl PersistentTables {
         }
         if let Err(e) = self.wals.write(id, updates) {
             error!(
-                "encountered error writing to table for relation {}: {}",
+                "encountered error writing to table for relation {}: {:#}",
                 id, e
             );
             self.disable();
@@ -241,7 +241,7 @@ impl PersistentTables {
                     .compacter_tx
                     .send(CompacterMessage::AllowCompaction(*id, times_list[0]))
                 {
-                    debug!("compacter dropped, disabling WAL: {}", e);
+                    error!("compacter dropped, disabling WAL: {:#}", e);
                     self.disable();
                 }
             }
