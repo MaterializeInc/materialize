@@ -492,3 +492,22 @@ parse-scalar
 ((x).*.*)
 ----
 Nested(WildcardAccess(WildcardAccess(Nested(Identifier([Ident("x")])))))
+
+# Special position syntax
+
+parse-scalar
+position('om' IN 'Thomas')
+----
+Function(Function { name: UnresolvedObjectName([Ident("position")]), args: Args([Value(String("om")), Value(String("Thomas"))]), filter: None, over: None, distinct: false })
+
+parse-scalar
+"position"('om', 'Thomas')
+----
+Function(Function { name: UnresolvedObjectName([Ident("position")]), args: Args([Value(String("om")), Value(String("Thomas"))]), filter: None, over: None, distinct: false })
+
+parse-scalar
+position('om', 'Thomas')
+----
+error: Expected IN, found comma
+position('om', 'Thomas')
+             ^
