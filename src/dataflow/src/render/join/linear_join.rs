@@ -181,7 +181,7 @@ where
             inputs,
             equivalences,
             demand,
-            implementation: expr::JoinImplementation::Differential((start, start_arr), order),
+            implementation: expr::JoinImplementation::Differential((start, _start_arr), order),
         } = relation_expr
         {
             let input_mapper = expr::JoinInputMapper::new(inputs);
@@ -225,57 +225,54 @@ where
             // Collect all error streams, and concatenate them at the end.
             let mut errors = Vec::new();
 
-            // Determine what form the linear spine of updates will take.
-            // This could be a stream, or one of several arrangements.
-            let mut joined = if start_arr.is_some() && inputs.len() > 1 {
-                // Assert that we did not extract an initial closure.
-                assert!(linear_plan.initial_closure.is_none());
-                // We have some redundancy that we should check here.
-                let arrangement_key = &linear_plan.stage_plans[0].stream_key;
-                assert_eq!(start_arr.as_ref().unwrap(), arrangement_key);
-                match self.arrangement(&inputs[linear_plan.source_relation], arrangement_key) {
-                    Some(ArrangementFlavor::Local(oks, errs)) => {
-                        errors.push(errs.as_collection(|k, _v| k.clone()));
-                        JoinedFlavor::Local(oks)
-                    }
-                    Some(ArrangementFlavor::Trace(_gid, oks, errs)) => {
-                        errors.push(errs.as_collection(|k, _v| k.clone()));
-                        JoinedFlavor::Trace(oks)
-                    }
-                    None => {
-                        unreachable!("Arrangement intended to exist!");
-                    }
+            // Determine which form our maintained spine of updates will initially take.
+            // First, just check out the availability of an appropriate arrangement.
+            // This will be `None` in the degenerate single-input join case, which ensures
+            // that we do not panic if we never go around the `stage_plans` loop.
+            let arrangement = linear_plan.stage_plans.get(0).and_then(|stage| {
+                self.arrangement(&inputs[linear_plan.source_relation], &stage.stream_key)
+            });
+            // We can use an arrangement if it exists and an initial closure does not.
+            let mut joined = match (arrangement, linear_plan.initial_closure) {
+                (Some(ArrangementFlavor::Local(oks, errs)), None) => {
+                    errors.push(errs.as_collection(|k, _v| k.clone()));
+                    JoinedFlavor::Local(oks)
                 }
-            } else {
-                // TODO: extract closure from the first stage in the join plan, should it exist.
-                // TODO: apply that closure in `flat_map_ref` rather than calling `.collection`.
-                let (mut joined, errs) = self.collection(&inputs[*start]).unwrap();
-                errors.push(errs);
-                // In the current code this should always be `None`, but we have this here should
-                // we change that and want to know what we should be doing.
-                if let Some(closure) = linear_plan.initial_closure {
-                    // If there is no starting arrangement, then we can run filters
-                    // directly on the starting collection.
-                    // If there is only one input, we are done joining, so run filters
-                    let (j, errs) = joined.flat_map_fallible({
-                        // Reuseable allocation for unpacking.
-                        let mut datums = DatumVec::new();
-                        let mut row_packer = RowPacker::new();
-                        move |row| {
-                            let temp_storage = RowArena::new();
-                            let mut datums_local = datums.borrow_with(&row);
-                            // TODO(mcsherry): re-use `row` allocation.
-                            closure
-                                .apply(&mut datums_local, &temp_storage, &mut row_packer)
-                                .map_err(DataflowError::from)
-                                .transpose()
-                        }
-                    });
-                    joined = j;
+                (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
+                    errors.push(errs.as_collection(|k, _v| k.clone()));
+                    JoinedFlavor::Trace(oks)
+                }
+                (_, initial_closure) => {
+                    // TODO: extract closure from the first stage in the join plan, should it exist.
+                    // TODO: apply that closure in `flat_map_ref` rather than calling `.collection`.
+                    let (mut joined, errs) = self.collection(&inputs[*start]).unwrap();
                     errors.push(errs);
-                }
+                    // In the current code this should always be `None`, but we have this here should
+                    // we change that and want to know what we should be doing.
+                    if let Some(closure) = initial_closure {
+                        // If there is no starting arrangement, then we can run filters
+                        // directly on the starting collection.
+                        // If there is only one input, we are done joining, so run filters
+                        let (j, errs) = joined.flat_map_fallible({
+                            // Reuseable allocation for unpacking.
+                            let mut datums = DatumVec::new();
+                            let mut row_packer = RowPacker::new();
+                            move |row| {
+                                let temp_storage = RowArena::new();
+                                let mut datums_local = datums.borrow_with(&row);
+                                // TODO(mcsherry): re-use `row` allocation.
+                                closure
+                                    .apply(&mut datums_local, &temp_storage, &mut row_packer)
+                                    .map_err(DataflowError::from)
+                                    .transpose()
+                            }
+                        });
+                        joined = j;
+                        errors.push(errs);
+                    }
 
-                JoinedFlavor::Collection(joined)
+                    JoinedFlavor::Collection(joined)
+                }
             };
 
             // Progress through stages, updating partial results and errors.
