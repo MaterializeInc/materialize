@@ -4235,7 +4235,7 @@ fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 
         // this will be our byte index
         // if we went to far, we should take the empty string
-        byte_indices.next().unwrap_or(string.len())
+        byte_indices.next().unwrap_or_else(|| string.len())
     };
 
     Datum::String(&string[start_in_bytes..])
