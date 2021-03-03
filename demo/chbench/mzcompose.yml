@@ -338,15 +338,18 @@ mzworkflows:
         --only-initialize
         -q loadtest
 
-  # Run a test that populates Kafka with data from chbench for a set amount of time
-  # Once chbench exits, record offsets ingested by Materialize and view states
-  # Leaves the cluster running
-  setup-ingest-benchmark:
+  # After the first timer expires, stop chbench and wait for the data to stabilize
+  # Record offsets ingested by Materialize and the answers to our count(*) views
+  # Stops the load generator and source database but leaves the rest of the cluster running
+  prepare-snapshot:
     env:
-      MZ_CHBENCH_SNAPSHOT: '${MZ_CHBENCH_SNAPSHOT:-./tmp}'
-      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
-      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-./tmp}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper
     steps:
+    - step: run
+      service: peeker
+      command: --write-config /snapshot/config.toml
     - step: workflow
       workflow: bring-up-source-data-mysql
     # start the dashboard before the load data get started so that we have data from
@@ -378,12 +381,12 @@ mzworkflows:
       command: snapshot_view_states.py
 
   # Run a workflow to measure the ingest performance of Materialize. Assumes that the you have
-  # already called setup-ingest-benchmark and the cluster is still running
+  # already called prepare-snapshot and the cluster is still running
   measure-ingest-performance:
     env:
-      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
-      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
-      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-./tmp}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper
     steps:
     - step: restart-services
       services: [materialized]
@@ -391,29 +394,13 @@ mzworkflows:
       service: mzutil
       command: wait_for_view_states.py
 
-  # Run a test that populates Kafka with data from chbench for a set amount of time
-  # After the first timer expires, stop chbench and wait for the data to stabilize
-  # Record offsets ingested by Materialize and the answers to our count(*) views
-  # Take a snapshot of topic schemas and contents
-  generate-snapshot:
-    env:
-      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
-      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
-      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
-    steps:
-    - step: run
-      service: peeker
-      command: --write-config /snapshot/config.toml
-    - step: workflow
-      workflow: setup-ingest-benchmark
-
   # Run a test that populates Kafka with data from topic snapshots
   # Then run Materialize and measure time until it catches up to snapshotted view state
   setup-replay-benchmark:
     env:
-      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
-      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
-      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-./tmp}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper
     steps:
     # start the dashboard before the load data get started so that we have data from
     # the beginning of time

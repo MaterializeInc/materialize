@@ -98,7 +98,7 @@ main() {
     # Record the arguments used to generate this snapshot
     env > "${snapshot}/snapshot.env"
 
-    "$project"/mzcompose run generate-snapshot
+    "$project"/mzcompose run prepare-snapshot
     "$project"/mzcompose down
 
     # Compress directories to reduce bytes transferred
