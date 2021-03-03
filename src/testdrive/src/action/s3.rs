@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::default::Default;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use rusoto_core::RusotoError;
@@ -111,6 +112,7 @@ pub struct AddBucketNotifications {
     bucket_prefix: String,
 
     sqs_test_prefix: String,
+    sqs_validation_timeout: Duration,
 }
 
 pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotifications, String> {
@@ -134,6 +136,12 @@ pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotif
             .args
             .opt_string("sqs-test-prefix")
             .unwrap_or_else(|| "sqs-test".into()),
+        sqs_validation_timeout: cmd
+            .args
+            .opt_string("sqs-validation-timeout")
+            .map(|t| parse_duration::parse(&t).map_err(|e| e.to_string()))
+            .transpose()?
+            .unwrap_or_else(|| Duration::from_secs(120)),
     })
 }
 
@@ -253,19 +261,20 @@ impl Action for AddBucketNotifications {
         let mut attempts = 0;
         let mut success = false;
         print!("Verifying SQS notification configuration for up to 2 minutes");
-        for i in 0..120u8 {
+        let start = Instant::now();
+        while start.elapsed() < self.sqs_validation_timeout {
             // a maximum of ~2 minutes
             state
                 .s3_client
                 .put_object(PutObjectRequest {
                     bucket: self.bucket.clone(),
                     body: Some(Vec::new().into()),
-                    key: format!("{}/{}", self.sqs_test_prefix, i),
+                    key: format!("{}/{}", self.sqs_test_prefix, attempts),
                     ..Default::default()
                 })
                 .await
                 .map_err(|e| format!("creating object to verify sqs: {}", e))?;
-            attempts = i;
+            attempts += 1;
 
             let resp = state
                 .sqs_client
@@ -312,7 +321,10 @@ impl Action for AddBucketNotifications {
             println!(" Success! (in {} attempts)", attempts + 1);
             Ok(())
         } else {
-            println!(" Error, never got messages");
+            println!(
+                " Error, never got messages (after {} attempts)",
+                attempts + 1
+            );
             Err("Never got messages on S3 bucket notification queue".to_string())
         }
     }

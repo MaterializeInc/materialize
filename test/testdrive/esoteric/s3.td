@@ -146,7 +146,7 @@ $ set otherbucket=materialize-ci-td-other-${testdrive.seed}
 $ set otherqueue=materialize-ci-other-${testdrive.seed}
 
 $ s3-create-bucket bucket=${otherbucket}
-$ s3-add-notifications bucket=${otherbucket} queue=${otherqueue}
+$ s3-add-notifications bucket=${otherbucket} queue=${otherqueue} sqs-validation-timout=5m
 
 $ s3-put-object bucket=${otherbucket} key=short/c
 c1
