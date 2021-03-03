@@ -122,7 +122,6 @@ impl LogVariant {
                 .with_column("source_worker", ScalarType::Int64.nullable(false))
                 .with_column("target_worker", ScalarType::Int64.nullable(false))
                 .with_column("sent", ScalarType::Int64.nullable(false))
-                .with_column("received", ScalarType::Int64.nullable(false))
                 .with_key(vec![0]),
 
             LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()

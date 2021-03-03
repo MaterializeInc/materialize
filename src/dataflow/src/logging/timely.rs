@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use differential_dataflow::difference::{Abelian, DiffPair};
+use differential_dataflow::difference::Abelian;
 use differential_dataflow::operators::count::CountTotal;
 use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::operators::join::Join;
@@ -57,7 +57,7 @@ pub fn construct<A: Allocate>(
         let (mut channels_out, channels) = demux.new_output();
         let (mut addresses_out, addresses) = demux.new_output();
         let (mut parks_out, parks) = demux.new_output();
-        let (mut messages_out, messages) = demux.new_output();
+        let (mut messages_sent_out, messages_sent) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
@@ -73,7 +73,7 @@ pub fn construct<A: Allocate>(
                 let mut channels = channels_out.activate();
                 let mut addresses = addresses_out.activate();
                 let mut parks = parks_out.activate();
-                let mut messages = messages_out.activate();
+                let mut messages_sent = messages_sent_out.activate();
 
                 input.for_each(|time, data| {
                     data.swap(&mut demux_buffer);
@@ -82,7 +82,7 @@ pub fn construct<A: Allocate>(
                     let mut channels_session = channels.session(&time);
                     let mut addresses_session = addresses.session(&time);
                     let mut parks_sesssion = parks.session(&time);
-                    let mut messages_session = messages.session(&time);
+                    let mut messages_sent_session = messages_sent.session(&time);
 
                     for (time, worker, datum) in demux_buffer.drain(..) {
                         let time_ns = time.as_nanos();
@@ -236,15 +236,17 @@ pub fn construct<A: Allocate>(
                             },
 
                             TimelyEvent::Messages(event) => {
-                                messages_session.give((
-                                    (
-                                        (event.channel, event.source, event.target),
-                                        event.length,
-                                        event.is_send,
-                                    ),
-                                    time_ms,
-                                    1,
-                                ));
+                                // TODO: add the inverse for received messages
+                                if event.is_send {
+                                    messages_sent_session.give((
+                                        (
+                                            (event.channel, event.source),
+                                            (event.target, event.length),
+                                        ),
+                                        time_ms,
+                                        1,
+                                    ));
+                                }
                             }
                             _ => {}
                         }
@@ -309,7 +311,10 @@ pub fn construct<A: Allocate>(
 
         // Accumulate the durations of each operator.
         // The first `map` exists so that we can semijoin effectively (it requires a key-val pair).
-        let mut elapsed = duration
+        let mut elapsed: Collection<
+            timely::dataflow::scopes::Child<timely::worker::Worker<A>, u64>,
+            ((usize, usize), ()),
+        > = duration
             .map(|(op_worker, t, d)| ((op_worker, ()), t, d as isize))
             .as_collection();
         // Remove elapsed times for operators not present in `operates`.
@@ -364,8 +369,11 @@ pub fn construct<A: Allocate>(
         let channels = channels.as_collection().map(
             |(id, worker, source_node, source_port, target_node, target_port)| {
                 (
-                    id,
-                    (worker, source_node, source_port, target_node, target_port),
+                    (id, worker),
+                    source_node,
+                    source_port,
+                    target_node,
+                    target_port,
                 )
             },
         );
@@ -397,45 +405,23 @@ pub fn construct<A: Allocate>(
             });
 
         use differential_dataflow::operators::Count;
-        let messages =
-            messages
-                .as_collection()
-                .map(|((channel, source, target), count, is_send)| {
-                    (channel, (source, target, count, is_send))
-                });
-
-        let messages = thin_collection(messages, delay, |c| {
-            c.semijoin(&channels.map(|(channel, _)| channel))
+        let messages_sent = messages_sent
+            .map(|(d, t, m)| (d, t, m as isize))
+            .as_collection();
+        let messages_sent = thin_collection(messages_sent, delay, |c| {
+            c.semijoin(&channels.map(|(k, _, _, _, _)| k))
         })
-        .map(|(channel, (source, target, count, is_send))| {
-            ((channel, source, target), count, is_send)
-        })
-        .explode(|(key, count, is_send)| {
-            Some((
-                key,
-                if is_send {
-                    DiffPair::new(count as isize, 0)
-                } else {
-                    DiffPair::new(0, count as isize)
-                },
-            ))
-        })
+        .map(|((channel, source), (target, count))| ((channel, source, target), count))
+        .explode(|(key, count)| Some((key, count as isize)))
         .count()
         .map({
             let mut row_packer = repr::RowPacker::new();
-            move |(
-                (channel, source, target),
-                DiffPair {
-                    element1: sent,
-                    element2: received,
-                },
-            )| {
+            move |((channel, source, target), sent)| {
                 row_packer.pack(&[
                     Datum::Int64(channel as i64),
                     Datum::Int64(source as i64),
                     Datum::Int64(target as i64),
                     Datum::Int64(sent as i64),
-                    Datum::Int64(received as i64),
                 ])
             }
         });
@@ -446,7 +432,7 @@ pub fn construct<A: Allocate>(
             isize,
         > = channels.map({
             let mut row_packer = repr::RowPacker::new();
-            move |(id, (worker, source_node, source_port, target_node, target_port))| {
+            move |((id, worker), source_node, source_port, target_node, target_port)| {
                 row_packer.pack(&[
                     Datum::Int64(id as i64),
                     Datum::Int64(worker as i64),
@@ -468,7 +454,7 @@ pub fn construct<A: Allocate>(
             (LogVariant::Timely(TimelyLog::Histogram), histogram),
             (LogVariant::Timely(TimelyLog::Addresses), addresses),
             (LogVariant::Timely(TimelyLog::Parks), parks),
-            (LogVariant::Timely(TimelyLog::Messages), messages),
+            (LogVariant::Timely(TimelyLog::Messages), messages_sent),
         ];
 
         let mut result = std::collections::HashMap::new();
