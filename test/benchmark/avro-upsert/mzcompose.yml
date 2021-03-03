@@ -46,7 +46,7 @@ services:
   materialized:
     mzbuild: materialized
     ports:
-     - *materialized
+      - *materialized
     init: true
     command:
       - --workers=${MZ_WORKERS:-16}
@@ -63,6 +63,7 @@ services:
       # You can, for example, add `pgwire=trace` or change `info` to `debug` to
       # get more verbose logs.
       - MZ_LOG=pgwire=debug,info
+      - MZ_DEV=1
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.3
     environment:

@@ -16,6 +16,8 @@ services:
     mzbuild: materialized
     init: true
     command: -w1 --disable-telemetry
+    environment:
+      - MZ_DEV=1
     ports:
       - *materialized
   mysql:

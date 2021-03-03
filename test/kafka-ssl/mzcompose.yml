@@ -48,6 +48,8 @@ services:
     volumes:
       - secrets:/share/secrets
     depends_on: [test-certs]
+    environment:
+      - MZ_DEV=1
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.3
     environment:

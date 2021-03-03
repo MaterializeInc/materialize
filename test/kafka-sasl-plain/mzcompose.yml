@@ -48,6 +48,8 @@ services:
   materialized:
     mzbuild: materialized
     command: -w1 --disable-telemetry
+    environment:
+      - MZ_DEV=1
     volumes:
       - secrets:/share/secrets
     depends_on: [test-certs]
