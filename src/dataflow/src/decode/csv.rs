@@ -11,12 +11,11 @@ use std::iter;
 
 use dataflow_types::LinearOperator;
 
-use log::error;
-
 use differential_dataflow::{AsCollection, Collection};
-use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::{OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
 
+use dataflow_types::{DataflowError, DecodeError};
 use repr::{Datum, Diff, Row, Timestamp};
 
 use crate::{metrics::EVENTS_COUNTER, source::SourceOutput};
@@ -47,8 +46,7 @@ where
         })
         .collect::<Vec<_>>();
 
-    let stream =
-    stream.unary(
+    let stream = stream.unary(
         SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
         "CsvDecode",
         |_, _| {
@@ -67,12 +65,25 @@ where
                     // but the CsvReader *itself* searches for line breaks.
                     // This is mainly an aesthetic/performance-golfing
                     // issue as I doubt it will ever be a bottleneck.
-                    for SourceOutput { key: _, value: line, position: line_no , upstream_time_millis: _ } in &*lines {
+                    for SourceOutput {
+                        key: _,
+                        value: line,
+                        position: line_no,
+                        upstream_time_millis: _,
+                    } in &*lines
+                    {
                         // We only want to process utf8 strings, as this ensures that all fields
                         // will be utf8 as well, allowing some unsafe shenanigans.
                         if std::str::from_utf8(line.as_slice()).is_err() {
+                            // Generate an error object for the error stream
                             events_error += 1;
-                            error!("CSV error: input text is not utf8");
+                            session.give((
+                                Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                                    "CSV error: input text is not utf8"
+                                )))),
+                                *cap.time(),
+                                1,
+                            ));
                         } else {
                             // Reset the reader to read a new series of records.
                             csv_reader.reset();
@@ -89,10 +100,13 @@ where
                             let mut done = false;
 
                             while !done {
-
                                 // Note that we protect the first element of `bounds`, a zero, so that ranges are easier to extract below.
                                 let (result, in_read, out_wrote, ends_wrote) = csv_reader
-                                    .read_record(input, &mut buffer[buffer_valid..], &mut bounds[1+bounds_valid..]);
+                                    .read_record(
+                                        input,
+                                        &mut buffer[buffer_valid..],
+                                        &mut bounds[1 + bounds_valid..],
+                                    );
 
                                 // Advance buffers, as requested by return values.
                                 input = &input[in_read..];
@@ -114,14 +128,20 @@ where
                                     csv_core::ReadRecordResult::Record => {
                                         if bounds_valid != n_cols {
                                             events_error += 1;
-                                            error!(
-                                                "CSV error: expected {} columns, got {}. Ignoring row.",
-                                                n_cols, bounds_valid,
-                                            );
+                                            session.give((
+                                                Err(DataflowError::DecodeError(DecodeError::Text(
+                                                    format!(
+                                                        "CSV error at lineno {}: expected {} columns, got {}.",
+                                                        line_no.unwrap_or_default(), n_cols, bounds_valid
+                                                    ),
+                                                ))),
+                                                *cap.time(),
+                                                1,
+                                            ));
                                         } else {
                                             events_success += 1;
                                             session.give((
-                                                row_packer.pack(
+                                                Ok(row_packer.pack(
                                                     (0..n_cols)
                                                         .map(|i| {
                                                             // Unsafety rationalized as 1. the input text is determined to be
@@ -130,8 +150,8 @@ where
                                                             Datum::String(unsafe {
                                                                 if demanded[i] {
                                                                     std::str::from_utf8_unchecked(
-                                                                        &buffer
-                                                                            [bounds[i]..bounds[i + 1]],
+                                                                        &buffer[bounds[i]
+                                                                            ..bounds[i + 1]],
                                                                     )
                                                                 } else {
                                                                     ""
@@ -141,7 +161,7 @@ where
                                                         .chain(iter::once(
                                                             line_no.map(Datum::Int64).into(),
                                                         )),
-                                                ),
+                                                )),
                                                 *cap.time(),
                                                 1,
                                             ));
@@ -168,5 +188,10 @@ where
         },
     );
 
-    (stream.as_collection(), None)
+    let (oks, errs) = stream.ok_err(|(data, time, diff)| match data {
+        Ok(data) => Ok((data, time, diff)),
+        Err(err) => Err((err, time, diff)),
+    });
+
+    (oks.as_collection(), Some(errs.as_collection()))
 }
