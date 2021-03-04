@@ -11,12 +11,11 @@ use std::iter;
 
 use dataflow_types::LinearOperator;
 
-use log::error;
-
 use differential_dataflow::{AsCollection, Collection};
-use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::{OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
 
+use dataflow_types::{DataflowError, DecodeError};
 use repr::{Datum, Diff, Row, Timestamp};
 
 use crate::{metrics::EVENTS_COUNTER, source::SourceOutput};
@@ -71,8 +70,11 @@ where
                         // We only want to process utf8 strings, as this ensures that all fields
                         // will be utf8 as well, allowing some unsafe shenanigans.
                         if std::str::from_utf8(line.as_slice()).is_err() {
+                            // Generate an error object for the error stream
                             events_error += 1;
-                            error!("CSV error: input text is not utf8");
+                            session.give((Err(DataflowError::DecodeError(
+                                  DecodeError::Text(format!("CSV error: input text is not utf8"))
+                            )), *cap.time(), 1));
                         } else {
                             // Reset the reader to read a new series of records.
                             csv_reader.reset();
@@ -114,14 +116,13 @@ where
                                     csv_core::ReadRecordResult::Record => {
                                         if bounds_valid != n_cols {
                                             events_error += 1;
-                                            error!(
-                                                "CSV error: expected {} columns, got {}. Ignoring row.",
-                                                n_cols, bounds_valid,
-                                            );
+                                            session.give((Err(DataflowError::DecodeError(
+                                                DecodeError::Text(format!("CSV error: expected {} columns, got {}. Ignoring row.", n_cols, bounds_valid))
+                                            )), *cap.time(), 1));
                                         } else {
                                             events_success += 1;
                                             session.give((
-                                                row_packer.pack(
+                                                Ok(row_packer.pack(
                                                     (0..n_cols)
                                                         .map(|i| {
                                                             // Unsafety rationalized as 1. the input text is determined to be
@@ -141,7 +142,7 @@ where
                                                         .chain(iter::once(
                                                             line_no.map(Datum::Int64).into(),
                                                         )),
-                                                ),
+                                                )),
                                                 *cap.time(),
                                                 1,
                                             ));
@@ -168,5 +169,10 @@ where
         },
     );
 
-    (stream.as_collection(), None)
+    let (oks, errs) = stream.ok_err(|(data, time, diff)| match data {
+        Ok(data) => Ok((data, time, diff)),
+        Err(err) => Err((err, time, diff)),
+    });
+
+    (oks.as_collection(), Some(errs.as_collection()))
 }

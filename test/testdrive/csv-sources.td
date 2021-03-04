@@ -120,5 +120,5 @@ badint,
   FROM FILE '${testdrive.temp-dir}/malformed.csv'
   FORMAT CSV WITH HEADER
 
-> SELECT * FROM malformed_csv
-Source error:
+! SELECT * FROM malformed_csv
+Decode error: Text: CSV error: expected 2 columns, got 1. Ignoring row.
