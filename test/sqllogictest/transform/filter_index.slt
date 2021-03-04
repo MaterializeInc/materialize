@@ -92,33 +92,6 @@ just
 is
 -1.0000
 
-query T multiline
-explain plan for select b, c from foo, bar, (select -1 as a) const where foo.a / bar.a = const.a
-----
-%0 =
-| Get materialize.public.foo (u1)
-| ArrangeBy ()
-
-%1 =
-| Get materialize.public.bar (u3)
-
-%2 =
-| Join %0 %1
-| | implementation = Differential %1 %0.()
-| | demand = (#0..#3)
-| Filter (-1 = (#0 / #3))
-| Project (#1, #2)
-
-EOF
-
-query TR
-select b, c from foo, bar, (select -1 as a) const where foo.a / bar.a = const.a
-----
-just
-11.300
-this
--4.400
-
 statement ok
 create index foo_idx on foo(a);
 
