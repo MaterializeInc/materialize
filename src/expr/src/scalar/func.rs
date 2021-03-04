@@ -4223,16 +4223,17 @@ fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let start_in_bytes = if n == 0 {
         string.len()
     } else if n > 0 {
-        let char_index = usize::try_from(n - 1).map_err(|_| {
+        let n = usize::try_from(n - 1).map_err(|_| {
             EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
         })?;
         // nth from the back
-        byte_indices.rev().nth(char_index).unwrap_or(0)
+        byte_indices.rev().nth(n).unwrap_or(0)
     } else {
         let n = n.abs();
-        let char_index = usize::try_from(n)
-            .map_err(|_| EvalError::InvalidParameterValue("invalid n".to_owned()))?;
-        byte_indices.nth(char_index).unwrap_or_else(|| string.len())
+        let n = usize::try_from(n).map_err(|_| {
+            EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
+        })?;
+        byte_indices.nth(n).unwrap_or_else(|| string.len())
     };
 
     Ok(Datum::String(&string[start_in_bytes..]))
