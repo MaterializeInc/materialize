@@ -83,6 +83,16 @@ Is one worker (or a few workers) behind the others?
 
 Is the failover behavior sane?
 
+In the case of OOM or Materialize falling over:
+- Can a join be made smaller?
+  - If an input A of the join depends on a source/view B, and the record
+    count of A is greater than the record count of B, consider joining
+    against B instead of A.
+  - If there is a group-by around the join, consider reduction pushdown.
+    - Does the query involving joining on columns ending with '...Id'?
+      Reduction pushdown may be especially helpful in this case because columns
+      whose names end with '...Id' tend to be unique keys.
+
 In the case of a performance problem gradually observed getting worse over a substantial period of time with prometheus:
 - Is the problem reproduceable if prometheus is not running? (and performance is measured via top)
 
