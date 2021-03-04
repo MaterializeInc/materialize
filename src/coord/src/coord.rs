@@ -321,20 +321,24 @@ impl Coordinator {
                                 let mut updates = vec![];
                                 for persisted_message in messages.into_iter() {
                                     match persisted_message {
-                                        PersistedMessage::Progress(_) => {
+                                        PersistedMessage::Progress(time) => {
                                             // Send the messages accumulated so far + update
                                             // progress
+                                            // TODO: I think we need to avoid downgrading capabilities until
+                                            // all rows have been sent so the table is not visible for reads
+                                            // before being fully reloaded.
                                             let updates = std::mem::replace(&mut updates, vec![]);
-                                            self.broadcast(SequencedCommand::Insert {
-                                                id: *id,
-                                                updates,
-                                            });
-                                            // TODO: trying to send this fails because on restart
-                                            // the frontier has already advanced ahead. Need to investigate
-                                            // this more.
-                                            // self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
-                                            //    advance_to: time,
-                                            // });
+                                            if !updates.is_empty() {
+                                                self.broadcast(SequencedCommand::Insert {
+                                                    id: *id,
+                                                    updates,
+                                                });
+                                                self.broadcast(
+                                                    SequencedCommand::AdvanceAllLocalInputs {
+                                                        advance_to: time,
+                                                    },
+                                                );
+                                            }
                                         }
                                         PersistedMessage::Data(update) => {
                                             updates.push(update);
