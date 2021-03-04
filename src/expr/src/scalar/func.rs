@@ -337,6 +337,12 @@ fn cast_decimal_to_string<'a>(a: Datum<'a>, scale: u8, temp_storage: &'a RowAren
     Datum::String(temp_storage.push_string(buf))
 }
 
+fn cast_numeric_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    let mut buf = String::new();
+    strconv::format_numeric(&mut buf, &a.unwrap_numeric());
+    Datum::String(temp_storage.push_string(buf))
+}
+
 fn cast_string_to_bool<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match strconv::parse_bool(a.unwrap_str())? {
         true => Ok(Datum::True),
@@ -386,6 +392,17 @@ fn cast_string_to_decimal<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, Eval
             })
         })
         .err_into()
+}
+
+fn cast_string_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+    let mut d = strconv::parse_numeric(a.unwrap_str())?;
+    if let Some(scale) = scale {
+        if rdn::rescale(&mut d, scale).is_err() {
+            return Err(EvalError::NumericFieldOverflow);
+        }
+    }
+
+    Ok(Datum::from(d))
 }
 
 fn cast_string_to_date<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -3028,6 +3045,7 @@ pub enum UnaryFunc {
     CastDecimalToInt32(u8),
     CastDecimalToInt64(u8),
     CastDecimalToString(u8),
+    CastNumericToString,
     CastSignificandToFloat32,
     CastSignificandToFloat64,
     CastStringToBool,
@@ -3056,6 +3074,7 @@ pub enum UnaryFunc {
     CastStringToTimestampTz,
     CastStringToInterval,
     CastStringToDecimal(u8),
+    CastStringToNumeric(Option<u8>),
     CastStringToUuid,
     CastDateToTimestamp,
     CastDateToTimestampTz,
@@ -3219,6 +3238,7 @@ impl UnaryFunc {
             UnaryFunc::CastStringToFloat32 => cast_string_to_float32(a),
             UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
             UnaryFunc::CastStringToDecimal(scale) => cast_string_to_decimal(a, *scale),
+            UnaryFunc::CastStringToNumeric(scale) => cast_string_to_numeric(a, *scale),
             UnaryFunc::CastStringToDate => cast_string_to_date(a),
             UnaryFunc::CastStringToList {
                 cast_expr,
@@ -3240,6 +3260,7 @@ impl UnaryFunc {
             UnaryFunc::CastDecimalToString(scale) => {
                 Ok(cast_decimal_to_string(a, *scale, temp_storage))
             }
+            UnaryFunc::CastNumericToString => Ok(cast_numeric_to_string(a, temp_storage)),
             UnaryFunc::CastTimeToInterval => cast_time_to_interval(a),
             UnaryFunc::CastTimeToString => Ok(cast_time_to_string(a, temp_storage)),
             UnaryFunc::CastTimestampToDate => Ok(cast_timestamp_to_date(a)),
@@ -3357,6 +3378,7 @@ impl UnaryFunc {
             CastStringToDecimal(scale) => {
                 ScalarType::Decimal(MAX_DECIMAL_PRECISION, *scale).nullable(true)
             }
+            CastStringToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(true),
             CastStringToDate => ScalarType::Date.nullable(true),
             CastStringToTime => ScalarType::Time.nullable(true),
             CastStringToTimestamp => ScalarType::Timestamp.nullable(true),
@@ -3373,6 +3395,7 @@ impl UnaryFunc {
             | CastFloat32ToString
             | CastFloat64ToString
             | CastDecimalToString(_)
+            | CastNumericToString
             | CastDateToString
             | CastTimeToString
             | CastTimestampToString
@@ -3588,6 +3611,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastDecimalToInt32(_) => f.write_str("dectoi32"),
             UnaryFunc::CastDecimalToInt64(_) => f.write_str("dectoi64"),
             UnaryFunc::CastDecimalToString(_) => f.write_str("dectostr"),
+            UnaryFunc::CastNumericToString => f.write_str("numerictostr"),
             UnaryFunc::CastSignificandToFloat32 => f.write_str("dectof32"),
             UnaryFunc::CastSignificandToFloat64 => f.write_str("dectof64"),
             UnaryFunc::CastStringToBool => f.write_str("strtobool"),
@@ -3597,6 +3621,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastStringToFloat32 => f.write_str("strtof32"),
             UnaryFunc::CastStringToFloat64 => f.write_str("strtof64"),
             UnaryFunc::CastStringToDecimal(_) => f.write_str("strtodec"),
+            UnaryFunc::CastStringToNumeric(_) => f.write_str("strtonumeric"),
             UnaryFunc::CastStringToDate => f.write_str("strtodate"),
             UnaryFunc::CastStringToList { .. } => f.write_str("strtolist"),
             UnaryFunc::CastStringToMap { .. } => f.write_str("strtomap"),
