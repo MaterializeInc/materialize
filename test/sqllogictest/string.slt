@@ -956,12 +956,35 @@ NULL    不释手
 
 
 # NULL inputs
-query I
+query T
 SELECT right(NULL, 99)
 ----
 NULL
 
-query I
+query T
 SELECT right('str', NULL)
 ----
 NULL
+
+# combining characters
+
+query T
+SELECT right('रः॑', 0)
+----
+(empty)
+
+query T
+SELECT right('रः॑', 1)
+----
+ ॑
+
+query T
+SELECT right('रः॑', -1)
+----
+ः॑
+
+# this is exavtly the same as above, but using unicode escapes
+query T
+SELECT right(e'\u0930\u0903\u0951', -1)
+----
+ः॑
