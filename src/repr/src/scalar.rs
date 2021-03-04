@@ -766,6 +766,19 @@ impl<'a> ScalarType {
             _ => panic!("ScalarType::unwrap_decimal_parts called on {:?}", self),
         }
     }
+
+    /// Returns the contained decimal precision and scale.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the scalar type is not [`ScalarType::Numeric`].
+    pub fn unwrap_numeric_scale(&self) -> Option<u8> {
+        match self {
+            ScalarType::Numeric { scale } => *scale,
+            _ => panic!("ScalarType::unwrap_numeric_scale called on {:?}", self),
+        }
+    }
+
     /// Returns the [`ScalarType`] of elements in a [`ScalarType::List`].
     ///
     /// # Panics

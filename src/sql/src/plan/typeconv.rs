@@ -235,6 +235,10 @@ lazy_static! {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToDecimal(s)))
             }),
+            (String, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_numeric_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(s)))
+            }),
             (String, Date) => Explicit: CastStringToDate,
             (String, Time) => Explicit: CastStringToTime,
             (String, Timestamp) => Explicit: CastStringToTimestamp,
@@ -309,7 +313,10 @@ lazy_static! {
             (Jsonb, String) => Assignment: CastJsonbToString,
 
             // UUID
-            (Uuid, String) => Assignment: CastUuidToString
+            (Uuid, String) => Assignment: CastUuidToString,
+
+            // NUMERIC
+            (Numeric, String) => Assignment: CastNumericToString
         }
     };
 }
