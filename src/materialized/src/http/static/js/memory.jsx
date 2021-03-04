@@ -369,8 +369,8 @@ function View(props) {
       if (to_id === undefined) {
         return `// ${to} or not in lookup`;
       }
-      return sent == null ? `_${from_id} -> _${to_id};` :
-        `_${from_id} -> _${to_id} [label="${sent} msgs"];`;
+      return sent == null ? `_${from_id} -> _${to_id} [style="dashed"];` :
+        `_${from_id} -> _${to_id} [label="sent ${sent}"];`;
     });
     const oper_labels = Object.entries(opers).map(([id, name]) => {
       if (!addrs[id].length) {
