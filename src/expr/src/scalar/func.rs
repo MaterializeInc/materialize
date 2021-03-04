@@ -2255,6 +2255,7 @@ pub enum BinaryFunc {
     MapContainsAnyKeys,
     MapContainsMap,
     ConvertFrom,
+    Position,
     Trim,
     TrimLeading,
     TrimTrailing,
@@ -2409,6 +2410,7 @@ impl BinaryFunc {
             BinaryFunc::ConvertFrom => eager!(convert_from),
             BinaryFunc::Encode => eager!(encode, temp_storage),
             BinaryFunc::Decode => eager!(decode, temp_storage),
+            BinaryFunc::Position => eager!(position),
             BinaryFunc::Trim => Ok(eager!(trim)),
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
@@ -2596,6 +2598,7 @@ impl BinaryFunc {
             ListListConcat | ListElementConcat => input1_type.scalar_type.nullable(true),
             ElementListConcat => input2_type.scalar_type.nullable(true),
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
+            Position => ScalarType::Int32.nullable(in_nullable),
             Encode => ScalarType::String.nullable(in_nullable),
             Decode => ScalarType::Bytes.nullable(in_nullable),
             LogDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
@@ -2772,6 +2775,7 @@ impl BinaryFunc {
             | CastFloat64ToDecimal
             | RoundDecimal(_)
             | ConvertFrom
+            | Position
             | Trim
             | TrimLeading
             | TrimTrailing
@@ -2882,6 +2886,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MapContainsAnyKeys => f.write_str("?|"),
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
+            BinaryFunc::Position => f.write_str("position"),
             BinaryFunc::Trim => f.write_str("btrim"),
             BinaryFunc::TrimLeading => f.write_str("ltrim"),
             BinaryFunc::TrimTrailing => f.write_str("rtrim"),
@@ -4209,6 +4214,25 @@ fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
 
 fn trim_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_str().trim_matches(' '))
+}
+
+fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let substring: &'a str = a.unwrap_str();
+    let string = b.unwrap_str();
+    let char_index = string.find(substring);
+
+    if let Some(char_index) = char_index {
+        // find the index in char space
+        let string_prefix = &string[0..char_index];
+
+        let num_prefix_chars = string_prefix.chars().count();
+        let num_prefix_chars =
+            i32::try_from(num_prefix_chars).map_err(|_| EvalError::Int32OutOfRange)?;
+
+        Ok(Datum::Int32(num_prefix_chars + 1))
+    } else {
+        Ok(Datum::Int32(0))
+    }
 }
 
 fn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {

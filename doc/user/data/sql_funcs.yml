@@ -246,6 +246,9 @@
   - signature: 'octet_length(b: bytea) -> int'
     description: Number of bytes in `b`
 
+  - signature: 'position(sub: str IN s: str) -> int'
+    description: The starting index of `sub` within `s` or `0` if `sub` is not a substring of `s`.
+
   - signature: 'regexp_match(haystack: str, needle: str [, flags: str]]) -> str[]'
     description: >-
       Matches the regular expression `needle` against haystack, returning a

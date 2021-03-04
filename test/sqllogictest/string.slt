@@ -863,3 +863,67 @@ SELECT ''::pg_catalog.CHAR(0)
 
 query error length for type char must be within \[1-10485760\], have 10485761
 SELECT ''::pg_catalog.CHAR(10485761)
+
+### position ###
+statement ok
+CREATE TABLE positiontest (strcol1 char(15), strcol2 char(15), vccol1 varchar(15), vccol2 varchar(15))
+
+statement ok
+INSERT INTO positiontest VALUES ('om', 'Thomas', 'om', 'Thomas'), ('foo', 'barbar', 'foo', 'barbar'),
+    (NULL, 'str', NULL, 'str'), ('str', NULL, 'str', NULL), ('释手', '爱不释手', '释手', '爱不释手'),
+    ('', 'str', '', 'str'), ('str', '', 'str', '')
+
+# invalid input
+statement error Expected IN, found right parenthesis
+SELECT position(42)
+
+statement error Expected IN, found right parenthesis
+SELECT position('str')
+
+statement error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT position(42 IN 'str')
+
+statement error arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT position('str' IN 42)
+
+statement error Expected right parenthesis, found comma
+SELECT position('str' IN 42, 172)
+
+# standard tests
+
+#TODO: materialize#589 select position(strcol1 IN strcol2) from positiontest
+
+query I rowsort
+SELECT position(vccol1 IN vccol2) FROM positiontest
+----
+3
+0
+NULL
+NULL
+3
+1
+0
+
+# NULL inputs
+query I
+SELECT position(NULL IN 'str')
+----
+NULL
+
+query I
+SELECT position('str' IN NULL)
+----
+NULL
+
+# combining characters
+
+query I
+SELECT position('ः॑' IN 'रः॑')
+----
+2
+
+# this is exactly the same as above, but using unicode escapes
+query I
+SELECT position(e'\u0903\u0951' IN e'\u0930\u0903\u0951')
+----
+2
