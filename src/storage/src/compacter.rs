@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, HashMap};
-use std::fs::{self};
-use std::io::Cursor;
+use std::fs::{self, File};
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -41,7 +41,7 @@ use crate::wal::{encode_progress, encode_update};
 /// where each update is of the form `(Row, time, diff)` and each `(Row, time)` pair occurs
 /// exactly once and all diffs are nonzero.
 ///
-/// Note that all `Batch`s keep their data on persistent storage. No data resides on disk
+/// Note that all `Batch`s keep their data on persistent storage. No data resides in memory
 /// (except currently we load all the data from batches into memory for compaction and on
 ///  restart but this will get fixed!).
 ///
@@ -142,9 +142,8 @@ impl Batch {
 
         // Now let's prepare the output
         let mut buf = Vec::new();
-        assert!(lower.is_some());
-        assert!(upper.is_some());
 
+        // Batches are expected to have lower and upper time bounds.
         let lower = lower.unwrap();
         let upper = upper.unwrap();
 
@@ -167,8 +166,19 @@ impl Batch {
         let batch_tmp_path = trace_path.join(format!("{}-tmp", batch_name));
         // Write the file first suffixed with "-tmp" and then rename to guard against
         // partial writes.
-        fs::write(&batch_tmp_path, buf)
+        let mut batch_tmp_file = File::create(&batch_tmp_path)
+            .with_context(|| format!("failed to open batch file {}", batch_tmp_path.display()))?;
+        batch_tmp_file
+            .write_all(&buf)
             .with_context(|| format!("failed to write batch file {}", batch_tmp_path.display()))?;
+        batch_tmp_file
+            .flush()
+            .with_context(|| format!("failed to flush batch file {}", batch_tmp_path.display()))?;
+        batch_tmp_file
+            .sync_all()
+            .with_context(|| format!("failed to sync batch file {}", batch_tmp_path.display()))?;
+        // TODO: We need to fsync the parent directory here to durably persist this
+        // rename.
         fs::rename(&batch_tmp_path, &batch_path).with_context(|| {
             format!(
                 "failed to rename batch file from: {} to: {}",
@@ -285,6 +295,7 @@ impl Trace {
         for segment in finished_segments {
             let batch = Batch::create(&segment, &self.trace_path)?;
             self.batches.push(batch);
+            // TODO: Need to fsync wal directory here to persist the removal.
             fs::remove_file(&segment).with_context(|| {
                 format!(
                     "failed to remove consumed wal segment {}",
@@ -371,6 +382,7 @@ impl Trace {
 
             // TODO: This seems like potentially a place with a weird failure mode.
             for batch in batches {
+                // TODO: need to fsync() the parent directory here to persist this removal.
                 fs::remove_file(&batch.path).with_context(|| {
                     format!("failed to remove replaced batch {}", batch.path.display())
                 })?;
@@ -416,6 +428,8 @@ impl Trace {
         let finished_segments = self.find_finished_wal_segments()?;
         let unfinished_segment = self.find_unfinished_wal_segment()?;
 
+        // Read messages in sorted by time. Each batch is assumed to have sorted data by
+        // time, as does each wal segment.
         for segment in finished_segments {
             let mut messages = read_segment(&segment)?;
             out.append(&mut messages);
@@ -423,6 +437,7 @@ impl Trace {
 
         out.append(&mut read_segment(&unfinished_segment)?);
 
+        // Remove duplicated progress messages across wal segments.
         out.dedup();
         Ok(out)
     }

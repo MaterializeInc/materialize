@@ -30,9 +30,15 @@ use dataflow_types::Update;
 use expr::GlobalId;
 use repr::{Row, Timestamp};
 
-// Limit at which we will make a new log segment
+/// Limit at which we will make a new segment.
+///
+/// Note that this doesn't provide a true upper bound to the size of a log
+/// segment because a single transaction / single timestamp's updates will always
+/// be placed in the same segment. However, this limit is the threshold at which
+/// the WAL writer will stop writing to the current log segment and open a new
+/// one.
 // TODO: make this configurable..
-static MAX_LOG_SEGMENT_SIZE: usize = 1usize << 24;
+static LOG_SEGMENT_SIZE_LIMIT: usize = 1usize << 24;
 
 /// Segmented write ahead log to persist (data, time, records) from a relation
 /// to disk.
@@ -81,7 +87,7 @@ impl WriteAheadLog {
 
         // TODO: clean this up
         let file_path = base_path.join("log-0");
-        let current_file = create_log_segment(&file_path)?;
+        let current_file = open_log_segment(&file_path, true)?;
 
         let mut ret = Self {
             id,
@@ -101,7 +107,11 @@ impl WriteAheadLog {
     /// Append `buf` to the end of the current log segment
     ///
     /// TODO: We don't currently sync after every write so there is still the
-    /// potential for data loss here.
+    /// potential for data loss here. Calling `fs::sync_all` after every write
+    /// results in a ~20x slowdown. Explore opening the file in `O_SYNC` or `O_DSYNC`
+    /// and also `O_DIRECT` + aligned block size writes.
+    /// TODO: Also note that Postgres exposes a few different WAL writing modes,
+    /// some faster and some safer and we could do a similar thing.
     fn write_inner(&mut self, buf: &[u8]) -> Result<(), anyhow::Error> {
         let len = buf.len();
         self.current_file.write_all(&buf).with_context(|| {
@@ -152,7 +162,7 @@ impl WriteAheadLog {
 
         // We only want to rotate the log segments at progress messages
         // so that we can extract batches.
-        if self.current_bytes_written > MAX_LOG_SEGMENT_SIZE {
+        if self.current_bytes_written > LOG_SEGMENT_SIZE_LIMIT {
             self.rotate_log_segment()?;
             // Write the progress update to the new file to make sure we
             // know the `lower` for the new file
@@ -177,7 +187,7 @@ impl WriteAheadLog {
             .join(format!("log-{}", self.current_sequence_number + 1));
 
         // First lets open the new file
-        let new_file = create_log_segment(&new_file_path)?;
+        let new_file = open_log_segment(&new_file_path, true)?;
         let old_file = std::mem::replace(&mut self.current_file, new_file);
 
         // Let's close the file descriptor from the old file and mark it as final.
@@ -187,6 +197,17 @@ impl WriteAheadLog {
                 old_file_path.display()
             )
         })?;
+
+        // TODO: Need to sync the parent directory here to be sure that
+        // we durably persist the rename. I think perhaps a clearer protocol
+        // then is to:
+        // * write a termination 4 byte sequence
+        // * fsync() the file
+        // * rename the file to mark completion
+        // * fsync() the parent directory to durably persist the rename.
+        // * open a new file
+        // * fsync() the parent directory to durably persist the file creation.
+        // Luckily I think the existing behavior is ok on most filesystems.
         fs::rename(&old_file_path, &old_file_rename).with_context(|| {
             format!(
                 "failed to rename finished log segment from: {} to: {}",
@@ -249,15 +270,7 @@ impl WriteAheadLog {
 
         if let Some((unfinished_file, sequence_number)) = unfinished_file {
             // Lets start writing to the previously created file.
-            let file = fs::OpenOptions::new()
-                .append(true)
-                .open(&unfinished_file)
-                .with_context(|| {
-                    format!(
-                        "trying to reopen wal segment file at path: {}",
-                        unfinished_file.display()
-                    )
-                })?;
+            let file = open_log_segment(&unfinished_file, false)?;
 
             let ret = Self {
                 id,
@@ -373,9 +386,12 @@ pub fn encode_update(
 
     // Write out the header
     // Not a progress message so - 0
-    buf.write_u32::<NetworkEndian>(0).unwrap();
-    buf.write_u64::<NetworkEndian>(timestamp).unwrap();
-    buf.write_i64::<NetworkEndian>(diff as i64).unwrap();
+    buf.write_u32::<NetworkEndian>(0)
+        .expect("writes to vec cannot fail");
+    buf.write_u64::<NetworkEndian>(timestamp)
+        .expect("writes to vec cannot fail");
+    buf.write_i64::<NetworkEndian>(diff as i64)
+        .expect("writes to vec cannot fail");
 
     // Now write out the data
     buf.write_u32::<NetworkEndian>(data.len() as u32)
@@ -399,15 +415,21 @@ pub fn encode_progress(timestamp: Timestamp, buf: &mut Vec<u8>) -> Result<(), an
 // TODO: We also want to open this file with `O_SYNC` or otherwise guarantee that
 // every write to the WAL is followed by a `fsync()` to make sure we durably
 // flush updates to disk.
-fn create_log_segment(path: &Path) -> Result<File, anyhow::Error> {
-    fs::OpenOptions::new()
-        .append(true)
-        .create_new(true)
-        .open(path)
-        .with_context(|| {
-            format!(
-                "trying to create wal segment file at path: {}",
-                path.display()
-            )
-        })
+// TODO: we need to also fsync the parent directory to durably persist the file
+// entry.
+fn open_log_segment(path: &Path, create_new: bool) -> Result<File, anyhow::Error> {
+    let mut options = fs::OpenOptions::new();
+    options.append(true);
+
+    // TODO: perhaps setting this option to false when not previously set is a no-op.
+    // Was not obvious to me from the documentation.
+    if create_new {
+        options.create_new(true);
+    }
+    options.open(path).with_context(|| {
+        format!(
+            "trying to open wal segment file at path: {}",
+            path.display()
+        )
+    })
 }

@@ -64,8 +64,8 @@
 //!     (row2, t1, diff3)
 //!     (row3, t2, diff4)
 //!
-//! Each batch stores its data in a separate file or in the future, a separate S3 bucket. We only keep the metadata
-//! required to find the data (a path or S3 prefix + bucket id) in memory + a description of the timestamps the batch
+//! Each batch stores its data in a separate file or in the future, a separate S3 object. We only keep the metadata
+//! required to find the data (a path or S3 prefix + object id) in memory + a description of the timestamps the batch
 //! covers.
 //!
 //! The Compacter keeps a Trace for each relation. A Trace is (perhaps superficially) similar to a
