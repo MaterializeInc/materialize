@@ -911,6 +911,17 @@ SELECT right('str', 42, 17)
 #不见
 #(empty)
 
+# edge case
+query T rowsort
+SELECT right(vccol, 0) FROM righttest
+----
+(empty)
+(empty)
+NULL
+(empty)
+(empty)
+(empty)
+
 # from the back
 query T rowsort
 SELECT right(vccol, 2) FROM righttest

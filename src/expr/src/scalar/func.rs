@@ -2409,7 +2409,7 @@ impl BinaryFunc {
             BinaryFunc::ConvertFrom => eager!(convert_from),
             BinaryFunc::Encode => eager!(encode, temp_storage),
             BinaryFunc::Decode => eager!(decode, temp_storage),
-            BinaryFunc::Right => Ok(eager!(right)),
+            BinaryFunc::Right => eager!(right),
             BinaryFunc::Trim => Ok(eager!(trim)),
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
@@ -4214,31 +4214,28 @@ fn trim_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_str().trim_matches(' '))
 }
 
-fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let string: &'a str = a.unwrap_str();
     let n = b.unwrap_int64();
 
-    // the index of every char in bytes
-    let byte_indices = string.char_indices().map(|(i, _)| i);
+    let mut byte_indices = string.char_indices().map(|(i, _)| i);
 
-    let start_in_bytes = if n > 0 {
-        // pop off the last n-1 elements
-        let mut byte_indices = byte_indices.rev().skip((n - 1) as usize);
-
-        // this will be our byte index
-        // if we went to far we just take the whole string
-        byte_indices.next().unwrap_or(0)
+    let start_in_bytes = if n == 0 {
+        string.len()
+    } else if n > 0 {
+        let char_index = usize::try_from(n - 1).map_err(|_| {
+            EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
+        })?;
+        // nth from the back
+        byte_indices.rev().nth(char_index).unwrap_or(0)
     } else {
-        let n = -n;
-        // pop off the first n elements
-        let mut byte_indices = byte_indices.skip(n as usize);
-
-        // this will be our byte index
-        // if we went to far, we should take the empty string
-        byte_indices.next().unwrap_or_else(|| string.len())
+        let n = n.abs();
+        let char_index = usize::try_from(n)
+            .map_err(|_| EvalError::InvalidParameterValue("invalid n".to_owned()))?;
+        byte_indices.nth(char_index).unwrap_or_else(|| string.len())
     };
 
-    Datum::String(&string[start_in_bytes..])
+    Ok(Datum::String(&string[start_in_bytes..]))
 }
 
 fn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
