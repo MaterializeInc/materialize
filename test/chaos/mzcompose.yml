@@ -35,6 +35,8 @@ services:
       - *materialized
     init: true
     command: -w4 --disable-telemetry
+    environment:
+      - MZ_DEV=1
 
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.3

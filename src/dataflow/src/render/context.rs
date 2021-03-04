@@ -40,17 +40,17 @@ pub type TraceKeyHandle<K, T, R> = TraceAgent<OrdKeySpine<K, T, R>>;
 /// A trace handle for key-value data.
 pub type TraceValHandle<K, V, T, R> = TraceAgent<OrdValSpine<K, V, T, R>>;
 
-type Diff = isize;
+pub type Diff = isize;
 
 // Local type definition to avoid the horror in signatures.
 pub type Arrangement<S, V> = Arranged<S, TraceValHandle<V, V, <S as ScopeParent>::Timestamp, Diff>>;
 pub type ErrArrangement<S> =
     Arranged<S, TraceKeyHandle<DataflowError, <S as ScopeParent>::Timestamp, Diff>>;
-type ArrangementImport<S, V, T> = Arranged<
+pub type ArrangementImport<S, V, T> = Arranged<
     S,
     TraceEnter<TraceFrontier<TraceValHandle<V, V, T, Diff>>, <S as ScopeParent>::Timestamp>,
 >;
-type ErrArrangementImport<S, T> = Arranged<
+pub type ErrArrangementImport<S, T> = Arranged<
     S,
     TraceEnter<
         TraceFrontier<TraceKeyHandle<DataflowError, T, Diff>>,
