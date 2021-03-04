@@ -117,7 +117,7 @@ where
                                         if bounds_valid != n_cols {
                                             events_error += 1;
                                             session.give((Err(DataflowError::DecodeError(
-                                                DecodeError::Text(format!("CSV error: expected {} columns, got {}. Ignoring row.", n_cols, bounds_valid))
+                                                DecodeError::Text(format!("CSV error: expected {} columns, got {}.", n_cols, bounds_valid))
                                             )), *cap.time(), 1));
                                         } else {
                                             events_success += 1;
