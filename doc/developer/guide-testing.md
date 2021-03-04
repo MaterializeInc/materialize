@@ -374,7 +374,7 @@ will hamper development as often as it catches regressions.
 
 Nikhil's philosophy is that writing a battery of system tests is a much better
 use of time. Testdrive and sqllogictest have discovered numerous bugs with the
-fiddly bits of timestamp assignment in the dataflow package, even though that's
+fiddly bits of timestamp assignment in the coord package, even though that's
 not what they're designed for. It's true that it's much harder to ascertain what
 exactly went wrong–some of these failures presented as hangs in CI—but I wager
 that you still net save time by not writing overly complicated and brittle unit
