@@ -230,9 +230,11 @@ function View(props) {
 
       const chan_table = await query(`
         SELECT DISTINCT
-          id, source_node, target_node
+          id, source_node, target_node, sent
         FROM
-          mz_catalog.mz_dataflow_channels
+          mz_catalog.mz_dataflow_channels AS channels
+          LEFT JOIN mz_catalog.mz_message_counts AS counts
+              ON channels.id = counts.channel AND channels.worker = counts.source_worker
         WHERE
           id
           IN (
@@ -255,7 +257,7 @@ function View(props) {
       `);
       // {id: [source, target]}.
       const chans = Object.fromEntries(
-        chan_table.rows.map(([id, source, target]) => [id, [source, target]])
+        chan_table.rows.map(([id, source, target, sent]) => [id, [source, target, sent]])
       );
       setChans(chans);
 
@@ -353,7 +355,7 @@ function View(props) {
       sg.push('}');
       return sg.join('\n');
     });
-    const edges = Object.entries(chans).map(([id, [source, target]]) => {
+    const edges = Object.entries(chans).map(([id, [source, target, sent]]) => {
       if (!(id in addrs)) {
         return `// ${id} not in addrs`;
       }
@@ -367,7 +369,8 @@ function View(props) {
       if (to_id === undefined) {
         return `// ${to} or not in lookup`;
       }
-      return `_${from_id} -> _${to_id};`;
+      return sent == null ? `_${from_id} -> _${to_id} [style="dashed"];` :
+        `_${from_id} -> _${to_id} [label="sent ${sent}"];`;
     });
     const oper_labels = Object.entries(opers).map(([id, name]) => {
       if (!addrs[id].length) {
