@@ -77,9 +77,13 @@ where
                         if std::str::from_utf8(line.as_slice()).is_err() {
                             // Generate an error object for the error stream
                             events_error += 1;
+                            let line_no= match line_no {
+                                Some(line_no) => line_no.to_string(),
+                                None => "unknown".into(),
+                            };
                             session.give((
                                 Err(DataflowError::DecodeError(DecodeError::Text(format!(
-                                    "CSV error: input text is not utf8"
+                                    "CSV error at lineno {}: invalid UTF-8", line_no
                                 )))),
                                 *cap.time(),
                                 1,
@@ -128,11 +132,15 @@ where
                                     csv_core::ReadRecordResult::Record => {
                                         if bounds_valid != n_cols {
                                             events_error += 1;
+                                            let line_no= match line_no {
+                                                Some(line_no) => line_no.to_string(),
+                                                None => "unknown".into(),
+                                            };
                                             session.give((
                                                 Err(DataflowError::DecodeError(DecodeError::Text(
                                                     format!(
                                                         "CSV error at lineno {}: expected {} columns, got {}.",
-                                                        line_no.unwrap_or_default(), n_cols, bounds_valid
+                                                        line_no, n_cols, bounds_valid
                                                     ),
                                                 ))),
                                                 *cap.time(),
