@@ -2207,6 +2207,7 @@ lazy_static! {
                 params!(Interval, Time) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
                 }, 1849;
+                params!(Numeric{scale: None}, Numeric{scale: None}) => AddNumeric, 17580;
             },
             "-" => Scalar {
                 params!(Int32) => UnaryFunc::NegInt32, 558;
@@ -2275,6 +2276,7 @@ lazy_static! {
                     let expr = lhs.call_binary(rhs, DivDecimal);
                     Ok(rescale_decimal(expr, si - s2, s))
                 }), 1761;
+                params!(Numeric{scale: None}, Numeric{scale: None}) => DivNumeric, 17610;
             },
             "%" => Scalar {
                 params!(Int32, Int32) => ModInt32, 530;

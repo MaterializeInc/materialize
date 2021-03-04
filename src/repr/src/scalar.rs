@@ -565,6 +565,12 @@ impl From<Uuid> for Datum<'static> {
     }
 }
 
+impl From<Decimal128> for Datum<'static> {
+    fn from(d: Decimal128) -> Datum<'static> {
+        Datum::Numeric(OrderedDecimal(d))
+    }
+}
+
 impl From<OrderedDecimal<Decimal128>> for Datum<'static> {
     fn from(d: OrderedDecimal<Decimal128>) -> Datum<'static> {
         Datum::Numeric(d)

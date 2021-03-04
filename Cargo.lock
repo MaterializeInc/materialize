@@ -1077,6 +1077,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "csv",
+ "dec",
  "encoding",
  "enum-iterator",
  "hex",

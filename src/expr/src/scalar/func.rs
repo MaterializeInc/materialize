@@ -20,6 +20,7 @@ use chrono::{
     DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike,
     Utc,
 };
+use dec::{Context, Decimal128, OrderedDecimal};
 use hmac::{Hmac, Mac, NewMac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
@@ -1022,6 +1023,16 @@ fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() + b.unwrap_decimal())
 }
 
+fn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut cx = Context::<Decimal128>::default();
+    let d = OrderedDecimal(cx.add(a.unwrap_numeric().0, b.unwrap_numeric().0));
+    if rdn::check_max_precision_strict(&cx, &d).is_err() {
+        Err(EvalError::NumericFieldOverflow)
+    } else {
+        Ok(Datum::from(d))
+    }
+}
+
 fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_interval()
         .checked_add(&b.unwrap_interval())
@@ -1183,6 +1194,18 @@ fn div_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
             .checked_div(b)
             .ok_or(EvalError::IntervalOutOfRange)
             .map(Datum::from)
+    }
+}
+
+fn div_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut cx = Context::<Decimal128>::default();
+    let d = OrderedDecimal(cx.div(a.unwrap_numeric().0, b.unwrap_numeric().0));
+    if cx.status().division_by_zero() {
+        Err(EvalError::DivisionByZero)
+    } else if rdn::exceeds_max_precision(&d) {
+        Err(EvalError::NumericFieldOverflow)
+    } else {
+        Ok(Datum::from(d))
     }
 }
 
@@ -2264,6 +2287,7 @@ pub enum BinaryFunc {
     AddDateTime,
     AddTimeInterval,
     AddDecimal,
+    AddNumeric,
     SubInt32,
     SubInt64,
     SubFloat32,
@@ -2290,6 +2314,7 @@ pub enum BinaryFunc {
     DivFloat64,
     DivDecimal,
     DivInterval,
+    DivNumeric,
     ModInt32,
     ModInt64,
     ModFloat32,
@@ -2390,6 +2415,7 @@ impl BinaryFunc {
             BinaryFunc::AddDateInterval => Ok(eager!(add_date_interval)),
             BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
             BinaryFunc::AddDecimal => Ok(eager!(add_decimal)),
+            BinaryFunc::AddNumeric => eager!(add_numeric),
             BinaryFunc::AddInterval => eager!(add_interval),
             BinaryFunc::SubInt32 => eager!(sub_int32),
             BinaryFunc::SubInt64 => eager!(sub_int64),
@@ -2417,6 +2443,7 @@ impl BinaryFunc {
             BinaryFunc::DivFloat64 => eager!(div_float64),
             BinaryFunc::DivDecimal => eager!(div_decimal),
             BinaryFunc::DivInterval => eager!(div_interval),
+            BinaryFunc::DivNumeric => eager!(div_numeric),
             BinaryFunc::ModInt32 => eager!(mod_int32),
             BinaryFunc::ModInt64 => eager!(mod_int64),
             BinaryFunc::ModFloat32 => eager!(mod_float32),
@@ -2558,6 +2585,8 @@ impl BinaryFunc {
 
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | SubDate | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
+
+            AddNumeric | DivNumeric => ScalarType::Numeric { scale: None }.nullable(in_nullable),
 
             // TODO(benesch): we correctly compute types for decimal scale, but
             // not decimal precision... because nothing actually cares about
@@ -2718,7 +2747,9 @@ impl BinaryFunc {
                 | SubInterval
                 | MulInterval
                 | DivInterval
+                | DivNumeric
                 | AddDecimal
+                | AddNumeric
                 | SubInt32
                 | SubInt64
                 | SubFloat32
@@ -2768,7 +2799,9 @@ impl BinaryFunc {
             | SubInterval
             | MulInterval
             | DivInterval
+            | DivNumeric
             | AddDecimal
+            | AddNumeric
             | SubInt32
             | SubInt64
             | SubFloat32
@@ -2885,6 +2918,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddFloat32 => f.write_str("+"),
             BinaryFunc::AddFloat64 => f.write_str("+"),
             BinaryFunc::AddDecimal => f.write_str("+"),
+            BinaryFunc::AddNumeric => f.write_str("+"),
             BinaryFunc::AddInterval => f.write_str("+"),
             BinaryFunc::AddTimestampInterval => f.write_str("+"),
             BinaryFunc::AddTimestampTzInterval => f.write_str("+"),
@@ -2917,6 +2951,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DivFloat64 => f.write_str("/"),
             BinaryFunc::DivDecimal => f.write_str("/"),
             BinaryFunc::DivInterval => f.write_str("/"),
+            BinaryFunc::DivNumeric => f.write_str("/"),
             BinaryFunc::ModInt32 => f.write_str("%"),
             BinaryFunc::ModInt64 => f.write_str("%"),
             BinaryFunc::ModFloat32 => f.write_str("%"),
