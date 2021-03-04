@@ -121,4 +121,4 @@ badint,
   FORMAT CSV WITH HEADER
 
 ! SELECT * FROM malformed_csv
-Decode error: Text: CSV error: expected 2 columns, got 1.
+Decode error: Text: CSV error at lineno 3: expected 2 columns, got 1.
