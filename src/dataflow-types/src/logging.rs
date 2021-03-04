@@ -122,7 +122,7 @@ impl LogVariant {
                 .with_column("source_worker", ScalarType::Int64.nullable(false))
                 .with_column("target_worker", ScalarType::Int64.nullable(false))
                 .with_column("sent", ScalarType::Int64.nullable(false))
-                .with_key(vec![0]),
+                .with_key(vec![0, 1, 2]),
 
             LogVariant::Differential(DifferentialLog::Arrangement) => RelationDesc::empty()
                 .with_column("operator", ScalarType::Int64.nullable(false))
@@ -197,10 +197,16 @@ impl LogVariant {
                 vec![(0, 0), (1, 1)],
             )],
             LogVariant::Timely(TimelyLog::Parks) => vec![],
-            LogVariant::Timely(TimelyLog::Messages) => vec![(
-                LogVariant::Timely(TimelyLog::Channels),
-                vec![(0, 0), (0, 0)],
-            )],
+            LogVariant::Timely(TimelyLog::Messages) => vec![
+                (
+                    LogVariant::Timely(TimelyLog::Channels),
+                    vec![(0, 0), (1, 1)],
+                ),
+                (
+                    LogVariant::Timely(TimelyLog::Channels),
+                    vec![(0, 0), (2, 2)],
+                ),
+            ],
             LogVariant::Differential(DifferentialLog::Arrangement) => vec![(
                 LogVariant::Timely(TimelyLog::Operates),
                 vec![(0, 0), (1, 1)],
