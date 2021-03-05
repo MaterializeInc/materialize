@@ -333,7 +333,7 @@ mzworkflows:
       OLTP_THREADS: 4
     steps:
       - step: workflow
-        workflow: setup-ingest-benchmark
+        workflow: prepare-snapshot
       - step: down
         destroy_volumes: true
       - step: workflow
