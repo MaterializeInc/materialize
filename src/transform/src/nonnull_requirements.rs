@@ -207,7 +207,16 @@ impl NonNullRequirements {
                 }
                 self.action(input, new_columns, gets);
             }
-            MirRelationExpr::TopK { input, .. } => {
+            MirRelationExpr::TopK {
+                input, group_key, ..
+            } => {
+                // We can only allow rows to be discarded if their key columns are
+                // NULL, as discarding rows based on other columns can change the
+                // result set, based on how NULL is ordered.
+                columns.retain(|c| group_key.contains(c));
+                // TODO(mcsherry): bind NULL ordering and apply the tranformation
+                // to all columns if the correct ASC/DESC ordering is observed
+                // (with some care about orderings on multiple columns).
                 self.action(input, columns, gets);
             }
             MirRelationExpr::Negate { input } => {
