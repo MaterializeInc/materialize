@@ -189,6 +189,7 @@ impl Batch {
         // at each timestamp.
         encode_progress(lower, &mut buf)?;
         for ((timestamp, row), diff) in time_data.into_iter() {
+            // TODO: this shouldn't happen anymore. Let's complain if it does.
             if diff == 0 {
                 continue;
             }
@@ -240,6 +241,7 @@ impl Batch {
             .to_str()
             .expect("batch name known to be valid utf8");
         let parts: Vec<_> = batch_name.split('-').collect();
+        // TODO: return an error here instead of asserting.
         assert!(parts.len() == 3);
         Ok(Self {
             upper: parts[2].parse()?,
@@ -253,8 +255,11 @@ impl Batch {
         read_segment(&self.path)
     }
 
-    /// Physically concatenate all batches together into a single batch
+    /// Physically concatenate all `Batch`s together into a single `Batch`
     /// and consolidate updates up to the frontier if provided.
+    ///
+    /// TODO: the provided `Batch`s need to span a contiguous time interval in order
+    /// for this to work. Let's verify that.
     fn compact(
         batches: &[Batch],
         trace_path: &Path,
@@ -272,19 +277,32 @@ impl Batch {
 
 /// A Trace is an on-disk representation of data meant to mimic a differential Trace.
 ///
-/// A Trace listens to the `wal_path` and checks for WAL segments that it can consolidate
+/// A Trace checks the `wal_path` and looks for WAL segments that it can consolidate
 /// into Batches (stored in the `trace_path`). Once it exceeds a certain number of Batches
 /// it tries to physically and logically compact them into a single batch that is
 /// compacted up to the `compaction` frontier.
 #[derive(Debug)]
 pub struct Trace {
+    // Directory where `Batch` data are stored. The `Trace` will create this directory,
+    // write files into it as updates come in, reads from it to compact and on restart,
+    // and will delete it when the underlying relation is dropped.
     trace_path: PathBuf,
+    // Directory where WAL segments are stored. The `Trace` assumes this directory already
+    // exists by the time the `Trace` is created, and the `Trace` will read from it to find
+    // newly minted log segments, delete segments as they are converted into `Batch`s and
+    // delete the directory when the underlying relation is dropped.
     wal_path: PathBuf,
+    // List of `Batch`s in this trace.
     batches: Vec<Batch>,
+    // Compaction frontier for this trace, as indicated by the `Coordinator`.
     compaction: Option<Timestamp>,
 }
 
 impl Trace {
+    /// Create a new `Trace` for relation `id`.
+    ///
+    /// Note that the `wal_path` has to already have been created, but the `trace_path` cannot
+    /// already exist before we instantiate this `Trace`.
     fn create(id: GlobalId, trace_path: PathBuf, wal_path: PathBuf) -> Result<Self, anyhow::Error> {
         let _ = fs::read_dir(&wal_path).with_context(|| {
             format!(
@@ -310,7 +328,12 @@ impl Trace {
     /// Remove all on-disk data for this trace.
     ///
     /// Importantly, we also delete the WAL directory here (the WAL writer
-    /// only gets to add new files and can't do anything else)
+    /// only gets to add new files and can't do anything else). It's important
+    /// for the `Trace` to do this, as the `Trace` reads from the `wal_path`
+    /// independently of the WAL writer, and if the WAL writer were to delete
+    /// the WAL directory, we would have to have either tighter coordination
+    /// between the two, or continually on guard for having had the directory
+    /// deleted while we were trying to read it.
     fn destroy(self) -> Result<(), anyhow::Error> {
         fs::remove_dir_all(&self.trace_path).with_context(|| {
             format!(
@@ -332,6 +355,8 @@ impl Trace {
         for segment in finished_segments {
             let batch = Batch::create(&segment, &self.trace_path)?;
             self.batches.push(batch);
+            // We only delete the WAL segment after the new `Batch` has been
+            // durably persisted.
             // TODO: Need to fsync wal directory here to persist the removal.
             fs::remove_file(&segment).with_context(|| {
                 format!(
@@ -351,6 +376,9 @@ impl Trace {
         }
 
         let mut segments = read_dir_regex(&self.wal_path, &FINISHED_WAL_SEGMENT_REGEX)?;
+        // Sort the segments by their WAL sequence number.
+        // TODO: we need to check that the sequence numbers are contiguous and
+        // directly follow the last sequence number consumed.
         segments.sort_by_key(|segment| {
             segment
                 .to_str()
@@ -365,30 +393,41 @@ impl Trace {
         Ok(segments)
     }
 
+    /// Checks for the unfinished WAL segment.
+    ///
+    /// This code assumes that the WAL writer always creates a new segment atomically
+    /// with marking the old one finished.
+    /// TODO: this assumption is inaccurate and kind of hard to justify, especially if
+    /// we wanted to later support "static" or "closed" tables.
     fn find_unfinished_wal_segment(&self) -> Result<PathBuf, anyhow::Error> {
         lazy_static! {
             static ref UNFINISHED_WAL_SEGMENT_REGEX: Regex = Regex::new("^log-[0-9]+$").unwrap();
         }
 
         let mut segments = read_dir_regex(&self.wal_path, &UNFINISHED_WAL_SEGMENT_REGEX)?;
-        if segments.len() > 1 {
-            bail!(
-                "Expected only a single unfinished wal segment at {}. Found {}",
-                self.wal_path.display(),
-                segments.len()
-            );
+        match segments.len() {
+            1 => Ok(segments.pop().unwrap()),
+            0 => {
+                bail!(
+                    "Expected at least a single unfinished wal segment at {}. Found none.",
+                    self.wal_path.display()
+                )
+            }
+            l => {
+                bail!(
+                    "Expected only a single unfinished wal segment at {}. Found {}",
+                    self.wal_path.display(),
+                    l
+                )
+            }
         }
-
-        if segments.len() == 0 {
-            bail!(
-                "Expected at least a single unfinished wal segment at {}. Found none.",
-                self.wal_path.display()
-            );
-        }
-
-        Ok(segments.pop().unwrap())
     }
 
+    /// Recover all of the `Batch`s we previously knew about (to be used after a
+    /// restart)
+    ///
+    /// TODO: this function needs to think harder to only keep one `Batch` per timestamp
+    /// and assure that a contiguous range of timestamps is covered.
     fn find_batches(&self) -> Result<Vec<Batch>, anyhow::Error> {
         lazy_static! {
             static ref BATCH_REGEX: Regex = Regex::new("^batch-[0-9]+-[0-9]+$").unwrap();
@@ -406,7 +445,7 @@ impl Trace {
     }
 
     /// Try to compact all of the batches we know about into a single batch from
-    /// [compaction_frontier, upper)
+    /// [lower, upper) with updates forwarded up to the compaction frontier.
     ///
     /// TODO: the approach to compacting is likely very suboptimal.
     fn compact(&mut self) -> Result<(), anyhow::Error> {
@@ -417,7 +456,8 @@ impl Trace {
             let batch = Batch::compact(&batches, &self.trace_path, self.compaction)?;
             self.batches.push(batch);
 
-            // TODO: This seems like potentially a place with a weird failure mode.
+            // TODO: This seems like potentially a place with a weird failure mode, because
+            // we might crash before we delete all of the now irrelevant `Batch`s.
             for batch in batches {
                 // TODO: need to fsync() the parent directory here to persist this removal.
                 fs::remove_file(&batch.path).with_context(|| {
@@ -446,8 +486,8 @@ impl Trace {
             compaction: None,
         };
 
-        let mut batches = ret.find_batches()?;
-        ret.batches.append(&mut batches);
+        // Reload the `Batch`s we had previously written to `trace_path`.
+        ret.batches = ret.find_batches()?;
 
         Ok(ret)
     }
@@ -480,6 +520,8 @@ impl Trace {
     }
 }
 
+/// The `Compacter` is (currently) a tokio task that receives instructions from
+/// the `Coordinator` and maintains `Trace`s for various relations.
 pub struct Compacter {
     rx: mpsc::UnboundedReceiver<CompacterMessage>,
     traces: HashMap<GlobalId, Trace>,
@@ -622,6 +664,10 @@ fn read_dir_regex(path: &Path, regex: &Regex) -> Result<Vec<PathBuf>, anyhow::Er
     Ok(results)
 }
 
+/// Try to decode the next message from `buf` starting at `offset`.
+///
+/// Returns a Message and the next offset to read from if successful, or None.
+/// TODO: make this API cleaner.
 fn read_message(buf: &[u8], mut offset: usize) -> Option<(Message, usize)> {
     if offset >= buf.len() {
         return None;
