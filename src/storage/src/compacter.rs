@@ -32,7 +32,10 @@ use crate::wal::{encode_progress, encode_update};
 /// The `Compacter` task keeps track of the persisted updates for each persisted relation and
 /// periodically compacts that representation to use space proportional to the number of
 /// distinct rows in the relation. In order to do so, the `Compacter` maintains a `Trace` for
-/// each persisted relation.
+/// each persisted relation. Note that the `Compacter` is currently a thread running on the
+/// Materialize process, but there's no conceptual reason it couldn't be a separate process, or
+/// even on a separate machine as long as it had access to the storage for the WAL (e.g. with a
+/// shared EBS volume).
 ///
 /// A `Trace` is basically a list of `Batch`s that represent a contiguous time interval, and a
 /// compaction frontier.
@@ -60,9 +63,19 @@ use crate::wal::{encode_progress, encode_update};
 /// combines all of them into a single large batch with updates
 /// forwarded to the compaction frontier.
 
+// How frequently the `Compacter` checks to see if `Batch`s should be compacted.
 // TODO: Lets add some jitter to compaction so we aren't compacting every single
 // relation at the same time maybe?
 static COMPACTER_INTERVAL: Duration = Duration::from_secs(300);
+
+// Data stored in Batches and log segment files.
+#[derive(Debug, PartialEq)]
+pub enum Message {
+    // (Row, time, diff) tuples
+    Data(Update),
+    // Statements about which timestamps we might still receive data at.
+    Progress(Timestamp),
+}
 
 /// Instructions that the Coordinator sends the Compacter.
 #[derive(Debug)]
@@ -82,6 +95,8 @@ pub enum CompacterMessage {
 /// TODO: Batches are meant to mimic differential / cdcv2 batches but do not do so
 /// currently. Let's fix that. Specifically, introduce a `since` field, and counts
 /// for the number of updates at each time.
+/// TODO: Differential has a struct called `Description` that we should eventually re-use
+/// here.
 #[derive(Debug)]
 struct Batch {
     upper: Timestamp,
@@ -91,6 +106,11 @@ struct Batch {
 
 impl Batch {
     /// Create a batch from a finished log segment file.
+    ///
+    /// Reads in the contents at `log_segment_path` into memory, consolidates them,
+    /// (i. e. keeps a single copy per (Row, time) update), and writes that data, along
+    /// with the corresponding [lower, upper) frontiers, to a new file. Returns a
+    /// new `Batch` that points to the newly created file.
     fn create(log_segment_path: &Path, trace_path: &Path) -> Result<Self, anyhow::Error> {
         let messages = read_segment(log_segment_path)?;
         Batch::create_from_messages(messages, trace_path, None)
@@ -99,7 +119,10 @@ impl Batch {
     /// Read in and consolidate a list of messages, and write them to a new batch file
     /// in `trace_path`.
     ///
-    /// Will also compact updates up to `compaction_frontier` if provided..
+    /// Will also compact updates up to `compaction_frontier` if provided.
+    /// TODO: more strongly assert invariants here. For example, the first and
+    /// last messages need to be progress messages that denote a lower and upper
+    /// bound on timestamps respectively.
     fn create_from_messages(
         messages: Vec<Message>,
         trace_path: &Path,
@@ -108,6 +131,12 @@ impl Batch {
         let mut upper: Option<Timestamp> = None;
         let mut lower: Option<Timestamp> = None;
         let mut time_data = BTreeMap::new();
+        // The messages are going to come in as a time ordered sequence of
+        // progress and data messages, with the first and last messages being
+        // progress messages that denote the lower and upper bounds for timestamps
+        // in the resulting `Batch`. However, there may be more than two timestamp
+        // progress messages present so keep update the upper bound when we see a
+        // newer progress message.
         for message in messages.iter() {
             match message {
                 Message::Progress(time) => match (lower, upper) {
@@ -130,12 +159,20 @@ impl Batch {
                     diff,
                 }) => {
                     let time = if let Some(frontier) = compaction_frontier {
-                        std::cmp::min(frontier, *timestamp)
+                        std::cmp::max(frontier, *timestamp)
                     } else {
                         *timestamp
                     };
+
+                    let lower =
+                        lower.expect("lower bound should be present before we see any data");
+                    assert!(time >= lower);
                     let entry = time_data.entry((time, row)).or_insert(0);
                     *entry += diff;
+
+                    if *entry == 0 {
+                        time_data.remove(&(time, row));
+                    }
                 }
             }
         }
@@ -583,15 +620,6 @@ fn read_dir_regex(path: &Path, regex: &Regex) -> Result<Vec<PathBuf>, anyhow::Er
     }
 
     Ok(results)
-}
-
-// Data stored in Batches
-#[derive(Debug, PartialEq)]
-pub enum Message {
-    // (Row, time, diff) tuples
-    Data(Update),
-    // Statements about which timestamps we might still receive data at.
-    Progress(Timestamp),
 }
 
 fn read_message(buf: &[u8], mut offset: usize) -> Option<(Message, usize)> {
