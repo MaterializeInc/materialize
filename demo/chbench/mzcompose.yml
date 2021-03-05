@@ -360,9 +360,11 @@ mzworkflows:
   # Run a test that populates Kafka with data from chbench for a set amount of time
   # After the first timer expires, stop chbench and wait for the data to stabilize
   # Record offsets ingested by Materialize and the answers to our count(*) views
-  # Take a snapshot of topic schemas and contents
-  # Leaves the cluster running
-  setup-ingest-benchmark:
+  prepare-snapshot:
+    env:
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-./tmp}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper
     steps:
     - step: run
       service: peeker
