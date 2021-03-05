@@ -23,6 +23,7 @@ use crate::source::SourceOutput;
 pub fn regex<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     regex: Regex,
+    name: &str,
 ) -> (
     Collection<G, Row, Diff>,
     Option<Collection<G, dataflow_types::DataflowError, Diff>>,
@@ -30,6 +31,7 @@ pub fn regex<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let name = String::from(name);
     let pact = SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract();
     let mut row_packer = repr::RowPacker::new();
     let stream = stream.unary(pact, "RegexDecode", |_cap, _op_info| {
@@ -56,8 +58,8 @@ where
                                 .collect::<String>();
                             session.give((
                                 Err(DataflowError::DecodeError(DecodeError::Text(format!(
-                                    "Regex error at lineno {}: invalid UTF-8, line prefix: {:?}",
-                                    line_no, line_prefix
+                                    "Regex error in source {} at lineno {}: invalid UTF-8, line prefix: {:?}",
+                                    name, line_no, line_prefix
                                 )))),
                                 *cap.time(),
                                 1,
