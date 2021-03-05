@@ -244,7 +244,9 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "composition", type=str, help="Name of the mzcompose composition to run",
+        "composition",
+        type=str,
+        help="Name of the mzcompose composition to run",
     )
 
     parser.add_argument(
