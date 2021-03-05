@@ -77,14 +77,13 @@ where
                         if std::str::from_utf8(line.as_slice()).is_err() {
                             // Generate an error object for the error stream
                             events_error += 1;
-                            let line_no= match line_no {
-                                Some(line_no) => line_no.to_string(),
-                                None => "unknown".into(),
-                            };
                             session.give((
-                                Err(DataflowError::DecodeError(DecodeError::Text(format!(
-                                    "CSV error at lineno {}: invalid UTF-8", line_no
-                                )))),
+                                Err(DataflowError::DecodeError(DecodeError::Text(
+                                    match line_no {
+                                        Some(line_no) => format!("CSV error at lineno {}: invalid UTF-8", line_no),
+                                        None => format!("CSV error at lineno 'unknown': invalid UTF-8"),
+                                    }
+                                ))),
                                 *cap.time(),
                                 1,
                             ));
@@ -132,16 +131,12 @@ where
                                     csv_core::ReadRecordResult::Record => {
                                         if bounds_valid != n_cols {
                                             events_error += 1;
-                                            let line_no= match line_no {
-                                                Some(line_no) => line_no.to_string(),
-                                                None => "unknown".into(),
-                                            };
                                             session.give((
                                                 Err(DataflowError::DecodeError(DecodeError::Text(
-                                                    format!(
-                                                        "CSV error at lineno {}: expected {} columns, got {}.",
-                                                        line_no, n_cols, bounds_valid
-                                                    ),
+                                                    match line_no {
+                                                        Some(line_no) => format!( "CSV error at lineno {}: expected {} columns, got {}.", line_no, n_cols, bounds_valid),
+                                                        None => format!("CSV error at lineno 'unknown': expected {} columns, got {}.", n_cols, bounds_valid),
+                                                    }
                                                 ))),
                                                 *cap.time(),
                                                 1,
