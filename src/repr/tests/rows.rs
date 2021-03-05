@@ -4,7 +4,7 @@ use proptest_derive::Arbitrary;
 use repr::{
     adt::decimal::Significand,
     adt::{array::ArrayDimension, interval::Interval},
-    Datum, RowPacker,
+    Datum, Row, RowPacker,
 };
 use std::ops::Add;
 use uuid::Uuid;
@@ -57,7 +57,7 @@ enum PropertizedDatum {
 }
 
 fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
-    (1..500_usize)
+    (1..8_usize)
         .prop_map(|length| ArrayDimension {
             lower_bound: 1,
             length,
@@ -66,22 +66,27 @@ fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-struct PropertizedArray {
-    dimensions: Vec<ArrayDimension>,
-    elements: Vec<PropertizedDatum>,
-}
+struct PropertizedArray(Row, Vec<PropertizedDatum>);
 
 fn arb_propertized_array() -> BoxedStrategy<PropertizedArray> {
-    prop::collection::vec(arb_array_dimension(), 1..20)
-        .prop_map(|dimensions| {
-            let min: usize = dimensions.iter().map(|d| d.length).sum();
-            (dimensions, min..min * 5)
-        })
-        .prop_map(|(dimensions, counts)| PropertizedArray {
-            dimensions,
-            elements: vec![],
-        })
-        .boxed()
+    prop::collection::vec(
+        arb_array_dimension(),
+        1..(repr::adt::array::MAX_ARRAY_DIMENSIONS as usize),
+    )
+    .prop_flat_map(|dimensions| {
+        let n_elts: usize = dimensions.iter().map(|d| d.length).product();
+        (
+            Just(dimensions),
+            prop::collection::vec(any::<PropertizedDatum>(), n_elts),
+        )
+    })
+    .prop_map(|(dimensions, elements)| {
+        let element_datums: Vec<Datum<'_>> = elements.iter().map(|pd| pd.into()).collect();
+        let mut packer = RowPacker::new();
+        packer.push_array(&dimensions, element_datums).unwrap();
+        PropertizedArray(packer.finish(), elements)
+    })
+    .boxed()
 }
 
 fn arb_interval() -> BoxedStrategy<Interval> {
@@ -134,6 +139,14 @@ impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
 }
 
 proptest! {
+    #[test]
+    fn array_packing_unpacks_correctly(array in arb_propertized_array()) {
+        let PropertizedArray(row, elts) = array;
+        let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
+        let unpacked_datums: Vec<Datum<'_>> = row.unpack_first().unwrap_array().elements().iter().collect();
+        assert_eq!(unpacked_datums, datums);
+    }
+
     #[test]
     fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(any::<PropertizedDatum>(), 1..100)) {
         let mut packer = RowPacker::new();
