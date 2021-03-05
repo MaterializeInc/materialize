@@ -12,13 +12,13 @@ use std::str;
 
 use differential_dataflow::{AsCollection, Collection};
 use regex::Regex;
-use timely::dataflow::operators::{OkErr, Operator};
+use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
 use dataflow_types::{DataflowError, DecodeError};
 use repr::{Datum, Diff, Row, Timestamp};
 
-use crate::source::SourceOutput;
+use crate::{operator::CollectionExt, source::SourceOutput};
 
 pub fn regex<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
@@ -87,10 +87,6 @@ where
         }
     });
 
-    let (oks, errs) = stream.ok_err(|(data, time, diff)| match data {
-        Ok(data) => Ok((data, time, diff)),
-        Err(err) => Err((err, time, diff)),
-    });
-
-    (oks.as_collection(), Some(errs.as_collection()))
+    let (oks, errs) = stream.as_collection().map_fallible(|x| x);
+    return (oks, Some(errs));
 }
