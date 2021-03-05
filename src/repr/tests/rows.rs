@@ -1,7 +1,11 @@
 use chrono::TimeZone;
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
-use repr::{adt::decimal::Significand, adt::interval::Interval, Datum, RowPacker};
+use repr::{
+    adt::decimal::Significand,
+    adt::{array::ArrayDimension, interval::Interval},
+    Datum, RowPacker,
+};
 use std::ops::Add;
 use uuid::Uuid;
 
@@ -50,6 +54,34 @@ enum PropertizedDatum {
     Uuid(Uuid),
 
     Dummy,
+}
+
+fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
+    (1..500_usize)
+        .prop_map(|length| ArrayDimension {
+            lower_bound: 1,
+            length,
+        })
+        .boxed()
+}
+
+#[derive(Debug, PartialEq, Clone)]
+struct PropertizedArray {
+    dimensions: Vec<ArrayDimension>,
+    elements: Vec<PropertizedDatum>,
+}
+
+fn arb_propertized_array() -> BoxedStrategy<PropertizedArray> {
+    prop::collection::vec(arb_array_dimension(), 1..20)
+        .prop_map(|dimensions| {
+            let min: usize = dimensions.iter().map(|d| d.length).sum();
+            (dimensions, min..min * 5)
+        })
+        .prop_map(|(dimensions, counts)| PropertizedArray {
+            dimensions,
+            elements: vec![],
+        })
+        .boxed()
 }
 
 fn arb_interval() -> BoxedStrategy<Interval> {
