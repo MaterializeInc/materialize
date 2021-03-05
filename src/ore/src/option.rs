@@ -48,7 +48,7 @@ impl<T> OptionExt<T> for Option<T> {
 }
 
 /// Extension methods for things, like `[Option]`, that are displayable if a default value is supplied.
-pub trait OrDisplay<T, D> {
+pub trait OrDisplay<D> {
     /// The type returned by the [`or_display`] function
     type Displayable: Display;
     /// Wrap the object in a type that can be displayed, by providing it with a default display value.
@@ -83,7 +83,7 @@ where
     }
 }
 
-impl<T, D> OrDisplay<T, D> for Option<T>
+impl<T, D> OrDisplay<D> for Option<T>
 where
     D: Display,
     T: Display,
