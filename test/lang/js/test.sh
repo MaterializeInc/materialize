@@ -19,7 +19,7 @@ cd "$(dirname "$0")/../../.."
 
 cd test/lang/js
 
-yarn install
+yarn install --frozen-lockfile
 
 ci_init
 
