@@ -30,9 +30,9 @@ enum PropertizedDatum {
     String(String),
 
     Array(PropertizedArray),
+    List(PropertizedList),
 
     // TODO: these variants need reimplementation of the corresponding types:
-    // List(DatumList<'a>),
     // Map(DatumMap<'a>),
     JsonNull,
     Uuid(Uuid),
@@ -62,7 +62,10 @@ fn arb_datum() -> BoxedStrategy<PropertizedDatum> {
         Just(PropertizedDatum::Dummy)
     ];
     leaf.prop_recursive(3, 8, 16, |inner| {
-        prop_oneof!(arb_array(inner.clone()).prop_map(PropertizedDatum::Array))
+        prop_oneof!(
+            arb_array(inner.clone()).prop_map(PropertizedDatum::Array),
+            arb_list(inner.clone()).prop_map(PropertizedDatum::List),
+        )
     })
     .boxed()
 }
@@ -99,6 +102,20 @@ fn arb_array(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy
         PropertizedArray(packer.finish(), elements)
     })
     .boxed()
+}
+
+#[derive(Debug, PartialEq, Clone)]
+struct PropertizedList(Row, Vec<PropertizedDatum>);
+
+fn arb_list(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<PropertizedList> {
+    prop::collection::vec(element_strategy.clone(), 1..50)
+        .prop_map(|elements| {
+            let element_datums: Vec<Datum<'_>> = elements.iter().map(|pd| pd.into()).collect();
+            let mut packer = RowPacker::new();
+            packer.push_list(element_datums.iter());
+            PropertizedList(packer.finish(), elements)
+        })
+        .boxed()
 }
 
 fn arb_interval() -> BoxedStrategy<Interval> {
@@ -146,6 +163,10 @@ impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
             Array(PropertizedArray(row, _)) => {
                 let array = row.unpack_first().unwrap_array();
                 Datum::Array(array)
+            }
+            List(PropertizedList(row, _)) => {
+                let list = row.unpack_first().unwrap_list();
+                Datum::List(list)
             }
             JsonNull => Datum::JsonNull,
             Uuid(u) => Datum::from(*u),
