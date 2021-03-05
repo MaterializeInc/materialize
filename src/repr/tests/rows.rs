@@ -31,9 +31,8 @@ enum PropertizedDatum {
 
     Array(PropertizedArray),
     List(PropertizedList),
+    Map(PropertizedDict),
 
-    // TODO: these variants need reimplementation of the corresponding types:
-    // Map(DatumMap<'a>),
     JsonNull,
     Uuid(Uuid),
     Dummy,
@@ -65,6 +64,7 @@ fn arb_datum() -> BoxedStrategy<PropertizedDatum> {
         prop_oneof!(
             arb_array(inner.clone()).prop_map(PropertizedDatum::Array),
             arb_list(inner.clone()).prop_map(PropertizedDatum::List),
+            arb_dict(inner.clone()).prop_map(PropertizedDatum::Map),
         )
     })
     .boxed()
@@ -114,6 +114,25 @@ fn arb_list(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<
             let mut packer = RowPacker::new();
             packer.push_list(element_datums.iter());
             PropertizedList(packer.finish(), elements)
+        })
+        .boxed()
+}
+
+#[derive(Debug, PartialEq, Clone)]
+struct PropertizedDict(Row, Vec<(String, PropertizedDatum)>);
+
+fn arb_dict(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<PropertizedDict> {
+    prop::collection::vec((".*", element_strategy.clone()), 1..50)
+        .prop_map(|mut entries| {
+            entries.sort_by_key(|(k, _)| k.clone());
+            entries.dedup_by_key(|(k, _)| k.clone());
+            let mut packer = RowPacker::new();
+            let entry_iter: Vec<(&str, Datum<'_>)> = entries
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.into()))
+                .collect();
+            packer.push_dict(entry_iter.into_iter());
+            PropertizedDict(packer.finish(), entries)
         })
         .boxed()
 }
@@ -168,6 +187,10 @@ impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
                 let list = row.unpack_first().unwrap_list();
                 Datum::List(list)
             }
+            Map(PropertizedDict(row, _)) => {
+                let map = row.unpack_first().unwrap_map();
+                Datum::Map(map)
+            }
             JsonNull => Datum::JsonNull,
             Uuid(u) => Datum::from(*u),
             Dummy => Datum::Dummy,
@@ -181,6 +204,22 @@ proptest! {
         let PropertizedArray(row, elts) = array;
         let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
         let unpacked_datums: Vec<Datum<'_>> = row.unpack_first().unwrap_array().elements().iter().collect();
+        assert_eq!(unpacked_datums, datums);
+    }
+
+    #[test]
+    fn list_packing_unpacks_correctly(array in arb_list(arb_datum())) {
+        let PropertizedList(row, elts) = array;
+        let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
+        let unpacked_datums: Vec<Datum<'_>> = row.unpack_first().unwrap_list().iter().collect();
+        assert_eq!(unpacked_datums, datums);
+    }
+
+    #[test]
+    fn dict_packing_unpacks_correctly(array in arb_dict(arb_datum())) {
+        let PropertizedDict(row, elts) = array;
+        let datums: Vec<(&str, Datum<'_>)> = elts.iter().map(|(k, e)| (k.as_str(), e.into())).collect();
+        let unpacked_datums: Vec<(&str, Datum<'_>)> = row.unpack_first().unwrap_map().iter().collect();
         assert_eq!(unpacked_datums, datums);
     }
 
