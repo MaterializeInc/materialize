@@ -1039,6 +1039,18 @@ where
                 command_complete!("{}", tag)
             }
             ExecuteResponse::Tailing { rx } => {
+                if fetch_portal_name.is_none() {
+                    let mut msg = ErrorResponse::notice(
+                        SqlState::WARNING,
+                        "streaming TAIL rows directly requires a client that does not buffer output",
+                    );
+                    if self.coord_client.session().vars().application_name() == "psql" {
+                        msg.hint =
+                            Some("Wrap your TAIL statement in `COPY (TAIL ...) TO STDOUT`.".into())
+                    }
+                    self.conn.send(msg).await?;
+                    self.conn.flush().await?;
+                }
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::Tailing");
                 self.send_rows(
