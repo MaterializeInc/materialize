@@ -92,7 +92,6 @@ fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
 struct PropertizedArray(Row, Vec<PropertizedDatum>);
 
 fn arb_array(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<PropertizedArray> {
-    let element_strategy = element_strategy.clone();
     prop::collection::vec(
         arb_array_dimension(),
         1..(repr::adt::array::MAX_ARRAY_DIMENSIONS as usize),
@@ -117,7 +116,7 @@ fn arb_array(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy
 struct PropertizedList(Row, Vec<PropertizedDatum>);
 
 fn arb_list(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<PropertizedList> {
-    prop::collection::vec(element_strategy.clone(), 1..50)
+    prop::collection::vec(element_strategy, 1..50)
         .prop_map(|elements| {
             let element_datums: Vec<Datum<'_>> = elements.iter().map(|pd| pd.into()).collect();
             let mut packer = RowPacker::new();
@@ -131,7 +130,7 @@ fn arb_list(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<
 struct PropertizedDict(Row, Vec<(String, PropertizedDatum)>);
 
 fn arb_dict(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<PropertizedDict> {
-    prop::collection::vec((".*", element_strategy.clone()), 1..50)
+    prop::collection::vec((".*", element_strategy), 1..50)
         .prop_map(|mut entries| {
             entries.sort_by_key(|(k, _)| k.clone());
             entries.dedup_by_key(|(k, _)| k.clone());
