@@ -48,19 +48,13 @@ where
                     let line = match str::from_utf8(&line) {
                         Ok(line) => line,
                         Err(_) => {
-                            let line_no = match line_no {
-                                Some(line_no) => line_no.to_string(),
-                                None => "unknown".into(),
-                            };
-                            let line_prefix = String::from_utf8_lossy(&line)
-                                .chars()
-                                .take(64)
-                                .collect::<String>();
                             session.give((
-                                Err(DataflowError::DecodeError(DecodeError::Text(format!(
-                                    "Regex error in source {} at lineno {}: invalid UTF-8, line prefix: {:?}",
-                                    name, line_no, line_prefix
-                                )))),
+                                Err(DataflowError::DecodeError(DecodeError::Text(
+                                    match line_no {
+                                        Some(line_no) => format!("Regex error in source {} at lineno {}: invalid UTF-8", name, line_no.to_string()),
+                                        None => format!("Regex error in source {} at lineno 'unknown': invalid UTF-8", name),
+                                    }
+                                ))),
                                 *cap.time(),
                                 1,
                             ));
