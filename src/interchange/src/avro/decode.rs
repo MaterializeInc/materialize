@@ -613,24 +613,6 @@ fn pack_value(v: Value, mut row: RowPacker, n: SchemaNode) -> anyhow::Result<Row
     Ok(row)
 }
 
-pub fn extract_nullable_row<'a, I>(v: Value, extra: I, n: SchemaNode) -> anyhow::Result<Option<Row>>
-where
-    I: IntoIterator<Item = Datum<'a>>,
-{
-    let (v, n) = match v {
-        Value::Union { index, inner, .. } => {
-            let next = if let SchemaPiece::Union(us) = n.inner {
-                n.step(&us.variants()[index])
-            } else {
-                unreachable!("Avro value out of sync with schema")
-            };
-            (*inner, next)
-        }
-        _ => bail!("unsupported avro value: {:?}", v),
-    };
-    extract_row(v, extra, n)
-}
-
 pub fn extract_row<'a, I>(v: Value, extra: I, n: SchemaNode) -> anyhow::Result<Option<Row>>
 where
     I: IntoIterator<Item = Datum<'a>>,
