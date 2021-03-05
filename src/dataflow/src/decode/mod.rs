@@ -464,7 +464,7 @@ where
             "Internal error: A non-Avro Debezium-envelope source should not have been created."
         ),
         (DataEncoding::Regex(RegexEncoding { regex }), SourceEnvelope::None) => {
-            ((regex_fn(stream, regex, debug_name), None), None)
+            (regex_fn(stream, regex, debug_name), None)
         }
         (DataEncoding::Protobuf(enc), SourceEnvelope::None) => (
             decode_values_inner(

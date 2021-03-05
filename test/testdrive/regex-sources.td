@@ -10,7 +10,6 @@
 $ file-append path=request.log
 123.17.127.5 - - [22/Jan/2020 18:59:52] "GET / HTTP/1.1" 200 -
 8.15.119.56 - - [22/Jan/2020 18:59:52] "GET /detail/nNZpqxzR HTTP/1.1" 200 -
-this line has invalid UTF-8 and will be dropped --> \x80 <--
 96.12.83.72 - - [22/Jan/2020 18:59:52] "GET /search/?kw=helper+ins+hennaed HTTP/1.1" 200 -
 
 # Regex explained here: https://www.debuggex.com/r/k48kBEt-lTMUZbaw
@@ -33,7 +32,7 @@ ip            ts                      path                                      
 --------------------------------------------------------------------------------------------------------------------------------------------
 123.17.127.5  "22/Jan/2020 18:59:52"  "GET / HTTP/1.1"                               <null>              <null>             200   1
 8.15.119.56   "22/Jan/2020 18:59:52"  "GET /detail/nNZpqxzR HTTP/1.1"                <null>              nNZpqxzR           200   2
-96.12.83.72   "22/Jan/2020 18:59:52"  "GET /search/?kw=helper+ins+hennaed HTTP/1.1"  helper+ins+hennaed  <null>             200   4
+96.12.83.72   "22/Jan/2020 18:59:52"  "GET /search/?kw=helper+ins+hennaed HTTP/1.1"  helper+ins+hennaed  <null>             200   3
 
 > SELECT search_kw FROM regex_source WHERE search_kw IS NOT NULL
 search_kw
@@ -60,4 +59,17 @@ ip            ts                      path                                      
 --------------------------------------------------------------------------------------------------------------------------------------------
 123.17.127.5  "22/Jan/2020 18:59:52"  "GET / HTTP/1.1"                               <null>              <null>             200   1
 8.15.119.56   "22/Jan/2020 18:59:52"  "GET /detail/nNZpqxzR HTTP/1.1"                <null>              nNZpqxzR           200   2
-96.12.83.72   "22/Jan/2020 18:59:52"  "GET /search/?kw=helper+ins+hennaed HTTP/1.1"  helper+ins+hennaed  <null>             200   4
+96.12.83.72   "22/Jan/2020 18:59:52"  "GET /search/?kw=helper+ins+hennaed HTTP/1.1"  helper+ins+hennaed  <null>             200   3
+
+# Malformed regex with non-utf-8 characters
+$ file-append path=malformed-request.log
+123.17.127.5 - - [22/Jan/2020 18:59:52] "GET / HTTP/1.1" 200 -
+8.15.119.56 - - [22/Jan/2020 18:59:52] "GET /detail/nNZpqxzR HTTP/1.1" 200 -
+this line has invalid UTF-8 and will be cause dataflow errors --> \x80 <--
+96.12.83.72 - - [22/Jan/2020 18:59:52] "GET /search/?kw=helper+ins+hennaed HTTP/1.1" 200 -
+
+> CREATE MATERIALIZED SOURCE bad_regex_source FROM FILE '${testdrive.temp-dir}/malformed-request.log'
+  FORMAT REGEX '(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<path>(?:GET /search/\?kw=(?P<search_kw>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<product_detail_id>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<code>\d{3}) -'
+
+! SELECT * FROM bad_regex_source
+Decode error: Text: Regex error in source materialize.public.bad_regex_source_primary_idx at lineno 3: invalid UTF-8
