@@ -71,7 +71,7 @@ impl Metrics {
         self.pending_peeks.set(pending_peeks.len() as i64);
     }
 
-    /// Observe that we have executed a command. Must be paired with [`observe_command_finish`]
+    /// Observe that we have executed a command. Must be paired with [`Metrics::observe_command_finish`]
     pub(super) fn observe_command(&mut self, command: &SequencedCommand) {
         self.commands_processed.observe(command)
     }
