@@ -82,7 +82,7 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
 
-    /// Like [`timely::dataflow::operators::map::Map::filter`], but `logic`
+    /// Like [`timely::dataflow::operators::filter::Filter::filter`], but `logic`
     /// is allowed to fail. The first returned stream will contain the
     /// elements where `logic` returned `Ok(true)`, and the second returned
     /// stream will contain the errors for elements where `logic` failed.

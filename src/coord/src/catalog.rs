@@ -82,7 +82,7 @@ pub const FIRST_USER_OID: u32 = 20_000;
 /// unambiguously specifies the item, or a [`PartialName`], which can omit the
 /// database name and/or the schema name. Partial names can be converted into
 /// full names via a complicated resolution process documented by the
-/// [`resolve`] method.
+/// [`Catalog::resolve`] method.
 ///
 /// The catalog also maintains special "ambient schemas": virtual schemas,
 /// implicitly present in all databases, that house various system views.
@@ -933,8 +933,6 @@ impl Catalog {
     }
 
     /// Returns the named catalog item, if it exists.
-    ///
-    /// See also [`Catalog::get`].
     pub fn try_get(&self, name: &FullName, conn_id: u32) -> Option<&CatalogEntry> {
         self.get_schema(&name.database, &name.schema, conn_id)
             .and_then(|schema| schema.items.get(&name.item))

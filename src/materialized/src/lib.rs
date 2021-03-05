@@ -142,7 +142,7 @@ pub enum TlsMode {
         /// The path to a TLS certificate authority.
         ca: PathBuf,
     },
-    /// Like [`TlsMode::VerifyCA`], but the `cn` (Common Name) field of the
+    /// Like [`TlsMode::VerifyCa`], but the `cn` (Common Name) field of the
     /// certificate must additionally match the user named in the connection
     /// request.
     VerifyFull {

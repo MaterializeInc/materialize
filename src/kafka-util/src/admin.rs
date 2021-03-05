@@ -31,7 +31,7 @@ use ore::retry;
 /// creation can result in "unknown topic" errors.
 ///
 /// This function does not return successfully unless it can find the metadata
-/// for the newly-created topic in a call to [`Client::fetch_metadata`] and
+/// for the newly-created topic in a call to [`rdkafka::client::Client::fetch_metadata`] and
 /// verify that the metadata reports the topic has the number of partitions
 /// requested in `new_topic`. Empirically, this seems to be the condition that
 /// guarantees that future attempts to consume from or produce to the topic will

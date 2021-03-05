@@ -84,7 +84,7 @@ pub struct Response<T> {
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponse> + Send>>;
 
-/// The response to [`Client::startup`](crate::Client::startup).
+/// The response to [`ConnClient::startup`]().
 #[derive(Debug)]
 pub struct StartupResponse {
     /// An opaque secret associated with this session.

@@ -98,7 +98,7 @@ where
 
 /// Parses an [`i32`] from `s`.
 ///
-/// Valid values are whatever the [`FromStr`] implementation on `i32` accepts,
+/// Valid values are whatever the [`std::str::FromStr`] implementation on `i32` accepts,
 /// plus leading and trailing whitespace.
 pub fn parse_int32(s: &str) -> Result<i32, ParseError> {
     s.trim()

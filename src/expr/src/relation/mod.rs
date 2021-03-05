@@ -741,7 +741,7 @@ impl MirRelationExpr {
     /// Returns the distinct global identifiers on which this expression
     /// depends.
     ///
-    /// See [`Relationexpr::global_uses_into`] to reuse an existing vector.
+    /// See [`MirRelationExpr::global_uses_into`] to reuse an existing vector.
     pub fn global_uses(&self) -> Vec<GlobalId> {
         let mut out = vec![];
         self.global_uses_into(&mut out);

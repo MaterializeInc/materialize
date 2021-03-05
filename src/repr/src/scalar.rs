@@ -685,7 +685,7 @@ pub enum ScalarType {
     ///   * [`Datum::String`]
     ///   * [`Datum::Float64`]
     ///   * [`Datum::List`]
-    ///   * [`Datum::Dict`]
+    ///   * [`Datum::Map`]
     Jsonb,
     /// The type of [`Datum::Uuid`].
     Uuid,
@@ -713,7 +713,7 @@ pub enum ScalarType {
     },
     /// A PostgreSQL object identifier.
     Oid,
-    /// The type of [`Datum::Dict`]
+    /// The type of [`Datum::Map`]
     ///
     /// Keys within the map are always of type [`ScalarType::String`].
     /// Values within the map are of the specified type. Values may always

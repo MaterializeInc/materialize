@@ -528,7 +528,7 @@ impl ConsistencyInfo {
     /// This method assumes that timestamps are inserted in increasing order in the hashmap
     /// (even across partitions). This means that once we see a timestamp with ts x, no entry with
     /// ts (x-1) will ever be inserted. Entries with timestamp x might still be inserted in different
-    /// partitions. This is guaranteed by the [coord::timestamp::is_valid_ts] method.
+    /// partitions. This is guaranteed by the [coord::timestamp::is_ts_valid] method.
     ///
     fn downgrade_capability<Out: Send + Clone + 'static>(
         &mut self,

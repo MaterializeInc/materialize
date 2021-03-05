@@ -882,7 +882,7 @@ impl RowPacker {
     ///
     /// The supplied closure will be invoked once with a `RowPacker` that can
     /// be used to populate the list. It is valid to call any method on the
-    /// [`RowPacker`] except for [`Row::finish_and_reuse`].
+    /// [`RowPacker`] except for [`RowPacker::finish_and_reuse`].
     ///
     /// Returns the value returned by the closure, if any.
     ///
@@ -919,7 +919,7 @@ impl RowPacker {
         out
     }
 
-    /// Pushes a [`DatumDict`] that is built from a closure.
+    /// Pushes a [`DatumMap`] that is built from a closure.
     ///
     /// The supplied closure will be invoked once with a `RowPacker` that can be
     /// used to populate the dict.
@@ -1046,7 +1046,7 @@ impl RowPacker {
 
     /// Convenience function to push a `DatumList` from an iter of `Datum`s
     ///
-    /// See [`push_dict_with`] if you need to be able to handle errors
+    /// See [`RowPacker::push_dict_with`] if you need to be able to handle errors
     pub fn push_list<'a, I, D>(&mut self, iter: I)
     where
         I: IntoIterator<Item = D>,
@@ -1059,9 +1059,7 @@ impl RowPacker {
         });
     }
 
-    /// Convenience function to push a `DatumDict` from an iter of `(&str, Datum)` pairs
-    ///
-    /// See [`try_push_dict_with`] if you need to be able to handle errors
+    /// Convenience function to push a `DatumMap` from an iter of `(&str, Datum)` pairs
     pub fn push_dict<'a, I, D>(&mut self, iter: I)
     where
         I: IntoIterator<Item = (&'a str, D)>,
@@ -1177,7 +1175,7 @@ impl RowArena {
         self.push_unary_row(packer.finish())
     }
 
-    /// Like [`Row::make_datum`], but the provided closure can return an error.
+    /// Like [`RowArena::make_datum`], but the provided closure can return an error.
     pub fn try_make_datum<'a, F, E>(&'a self, f: F) -> Result<Datum<'a>, E>
     where
         F: FnOnce(&mut RowPacker) -> Result<(), E>,

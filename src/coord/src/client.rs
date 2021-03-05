@@ -203,7 +203,7 @@ impl SessionClient {
 
     /// Saves the specified statement as a prepared statement.
     ///
-    /// The prepared statement is saved in the connection's [`sql::Session`]
+    /// The prepared statement is saved in the connection's [`crate::session::Session`]
     /// under the specified name.
     pub async fn describe(
         &mut self,
