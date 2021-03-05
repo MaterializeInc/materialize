@@ -73,7 +73,7 @@ fn arb_datum() -> BoxedStrategy<PropertizedDatum> {
         prop_oneof!(
             arb_array(inner.clone()).prop_map(PropertizedDatum::Array),
             arb_list(inner.clone()).prop_map(PropertizedDatum::List),
-            arb_dict(inner.clone()).prop_map(PropertizedDatum::Map),
+            arb_dict(inner).prop_map(PropertizedDatum::Map),
         )
     })
     .boxed()
