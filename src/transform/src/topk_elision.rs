@@ -43,6 +43,8 @@ impl TopKElision {
         {
             if limit.is_none() && *offset == 0 {
                 *relation = input.take_dangerous();
+            } else if limit == &Some(0) {
+                relation.take_safely();
             }
         }
     }

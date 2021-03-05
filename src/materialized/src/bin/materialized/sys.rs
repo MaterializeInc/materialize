@@ -10,7 +10,10 @@
 //! System support functions.
 
 use std::alloc::{self, Layout};
+use std::io::{self, Write};
+use std::process;
 use std::ptr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{bail, Context};
 use log::{trace, warn};
@@ -97,16 +100,17 @@ pub fn adjust_rlimits() {
     }
 }
 
-/// Attempts to enable backtraces when SIGSEGV occurs.
+/// Attempts to enable backtraces when SIGBUS or SIGSEGV occurs.
 ///
-/// In particular, this means producing backtraces on stack overflow, as
-/// stack overflow raises SIGSEGV. The approach here involves making system
-/// calls to handle SIGSEGV on an alternate signal stack, which seems to work
-/// well in practice but may technically be undefined behavior.
+/// In particular, this means producing backtraces on stack overflow, as stack
+/// overflow raises SIGBUS or SIGSEGV via guard pages. The approach here
+/// involves making system calls to handle SIGBUS/SIGSEGV on an alternate signal
+/// stack, which seems to work well in practice but may technically be undefined
+/// behavior.
 ///
-/// Rust may someday do this by default.
-/// Follow: https://github.com/rust-lang/rust/issues/51405.
-pub fn enable_sigsegv_backtraces() -> Result<(), anyhow::Error> {
+/// Rust may someday do this by default. Follow:
+/// https://github.com/rust-lang/rust/issues/51405.
+pub fn enable_sigbus_sigsegv_backtraces() -> Result<(), anyhow::Error> {
     // This code is derived from the code in the backtrace-on-stack-overflow
     // crate, which is freely available under the terms of the Apache 2.0
     // license. The modifications here provide better error messages if any of
@@ -148,18 +152,20 @@ pub fn enable_sigsegv_backtraces() -> Result<(), anyhow::Error> {
 
     // Install a handler for SIGSEGV.
     let action = signal::SigAction::new(
-        signal::SigHandler::Handler(handle_sigsegv),
+        signal::SigHandler::Handler(handle_sigbus_sigsegv),
         signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
         signal::SigSet::empty(),
     );
-    // SAFETY: see `handle_sigsegv`.
+    // SAFETY: see `handle_sigbus_sigsegv`.
+    unsafe { signal::sigaction(signal::SIGBUS, &action) }
+        .context("failed to install SIGBUS handler")?;
     unsafe { signal::sigaction(signal::SIGSEGV, &action) }
         .context("failed to install SIGSEGV handler")?;
 
     Ok(())
 }
 
-extern "C" fn handle_sigsegv(_: i32) {
+extern "C" fn handle_sigbus_sigsegv(_: i32) {
     // SAFETY: this is is a signal handler function and technically must be
     // "async-signal safe" [0]. That typically means no memory allocation, which
     // means no panics or backtraces... but if we're here, we're already doomed
@@ -170,5 +176,22 @@ extern "C" fn handle_sigsegv(_: i32) {
     // SIGSEGV.
     //
     // [0]: https://man7.org/linux/man-pages/man7/signal-safety.7.html
-    panic!("stack overflow");
+
+    static SEEN: AtomicUsize = AtomicUsize::new(0);
+    match SEEN.fetch_add(1, Ordering::SeqCst) {
+        0 => {
+            // First SIGSEGV. See if we can defer to our slick panic handler,
+            // which will emit a backtrace and details on where to submit bugs.
+            panic!("received SIGSEGV or SIGBUS (maybe a stack overflow?)");
+        }
+        _ => {
+            // Second SIGSEGV, which means the panic handler itself segfaulted.
+            // This usually indicates that the memory allocator state is
+            // corrupt, which can happen if we overflow the stack while inside
+            // the allocator. Just try to eke out a message and crash.
+            let _ = io::stderr().write_all(b"SIGBUS or SIGSEGV while handling SIGSEGV or SIGBUS\n");
+            let _ = io::stderr().write_all(b"(maybe a stack overflow while allocating?)\n");
+            process::abort();
+        }
+    }
 }

@@ -12,6 +12,7 @@ fn main() {
         .serde(true)
         .include("src/format/protobuf")
         .input("src/format/protobuf/billing.proto")
+        .input("src/format/protobuf/recursive.proto")
         .input("src/format/protobuf/simple.proto")
         .build_script_exec();
 }

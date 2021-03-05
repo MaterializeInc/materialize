@@ -27,6 +27,7 @@ This file is written in a bottom-up structure. The code flows as follows:
   internal copy of the view that can be used to initialize state for new listeners.
 """
 
+import argparse
 import collections
 import logging
 import os
@@ -143,12 +144,13 @@ class View:
         """
         self.current_timestamp = int(timestamp)
 
+        # TODO: Insert new rows after deleting, once #5827 is fixed
+        # Add any rows that have been inserted
+        self.current_rows.extend(inserted)
+
         # Remove any rows that have been deleted
         for r in deleted:
             self.current_rows.remove(r)
-
-        # And add any rows that have been inserted
-        self.current_rows.extend(inserted)
 
         # If we have listeners configured, broadcast this diff
         if self.listeners:
@@ -217,7 +219,7 @@ def configure_logging():
     )
 
 
-def run():
+def run(dsn, views):
     """Create the Wikirecent Tornado Application.
 
     Create a Tornado application configured with our HTTP / Websocket handlers and start listening
@@ -239,13 +241,12 @@ def run():
         static_path=static_path,
         template_path=template_path,
         debug=True,
-        configured_views=["counter", "top10"],
-        dsn="postgresql://materialized:6875/materialize",
+        configured_views=views,
+        dsn=dsn,
     )
 
-    port = 8875
-    log.info("Port %d ready to rumble!", port)
-    app.listen(port)
+    app.listen(args.listen_port, args.listen_addr)
+    log.info("Address %s:%d ready to rumble!", args.listen_addr, args.listen_port)
 
     ioloop = tornado.ioloop.IOLoop.current()
     app.tail_views(ioloop)
@@ -255,4 +256,36 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument(
+        "--dbhost", help="materialized hostname", default="materialized", type=str
+    )
+    parser.add_argument(
+        "--dbname", help="materialized database name", default="materialize", type=str
+    )
+    parser.add_argument(
+        "--dbport", help="materialized port number", default=6875, type=int
+    )
+    parser.add_argument(
+        "--dbuser", help="materialized username", default="materialize", type=str
+    )
+
+    parser.add_argument(
+        "--listen-port", help="Network port to bind to", default="8875", type=int
+    )
+
+    parser.add_argument(
+        "--listen-addr", help="Network address to bind to", default="0.0.0.0", type=str
+    )
+
+    parser.add_argument(
+        "views", type=str, nargs="+", help="Views to expose as websockets"
+    )
+
+    args = parser.parse_args()
+
+    dsn = f"postgresql://{args.dbuser}@{args.dbhost}:{args.dbport}/{args.dbname}"
+
+    run(dsn, args.views)

@@ -14,20 +14,41 @@
 # to change these you must restart the docker-compose cluster.
 x-port-mappings:
   - &kafka-internal ${KAFKA_PORT:-9092}
-  - &kafka-external 9093
-  - &schema-registry ${SR_PORT:-8081}
+  - &kafka-external 9093:9093
+  - &schema-registry ${SR_PORT:-8081:8081}
   - &materialized ${MZ_PORT:-6875}
   - &grafana 3000:3000
   - &prometheus 9090
+  - &perf-metrics ${PERF_METRICS_PORT:-8675}
+  - &perf-dash-web ${PERF_DASH_PORT:-8875:8875}
 
 version: '3.7'
 services:
   create-views:
     mzbuild: avro-upsert-create-views
+  perf-dash-metrics:
+    mzbuild: materialized
+    ports:
+      - *perf-metrics
+    command:
+      - --disable-telemetry
+      - --listen-addr=0.0.0.0:${PERF_METRICS_PORT:-8675}
+      - --logical-compaction-window=1ms
+    environment:
+      - MZ_DEV=1
+  perf-dash-scraper:
+    mzbuild: perf-dash-scraper
+    command: scrape
+  perf-dash-create-views:
+    mzbuild: perf-dash-create-views
+  perf-dash-web:
+    mzbuild: perf-dash-web
+    ports:
+      - *perf-dash-web
   materialized:
     mzbuild: materialized
     ports:
-     - *materialized
+      - *materialized
     init: true
     command:
       - --workers=${MZ_WORKERS:-16}
@@ -44,6 +65,7 @@ services:
       # You can, for example, add `pgwire=trace` or change `info` to `debug` to
       # get more verbose logs.
       - MZ_LOG=pgwire=debug,info
+      - MZ_DEV=1
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.3
     environment:
@@ -83,6 +105,10 @@ services:
     mzbuild: avro-upsert-generator
   metric-verifier:
     mzbuild: metric-verifier
+    environment:
+      MZ_WORKERS: ${MZ_WORKERS:-0}
+      MZBENCH_GIT_REF: ${MZBENCH_GIT_REF:-None}
+      MZBENCH_ID: ${MZBENCH_ID:-0}
   # All monitoring
   dashboard:
     mzbuild: dashboard
@@ -106,12 +132,13 @@ volumes:
   prometheus:
 
 mzworkflows:
-  benchmark:
+
+  start-services:
     steps:
     - step: start-services
       services: [dashboard]
     - step: start-services
-      services: [kafka, schema-registry, materialized]
+      services: [kafka, schema-registry, perf-dash-metrics]
     - step: wait-for-tcp
       host: kafka
       port: 9092
@@ -119,49 +146,196 @@ mzworkflows:
       host: schema-registry
       port: 8081
     - step: run
+      service: perf-dash-scraper
+      command: >-
+        create-topics
+    - step: run
+      service: metric-verifier
+      command: >-
+        create-topics
+    - step: run
+      service: perf-dash-create-views
+    - step: start-services
+      services: [perf-dash-web]
+
+  benchmark:
+    steps:
+    - step: workflow
+      workflow: setup-benchmark
+    - step: workflow
+      workflow: run-benchmark
+
+  setup-benchmark:
+    steps:
+    - step: workflow
+      workflow: start-services
+    - step: run
       service: avro-upsert-generator
-      # No command needed, defaults to benchmark distribution
+      command: >-
+        --parallelism=40
+        --num-records=400000000
+
+  run-benchmark:
+    env:
+      MZ_WORKERS: ${MZ_WORKERS:-16}
+    steps:
+    - step: remove-services
+      services: [materialized, perf-dash-scraper]
+      destroy_volumes: true
+    - step: start-services
+      services: [materialized, perf-dash-scraper]
+    - step: run
+      service: metric-verifier
+      daemon: true
+      command: >-
+        scrape
+        --timeout-seconds=3600
+        "sum(mz_messages_ingested)"
+        "400000000"
     - step: run
       service: create-views
+    - step: wait
+      service: metric-verifier
+      expected_return_code: 0
+      print_logs: true
+
+  benchmark-medium:
+    steps:
+    - step: workflow
+      workflow: setup-benchmark-medium
+    - step: workflow
+      workflow: run-benchmark-medium
+
+  setup-benchmark-medium:
+    steps:
+    - step: workflow
+      workflow: start-services
+    - step: run
+      service: avro-upsert-generator
+      command: >-
+        --parallelism=8
+        --num-records=20000000
+        --distribution=medium
+
+  run-benchmark-medium:
+    env:
+      MZ_WORKERS: ${MZ_WORKERS:-8}
+    steps:
+    - step: remove-services
+      services: [materialized, perf-dash-scraper]
+      destroy_volumes: true
+    - step: start-services
+      services: [materialized, perf-dash-scraper]
+    - step: run
+      service: metric-verifier
+      daemon: true
+      command: >-
+        scrape
+        --timeout-seconds=900
+        "sum(mz_messages_ingested)"
+        "20000000"
+    - step: run
+      service: create-views
+    - step: wait
+      service: metric-verifier
+      expected_return_code: 0
+      print_logs: true
+
+  benchmark-insert-with-filter:
+    steps:
+    - step: workflow
+      workflow: setup-benchmark-insert-with-filter
+    - step: workflow
+      workflow: run-benchmark-insert-with-filter
+
+  setup-benchmark-insert-with-filter:
+    steps:
+    - step: workflow
+      workflow: start-services
+    - step: run
+      service: avro-upsert-generator
+      command: >-
+        --parallelism=40
+
+  run-benchmark-insert-with-filter:
+    env:
+      MZ_WORKERS: ${MZ_WORKERS:-16}
+    steps:
+    - step: remove-services
+      services: [materialized, perf-dash-scraper]
+      destroy_volumes: true
+    - step: start-services
+      services: [materialized, perf-dash-scraper]
+    - step: run
+      service: metric-verifier
+      daemon: true
+      command: >-
+        scrape
+        --timeout-seconds=900
+        "sum(mz_messages_ingested)"
+        "400000000"
+    - step: run
+      service: create-views
+      command: >-
+        insert_views.sql
+    - step: wait
+      service: metric-verifier
+      expected_return_code: 0
+      print_logs: true
 
   ci:
     steps:
-    - step: start-services
-      services: [dashboard]
-    - step: start-services
-      services: [kafka, schema-registry, materialized]
-    - step: wait-for-tcp
-      host: kafka
-      port: 9092
-    - step: wait-for-tcp
-      host: schema-registry
-      port: 8081
+    - step: workflow
+      workflow: setup-benchmark-ci
+    - step: workflow
+      workflow: run-benchmark-ci
+
+  setup-benchmark-ci:
+    steps:
+    - step: workflow
+      workflow: start-services
     - step: run
       service: avro-upsert-generator
       command: >-
         --parallelism=4
         --num-records=100000
         --distribution=small
-    - step: run
-      service: create-views
+
+  run-benchmark-ci:
+    env:
+      MZ_WORKERS: ${MZ_WORKERS:-1}
+    steps:
+    - step: remove-services
+      services: [materialized, perf-dash-scraper]
+      destroy_volumes: true
+    - step: start-services
+      services: [materialized, perf-dash-scraper]
     - step: run
       service: metric-verifier
+      daemon: true
       command: >-
+        scrape
         --timeout-seconds=30
         "sum(mz_messages_ingested)"
         "100000"
+    - step: run
+      service: create-views
+    - step: wait
+      service: metric-verifier
+      expected_return_code: 0
+      print_logs: true
 
   run-generator:
     steps:
     - step: run
       service: avro-upsert-generator
 
-  restart-materialized:
+  rerun-benchmark:
     steps:
     - step: remove-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
       destroy_volumes: true
     - step: start-services
-      services: [materialized]
+      services: [materialized, perf-dash-scraper]
     - step: run
       service: create-views

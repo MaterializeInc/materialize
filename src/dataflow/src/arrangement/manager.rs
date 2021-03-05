@@ -120,9 +120,9 @@ impl TraceManager {
             let now = Instant::now();
 
             bundle.oks.read_upper(&mut antichain);
-            bundle.oks.distinguish_since(antichain.borrow());
+            bundle.oks.set_physical_compaction(antichain.borrow());
             bundle.errs.read_upper(&mut antichain);
-            bundle.errs.distinguish_since(antichain.borrow());
+            bundle.errs.set_physical_compaction(antichain.borrow());
 
             maintenance_metrics
                 .total_maintenance_time
@@ -140,8 +140,8 @@ impl TraceManager {
     /// accumulations at times in advance of `frontier`.
     pub fn allow_compaction(&mut self, id: GlobalId, frontier: AntichainRef<Timestamp>) {
         if let Some(bundle) = self.traces.get_mut(&id) {
-            bundle.oks.advance_by(frontier);
-            bundle.errs.advance_by(frontier);
+            bundle.oks.set_logical_compaction(frontier);
+            bundle.errs.set_logical_compaction(frontier);
         }
     }
 

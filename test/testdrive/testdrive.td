@@ -29,3 +29,12 @@
 row 1
 # inline comment
 row 2
+
+# Test DATE , TIME, TIMESTAMP output
+
+> CREATE TABLE t1 (f1 DATE, f2 TIME, f3 TIMESTAMP)
+
+> INSERT INTO t1 VALUES ('2011-11-11', '11:11:11', '2011-11-11 11:11:11')
+
+> SELECT * FROM t1
+"2011-11-11" "11:11:11" "2011-11-11 11:11:11"

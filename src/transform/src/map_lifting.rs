@@ -70,10 +70,10 @@ impl LiteralLifting {
                 // From the back to the front, check if all values are identical.
                 // TODO(frank): any subset of constant values can be extracted with a permute.
                 let mut the_same = vec![true; typ.arity()];
-                if let Some((row, _cnt)) = rows.first() {
+                if let Ok([(row, _cnt), rows @ ..]) = rows.as_deref_mut() {
                     let mut data = row.unpack();
                     assert_eq!(the_same.len(), data.len());
-                    for (row, _cnt) in rows[1..].iter() {
+                    for (row, _cnt) in rows.iter() {
                         let other = row.unpack();
                         assert_eq!(the_same.len(), other.len());
                         for index in 0..the_same.len() {
@@ -85,7 +85,7 @@ impl LiteralLifting {
                         the_same.pop();
                         let datum = data.pop().unwrap();
                         let typum = typ.column_types.pop().unwrap();
-                        literals.push(MirScalarExpr::literal_ok(datum, typum));
+                        literals.push(MirScalarExpr::literal_ok(datum, typum.scalar_type));
                     }
                     literals.reverse();
 
@@ -98,8 +98,9 @@ impl LiteralLifting {
                         typ.keys.dedup();
 
                         let mut row_packer = repr::RowPacker::new();
+                        *row = row_packer.pack(row.iter().take(typ.arity()));
                         for (row, _cnt) in rows.iter_mut() {
-                            *row = row_packer.pack(row.unpack().into_iter().take(typ.arity()));
+                            *row = row_packer.pack(row.iter().take(typ.arity()));
                         }
                     }
                     literals
@@ -362,7 +363,8 @@ impl LiteralLifting {
                         // This type information should be available in the `a.expr` literal,
                         // but extracting it with pattern matching seems awkward.
                         aggr.func
-                            .output_type(aggr.expr.typ(&repr::RelationType::empty())),
+                            .output_type(aggr.expr.typ(&repr::RelationType::empty()))
+                            .scalar_type,
                     ));
                 }
                 result.reverse();
@@ -395,6 +397,7 @@ impl LiteralLifting {
                 // Literals can just be lifted out of threshold.
                 self.action(input, gets)
             }
+            MirRelationExpr::DeclareKeys { input, .. } => self.action(input, gets),
             MirRelationExpr::Union { base, inputs } => {
                 let mut base_literals = self.action(base, gets);
                 let mut input_literals = inputs

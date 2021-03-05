@@ -18,12 +18,8 @@ depends_on = None
 
 
 def upgrade():
-    op.alter_column(
-        "slt", "inference_failure", new_column_name="wrong_column_count",
-    )
+    op.alter_column("slt", "inference_failure", new_column_name="wrong_column_count")
 
 
 def downgrade():
-    op.alter_column(
-        "slt", "wrong_column_count", new_column_name="inference_failure",
-    )
+    op.alter_column("slt", "wrong_column_count", new_column_name="inference_failure")

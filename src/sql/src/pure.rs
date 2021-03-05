@@ -7,13 +7,17 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Statement purification.
+//! SQL purification.
+//!
+//! See the [crate-level documentation](crate) for details.
 
 use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
+use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
+use tokio::task;
 use tokio::time::Duration;
 
 use repr::strconv;
@@ -24,12 +28,15 @@ use sql_parser::ast::{
 use crate::kafka_util;
 use crate::normalize;
 
-/// Removes dependencies on external state from `stmt`: inlining schemas in
-/// files, fetching schemas from registries, and so on. The [`Statement`]
-/// returned from this function will be valid to pass to `Plan`.
+/// Purifies a statement, removing any dependencies on external state.
+///
+/// See the section on [purification](crate#purification) in the crate
+/// documentation for details.
 ///
 /// Note that purification is asynchronous, and may take an unboundedly long
-/// time to complete.
+/// time to complete. As a result purification does *not* have access to a
+/// [`Catalog`](crate::catalog::Catalog), as that would require locking access
+/// to the catalog for an unbounded amount of time.
 pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::Error> {
     if let Statement::CreateSource(CreateSourceStatement {
         col_names,
@@ -52,23 +59,28 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 
                 // Verify that the provided security options are valid and then test them.
                 config_options = kafka_util::extract_config(&mut with_options_map)?;
-                kafka_util::test_config(&config_options)?;
+                kafka_util::test_config(&broker, &config_options).await?;
             }
             Connector::AvroOcf { path, .. } => {
                 let path = path.clone();
-                let f = std::fs::File::open(path)?;
-                let r = mz_avro::Reader::new(f)?;
-                if !with_options_map.contains_key("reader_schema") {
-                    let schema = serde_json::to_string(r.writer_schema()).unwrap();
-                    with_options.push(sql_parser::ast::SqlOption::Value {
-                        name: sql_parser::ast::Ident::new("reader_schema"),
-                        value: sql_parser::ast::Value::String(schema),
-                    });
-                }
+                task::block_in_place(|| {
+                    // mz_avro::Reader has no async equivalent, so we're stuck
+                    // using blocking calls here.
+                    let f = std::fs::File::open(path)?;
+                    let r = mz_avro::Reader::new(f)?;
+                    if !with_options_map.contains_key("reader_schema") {
+                        let schema = serde_json::to_string(r.writer_schema()).unwrap();
+                        with_options.push(sql_parser::ast::SqlOption::Value {
+                            name: sql_parser::ast::Ident::new("reader_schema"),
+                            value: sql_parser::ast::Value::String(schema),
+                        });
+                    }
+                    Ok::<_, anyhow::Error>(())
+                })?;
             }
             // Report an error if a file cannot be opened, or if it is a directory.
             Connector::File { path, .. } => {
-                let f = tokio::fs::File::open(&path).await?;
+                let f = File::open(&path).await?;
                 if f.metadata().await?.is_dir() {
                     bail!("Expected a regular file, but {} is a directory.", path);
                 }
@@ -89,6 +101,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 let aws_info = normalize::aws_connect_info(&mut with_options_map, Some(region))?;
                 aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
             }
+            Connector::Postgres { .. } => (),
         }
 
         purify_format(format, connector, col_names, file, &config_options).await?;
@@ -100,10 +113,10 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 }
 
 async fn purify_format(
-    format: &mut Option<Format>,
-    connector: &mut Connector,
+    format: &mut Option<Format<Raw>>,
+    connector: &mut Connector<Raw>,
     col_names: &mut Vec<Ident>,
-    file: Option<tokio::fs::File>,
+    file: Option<File>,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
     match format {
@@ -121,11 +134,13 @@ async fn purify_format(
                 if seed.is_none() {
                     let url = url.parse()?;
 
-                    let ccsr_config = kafka_util::generate_ccsr_client_config(
-                        url,
-                        &connector_options,
-                        normalize::options(ccsr_options),
-                    )?;
+                    let ccsr_config = task::block_in_place(|| {
+                        kafka_util::generate_ccsr_client_config(
+                            url,
+                            &connector_options,
+                            normalize::options(ccsr_options),
+                        )
+                    })?;
 
                     let Schema {
                         key_schema,
@@ -138,9 +153,15 @@ async fn purify_format(
                     });
                 }
             }
-            AvroSchema::Schema(sql_parser::ast::Schema::File(path)) => {
+            AvroSchema::Schema {
+                schema: sql_parser::ast::Schema::File(path),
+                with_options,
+            } => {
                 let value_schema = tokio::fs::read_to_string(path).await?;
-                *schema = AvroSchema::Schema(sql_parser::ast::Schema::Inline(value_schema));
+                *schema = AvroSchema::Schema {
+                    schema: sql_parser::ast::Schema::Inline(value_schema),
+                    with_options: with_options.clone(),
+                };
             }
             _ => {}
         },
@@ -184,6 +205,7 @@ pub struct Schema {
     pub key_schema: Option<String>,
     pub value_schema: String,
     pub schema_registry_config: Option<ccsr::ClientConfig>,
+    pub confluent_wire_format: bool,
 }
 
 async fn get_remote_avro_schema(
@@ -208,5 +230,6 @@ async fn get_remote_avro_schema(
         key_schema: key_schema.map(|s| s.raw),
         value_schema: value_schema.raw,
         schema_registry_config: Some(schema_registry_config),
+        confluent_wire_format: true,
     })
 }

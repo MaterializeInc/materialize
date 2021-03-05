@@ -15,6 +15,10 @@
 
 #![deny(missing_docs, missing_debug_implementations)]
 
+// This module presently only contains macros. Macros are always exported at the
+// root of a crate, so this module is not public as it would appear empty.
+mod assert;
+
 pub mod ascii;
 pub mod cast;
 pub mod cli;

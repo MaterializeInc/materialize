@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::iter;
 
+use ore::str::StrExt;
 use repr::RelationType;
 
 use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, MirRelationExpr, RowSetFinishing};
@@ -120,6 +121,7 @@ impl<'a> Explanation<'a> {
             // traversal.
             match expr {
                 // Leaf expressions. Nothing more to visit.
+                // TODO [btv] Explain complex sources.
                 Constant { .. } | Get { .. } => (),
                 // Single-input expressions continue the chain.
                 Project { input, .. }
@@ -130,6 +132,7 @@ impl<'a> Explanation<'a> {
                 | TopK { input, .. }
                 | Negate { input, .. }
                 | Threshold { input, .. }
+                | DeclareKeys { input, .. }
                 | ArrangeBy { input, .. } => walk(input, explanation),
                 // For join and union, each input may need to go in its own
                 // chain.
@@ -213,15 +216,22 @@ impl<'a> Explanation<'a> {
         use MirRelationExpr::*;
 
         match node.expr {
-            Constant { rows, .. } => writeln!(
-                f,
-                "| Constant {}",
-                separated(
-                    " ",
-                    rows.iter()
-                        .flat_map(|(row, count)| (0..*count).map(move |_| row))
-                )
-            )?,
+            Constant { rows, .. } => {
+                write!(f, "| Constant")?;
+                match rows {
+                    Ok(rows) if !rows.is_empty() => writeln!(
+                        f,
+                        " {}",
+                        separated(
+                            " ",
+                            rows.iter()
+                                .flat_map(|(row, count)| (0..*count).map(move |_| row))
+                        )
+                    )?,
+                    Ok(_) => writeln!(f)?,
+                    Err(e) => writeln!(f, " Err({})", e.to_string().quoted())?,
+                }
+            }
             Get { id, .. } => match id {
                 Id::Local(local_id) => writeln!(
                     f,
@@ -239,6 +249,15 @@ impl<'a> Explanation<'a> {
                         .unwrap_or_else(|| "?".to_owned()),
                     id,
                 )?,
+                Id::BareSource(id) => writeln!(
+                    f,
+                    "| Get Bare Source for {} ({})",
+                    self.expr_humanizer
+                        .humanize_id(*id)
+                        .unwrap_or_else(|| "?".to_owned()),
+                    id
+                )?,
+                Id::LocalBareSource => writeln!(f, "| Get Bare Source for This Source")?,
             },
             // Lets are annotated on the chain ID that they correspond to.
             Let { .. } => (),
@@ -337,6 +356,15 @@ impl<'a> Explanation<'a> {
             }
             Negate { .. } => writeln!(f, "| Negate")?,
             Threshold { .. } => write!(f, "| Threshold")?,
+            DeclareKeys { input: _, keys } => write!(
+                f,
+                "| Declare primary keys {}",
+                separated(
+                    " ",
+                    keys.iter()
+                        .map(|key| bracketed("(", ")", separated(", ", key)))
+                )
+            )?,
             Union { base, inputs } => writeln!(
                 f,
                 "| Union %{} {}",

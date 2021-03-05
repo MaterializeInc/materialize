@@ -85,7 +85,7 @@ main() {
     export NUM_WAREHOUSES="${warehouses}"
     export CHBENCH_RUN_SECONDS="${chbench_seconds}"
 
-    "$project"/mzcompose run setup-ingest-benchmark
+    "$project"/mzcompose run prepare-snapshot
 
     for i in $(seq 1 "${num_measurements}"); do
         echo "Conducting measurement ${i} of ${num_measurements}"

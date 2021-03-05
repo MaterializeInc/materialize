@@ -27,14 +27,18 @@ use std::iter;
 use std::mem;
 
 use anyhow::{anyhow, bail, ensure, Context};
+use expr::LocalId;
 use itertools::Itertools;
 use ore::iter::IteratorExt;
 use ore::str::StrExt;
+use sql_parser::ast::display::{AstDisplay, AstFormatter};
+use sql_parser::ast::fold::Fold;
 use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
-    DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource, JoinConstraint,
-    JoinOperator, Limit, ObjectName, OrderByExpr, Query, Raw, Select, SelectItem, SetExpr,
-    SetOperator, TableAlias, TableFactor, TableWithJoins, Value, Values,
+    AstInfo, Cte, DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource,
+    JoinConstraint, JoinOperator, Limit, OrderByExpr, Query, Raw, RawName, Select, SelectItem,
+    SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, UnresolvedObjectName, Value,
+    Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -59,6 +63,223 @@ use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastContext};
 
+// Aug is the type variable assigned to an AST that has already been
+// name-resolved. An AST in this state has global IDs populated next to table
+// names, and local IDs assigned to CTE definitions and references.
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
+pub struct Aug;
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct ResolvedObjectName {
+    id: Id,
+    raw_name: PartialName,
+}
+
+impl AstDisplay for ResolvedObjectName {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str(format!("[{}: {}]", self.id, self.raw_name));
+    }
+}
+
+impl std::fmt::Display for ResolvedObjectName {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(self.to_ast_string().as_str())
+    }
+}
+
+impl ResolvedObjectName {
+    pub fn raw_name(&self) -> PartialName {
+        self.raw_name.clone()
+    }
+}
+
+impl AstInfo for Aug {
+    type ObjectName = ResolvedObjectName;
+    type Id = Id;
+}
+
+#[derive(Debug)]
+struct NameResolver<'a> {
+    catalog: &'a dyn Catalog,
+    ctes: HashMap<String, LocalId>,
+    status: Result<(), anyhow::Error>,
+    ids: HashSet<GlobalId>,
+}
+
+impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
+    fn fold_query(&mut self, q: Query<Raw>) -> Query<Aug> {
+        // Retain the old values of various CTE names so that we can restore them after we're done
+        // planning this SELECT.
+        let mut old_cte_values = Vec::new();
+        // A single WITH block cannot use the same name multiple times.
+        let mut used_names = HashSet::new();
+        let mut ctes = Vec::new();
+        for cte in q.ctes {
+            let cte_name = normalize::ident(cte.alias.name.clone());
+
+            if used_names.contains(&cte_name) {
+                self.status = Err(anyhow!(
+                    "WITH query name \"{}\" specified more than once",
+                    cte_name
+                ));
+            }
+            used_names.insert(cte_name.clone());
+
+            let id = LocalId::new(self.ctes.len() as u64);
+            ctes.push(Cte {
+                alias: cte.alias,
+                id: Id::Local(id),
+                query: self.fold_query(cte.query),
+            });
+            let old_val = self.ctes.insert(cte_name.clone(), id);
+            old_cte_values.push((cte_name, old_val));
+        }
+        let result = Query {
+            ctes,
+            body: self.fold_set_expr(q.body),
+            limit: q.limit.map(|l| self.fold_limit(l)),
+            offset: q.offset.map(|l| self.fold_expr(l)),
+            order_by: q
+                .order_by
+                .into_iter()
+                .map(|c| self.fold_order_by_expr(c))
+                .collect(),
+        };
+
+        // Restore the old values of the CTEs.
+        for (name, value) in old_cte_values.iter() {
+            match value {
+                Some(value) => {
+                    self.ctes.insert(name.to_string(), value.clone());
+                }
+                None => {
+                    self.ctes.remove(name);
+                }
+            };
+        }
+
+        result
+    }
+
+    fn fold_id(&mut self, _id: <Raw as AstInfo>::Id) -> <Aug as AstInfo>::Id {
+        panic!("this should have been handled when walking the CTE");
+    }
+
+    fn fold_object_name(
+        &mut self,
+        object_name: <Raw as AstInfo>::ObjectName,
+    ) -> <Aug as AstInfo>::ObjectName {
+        match object_name {
+            RawName::Name(raw_name) => {
+                // Check if unqualified name refers to a CTE.
+                if raw_name.0.len() == 1 {
+                    let norm_name = normalize::ident(raw_name.0[0].clone());
+                    if let Some(id) = self.ctes.get(&norm_name) {
+                        return ResolvedObjectName {
+                            id: Id::Local(*id),
+                            raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
+                        };
+                    }
+                }
+
+                let name = normalize::unresolved_object_name(raw_name).unwrap();
+                match self.catalog.resolve_item(&name) {
+                    Ok(item) => {
+                        self.ids.insert(item.id());
+                        ResolvedObjectName {
+                            id: Id::Global(item.id()),
+                            raw_name: name,
+                        }
+                    }
+                    Err(e) => {
+                        if self.status.is_ok() {
+                            self.status = Err(e.into());
+                        }
+                        ResolvedObjectName {
+                            id: Id::Local(LocalId::new(0)),
+                            raw_name: name,
+                        }
+                    }
+                }
+            }
+            RawName::Id(id, raw_name) => {
+                let gid: GlobalId = match id.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        self.status = Err(e);
+                        GlobalId::User(0)
+                    }
+                };
+                if self.status.is_ok() && self.catalog.try_get_item_by_id(&gid).is_none() {
+                    self.status = Err(anyhow!("invalid id {}", &gid));
+                }
+                self.ids.insert(gid.clone());
+                ResolvedObjectName {
+                    id: Id::Global(gid),
+                    raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
+                }
+            }
+        }
+    }
+}
+
+// Attaches additional information to a `Raw` AST, resulting in an `Aug` AST, by
+// resolving names and (aspirationally) performing semantic analysis such as
+// type-checking.
+pub fn resolve_names(
+    qcx: &mut QueryContext,
+    query: Query<Raw>,
+) -> Result<Query<Aug>, anyhow::Error> {
+    let mut n = NameResolver {
+        status: Ok(()),
+        catalog: qcx.scx.catalog,
+        ctes: HashMap::new(),
+        ids: HashSet::new(),
+    };
+    let result = n.fold_query(query);
+    n.status?;
+    qcx.ids.extend(n.ids.iter());
+    Ok(result)
+}
+
+pub fn resolve_names_expr(
+    qcx: &mut QueryContext,
+    expr: Expr<Raw>,
+) -> Result<Expr<Aug>, anyhow::Error> {
+    let mut n = NameResolver {
+        status: Ok(()),
+        catalog: qcx.scx.catalog,
+        ctes: HashMap::new(),
+        ids: HashSet::new(),
+    };
+    let result = n.fold_expr(expr);
+    n.status?;
+    qcx.ids.extend(n.ids.iter());
+    Ok(result)
+}
+
+pub fn resolve_names_data_type(
+    scx: &StatementContext,
+    data_type: DataType<Raw>,
+) -> Result<(DataType<Aug>, HashSet<GlobalId>), anyhow::Error> {
+    let mut n = NameResolver {
+        status: Ok(()),
+        catalog: scx.catalog,
+        ctes: HashMap::new(),
+        ids: HashSet::new(),
+    };
+    let result = n.fold_data_type(data_type);
+    n.status?;
+    Ok((result, n.ids))
+}
+
+pub struct PlannedQuery<E> {
+    pub expr: E,
+    pub desc: RelationDesc,
+    pub finishing: RowSetFinishing,
+    pub depends_on: Vec<GlobalId>,
+}
+
 /// Plans a top-level query, returning the `HirRelationExpr` describing the query
 /// plan, the `RelationDesc` describing the shape of the result set, a
 /// `RowSetFinishing` describing post-processing that must occur before results
@@ -71,10 +292,11 @@ pub fn plan_root_query(
     scx: &StatementContext,
     mut query: Query<Raw>,
     lifetime: QueryLifetime,
-) -> Result<(HirRelationExpr, RelationDesc, RowSetFinishing), anyhow::Error> {
+) -> Result<PlannedQuery<HirRelationExpr>, anyhow::Error> {
     transform_ast::transform_query(scx, &mut query)?;
     let mut qcx = QueryContext::root(scx, lifetime);
-    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &query)?;
+    let resolved_query = resolve_names(&mut qcx, query)?;
+    let (mut expr, scope, mut finishing) = plan_query(&mut qcx, &resolved_query)?;
 
     // Attempt to push the finishing's ordering past its projection. This allows
     // data to be projected down on the workers rather than the coordinator. It
@@ -92,8 +314,14 @@ pub fn plan_root_query(
             .collect(),
     );
     let desc = RelationDesc::new(typ, scope.column_names());
+    let depends_on = qcx.ids.into_iter().collect();
 
-    Ok((expr, desc, finishing))
+    Ok(PlannedQuery {
+        expr,
+        desc,
+        finishing,
+        depends_on,
+    })
 }
 
 /// Attempts to push a projection through an order by.
@@ -129,7 +357,7 @@ fn try_push_projection_order_by(
 
 pub fn plan_insert_query(
     scx: &StatementContext,
-    table_name: ObjectName,
+    table_name: UnresolvedObjectName,
     columns: Vec<Ident>,
     source: InsertSource<Raw>,
 ) -> Result<(GlobalId, HirRelationExpr), anyhow::Error> {
@@ -193,6 +421,7 @@ pub fn plan_insert_query(
     let expr = match source {
         InsertSource::Query(mut query) => {
             transform_ast::transform_query(scx, &mut query)?;
+            let query = resolve_names(&mut qcx, query)?;
 
             match query {
                 // Special-case simple VALUES clauses, as PostgreSQL does, so
@@ -266,9 +495,9 @@ pub fn plan_insert_query(
         if let Some(src_idx) = col_to_source.get(&col_idx) {
             project_key.push(*src_idx);
         } else {
-            let default_expr = plan_default_expr(scx, default, &col_typ.scalar_type)?;
+            let (hir, _) = plan_default_expr(scx, default, &col_typ.scalar_type)?;
             project_key.push(typ.arity() + map_exprs.len());
-            map_exprs.push(default_expr);
+            map_exprs.push(hir);
         }
     }
 
@@ -345,7 +574,12 @@ pub fn eval_as_of<'a>(
         Some(Scope::empty(None)),
     );
     let desc = RelationDesc::empty();
-    let qcx = &QueryContext::root(scx, QueryLifetime::OneShot);
+    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+
+    transform_ast::transform_expr(scx, &mut expr)?;
+
+    let expr = resolve_names_expr(&mut qcx, expr)?;
+
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "AS OF",
@@ -355,7 +589,6 @@ pub fn eval_as_of<'a>(
         allow_subqueries: false,
     };
 
-    transform_ast::transform_expr(scx, &mut expr)?;
     let ex = plan_expr(ecx, &expr)?
         .type_as_any(ecx)?
         .lower_uncorrelated()?;
@@ -382,8 +615,9 @@ pub fn plan_default_expr(
     scx: &StatementContext,
     expr: &Expr<Raw>,
     target_ty: &ScalarType,
-) -> Result<HirScalarExpr, anyhow::Error> {
-    let qcx = &QueryContext::root(scx, QueryLifetime::OneShot);
+) -> Result<(HirScalarExpr, Vec<GlobalId>), anyhow::Error> {
+    let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
+    let expr = resolve_names_expr(&mut qcx, expr.clone())?;
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "DEFAULT expression",
@@ -392,16 +626,26 @@ pub fn plan_default_expr(
         allow_aggregates: false,
         allow_subqueries: false,
     };
-    plan_expr(ecx, expr)?.cast_to(ecx.name, ecx, CastContext::Assignment, target_ty)
+    let hir = plan_expr(ecx, &expr)?.cast_to(ecx.name, ecx, CastContext::Assignment, target_ty)?;
+    Ok((hir, qcx.ids.into_iter().collect()))
 }
 
 pub fn plan_index_exprs<'a>(
     scx: &'a StatementContext,
     on_desc: &RelationDesc,
     exprs: Vec<Expr<Raw>>,
-) -> Result<Vec<::expr::MirScalarExpr>, anyhow::Error> {
+) -> Result<(Vec<::expr::MirScalarExpr>, Vec<GlobalId>), anyhow::Error> {
     let scope = Scope::from_source(None, on_desc.iter_names(), Some(Scope::empty(None)));
-    let qcx = &QueryContext::root(scx, QueryLifetime::Static);
+    let mut qcx = QueryContext::root(scx, QueryLifetime::Static);
+
+    let resolved_exprs = exprs
+        .into_iter()
+        .map(|mut e| {
+            transform_ast::transform_expr(scx, &mut e)?;
+            resolve_names_expr(&mut qcx, e)
+        })
+        .collect::<Result<Vec<Expr<Aug>>, _>>()?;
+
     let ecx = &ExprContext {
         qcx: &qcx,
         name: "CREATE INDEX",
@@ -411,17 +655,16 @@ pub fn plan_index_exprs<'a>(
         allow_subqueries: false,
     };
     let mut out = vec![];
-    for mut expr in exprs {
-        transform_ast::transform_expr(scx, &mut expr)?;
+    for expr in resolved_exprs {
         let expr = plan_expr_or_col_index(ecx, &expr)?;
         out.push(expr.lower_uncorrelated()?);
     }
-    Ok(out)
+    Ok((out, qcx.ids.into_iter().collect()))
 }
 
 fn plan_expr_or_col_index(
     ecx: &ExprContext,
-    e: &Expr<Raw>,
+    e: &Expr<Aug>,
 ) -> Result<HirScalarExpr, anyhow::Error> {
     match check_col_index(&ecx.name, e, ecx.relation_type.column_types.len())? {
         Some(column) => Ok(HirScalarExpr::Column(ColumnRef { level: 0, column })),
@@ -429,7 +672,7 @@ fn plan_expr_or_col_index(
     }
 }
 
-fn check_col_index(name: &str, e: &Expr<Raw>, max: usize) -> Result<Option<usize>, anyhow::Error> {
+fn check_col_index(name: &str, e: &Expr<Aug>, max: usize) -> Result<Option<usize>, anyhow::Error> {
     match e {
         Expr::Value(Value::Number(n)) => {
             let n = n
@@ -451,7 +694,7 @@ fn check_col_index(name: &str, e: &Expr<Raw>, max: usize) -> Result<Option<usize
 
 fn plan_query(
     qcx: &mut QueryContext,
-    q: &Query<Raw>,
+    q: &Query<Aug>,
 ) -> Result<(HirRelationExpr, Scope, RowSetFinishing), anyhow::Error> {
     // Retain the old values of various CTE names so that we can restore them after we're done
     // planning this SELECT.
@@ -479,15 +722,20 @@ fn plan_query(
             &cte.alias.columns,
         )?;
 
-        let old_val = qcx.ctes.insert(
-            cte_name.clone(),
-            CteDesc {
-                val,
-                val_desc,
-                level_offset: 0,
-            },
-        );
-        old_cte_values.push((cte_name, old_val));
+        match cte.id {
+            Id::Local(id) => {
+                let old_val = qcx.ctes.insert(
+                    id,
+                    CteDesc {
+                        val,
+                        val_desc,
+                        level_offset: 0,
+                    },
+                );
+                old_cte_values.push((cte_name, old_val));
+            }
+            _ => unreachable!(),
+        }
     }
     let limit = match &q.limit {
         None => None,
@@ -542,24 +790,12 @@ fn plan_query(
         }
     };
 
-    // Restore the old values of the CTEs.
-    for (name, value) in old_cte_values.iter() {
-        match value {
-            Some(value) => {
-                qcx.ctes.insert(name.to_string(), value.clone());
-            }
-            None => {
-                qcx.ctes.remove(name);
-            }
-        };
-    }
-
     result
 }
 
 fn plan_subquery(
     qcx: &mut QueryContext,
-    q: &Query<Raw>,
+    q: &Query<Aug>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
     let (mut expr, scope, finishing) = plan_query(qcx, q)?;
     if finishing.limit.is_some() || finishing.offset > 0 {
@@ -576,7 +812,7 @@ fn plan_subquery(
 
 fn plan_set_expr(
     qcx: &mut QueryContext,
-    q: &SetExpr<Raw>,
+    q: &SetExpr<Aug>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
     match q {
         SetExpr::Select(select) => {
@@ -671,7 +907,7 @@ fn plan_set_expr(
 
 fn plan_values(
     qcx: &QueryContext,
-    values: &[Vec<Expr<Raw>>],
+    values: &[Vec<Expr<Aug>>],
     type_hints: Option<Vec<&ScalarType>>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
     ensure!(
@@ -787,8 +1023,8 @@ struct SelectPlan {
 /// former class, see `plan_view_select`.
 fn plan_view_select(
     qcx: &QueryContext,
-    s: &Select<Raw>,
-    order_by_exprs: &[OrderByExpr<Raw>],
+    s: &Select<Aug>,
+    order_by_exprs: &[OrderByExpr<Aug>],
 ) -> Result<SelectPlan, anyhow::Error> {
     let Select {
         distinct,
@@ -1155,9 +1391,9 @@ fn plan_view_select(
 /// details.
 fn plan_group_by_expr<'a>(
     ecx: &ExprContext,
-    group_expr: &'a Expr<Raw>,
+    group_expr: &'a Expr<Aug>,
     projection: &'a [(ExpandedSelectItem, Option<ColumnName>)],
-) -> Result<(Option<&'a Expr<Raw>>, HirScalarExpr), anyhow::Error> {
+) -> Result<(Option<&'a Expr<Aug>>, HirScalarExpr), anyhow::Error> {
     let plan_projection = |column: usize| match &projection[column].0 {
         ExpandedSelectItem::InputOrdinal(column) => Ok((
             None,
@@ -1212,7 +1448,7 @@ fn plan_group_by_expr<'a>(
 /// Plans a slice of `ORDER BY` expressions.
 fn plan_order_by_exprs(
     ecx: &ExprContext,
-    order_by_exprs: &[OrderByExpr<Raw>],
+    order_by_exprs: &[OrderByExpr<Aug>],
 ) -> Result<(Vec<ColumnOrder>, Vec<HirScalarExpr>), anyhow::Error> {
     let project_key: Vec<_> = (0..ecx.scope.len()).collect();
     plan_projected_order_by_exprs(ecx, order_by_exprs, &project_key)
@@ -1222,7 +1458,7 @@ fn plan_order_by_exprs(
 /// projected via `project_key` rather than being accepted directly.
 fn plan_projected_order_by_exprs(
     ecx: &ExprContext,
-    order_by_exprs: &[OrderByExpr<Raw>],
+    order_by_exprs: &[OrderByExpr<Aug>],
     project_key: &[usize],
 ) -> Result<(Vec<ColumnOrder>, Vec<HirScalarExpr>), anyhow::Error> {
     let mut order_by = vec![];
@@ -1253,7 +1489,7 @@ fn plan_projected_order_by_exprs(
 /// directly.
 fn plan_order_by_or_distinct_expr(
     ecx: &ExprContext,
-    expr: &Expr<Raw>,
+    expr: &Expr<Aug>,
     project_key: &[usize],
 ) -> Result<HirScalarExpr, anyhow::Error> {
     match check_col_index(&ecx.name, expr, project_key.len())? {
@@ -1269,8 +1505,8 @@ fn plan_table_with_joins<'a>(
     qcx: &QueryContext,
     left: HirRelationExpr,
     left_scope: Scope,
-    join_operator: &JoinOperator<Raw>,
-    table_with_joins: &'a TableWithJoins<Raw>,
+    join_operator: &JoinOperator<Aug>,
+    table_with_joins: &'a TableWithJoins<Aug>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
     let (mut left, mut left_scope) = plan_table_factor(
         qcx,
@@ -1292,8 +1528,8 @@ fn plan_table_factor(
     left_qcx: &QueryContext,
     left: HirRelationExpr,
     left_scope: Scope,
-    join_operator: &JoinOperator<Raw>,
-    table_factor: &TableFactor<Raw>,
+    join_operator: &JoinOperator<Aug>,
+    table_factor: &TableFactor<Aug>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
     let lateral = matches!(
         table_factor,
@@ -1364,11 +1600,11 @@ fn plan_table_factor(
 
 fn plan_table_function(
     ecx: &ExprContext,
-    name: &ObjectName,
+    name: &UnresolvedObjectName,
     alias: Option<&TableAlias>,
-    args: &FunctionArgs<Raw>,
+    args: &FunctionArgs<Aug>,
 ) -> Result<(HirRelationExpr, Scope), anyhow::Error> {
-    if *name == ObjectName::unqualified("values") {
+    if *name == UnresolvedObjectName::unqualified("values") {
         // Produce a nice error message for the common typo
         // `SELECT * FROM VALUES (1)`.
         bail!("VALUES expression in FROM clause must be surrounded by parentheses");
@@ -1382,7 +1618,7 @@ fn plan_table_function(
         FunctionArgs::Star => bail!("{} does not accept * as an argument", name),
         FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
-    let name = normalize::object_name(name.clone())?;
+    let name = normalize::unresolved_object_name(name.clone())?;
     let tf = func::select_impl(ecx, FuncSpec::Func(&name), impls, args)?;
     let call = HirRelationExpr::CallTable {
         func: tf.func,
@@ -1458,11 +1694,11 @@ fn plan_table_alias(mut scope: Scope, alias: Option<&TableAlias>) -> Result<Scop
     Ok(scope)
 }
 
-fn invent_column_name(ecx: &ExprContext, expr: &Expr<Raw>) -> Option<ScopeItemName> {
+fn invent_column_name(ecx: &ExprContext, expr: &Expr<Aug>) -> Option<ScopeItemName> {
     let name = match expr {
         Expr::Identifier(names) => names.last().map(|n| normalize::column_name(n.clone())),
         Expr::Function(func) => {
-            let name = normalize::object_name(func.name.clone()).ok()?;
+            let name = normalize::unresolved_object_name(func.name.clone()).ok()?;
             if name.schema.as_deref() == Some("mz_internal") {
                 None
             } else {
@@ -1498,19 +1734,20 @@ fn invent_column_name(ecx: &ExprContext, expr: &Expr<Raw>) -> Option<ScopeItemNa
 
 enum ExpandedSelectItem<'a> {
     InputOrdinal(usize),
-    Expr(Cow<'a, Expr<Raw>>),
+    Expr(Cow<'a, Expr<Aug>>),
 }
 
 fn expand_select_item<'a>(
     ecx: &ExprContext,
-    s: &'a SelectItem<Raw>,
+    s: &'a SelectItem<Aug>,
 ) -> Result<Vec<(ExpandedSelectItem<'a>, Option<ColumnName>)>, anyhow::Error> {
     match s {
         SelectItem::Expr {
             expr: Expr::QualifiedWildcard(table_name),
             alias: _,
         } => {
-            let table_name = normalize::object_name(ObjectName(table_name.clone()))?;
+            let table_name =
+                normalize::unresolved_object_name(UnresolvedObjectName(table_name.clone()))?;
             let out: Vec<_> = ecx
                 .scope
                 .items
@@ -1578,7 +1815,7 @@ fn expand_select_item<'a>(
 
 #[allow(clippy::too_many_arguments)]
 fn plan_join_operator(
-    operator: &JoinOperator<Raw>,
+    operator: &JoinOperator<Aug>,
     left_qcx: &QueryContext,
     left: HirRelationExpr,
     left_scope: Scope,
@@ -1664,7 +1901,7 @@ fn plan_join_operator(
 
 #[allow(clippy::too_many_arguments)]
 fn plan_join_constraint<'a>(
-    constraint: &'a JoinConstraint<Raw>,
+    constraint: &'a JoinConstraint<Aug>,
     left_qcx: &QueryContext,
     left: HirRelationExpr,
     left_scope: Scope,
@@ -1880,7 +2117,7 @@ fn plan_using_constraint(
 
 pub fn plan_expr<'a>(
     ecx: &'a ExprContext,
-    e: &Expr<Raw>,
+    e: &Expr<Aug>,
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
     if let Some(i) = ecx.scope.resolve_expr(e) {
         // We've already calculated this expression.
@@ -2143,7 +2380,7 @@ pub fn plan_expr<'a>(
 /// error instead.
 fn plan_exprs<E>(ecx: &ExprContext, exprs: &[E]) -> Result<Vec<CoercibleScalarExpr>, anyhow::Error>
 where
-    E: std::borrow::Borrow<Expr<Raw>>,
+    E: std::borrow::Borrow<Expr<Aug>>,
 {
     let mut out = vec![];
     for expr in exprs {
@@ -2154,7 +2391,7 @@ where
 
 fn plan_array(
     ecx: &ExprContext,
-    exprs: &[Expr<Raw>],
+    exprs: &[Expr<Aug>],
     type_hint: Option<&ScalarType>,
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
     ecx.qcx.scx.require_experimental_mode("ARRAY")?;
@@ -2190,7 +2427,7 @@ fn plan_array(
 
 fn plan_list(
     ecx: &ExprContext,
-    exprs: &[Expr<Raw>],
+    exprs: &[Expr<Aug>],
     type_hint: Option<&ScalarType>,
 ) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (elem_type, exprs) = if exprs.is_empty() {
@@ -2268,7 +2505,7 @@ pub fn coerce_homogeneous_exprs(
 
 fn plan_aggregate(
     ecx: &ExprContext,
-    sql_func: &Function<Raw>,
+    sql_func: &Function<Aug>,
 ) -> Result<AggregateExpr, anyhow::Error> {
     let impls = match resolve_func(ecx, &sql_func.name, &sql_func.args)? {
         Func::Aggregate(impls) => impls,
@@ -2279,7 +2516,7 @@ fn plan_aggregate(
         unsupported!(213, "window functions");
     }
 
-    let name = normalize::object_name(sql_func.name.clone())?;
+    let name = normalize::unresolved_object_name(sql_func.name.clone())?;
 
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
     // generalized function selection framework. The rule is simple: the user
@@ -2348,7 +2585,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
-        let table_name = normalize::object_name(ObjectName(names))?;
+        let table_name = normalize::unresolved_object_name(UnresolvedObjectName(names))?;
         let (i, _name) = ecx.scope.resolve_table_column(&table_name, &col_name)?;
         return Ok(HirScalarExpr::Column(i));
     }
@@ -2403,8 +2640,8 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
 fn plan_op(
     ecx: &ExprContext,
     op: &str,
-    expr1: &Expr<Raw>,
-    expr2: Option<&Expr<Raw>>,
+    expr1: &Expr<Aug>,
+    expr2: Option<&Expr<Aug>>,
 ) -> Result<HirScalarExpr, anyhow::Error> {
     let impls = func::resolve_op(op)?;
     let args = match expr2 {
@@ -2416,7 +2653,7 @@ fn plan_op(
 
 fn plan_function<'a>(
     ecx: &ExprContext,
-    sql_func: &'a Function<Raw>,
+    sql_func: &'a Function<Aug>,
 ) -> Result<HirScalarExpr, anyhow::Error> {
     let impls = match resolve_func(ecx, &sql_func.name, &sql_func.args)? {
         Func::Aggregate(_) if ecx.allow_aggregates => {
@@ -2456,7 +2693,7 @@ fn plan_function<'a>(
         FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
 
-    let name = normalize::object_name(sql_func.name.clone())?;
+    let name = normalize::unresolved_object_name(sql_func.name.clone())?;
     func::select_impl(ecx, FuncSpec::Func(&name), impls, args)
 }
 
@@ -2465,8 +2702,8 @@ fn plan_function<'a>(
 /// If the name does not specify a known built-in function, returns an error.
 pub fn resolve_func(
     ecx: &ExprContext,
-    name: &ObjectName,
-    args: &sql_parser::ast::FunctionArgs<Raw>,
+    name: &UnresolvedObjectName,
+    args: &sql_parser::ast::FunctionArgs<Aug>,
 ) -> Result<&'static Func, anyhow::Error> {
     if let Ok(i) = ecx.qcx.scx.resolve_function(name.clone()) {
         if let Ok(f) = i.func() {
@@ -2494,7 +2731,7 @@ pub fn resolve_func(
 
 fn plan_is_null_expr<'a>(
     ecx: &ExprContext,
-    inner: &'a Expr<Raw>,
+    inner: &'a Expr<Aug>,
     not: bool,
 ) -> Result<HirScalarExpr, anyhow::Error> {
     // PostgreSQL can plan `NULL IS NULL` but not `$1 IS NULL`. This is at odds
@@ -2517,10 +2754,10 @@ fn plan_is_null_expr<'a>(
 
 fn plan_case<'a>(
     ecx: &ExprContext,
-    operand: &'a Option<Box<Expr<Raw>>>,
-    conditions: &'a [Expr<Raw>],
-    results: &'a [Expr<Raw>],
-    else_result: &'a Option<Box<Expr<Raw>>>,
+    operand: &'a Option<Box<Expr<Aug>>>,
+    conditions: &'a [Expr<Aug>],
+    results: &'a [Expr<Aug>],
+    else_result: &'a Option<Box<Expr<Aug>>>,
 ) -> Result<HirScalarExpr, anyhow::Error> {
     let mut cond_exprs = Vec::new();
     let mut result_exprs = Vec::new();
@@ -2611,7 +2848,9 @@ fn find_trivial_column_equivalences(expr: &HirScalarExpr) -> Vec<(usize, usize)>
                     }),
                 ) = (&**expr1, &**expr2)
                 {
-                    equivalences.push((*l, *r));
+                    if l != r {
+                        equivalences.push((*l, *r));
+                    }
                 }
             }
             CallBinary {
@@ -2630,7 +2869,7 @@ fn find_trivial_column_equivalences(expr: &HirScalarExpr) -> Vec<(usize, usize)>
 
 pub fn scalar_type_from_sql(
     scx: &StatementContext,
-    data_type: &DataType,
+    data_type: &DataType<Aug>,
 ) -> Result<ScalarType, anyhow::Error> {
     Ok(match data_type {
         DataType::Array(elem_type) => {
@@ -2658,11 +2897,12 @@ pub fn scalar_type_from_sql(
             }
         }
         DataType::Other { name, typ_mod } => {
-            let canonical_name = canonicalize_type_name_internal(name);
-            let canonical_name = normalize::object_name(canonical_name)?;
-            let item = match scx.catalog.resolve_item(&canonical_name) {
+            let item = match scx.catalog.resolve_item(&name.raw_name()) {
                 Ok(i) => i,
-                Err(_) => bail!("type {} does not exist", name.to_string().quoted()),
+                Err(_) => bail!(
+                    "type {} does not exist",
+                    name.raw_name().to_string().quoted()
+                ),
             };
             match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
                 Some(t) => match t {
@@ -2671,7 +2911,10 @@ pub fn scalar_type_from_sql(
                         ScalarType::Decimal(precision, scale)
                     }
                     ScalarType::String => {
-                        match name.to_string().as_str() {
+                        // TODO(justin): we should look up in the catalog to see
+                        // if this type is actually a length-parameterized
+                        // string.
+                        match name.raw_name().item.as_str() {
                             n @ "char" | n @ "varchar" => {
                                 validate_typ_mod(n, &typ_mod, &[("length", 1, 10_485_760)])?
                             }
@@ -2684,20 +2927,13 @@ pub fn scalar_type_from_sql(
                         t
                     }
                 },
-                None => bail!("type {} does not exist", name.to_string().quoted()),
+                None => bail!(
+                    "type {} does not exist",
+                    name.raw_name().to_string().quoted()
+                ),
             }
         }
     })
-}
-
-pub fn canonicalize_type_name_internal(name: &ObjectName) -> ObjectName {
-    // Rewrite some unqualified aliases to the name we know they should
-    // use in the catalog, i.e. canonicalize the catalog name.
-    match name.to_string().as_str() {
-        "char" | "varchar" => ObjectName::unqualified("text"),
-        "smallint" => ObjectName::unqualified("int4"),
-        _ => name.clone(),
-    }
 }
 
 /// Returns the first two values provided as typ_mods as `u8`, which are
@@ -2790,7 +3026,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
 /// See the explanation of aggregate handling at the top of the file for more details.
 struct AggregateFuncVisitor<'a, 'ast> {
     scx: &'a StatementContext<'a>,
-    aggs: Vec<&'ast Function<Raw>>,
+    aggs: Vec<&'ast Function<Aug>>,
     within_aggregate: bool,
     err: Option<anyhow::Error>,
 }
@@ -2805,7 +3041,7 @@ impl<'a, 'ast> AggregateFuncVisitor<'a, 'ast> {
         }
     }
 
-    fn into_result(self) -> Result<Vec<&'ast Function<Raw>>, anyhow::Error> {
+    fn into_result(self) -> Result<Vec<&'ast Function<Aug>>, anyhow::Error> {
         match self.err {
             Some(err) => Err(err),
             None => {
@@ -2822,8 +3058,8 @@ impl<'a, 'ast> AggregateFuncVisitor<'a, 'ast> {
     }
 }
 
-impl<'a, 'ast> Visit<'ast, Raw> for AggregateFuncVisitor<'a, 'ast> {
-    fn visit_function(&mut self, func: &'ast Function<Raw>) {
+impl<'a, 'ast> Visit<'ast, Aug> for AggregateFuncVisitor<'a, 'ast> {
+    fn visit_function(&mut self, func: &'ast Function<Aug>) {
         let item = match self.scx.resolve_function(func.name.clone()) {
             Ok(i) => i,
             // Catching missing functions later in planning improves error messages.
@@ -2855,7 +3091,7 @@ impl<'a, 'ast> Visit<'ast, Raw> for AggregateFuncVisitor<'a, 'ast> {
         visit::visit_function(self, func);
     }
 
-    fn visit_query(&mut self, _query: &'ast Query<Raw>) {
+    fn visit_query(&mut self, _query: &'ast Query<Aug>) {
         // Don't go into subqueries.
     }
 }
@@ -2895,8 +3131,10 @@ pub struct QueryContext<'a> {
     pub outer_scope: Scope,
     /// The type of the outer relation expressions.
     pub outer_relation_types: Vec<RelationType>,
-    /// CTEs for this query.
-    pub ctes: HashMap<String, CteDesc>,
+    /// CTEs for this query, mapping their assigned LocalIds to their definition.
+    pub ctes: HashMap<LocalId, CteDesc>,
+    /// The GlobalIds of the items the `Query` is dependent upon.
+    pub ids: HashSet<GlobalId>,
 }
 
 impl<'a> QueryContext<'a> {
@@ -2907,6 +3145,7 @@ impl<'a> QueryContext<'a> {
             outer_scope: Scope::empty(None),
             outer_relation_types: vec![],
             ctes: HashMap::new(),
+            ids: HashSet::new(),
         }
     }
 
@@ -2933,31 +3172,26 @@ impl<'a> QueryContext<'a> {
                 .cloned()
                 .collect(),
             ctes,
+            ids: HashSet::new(),
         }
     }
 
-    /// Resolves `name` to a table expr, i.e. getting a catalog table or
-    /// inlining a CTE.
+    /// Resolves `object` to a table expr, i.e. creating a `Get` or inlining a
+    /// CTE.
     pub fn resolve_table_name(
         &self,
-        name: ObjectName,
+        object: ResolvedObjectName,
     ) -> Result<(HirRelationExpr, Scope), PlanError> {
-        // Check if unqualified name refers to a CTE.
-        if name.0.len() == 1 {
-            let norm_name = normalize::ident(name.0[0].clone());
-            if let Some(cte) = self.ctes.get(&norm_name) {
+        match object.id {
+            Id::Local(id) => {
+                let name = object.raw_name;
+                let cte = self.ctes.get(&id).unwrap();
                 let mut val = cte.val.clone();
                 val.visit_columns(0, &mut |depth, col| {
                     if col.level > depth {
                         col.level += cte.level_offset;
                     }
                 });
-
-                let name = PartialName {
-                    database: None,
-                    schema: None,
-                    item: norm_name,
-                };
 
                 let scope = Scope::from_source(
                     Some(name),
@@ -2968,25 +3202,29 @@ impl<'a> QueryContext<'a> {
                 // Inline `val` where its name was referenced. In an ideal
                 // world, multiple instances of this expression would be
                 // de-duplicated.
-                return Ok((val, scope));
+                Ok((val, scope))
+            }
+            Id::Global(id) => {
+                let item = self.scx.get_item_by_id(&id);
+                let desc = item.desc()?.clone();
+                let expr = HirRelationExpr::Get {
+                    id: Id::Global(item.id()),
+                    typ: desc.typ().clone(),
+                };
+
+                let scope = Scope::from_source(
+                    Some(object.raw_name),
+                    desc.iter_names().map(|n| n.cloned()),
+                    Some(self.outer_scope.clone()),
+                );
+
+                Ok((expr, scope))
+            }
+            Id::BareSource(_) | Id::LocalBareSource => {
+                // These are never introduced except when planning source transformations.
+                unreachable!()
             }
         }
-
-        // Non-CTE table names must be retrieved from the catalog.
-        let item = self.scx.resolve_item(name)?;
-        let desc = item.desc()?.clone();
-        let expr = HirRelationExpr::Get {
-            id: Id::Global(item.id()),
-            typ: desc.typ().clone(),
-        };
-
-        let scope = Scope::from_source(
-            Some(item.name().clone().into()),
-            desc.iter_names().map(|n| n.cloned()),
-            Some(self.outer_scope.clone()),
-        );
-
-        Ok((expr, scope))
     }
 
     pub fn humanize_scalar_type(&self, typ: &ScalarType) -> String {

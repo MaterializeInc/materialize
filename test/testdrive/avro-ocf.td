@@ -105,7 +105,7 @@ mz_obj_no  false     bigint
 ! CREATE MATERIALIZED SOURCE reader_schema
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf'
   WITH (reader_schema = '{"bad": "news", "bears"')
-validating avro ocf reader schema:
+validating avro value schema:
 
 > CREATE MATERIALIZED SOURCE tailed
   FROM AVRO OCF '${testdrive.temp-dir}/data.ocf' WITH (tail = true)
@@ -174,8 +174,8 @@ $ avro-ocf-write path=timestamp.ocf schema=${timestamp-schema}
 > SELECT * FROM timestamp_source
 d     ts ts_tz  mz_obj_no
 -------------------------
-"2000-02-01" "2000-02-01 10:10:10.000297" "2000-02-01 08:10:10.000232" 1
-"2000-01-01" "2000-01-01 10:10:10.000890" "2000-01-01 08:10:10.000857" 2
+"2000-02-01" "2000-02-01 10:10:10.111" "2000-02-01 08:10:10.111" 1
+"2000-01-01" "2000-01-01 10:10:10.111" "2000-01-01 08:10:10.111" 2
 
 > SHOW COLUMNS FROM timestamp_source
 name        nullable  type

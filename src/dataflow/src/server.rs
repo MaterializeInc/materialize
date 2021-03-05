@@ -12,8 +12,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::net::TcpStream;
-use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::{Instant, UNIX_EPOCH};
@@ -22,13 +20,7 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::trace::cursor::Cursor;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::Collection;
-use futures::channel::mpsc::UnboundedReceiver;
-use futures::executor::block_on;
-use futures::future::TryFutureExt;
-use futures::sink::{Sink, SinkExt};
 use serde::{Deserialize, Serialize};
-use timely::communication::allocator::generic::GenericBuilder;
-use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
 use timely::communication::initialize::WorkerGuards;
 use timely::communication::Allocate;
 use timely::dataflow::operators::unordered_input::UnorderedHandle;
@@ -38,14 +30,15 @@ use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    DataflowDesc, DataflowError, MzOffset, PeekResponse, TimestampSourceUpdate, Update,
+    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, MzOffset, PeekResponse,
+    SourceConnector, TimestampSourceUpdate, Update,
 };
-use expr::{GlobalId, MapFilterProject, PartitionId, RowSetFinishing, SourceInstanceId};
-use ore::future::channel::mpsc::ReceiverExt;
+use expr::{GlobalId, MapFilterProject, PartitionId, RowSetFinishing};
 use repr::{Diff, Row, RowArena, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -58,25 +51,8 @@ use crate::source::cache::WorkerCacheData;
 
 mod metrics;
 
-/// A [`comm::broadcast::Token`] that permits broadcasting commands to the
-/// Timely workers.
-pub struct BroadcastToken;
-
-impl comm::broadcast::Token for BroadcastToken {
-    type Item = SequencedCommand;
-
-    /// Returns true, to enable loopback.
-    ///
-    /// Since the coordinator lives on the same process as one set of
-    /// workers, we need to enable loopback so that broadcasts are
-    /// transmitted intraprocess and visible to those workers.
-    fn loopback(&self) -> bool {
-        true
-    }
-}
-
 /// Explicit instructions for timely dataflow workers.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub enum SequencedCommand {
     /// Create a sequence of dataflows.
     CreateDataflows(Vec<DataflowDesc>),
@@ -101,7 +77,7 @@ pub enum SequencedCommand {
         /// Used in responses and cancelation requests.
         conn_id: u32,
         /// A communication link for sending a response.
-        tx: comm::mpsc::Sender<PeekResponse>,
+        tx: mpsc::UnboundedSender<PeekResponse>,
         /// The logical timestamp at which the arrangement is queried.
         timestamp: Timestamp,
         /// Actions to apply to the result set before returning them.
@@ -127,12 +103,24 @@ pub enum SequencedCommand {
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
     AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
+    /// Add a new source to be aware of for timestamping.
+    AddSourceTimestamping {
+        /// The ID of the timestamped source
+        id: GlobalId,
+        /// The connector for the timestamped source.
+        connector: SourceConnector,
+    },
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
         /// The ID of the timestamped source
-        id: SourceInstanceId,
+        id: GlobalId,
         /// The associated update (RT or BYO)
         update: TimestampSourceUpdate,
+    },
+    /// Drop all timestamping info for a source
+    DropSourceTimestamping {
+        /// The ID id of the formerly timestamped source.
+        id: GlobalId,
     },
     /// Advance all local inputs to the given timestamp.
     AdvanceAllLocalInputs {
@@ -140,9 +128,9 @@ pub enum SequencedCommand {
         advance_to: Timestamp,
     },
     /// Request that feedback is streamed to the provided channel.
-    EnableFeedback(comm::mpsc::Sender<WorkerFeedbackWithMeta>),
+    EnableFeedback(mpsc::UnboundedSender<WorkerFeedbackWithMeta>),
     /// Request that cache data is streamed to the provided channel.
-    EnableCaching(comm::mpsc::Sender<CacheMessage>),
+    EnableCaching(mpsc::UnboundedSender<CacheMessage>),
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
@@ -169,8 +157,6 @@ pub enum CacheMessage {
     AddSource(Uuid, GlobalId),
     /// Drop source from cache.
     DropSource(GlobalId),
-    /// Shut down caching thread
-    Shutdown,
 }
 
 /// Responses the worker can provide back to the coordinator.
@@ -178,32 +164,23 @@ pub enum CacheMessage {
 pub enum WorkerFeedback {
     /// A list of identifiers of traces, with prior and new upper frontiers.
     FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
-    /// The id of a source whose source connector has been dropped
-    DroppedSource(SourceInstanceId),
-    /// The id of a source whose source connector has been created
-    CreateSource(SourceInstanceId),
 }
 
 /// Configures a dataflow server.
 pub struct Config {
-    /// The number of worker threads to spawn.
-    pub workers: usize,
-    /// The ID of this process in the dataflow cluster.
-    pub process: usize,
+    /// Command stream receivers for each desired workers.
+    ///
+    /// The length of this vector determines the number of worker threads that
+    /// will be spawned.
+    pub command_receivers: Vec<crossbeam_channel::Receiver<SequencedCommand>>,
     /// The Timely worker configuration.
     pub timely_worker: timely::WorkerConfig,
 }
 
 /// Initiates a timely dataflow computation, processing materialized commands.
-pub fn serve<C>(
-    config: Config,
-    sockets: Vec<Option<TcpStream>>,
-    switchboard: comm::Switchboard<C>,
-) -> Result<WorkerGuards<()>, String>
-where
-    C: comm::Connection,
-{
-    assert!(config.workers > 0);
+pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
+    let workers = config.command_receivers.len();
+    assert!(workers > 0);
 
     // Construct endpoints for each thread that will receive the coordinator's
     // sequenced command stream.
@@ -211,37 +188,20 @@ where
     // TODO(benesch): package up this idiom of handing out ownership of N items
     // to the N timely threads that will be spawned. The Mutex<Vec<Option<T>>>
     // is hard to read through.
-    let command_rxs = {
-        let mut rx = switchboard.broadcast_rx(BroadcastToken).fanout();
-        let command_rxs = Mutex::new(
-            (0..config.workers)
-                .map(|_| Some(rx.attach()))
-                .collect::<Vec<_>>(),
-        );
-        tokio::spawn(
-            rx.shuttle()
-                .map_err(|err| panic!("failure shuttling dataflow receiver commands: {}", err)),
-        );
-        command_rxs
-    };
-
-    let log_fn = Box::new(|_| None);
-    let (builders, guard) =
-        initialize_networking_from_sockets(sockets, config.process, config.workers, log_fn)
-            .map_err(|err| format!("failed to initialize networking: {}", err))?;
-    let builders = builders.into_iter().map(GenericBuilder::ZeroCopy).collect();
+    let command_rxs: Mutex<Vec<_>> =
+        Mutex::new(config.command_receivers.into_iter().map(Some).collect());
 
     let tokio_executor = tokio::runtime::Handle::current();
-    timely::execute::execute_from(
-        builders,
-        Box::new(guard),
-        config.timely_worker.clone(),
+    timely::execute::execute(
+        timely::Config {
+            communication: timely::CommunicationConfig::Process(workers),
+            worker: config.timely_worker,
+        },
         move |timely_worker| {
             let _tokio_guard = tokio_executor.enter();
-            let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % config.workers]
+            let command_rx = command_rxs.lock().unwrap()[timely_worker.index() % workers]
                 .take()
-                .unwrap()
-                .request_unparks();
+                .unwrap();
             let worker_idx = timely_worker.index();
             Worker {
                 timely_worker,
@@ -250,7 +210,6 @@ where
                     local_inputs: HashMap::new(),
                     ts_source_mapping: HashMap::new(),
                     ts_histories: Default::default(),
-                    ts_source_updates: Default::default(),
                     dataflow_tokens: HashMap::new(),
                     caching_tx: None,
                 },
@@ -280,21 +239,7 @@ pub enum TimestampDataUpdate {
     BringYourOwn(HashMap<PartitionId, VecDeque<(PartitionCount, Timestamp, MzOffset)>>),
 }
 /// Map of source ID to timestamp data updates (RT or BYO).
-pub type TimestampDataUpdates = Rc<RefCell<HashMap<SourceInstanceId, TimestampDataUpdate>>>;
-
-/// List of sources that need to start being timestamped or have been dropped and no longer require
-/// timestamping.
-/// A source inserts a StartTimestamping to this vector on source creation, and adds a
-/// StopTimestamping request once the operator for the source is dropped.
-pub type TimestampMetadataUpdates = Rc<RefCell<Vec<TimestampMetadataUpdate>>>;
-
-/// Possible timestamping metadata information messages that get sent from workers to coordinator
-pub enum TimestampMetadataUpdate {
-    /// Requests to start timestamping a source with given id
-    StartTimestamping(SourceInstanceId),
-    /// Request to stop timestamping a source wth given id
-    StopTimestamping(SourceInstanceId),
-}
+pub type TimestampDataUpdates = Rc<RefCell<HashMap<GlobalId, TimestampDataUpdate>>>;
 
 /// State maintained for each worker thread.
 ///
@@ -311,11 +256,11 @@ where
     /// The logger, from Timely's logging framework, if logs are enabled.
     materialized_logger: Option<logging::materialized::Logger>,
     /// The channel from which commands are drawn.
-    command_rx: UnboundedReceiver<SequencedCommand>,
+    command_rx: crossbeam_channel::Receiver<SequencedCommand>,
     /// Peek commands that are awaiting fulfillment.
     pending_peeks: Vec<PendingPeek>,
-    /// The channel over which fontier information is reported.
-    feedback_tx: Option<Pin<Box<dyn Sink<WorkerFeedbackWithMeta, Error = ()>>>>,
+    /// The channel over which frontier information is reported.
+    feedback_tx: Option<mpsc::UnboundedSender<WorkerFeedbackWithMeta>>,
     /// Tracks the frontier information that has been sent over `feedback_tx`.
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Metrics bundle.
@@ -487,13 +432,8 @@ where
             // Report frontier information back the coordinator.
             self.report_frontiers();
 
-            self.report_source_modifications();
-
             // Handle any received commands.
-            let mut cmds = vec![];
-            while let Ok(Some(cmd)) = self.command_rx.try_next() {
-                cmds.push(cmd);
-            }
+            let cmds: Vec<_> = self.command_rx.try_iter().collect();
             self.metrics.observe_command_queue(&cmds);
             for cmd in cmds {
                 if let SequencedCommand::Shutdown = cmd {
@@ -507,36 +447,6 @@ where
             self.metrics.observe_command_finish();
             self.process_peeks();
         }
-    }
-
-    /// Report source drops or creations to the coordinator
-    fn report_source_modifications(&mut self) {
-        let mut updates = self.render_state.ts_source_updates.borrow_mut();
-        for source_update in updates.iter() {
-            match source_update {
-                TimestampMetadataUpdate::StopTimestamping(id) => {
-                    // A source was deleted
-                    self.render_state.ts_histories.borrow_mut().remove(id);
-                    self.render_state.ts_source_mapping.remove(id);
-                    let connector = self.feedback_tx.as_mut().unwrap();
-                    block_on(connector.send(WorkerFeedbackWithMeta {
-                        worker_id: self.timely_worker.index(),
-                        message: WorkerFeedback::DroppedSource(*id),
-                    }))
-                    .unwrap();
-                }
-                TimestampMetadataUpdate::StartTimestamping(id) => {
-                    // A source was created
-                    let connector = self.feedback_tx.as_mut().unwrap();
-                    block_on(connector.send(WorkerFeedbackWithMeta {
-                        worker_id: self.timely_worker.index(),
-                        message: WorkerFeedback::CreateSource(*id),
-                    }))
-                    .unwrap();
-                }
-            }
-        }
-        updates.clear();
     }
 
     /// Send progress information to the coordinator.
@@ -575,11 +485,12 @@ where
                 }
             }
             if !progress.is_empty() {
-                block_on(feedback_tx.send(WorkerFeedbackWithMeta {
-                    worker_id: self.timely_worker.index(),
-                    message: WorkerFeedback::FrontierUppers(progress),
-                }))
-                .unwrap();
+                feedback_tx
+                    .send(WorkerFeedbackWithMeta {
+                        worker_id: self.timely_worker.index(),
+                        message: WorkerFeedback::FrontierUppers(progress),
+                    })
+                    .expect("feedback receriver should not drop first");
             }
         }
     }
@@ -648,16 +559,16 @@ where
                 let empty_frontier = Antichain::new();
                 trace_bundle
                     .oks_mut()
-                    .advance_by(timestamp_frontier.borrow());
+                    .set_logical_compaction(timestamp_frontier.borrow());
                 trace_bundle
                     .errs_mut()
-                    .advance_by(timestamp_frontier.borrow());
+                    .set_logical_compaction(timestamp_frontier.borrow());
                 trace_bundle
                     .oks_mut()
-                    .distinguish_since(empty_frontier.borrow());
+                    .set_physical_compaction(empty_frontier.borrow());
                 trace_bundle
                     .errs_mut()
-                    .distinguish_since(empty_frontier.borrow());
+                    .set_physical_compaction(empty_frontier.borrow());
                 // Prepare a description of the peek work to do.
                 let mut peek = PendingPeek {
                     id,
@@ -690,8 +601,9 @@ where
                 let logger = &mut self.materialized_logger;
                 self.pending_peeks.retain(|peek| {
                     if peek.conn_id == conn_id {
-                        let mut tx = block_on(peek.tx.connect()).unwrap();
-                        block_on(tx.send(PeekResponse::Canceled)).unwrap();
+                        peek.tx
+                            .send(PeekResponse::Canceled)
+                            .expect("peek receiver should not drop first");
 
                         if let Some(logger) = logger {
                             logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
@@ -733,10 +645,7 @@ where
             }
 
             SequencedCommand::EnableFeedback(tx) => {
-                self.feedback_tx =
-                    Some(Box::pin(block_on(tx.connect()).unwrap().sink_map_err(
-                        |err| panic!("error sending worker feedback: {}", err),
-                    )));
+                self.feedback_tx = Some(tx);
             }
             SequencedCommand::EnableLogging(config) => {
                 self.initialize_logging(&config);
@@ -748,6 +657,65 @@ where
                 // this should lead timely to wind down eventually
                 self.render_state.traces.del_all_traces();
                 self.shutdown_logging();
+            }
+            SequencedCommand::AddSourceTimestamping { id, connector } => {
+                let byo_default = TimestampDataUpdate::BringYourOwn(HashMap::new());
+                let rt_default = TimestampDataUpdate::RealTime(1);
+
+                let source_timestamp_data = if let SourceConnector::External {
+                    connector,
+                    consistency,
+                    ..
+                } = connector
+                {
+                    match (connector, consistency) {
+                        (ExternalSourceConnector::Kafka(_), Consistency::BringYourOwn(_)) => {
+                            Some(byo_default)
+                        }
+                        (ExternalSourceConnector::Kafka(_), Consistency::RealTime) => {
+                            Some(rt_default)
+                        }
+                        (ExternalSourceConnector::AvroOcf(_), Consistency::BringYourOwn(_)) => {
+                            Some(byo_default)
+                        }
+                        (ExternalSourceConnector::AvroOcf(_), Consistency::RealTime) => {
+                            Some(rt_default)
+                        }
+                        (ExternalSourceConnector::File(_), Consistency::BringYourOwn(_)) => {
+                            Some(byo_default)
+                        }
+                        (ExternalSourceConnector::File(_), Consistency::RealTime) => {
+                            Some(rt_default)
+                        }
+                        (ExternalSourceConnector::Kinesis(_), Consistency::RealTime) => {
+                            Some(rt_default)
+                        }
+                        (ExternalSourceConnector::S3(_), Consistency::RealTime) => Some(rt_default),
+                        (ExternalSourceConnector::Kinesis(_), Consistency::BringYourOwn(_)) => {
+                            log::error!("BYO timestamping not supported for Kinesis sources");
+                            None
+                        }
+                        (ExternalSourceConnector::S3(_), Consistency::BringYourOwn(_)) => {
+                            log::error!("BYO timestamping not supported for S3 sources");
+                            None
+                        }
+                        (ExternalSourceConnector::Postgres(_), _) => {
+                            log::error!("Postgres sources not supported yet");
+                            None
+                        }
+                    }
+                } else {
+                    log::debug!(
+                        "Timestamping not supported for local sources {}. Ignoring",
+                        id
+                    );
+                    None
+                };
+
+                if let Some(data) = source_timestamp_data {
+                    let prev = self.render_state.ts_histories.borrow_mut().insert(id, data);
+                    assert!(prev.is_none());
+                }
             }
             SequencedCommand::AdvanceSourceTimestamp { id, update } => {
                 let mut timestamps = self.render_state.ts_histories.borrow_mut();
@@ -799,16 +767,32 @@ where
                             }
                         }
                     }
-                    let source = self
+
+                    let sources = self
                         .render_state
                         .ts_source_mapping
-                        .get(&id)
-                        .expect("Id should be present");
-                    if let Some(source) = source.upgrade() {
-                        if let Some(token) = &*source {
-                            token.activate();
+                        .entry(id)
+                        .or_insert_with(Vec::new);
+                    for source in sources {
+                        if let Some(source) = source.upgrade() {
+                            if let Some(token) = &*source {
+                                token.activate();
+                            }
                         }
                     }
+                }
+            }
+            SequencedCommand::DropSourceTimestamping { id } => {
+                let mut timestamps = self.render_state.ts_histories.borrow_mut();
+                let prev = timestamps.remove(&id);
+
+                if prev.is_none() {
+                    log::debug!("Attempted to drop timestamping for source {} that was not previously known", id);
+                }
+
+                let prev = self.render_state.ts_source_mapping.remove(&id);
+                if prev.is_none() {
+                    log::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }
             }
         }
@@ -851,7 +835,7 @@ struct PendingPeek {
     /// The ID of the connection that submitted the peek. For logging only.
     conn_id: u32,
     /// A transmitter connected to the intended recipient of the peek.
-    tx: comm::mpsc::Sender<PeekResponse>,
+    tx: mpsc::UnboundedSender<PeekResponse>,
     /// Time at which the collection should be materialized.
     timestamp: Timestamp,
     /// Finishing operations to perform on the peek, like an ordering and a
@@ -894,11 +878,9 @@ impl PendingPeek {
             Ok(rows) => PeekResponse::Rows(rows),
             Err(text) => PeekResponse::Error(text),
         };
-        let mut tx = block_on(self.tx.connect()).unwrap();
-        let tx_result = block_on(tx.send(response));
-        if let Err(e) = tx_result {
-            block_on(tx.send(PeekResponse::Error(e.to_string()))).unwrap();
-        }
+        self.tx
+            .send(response)
+            .expect("peek receiver should not drop first");
         true
     }
 
@@ -916,8 +898,8 @@ impl PendingPeek {
             });
             if copies < 0 {
                 return Err(format!(
-                    "Negative multiplicity: {} for {}",
-                    copies,
+                    "Invalid data in source, saw retractions ({}) for row that does not exist: {}",
+                    copies * -1,
                     cursor.key(&storage),
                 ));
             }
@@ -970,8 +952,8 @@ impl PendingPeek {
                     });
                     if copies < 0 {
                         return Err(format!(
-                            "Negative multiplicity: {} for {:?}",
-                            copies,
+                            "Invalid data in source, saw retractions ({}) for row that does not exist: {:?}",
+                            copies * -1,
                             row.unpack(),
                         ));
                     }
@@ -1034,15 +1016,4 @@ impl PendingPeek {
 
         Ok(results)
     }
-}
-
-/// The presence of this function forces `rustc` to instantiate the
-/// slow-to-compile differential and timely templates while compiling this
-/// crate. This means that iterating on crates that depend upon this crate is
-/// much faster, because these templates don't need to be reinstantiated
-/// whenever a downstream dependency changes. And iterating on this crate
-/// doesn't really become slower, because you needed to instantiate these
-/// templates anyway to run tests.
-pub fn __explicit_instantiation__() {
-    ore::hint::black_box(serve::<tokio::net::TcpStream> as fn(_, _, _) -> _);
 }

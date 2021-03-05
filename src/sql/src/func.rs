@@ -23,7 +23,7 @@ use lazy_static::lazy_static;
 use ore::collections::CollectionExt;
 use pgrepr::oid;
 use repr::{ColumnName, Datum, RelationType, ScalarBaseType, ScalarType};
-use sql_parser::ast::{Expr, ObjectName, Raw};
+use sql_parser::ast::{Expr, Raw, UnresolvedObjectName};
 
 use crate::catalog::CatalogItemType;
 use crate::names::PartialName;
@@ -255,7 +255,14 @@ macro_rules! sql_op {
                     .map(|(i, e)| (i + 1, ecx.scalar_type(e)))
                     .collect(),
             ));
-            let qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
+            let mut qcx = QueryContext::root(&scx, ecx.qcx.lifetime);
+
+            // Desugar the expression
+            let mut expr = EXPR.clone();
+            transform_ast::transform_expr(&scx, &mut expr)?;
+
+            let expr = query::resolve_names_expr(&mut qcx, expr)?;
+
             let ecx = ExprContext {
                 qcx: &qcx,
                 name: "static function definition",
@@ -264,10 +271,6 @@ macro_rules! sql_op {
                 allow_aggregates: false,
                 allow_subqueries: true,
             };
-
-            // Desugar the expression
-            let mut expr = EXPR.clone();
-            transform_ast::transform_expr(&scx, &mut expr)?;
 
             // Plan the expression.
             let mut expr = query::plan_expr(&ecx, &expr)?.type_as_any(&ecx)?;
@@ -1312,6 +1315,9 @@ lazy_static! {
                 params!(String) => UnaryFunc::TrimWhitespace, 885;
                 params!(String, String) => BinaryFunc::Trim, 884;
             },
+            "cbrt" => Scalar {
+                params!(Float64) => UnaryFunc::CbrtFloat64, 1345;
+            },
             "ceil" => Scalar {
                 params!(Float32) => UnaryFunc::CeilFloat32, oid::FUNC_CEIL_F32_OID;
                 params!(Float64) => UnaryFunc::CeilFloat64, 2308;
@@ -1344,6 +1350,15 @@ lazy_static! {
             },
             "convert_from" => Scalar {
                 params!(Bytes, String) => BinaryFunc::ConvertFrom, 1714;
+            },
+            "cos" => Scalar {
+                params!(Float64) => UnaryFunc::Cos, 1605;
+            },
+            "cosh" => Scalar {
+                params!(Float64) => UnaryFunc::Cosh, 2463;
+            },
+            "cot" => Scalar {
+                params!(Float64) => UnaryFunc::Cot, 1607;
             },
             "current_schema" => Scalar {
                 params!() => sql_op!("current_schemas(false)[1]"), 1402;
@@ -1381,6 +1396,13 @@ lazy_static! {
             "digest" => Scalar {
                 params!(String, String) => BinaryFunc::DigestString, 44154;
                 params!(Bytes, String) => BinaryFunc::DigestBytes, 44155;
+            },
+            "exp" => Scalar {
+                params!(Float64) => UnaryFunc::Exp, 1346;
+                params!(DecimalAny) => Operation::unary(|ecx, e| {
+                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
+                    Ok(e.call_unary(UnaryFunc::ExpDecimal(s)))
+                }), 1732;
             },
             "floor" => Scalar {
                 params!(Float32) => UnaryFunc::FloorFloat32, oid::FUNC_FLOOR_F32_OID;
@@ -1441,6 +1463,31 @@ lazy_static! {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes, 2010;
                 params!(String) => UnaryFunc::CharLength, 1317;
                 params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength, 1713;
+            },
+            "ln" => Scalar {
+                params!(Float64) => UnaryFunc::Ln, 1341;
+                params!(DecimalAny) => Operation::unary(|ecx, e| {
+                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
+                    Ok(e.call_unary(UnaryFunc::LnDecimal(s)))
+                }), 1734;
+            },
+            "log10" => Scalar {
+                params!(Float64) => UnaryFunc::Log10, 1194;
+                params!(DecimalAny) => Operation::unary(|ecx, e| {
+                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
+                    Ok(e.call_unary(UnaryFunc::Log10Decimal(s)))
+                }), 1481;
+            },
+            "log" => Scalar {
+                params!(Float64) => UnaryFunc::Log10, 1340;
+                params!(DecimalAny) => Operation::unary(|ecx, e| {
+                    let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
+                    Ok(e.call_unary(UnaryFunc::Log10Decimal(s)))
+                }), 1340;
+                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
+                    let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
+                    Ok(lhs.call_binary(rhs, BinaryFunc::LogDecimal(s)))
+                }), 1736;
             },
             "lower" => Scalar {
                 params!(String) => UnaryFunc::Lower, 870;
@@ -1511,6 +1558,13 @@ lazy_static! {
                     Ok(HirScalarExpr::literal(Datum::String(&name), ScalarType::String))
                 }), 1619;
             },
+            "power" => Scalar {
+                params!(Float64, Float64) => BinaryFunc::Power, 1368;
+                params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
+                    let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
+                    Ok(lhs.call_binary(rhs, BinaryFunc::PowerDecimal(s)))
+                }), 2169;
+            },
             "regexp_match" => Scalar {
                 params!(String, String) => VariadicFunc::RegexpMatch, 3396;
                 params!(String, String, String) => VariadicFunc::RegexpMatch, 3397;
@@ -1533,6 +1587,12 @@ lazy_static! {
             "rtrim" => Scalar {
                 params!(String) => UnaryFunc::TrimTrailingWhitespace, 882;
                 params!(String, String) => BinaryFunc::TrimTrailing, 876;
+            },
+            "sin" => Scalar {
+                params!(Float64) => UnaryFunc::Sin, 1604;
+            },
+            "sinh" => Scalar {
+                params!(Float64) => UnaryFunc::Sinh, 2462;
             },
             "split_part" => Scalar {
                 params!(String, String, Int64) => VariadicFunc::SplitPart, 2088;
@@ -1567,12 +1627,17 @@ lazy_static! {
                 params!(String, Int64, Int64) => VariadicFunc::Substr, 936;
             },
             "sqrt" => Scalar {
-                params!(Float32) => UnaryFunc::SqrtFloat32, oid::FUNC_SQRT_F32_OID;
                 params!(Float64) => UnaryFunc::SqrtFloat64, 1344;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
                 }), 1730;
+            },
+            "tan" => Scalar {
+                params!(Float64) => UnaryFunc::Tan, 1606;
+            },
+            "tanh" => Scalar {
+                params!(Float64) => UnaryFunc::Tanh, 246;
             },
             "timezone" => Scalar {
                 params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp, 2069;
@@ -1777,6 +1842,12 @@ lazy_static! {
                         column_names: vec![Some("jsonb_object_keys".into())],
                     })
                 }), 3931;
+            },
+            "encode" => Scalar {
+                params!(Bytes, String) => BinaryFunc::Encode, 1946;
+            },
+            "decode" => Scalar {
+                params!(String, String) => BinaryFunc::Decode, 1947;
             }
         }
     };
@@ -1813,7 +1884,7 @@ lazy_static! {
                         Some(id) => id,
                         None => bail!("source passed to internal_read_cached_data must be literal string"),
                     };
-                    let item = ecx.qcx.scx.resolve_item(ObjectName::unqualified(&source))?;
+                    let item = ecx.qcx.scx.resolve_item(UnresolvedObjectName::unqualified(&source))?;
                     match item.item_type() {
                         CatalogItemType::Source => {},
                         _ =>  bail!("{} is a {}, but internal_read_cached_data requires a source", source, item.item_type()),

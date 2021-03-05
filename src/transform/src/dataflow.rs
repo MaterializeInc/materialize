@@ -205,7 +205,7 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
 
     // Push demand information into the SourceDesc.
     for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
-        if let Some(columns) = demand.get(&Id::Global(*source_id)).clone() {
+        if let Some(columns) = demand.get(&Id::BareSource(*source_id)).clone() {
             // Install no-op demand information if none exists.
             if source_desc.operators.is_none() {
                 source_desc.operators = Some(LinearOperator {
@@ -244,7 +244,7 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
 
     // Push predicate information into the SourceDesc.
     for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
-        if let Some(list) = predicates.get(&Id::Global(*source_id)).clone() {
+        if let Some(list) = predicates.get(&Id::BareSource(*source_id)).clone() {
             // Install no-op predicate information if none exists.
             if source_desc.operators.is_none() {
                 source_desc.operators = Some(LinearOperator {
@@ -279,7 +279,14 @@ pub mod monotonic {
                 }
             }
             MirRelationExpr::Project { input, .. } => is_monotonic(input, sources),
-            MirRelationExpr::Filter { input, .. } => is_monotonic(input, sources),
+            MirRelationExpr::Filter { input, predicates } => {
+                let is_monotonic = is_monotonic(input, sources);
+                // Non-temporal predicates can introduce non-monotonicity, as they
+                // can result in the future removal of records.
+                // TODO: this could be improved to only restrict if upper bounds
+                // are present, as temporal lower bounds only delay introduction.
+                is_monotonic && !predicates.iter().any(|p| p.contains_temporal())
+            }
             MirRelationExpr::Map { input, .. } => is_monotonic(input, sources),
             MirRelationExpr::TopK {
                 input, monotonic, ..
@@ -320,7 +327,9 @@ pub mod monotonic {
                 }
                 monotonic
             }
-            MirRelationExpr::Constant { rows, .. } => rows.iter().all(|(_, diff)| diff > &0),
+            MirRelationExpr::Constant { rows: Ok(rows), .. } => {
+                rows.iter().all(|(_, diff)| diff > &0)
+            }
             MirRelationExpr::Threshold { input } => is_monotonic(input, sources),
             // Let and Negate remain
             _ => {

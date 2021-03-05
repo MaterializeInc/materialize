@@ -13,10 +13,15 @@
 
 set -euo pipefail
 
-bin/doc
-bin/pydoc
 rsync misc/www/index.html buildkite@mtrlz.dev:/var/www/html/index.html
+
+bin/doc
 rsync --archive target/doc/ buildkite@mtrlz.dev:/var/www/html/api/rust
+
+bin/doc --document-private-items
+rsync --archive target/doc/ buildkite@mtrlz.dev:/var/www/html/api/rust-private
+
+bin/pydoc
 rsync --archive target/pydoc/ buildkite@mtrlz.dev:/var/www/html/api/python
 
 ssh -A buildkite@mtrlz.dev <<'EOF'

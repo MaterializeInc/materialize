@@ -34,6 +34,7 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
     volumes:
+      # this is the dir that contains all the individual snapshot directories
       - ${MZ_CHBENCH_SNAPSHOT_DIR}:/snapshot
   materialized:
     mzbuild: materialized
@@ -54,6 +55,7 @@ services:
       # You can, for example, add `pgwire=trace` or change `info` to `debug` to
       # get more verbose logs.
       - MZ_LOG=pgwire=debug,info
+      - MZ_DEV=1
   mysql:
     mzbuild: chbench-mysql
     ports:
@@ -98,8 +100,7 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-data:/var/lib/zookeeper/data
-      - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-log:/var/lib/zookeeper/log
+      - ${MZ_CHBENCH_SNAPSHOT_ZK_DATA:-zk-data}:/var/lib/zookeeper
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.3
     ports:
@@ -122,7 +123,7 @@ services:
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data:/var/lib/kafka/data
+      - ${MZ_CHBENCH_SNAPSHOT_KAFKA_DATA:-mzsnap-data}:/var/lib/kafka/data
   connect:
     image: debezium/connect:1.4
     environment:
@@ -153,7 +154,6 @@ services:
     depends_on: [schema-registry, control-center]
   control-center:
     image: confluentinc/cp-enterprise-control-center:5.5.3
-    restart: always
     depends_on: [zookeeper, kafka, connect]
     ports:
       - *control-center
@@ -183,9 +183,6 @@ services:
   cli:
     mzbuild: cli
     init: true
-    # if you run the terminal with a dark background uncomment these lines
-    # environment:
-    #   MZCLI_PROMPT: DARK_MODE
     depends_on:
       - materialized
   inspect:
@@ -196,11 +193,11 @@ services:
   mzutil:
     mzbuild: mzutil
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT}:/snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
   kafka-util:
     mzbuild: kafka-util
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT}:/snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -263,7 +260,7 @@ services:
     command: ${PEEKER_CMD:---queries q01,q02,q17}
     volumes:
       - ./peeker-config:/etc/peeker
-      - ${MZ_CHBENCH_SNAPSHOT:-/tmp}:/snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
   test-correctness:
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: test-correctness
@@ -282,6 +279,10 @@ volumes:
   grafana:
   prometheus:
   view-snapshots:
+
+  # shared volumes for load tests, but a mounted directories for benchmarks
+  mzsnap-data:
+  zk-data:
 
 mzworkflows:
   ci:
@@ -306,7 +307,7 @@ mzworkflows:
         --run-seconds=${CHBENCH_RUN_SECONDS:-500}
         -l /dev/stdout
         --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
-        --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+        --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
     - step: ensure-stays-up
       container: chbench
       seconds: 10
@@ -342,13 +343,6 @@ mzworkflows:
       - step: down
         destroy_volumes: true
 
-  # Temporary migration workflow in case folks look at the docs before the next version
-  # has been released
-  demo-load:
-    steps:
-    - step: workflow
-      workflow: demo
-
   demo:
     steps:
     - step: workflow
@@ -361,7 +355,6 @@ mzworkflows:
       service: peeker
       command: >-
         --only-initialize
-        -c /etc/peeker/materialized-sources.toml
         -q loadtest
 
   # Run a test that populates Kafka with data from chbench for a set amount of time
@@ -405,8 +398,12 @@ mzworkflows:
       command: snapshot_view_states.py
 
   # Run a workflow to measure the ingest performance of Materialize. Assumes that the you have
-  # already called setup-ingest-benchmark and the cluster is still running
+  # already called prepare-snapshot and the cluster is still running
   measure-ingest-performance:
+    env:
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-./tmp}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper
     steps:
     - step: restart-services
       services: [materialized]
@@ -417,6 +414,10 @@ mzworkflows:
   # Run a test that populates Kafka with data from topic snapshots
   # Then run Materialize and measure time until it catches up to snapshotted view state
   setup-replay-benchmark:
+    env:
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-./tmp}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper
     steps:
     # start the dashboard before the load data get started so that we have data from
     # the beginning of time
@@ -613,7 +614,7 @@ mzworkflows:
         --run-seconds=${CHBENCH_RUN_SECONDS:-1200}
         -l /dev/stdout
         --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
-        --mz-url=postgresql://${MZ_HOST:-materialized}:6875/materialize?sslmode=disable
+        --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
     - step: run
       service: peeker
       daemon: true
@@ -739,7 +740,7 @@ mzworkflows:
         --run-seconds=${CHBENCH_RUN_SECONDS:-864000}
         -l /var/log/chbench.log
         --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
-        --mz-url=postgresql://${MZ_HOST:-materialized}:6875/materialize?sslmode=disable
+        --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
 
   heavy-load-postgres:
     steps:
@@ -754,4 +755,4 @@ mzworkflows:
         --run-seconds=${CHBENCH_RUN_SECONDS:-864000}
         -l /var/log/chbench.log
         --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
-        --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+        --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable

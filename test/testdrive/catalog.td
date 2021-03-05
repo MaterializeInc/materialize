@@ -176,7 +176,7 @@ foo.other.int_list
 
 > CREATE TYPE bool AS LIST (element_type=int4)
 ! SELECT '{1}'::bool
-invalid input syntax for boolean: "{1}"
+invalid input syntax for type boolean: "{1}"
 
 > SELECT pg_typeof('{1}'::public.bool);
 public.bool

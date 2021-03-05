@@ -77,67 +77,79 @@ struct NpmPackage {
     css_file: Option<&'static str>,
     js_prod_file: &'static str,
     js_dev_file: &'static str,
+    extra_file: Option<(&'static str, &'static str)>,
 }
 
 const NPM_PACKAGES: &[NpmPackage] = &[
     NpmPackage {
         name: "@hpcc-js/wasm",
         version: "0.3.14",
-        digest: hex!("2defda7171f010f58ccfb72dad3b74978baaec7ae484025d5f405aee61826ff6"),
+        digest: hex!("b1628f561790925e58d33dcc5552aa2d1e8316a14b8436999a3c9c86df7c514a"),
         css_file: None,
         js_prod_file: "dist/index.min.js",
         js_dev_file: "dist/index.js",
+        extra_file: Some((
+            "dist/graphvizlib.wasm",
+            "js/vendor/@hpcc-js/graphvizlib.wasm",
+        )),
     },
     NpmPackage {
         name: "babel-standalone",
         version: "6.26.0",
-        digest: hex!("8539e25167423cf3d1273147351406c01f4e796c836c7615995ba1faffd858ce"),
+        digest: hex!("2a6dc2f1acc2893e53cb53192eee2dfc6a09d86ef7620dcb6323c4d624f99d92"),
         css_file: None,
         js_prod_file: "babel.min.js",
         js_dev_file: "babel.js",
+        extra_file: None,
     },
     NpmPackage {
         name: "d3",
         version: "5.16.0",
-        digest: hex!("3dcae05fa7d1a7c4cfbbc517d866779026191c3b81e67e2429af17f0d603f0a7"),
+        digest: hex!("85aa224591310c3cdd8a2ab8d3f8421bb7b0035926190389e790497c5b1d0f0b"),
         css_file: None,
         js_prod_file: "dist/d3.min.js",
         js_dev_file: "dist/d3.js",
+        extra_file: None,
     },
     NpmPackage {
         name: "d3-flame-graph",
         version: "3.1.1",
-        digest: hex!("e2cbdf1b15f675b00d3554c5f7bc7b15cc2c5ee4e51dc7bb69c312a62000ffe8"),
+        digest: hex!("603120d8f1badfde6155816585d8e4c494f9783ae8fd40a3974928df707b1889"),
         css_file: Some("dist/d3-flamegraph.css"),
         js_prod_file: "dist/d3-flamegraph.min.js",
         js_dev_file: "dist/d3-flamegraph.js",
+        extra_file: None,
     },
     NpmPackage {
         name: "pako",
         version: "1.0.11",
-        digest: hex!("99bb6f43fae78a98e70264bd66fd8eaf84a367f8e079961f38cd2a1363681ad1"),
+        digest: hex!("1243d3fd9710c9b4e04d9528db02bfa55a4055bebc24743628fdddf59c83fa95"),
         css_file: None,
         js_prod_file: "dist/pako.min.js",
         js_dev_file: "dist/pako.js",
+        extra_file: None,
     },
     NpmPackage {
         name: "react",
         version: "16.14.0",
-        digest: hex!("8ba8a6953d116dba7da695ac3aa2c024773ce7b9d2bb87d68d25f80c8e37dde2"),
+        digest: hex!("2fd361cfad2e0f8df36b67a0fdd43bd8064822b077fc7d70a84388918c663089"),
         css_file: None,
         js_prod_file: "umd/react.production.min.js",
         js_dev_file: "umd/react.development.js",
+        extra_file: None,
     },
     NpmPackage {
         name: "react-dom",
         version: "16.14.0",
-        digest: hex!("6a95eebee42f1c33702a6dfbe4fc3a47df17a9b40688f85f77c75f942bd090cb"),
+        digest: hex!("27f6addacabaa5e5b9aa36ef443d4e79a947f3245c7d6c77f310f9c9fc944e25"),
         css_file: None,
         js_prod_file: "umd/react-dom.production.min.js",
         js_dev_file: "umd/react-dom.development.js",
+        extra_file: None,
     },
 ];
 
+const STATIC: &str = "src/http/static";
 const CSS_VENDOR: &str = "src/http/static/css/vendor";
 const JS_PROD_VENDOR: &str = "src/http/static/js/vendor";
 const JS_DEV_VENDOR: &str = "src/http/static-dev/js/vendor";
@@ -155,6 +167,11 @@ impl NpmPackage {
         Path::new(JS_DEV_VENDOR).join(&format!("{}.js", self.name))
     }
 
+    fn extra_path(&self) -> PathBuf {
+        let dst = self.extra_file.map(|(_src, dst)| dst);
+        Path::new(STATIC).join(dst.unwrap_or(""))
+    }
+
     fn compute_digest(&self) -> Result<Vec<u8>, anyhow::Error> {
         let css_data = if self.css_file.is_some() {
             fs::read(self.css_path())?
@@ -163,10 +180,16 @@ impl NpmPackage {
         };
         let js_prod_data = fs::read(self.js_prod_path())?;
         let js_dev_data = fs::read(self.js_dev_path())?;
+        let extra_data = if self.extra_file.is_some() {
+            fs::read(self.extra_path())?
+        } else {
+            vec![]
+        };
         Ok(Sha256::new()
             .chain(&Sha256::digest(&css_data))
             .chain(&Sha256::digest(&js_prod_data))
             .chain(&Sha256::digest(&js_dev_data))
+            .chain(&Sha256::digest(&extra_data))
             .finalize()
             .as_slice()
             .into())
@@ -211,6 +234,11 @@ pub fn ensure() -> Result<(), anyhow::Error> {
             if path == Path::new(pkg.js_dev_file) {
                 unpack_entry(&mut entry, &pkg.js_dev_path())?;
             }
+            if let Some((extra_src, _extra_dst)) = &pkg.extra_file {
+                if path == Path::new(extra_src) {
+                    unpack_entry(&mut entry, &pkg.extra_path())?;
+                }
+            }
         }
 
         let digest = pkg
@@ -238,6 +266,9 @@ expected: {}
         }
         known_paths.insert(pkg.js_prod_path());
         known_paths.insert(pkg.js_dev_path());
+        if pkg.extra_file.is_some() {
+            known_paths.insert(pkg.extra_path());
+        }
     }
     for dir in &[CSS_VENDOR, JS_PROD_VENDOR, JS_DEV_VENDOR] {
         for entry in WalkDir::new(dir) {

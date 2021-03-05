@@ -24,17 +24,65 @@ use std::fmt::Debug;
 use std::hash::Hash;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{Expr, FunctionArgs, Ident, ObjectName, SqlOption};
+use crate::ast::{Expr, FunctionArgs, Ident, SqlOption, UnresolvedObjectName};
 
+// This represents the metadata that lives next to an AST, as we take it through
+// various stages in the planning process.
+//
+// Conceptually, when we first receive an AST from the parsing process, it only
+// represents the syntax that the user input, and has no semantic information
+// embedded in it. Later in this process, we want to be able to walk the tree
+// and add additional information to it piecemeal, perhaps without going down
+// the full planning pipeline. AstInfo represents various bits of information
+// that get stored in the tree: for instance, at first, table names are only
+// represented by the names the user input (in the `Raw` implementor of this
+// trait), but later on, we replace them with both the name along with the ID
+// that it gets resolved to.
+//
+// Currently this process brings an Ast<Raw> to Ast<Aug>, and lives in
+// sql/src/plan/query.rs:resolve_names.
 pub trait AstInfo: Clone {
-    type Table: AstDisplay + Clone + Hash + Debug + Eq;
+    // The type used for table references.
+    type ObjectName: AstDisplay + Clone + Hash + Debug + Eq;
+    // The type stored next to CTEs for their assigned ID.
+    type Id: Clone + Hash + Debug + Eq;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Default)]
 pub struct Raw;
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+pub enum RawName {
+    Name(UnresolvedObjectName),
+    Id(String, UnresolvedObjectName),
+}
+
+impl RawName {
+    pub fn name(&self) -> &UnresolvedObjectName {
+        match self {
+            RawName::Name(name) => name,
+            RawName::Id(_, name) => name,
+        }
+    }
+}
+
+impl AstDisplay for RawName {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            RawName::Name(o) => f.write_node(o),
+            RawName::Id(id, o) => {
+                f.write_str(format!("[{} AS ", id));
+                f.write_node(o);
+                f.write_str("]");
+            }
+        }
+    }
+}
+impl_display!(RawName);
+
 impl AstInfo for Raw {
-    type Table = ObjectName;
+    type ObjectName = RawName;
+    type Id = ();
 }
 
 /// The most complete variant of a `SELECT` query expression, optionally
@@ -202,7 +250,7 @@ pub struct Select<T: AstInfo> {
     /// HAVING
     pub having: Option<Expr<T>>,
     /// OPTION
-    pub options: Vec<SqlOption>,
+    pub options: Vec<SqlOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for Select<T> {
@@ -285,6 +333,7 @@ impl<T: AstInfo> AstDisplay for Distinct<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Cte<T: AstInfo> {
     pub alias: TableAlias,
+    pub id: T::Id,
     pub query: Query<T>,
 }
 
@@ -356,11 +405,11 @@ impl<T: AstInfo> TableWithJoins<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TableFactor<T: AstInfo> {
     Table {
-        name: T::Table,
+        name: T::ObjectName,
         alias: Option<TableAlias>,
     },
     Function {
-        name: ObjectName,
+        name: UnresolvedObjectName,
         args: FunctionArgs<T>,
         alias: Option<TableAlias>,
     },

@@ -37,7 +37,7 @@ const mz::Config& mz::defaultConfig() {
             "debezium_tpcch_supplier"
         },
         .viewPattern = "debezium.tpcch.%",
-        .materializedUrl = "postgresql://materialized:6875/materialize?sslmode=disable",
+        .materializedUrl = "postgresql://materialize@materialized:6875/materialize?sslmode=disable",
         .kafkaUrl = "kafka:9092",
         .schemaRegistryUrl = "http://schema-registry:8081",
         .consistencySource = "",

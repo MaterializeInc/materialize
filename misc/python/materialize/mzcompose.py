@@ -84,7 +84,7 @@ class LintError:
 def lint_composition(path: Path, composition: Any, errors: List[LintError]) -> None:
     for (name, service) in composition["services"].items():
         if service.get("mzbuild") == "materialized":
-            lint_materialized_service(path, service, errors)
+            lint_materialized_service(path, name, service, errors)
         elif "mzbuild" not in service and "image" in service:
             lint_image_name(path, service["image"], errors)
 
@@ -135,7 +135,7 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
 
 
 def lint_materialized_service(
-    path: Path, service: Any, errors: List[LintError]
+    path: Path, name: str, service: Any, errors: List[LintError]
 ) -> None:
     # command may be a string that is passed to the shell, or a list of
     # arguments.
@@ -147,6 +147,14 @@ def lint_materialized_service(
             LintError(
                 path,
                 "materialized service command does not include --disable-telemetry",
+            )
+        )
+    env = service.get("environment", [])
+    if "MZ_DEV=1" not in env:
+        errors.append(
+            LintError(
+                path,
+                f"materialized service '{name}' does not specify MZ_DEV=1 in its environment: {env}",
             )
         )
 
@@ -199,7 +207,7 @@ class Composition:
                 if isinstance(env, dict):
                     env = {k: str(v) for k, v in env.items()}
                 self.workflows[workflow_name] = Workflow(
-                    workflow_name, built_steps, env=env, composition=self,
+                    workflow_name, built_steps, env=env, composition=self
                 )
 
         # Resolve all services that reference an `mzbuild` image to a specific
@@ -304,9 +312,7 @@ class Composition:
         # however, and we can pipe the container IDs into `docker inspect`,
         # which supports machine-readable output.
         containers = self.run(["ps", "-q"], capture=True).stdout.splitlines()
-        metadata = spawn.capture(
-            ["docker", "inspect", "-f", "{{json .}}", *containers,]
-        )
+        metadata = spawn.capture(["docker", "inspect", "-f", "{{json .}}", *containers])
         metadata = [json.loads(line) for line in metadata.splitlines()]
         ports = []
         for md in metadata:
@@ -349,7 +355,7 @@ class Composition:
         except subprocess.CalledProcessError as e:
             ui.log_in_automation(
                 "docker inspect ({}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
-                    container_id, ui.shell_quote(cmd), e, e.stdout, e.stderr,
+                    container_id, ui.shell_quote(cmd), e, e.stdout, e.stderr
                 )
             )
             raise errors.Failed(f"failed to inspect Docker container: {e}")
@@ -437,6 +443,15 @@ class Workflow:
     def run(self) -> None:
         for step in self._steps:
             step.run(self)
+
+    def run_with_env(self, env: Dict[str, str]) -> None:
+        """Run a workflow with a parent environment"""
+        old_env = self.env
+        self.env = dict(**old_env, **env)
+        try:
+            self.run()
+        finally:
+            self.env = old_env
 
     def run_compose(
         self, args: List[str], capture: bool = False
@@ -796,9 +811,7 @@ class WaitForTcpStep(WorkflowStep):
         self._timeout_secs = timeout_secs
 
     def run(self, workflow: Workflow) -> None:
-        ui.progress(
-            f"waiting for {self._host}:{self._port}", "C",
-        )
+        ui.progress(f"waiting for {self._host}:{self._port}", "C")
         for remaining in ui.timeout_loop(self._timeout_secs):
             cmd = f"docker run --rm -t --network {workflow.composition.name}_default ubuntu:bionic-20200403".split()
             cmd.extend(
@@ -884,7 +897,7 @@ class RandomChaos(WorkflowStep):
     ]
 
     def __init__(
-        self, chaos: List[str] = [], services: List[str] = [], other_service: str = "",
+        self, chaos: List[str] = [], services: List[str] = [], other_service: str = ""
     ):
         self._chaos = chaos
         self._services = services
@@ -1088,7 +1101,7 @@ class WorkflowWorkflowStep(WorkflowStep):
         try:
             # Run the specified workflow with the context of the parent workflow
             sub_workflow = workflow.composition.workflows[self._workflow]
-            sub_workflow.run()
+            sub_workflow.run_with_env(workflow.env)
         except KeyError:
             raise errors.UnknownItem(
                 f"workflow in {workflow.composition.name}",
@@ -1190,13 +1203,16 @@ class DownStep(WorkflowStep):
 
 @Steps.register("wait")
 class WaitStep(WorkflowStep):
-    def __init__(self, *, service: str, expected_return_code: int) -> None:
+    def __init__(
+        self, *, service: str, expected_return_code: int, print_logs: bool = False
+    ) -> None:
         """Wait for the container with name service to exit"""
         self._expected_return_code = expected_return_code
         self._service = service
+        self._print_logs = print_logs
 
     def run(self, workflow: Workflow) -> None:
-        say("Wait for the specified service to exit")
+        say(f"Waiting for the service {self._service} to exit")
         ps_proc = workflow.run_compose(["ps", "-q", self._service], capture=True)
         container_ids = [c for c in ps_proc.stdout.decode("utf-8").strip().split("\n")]
         if len(container_ids) > 1:
@@ -1222,6 +1238,9 @@ class WaitStep(WorkflowStep):
             raise errors.Failed(
                 f"Expected exit code {self._expected_return_code} for {container_id}; got: {return_code}"
             )
+
+        if self._print_logs:
+            spawn.runv(["docker", "logs", container_id])
 
 
 def print_docker_logs(pattern: str, tail: int = 0) -> None:

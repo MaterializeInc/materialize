@@ -21,12 +21,12 @@ use std::cmp;
 use std::env;
 use std::ffi::CStr;
 use std::fmt;
-use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs};
+use std::fs;
+use std::io;
+use std::net::SocketAddr;
 use std::panic;
 use std::panic::PanicInfo;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use backtrace::Backtrace;
 use clap::AppSettings;
 use itertools::Itertools;
@@ -42,6 +42,8 @@ use lazy_static::lazy_static;
 use log::{info, warn};
 use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
+
+use materialized::TlsMode;
 
 mod sys;
 mod tracing;
@@ -80,43 +82,24 @@ struct Args {
     /// Number of dataflow worker threads.
     #[structopt(short, long, env = "MZ_WORKERS", value_name = "N", default_value)]
     workers: WorkerCount,
-    /// Identity of this node in the cluster.
-    #[structopt(
-        short,
-        long,
-        env = "MZ_PROCESS",
-        value_name = "INDEX",
-        default_value = "0"
-    )]
-    process: usize,
-    /// Total number of nodes in the cluster.
-    #[structopt(
-        short = "n",
-        long,
-        env = "MZ_PROCESSES",
-        value_name = "N",
-        default_value = "1"
-    )]
-    processes: usize,
-    /// Text file containing the addresses of the nodes in the cluster.
-    ///
-    /// The addresses should be specified one per line.
-    #[structopt(short, long, env = "MZ_ADDRESSES", value_name = "PATH")]
-    addresses: Option<PathBuf>,
     /// Log Timely logging itself.
     #[structopt(long, hidden = true)]
-    debug_timely_logging: bool,
+    debug_introspection: bool,
 
     // === Performance tuning parameters. ===
-    /// Granularity of dataflow logs.
+    /// The frequency at which to update introspection sources.
     ///
-    /// Set to "off" to disable dataflow logging.
-    #[structopt(short = "l", long, env = "MZ_LOGGING_GRANULARITY", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1s")]
-    logging_granularity: OptionalDuration,
+    /// The introspection sources are the built-in sources in the mz_catalog
+    /// schema, like mz_scheduling_elapsed, that reflect the internal state of
+    /// Materialize's dataflow engine.
+    ///
+    /// Set to "off" to disable introspection.
+    #[structopt(long, env = "MZ_INTROSPECTION_FREQUENCY", parse(try_from_str = parse_optional_duration), value_name = "FREQUENCY", default_value = "1s")]
+    introspection_frequency: OptionalDuration,
     /// How much historical detail to maintain in arrangements.
     ///
     /// Set to "off" to disable logical compaction.
-    #[structopt(long, env = "MZ_LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "60s")]
+    #[structopt(long, env = "MZ_LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
     logical_compaction_window: OptionalDuration,
     /// [DEPRECATED] Frequency with which to advance timestamps.
     #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str = parse_duration::parse), value_name = "DURATION", default_value = "10ms")]
@@ -141,20 +124,78 @@ struct Args {
     /// Where materialized will emit log messages.
     #[structopt(long, env = "MZ_LOG_FILE", value_name = "PATH")]
     log_file: Option<String>,
+
     // == Connection options.
     /// The address on which to listen for connections.
-    #[structopt(long, env = "MZ_LISTEN_ADDR", value_name = "HOST:PORT")]
-    listen_addr: Option<SocketAddr>,
+    #[structopt(
+        long,
+        env = "MZ_LISTEN_ADDR",
+        value_name = "HOST:PORT",
+        default_value = "0.0.0.0:6875"
+    )]
+    listen_addr: SocketAddr,
+    /// How stringently to demand TLS authentication and encryption.
+    ///
+    /// If set to "disable", then materialized rejects HTTP and PostgreSQL
+    /// connections that negotiate TLS.
+    ///
+    /// If set to "require", then materialized requires that all HTTP and
+    /// PostgreSQL connections negotiate TLS. Unencrypted connections will be
+    /// rejected.
+    ///
+    /// If set to "verify-ca", then materialized requires that all HTTP and
+    /// PostgreSQL connections negotiate TLS and supply a certificate signed by
+    /// a trusted certificate authority (CA). HTTP connections will operate as
+    /// the system user in this mode, while PostgreSQL connections will assume
+    /// the name of whatever user is specified in the handshake.
+    ///
+    /// The "verify-full" mode is like "verify-ca", except that the Common Name
+    /// (CN) field of the certificate must match the name of a valid user. HTTP
+    /// and PostgreSQL connections will operate as this user. PostgreSQL
+    /// connections must additionally specify the same username in the
+    /// connection parameters.
+    ///
+    /// The most secure mode is "verify-full". This is the default mode when
+    /// the --tls-cert option is specified. Otherwise the default is "disable".
+    #[structopt(
+        long, env = "MZ_TLS_MODE",
+        possible_values = &["disable", "require", "verify-ca", "verify-full"],
+        default_value = "disable",
+        default_value_if("tls-cert", None, "verify-full"),
+        value_name = "MODE",
+    )]
+    tls_mode: String,
+    #[structopt(
+        long,
+        env = "MZ_TLS_CA",
+        required_if("tls-mode", "verify-ca"),
+        required_if("tls-mode", "verify-full"),
+        value_name = "PATH"
+    )]
+    tls_ca: Option<PathBuf>,
     /// Certificate file for TLS connections.
-    #[structopt(long, env = "MZ_TLS_CERT", requires = "tls-key", value_name = "PATH")]
+    #[structopt(
+        long,
+        env = "MZ_TLS_CERT",
+        requires = "tls-key",
+        required_ifs(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
+        value_name = "PATH"
+    )]
     tls_cert: Option<PathBuf>,
     /// Private key file for TLS connections.
-    #[structopt(long, env = "MZ_TLS_KEY", requires = "tls-cert", value_name = "PATH")]
+    #[structopt(
+        long,
+        env = "MZ_TLS_KEY",
+        requires = "tls-cert",
+        required_ifs(&[("tls-mode", "allow"), ("tls-mode", "require"), ("tls-mode", "verify-ca"), ("tls-mode", "verify-full")]),
+        value_name = "PATH"
+    )]
     tls_key: Option<PathBuf>,
 
     // === Storage options. ===
     /// Where to store data.
     #[structopt(
+        short = "D",
         long,
         env = "MZ_DATA_DIRECTORY",
         value_name = "PATH",
@@ -213,7 +254,7 @@ fn main() {
 
 fn run(args: Args) -> Result<(), anyhow::Error> {
     panic::set_hook(Box::new(handle_panic));
-    sys::enable_sigsegv_backtraces()?;
+    sys::enable_sigbus_sigsegv_backtraces()?;
 
     if args.version > 0 {
         println!("materialized {}", materialized::BUILD_INFO.human_version());
@@ -239,37 +280,50 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
     }
 
     // Configure Timely and Differential workers.
-    if args.process >= args.processes {
-        bail!(
-            "process ID {} is not between 0 and {}",
-            args.process,
-            args.processes
-        );
-    }
-    let addresses = match &args.addresses {
-        None => (0..args.processes)
-            .map(|i| SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6875 + i as u16))
-            .collect(),
-        Some(addresses) => read_address_file(addresses, args.processes)?,
-    };
-    let log_logging = args.debug_timely_logging;
+    let log_logging = args.debug_introspection;
     let logging = args
-        .logging_granularity
+        .introspection_frequency
         .map(|granularity| coord::LoggingConfig {
             granularity,
             log_logging,
         });
     if log_logging && logging.is_none() {
-        bail!("cannot specify --debug-timely-logging and --logging-granularity=off simultaneously");
+        bail!(
+            "cannot specify --debug-introspection and --introspection-frequency=off simultaneously"
+        );
     }
 
     // Configure connections.
-    let tls = match (args.tls_cert, args.tls_key) {
-        (None, None) => None,
-        (None, Some(_)) | (Some(_), None) => {
-            unreachable!("clap ensures --tls-cert and --tls-key are specified together");
+    let tls = if args.tls_mode == "disable" {
+        if args.tls_ca.is_some() {
+            bail!("cannot specify --tls-mode=disable and --tls-ca simultaneously");
         }
-        (Some(cert), Some(key)) => Some(materialized::TlsConfig { cert, key }),
+        if args.tls_cert.is_some() {
+            bail!("cannot specify --tls-mode=disable and --tls-cert simultaneously");
+        }
+        if args.tls_key.is_some() {
+            bail!("cannot specify --tls-mode=disable and --tls-key simultaneously");
+        }
+        None
+    } else {
+        let mode = match args.tls_mode.as_str() {
+            "require" => {
+                if args.tls_ca.is_some() {
+                    bail!("cannot specify --tls-mode=require and --tls-ca simultaneously");
+                }
+                TlsMode::Require
+            }
+            "verify-ca" => TlsMode::VerifyCa {
+                ca: args.tls_ca.unwrap(),
+            },
+            "verify-full" => TlsMode::VerifyFull {
+                ca: args.tls_ca.unwrap(),
+            },
+            _ => unreachable!(),
+        };
+        let cert = args.tls_cert.unwrap();
+        let key = args.tls_key.unwrap();
+        Some(materialized::TlsConfig { mode, cert, key })
     };
 
     // Configure storage.
@@ -442,8 +496,6 @@ swap: {swap_total}KB total, {swap_used}KB used",
     let server = runtime.block_on(materialized::serve(
         materialized::Config {
             workers: args.workers.0,
-            process: args.process,
-            addresses,
             timely_worker,
             logging,
             logical_compaction_window: args.logical_compaction_window,
@@ -526,28 +578,6 @@ For more details, see https://materialize.com/docs/cli#experimental-mode
     }
 }
 
-fn read_address_file(path: &Path, n: usize) -> Result<Vec<SocketAddr>, anyhow::Error> {
-    let file =
-        File::open(path).with_context(|| format!("opening address file {}", path.display()))?;
-    let mut lines = BufReader::new(file).lines();
-    let addrs = lines.by_ref().take(n).collect::<Result<Vec<_>, _>>()?;
-    if addrs.len() < n || lines.next().is_some() {
-        bail!("address file does not contain exactly {} lines", n);
-    }
-    Ok(addrs
-        .into_iter()
-        .map(|addr| match addr.to_socket_addrs() {
-            // TODO(benesch): we should try all possible addresses, not just the
-            // first (#502).
-            Ok(mut addrs) => match addrs.next() {
-                Some(addr) => Ok(addr),
-                None => Err(anyhow!("{} did not resolve to any addresses", addr)),
-            },
-            Err(err) => Err(anyhow!("error resolving {}: {}", addr, err)),
-        })
-        .collect::<Result<Vec<_>, _>>()?)
-}
-
 lazy_static! {
     static ref PANIC_MUTEX: Mutex<()> = Mutex::new(());
 }
@@ -566,7 +596,27 @@ fn handle_panic(panic_info: &PanicInfo) {
         },
     };
 
-    log::error!(target: "panic", "{}: {}\n{:?}", thr_name, msg, Backtrace::new());
+    let location = if let Some(loc) = panic_info.location() {
+        loc.to_string()
+    } else {
+        "<unknown>".to_string()
+    };
+
+    log::error!(
+        target: "panic",
+        "{msg}
+thread: {thr_name}
+location: {location}
+version: {version} ({sha})
+backtrace:
+{backtrace:?}",
+        msg = msg,
+        thr_name = thr_name,
+        location = location,
+        version = materialized::BUILD_INFO.version,
+        sha = materialized::BUILD_INFO.sha,
+        backtrace = Backtrace::new(),
+    );
     eprintln!(
         r#"materialized encountered an internal error and crashed.
 
@@ -574,8 +624,7 @@ We rely on bug reports to diagnose and fix these errors. Please
 copy and paste the above details and file a report at:
 
     https://materialize.com/s/bug
-
-To protect your privacy, we do not collect crash reports automatically."#,
+"#,
     );
     process::exit(1);
 }

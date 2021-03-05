@@ -8,15 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::convert::TryInto;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::executor::block_on;
-use futures::sink::SinkExt;
+use differential_dataflow::hashable::Hashable;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -26,25 +25,20 @@ use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionLi
 use timely::scheduling::activate::{Activator, SyncActivator};
 
 use dataflow_types::{
-    Consistency, DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
+    DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
 };
-use expr::{PartitionId, SourceInstanceId};
+use expr::{GlobalId, PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{debug, error, info, log_enabled, warn};
 use repr::{CachedRecord, CachedRecordIter, Timestamp};
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::source::cache::{CacheSender, RecordFileMetadata, WorkerCacheData};
+use crate::source::cache::{RecordFileMetadata, WorkerCacheData};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
-use crate::{
-    logging::materialized::Logger,
-    server::{
-        CacheMessage, TimestampDataUpdate, TimestampDataUpdates, TimestampMetadataUpdate,
-        TimestampMetadataUpdates,
-    },
-};
+use crate::{logging::materialized::Logger, server::CacheMessage};
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceInfo {
@@ -102,32 +96,6 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
 }
 
 impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
-    fn activate_source_timestamping(
-        id: &SourceInstanceId,
-        consistency: &Consistency,
-        _active: bool,
-        timestamp_data_updates: TimestampDataUpdates,
-        timestamp_metadata_channel: TimestampMetadataUpdates,
-    ) -> Option<TimestampMetadataUpdates> {
-        let prev = if let Consistency::BringYourOwn(_) = consistency {
-            timestamp_data_updates.borrow_mut().insert(
-                id.clone(),
-                TimestampDataUpdate::BringYourOwn(HashMap::new()),
-            )
-        } else {
-            timestamp_data_updates
-                .borrow_mut()
-                .insert(id.clone(), TimestampDataUpdate::RealTime(1))
-        };
-        // Check that this is the first time this source id is registered
-        assert!(prev.is_none());
-        timestamp_metadata_channel
-            .as_ref()
-            .borrow_mut()
-            .push(TimestampMetadataUpdate::StartTimestamping(*id));
-        Some(timestamp_metadata_channel)
-    }
-
     /// This function determines whether it is safe to close the current timestamp.
     /// It is safe to close the current timestamp if
     /// 1) this worker does not own the current partition
@@ -194,27 +162,21 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         }
     }
     /// Returns the number of partitions expected *for this worker*. Partitions are assigned
-    /// round-robin in worker id order
-    /// Ex: a partition count of 4 for 3 workers will assign worker 0 with partitions 0,3,
-    /// worker 1 with partition 1, and worker 2 with partition 2
+    /// round-robin in worker id order offset by the hash of the source_id
     fn get_worker_partition_count(&self) -> i32 {
-        let pcount = self.known_partitions / self.worker_count;
-        if self.worker_id < (self.known_partitions % self.worker_count) {
-            pcount + 1
-        } else {
-            pcount
-        }
+        (0..self.known_partitions)
+            .filter(|pid| has_partition(self.id.source_id, self.worker_id, self.worker_count, *pid))
+            .count() as i32
     }
 
     /// Returns true if this worker is responsible for this partition
-    /// Ex: if pid=0 and worker_id = 0, then true
-    /// if pid=1 and worker_id = 0, then false
     fn has_partition(&self, partition_id: PartitionId) -> bool {
         let pid = match partition_id {
             PartitionId::Kafka(pid) => pid,
             _ => unreachable!(),
         };
-        (pid % self.worker_count) == self.worker_id
+
+        self.has_partition(pid)
     }
 
     /// Ensures that a partition queue for `pid` exists.
@@ -412,7 +374,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
 
     fn cache_message(
         &self,
-        caching_tx: &mut Option<CacheSender>,
+        caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
         message: &SourceMessage<Vec<u8>>,
         timestamp: Timestamp,
         predecessor: Option<MzOffset>,
@@ -441,11 +403,11 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 },
             });
 
-            let mut connector = caching_tx.as_mut();
-
-            // TODO(rkhaitan): revisit whether this architecture of blocking
-            // within a dataflow operator makes sense.
-            block_on(connector.send(cache_data)).unwrap();
+            // TODO(benesch): the lack of backpressure here can result in
+            // unbounded memory usage.
+            caching_tx
+                .send(cache_data)
+                .expect("caching receiver should never drop first");
         }
     }
 }
@@ -497,7 +459,12 @@ impl KafkaSourceInfo {
                         match metadata {
                             Ok(Some(meta)) => {
                                 assert_eq!(source_id.source_id, meta.source_id);
-                                has_partition(worker_id, worker_count, meta.partition_id)
+                                has_partition(
+                                    source_id.source_id,
+                                    worker_id,
+                                    worker_count,
+                                    meta.partition_id,
+                                )
                             }
                             _ => {
                                 error!("Failed to parse path: {}", f.display());
@@ -534,10 +501,13 @@ impl KafkaSourceInfo {
     }
 
     /// Returns true if this worker is responsible for this partition
-    /// Ex: if pid=0 and worker_id = 0, then true
-    /// if pid=1 and worker_id = 0, then false
     fn has_partition(&self, partition_id: i32) -> bool {
-        has_partition(self.worker_id, self.worker_count, partition_id)
+        has_partition(
+            self.id.source_id,
+            self.worker_id,
+            self.worker_count,
+            partition_id,
+        )
     }
 
     /// Returns a count of total number of consumers for this source
@@ -801,6 +771,25 @@ impl ConsumerContext for GlueConsumerContext {
     }
 }
 
-fn has_partition(worker_id: i32, worker_count: i32, partition_id: i32) -> bool {
-    (partition_id % worker_count) == worker_id
+// We want to distribute partitions across workers evenly, such that
+// - different partitions for the same source are uniformly distributed across workers
+// - the same partition id across different sources are uniformly distributed across workers
+// - the same partition id across different instances of the same source is sent to
+//   the same worker.
+// We achieve this by taking a hash of the `source_id` (not the source instance id) and using
+// that to offset distributing partitions round robin across workers.
+fn has_partition(
+    source_id: GlobalId,
+    worker_id: i32,
+    worker_count: i32,
+    partition_id: i32,
+) -> bool {
+    assert!(worker_id >= 0);
+    assert!(worker_count > worker_id);
+    assert!(partition_id >= 0);
+
+    // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
+    // overflow.
+    let hash = (source_id.hashed() >> 32) + partition_id as u64;
+    (hash % worker_count as u64) == worker_id as u64
 }

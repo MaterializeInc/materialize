@@ -16,10 +16,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, Stream};
 
-use futures::executor::block_on;
-use futures::sink::SinkExt;
-
-use dataflow_types::TailSinkConnector;
+use dataflow_types::{SinkAsOf, TailSinkConnector};
 use expr::GlobalId;
 use repr::adt::decimal::Significand;
 use repr::{Datum, Diff, Row, RowPacker, Timestamp};
@@ -28,13 +25,19 @@ pub fn tail<G>(
     stream: Stream<G, Rc<OrdValBatch<GlobalId, Row, Timestamp, Diff>>>,
     id: GlobalId,
     connector: TailSinkConnector,
+    as_of: SinkAsOf,
 ) where
     G: Scope<Timestamp = Timestamp>,
 {
-    let mut tx = block_on(connector.tx.connect()).expect("tail transmitter failed");
+    let mut errored = false;
     let mut packer = RowPacker::new();
     stream.sink(Pipeline, &format!("tail-{}", id), move |input| {
         input.for_each(|_, batches| {
+            if errored {
+                // TODO(benesch): we should actually drop the sink if the
+                // receiver has gone away.
+                return;
+            }
             let mut results = vec![];
             for batch in batches.iter() {
                 let mut cursor = batch.cursor();
@@ -44,10 +47,10 @@ pub fn tail<G>(
                         cursor.map_times(&batch, |time, diff| {
                             assert!(*diff >= 0, "negative multiplicities sinked in tail");
                             let diff = *diff as usize;
-                            let should_emit = if connector.strict {
-                                connector.frontier.less_than(time)
+                            let should_emit = if as_of.strict {
+                                as_of.frontier.less_than(time)
                             } else {
-                                connector.frontier.less_equal(time)
+                                as_of.frontier.less_equal(time)
                             };
                             if should_emit {
                                 for _ in 0..diff {
@@ -84,11 +87,12 @@ pub fn tail<G>(
                 }
             }
 
-            // TODO(benesch): this blocks the Timely thread until the send
-            // completes. Hopefully it's just a quick write to a kernel buffer,
-            // but perhaps not if the batch gets too large? We may need to do
-            // something smarter, like offloading to a networking thread.
-            block_on(tx.send(results)).expect("tail send failed");
+            // TODO(benesch): the lack of backpressure here can result in
+            // unbounded memory usage.
+            if connector.tx.send(results).is_err() {
+                errored = true;
+                return;
+            }
         });
     })
 }

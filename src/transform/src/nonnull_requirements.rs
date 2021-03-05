@@ -51,10 +51,14 @@ impl NonNullRequirements {
         gets: &mut HashMap<Id, Vec<HashSet<usize>>>,
     ) {
         match relation {
-            MirRelationExpr::Constant { rows, .. } => rows.retain(|(row, _)| {
-                let datums = row.unpack();
-                columns.iter().all(|c| datums[*c] != repr::Datum::Null)
-            }),
+            MirRelationExpr::Constant { rows, .. } => {
+                if let Ok(rows) = rows {
+                    rows.retain(|(row, _)| {
+                        let datums = row.unpack();
+                        columns.iter().all(|c| datums[*c] != repr::Datum::Null)
+                    })
+                }
+            }
             MirRelationExpr::Get { id, .. } => {
                 gets.entry(*id).or_insert_with(Vec::new).push(columns);
             }
@@ -212,6 +216,9 @@ impl NonNullRequirements {
             MirRelationExpr::Threshold { input } => {
                 self.action(input, columns, gets);
             }
+            MirRelationExpr::DeclareKeys { input, .. } => {
+                self.action(input, columns, gets);
+            }
             MirRelationExpr::Union { base, inputs } => {
                 self.action(base, columns.clone(), gets);
                 for input in inputs {
@@ -250,10 +257,7 @@ mod tests {
                             },
                         ]),
                     }),
-                    scalars: vec![MirScalarExpr::literal_null(ColumnType {
-                        nullable: true,
-                        scalar_type: ScalarType::Int32,
-                    })],
+                    scalars: vec![MirScalarExpr::literal_null(ScalarType::Int32)],
                 }),
                 func: TableFunc::GenerateSeriesInt32,
                 exprs: vec![MirScalarExpr::Column(1)],

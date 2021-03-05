@@ -156,7 +156,7 @@ impl HirRelationExpr {
             Constant { rows, typ } => {
                 // Constant expressions are not correlated with `get_outer`, and should be cross-products.
                 get_outer.product(SR::Constant {
-                    rows: rows.into_iter().map(|row| (row, 1)).collect(),
+                    rows: Ok(rows.into_iter().map(|row| (row, 1)).collect()),
                     typ,
                 })
             }
@@ -478,6 +478,9 @@ impl HirRelationExpr {
                 // Threshold is uncomplicated.
                 input.applied_to(id_gen, get_outer, col_map).threshold()
             }
+            DeclareKeys { input, keys } => input
+                .applied_to(id_gen, get_outer, col_map)
+                .declare_keys(keys),
         }
     }
 }
@@ -585,10 +588,7 @@ impl HirScalarExpr {
                             expr1: Box::new(SS::CallBinary {
                                 func: expr::BinaryFunc::Eq,
                                 expr1: Box::new(cond_expr.clone()),
-                                expr2: Box::new(SS::literal_ok(
-                                    Datum::False,
-                                    ScalarType::Bool.nullable(false),
-                                )),
+                                expr2: Box::new(SS::literal_ok(Datum::False, ScalarType::Bool)),
                             }),
                             expr2: Box::new(SS::CallUnary {
                                 func: expr::UnaryFunc::IsNull,
@@ -993,7 +993,7 @@ fn attempt_outer_join(
                             .column_types
                             .into_iter()
                             .skip(oa)
-                            .map(|typ| expr::MirScalarExpr::literal_null(typ.nullable(true)))
+                            .map(|typ| expr::MirScalarExpr::literal_null(typ.scalar_type))
                             .collect();
 
                         // Add to `result` absent elements, filled with typed nulls.
@@ -1021,7 +1021,7 @@ fn attempt_outer_join(
                             .column_types
                             .into_iter()
                             .skip(oa)
-                            .map(|typ| expr::MirScalarExpr::literal_null(typ.nullable(true)))
+                            .map(|typ| expr::MirScalarExpr::literal_null(typ.scalar_type))
                             .collect();
 
                         // Add to `result` absent elemetns, prepended with typed nulls.

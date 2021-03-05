@@ -18,6 +18,7 @@ use std::fmt;
 use std::mem;
 
 use anyhow::bail;
+use expr::DummyHumanizer;
 use itertools::Itertools;
 
 use ore::collections::CollectionExt;
@@ -30,6 +31,8 @@ use crate::plan::Params;
 // these happen to be unchanged at the moment, but there might be additions later
 pub use expr::{BinaryFunc, ColumnOrder, NullaryFunc, TableFunc, UnaryFunc, VariadicFunc};
 use repr::adt::array::ArrayDimension;
+
+use super::Explanation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Just like MirRelationExpr, except where otherwise noted below.
@@ -102,6 +105,10 @@ pub enum HirRelationExpr {
     Union {
         base: Box<HirRelationExpr>,
         inputs: Vec<HirRelationExpr>,
+    },
+    DeclareKeys {
+        input: Box<HirRelationExpr>,
+        keys: Vec<Vec<usize>>,
     },
 }
 
@@ -553,6 +560,9 @@ impl HirRelationExpr {
                 }
                 RelationType::new(base_cols)
             }
+            HirRelationExpr::DeclareKeys { input, keys } => {
+                input.typ(outers, params).with_keys(keys.clone())
+            }
         }
     }
 
@@ -567,6 +577,7 @@ impl HirRelationExpr {
             | HirRelationExpr::TopK { input, .. }
             | HirRelationExpr::Distinct { input }
             | HirRelationExpr::Negate { input }
+            | HirRelationExpr::DeclareKeys { input, .. }
             | HirRelationExpr::Threshold { input } => input.arity(),
             HirRelationExpr::Join { left, right, .. } => left.arity() + right.arity(),
             HirRelationExpr::Union { base, .. } => base.arity(),
@@ -576,6 +587,11 @@ impl HirRelationExpr {
                 ..
             } => group_key.len() + aggregates.len(),
         }
+    }
+
+    /// Pretty-print this HirRelationExpr to a string.
+    pub fn pretty(&self) -> String {
+        Explanation::new(self, &DummyHumanizer).to_string()
     }
 
     pub fn is_join_identity(&self) -> bool {
@@ -621,6 +637,13 @@ impl HirRelationExpr {
         HirRelationExpr::Filter {
             input: Box::new(self),
             predicates,
+        }
+    }
+
+    pub fn declare_keys(self, keys: Vec<Vec<usize>>) -> Self {
+        HirRelationExpr::DeclareKeys {
+            input: Box::new(self),
+            keys,
         }
     }
 
@@ -745,6 +768,9 @@ impl HirRelationExpr {
             HirRelationExpr::Threshold { input } => {
                 f(input);
             }
+            HirRelationExpr::DeclareKeys { input, .. } => {
+                f(input);
+            }
             HirRelationExpr::Union { base, inputs } => {
                 f(base);
                 for input in inputs {
@@ -796,6 +822,9 @@ impl HirRelationExpr {
                 f(input);
             }
             HirRelationExpr::Threshold { input } => {
+                f(input);
+            }
+            HirRelationExpr::DeclareKeys { input, .. } => {
                 f(input);
             }
             HirRelationExpr::Union { base, inputs } => {
@@ -863,6 +892,7 @@ impl HirRelationExpr {
             | HirRelationExpr::Distinct { input }
             | HirRelationExpr::TopK { input, .. }
             | HirRelationExpr::Negate { input }
+            | HirRelationExpr::DeclareKeys { input, .. }
             | HirRelationExpr::Threshold { input } => {
                 input.visit_columns(depth, f);
             }
@@ -917,6 +947,7 @@ impl HirRelationExpr {
             | HirRelationExpr::Distinct { input, .. }
             | HirRelationExpr::TopK { input, .. }
             | HirRelationExpr::Negate { input, .. }
+            | HirRelationExpr::DeclareKeys { input, .. }
             | HirRelationExpr::Threshold { input, .. } => input.bind_parameters(params),
             HirRelationExpr::Constant { .. } | HirRelationExpr::Get { .. } => Ok(()),
         }
@@ -971,6 +1002,7 @@ impl HirRelationExpr {
             | HirRelationExpr::Distinct { input }
             | HirRelationExpr::TopK { input, .. }
             | HirRelationExpr::Negate { input }
+            | HirRelationExpr::DeclareKeys { input, .. }
             | HirRelationExpr::Threshold { input } => {
                 input.splice_parameters(params, depth);
             }

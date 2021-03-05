@@ -34,15 +34,30 @@ pub struct IngestAction {
 
 #[derive(Clone)]
 enum Format {
-    Avro { schema: String },
-    Protobuf { message: protobuf::MessageType },
-    Bytes { terminator: Option<u8> },
+    Avro {
+        schema: String,
+        confluent_wire_format: bool,
+    },
+    Protobuf {
+        message: protobuf::MessageType,
+    },
+    Bytes {
+        terminator: Option<u8>,
+    },
 }
 
 enum Transcoder {
-    Avro { schema: Schema, schema_id: i32 },
-    Protobuf { message: protobuf::MessageType },
-    Bytes { terminator: Option<u8> },
+    Avro {
+        schema: Schema,
+        schema_id: i32,
+        confluent_wire_format: bool,
+    },
+    Protobuf {
+        message: protobuf::MessageType,
+    },
+    Bytes {
+        terminator: Option<u8>,
+    },
 }
 
 impl Transcoder {
@@ -65,17 +80,23 @@ impl Transcoder {
         R: BufRead,
     {
         match self {
-            Transcoder::Avro { schema, schema_id } => {
+            Transcoder::Avro {
+                schema,
+                schema_id,
+                confluent_wire_format,
+            } => {
                 if let Some(val) = Self::decode_json(row)? {
                     let val = avro::from_json(&val, schema.top_node())?;
                     let mut out = vec![];
-                    // The first byte is a magic byte (0) that indicates the Confluent
-                    // serialization format version, and the next four bytes are a
-                    // 32-bit schema ID.
-                    //
-                    // https://docs.confluent.io/current/schema-registry/docs/serializer-formatter.html#wire-format
-                    out.write_u8(0).unwrap();
-                    out.write_i32::<NetworkEndian>(*schema_id).unwrap();
+                    if *confluent_wire_format {
+                        // The first byte is a magic byte (0) that indicates the Confluent
+                        // serialization format version, and the next four bytes are a
+                        // 32-bit schema ID.
+                        //
+                        // https://docs.confluent.io/3.3.0/schema-registry/docs/serializer-formatter.html#wire-format
+                        out.write_u8(0).unwrap();
+                        out.write_i32::<NetworkEndian>(*schema_id).unwrap();
+                    }
                     out.extend(avro::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
                     Ok(Some(out))
                 } else {
@@ -126,6 +147,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => Format::Avro {
             schema: cmd.args.string("schema")?,
+            confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
         },
         "protobuf" => Format::Protobuf {
             message: cmd.args.parse("message")?,
@@ -136,6 +158,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let key_format = match cmd.args.opt_string("key-format").as_deref() {
         Some("avro") => Some(Format::Avro {
             schema: cmd.args.string("key-schema")?,
+            confluent_wire_format: cmd.args.opt_bool("confluent-wire-format")?.unwrap_or(true),
         }),
         Some("protobuf") => Some(Format::Protobuf {
             message: cmd.args.parse("key-message")?,
@@ -151,7 +174,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
         None => None,
     };
     let timestamp = cmd.args.opt_parse("timestamp")?;
-    let publish = cmd.args.opt_bool("publish")?;
+    let publish = cmd.args.opt_bool("publish")?.unwrap_or(false);
     cmd.args.done()?;
 
     Ok(IngestAction {
@@ -197,7 +220,10 @@ impl Action for IngestAction {
         let ccsr_client = &state.ccsr_client;
         let make_transcoder = |format, typ| async move {
             match format {
-                Format::Avro { schema } => {
+                Format::Avro {
+                    schema,
+                    confluent_wire_format,
+                } => {
                     let schema_id = if self.publish {
                         let ccsr_subject = format!("{}-{}", topic_name, typ);
                         let schema_id = ccsr_client
@@ -210,7 +236,11 @@ impl Action for IngestAction {
                     };
                     let schema = avro::parse_schema(&schema)
                         .map_err(|e| format!("parsing avro schema: {}", e))?;
-                    Ok::<_, String>(Transcoder::Avro { schema, schema_id })
+                    Ok::<_, String>(Transcoder::Avro {
+                        schema,
+                        schema_id,
+                        confluent_wire_format,
+                    })
                 }
                 Format::Protobuf { message } => Ok(Transcoder::Protobuf { message }),
                 Format::Bytes { terminator } => Ok(Transcoder::Bytes { terminator }),

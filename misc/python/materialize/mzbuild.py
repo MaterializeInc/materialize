@@ -120,7 +120,7 @@ def docker_images() -> Set[str]:
     """List the Docker images available on the local machine."""
     return set(
         spawn.capture(
-            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"], unicode=True,
+            ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"], unicode=True
         )
         .strip()
         .split("\n")
@@ -195,9 +195,7 @@ class CargoBuild(CargoPreImage):
         cargo_build = [self.rd.xcargo(), "build", "--bin", self.bin]
         if self.rd.release_mode:
             cargo_build.append("--release")
-        spawn.runv(
-            cargo_build, cwd=self.rd.root,
-        )
+        spawn.runv(cargo_build, cwd=self.rd.root)
         cargo_profile = "release" if self.rd.release_mode else "debug"
         shutil.copy(self.rd.xcargo_target_dir() / cargo_profile / self.bin, self.path)
         if self.strip:
@@ -205,7 +203,7 @@ class CargoBuild(CargoPreImage):
             # down CI, since we're packaging these binaries up into Docker
             # images and shipping them around. A bit unfortunate, since it'd be
             # nice to have useful backtraces if the binary crashes.
-            spawn.runv([xstrip, self.path / self.bin])
+            spawn.runv([xstrip, "--strip-debug", self.path / self.bin])
         else:
             # Even if we've been asked not to strip the binary, remove the
             # `.debug_pubnames` and `.debug_pubtypes` sections. These are just
@@ -316,10 +314,6 @@ class CargoTest(CargoPreImage):
                 manifest.write(f"{slug} {crate_path}\n")
         shutil.move(str(self.path / "materialized"), self.path / "tests")
         shutil.move(str(self.path / "testdrive"), self.path / "tests")
-        shutil.copy(
-            self.rd.xcargo_target_dir() / "debug" / "examples" / "pingpong",
-            self.path / "tests" / "examples",
-        )
         shutil.copytree(self.rd.root / "misc" / "shlib", self.path / "shlib")
 
     def inputs(self) -> Set[str]:
@@ -697,14 +691,14 @@ class Repository:
     def resolve_dependencies(self, targets: Iterable[Image]) -> DependencySet:
         """Compute the dependency set necessary to build target images.
 
-         The dependencies of `targets` will be crawled recursively until the
-         complete set of transitive dependencies is determined or a circular
-         dependency is discovered. The returned dependency set will be sorted
-         in topological order.
+        The dependencies of `targets` will be crawled recursively until the
+        complete set of transitive dependencies is determined or a circular
+        dependency is discovered. The returned dependency set will be sorted
+        in topological order.
 
-         Raises:
-            ValueError: A circular dependency was discovered in the images
-                in the repository.
+        Raises:
+           ValueError: A circular dependency was discovered in the images
+               in the repository.
         """
         resolved = OrderedDict()
         visiting = set()

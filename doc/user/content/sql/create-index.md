@@ -42,6 +42,12 @@ Field | Use
 _index&lowbar;name_ | A name for the index.
 _obj&lowbar;name_ | The name of the source or view on which you want to create an index.
 _col&lowbar;ref_**...** | The columns to use as the key into the index.
+_field_ | The name of an index parameter to set to _val_. See [`ALTER INDEX`](/sql/alter-index) for available parameters.
+
+{{< version-changed v0.7.1 >}}
+The `WITH (field = val, ...)` clause was added to allow setting index parameters
+when creating the index.
+{{</ version-changed >}}
 
 ## Details
 

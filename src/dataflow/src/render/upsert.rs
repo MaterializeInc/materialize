@@ -7,21 +7,23 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::{AsCollection, Collection};
 
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::generic::{operator, Operator};
-use timely::dataflow::operators::map::Map;
+use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::operators::{generic::Operator, Concat, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use dataflow_types::{DataEncoding, DataflowError, LinearOperator};
-use repr::{Datum, RelationType, Row, RowArena, Timestamp};
+use dataflow_types::{DataflowError, DecodeError, LinearOperator};
+use expr::{EvalError, MirScalarExpr};
+use log::error;
+use repr::{Datum, Diff, Row, RowArena, Timestamp};
 
-use crate::decode::decode_upsert;
+use crate::decode::DecoderState;
 use crate::operator::StreamExt;
 use crate::source::{SourceData, SourceOutput};
 
@@ -31,34 +33,29 @@ use crate::source::{SourceData, SourceOutput};
 /// the rendering pipeline in that their input is a stream
 /// with two components instead of one, and the second component
 /// can be null or empty.
-#[allow(clippy::too_many_arguments)]
-pub fn pre_arrange_from_upsert_transforms<G>(
+pub fn decode_stream<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
-    encoding: DataEncoding,
-    key_encoding: DataEncoding,
-    debug_name: &str,
-    worker_index: usize,
     as_of_frontier: Antichain<Timestamp>,
-    linear_operator: &mut Option<LinearOperator>,
-    src_type: &RelationType,
+    mut key_decoder_state: Box<dyn DecoderState>,
+    mut value_decoder_state: Box<dyn DecoderState>,
+    operators: &mut Option<LinearOperator>,
+    source_arity: usize,
 ) -> (
-    Stream<G, (Row, Option<Row>, Timestamp)>,
-    Stream<G, DataflowError>,
+    Collection<G, Row, Diff>,
+    Option<Collection<G, dataflow_types::DataflowError, Diff>>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
 {
     // Currently, the upsert-specific transformations run in the
     // following order:
-    // 1. as_of
-    // 2. deduplicating records by key
+    // 1. Applies `as_of` frontier compaction. The compaction is important as
+    // downstream upsert preparation can compact away updates for the same keys
+    // at the same times, and by advancing times we make more of them the same.
+    // 2. compact away updates for the same keys at the same times
     // 3. decoding records
-    // 4. applying linear operator, which currently consist of
-    //     a. filter
-    //     b. project
-    //     c. prepending the key to the value so that the stream becomes
+    // 4. prepending the key to the value so that the stream becomes
     //        of the format (key, <entire record>)
-    //
     // We may want to consider switching the order of the transformations to
     // optimize performance trade-offs. In the current order, by running
     // deduplicating before decoding/linear operators, we're reducing compute at the
@@ -68,244 +65,275 @@ where
     // to specify that they believe that they have a large number of unique
     // keys, at which point materialize may be more performant if it runs
     // decoding/linear operators before deduplicating.
+    //
+    // The method also takes in `operators` which describes predicates that can
+    // be applied and columns of the data that can be blanked out. We can apply
+    // these operations but must be careful: for example, we can apply predicates
+    // before staging the records, but we need to present filtered results as a
+    // `None` value to ensure that it prompts dropping any held values with the
+    // same key. If the predicates produce errors, we should notice these as well
+    // and retract them if non-erroring records overwrite them.
 
-    // This operator changes the timestamp from capability to message payload,
-    // and applies `as_of` frontier compaction. The compaction is important as
-    // downstream upsert preparation can compact away updates for the same keys
-    // at the same times, and by advancing times we make more of them the same.
-    let stream = stream.unary(Pipeline, "AppendTimestamp", move |_, _| {
-        let mut vector = Vec::new();
-        move |input, output| {
-            input.for_each(|cap, data| {
-                data.swap(&mut vector);
-                let mut time = cap.time().clone();
-                time.advance_by(as_of_frontier.borrow());
-                output
-                    .session(&cap)
-                    .give_iterator(vector.drain(..).map(|x| (x, time.clone())));
-            });
-        }
-    });
+    // TODO: We could move the decoding before the staging grounds, which would
+    // allow us to stage potentially less data. The motivation for the current
+    // design is to support bulk deduplication without decoding, but we expect
+    // this is most likely to happen in the loading of data; consequently, we
+    // could use this implementation until `as_of_frontier` is reached, and then
+    // switch over to eager decoding. A work-in-progress idea that needs thought.
 
-    // Deduplicate records by key
-    let deduplicated = prepare_upsert_by_max_offset(&stream);
-
-    // Decode
-    let decoded = decode_upsert(
-        &deduplicated,
-        encoding,
-        key_encoding,
-        debug_name,
-        worker_index,
-    );
-
-    apply_linear_operators(&decoded, linear_operator, src_type)
-}
-
-/// Produces at most one entry for each `(key, time)` pair.
-///
-/// The incoming stream of `(key, (val, off), time)` records may have many
-/// entries with the same `key` and `time`. We are able to reduce this to
-/// at most one record for each pair, by retaining only the record with the
-/// greatest offset: its action summarizes the sequence of many actions that
-/// occur at the same moment and so are not distinguishable.
-fn prepare_upsert_by_max_offset<G>(
-    stream: &Stream<G, (SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)>,
-) -> Stream<G, ((Vec<u8>, SourceData), Timestamp)>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    stream.unary_frontier(
-        Exchange::new(move |x: &(SourceOutput<Vec<u8>, Vec<u8>>, Timestamp)| x.0.key.hashed()),
-        "UpsertCompaction",
-        |_cap, _info| {
-            // this is a map of (time) -> ((key) -> (value with max offset))
-            let mut values = HashMap::<_, HashMap<_, SourceData>>::new();
-            let mut vector = Vec::new();
-
-            move |input, output| {
-                // Digest each input, reduce by presented timestamp.
-                input.for_each(|cap, data| {
-                    data.swap(&mut vector);
-                    for (
-                        SourceOutput {
-                            key,
-                            value: new_value,
-                            position: new_position,
-                            upstream_time_millis: new_upstream_time_millis,
-                        },
-                        time,
-                    ) in vector.drain(..)
-                    {
-                        let entry = values
-                            .entry(cap.delayed(&time))
-                            .or_insert_with(HashMap::new)
-                            .entry(key)
-                            .or_insert_with(Default::default);
-
-                        if let Some(new_offset) = new_position {
-                            if let Some(offset) = entry.position {
-                                if offset < new_offset {
-                                    *entry = SourceData {
-                                        value: new_value,
-                                        position: new_position,
-                                        upstream_time_millis: new_upstream_time_millis,
-                                    };
-                                }
-                            } else {
-                                *entry = SourceData {
-                                    value: new_value,
-                                    position: new_position,
-                                    upstream_time_millis: new_upstream_time_millis,
-                                };
-                            }
-                        }
-                    }
-                });
-
-                // Produce (key, val) pairs at any complete times.
-                for (cap, map) in values.iter_mut() {
-                    if !input.frontier.less_equal(cap.time()) {
-                        let mut session = output.session(cap);
-                        for (key, val) in map.drain() {
-                            session.give(((key, val), cap.time().clone()))
-                        }
-                    }
-                }
-                // Discard entries, capabilities for complete times.
-                values.retain(|_cap, map| !map.is_empty());
+    // Extract predicates, and "dummy column" information.
+    // Predicates are distinguished into temporal and non-temporal,
+    // as the non-temporal determine if a record is retained at all,
+    // and the temporal indicate how we should transform its timestamps
+    // when it is transmitted.
+    let mut temporal = Vec::new();
+    let mut predicates = Vec::new();
+    let mut position_or = (0..source_arity).map(|x| Some(x)).collect::<Vec<_>>();
+    if let Some(mut operators) = operators.take() {
+        for predicate in operators.predicates.drain(..) {
+            if predicate.contains_temporal() {
+                temporal.push(predicate);
+            } else {
+                predicates.push(predicate);
             }
-        },
-    )
-}
+        }
+        // Temporal predicates will be applied after blanking out column,
+        // so ensure that their support is preserved.
+        // TODO: consider blanking out columns added by this processes in
+        // the temporal filtering operator.
+        for predicate in temporal.iter() {
+            operators.projection.extend(predicate.support());
+        }
+        operators.projection.sort();
+        operators.projection.dedup();
 
-/// Apply a filter followed by a project to an upsert stream.
-/// Also, prepend key columns to the beginning of the value so
-/// the return stream is `Stream<G, (key, Option<entire record>, Timestamp)>
-/// whereas the input stream is `Stream<G, (key, Option<value>, Timestamp)>
-fn apply_linear_operators<G>(
-    stream: &Stream<G, (Row, Option<Row>, Timestamp)>,
-    linear_operator: &mut Option<LinearOperator>,
-    src_type: &RelationType,
-) -> (
-    Stream<G, (Row, Option<Row>, Timestamp)>,
-    Stream<G, DataflowError>,
-)
-where
-    G: Scope<Timestamp = Timestamp>,
-{
-    let operator = linear_operator.take();
-    let mut row_packer = repr::RowPacker::new();
-
-    if let Some(operator) = operator {
-        // Determine replacement values for unused columns.
-        // This is copied over from applying linear operators to
-        // the non-upsert case.
-        // At this point, the stream consists of (key, key+payload, time)
-        // so it is ok to delete replace unused values in key+payload
-        // but not to replace unused values in key because that would cause
-        // errors in arrange_from_upsert
-        let position_or = (0..src_type.arity())
+        // Overwrite `position_or` to reflect `operators.projection`.
+        position_or = (0..source_arity)
             .map(|col| {
-                if operator.projection.contains(&col) {
+                if operators.projection.contains(&col) {
                     Some(col)
                 } else {
                     None
                 }
             })
             .collect::<Vec<_>>();
+    }
+    let temporal_plan = if !temporal.is_empty() {
+        Some(crate::FilterPlan::create_from(temporal).unwrap_or_else(|e| panic!(e)))
+    } else {
+        None
+    };
 
-        // If a row does not match a predicate whose support lies in the key
-        // columns, it can be tossed away entirely. If a row does not match
-        // a predicate whose support is not contained in the key columns, it
-        // must be replaced with (key, None) in case if there was previously a
-        // row with the same key that matched the predicate.
-        let key_col_len = src_type.keys[0].len();
-        let mut predicates = operator.predicates;
-        let mut key_predicates = Vec::new();
-        predicates.retain(|p| {
-            let key_predicate = p.support().into_iter().all(|c| c < key_col_len);
-            if key_predicate {
-                key_predicates.push(p.clone());
-            }
-            !key_predicate
-        });
+    let result_stream = stream.unary_frontier(
+        Exchange::new(move |x: &SourceOutput<Vec<u8>, Vec<u8>>| x.key.hashed()),
+        "Upsert",
+        move |_cap, _info| {
+            // this is a map of (time) -> (capability, ((key) -> (value with max
+            // offset))) This is a BTreeMap because we want to ensure that if we
+            // receive (key1, value1, time 5) and (key1, value2, time 7) that we
+            // send (key1, value1, time 5) before (key1, value2, time 7)
+            let mut to_send = BTreeMap::<_, (_, HashMap<_, SourceData>)>::new();
+            // this is a map of (decoded key) -> (decoded_value). We store the
+            // latest value for a given key that way we know what to retract if
+            // a new value with the same key comes along
+            let mut current_values = HashMap::new();
 
-        let mut storage = Vec::new();
+            let mut vector = Vec::new();
+            let mut row_packer = repr::RowPacker::new();
 
-        stream.unary_fallible(Pipeline, "UpsertLinearFallible", move |_, _| {
-            move |input, ok_output, err_output| {
-                input.for_each(|time, data| {
-                    let mut ok_session = ok_output.session(&time);
-                    let mut err_session = err_output.session(&time);
-                    data.swap(&mut storage);
-                    let temp_storage = RowArena::new();
-                    for (key, value, time) in storage.drain(..) {
-                        let mut datums = key.unpack();
-                        let key_pred_eval = key_predicates
-                            .iter()
-                            .map(|predicate| predicate.eval(&datums, &temp_storage))
-                            .find(|result| result != &Ok(Datum::True));
-                        match key_pred_eval {
-                            None => {
-                                if let Some(value) = value {
-                                    let value_datums = value.unpack();
-                                    // combine value datums with key datums
-                                    datums.extend(value_datums);
-                                    // evaluate predicates against the entire record
-                                    let pred_eval = predicates
-                                        .iter()
-                                        .map(|predicate| predicate.eval(&datums, &temp_storage))
-                                        .find(|result| result != &Ok(Datum::True));
-                                    match pred_eval {
-                                        None => {
-                                            // project all demanded keys from the record
-                                            let record = Some(row_packer.pack(
-                                                position_or.iter().map(|pos_or| match pos_or {
-                                                    Some(index) => datums[*index],
-                                                    None => Datum::Dummy,
-                                                }),
-                                            ));
-                                            ok_session.give((key, record, time));
-                                        }
-                                        Some(Ok(Datum::False)) | Some(Ok(Datum::Null)) => {
-                                            ok_session.give((key, None, time));
-                                        }
-                                        Some(Ok(x)) => {
-                                            panic!("Predicate evaluated to invalid value: {:?}", x)
-                                        }
-                                        Some(Err(x)) => {
-                                            err_session.give(DataflowError::from(x));
-                                        }
+            move |input, output| {
+                // Digest each input, reduce by presented timestamp.
+                input.for_each(|cap, data| {
+                    data.swap(&mut vector);
+                    for SourceOutput {
+                        key,
+                        value: new_value,
+                        position: new_position,
+                        upstream_time_millis: new_upstream_time_millis,
+                    } in vector.drain(..)
+                    {
+                        let mut time = cap.time().clone();
+                        time.advance_by(as_of_frontier.borrow());
+                        if key.is_empty() {
+                            error!("Encountered empty key for value {:?}", new_value);
+                            continue;
+                        }
+
+                        if let Some(new_offset) = new_position {
+                            let entry = to_send
+                                .entry(time)
+                                .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
+                                .1
+                                .entry(key)
+                                .or_insert_with(Default::default);
+
+                            let new_entry = SourceData {
+                                value: new_value,
+                                position: new_position,
+                                upstream_time_millis: new_upstream_time_millis,
+                            };
+
+                            if let Some(offset) = entry.position {
+                                // If the time is equal, toss out the row with the
+                                // lower offset
+                                if offset < new_offset {
+                                    *entry = new_entry;
+                                }
+                            } else {
+                                // If there was not a previous entry, we'll have
+                                // inserted a blank default value, and the
+                                // offset would be none.
+                                // Just insert new entry into the hashmap.
+                                *entry = new_entry;
+                            }
+                        } else {
+                            // This case should be unreachable because kafka
+                            // records should always come with an offset.
+                            error!("Encountered row with empty offset {:?}", key);
+                        }
+                    }
+                });
+
+                let mut removed_times = Vec::new();
+                for (time, (cap, map)) in to_send.iter_mut() {
+                    if !input.frontier.less_equal(time) {
+                        let mut session = output.session(cap);
+                        removed_times.push(time.clone());
+                        for (key, data) in map.drain() {
+                            // decode key and value
+                            // TODO(mcsherry): we could record key decoding errors as the value
+                            // which would allow us to recover from key decoding errors by a
+                            // later retraction of the key (it will never decode correctly, but
+                            // we could produce and then remove the error from the output).
+                            match key_decoder_state.decode_key(&key) {
+                                Ok(Some(decoded_key)) => {
+                                    let decoded_value = if data.value.is_empty() {
+                                        Ok(None)
+                                    } else {
+                                        value_decoder_state
+                                            // Start with an attempt to decode the value.
+                                            .decode_upsert_value(
+                                                &data.value,
+                                                data.position,
+                                                data.upstream_time_millis,
+                                            )
+                                            // Convert decoding errors into `DataflowError`s.
+                                            .map_err(|text| {
+                                                DataflowError::DecodeError(DecodeError::Text(text))
+                                            })
+                                            // Apply the predicates and projections
+                                            .and_then(|value_option| {
+                                                if let Some(value) = value_option {
+                                                    // Unpack rows to apply predicates and projections.
+                                                    // This could be optimized with MapFilterProject.
+                                                    let mut datums =
+                                                        Vec::with_capacity(source_arity);
+                                                    datums.extend(decoded_key.iter());
+                                                    datums.extend(value.iter());
+                                                    evaluate(
+                                                        &datums,
+                                                        &predicates,
+                                                        &position_or,
+                                                        &mut row_packer,
+                                                    )
+                                                    .map_err(DataflowError::from)
+                                                } else {
+                                                    Ok(None)
+                                                }
+                                            })
+                                    };
+                                    // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
+                                    // We store errors as well as non-None values, so that they can be
+                                    // retracted if new rows show up for the same key.
+                                    let new_value = decoded_value.transpose();
+                                    let old_value = if let Some(new_value) = &new_value {
+                                        current_values.insert(decoded_key, new_value.clone())
+                                    } else {
+                                        current_values.remove(&decoded_key)
+                                    };
+                                    if let Some(old_value) = old_value {
+                                        // retract old value
+                                        session.give((old_value, cap.time().clone(), -1));
                                     }
-                                } else {
-                                    ok_session.give((key, None, time));
+                                    if let Some(new_value) = new_value {
+                                        // give new value
+                                        session.give((new_value, cap.time().clone(), 1));
+                                    }
+                                }
+                                Ok(None) => {}
+                                Err(err) => {
+                                    error!("key decoding error: {}", err);
                                 }
                             }
-                            Some(Ok(Datum::False)) | Some(Ok(Datum::Null)) => {}
-                            Some(Ok(x)) => panic!("Predicate evaluated to invalid value: {:?}", x),
-                            Some(Err(x)) => {
-                                err_session.give(DataflowError::from(x));
-                            }
-                        };
+                        }
+                    } else {
+                        // because this is a BTreeMap, the rest of the times in
+                        // the map will be greater than this time. So if the
+                        // input_frontier is less than or equal to this time,
+                        // it will be less than the times in the rest of the map
+                        break;
                     }
-                })
-            }
-        })
-    } else {
-        // just prepend the key to the value without unpacking rows
-        let prepended = stream.map({
-            move |(key, value, timestamp)| {
-                if let Some(value) = value {
-                    row_packer.extend_by_row(&key);
-                    row_packer.extend_by_row(&value);
-                    (key, Some(row_packer.finish_and_reuse()), timestamp)
-                } else {
-                    (key, None, timestamp)
                 }
+                // Discard entries, capabilities for complete times.
+                for time in removed_times {
+                    to_send.remove(&time);
+                }
+                key_decoder_state.log_error_count();
+                value_decoder_state.log_error_count();
+            }
+        },
+    );
+
+    let (mut oks, mut errs) = result_stream.ok_err(|(data, time, diff)| match data {
+        Ok(data) => Ok((data, time, diff)),
+        Err(err) => Err((err, time, diff)),
+    });
+
+    // If we have temporal predicates do the thing they have to do.
+    if let Some(plan) = temporal_plan {
+        let (oks2, errs2) = oks.flat_map_fallible({
+            let mut datums = crate::render::datum_vec::DatumVec::new();
+            move |(row, time, diff)| {
+                let mut datums_local = datums.borrow_with(&row);
+                let time_diffs = plan.evaluate(&mut datums_local, time, diff);
+                // Explicitly drop `datums_local` to release the borrow.
+                drop(datums_local);
+                time_diffs.map(move |time_diff| time_diff.map(|(t, d)| (row.clone(), t, d)))
             }
         });
-        let scope = &prepended.scope();
-        (prepended, operator::empty(scope))
+
+        oks = oks2;
+        errs = errs.concat(&errs2);
     }
+
+    (oks.as_collection(), Some(errs.as_collection()))
+}
+
+/// Evaluates predicates and dummy column information.
+///
+/// This method takes decoded datums and prepares as output
+/// a row which contains only those positions of `position_or`.
+/// If any predicate is failed, no row is produced, and if an
+/// error is encounted it is returned instead.
+fn evaluate(
+    datums: &[Datum],
+    predicates: &[MirScalarExpr],
+    position_or: &[Option<usize>],
+    row_packer: &mut repr::RowPacker,
+) -> Result<Option<Row>, EvalError> {
+    let arena = RowArena::new();
+    // Each predicate is tested in order.
+    for predicate in predicates.iter() {
+        if predicate.eval(&datums[..], &arena)? != Datum::True {
+            return Ok(None);
+        }
+    }
+    // We pack dummy values in locations that do not reference
+    // specific columns.
+    row_packer.clear();
+    row_packer.extend(position_or.iter().map(|x| match x {
+        Some(column) => datums[*column],
+        None => Datum::Dummy,
+    }));
+    Ok(Some(row_packer.finish_and_reuse()))
 }

@@ -21,8 +21,12 @@ b1
 b2
 b3
 
+$ set queue-name=materialize-ci-notifications-${testdrive.seed}
+
+$ s3-add-notifications bucket=${bucket} queue=${queue-name}
+
 > CREATE MATERIALIZED SOURCE s3_all
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -41,7 +45,7 @@ b2 5
 b3 6
 
 > CREATE MATERIALIZED SOURCE s3_glob_a
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN MATCHING '**/a'
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}' MATCHING '**/a'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -57,7 +61,7 @@ a2 2
 a3 3
 
 > CREATE MATERIALIZED SOURCE s3_just_a
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN MATCHING 'short/a'
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}' MATCHING 'short/a'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -78,7 +82,7 @@ c,8
 c,9
 
 > CREATE MATERIALIZED SOURCE csv_example (name, counts)
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN MATCHING '*.csv'
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}' MATCHING '*.csv'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -119,7 +123,7 @@ $ s3-put-object bucket=${bucket} key=logs/2021/01/01/frontend.log
 173.203.139.108 - - [01/01/2021:00:00:39] "GET /downloads/materialized HTTP/1.1" 404 335 "-" "Python/Requests_22"
 
 > CREATE MATERIALIZED SOURCE frontend_logs
-  FROM S3 BUCKET '${bucket}' OBJECTS FROM SCAN MATCHING 'logs/**/*.log'
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}' MATCHING 'logs/**/*.log'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -137,3 +141,104 @@ $ s3-put-object bucket=${bucket} key=logs/2021/01/01/frontend.log
 01/01/2021:00:00:57 91.234.194.89 Python/Requests_22
 12/31/2020:23:55:52 37.26.93.214 Go_1.1_package_http
 12/31/2020:23:55:59 99.99.44.44 Python/Requests_22
+
+$ set otherbucket=materialize-ci-td-other-${testdrive.seed}
+$ set otherqueue=materialize-ci-other-${testdrive.seed}
+
+$ s3-create-bucket bucket=${otherbucket}
+$ s3-add-notifications bucket=${otherbucket} queue=${otherqueue} sqs-validation-timout=5m
+
+$ s3-put-object bucket=${otherbucket} key=short/c
+c1
+c2
+c3
+
+> CREATE MATERIALIZED SOURCE s3_multi
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}', SCAN BUCKET '${otherbucket}'
+  MATCHING 'short/*'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT TEXT;
+
+> SELECT text FROM s3_multi ORDER BY text;
+a1
+a2
+a3
+b1
+b2
+b3
+c1
+c2
+c3
+
+# Check a source that has both SCAN and NOTIFICATIONS set up
+
+> CREATE MATERIALIZED SOURCE s3_scan_notifications
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}', SQS NOTIFICATIONS '${queue-name}'
+  MATCHING 'short/*'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT TEXT;
+
+> SELECT text FROM s3_scan_notifications ORDER BY text;
+a1
+a2
+a3
+b1
+b2
+b3
+
+$ s3-put-object bucket=${bucket} key=short/d
+d
+
+# S3 has a very loose idea of how fast items should show up:
+# > Typically, event notifications are delivered in seconds but can sometimes take a minute or longer.
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/NotificationHowTo.html
+$ set-sql-timeout duration=2minutes
+
+> SELECT text FROM s3_scan_notifications ORDER BY text;
+a1
+a2
+a3
+b1
+b2
+b3
+d
+
+# ensure that only the source we care about gets the notifications
+> DROP SOURCE s3_scan_notifications
+
+# check just pulling SQS
+
+# This section fails in localstack, but succeeds in AWS/CI
+$ s3-put-object bucket=${otherbucket} key=short/e
+e1
+e2
+e3
+
+> CREATE MATERIALIZED SOURCE s3_notifications
+  FROM S3 OBJECTS FROM SQS NOTIFICATIONS '${otherqueue}'
+  MATCHING 'short/e'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT TEXT;
+
+> SELECT text FROM s3_notifications ORDER BY text;
+e1
+e2
+e3

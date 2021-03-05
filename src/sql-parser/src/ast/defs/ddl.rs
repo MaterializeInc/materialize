@@ -24,7 +24,7 @@
 use std::path::PathBuf;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
-use crate::ast::{AstInfo, DataType, Expr, Ident, ObjectName, SqlOption};
+use crate::ast::{AstInfo, DataType, Expr, Ident, SqlOption, UnresolvedObjectName, WithOption};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Schema {
@@ -53,16 +53,19 @@ impl AstDisplay for Schema {
 impl_display!(Schema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum AvroSchema {
+pub enum AvroSchema<T: AstInfo> {
     CsrUrl {
         url: String,
         seed: Option<CsrSeed>,
-        with_options: Vec<SqlOption>,
+        with_options: Vec<SqlOption<T>>,
     },
-    Schema(Schema),
+    Schema {
+        schema: Schema,
+        with_options: Vec<WithOption>,
+    },
 }
 
-impl AstDisplay for AvroSchema {
+impl<T: AstInfo> AstDisplay for AvroSchema<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Self::CsrUrl {
@@ -83,11 +86,21 @@ impl AstDisplay for AvroSchema {
                     f.write_str(")");
                 }
             }
-            Self::Schema(schema) => schema.fmt(f),
+            Self::Schema {
+                schema,
+                with_options,
+            } => {
+                schema.fmt(f);
+                if !with_options.is_empty() {
+                    f.write_str(" WITH (");
+                    f.write_node(&display::comma_separated(with_options));
+                    f.write_str(")");
+                }
+            }
         }
     }
 }
-impl_display!(AvroSchema);
+impl_display_t!(AvroSchema);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CsrSeed {
@@ -111,9 +124,9 @@ impl AstDisplay for CsrSeed {
 impl_display!(CsrSeed);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Format {
+pub enum Format<T: AstInfo> {
     Bytes,
-    Avro(AvroSchema),
+    Avro(AvroSchema<T>),
     Protobuf {
         message_name: String,
         schema: Schema,
@@ -129,20 +142,20 @@ pub enum Format {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Envelope {
+pub enum Envelope<T: AstInfo> {
     None,
     Debezium,
-    Upsert(Option<Format>),
+    Upsert(Option<Format<T>>),
     CdcV2,
 }
 
-impl Default for Envelope {
+impl<T: AstInfo> Default for Envelope<T> {
     fn default() -> Self {
         Self::None
     }
 }
 
-impl AstDisplay for Envelope {
+impl<T: AstInfo> AstDisplay for Envelope<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Self::None => {
@@ -165,9 +178,9 @@ impl AstDisplay for Envelope {
         }
     }
 }
-impl_display!(Envelope);
+impl_display_t!(Envelope);
 
-impl AstDisplay for Format {
+impl<T: AstInfo> AstDisplay for Format<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Self::Bytes => f.write_str("BYTES"),
@@ -212,7 +225,7 @@ impl AstDisplay for Format {
         }
     }
 }
-impl_display!(Format);
+impl_display_t!(Format);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Compression {
@@ -236,17 +249,8 @@ impl AstDisplay for Compression {
 }
 impl_display!(Compression);
 
-impl From<Compression> for dataflow_types::Compression {
-    fn from(c: Compression) -> Self {
-        match c {
-            Compression::Gzip => Self::Gzip,
-            Compression::None => Self::None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Connector {
+pub enum Connector<T: AstInfo> {
     File {
         path: String,
         compression: Compression,
@@ -264,13 +268,26 @@ pub enum Connector {
         path: String,
     },
     S3 {
-        bucket: String,
+        /// The arguments to `OBJECTS FROM`: `SCAN BUCKET` or `SQS NOTIFICATIONS`
+        key_sources: Vec<S3KeySource>,
         /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
         pattern: Option<String>,
     },
+    Postgres {
+        /// The postgres connection string
+        conn: String,
+        /// The name of the publication to sync
+        publication: String,
+        /// The namespace the synced table belongs to
+        namespace: String,
+        /// The name of the table to sync
+        table: String,
+        /// The expected column schema of the synced table
+        columns: Vec<ColumnDef<T>>,
+    },
 }
 
-impl AstDisplay for Connector {
+impl<T: AstInfo> AstDisplay for Connector<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             Connector::File { path, compression } => {
@@ -305,20 +322,68 @@ impl AstDisplay for Connector {
                 f.write_node(&display::escape_single_quote_string(path));
                 f.write_str("'");
             }
-            Connector::S3 { bucket, pattern } => {
-                f.write_str("S3 BUCKET '");
-                f.write_str(&display::escape_single_quote_string(bucket));
-                f.write_str("' OBJECTS FROM SCAN");
+            Connector::S3 {
+                key_sources,
+                pattern,
+            } => {
+                f.write_str("S3 OBJECTS FROM");
+                f.write_node(&display::comma_separated(key_sources));
                 if let Some(pattern) = pattern {
                     f.write_str(" MATCHING '");
                     f.write_str(&display::escape_single_quote_string(pattern));
                     f.write_str("'");
                 }
             }
+            Connector::Postgres {
+                conn,
+                publication,
+                namespace,
+                table,
+                columns,
+            } => {
+                f.write_str("POSTGRES HOST '");
+                f.write_str(&display::escape_single_quote_string(conn));
+                f.write_str("' PUBLICATION '");
+                f.write_str(&display::escape_single_quote_string(publication));
+                f.write_str("' NAMESPACE '");
+                f.write_str(&display::escape_single_quote_string(namespace));
+                f.write_str("' TABLE '");
+                f.write_str(&display::escape_single_quote_string(table));
+                f.write_str("' (");
+                f.write_node(&display::comma_separated(columns));
+                f.write_str(")");
+            }
         }
     }
 }
-impl_display!(Connector);
+impl_display_t!(Connector);
+
+/// The key sources specified in the S3 source's `OBJECTS FROM` clause.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum S3KeySource {
+    /// `OBJECTS FROM SCAN BUCKET '<bucket>'`
+    Scan { bucket: String },
+    /// `OBJECTS FROM SQS NOTIFICATIONS '<queue-name>'`
+    SqsNotifications { queue: String },
+}
+
+impl AstDisplay for S3KeySource {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            S3KeySource::Scan { bucket } => {
+                f.write_str(" SCAN BUCKET '");
+                f.write_str(&display::escape_single_quote_string(bucket));
+                f.write_str("'");
+            }
+            S3KeySource::SqsNotifications { queue } => {
+                f.write_str(" SQS NOTIFICATIONS '");
+                f.write_str(&display::escape_single_quote_string(queue));
+                f.write_str("'");
+            }
+        }
+    }
+}
+impl_display!(S3KeySource);
 
 /// A table-level constraint, specified in a `CREATE TABLE` or an
 /// `ALTER TABLE ADD <constraint>` statement.
@@ -336,7 +401,7 @@ pub enum TableConstraint<T: AstInfo> {
     ForeignKey {
         name: Option<Ident>,
         columns: Vec<Ident>,
-        foreign_table: ObjectName,
+        foreign_table: UnresolvedObjectName,
         referred_columns: Vec<Ident>,
     },
     /// `[ CONSTRAINT <name> ] CHECK (<expr>)`
@@ -394,8 +459,8 @@ impl_display_t!(TableConstraint);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ColumnDef<T: AstInfo> {
     pub name: Ident,
-    pub data_type: DataType,
-    pub collation: Option<ObjectName>,
+    pub data_type: DataType<T>,
+    pub collation: Option<UnresolvedObjectName>,
     pub options: Vec<ColumnOptionDef<T>>,
 }
 
@@ -459,7 +524,7 @@ pub enum ColumnOption<T: AstInfo> {
     /// A referential integrity constraint (`[FOREIGN KEY REFERENCES
     /// <foreign_table> (<referred_columns>)`).
     ForeignKey {
-        foreign_table: ObjectName,
+        foreign_table: UnresolvedObjectName,
         referred_columns: Vec<Ident>,
     },
     // `CHECK (<expr>)`

@@ -13,23 +13,16 @@
 // not directly usable for some other source types.
 
 use std::path::Path;
-use std::pin::Pin;
 
 use anyhow::Error;
-
-use expr::GlobalId;
-use futures::sink::Sink;
 use log::error;
-use repr::CachedRecord;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::server::CacheMessage;
+use expr::GlobalId;
+use repr::CachedRecord;
 
 static RECORD_FILE_PREFIX: &str = "materialize";
-
-/// Type alias for object that sends data to the cacher.
-pub type CacheSender = Pin<Box<dyn Sink<CacheMessage, Error = comm::Error> + Send>>;
 
 /// Describes what is provided from a cached file.
 #[derive(Debug)]

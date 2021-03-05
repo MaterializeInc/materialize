@@ -317,6 +317,37 @@ SELECT sqrt(1.23783::decimal(15, 5))
 ----
 1.11257
 
+# Test cbrt.
+query R
+SELECT cbrt(NULL)
+----
+NULL
+
+query R
+SELECT cbrt(1.23783::float)
+----
+1.0737100084353584
+
+query R
+SELECT cbrt(1.23783::double)
+----
+1.0737100084353584
+
+query R
+SELECT cbrt(1.23783::decimal(15,5))
+----
+1.0737100084353584
+
+query R
+SELECT cbrt(-8::double)
+----
+-2
+
+query R
+SELECT cbrt(3::int)
+----
+1.4422495703074083
+
 # Test coalesce.
 query I
 SELECT coalesce(NULL, 1, NULL)
@@ -472,6 +503,8 @@ EXPLAIN PLAN FOR SELECT (a::bool AND b::bool) IS NULL FROM t
 | Project (#2)
 
 EOF
+
+mode cockroach
 
 # Test qualified function names.
 
@@ -652,6 +685,22 @@ SELECT array_length(ARRAY[]::int[], 1)
 ----
 NULL
 
+# Test strange collapsing behavior of nested empty arrays. See #5545.
+
+query TIII
+SELECT arr, array_lower(arr, 1), array_upper(arr, 1), array_length(arr, 1) FROM
+    (VALUES
+        (ARRAY[]::int[]),
+        (ARRAY[ARRAY[]]::int[]),
+        (ARRAY[ARRAY[], ARRAY[], ARRAY[]]::int[]),
+        (ARRAY[ARRAY[ARRAY[ARRAY[]]]]::int[])
+    ) AS _ (arr)
+----
+{}  NULL  NULL  NULL
+{}  NULL  NULL  NULL
+{}  NULL  NULL  NULL
+{}  NULL  NULL  NULL
+
 query T
 SELECT upper('a1Bd')
 ----
@@ -677,3 +726,312 @@ alreadylow
 
 query error Cannot call function lower\(interval\): arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT lower('1ms'::interval)
+
+# Test trigonometric functions.
+
+# Use standard mode to round floats to three digits of precision. This makes
+# tests more reliable across platforms, as platforms have different
+# implementations of the trigonometric functions that result in slight
+# variance in the least significant digits.
+mode standard
+
+query R
+SELECT sin(NULL)
+----
+NULL
+
+query R
+SELECT sinh(NULL)
+----
+NULL
+
+query R
+SELECT cos(NULL)
+----
+NULL
+
+query R
+SELECT cosh(NULL)
+----
+NULL
+
+query R
+SELECT tan(NULL)
+----
+NULL
+
+query R
+SELECT tanh(NULL)
+----
+NULL
+
+query R
+SELECT cot(NULL)
+----
+NULL
+
+query R
+SELECT sin('NaN'::double)
+----
+NaN
+
+query R
+SELECT sinh('NaN'::double)
+----
+NaN
+
+query R
+SELECT cos('NaN'::double)
+----
+NaN
+
+query R
+SELECT cosh('NaN'::double)
+----
+NaN
+
+query R
+SELECT tan('NaN'::double)
+----
+NaN
+
+query R
+SELECT tanh('NaN'::double)
+----
+NaN
+
+query R
+SELECT cot('NaN'::double)
+----
+NaN
+
+query R
+SELECT sin(0::double)
+----
+0.000
+
+query R
+SELECT sinh(0::double)
+----
+0.000
+
+query R
+SELECT cos(0::double)
+----
+1.000
+
+query R
+SELECT cosh(0::double)
+----
+1.000
+
+query R
+SELECT tan(0::double)
+----
+0.000
+
+query R
+SELECT tanh(0::double)
+----
+0.000
+
+query R
+SELECT cot(0::double)
+----
+inf
+
+query R
+SELECT cot(-0::double)
+----
+-inf
+
+query R
+SELECT sin(1::double)
+----
+0.841
+
+query R
+SELECT sinh(1::double)
+----
+1.175
+
+query R
+SELECT cos(1::double)
+----
+0.540
+
+query R
+SELECT cosh(1::double)
+----
+1.543
+
+query R
+SELECT tan(1.01::double)
+----
+1.592
+
+query R
+SELECT tanh(1::double)
+----
+0.762
+
+query R
+SELECT cot(1.01::double)
+----
+0.628
+
+query error function sin is only defined for finite arguments
+SELECT sin('inf'::double)
+
+query R
+SELECT sinh('inf'::double)
+----
+inf
+
+query error function cos is only defined for finite arguments
+SELECT cos('inf'::double)
+
+query R
+SELECT cosh('inf'::double)
+----
+inf
+
+query error function tan is only defined for finite arguments
+SELECT tan('inf'::double)
+
+query R
+SELECT tanh('inf'::double)
+----
+1.000
+
+query error function cot is only defined for finite arguments
+SELECT cot('inf'::double)
+
+query error function sin is only defined for finite arguments
+SELECT sin('-inf'::double)
+
+query R
+SELECT sinh('-inf'::double)
+----
+-inf
+
+query error function cos is only defined for finite arguments
+SELECT cos('-inf'::double)
+
+query R
+SELECT cosh('-inf'::double)
+----
+inf
+
+query error function tan is only defined for finite arguments
+SELECT tan('-inf'::double)
+
+query R
+SELECT tanh('-inf'::double)
+----
+-1.000
+
+# Use the more reasonable number representation, as the standard mode
+# causes all sorts of weird representation issues with exp and log:
+mode cockroach
+
+query error function cot is only defined for finite arguments
+SELECT cot('-inf'::double)
+
+query error function log10 is not defined for zero
+SELECT log10(0.0::double)
+
+query error function log10 is not defined for zero
+SELECT log10(+0.0::double)
+
+query error function log10 is not defined for negative numbers
+SELECT log10(-1.0::double)
+
+query R
+SELECT log10(10.0::double)
+----
+1
+
+query R
+SELECT log(10.0::decimal(15, 5))
+----
+1
+
+query error function log is not defined for zero
+SELECT log(0.0, 10)
+
+query error function log is not defined for zero
+SELECT log(+0.0, 10)
+
+query error function log is not defined for negative numbers
+SELECT log(-10, 10)
+
+query error function log is not defined for zero
+SELECT log(10, 0.0)
+
+query error function log is not defined for zero
+SELECT log(10, +0.0)
+
+query error function log is not defined for negative numbers
+SELECT log(10.0, -10)
+
+query R
+SELECT log(10, 10)
+----
+1
+
+query R
+SELECT log(400, 20)
+----
+2
+
+query R
+SELECT log10(10::decimal(15, 5))
+----
+1
+
+query R
+SELECT round(ln(13::float)::decimal(15, 5), 3)
+----
+2.5650
+
+query error function ln is not defined for negative numbers
+SELECT ln(-1)
+
+query error function ln is not defined for zero
+SELECT ln(0)
+
+query R
+SELECT ln(13.0000::decimal(15, 5))
+----
+2.56494
+
+query R
+SELECT round(exp(2)::decimal(15, 5), 3)
+----
+7.3890
+
+query R
+SELECT exp(ln(2))
+----
+2
+
+query T
+SELECT exp(ln(2::decimal(15, 5)))
+----
+2
+
+query R
+SELECT power(382, 5);
+----
+8134236862432
+
+query T
+SELECT power(9::float, 0.5);
+----
+3.000
+
+query T
+SELECT power(9::decimal(15, 5), 0.5::decimal(15, 5));
+----
+3

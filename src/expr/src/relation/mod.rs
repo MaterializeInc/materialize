@@ -20,7 +20,7 @@ use repr::{ColumnType, Datum, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
 use crate::explain::Explanation;
-use crate::{DummyHumanizer, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr};
+use crate::{DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr};
 
 pub mod func;
 pub mod join_input_mapper;
@@ -36,7 +36,7 @@ pub enum MirRelationExpr {
     /// The runtime memory footprint of this operator is zero.
     Constant {
         /// Rows of the constant collection and their multiplicities.
-        rows: Vec<(Row, isize)>,
+        rows: Result<Vec<(Row, isize)>, EvalError>,
         /// Schema of the collection.
         typ: RelationType,
     },
@@ -208,6 +208,18 @@ pub enum MirRelationExpr {
         /// Columns to arrange `input` by, in order of decreasing primacy
         keys: Vec<Vec<MirScalarExpr>>,
     },
+    /// Declares that `keys` are primary keys for `input`.
+    /// Should be used *very* sparingly, and only if there's no plausible
+    /// way to derive the key information from the underlying expression.
+    /// The result of declaring a key that isn't actually a key for the underlying expression is undefined.
+    ///
+    /// There is no operator rendered for this IR node; thus, its runtime memory footprint is zero.
+    DeclareKeys {
+        /// The source collection
+        input: Box<MirRelationExpr>,
+        /// The set of columns in the source collection that form a key.
+        keys: Vec<Vec<usize>>,
+    },
 }
 
 impl MirRelationExpr {
@@ -220,24 +232,27 @@ impl MirRelationExpr {
     pub fn typ(&self) -> RelationType {
         match self {
             MirRelationExpr::Constant { rows, typ } => {
-                for (row, _diff) in rows {
-                    for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
-                        // If the record will be observed, we should validate its type.
-                        if datum != Datum::Dummy {
-                            assert!(
-                                datum.is_instance_of(column_typ),
-                                "Expected datum of type {:?}, got value {:?}",
-                                column_typ,
-                                datum
-                            );
+                if let Ok(rows) = rows {
+                    for (row, _diff) in rows {
+                        for (datum, column_typ) in row.iter().zip(typ.column_types.iter()) {
+                            // If the record will be observed, we should validate its type.
+                            if datum != Datum::Dummy {
+                                assert!(
+                                    datum.is_instance_of(column_typ),
+                                    "Expected datum of type {:?}, got value {:?}",
+                                    column_typ,
+                                    datum
+                                );
+                            }
                         }
                     }
-                }
-                let result = typ.clone();
-                if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
-                    result.with_key(Vec::new())
+                    if rows.len() == 0 || (rows.len() == 1 && rows[0].1 == 1) {
+                        typ.clone().with_key(Vec::new())
+                    } else {
+                        typ.clone()
+                    }
                 } else {
-                    result
+                    typ.clone()
                 }
             }
             MirRelationExpr::Get { typ, .. } => typ.clone(),
@@ -319,10 +334,13 @@ impl MirRelationExpr {
                 exprs: _,
                 demand: _,
             } => {
-                let mut typ = input.typ();
-                typ.column_types.extend(func.output_type().column_types);
+                let mut input_typ = input.typ();
+                input_typ
+                    .column_types
+                    .extend(func.output_type().column_types);
                 // FlatMap can add duplicate rows, so input keys are no longer valid
-                RelationType::new(typ.column_types)
+                let typ = RelationType::new(input_typ.column_types);
+                typ
             }
             MirRelationExpr::Filter { input, .. } => input.typ(),
             MirRelationExpr::Join {
@@ -403,7 +421,20 @@ impl MirRelationExpr {
                 }
                 result
             }
-            MirRelationExpr::TopK { input, .. } => input.typ(),
+            MirRelationExpr::TopK {
+                input,
+                group_key,
+                limit,
+                ..
+            } => {
+                // If `limit` is `Some(1)` then the group key will become
+                // a unique key, as there will be only one record with that key.
+                let mut typ = input.typ();
+                if limit == &Some(1) {
+                    typ = typ.with_key(group_key.clone())
+                }
+                typ
+            }
             MirRelationExpr::Negate { input } => {
                 // Although negate may have distinct records for each key,
                 // the multiplicity is -1 rather than 1. This breaks many
@@ -427,6 +458,7 @@ impl MirRelationExpr {
                 // Important: do not inherit keys of either input, as not unique.
             }
             MirRelationExpr::ArrangeBy { input, .. } => input.typ(),
+            MirRelationExpr::DeclareKeys { input, keys } => input.typ().with_keys(keys.clone()),
         }
     }
 
@@ -459,10 +491,10 @@ impl MirRelationExpr {
             }
         }
         let mut row_packer = repr::RowPacker::new();
-        let rows = rows
+        let rows = Ok(rows
             .into_iter()
             .map(move |(row, diff)| (row_packer.pack(row), diff))
-            .collect();
+            .collect());
         MirRelationExpr::Constant { rows, typ }
     }
 
@@ -664,7 +696,10 @@ impl MirRelationExpr {
     /// constructed.
     pub fn union_many(mut inputs: Vec<Self>, typ: RelationType) -> Self {
         if inputs.len() == 0 {
-            MirRelationExpr::Constant { rows: vec![], typ }
+            MirRelationExpr::Constant {
+                rows: Ok(vec![]),
+                typ,
+            }
         } else if inputs.len() == 1 {
             inputs.into_element()
         } else {
@@ -696,7 +731,7 @@ impl MirRelationExpr {
     /// A false value does not mean the collection is known to be non-empty,
     /// only that we cannot currently determine that it is statically empty.
     pub fn is_empty(&self) -> bool {
-        if let MirRelationExpr::Constant { rows, .. } = self {
+        if let MirRelationExpr::Constant { rows: Ok(rows), .. } = self {
             rows.is_empty()
         } else {
             false
@@ -772,6 +807,9 @@ impl MirRelationExpr {
                 }
             }
             MirRelationExpr::ArrangeBy { input, .. } => {
+                f(input)?;
+            }
+            MirRelationExpr::DeclareKeys { input, .. } => {
                 f(input)?;
             }
         }
@@ -853,6 +891,9 @@ impl MirRelationExpr {
             MirRelationExpr::ArrangeBy { input, .. } => {
                 f(input)?;
             }
+            MirRelationExpr::DeclareKeys { input, .. } => {
+                f(input)?;
+            }
         }
         Ok(())
     }
@@ -914,7 +955,16 @@ impl MirRelationExpr {
         // Match written out explicitly to reduce the possibility of adding a
         // new field with a `MirScalarExpr` within and forgetting to account for it
         // here.
-        self.try_visit_mut(&mut |e| match e {
+        self.try_visit_mut(&mut |e| e.try_visit_scalars_mut1(f))
+    }
+
+    /// Fallible visitor for the [`MirScalarExpr`]s directly owned by this relation expression.
+    /// This does not recursively descend into owned [`MirRelationExpr`]s.
+    pub fn try_visit_scalars_mut1<F, E>(&mut self, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(&mut MirScalarExpr) -> Result<(), E>,
+    {
+        match self {
             MirRelationExpr::Map { scalars, input: _ }
             | MirRelationExpr::Filter {
                 predicates: scalars,
@@ -984,8 +1034,9 @@ impl MirRelationExpr {
             }
             | MirRelationExpr::Negate { input: _ }
             | MirRelationExpr::Threshold { input: _ }
+            | MirRelationExpr::DeclareKeys { input: _, keys: _ }
             | MirRelationExpr::Union { base: _, inputs: _ } => Ok(()),
-        })
+        }
     }
 
     /// Like `try_visit_scalars_mut`, but the closure must be infallible.
@@ -1016,14 +1067,20 @@ impl MirRelationExpr {
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the correct type.
     pub fn take_safely(&mut self) -> MirRelationExpr {
         let typ = self.typ();
-        std::mem::replace(self, MirRelationExpr::Constant { rows: vec![], typ })
+        std::mem::replace(
+            self,
+            MirRelationExpr::Constant {
+                rows: Ok(vec![]),
+                typ,
+            },
+        )
     }
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with an **incorrect** type.
     ///
     /// This should only be used if `self` is about to be dropped or otherwise overwritten.
     pub fn take_dangerous(&mut self) -> MirRelationExpr {
         let empty = MirRelationExpr::Constant {
-            rows: vec![],
+            rows: Ok(vec![]),
             typ: RelationType::new(Vec::new()),
         };
         std::mem::replace(self, empty)
@@ -1035,7 +1092,7 @@ impl MirRelationExpr {
         F: FnOnce(MirRelationExpr) -> MirRelationExpr,
     {
         let empty = MirRelationExpr::Constant {
-            rows: vec![],
+            rows: Ok(vec![]),
             typ: RelationType::new(Vec::new()),
         };
         let expr = std::mem::replace(self, empty);
@@ -1119,6 +1176,14 @@ impl MirRelationExpr {
                 default,
             ))
         })
+    }
+
+    /// Passes the collection through unchanged, but informs the optimizer that `keys` are primary keys.
+    pub fn declare_keys(self, keys: Vec<Vec<usize>>) -> Self {
+        Self::DeclareKeys {
+            input: Box::new(self),
+            keys,
+        }
     }
 }
 

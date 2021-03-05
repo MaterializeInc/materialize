@@ -7,6 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+! CREATE SOURCE bad FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Self' USING SCHEMA '${testdrive.protobuf-descriptors}'
+Recursive types are not supported: .Self
+
+! CREATE SOURCE bad FROM
+  KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
+  FORMAT PROTOBUF MESSAGE '.Mutual1' USING SCHEMA '${testdrive.protobuf-descriptors}'
+Recursive types are not supported: .Mutual1
+
 > CREATE SOURCE protomessages FROM
   KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-messages-${testdrive.seed}'
   FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA '${testdrive.protobuf-descriptors}'
@@ -27,5 +37,5 @@ $ kafka-ingest format=protobuf topic=messages message=struct timestamp=1
 
 # TODO: these should be fully json
 > SELECT * FROM pm
-1 1 ONE  my-string
-2 2 ONE  something-valid
+1 1 ONE  my-string 1
+2 2 ONE  something-valid 2

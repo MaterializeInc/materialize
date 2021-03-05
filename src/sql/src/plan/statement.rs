@@ -12,15 +12,16 @@
 //! This module houses the entry points for planning a SQL statement.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 
 use anyhow::bail;
 
+use expr::GlobalId;
 use ore::collections::CollectionExt;
 use repr::{ColumnType, RelationDesc, ScalarType};
 
-use crate::ast::{Ident, ObjectName, ObjectType, Raw, Statement};
+use crate::ast::{Ident, ObjectType, Raw, Statement, UnresolvedObjectName};
 use crate::catalog::{Catalog, CatalogDatabase, CatalogItem, CatalogItemType, CatalogSchema};
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::normalize;
@@ -98,6 +99,7 @@ pub fn describe(
     let scx = StatementContext {
         catalog,
         pcx: &PlanContext::default(),
+        ids: HashSet::new(),
         param_types: Rc::new(RefCell::new(param_types)),
     };
 
@@ -161,6 +163,10 @@ pub fn describe(
 /// Planning is a pure, synchronous function and so requires that the provided
 /// `stmt` does does not depend on any external state. To purify a statement,
 /// use [`crate::pure::purify`].
+///
+/// The returned plan is tied to the state of the provided catalog. If the state
+/// of the catalog changes after planning, the validity of the plan is not
+/// guaranteed.
 pub fn plan(
     pcx: &PlanContext,
     catalog: &dyn Catalog,
@@ -177,6 +183,7 @@ pub fn plan(
     let scx = &StatementContext {
         pcx,
         catalog,
+        ids: HashSet::new(),
         param_types: Rc::new(RefCell::new(param_types)),
     };
 
@@ -263,6 +270,7 @@ impl PartialEq<CatalogItemType> for ObjectType {
 pub struct StatementContext<'a> {
     pub pcx: &'a PlanContext,
     pub catalog: &'a dyn Catalog,
+    pub ids: HashSet<GlobalId>,
     /// The types of the parameters in the query. This is filled in as planning
     /// occurs.
     pub param_types: Rc<RefCell<BTreeMap<usize, ScalarType>>>,
@@ -294,10 +302,13 @@ impl<'a> StatementContext<'a> {
     }
 
     pub fn resolve_default_schema(&self) -> Result<&dyn CatalogSchema, PlanError> {
-        self.resolve_schema(ObjectName::unqualified("public"))
+        self.resolve_schema(UnresolvedObjectName::unqualified("public"))
     }
 
-    pub fn resolve_database(&self, name: ObjectName) -> Result<&dyn CatalogDatabase, PlanError> {
+    pub fn resolve_database(
+        &self,
+        name: UnresolvedObjectName,
+    ) -> Result<&dyn CatalogDatabase, PlanError> {
         if name.0.len() != 1 {
             return Err(PlanError::OverqualifiedDatabaseName(name.to_string()));
         }
@@ -309,7 +320,10 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_database(&name)?)
     }
 
-    pub fn resolve_schema(&self, mut name: ObjectName) -> Result<&dyn CatalogSchema, PlanError> {
+    pub fn resolve_schema(
+        &self,
+        mut name: UnresolvedObjectName,
+    ) -> Result<&dyn CatalogSchema, PlanError> {
         if name.0.len() > 2 {
             return Err(PlanError::OverqualifiedSchemaName(name.to_string()));
         }
@@ -318,14 +332,21 @@ impl<'a> StatementContext<'a> {
         Ok(self.catalog.resolve_schema(database_spec, &schema_name)?)
     }
 
-    pub fn resolve_item(&self, name: ObjectName) -> Result<&dyn CatalogItem, PlanError> {
-        let name = normalize::object_name(name)?;
+    pub fn resolve_item(&self, name: UnresolvedObjectName) -> Result<&dyn CatalogItem, PlanError> {
+        let name = normalize::unresolved_object_name(name)?;
         Ok(self.catalog.resolve_item(&name)?)
     }
 
-    pub fn resolve_function(&self, name: ObjectName) -> Result<&dyn CatalogItem, PlanError> {
-        let name = normalize::object_name(name)?;
+    pub fn resolve_function(
+        &self,
+        name: UnresolvedObjectName,
+    ) -> Result<&dyn CatalogItem, PlanError> {
+        let name = normalize::unresolved_object_name(name)?;
         Ok(self.catalog.resolve_function(&name)?)
+    }
+
+    pub fn get_item_by_id(&self, id: &GlobalId) -> &dyn CatalogItem {
+        self.catalog.get_item_by_id(id)
     }
 
     pub fn experimental_mode(&self) -> bool {

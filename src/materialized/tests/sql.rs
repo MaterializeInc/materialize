@@ -13,62 +13,104 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
+use std::env;
 use std::error::Error;
 use std::io::Write;
 use std::net::TcpListener;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::thread;
+use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use postgres::error::DbError;
+use lazy_static::lazy_static;
+use log::info;
 use tempfile::NamedTempFile;
 
-use util::MzTimestamp;
+use util::{MzTimestamp, PostgresErrorExt};
 
 pub mod util;
+
+lazy_static! {
+    pub static ref KAFKA_ADDRS: kafka_util::KafkaAddrs = match env::var("KAFKA_ADDRS") {
+        Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
+        _ => "localhost:9092".parse().unwrap(),
+    };
+}
 
 #[test]
 fn test_no_block() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
+    ore::panic::set_abort_on_panic();
+    // This is better than relying on CI to time out,
+    // because an actual abort (as opposed to a CI timeout) causes `services.log` to be uploaded.
+    let finished = Arc::new(AtomicBool::new(false));
+    thread::spawn({
+        let finished = finished.clone();
+        move || {
+            sleep(Duration::from_secs(30));
+            if !finished.load(Ordering::SeqCst) {
+                panic!("test_no_block timed out")
+            }
+        }
+    });
     // Create a listener that will simulate a slow Confluent Schema Registry.
+    info!("test_no_block: creating listener");
     let listener = TcpListener::bind("localhost:0")?;
     let listener_port = listener.local_addr()?.port();
 
-    let (server, mut client) = util::start_server(util::Config::default())?;
+    info!("test_no_block: starting server");
+    let server = util::start_server(util::Config::default())?;
+    info!("test_no_block: connecting to server");
+    let mut client = server.connect(postgres::NoTls)?;
 
+    info!("test_no_block: spawning thread");
     let slow_thread = thread::spawn(move || {
-        client.batch_execute(&format!(
+        info!("test_no_block: in thread; executing create source");
+        let result = client.batch_execute(&format!(
             "CREATE SOURCE foo \
-             FROM KAFKA BROKER 'localhost:9092' TOPIC 'foo' \
+             FROM KAFKA BROKER '{}' TOPIC 'foo' \
              FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:{}'",
-            listener_port,
-        ))
+            &*KAFKA_ADDRS, listener_port,
+        ));
+        info!("test_no_block: in thread; create source done");
+        result
     });
 
     // Wait for materialized to contact the schema registry, which indicates
     // the coordinator is processing the CREATE SOURCE command. It will be
     // unable to complete the query until we respond.
+    info!("test_no_block: accepting fake schema registry connection");
     let (mut stream, _) = listener.accept()?;
 
     // Verify that the coordinator can still process other requests from other
     // sessions.
-    let mut client = server.connect()?;
+    info!("test_no_block: connecting to server again");
+    let mut client = server.connect(postgres::NoTls)?;
+    info!("test_no_block: executing query");
     let answer: i32 = client.query_one("SELECT 1 + 1", &[])?.get(0);
     assert_eq!(answer, 2);
 
     // Return an error to the coordinator, so that we can shutdown cleanly.
+    info!("test_no_block: writing fake schema registry error");
     write!(stream, "HTTP/1.1 503 Service Unavailable\r\n\r\n")?;
+    info!("test_no_block: dropping fake schema registry connection");
     drop(stream);
 
     // Verify that the schema registry error was returned to the client, for
     // good measure.
+    info!("test_no_block: joining thread");
     let slow_res = slow_thread.join().unwrap();
     assert!(slow_res
         .unwrap_err()
         .to_string()
         .contains("server error 503"));
 
+    info!("test_no_block: returning");
+    finished.store(true, Ordering::SeqCst);
     Ok(())
 }
 
@@ -76,7 +118,8 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
 fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (_server, mut client) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     // Confirm that `now()` and `current_timestamp()` both return a
     // DateTime<Utc>, but don't assert specific times.
@@ -105,8 +148,9 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
-    let (server, mut client_writes) = util::start_server(config)?;
-    let mut client_reads = server.connect()?;
+    let server = util::start_server(config)?;
+    let mut client_writes = server.connect(postgres::NoTls)?;
+    let mut client_reads = server.connect(postgres::NoTls)?;
 
     client_writes.batch_execute("CREATE TABLE t (data text)")?;
     client_reads.batch_execute(
@@ -129,7 +173,8 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     // so we only see events that occur as of or later than that timestamp.
     for (ts, _) in &events {
         client_reads.batch_execute(&*format!(
-            "DECLARE c CURSOR FOR TAIL t WITH (SNAPSHOT = false) AS OF {}",
+            "CLOSE c;
+            DECLARE c CURSOR FOR TAIL t WITH (SNAPSHOT = false) AS OF {}",
             ts - 1
         ))?;
 
@@ -143,7 +188,11 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
     // Now tail with a snapshot as of each timestamp. We should see a batch of
     // updates all at the tailed timestamp, and then updates afterward.
     for (ts, _) in &events {
-        client_reads.batch_execute(&*format!("DECLARE c CURSOR FOR TAIL t AS OF {}", ts - 1))?;
+        client_reads.batch_execute(&*format!(
+            "CLOSE c;
+            DECLARE c CURSOR FOR TAIL t AS OF {}",
+            ts - 1
+        ))?;
 
         for (mut expected_ts, expected_data) in events.iter() {
             if expected_ts < ts - 1 {
@@ -165,7 +214,7 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         .batch_execute("ALTER INDEX t_primary_idx SET (logical_compaction_window = '1ms')")?;
     client_writes.batch_execute("CREATE VIEW v AS SELECT * FROM t")?;
     client_reads.batch_execute(
-        "BEGIN;
+        "CLOSE c;
          DECLARE c CURSOR FOR TAIL v;",
     )?;
     let rows = client_reads.query("FETCH ALL c", &[])?;
@@ -175,18 +224,12 @@ fn test_tail_basic() -> Result<(), Box<dyn Error>> {
         assert_eq!(rows[i].get::<_, String>("data"), format!("line {}", i + 1));
     }
 
-    match client_reads.batch_execute("TAIL v AS OF 1") {
-        Ok(()) => panic!("TAIL with bad AS OF unexpectedly succeeded"),
-        Err(e) => {
-            let e = e
-                .source()
-                .and_then(|e| e.downcast_ref::<DbError>())
-                .unwrap();
-            assert!(e
-                .message()
-                .starts_with("Timestamp (1) is not valid for all inputs"));
-        }
-    }
+    let err = client_reads
+        .batch_execute("TAIL v AS OF 1")
+        .unwrap_db_error();
+    assert!(err
+        .message()
+        .starts_with("Timestamp (1) is not valid for all inputs"));
 
     Ok(())
 }
@@ -200,8 +243,9 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
-    let (server, mut client_writes) = util::start_server(config)?;
-    let mut client_reads = server.connect()?;
+    let server = util::start_server(config)?;
+    let mut client_writes = server.connect(postgres::NoTls)?;
+    let mut client_reads = server.connect(postgres::NoTls)?;
 
     client_writes.batch_execute("CREATE TABLE t (data text)")?;
     client_reads.batch_execute(
@@ -238,7 +282,8 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
-    let (_server, mut client) = util::start_server(config)?;
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     client.batch_execute("CREATE TABLE t (i INT8)")?;
     client.batch_execute("INSERT INTO t VALUES (1), (2), (3);")?;
@@ -276,7 +321,10 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     // Make a new cursor. Try to fetch more rows from it than exist. Verify that
     // we got all the rows we expect and also waited for at least the timeout
     // duration. Cursor may take a moment to be ready, so do it in a loop.
-    client.batch_execute("DECLARE c CURSOR FOR TAIL t")?;
+    client.batch_execute(
+        "CLOSE c;
+        DECLARE c CURSOR FOR TAIL t",
+    )?;
     loop {
         let before = Instant::now();
         let rows = client.query("FETCH 4 c WITH (TIMEOUT = '1s')", &[])?;
@@ -304,7 +352,8 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default().workers(2);
-    let (_server, mut client) = util::start_server(config)?;
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     client.batch_execute("CREATE TABLE t (i INT8)")?;
     client.batch_execute("INSERT INTO t VALUES (1), (2), (3)")?;
@@ -329,7 +378,10 @@ fn test_tail_fetch_wait() -> Result<(), Box<dyn Error>> {
     // be returned, but it's up to the system to decide what is available. This
     // means that we could still get only one row per request, and we won't know
     // how many rows will come back otherwise.
-    client.batch_execute("DECLARE c CURSOR FOR TAIL t;")?;
+    client.batch_execute(
+        "CLOSE c;
+        DECLARE c CURSOR FOR TAIL t;",
+    )?;
     let mut expected_iter = expected.iter().peekable();
     while expected_iter.peek().is_some() {
         let rows = client.query("FETCH ALL c", &[])?;
@@ -359,7 +411,8 @@ fn test_tail_empty_upper_frontier() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default();
-    let (_server, mut client) = util::start_server(config)?;
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     client.batch_execute("CREATE MATERIALIZED VIEW foo AS VALUES (1), (2), (3);")?;
 
@@ -380,7 +433,8 @@ fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let config = util::Config::default();
-    let (_server, mut client) = util::start_server(config)?;
+    let server = util::start_server(config)?;
+    let mut client = server.connect(postgres::NoTls)?;
 
     let mut file = NamedTempFile::new()?;
     client.batch_execute(&*format!(
@@ -429,13 +483,13 @@ fn test_tail_unmaterialized_file() -> Result<(), Box<dyn Error>> {
 fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (server, _) = util::start_server(util::Config::default())?;
+    let server = util::start_server(util::Config::default())?;
 
     // We have to use the async PostgreSQL client so that we can ungracefully
     // abort the connection task.
     // See: https://github.com/sfackler/rust-postgres/issues/725
     server.runtime.block_on(async {
-        let (client, conn_task) = server.connect_async().await?;
+        let (client, conn_task) = server.connect_async(tokio_postgres::NoTls).await?;
 
         // Create a table with no data that we can TAIL. This is the simplest
         // way to cause a TAIL to never terminate.
@@ -465,8 +519,9 @@ fn test_tail_shutdown() -> Result<(), Box<dyn Error>> {
 fn test_temporary_views() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
-    let (server, mut client_a) = util::start_server(util::Config::default())?;
-    let mut client_b = server.connect()?;
+    let server = util::start_server(util::Config::default())?;
+    let mut client_a = server.connect(postgres::NoTls)?;
+    let mut client_b = server.connect(postgres::NoTls)?;
     client_a
         .batch_execute("CREATE VIEW v AS VALUES (1, 'foo'), (2, 'bar'), (3, 'foo'), (1, 'bar')")?;
     client_a.batch_execute("CREATE TEMPORARY VIEW temp_v AS SELECT * FROM v")?;
@@ -483,10 +538,9 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
     // Ensure that client_b can query v, but not temp_v.
     let count: i64 = client_b.query_one(query_v, &[])?.get("count");
     assert_eq!(4, count);
-    match client_b.query_one(query_temp_v, &[]) {
-        Ok(_) => panic!("query unexpectedly succeeded"),
-        Err(e) => assert!(e.to_string().contains("unknown catalog item \'temp_v\'")),
-    }
+
+    let err = client_b.query_one(query_temp_v, &[]).unwrap_db_error();
+    assert_eq!(err.message(), "unknown catalog item \'temp_v\'");
 
     Ok(())
 }

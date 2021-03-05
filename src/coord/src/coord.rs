@@ -20,37 +20,40 @@ use std::cmp;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::{TryFrom, TryInto};
 use std::iter;
+use std::mem;
 use std::os::unix::ffi::OsStringExt;
 use std::path::Path;
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, SystemTime};
 
-use anyhow::Context;
-use dataflow_types::SinkEnvelope;
+use anyhow::{anyhow, Context};
+use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
-use futures::future::{self, TryFutureExt};
-use futures::sink::SinkExt;
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::future::{self, FutureExt, TryFutureExt};
+use futures::stream::{self, StreamExt};
+use rand::Rng;
+use timely::communication::WorkerGuards;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
-use tokio::runtime::{Handle, Runtime};
-use uuid::Uuid;
+use tokio::runtime::{Handle as TokioHandle, Runtime};
+use tokio::sync::{mpsc, watch};
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use build_info::BuildInfo;
-use dataflow::source::cache::CacheSender;
 use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     AvroOcfSinkConnector, DataflowDesc, IndexDesc, KafkaSinkConnector, PeekResponse, SinkConnector,
     SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
 };
+use dataflow_types::{SinkAsOf, SinkEnvelope};
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
-    OptimizedMirRelationExpr, RowSetFinishing, SourceInstanceId,
+    OptimizedMirRelationExpr, RowSetFinishing,
 };
 use ore::collections::CollectionExt;
 use ore::str::StrExt;
-use ore::thread::JoinHandleExt;
+use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::adt::array::ArrayDimension;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timestamp};
 use sql::ast::display::AstDisplay;
@@ -58,12 +61,11 @@ use sql::ast::{
     CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
     FetchStatement, Ident, ObjectType, Raw, Statement,
 };
-use sql::catalog::Catalog as _;
+use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName, SchemaName};
 use sql::plan::StatementDesc;
 use sql::plan::{
-    AlterIndexLogicalCompactionWindow, CopyFormat, LogicalCompactionWindow, MutationKind, Params,
-    PeekWhen, Plan, PlanContext,
+    CopyFormat, IndexOption, IndexOptionName, MutationKind, Params, PeekWhen, Plan, PlanContext,
 };
 use transform::Optimizer;
 
@@ -78,20 +80,23 @@ use crate::catalog::builtin::{
 use crate::catalog::{
     self, Catalog, CatalogItem, Func, Index, SinkConnectorState, Type, TypeInner,
 };
+use crate::client::{Client, Handle};
 use crate::command::{
-    Command, ExecuteResponse, NoSessionExecuteResponse, Response, StartupMessage,
+    Cancelled, Command, ExecuteResponse, Response, StartupMessage, StartupResponse,
 };
 use crate::error::CoordError;
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
 };
 use crate::sink_connector;
-use crate::timestamp::{TimestampConfig, TimestampMessage, Timestamper};
+use crate::timestamp::{TimestampMessage, Timestamper};
 use crate::util::ClientTransmitter;
 
 mod arrangement_state;
 mod dataflow_builder;
+mod metrics;
 
+#[derive(Debug)]
 pub enum Message {
     Command(Command),
     Worker(WorkerFeedbackWithMeta),
@@ -101,43 +106,48 @@ pub enum Message {
     Shutdown,
 }
 
+#[derive(Debug)]
 pub struct AdvanceSourceTimestamp {
-    pub id: SourceInstanceId,
+    pub id: GlobalId,
     pub update: TimestampSourceUpdate,
 }
 
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct StatementReady {
     pub session: Session,
+    #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub result: Result<sql::ast::Statement<Raw>, CoordError>,
     pub params: Params,
 }
 
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct SinkConnectorReady {
     pub session: Session,
+    #[derivative(Debug = "ignore")]
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub id: GlobalId,
     pub oid: u32,
     pub result: Result<SinkConnector, CoordError>,
 }
 
+/// Configures dataflow worker logging.
 #[derive(Clone, Debug)]
 pub struct LoggingConfig {
     pub granularity: Duration,
     pub log_logging: bool,
 }
 
-pub struct Config<'a, C>
-where
-    C: comm::Connection,
-{
-    pub switchboard: comm::Switchboard<C>,
-    pub cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>,
-    pub total_workers: usize,
+/// Configures a coordinator.
+pub struct Config<'a> {
+    pub workers: usize,
+    pub timely_worker: timely::WorkerConfig,
     pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
-    pub timestamp: TimestampConfig,
+    pub timestamp_frequency: Duration,
     pub cache: Option<CacheConfig>,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
@@ -145,32 +155,27 @@ where
 }
 
 /// Glues the external world to the Timely workers.
-pub struct Coordinator<C>
-where
-    C: comm::Connection,
-{
-    switchboard: comm::Switchboard<C>,
-    broadcast_tx: comm::broadcast::Sender<SequencedCommand>,
-    total_workers: usize,
+pub struct Coordinator {
+    worker_guards: WorkerGuards<()>,
+    worker_txs: Vec<crossbeam_channel::Sender<SequencedCommand>>,
     optimizer: Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
     since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
-    /// For each connection running a TAIL command, the name of the dataflow
-    /// that is servicing the TAIL. A connection can only run one TAIL at a
-    /// time.
-    active_tails: HashMap<u32, GlobalId>,
-    timestamp_config: TimestampConfig,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
     /// Instance count: number of times sources have been instantiated in views. This is used
     /// to associate each new instance of a source with a unique instance id (iid)
     logging_granularity: Option<u64>,
+    // Channel to manange internal commands from the coordinator to itself.
+    internal_cmd_tx: mpsc::UnboundedSender<Message>,
+    // Channel to communicate source status updates to the timestamper thread.
+    ts_tx: std::sync::mpsc::Sender<TimestampMessage>,
     // Channel to communicate source status updates and shutdown notifications to the cacher
     // thread.
-    cache_tx: Option<CacheSender>,
+    cache_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// The last timestamp we assigned to a read.
     read_lower_bound: Timestamp,
     /// The timestamp that all local inputs have been advanced up to.
@@ -181,12 +186,32 @@ where
     /// TODO(justin): this is a hack, and does not work right with TAIL.
     need_advance: bool,
     transient_id_counter: u64,
+    /// A map from connection ID to metadata about that connection for all
+    // active connections.
+    active_conns: HashMap<u32, ConnMeta>,
 }
 
-impl<C> Coordinator<C>
-where
-    C: comm::Connection,
-{
+/// Metadata about an active connection.
+struct ConnMeta {
+    /// A watch channel shared with the client to inform the client of
+    /// cancellation requests. The coordinator sets the contained value to
+    /// `Cancelled::Cancelled` whenever it receives a cancellation request that
+    /// targets this connection. It is the client's responsibility to check this
+    /// value when appropriate and to reset the value to
+    /// `Cancelled::NotCancelled` before starting a new operation.
+    cancel_tx: Arc<watch::Sender<Cancelled>>,
+    /// Pgwire specifies that every connection have a 32-bit secret associated
+    /// with it, that is known to both the client and the server. Cancellation
+    /// requests are required to authenticate with the secret of the connection
+    /// that they are targeting.
+    secret_key: u32,
+}
+
+impl Coordinator {
+    fn num_workers(&self) -> usize {
+        self.worker_txs.len()
+    }
+
     /// Assign a timestamp for a read.
     fn get_read_ts(&mut self) -> Timestamp {
         let ts = self.get_ts();
@@ -257,6 +282,8 @@ where
                 //using a single dataflow, we have to make sure the rebuild process re-runs
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
+                    // Inform the timestamper about this source.
+                    self.update_timestamper(*id, true).await;
                     self.maybe_begin_caching(*id, &source.connector).await;
                 }
                 CatalogItem::Index(_) => {
@@ -271,7 +298,7 @@ where
                         // Should it not be the same logical compaction window
                         // that everything else uses?
                         self.indexes
-                            .insert(*id, Frontiers::new(self.total_workers, Some(1_000)));
+                            .insert(*id, Frontiers::new(self.num_workers(), Some(1_000)));
                     } else {
                         self.ship_dataflow(self.dataflow_builder().build_index_dataflow(*id))
                             .await?;
@@ -291,14 +318,9 @@ where
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connector = sink_connector::build(
-                        builder.clone(),
-                        sink.with_snapshot,
-                        self.determine_frontier(sink.as_of, sink.from)?,
-                        *id,
-                    )
-                    .await
-                    .with_context(|| format!("recreating sink {}", name))?;
+                    let connector = sink_connector::build(builder.clone(), *id)
+                        .await
+                        .with_context(|| format!("recreating sink {}", name))?;
                     self.handle_sink_connector_ready(*id, *oid, connector)
                         .await?;
                 }
@@ -365,46 +387,31 @@ where
     /// You must call `bootstrap` before calling this method.
     async fn serve(
         mut self,
-        cmd_rx: futures::channel::mpsc::UnboundedReceiver<Command>,
-        feedback_rx: comm::mpsc::Receiver<WorkerFeedbackWithMeta>,
+        internal_cmd_rx: mpsc::UnboundedReceiver<Message>,
+        cmd_rx: mpsc::UnboundedReceiver<Command>,
+        feedback_rx: mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
+        _timestamper_thread_handle: JoinOnDropHandle<()>,
     ) {
-        let (internal_cmd_tx, internal_cmd_stream) = futures::channel::mpsc::unbounded();
-
-        let cmd_stream = cmd_rx
+        let cmd_stream = UnboundedReceiverStream::new(cmd_rx)
             .map(Message::Command)
             .chain(stream::once(future::ready(Message::Shutdown)));
 
-        let feedback_stream = feedback_rx.map(|r| match r {
-            Ok(m) => Message::Worker(m),
-            Err(e) => panic!("coordinator feedback receiver failed: {}", e),
-        });
-
-        let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-        let mut timestamper =
-            Timestamper::new(&self.timestamp_config, internal_cmd_tx.clone(), ts_rx);
-        let executor = Handle::current();
-        let _timestamper_thread = thread::spawn(move || {
-            let _executor_guard = executor.enter();
-            timestamper.update()
-        })
-        .join_on_drop();
+        let feedback_stream = UnboundedReceiverStream::new(feedback_rx).map(Message::Worker);
 
         let mut messages = ore::future::select_all_biased(vec![
             // Order matters here. We want to drain internal commands
-            // (`internal_cmd_stream` and `feedback_stream`) before processing
+            // (`internal_cmd_rx` and `feedback_stream`) before processing
             // external commands (`cmd_stream`).
-            internal_cmd_stream.boxed(),
+            UnboundedReceiverStream::new(internal_cmd_rx).boxed(),
             feedback_stream.boxed(),
             cmd_stream.boxed(),
         ]);
 
         while let Some(msg) = messages.next().await {
             match msg {
-                Message::Command(cmd) => self.message_command(cmd, &internal_cmd_tx).await,
-                Message::Worker(worker) => self.message_worker(worker, &ts_tx).await,
-                Message::StatementReady(ready) => {
-                    self.message_statement_ready(ready, &internal_cmd_tx).await
-                }
+                Message::Command(cmd) => self.message_command(cmd).await,
+                Message::Worker(worker) => self.message_worker(worker).await,
+                Message::StatementReady(ready) => self.message_statement_ready(ready).await,
                 Message::SinkConnectorReady(ready) => {
                     self.message_sink_connector_ready(ready).await
                 }
@@ -412,7 +419,7 @@ where
                     self.message_advance_source_timestamp(advance).await
                 }
                 Message::Shutdown => {
-                    self.message_shutdown(&ts_tx).await;
+                    self.message_shutdown().await;
                     break;
                 }
             }
@@ -431,13 +438,9 @@ where
                         > self.closed_up_to / self.logging_granularity.unwrap()
             {
                 if next_ts > self.closed_up_to {
-                    broadcast(
-                        &mut self.broadcast_tx,
-                        SequencedCommand::AdvanceAllLocalInputs {
-                            advance_to: next_ts,
-                        },
-                    )
-                    .await;
+                    self.broadcast(SequencedCommand::AdvanceAllLocalInputs {
+                        advance_to: next_ts,
+                    });
                     self.closed_up_to = next_ts;
                 }
             }
@@ -445,7 +448,7 @@ where
 
         // Cleanly drain any pending messages from the worker before shutting
         // down.
-        drop(internal_cmd_tx);
+        drop(self.internal_cmd_tx);
         while messages.next().await.is_some() {}
     }
 
@@ -455,7 +458,6 @@ where
             worker_id: _,
             message,
         }: WorkerFeedbackWithMeta,
-        ts_tx: &std::sync::mpsc::Sender<TimestampMessage>,
     ) {
         match message {
             WorkerFeedback::FrontierUppers(updates) => {
@@ -463,25 +465,6 @@ where
                     self.update_upper(&name, changes);
                 }
                 self.maintenance().await;
-            }
-            WorkerFeedback::DroppedSource(source_id) => {
-                // Notify timestamping thread that source has been dropped
-                ts_tx
-                    .send(TimestampMessage::DropInstance(source_id))
-                    .expect("Failed to send Drop Instance notice to timestamper");
-            }
-            WorkerFeedback::CreateSource(src_instance_id) => {
-                if let Some(entry) = self.catalog.try_get_by_id(src_instance_id.source_id) {
-                    if let CatalogItem::Source(s) = entry.item() {
-                        ts_tx
-                            .send(TimestampMessage::Add(src_instance_id, s.connector.clone()))
-                            .expect("Failed to send CREATE Instance notice to timestamper");
-                    } else {
-                        panic!("A non-source is re-using the same source ID");
-                    }
-                } else {
-                    // Someone already dropped the source
-                }
             }
         }
     }
@@ -494,16 +477,12 @@ where
             result,
             params,
         }: StatementReady,
-        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
     ) {
         match future::ready(result)
             .and_then(|stmt| self.handle_statement(&session, stmt, &params))
             .await
         {
-            Ok((pcx, plan)) => {
-                self.sequence_plan(&internal_cmd_tx, tx, session, pcx, plan)
-                    .await
-            }
+            Ok((pcx, plan)) => self.sequence_plan(tx, session, pcx, plan).await,
             Err(e) => tx.send(Err(e), session),
         }
     }
@@ -550,36 +529,25 @@ where
         }
     }
 
-    async fn message_shutdown(&mut self, ts_tx: &std::sync::mpsc::Sender<TimestampMessage>) {
-        ts_tx.send(TimestampMessage::Shutdown).unwrap();
-
-        if let Some(cache_tx) = &mut self.cache_tx {
-            cache_tx
-                .send(CacheMessage::Shutdown)
-                .await
-                .expect("failed to send shutdown message to caching thread");
-        }
-        broadcast(&mut self.broadcast_tx, SequencedCommand::Shutdown).await;
+    async fn message_shutdown(&mut self) {
+        self.ts_tx.send(TimestampMessage::Shutdown).unwrap();
+        self.broadcast(SequencedCommand::Shutdown);
     }
 
     async fn message_advance_source_timestamp(
         &mut self,
         AdvanceSourceTimestamp { id, update }: AdvanceSourceTimestamp,
     ) {
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::AdvanceSourceTimestamp { id, update },
-        )
-        .await;
+        self.broadcast(SequencedCommand::AdvanceSourceTimestamp { id, update });
     }
 
-    async fn message_command(
-        &mut self,
-        cmd: Command,
-        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
-    ) {
+    async fn message_command(&mut self, cmd: Command) {
         match cmd {
-            Command::Startup { session, tx } => {
+            Command::Startup {
+                session,
+                cancel_tx,
+                tx,
+            } => {
                 if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
                     let _ = tx.send(Response {
                         result: Err(e.into()),
@@ -602,10 +570,28 @@ where
                     .resolve_database(catalog.default_database())
                     .is_err()
                 {
-                    messages.push(StartupMessage::UnknownSessionDatabase);
+                    messages.push(StartupMessage::UnknownSessionDatabase(
+                        catalog.default_database().into(),
+                    ));
                 }
 
-                ClientTransmitter::new(tx).send(Ok(messages), session)
+                let secret_key = rand::thread_rng().gen();
+
+                self.active_conns.insert(
+                    session.conn_id(),
+                    ConnMeta {
+                        cancel_tx,
+                        secret_key,
+                    },
+                );
+
+                ClientTransmitter::new(tx).send(
+                    Ok(StartupResponse {
+                        messages,
+                        secret_key,
+                    }),
+                    session,
+                )
             }
 
             Command::Execute {
@@ -744,7 +730,7 @@ where
                             },
                         }
 
-                        let mut internal_cmd_tx = internal_cmd_tx.clone();
+                        let internal_cmd_tx = self.internal_cmd_tx.clone();
                         tokio::spawn(async move {
                             let result = sql::pure::purify(stmt).await.map_err(|e| e.into());
                             internal_cmd_tx
@@ -754,7 +740,6 @@ where
                                     result,
                                     params,
                                 }))
-                                .await
                                 .expect("sending to internal_cmd_tx cannot fail");
                         });
                     }
@@ -765,45 +750,6 @@ where
                         });
                     }
                 }
-            }
-
-            // NoSessionExecute is designed to support a limited set of queries that
-            // run as the system user and are not associated with a user session. Due to
-            // that limitation, they do not support all plans (some of which require side
-            // effects in the session).
-            Command::NoSessionExecute { stmt, params, tx } => {
-                let res = async {
-                    let stmt = sql::pure::purify(stmt).await?;
-                    let catalog = self.catalog.for_system_session();
-                    let desc = describe(&catalog, stmt.clone(), &[], None)?;
-                    let pcx = PlanContext::default();
-                    let plan = sql::plan::plan(&pcx, &catalog, stmt, &params)?;
-                    // At time of writing this comment, Peeks use the connection id only for
-                    // logging, so it is safe to reuse the system id, which is the conn_id from
-                    // for_system_session().
-                    let conn_id = catalog.conn_id();
-                    let response = match plan {
-                        Plan::Peek {
-                            source,
-                            when,
-                            finishing,
-                            copy_to,
-                        } => {
-                            self.sequence_peek(conn_id, source, when, finishing, copy_to)
-                                .await?
-                        }
-
-                        Plan::SendRows(rows) => send_immediate_rows(rows),
-
-                        _ => coord_bail!("unsupported plan"),
-                    };
-                    Ok(NoSessionExecuteResponse {
-                        desc: desc.relation_desc,
-                        response,
-                    })
-                }
-                .await;
-                let _ = tx.send(res);
             }
 
             Command::Declare {
@@ -828,12 +774,21 @@ where
                 let _ = tx.send(Response { result, session });
             }
 
-            Command::CancelRequest { conn_id } => {
-                self.handle_cancel(conn_id).await;
+            Command::CancelRequest {
+                conn_id,
+                secret_key,
+            } => {
+                self.handle_cancel(conn_id, secret_key).await;
             }
 
-            Command::DumpCatalog { tx } => {
-                let _ = tx.send(self.catalog.dump());
+            Command::DumpCatalog { session, tx } => {
+                // TODO(benesch): when we have RBAC, dumping the catalog should
+                // require superuser permissions.
+
+                let _ = tx.send(Response {
+                    result: Ok(self.catalog.dump()),
+                    session,
+                });
             }
 
             Command::Terminate { mut session } => {
@@ -901,14 +856,8 @@ where
         self.since_updates
             .retain(|(_, frontier)| frontier != &Antichain::new());
         if !self.since_updates.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::AllowCompaction(std::mem::replace(
-                    &mut self.since_updates,
-                    Vec::new(),
-                )),
-            )
-            .await;
+            let since_updates = mem::take(&mut self.since_updates);
+            self.broadcast(SequencedCommand::AllowCompaction(since_updates));
         }
     }
 
@@ -978,7 +927,7 @@ where
         )?;
         let params = vec![];
         let result_formats = vec![pgrepr::Format::Text; desc.arity()];
-        session.set_portal(name, desc, Some(stmt), params, result_formats);
+        session.set_portal(name, desc, Some(stmt), params, result_formats)?;
         Ok(())
     }
 
@@ -1014,27 +963,21 @@ where
     }
 
     /// Instruct the dataflow layer to cancel any ongoing, interactive work for
-    /// the named `conn_id`. This means canceling the active PEEK or TAIL, if
-    /// one exists.
-    ///
-    /// NOTE(benesch): this function makes the assumption that a connection can
-    /// only have one active query at a time. This is true today, but will not
-    /// be true once we have full support for portals.
-    async fn handle_cancel(&mut self, conn_id: u32) {
-        if let Some(name) = self.active_tails.remove(&conn_id) {
-            // A TAIL is known to be active, so drop the dataflow that is
-            // servicing it. No need to try to cancel PEEKs in this case,
-            // because if a TAIL is active, a PEEK cannot be.
-            self.drop_sinks(vec![name]).await;
-        } else {
-            // No TAIL is known to be active, so drop the PEEK that may be
-            // active on this connection. This is a no-op if no PEEKs are
-            // active.
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::CancelPeek { conn_id },
-            )
-            .await;
+    /// the named `conn_id`.
+    async fn handle_cancel(&mut self, conn_id: u32, secret_key: u32) {
+        if let Some(conn_meta) = self.active_conns.get(&conn_id) {
+            // If the secret key specified by the client doesn't match the
+            // actual secret key for the target connection, we treat this as a
+            // rogue cancellation request and ignore it.
+            if conn_meta.secret_key != secret_key {
+                return;
+            }
+
+            // Tell dataflow to cancel any pending peeks.
+            self.broadcast(SequencedCommand::CancelPeek { conn_id });
+
+            // Inform the target session (if it asks) about the cancellation.
+            let _ = conn_meta.cancel_tx.send(Cancelled::Cancelled);
         }
     }
 
@@ -1042,13 +985,14 @@ where
     ///
     // This cleans up any state in the coordinator associated with the session.
     async fn handle_terminate(&mut self, session: &mut Session) {
-        if let Some(name) = self.active_tails.remove(&session.conn_id()) {
-            self.drop_sinks(vec![name]).await;
-        }
+        let (drop_sinks, _) = session.clear_transaction();
+        self.drop_sinks(drop_sinks).await;
+
         self.drop_temp_items(session.conn_id()).await;
         self.catalog
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
+        self.active_conns.remove(&session.conn_id());
     }
 
     // Removes all temporary items created by the specified connection, though
@@ -1084,13 +1028,17 @@ where
             },
         ];
         self.catalog_transact(ops).await?;
-
+        let as_of = SinkAsOf {
+            frontier: self.determine_frontier(sink.from),
+            strict: !sink.with_snapshot,
+        };
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
             name.to_string(),
             id,
             sink.from,
             connector,
             sink.envelope,
+            as_of,
         ))
         .await
     }
@@ -1109,14 +1057,10 @@ where
                 timestamp,
             })
             .collect();
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::Insert {
-                id: index_id,
-                updates,
-            },
-        )
-        .await;
+        self.broadcast(SequencedCommand::Insert {
+            id: index_id,
+            updates,
+        });
     }
 
     async fn report_database_update(
@@ -1494,7 +1438,6 @@ where
 
     async fn sequence_plan(
         &mut self,
-        internal_cmd_tx: &futures::channel::mpsc::UnboundedSender<Message>,
         tx: ClientTransmitter<ExecuteResponse>,
         mut session: Session,
         pcx: PlanContext,
@@ -1525,9 +1468,17 @@ where
                 name,
                 table,
                 if_not_exists,
+                depends_on,
             } => tx.send(
-                self.sequence_create_table(pcx, name, table, if_not_exists)
-                    .await,
+                self.sequence_create_table(
+                    pcx,
+                    name,
+                    table,
+                    if_not_exists,
+                    depends_on,
+                    session.conn_id(),
+                )
+                .await,
                 session,
             ),
 
@@ -1546,19 +1497,18 @@ where
                 name,
                 sink,
                 with_snapshot,
-                as_of,
                 if_not_exists,
+                depends_on,
             } => {
                 self.sequence_create_sink(
                     pcx,
-                    internal_cmd_tx.clone(),
                     tx,
                     session,
                     name,
                     sink,
                     with_snapshot,
-                    as_of,
                     if_not_exists,
+                    depends_on,
                 )
                 .await
             }
@@ -1569,6 +1519,7 @@ where
                 replace,
                 materialize,
                 if_not_exists,
+                depends_on,
             } => tx.send(
                 self.sequence_create_view(
                     pcx,
@@ -1578,6 +1529,7 @@ where
                     session.conn_id(),
                     materialize,
                     if_not_exists,
+                    depends_on,
                 )
                 .await,
                 session,
@@ -1586,16 +1538,23 @@ where
             Plan::CreateIndex {
                 name,
                 index,
+                options,
                 if_not_exists,
+                depends_on,
             } => tx.send(
-                self.sequence_create_index(pcx, name, index, if_not_exists)
+                self.sequence_create_index(pcx, name, index, options, if_not_exists, depends_on)
                     .await,
                 session,
             ),
 
-            Plan::CreateType { name, typ } => {
-                tx.send(self.sequence_create_type(pcx, name, typ).await, session)
-            }
+            Plan::CreateType {
+                name,
+                typ,
+                depends_on,
+            } => tx.send(
+                self.sequence_create_type(pcx, name, typ, depends_on).await,
+                session,
+            ),
 
             Plan::DropDatabase { name } => {
                 tx.send(self.sequence_drop_database(name).await, session)
@@ -1625,7 +1584,7 @@ where
             ),
 
             Plan::StartTransaction => {
-                let session = session.start_transaction();
+                session.start_transaction();
                 tx.send(Ok(ExecuteResponse::StartedTransaction), session)
             }
 
@@ -1662,7 +1621,7 @@ where
                 desc,
             } => tx.send(
                 self.sequence_tail(
-                    &session,
+                    &mut session,
                     id,
                     with_snapshot,
                     ts,
@@ -1711,6 +1670,10 @@ where
                 session,
             ),
 
+            Plan::AlterNoop { object_type } => {
+                tx.send(Ok(ExecuteResponse::AlteredObject(object_type)), session)
+            }
+
             Plan::AlterItemRename {
                 id,
                 to_name,
@@ -1721,8 +1684,12 @@ where
                 session,
             ),
 
-            Plan::AlterIndexLogicalCompactionWindow(alter_index) => tx.send(
-                self.sequence_alter_index_logical_compaction_window(alter_index),
+            Plan::AlterIndexSetOptions { id, options } => {
+                tx.send(self.sequence_alter_index_set_options(id, options), session)
+            }
+
+            Plan::AlterIndexResetOptions { id, options } => tx.send(
+                self.sequence_alter_index_reset_options(id, options),
                 session,
             ),
 
@@ -1734,7 +1701,8 @@ where
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
                     self.drop_temp_items(session.conn_id()).await;
-                    session.reset();
+                    let drop_sinks = session.reset();
+                    self.drop_sinks(drop_sinks).await;
                     Ok(ExecuteResponse::DiscardedAll)
                 } else {
                     Err(CoordError::OperationProhibitsTransaction(
@@ -1833,13 +1801,20 @@ where
         name: FullName,
         table: sql::plan::Table,
         if_not_exists: bool,
+        depends_on: Vec<GlobalId>,
+        conn_id: u32,
     ) -> Result<ExecuteResponse, CoordError> {
+        let conn_id = if table.temporary { Some(conn_id) } else { None };
         let table_id = self.catalog.allocate_id()?;
+        let mut index_depends_on = depends_on.clone();
+        index_depends_on.push(table_id);
         let table = catalog::Table {
             create_sql: table.create_sql,
             plan_cx: pcx,
             desc: table.desc,
             defaults: table.defaults,
+            conn_id,
+            depends_on,
         };
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
@@ -1849,7 +1824,8 @@ where
             name.clone(),
             table_id,
             &table.desc,
-            None,
+            conn_id,
+            index_depends_on,
         );
         let table_oid = self.catalog.allocate_oid()?;
         let index_oid = self.catalog.allocate_oid()?;
@@ -1888,11 +1864,17 @@ where
         if_not_exists: bool,
         materialized: bool,
     ) -> Result<ExecuteResponse, CoordError> {
+        let optimized_expr = self
+            .optimizer
+            .optimize(source.expr, self.catalog.indexes())?;
+        let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
         let source = catalog::Source {
             create_sql: source.create_sql,
             plan_cx: pcx,
+            optimized_expr,
             connector: source.connector,
-            desc: source.desc,
+            bare_desc: source.bare_desc,
+            desc: transformed_desc,
         };
         let source_id = self.catalog.allocate_id()?;
         let source_oid = self.catalog.allocate_oid()?;
@@ -1911,6 +1893,7 @@ where
                 source_id,
                 &source.desc,
                 None,
+                vec![source_id],
             );
             let index_id = self.catalog.allocate_id()?;
             let index_oid = self.catalog.allocate_oid()?;
@@ -1926,6 +1909,7 @@ where
         };
         match self.catalog_transact(ops).await {
             Ok(()) => {
+                self.update_timestamper(source_id, true).await;
                 if let Some(index_id) = index_id {
                     self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
                         .await?;
@@ -1943,14 +1927,13 @@ where
     async fn sequence_create_sink(
         &mut self,
         pcx: PlanContext,
-        mut internal_cmd_tx: futures::channel::mpsc::UnboundedSender<Message>,
         tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
         name: FullName,
         sink: sql::plan::Sink,
         with_snapshot: bool,
-        as_of: Option<u64>,
         if_not_exists: bool,
+        depends_on: Vec<GlobalId>,
     ) {
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = match self.catalog.allocate_id() {
@@ -1964,14 +1947,6 @@ where
             Ok(id) => id,
             Err(e) => {
                 tx.send(Err(e.into()), session);
-                return;
-            }
-        };
-
-        let frontier = match self.determine_frontier(as_of, sink.from) {
-            Ok(frontier) => frontier,
-            Err(e) => {
-                tx.send(Err(e), session);
                 return;
             }
         };
@@ -1993,7 +1968,7 @@ where
                 connector: catalog::SinkConnectorState::Pending(sink.connector_builder.clone()),
                 envelope: sink.envelope,
                 with_snapshot,
-                as_of,
+                depends_on,
             }),
         };
         match self.catalog_transact(vec![op]).await {
@@ -2011,6 +1986,7 @@ where
         // Now we're ready to create the sink connector. Arrange to notify the
         // main coordinator thread when the future completes.
         let connector_builder = sink.connector_builder;
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
         tokio::spawn(async move {
             internal_cmd_tx
                 .send(Message::SinkConnectorReady(SinkConnectorReady {
@@ -2018,10 +1994,8 @@ where
                     tx,
                     id,
                     oid,
-                    result: sink_connector::build(connector_builder, with_snapshot, frontier, id)
-                        .await,
+                    result: sink_connector::build(connector_builder, id).await,
                 }))
-                .await
                 .expect("sending to internal_cmd_tx cannot fail");
         });
     }
@@ -2036,6 +2010,7 @@ where
         conn_id: u32,
         materialize: bool,
         if_not_exists: bool,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = vec![];
         if let Some(id) = replace {
@@ -2052,6 +2027,7 @@ where
             optimized_expr,
             desc,
             conn_id: if view.temporary { Some(conn_id) } else { None },
+            depends_on,
         };
         ops.push(catalog::Op::CreateItem {
             id: view_id,
@@ -2068,6 +2044,7 @@ where
                 view_id,
                 &view.desc,
                 view.conn_id,
+                vec![view_id],
             );
             let index_id = self.catalog.allocate_id()?;
             let index_oid = self.catalog.allocate_oid()?;
@@ -2099,7 +2076,9 @@ where
         pcx: PlanContext,
         name: FullName,
         mut index: sql::plan::Index,
+        options: Vec<IndexOption>,
         if_not_exists: bool,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         for key in &mut index.keys {
             Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
@@ -2110,6 +2089,7 @@ where
             keys: index.keys,
             on: index.on,
             conn_id: None,
+            depends_on,
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -2123,6 +2103,7 @@ where
             Ok(()) => {
                 self.ship_dataflow(self.dataflow_builder().build_index_dataflow(id))
                     .await?;
+                self.set_index_options(id, options);
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedIndex { existed: true }),
@@ -2135,11 +2116,13 @@ where
         pcx: PlanContext,
         name: FullName,
         typ: sql::plan::Type,
+        depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
         let typ = catalog::Type {
             create_sql: typ.create_sql,
             plan_cx: pcx,
             inner: typ.inner.into(),
+            depends_on,
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
@@ -2196,11 +2179,11 @@ where
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => {
                 for id in items.iter() {
+                    self.update_timestamper(*id, false).await;
                     if let Some(cache_tx) = &mut self.cache_tx {
                         cache_tx
                             .send(CacheMessage::DropSource(*id))
-                            .await
-                            .expect("failed to send DROP SOURCE to cache thread");
+                            .expect("cache receiver should not drop first");
                     }
                 }
                 ExecuteResponse::DroppedSource
@@ -2265,7 +2248,8 @@ where
             TransactionStatus::InTransactionImplicit(_)
         );
 
-        let txn = session.clear_transaction();
+        let (drop_sinks, txn) = session.clear_transaction();
+        self.drop_sinks(drop_sinks).await;
 
         if let EndTransactionAction::Commit = action {
             match txn {
@@ -2276,6 +2260,13 @@ where
                     if let TransactionOps::Writes(inserts) = ops {
                         let timestamp = self.get_write_ts();
                         for WriteOp { id, rows } in inserts {
+                            // Re-verify this id exists.
+                            if self.catalog.try_get_by_id(id).is_none() {
+                                return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                                    id.to_string(),
+                                )));
+                            }
+
                             let updates = rows
                                 .into_iter()
                                 .map(|(row, diff)| Update {
@@ -2285,11 +2276,7 @@ where
                                 })
                                 .collect();
 
-                            broadcast(
-                                &mut self.broadcast_tx,
-                                SequencedCommand::Insert { id, updates },
-                            )
-                            .await;
+                            self.broadcast(SequencedCommand::Insert { id, updates });
                         }
                     }
                 }
@@ -2321,6 +2308,10 @@ where
 
         // If this optimizes to a constant expression, we can immediately return the result.
         let resp = if let MirRelationExpr::Constant { rows, typ: _ } = source.as_ref() {
+            let rows = match rows {
+                Ok(rows) => rows,
+                Err(e) => return Err(e.clone().into()),
+            };
             let mut results = Vec::new();
             for &(ref row, count) in rows {
                 assert!(
@@ -2344,7 +2335,7 @@ where
             // Choose a timestamp for all workers to use in the peek.
             // We minimize over all participating views, to ensure that the query will not
             // need to block on the arrival of further input data.
-            let (rows_tx, rows_rx) = self.switchboard.mpsc_limited(self.total_workers);
+            let (rows_tx, rows_rx) = mpsc::unbounded_channel();
 
             // Extract any surrounding linear operators to determine if we can simply read
             // out the contents from an existing arrangement.
@@ -2407,46 +2398,41 @@ where
                 self.ship_dataflow(dataflow).await?;
             }
 
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::Peek {
-                    id: index_id,
-                    key: literal_row,
-                    conn_id,
-                    tx: rows_tx,
-                    timestamp,
-                    finishing: finishing.clone(),
-                    map_filter_project,
-                },
-            )
-            .await;
+            self.broadcast(SequencedCommand::Peek {
+                id: index_id,
+                key: literal_row,
+                conn_id,
+                tx: rows_tx,
+                timestamp,
+                finishing: finishing.clone(),
+                map_filter_project,
+            });
 
             if !fast_path {
                 self.drop_indexes(vec![index_id]).await;
             }
 
-            let rows_rx = rows_rx
-                .try_fold(PeekResponse::Rows(vec![]), |memo, resp| {
+            let rows_rx = UnboundedReceiverStream::new(rows_rx)
+                .fold(PeekResponse::Rows(vec![]), |memo, resp| async {
                     match (memo, resp) {
                         (PeekResponse::Rows(mut memo), PeekResponse::Rows(rows)) => {
                             memo.extend(rows);
-                            future::ok(PeekResponse::Rows(memo))
+                            PeekResponse::Rows(memo)
                         }
                         (PeekResponse::Error(e), _) | (_, PeekResponse::Error(e)) => {
-                            future::ok(PeekResponse::Error(e))
+                            PeekResponse::Error(e)
                         }
                         (PeekResponse::Canceled, _) | (_, PeekResponse::Canceled) => {
-                            future::ok(PeekResponse::Canceled)
+                            PeekResponse::Canceled
                         }
                     }
                 })
-                .map_ok(move |mut resp| {
+                .map(move |mut resp| {
                     if let PeekResponse::Rows(rows) = &mut resp {
                         finishing.finish(rows)
                     }
                     resp
-                })
-                .err_into();
+                });
 
             ExecuteResponse::SendingRows(Box::pin(rows_rx))
         };
@@ -2463,7 +2449,7 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn sequence_tail(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         source_id: GlobalId,
         with_snapshot: bool,
         ts: Option<Timestamp>,
@@ -2474,7 +2460,19 @@ where
     ) -> Result<ExecuteResponse, CoordError> {
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
-        let frontier = self.determine_frontier(ts, source_id)?;
+        let frontier = if let Some(ts) = ts {
+            // If a timestamp was explicitly requested, use that.
+            Antichain::from_elem(self.determine_timestamp(
+                &MirRelationExpr::Get {
+                    id: Id::Global(source_id),
+                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
+                    typ: RelationType::empty(),
+                },
+                PeekWhen::AtTimestamp(ts),
+            )?)
+        } else {
+            self.determine_frontier(source_id)
+        };
         let sink_name = format!(
             "tail-source-{}",
             self.catalog
@@ -2483,8 +2481,8 @@ where
                 .expect("Source id is known to exist in catalog")
         );
         let sink_id = self.catalog.allocate_id()?;
-        self.active_tails.insert(session.conn_id(), sink_id);
-        let (tx, rx) = self.switchboard.mpsc_limited(self.total_workers);
+        session.add_drop_sink(sink_id);
+        let (tx, rx) = mpsc::unbounded_channel();
 
         self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
             sink_name,
@@ -2492,13 +2490,15 @@ where
             source_id,
             SinkConnector::Tail(TailSinkConnector {
                 tx,
-                frontier,
-                strict: !with_snapshot,
                 emit_progress,
                 object_columns,
                 value_desc: desc,
             }),
             SinkEnvelope::Tail { emit_progress },
+            SinkAsOf {
+                frontier,
+                strict: !with_snapshot,
+            },
         ))
         .await?;
 
@@ -2635,28 +2635,15 @@ where
         }
     }
 
-    /// Determine the frontier of updates to start *from*.
+    /// Determine the frontier of updates to start *from* for a sink based on
+    /// `source_id`.
+    ///
     /// Updates greater or equal to this frontier will be produced.
-    fn determine_frontier(
-        &mut self,
-        as_of: Option<u64>,
-        source_id: GlobalId,
-    ) -> Result<Antichain<u64>, CoordError> {
-        let frontier = if let Some(ts) = as_of {
-            // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(self.determine_timestamp(
-                &MirRelationExpr::Get {
-                    id: Id::Global(source_id),
-                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
-                    typ: RelationType::empty(),
-                },
-                PeekWhen::AtTimestamp(ts),
-            )?)
-        }
+    fn determine_frontier(&self, source_id: GlobalId) -> Antichain<Timestamp> {
         // TODO: The logic that follows is at variance from PEEK logic which consults the
         // "queryable" state of its inputs. We might want those to line up, but it is only
         // a "might".
-        else if let Some(index_id) = self.catalog.default_index_for(source_id) {
+        if let Some(index_id) = self.catalog.default_index_for(source_id) {
             let upper = self
                 .indexes
                 .upper_of(&index_id)
@@ -2671,8 +2658,7 @@ where
             // Use the earliest time that is still valid for all sources.
             let (index_ids, _indexes_complete) = self.catalog.nearest_indexes(&[source_id]);
             self.indexes.least_valid_since(index_ids)
-        };
-        Ok(frontier)
+        }
     }
 
     fn sequence_explain_plan(
@@ -2753,6 +2739,7 @@ where
         };
         match self.prep_relation_expr(values, prep_style)?.into_inner() {
             MirRelationExpr::Constant { rows, typ: _ } => {
+                let rows = rows?;
                 let desc = self.catalog.get_by_id(&id).desc()?;
                 for (row, _) in &rows {
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
@@ -2779,15 +2766,10 @@ where
 
     async fn sequence_alter_item_rename(
         &mut self,
-        id: Option<GlobalId>,
+        id: GlobalId,
         to_name: String,
         object_type: ObjectType,
     ) -> Result<ExecuteResponse, CoordError> {
-        let id = match id {
-            Some(id) => id,
-            // None is generated by `IF EXISTS`
-            None => return Ok(ExecuteResponse::AlteredObject(object_type)),
-        };
         let op = catalog::Op::RenameItem { id, to_name };
         match self.catalog_transact(vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(object_type)),
@@ -2795,34 +2777,30 @@ where
         }
     }
 
-    fn sequence_alter_index_logical_compaction_window(
+    fn sequence_alter_index_set_options(
         &mut self,
-        alter_index: Option<AlterIndexLogicalCompactionWindow>,
+        id: GlobalId,
+        options: Vec<IndexOption>,
     ) -> Result<ExecuteResponse, CoordError> {
-        let (index, logical_compaction_window) = match alter_index {
-            Some(AlterIndexLogicalCompactionWindow {
-                index,
-                logical_compaction_window,
-            }) => (index, logical_compaction_window),
-            // None is generated by `IF EXISTS` or if `logical_compaction_window`
-            // was not found in ALTER INDEX ... RESET
-            None => return Ok(ExecuteResponse::AlteredIndexLogicalCompaction),
-        };
+        self.set_index_options(id, options);
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
+    }
 
-        let logical_compaction_window = match logical_compaction_window {
-            LogicalCompactionWindow::Off => None,
-            LogicalCompactionWindow::Default => self.logical_compaction_window_ms,
-            LogicalCompactionWindow::Custom(window) => Some(duration_to_timestamp_millis(window)),
-        };
-
-        if let Some(index) = self.indexes.get_mut(&index) {
-            index.set_compaction_window_ms(logical_compaction_window);
-            Ok(ExecuteResponse::AlteredIndexLogicalCompaction)
-        } else {
-            // This can potentially happen if tries to delete the index and also
-            // alter the index concurrently
-            coord_bail!("index {} not found", index.to_string())
-        }
+    fn sequence_alter_index_reset_options(
+        &mut self,
+        id: GlobalId,
+        options: Vec<IndexOptionName>,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let options = options
+            .into_iter()
+            .map(|o| match o {
+                IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
+                    self.logical_compaction_window_ms.map(Duration::from_millis),
+                ),
+            })
+            .collect();
+        self.set_index_options(id, options);
+        Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
     async fn catalog_transact(&mut self, ops: Vec<catalog::Op>) -> Result<(), CoordError> {
@@ -2865,6 +2843,7 @@ where
                     if let Ok(desc) = item.desc(&name) {
                         self.report_column_updates(desc, *id, 1).await;
                     }
+                    metrics::item_created(*id, &item);
                     match item {
                         CatalogItem::Index(index) => {
                             self.report_index_update(*id, *oid, &index, &name.item, 1)
@@ -3001,6 +2980,7 @@ where
                     _ => unreachable!("DroppedIndex for non-index item"),
                 },
                 catalog::Event::DroppedItem { schema_id, entry } => {
+                    metrics::item_dropped(entry.id(), entry.item());
                     match entry.item() {
                         CatalogItem::Table(_) => {
                             sources_to_drop.push(entry.id());
@@ -3107,18 +3087,10 @@ where
         }
 
         if !sources_to_drop.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::DropSources(sources_to_drop),
-            )
-            .await;
+            self.broadcast(SequencedCommand::DropSources(sources_to_drop));
         }
         if !sinks_to_drop.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::DropSinks(sinks_to_drop),
-            )
-            .await;
+            self.broadcast(SequencedCommand::DropSinks(sinks_to_drop));
         }
         if !indexes_to_drop.is_empty() {
             self.drop_indexes(indexes_to_drop).await;
@@ -3128,11 +3100,9 @@ where
     }
 
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::DropSinks(dataflow_names),
-        )
-        .await
+        if !dataflow_names.is_empty() {
+            self.broadcast(SequencedCommand::DropSinks(dataflow_names));
+        }
     }
 
     async fn drop_indexes(&mut self, indexes: Vec<GlobalId>) {
@@ -3143,11 +3113,19 @@ where
             }
         }
         if !trace_keys.is_empty() {
-            broadcast(
-                &mut self.broadcast_tx,
-                SequencedCommand::DropIndexes(trace_keys),
-            )
-            .await
+            self.broadcast(SequencedCommand::DropIndexes(trace_keys))
+        }
+    }
+
+    fn set_index_options(&mut self, id: GlobalId, options: Vec<IndexOption>) {
+        let index = self.indexes.get_mut(&id).expect("index known to exist");
+        for o in options {
+            match o {
+                IndexOption::LogicalCompactionWindow(window) => {
+                    let window = window.map(duration_to_timestamp_millis);
+                    index.set_compaction_window_ms(window);
+                }
+            }
         }
     }
 
@@ -3159,37 +3137,60 @@ where
         mut expr: MirRelationExpr,
         style: ExprPrepStyle,
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
-        expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
-
-        // TODO (wangandi): Is there anything that optimizes to a
-        // constant expression that originally contains a global get? Is
-        // there anything not containing a global get that cannot be
-        // optimized to a constant expression?
-        Ok(self.optimizer.optimize(expr, self.catalog.indexes())?)
+        if let ExprPrepStyle::Static = style {
+            let mut opt_expr = self.optimizer.optimize(expr, self.catalog.indexes())?;
+            opt_expr.0.try_visit_mut(&mut |e| {
+                if let expr::MirRelationExpr::Filter {
+                    input: _,
+                    predicates,
+                } = &*e
+                {
+                    match dataflow::FilterPlan::create_from(predicates.iter().cloned()) {
+                        Err(e) => coord_bail!("{:?}", e),
+                        Ok(plan) => {
+                            // If we are in experimenal mode permit temporal filters.
+                            // TODO(mcsherry): remove this gating eventually.
+                            if plan.non_temporal() || self.catalog.config().experimental_mode {
+                                Ok(())
+                            } else {
+                                coord_bail!("temporal filters require the --experimental flag")
+                            }
+                        }
+                    }
+                } else {
+                    e.try_visit_scalars_mut1(&mut |s| Self::prep_scalar_expr(s, style))
+                }
+            })?;
+            Ok(opt_expr)
+        } else {
+            expr.try_visit_scalars_mut(&mut |s| Self::prep_scalar_expr(s, style))?;
+            // TODO (wangandi): Is there anything that optimizes to a
+            // constant expression that originally contains a global get? Is
+            // there anything not containing a global get that cannot be
+            // optimized to a constant expression?
+            Ok(self.optimizer.optimize(expr, self.catalog.indexes())?)
+        }
     }
 
     /// Prepares a scalar expression for execution by replacing any placeholders
     /// with their correct values.
     ///
     /// Specifically, calls to the special function `MzLogicalTimestamp` are
-    /// replaced according to `style`:
-    ///
-    ///   * if `OneShot`, calls are replaced according to the logical time
-    ///     specified in the `OneShot` variant.
-    ///   * if `Explain`, calls are replaced with a dummy time.
-    ///   * if `Static`, calls trigger an error indicating that static queries
-    ///     are not permitted to observe their own timestamps.
+    /// replaced if `style` is `OneShot { logical_timestamp }`. Calls are not
+    /// replaced for the `Explain` style nor for `Static` which should not
+    /// reach this point if we have correctly validated the use of placeholders.
     fn prep_scalar_expr(expr: &mut MirScalarExpr, style: ExprPrepStyle) -> Result<(), CoordError> {
         // Replace calls to `MzLogicalTimestamp` as described above.
-        let ts = match style {
-            ExprPrepStyle::Explain | ExprPrepStyle::Static => 0, // dummy timestamp
-            ExprPrepStyle::OneShot { logical_time } => logical_time,
-        };
         let mut observes_ts = false;
         expr.visit_mut(&mut |e| {
             if let MirScalarExpr::CallNullary(f @ NullaryFunc::MzLogicalTimestamp) = e {
                 observes_ts = true;
-                *e = MirScalarExpr::literal_ok(Datum::from(i128::from(ts)), f.output_type());
+                if let ExprPrepStyle::OneShot { logical_time } = style {
+                    *e = MirScalarExpr::literal_ok(
+                        Datum::from(i128::from(logical_time)),
+                        f.output_type().scalar_type,
+                    );
+                }
             }
         });
         if observes_ts && matches!(style, ExprPrepStyle::Static) {
@@ -3231,7 +3232,7 @@ where
         // a compaction frontier of at least `since`.
         for (global_id, _description, _typ) in dataflow.index_exports.iter() {
             let mut frontiers =
-                Frontiers::new(self.total_workers, self.logical_compaction_window_ms);
+                Frontiers::new(self.num_workers(), self.logical_compaction_window_ms);
             frontiers.advance_since(&since);
             self.indexes.insert(*global_id, frontiers);
         }
@@ -3286,12 +3287,40 @@ where
         transform::optimize_dataflow(&mut dataflow);
 
         // Finalize the dataflow by broadcasting its construction to all workers.
-        broadcast(
-            &mut self.broadcast_tx,
-            SequencedCommand::CreateDataflows(vec![dataflow]),
-        )
-        .await;
+        self.broadcast(SequencedCommand::CreateDataflows(vec![dataflow]));
         Ok(())
+    }
+
+    fn broadcast(&self, cmd: SequencedCommand) {
+        for tx in &self.worker_txs {
+            tx.send(cmd.clone())
+                .expect("worker command receiver should not drop first")
+        }
+        for handle in self.worker_guards.guards() {
+            handle.thread().unpark()
+        }
+    }
+
+    // Notify the timestamper thread that a source has been created or dropped.
+    async fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
+        if create {
+            if let Some(entry) = self.catalog.try_get_by_id(source_id) {
+                if let CatalogItem::Source(s) = entry.item() {
+                    self.ts_tx
+                        .send(TimestampMessage::Add(source_id, s.connector.clone()))
+                        .expect("Failed to send CREATE Instance notice to timestamper");
+                    self.broadcast(SequencedCommand::AddSourceTimestamping {
+                        id: source_id,
+                        connector: s.connector.clone(),
+                    });
+                }
+            }
+        } else {
+            self.ts_tx
+                .send(TimestampMessage::Drop(source_id))
+                .expect("Failed to send DROP Instance notice to timestamper");
+            self.broadcast(SequencedCommand::DropSourceTimestamping { id: source_id });
+        }
     }
 
     // Tell the cacher to start caching data for `id` if that source
@@ -3307,8 +3336,7 @@ where
                             self.catalog.config().cluster_id,
                             id,
                         ))
-                        .await
-                        .expect("failed to send CREATE SOURCE notification to caching thread");
+                        .expect("caching receiver should not drop first");
                 } else {
                     log::error!(
                         "trying to create a cached source ({}) but caching is disabled.",
@@ -3329,143 +3357,140 @@ where
     }
 }
 
-/// Begins coordinating user requests to the dataflow layer based on the
-/// provided configuration. Returns the thread that hosts the coordinator and
-/// the cluster ID.
+/// Serves the coordinator based on the provided configuration.
 ///
-/// To gracefully shut down the coordinator, send a `Message::Shutdown` to the
-/// `cmd_rx` in the configuration, then join on the thread.
-pub async fn serve<C>(
+/// For a high-level description of the coordinator, see the [crate
+/// documentation](crate).
+///
+/// Returns a handle to the coordinator and a client to communicate with the
+/// coordinator.
+pub async fn serve(
     Config {
-        switchboard,
-        cmd_rx,
-        total_workers,
+        workers,
+        timely_worker,
         symbiosis_url,
         logging,
         data_directory,
-        timestamp: timestamp_config,
+        timestamp_frequency,
         cache: cache_config,
         logical_compaction_window,
         experimental_mode,
         build_info,
-    }: Config<'_, C>,
+    }: Config<'_>,
     // TODO(benesch): Don't pass runtime explicitly when
     // `Handle::current().block_in_place()` lands. See:
     // https://github.com/tokio-rs/tokio/pull/3097.
     runtime: Arc<Runtime>,
-) -> Result<(JoinHandle<()>, Uuid), CoordError>
-where
-    C: comm::Connection,
-{
-    let mut broadcast_tx = switchboard.broadcast_tx(dataflow::BroadcastToken);
-
-    // First, configure the dataflow workers as directed by our configuration.
-    // These operations must all be infallible.
-
-    let (feedback_tx, feedback_rx) = switchboard.mpsc_limited(total_workers);
-    broadcast(
-        &mut broadcast_tx,
-        SequencedCommand::EnableFeedback(feedback_tx),
-    )
-    .await;
-
-    if let Some(config) = &logging {
-        broadcast(
-            &mut broadcast_tx,
-            SequencedCommand::EnableLogging(DataflowLoggingConfig {
-                granularity_ns: config.granularity.as_nanos(),
-                active_logs: BUILTINS
-                    .logs()
-                    .map(|src| (src.variant.clone(), src.index_id))
-                    .collect(),
-                log_logging: config.log_logging,
-            }),
-        )
-        .await;
-    }
-
+) -> Result<(Handle, Client), CoordError> {
+    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
     let cache_tx = if let Some(cache_config) = &cache_config {
-        let (cache_tx, cache_rx) = switchboard.mpsc();
-        broadcast(
-            &mut broadcast_tx,
-            SequencedCommand::EnableCaching(cache_tx.clone()),
-        )
-        .await;
-        let cache_tx = cache_tx
-            .connect()
-            .await
-            .expect("failed to connect cache tx");
-
+        let (cache_tx, cache_rx) = mpsc::unbounded_channel();
         let mut cacher = Cacher::new(cache_rx, cache_config.clone());
         tokio::spawn(async move { cacher.run().await });
-
         Some(cache_tx)
     } else {
         None
     };
-
-    // Then perform fallible operations, like opening the catalog. If these
-    // fail, we are careful to tell the dataflow layer to shutdown.
-    let coord = async {
-        let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
-            Some(symbiosis::Postgres::open_and_erase(symbiosis_url).await?)
-        } else {
-            None
-        };
-
-        let path = data_directory.join("catalog");
-        let (catalog, initial_catalog_events) = Catalog::open(&catalog::Config {
-            path: &path,
-            experimental_mode: Some(experimental_mode),
-            enable_logging: logging.is_some(),
-            cache_directory: cache_config.map(|c| c.path),
-            build_info,
-        })?;
-        let cluster_id = catalog.config().cluster_id;
-
-        let mut coord = Coordinator {
-            broadcast_tx: switchboard.broadcast_tx(dataflow::BroadcastToken),
-            switchboard: switchboard.clone(),
-            total_workers,
-            optimizer: Default::default(),
-            catalog,
-            symbiosis,
-            indexes: ArrangementFrontiers::default(),
-            since_updates: Vec::new(),
-            active_tails: HashMap::new(),
-            logging_granularity: logging.and_then(|c| c.granularity.as_millis().try_into().ok()),
-            timestamp_config,
-            logical_compaction_window_ms: logical_compaction_window
-                .map(duration_to_timestamp_millis),
-            cache_tx,
-            closed_up_to: 1,
-            read_lower_bound: 1,
-            last_op_was_read: false,
-            need_advance: true,
-            transient_id_counter: 1,
-        };
-        coord.bootstrap(initial_catalog_events).await?;
-        Ok((coord, cluster_id))
+    let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
+    let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
+        Some(symbiosis::Postgres::open_and_erase(symbiosis_url).await?)
+    } else {
+        None
     };
-    let (coord, cluster_id) = match coord.await {
-        Ok((coord, cluster_id)) => (coord, cluster_id),
-        Err(e) => {
-            broadcast(&mut broadcast_tx, SequencedCommand::Shutdown).await;
-            return Err(e);
+
+    let path = data_directory.join("catalog");
+    let (catalog, initial_catalog_events) = Catalog::open(&catalog::Config {
+        path: &path,
+        experimental_mode: Some(experimental_mode),
+        enable_logging: logging.is_some(),
+        cache_directory: cache_config.map(|c| c.path),
+        build_info,
+    })?;
+    let cluster_id = catalog.config().cluster_id;
+
+    let (worker_txs, worker_rxs): (Vec<_>, Vec<_>) =
+        (0..workers).map(|_| crossbeam_channel::unbounded()).unzip();
+    let worker_guards = dataflow::serve(dataflow::Config {
+        command_receivers: worker_rxs,
+        timely_worker,
+    })
+    .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
+
+    // Spawn timestamper after any fallible operations so that if bootstrap fails we still
+    // tell it to shut down.
+    let (ts_tx, ts_rx) = std::sync::mpsc::channel();
+    let mut timestamper = Timestamper::new(timestamp_frequency, internal_cmd_tx.clone(), ts_rx);
+    let executor = TokioHandle::current();
+    let timestamper_thread_handle = thread::spawn(move || {
+        let _executor_guard = executor.enter();
+        timestamper.update()
+    })
+    .join_on_drop();
+
+    let mut coord = Coordinator {
+        worker_guards,
+        worker_txs,
+        optimizer: Default::default(),
+        catalog,
+        symbiosis,
+        indexes: ArrangementFrontiers::default(),
+        since_updates: Vec::new(),
+        logging_granularity: logging
+            .as_ref()
+            .and_then(|c| c.granularity.as_millis().try_into().ok()),
+        logical_compaction_window_ms: logical_compaction_window.map(duration_to_timestamp_millis),
+        internal_cmd_tx,
+        ts_tx: ts_tx.clone(),
+        cache_tx,
+        closed_up_to: 1,
+        read_lower_bound: 1,
+        last_op_was_read: false,
+        need_advance: true,
+        transient_id_counter: 1,
+        active_conns: HashMap::new(),
+    };
+    coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
+    if let Some(config) = &logging {
+        coord.broadcast(SequencedCommand::EnableLogging(DataflowLoggingConfig {
+            granularity_ns: config.granularity.as_nanos(),
+            active_logs: BUILTINS
+                .logs()
+                .map(|src| (src.variant.clone(), src.index_id))
+                .collect(),
+            log_logging: config.log_logging,
+        }));
+    }
+    if let Some(cache_tx) = &coord.cache_tx {
+        coord.broadcast(SequencedCommand::EnableCaching(cache_tx.clone()));
+    }
+    match coord.bootstrap(initial_catalog_events).await {
+        Ok(()) => {
+            let thread = thread::spawn(move || {
+                runtime.block_on(coord.serve(
+                    internal_cmd_rx,
+                    cmd_rx,
+                    feedback_rx,
+                    timestamper_thread_handle,
+                ))
+            });
+            let handle = Handle {
+                cluster_id,
+                _thread: thread.join_on_drop(),
+            };
+            let client = Client::new(cmd_tx);
+            Ok((handle, client))
         }
-    };
-
-    // From this point on, this function must not fail! If you add a new
-    // fallible operation, ensure it is in the async block above.
-
-    // The future returned by `Coordinator::serve` does not implement `Send` as
-    // it holds various non-thread-safe state across await points. This means we
-    // can't use `tokio::spawn`, but instead have to spawn a dedicated thread to
-    // run the future.
-    Ok((
-        thread::spawn(move || runtime.block_on(coord.serve(cmd_rx, feedback_rx))),
-        cluster_id,
-    ))
+        Err(e) => {
+            // Tell the timestamper thread to shut down.
+            ts_tx.send(TimestampMessage::Shutdown).unwrap();
+            // Explicitly drop the timestamper handle here so we can wait for
+            // the thread to return.
+            drop(timestamper_thread_handle);
+            coord.broadcast(SequencedCommand::Shutdown);
+            Err(e)
+        }
+    }
 }
 
 /// The styles in which an expression can be prepared.
@@ -3482,18 +3507,11 @@ enum ExprPrepStyle {
     OneShot { logical_time: u64 },
 }
 
-async fn broadcast(tx: &mut comm::broadcast::Sender<SequencedCommand>, cmd: SequencedCommand) {
-    // TODO(benesch): avoid flushing after every send.
-    tx.send(cmd).await.unwrap();
-}
-
 /// Constructs an [`ExecuteResponse`] that that will send some rows to the
 /// client immediately, as opposed to asking the dataflow layer to send along
 /// the rows after some computation.
 fn send_immediate_rows(rows: Vec<Row>) -> ExecuteResponse {
-    let (tx, rx) = futures::channel::oneshot::channel();
-    tx.send(PeekResponse::Rows(rows)).unwrap();
-    ExecuteResponse::SendingRows(Box::pin(rx.err_into()))
+    ExecuteResponse::SendingRows(Box::pin(async { PeekResponse::Rows(rows) }))
 }
 
 fn auto_generate_primary_idx(
@@ -3502,6 +3520,7 @@ fn auto_generate_primary_idx(
     on_id: GlobalId,
     on_desc: &RelationDesc,
     conn_id: Option<u32>,
+    depends_on: Vec<GlobalId>,
 ) -> catalog::Index {
     let default_key = on_desc.typ().default_key();
 
@@ -3514,6 +3533,7 @@ fn auto_generate_primary_idx(
             .map(|k| MirScalarExpr::Column(*k))
             .collect(),
         conn_id,
+        depends_on,
     }
 }
 
@@ -3538,6 +3558,7 @@ pub fn index_sql(
                 })
                 .collect(),
         ),
+        with_options: vec![],
         if_not_exists: false,
     }
     .to_ast_string_stable()

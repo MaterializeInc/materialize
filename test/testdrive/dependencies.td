@@ -130,6 +130,10 @@ catalog item 's1' already exists
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'v2'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
+> CREATE SINK s2 FROM s
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'v3'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
 # Test that sinks cannot be depended upon.
 ! CREATE MATERIALIZED VIEW v2 AS SELECT * FROM s1;
 catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
@@ -332,8 +336,84 @@ unknown catalog item 'j2'
 
 > DROP SOURCE s5;
 
+# https://github.com/MaterializeInc/materialize/issues/5577
+> CREATE TYPE int4_list AS LIST (element_type=int4)
+
+> CREATE VIEW v1 AS SELECT CAST('{2}' AS int4_list)
+
+! DROP TYPE int4_list
+cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+
+> DROP VIEW v1
+
+> CREATE TABLE t1 (custom int4_list)
+
+! DROP TYPE int4_list
+cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.t1'
+
+> DROP TABLE t1
+
+> SHOW TABLES
+
+> CREATE MATERIALIZED VIEW v1 AS SELECT * FROM ( SELECT CAST('{2}' AS int4_list) )
+
+! DROP TYPE int4_list
+cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+
+> DROP VIEW v1
+
+> CREATE VIEW v1 AS SELECT CAST(CAST('{2}' AS int4_list) AS text)
+
+! DROP TYPE int4_list
+cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+
+> DROP VIEW v1
+
+> CREATE VIEW v1 AS VALUES (CAST('{2}' AS int4_list))
+
+! DROP TYPE int4_list
+cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+
+> DROP VIEW v1
+
+> CREATE VIEW v1 AS SELECT MIN(CAST(CAST('{1}' AS int4_list) AS string))
+
+! DROP TYPE int4_list
+cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.v1'
+
+> DROP VIEW v1
+
+> CREATE TABLE t1 (f1 TEXT DEFAULT CAST ('{}' AS int4_list))
+
+> DROP TABLE t1
+
+> CREATE TEMPORARY TABLE t1 (f1 int4_list)
+
+! DROP TYPE int4_list
+cannot drop materialize.public.int4_list: still depended upon by catalog item 'mz_temp.t1'
+
+> DROP TABLE t1
+
+> CREATE TABLE t1 (f1 TEXT)
+
+> CREATE INDEX i1 ON t1 (CAST(f1 AS int4_list))
+
+! DROP TYPE int4_list
+cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.i1'
+
+> DROP TABLE t1
+
+> CREATE TYPE int4_list_list AS LIST (element_type=int4_list)
+
+! DROP TYPE int4_list
+cannot drop materialize.public.int4_list: still depended upon by catalog item 'materialize.public.int4_list_list'
+
+> DROP TYPE int4_list_list
+
 #cleanup
 > DROP SINK s1;
+
+> DROP SINK s2;
 
 > DROP SOURCE s;
 

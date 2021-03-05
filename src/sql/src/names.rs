@@ -7,20 +7,27 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! Structured name types for SQL objects.
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use sql_parser::ast::{Ident, ObjectName};
+use sql_parser::ast::{Ident, UnresolvedObjectName};
 
-/// The fully-qualified name of an item in the catalog.
+/// A fully-qualified name of an item in the catalog.
 ///
-/// Catalog names compare case sensitively. Normalization is the responsibility
-/// of the consumer (e.g., the SQL layer).
+/// Catalog names compare case sensitively. Use [`normalize::object_name`] to
+/// perform proper case folding if converting an [`ObjectName`] to a `FullName`.
+///
+/// [`normalize::object_name`]: crate::normalize::object_name
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct FullName {
+    /// The database name.
     pub database: DatabaseSpecifier,
+    /// The schema name.
     pub schema: String,
+    /// The item name.
     pub item: String,
 }
 
@@ -33,9 +40,13 @@ impl fmt::Display for FullName {
     }
 }
 
+/// A name of a database in a [`FullName`].
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum DatabaseSpecifier {
+    /// The "ambient" database, which is always present and is not named
+    /// explicitly, but by omission.
     Ambient,
+    /// A normal database with a name.
     Name(String),
 }
 
@@ -57,6 +68,7 @@ impl From<Option<String>> for DatabaseSpecifier {
     }
 }
 
+/// The fully-qualified name of a schema in the catalog.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct SchemaName {
     pub database: DatabaseSpecifier,
@@ -72,28 +84,33 @@ impl fmt::Display for SchemaName {
     }
 }
 
-impl From<FullName> for ObjectName {
-    fn from(full_name: FullName) -> ObjectName {
+impl From<FullName> for UnresolvedObjectName {
+    fn from(full_name: FullName) -> UnresolvedObjectName {
         let mut name_parts = Vec::new();
         if let DatabaseSpecifier::Name(database) = full_name.database {
             name_parts.push(Ident::new(database));
         }
         name_parts.push(Ident::new(full_name.schema));
         name_parts.push(Ident::new(full_name.item));
-        ObjectName(name_parts)
+        UnresolvedObjectName(name_parts)
     }
 }
 
-/// A partial name of an item in the catalog.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// An optionally-qualified name of an item in the catalog.
+///
+/// This is like a [`FullName`], but either the database or schema name may be
+/// omitted.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PartialName {
     pub database: Option<String>,
     pub schema: Option<String>,
     pub item: String,
 }
 
-impl PartialEq for PartialName {
-    fn eq(&self, other: &Self) -> bool {
+impl PartialName {
+    // Whether either self or other might be a (possibly differently qualified)
+    // version of the other.
+    pub fn matches(&self, other: &Self) -> bool {
         match (&self.database, &other.database) {
             (Some(d1), Some(d2)) if d1 != d2 => return false,
             _ => (),

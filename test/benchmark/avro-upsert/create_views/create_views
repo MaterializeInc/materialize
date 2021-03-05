@@ -8,4 +8,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-psql -h materialized -p 6875 -U materialize -f /data/views.sql materialize
+set -euo pipefail
+
+view_file="/data/${1:-upsert_views.sql}"
+
+psql -h materialized -p 6875 -U materialize -f "${view_file}" materialize

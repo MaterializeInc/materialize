@@ -9,20 +9,16 @@
 
 use std::convert::TryInto;
 use std::error::Error;
-use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use openssl::asn1::Asn1Time;
-use openssl::hash::MessageDigest;
-use openssl::nid::Nid;
-use openssl::pkey::PKey;
-use openssl::rsa::Rsa;
-use openssl::x509::extension::SubjectAlternativeName;
-use openssl::x509::{X509NameBuilder, X509};
+use materialized::TlsMode;
+use postgres::error::DbError;
+use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
+use postgres::Socket;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -58,12 +54,14 @@ impl Config {
         self
     }
 
-    pub fn enable_tls(
+    pub fn with_tls(
         mut self,
+        mode: TlsMode,
         cert_path: impl Into<PathBuf>,
         key_path: impl Into<PathBuf>,
     ) -> Self {
         self.tls = Some(materialized::TlsConfig {
+            mode,
             cert: cert_path.into(),
             key: key_path.into(),
         });
@@ -81,7 +79,7 @@ impl Config {
     }
 }
 
-pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dyn Error>> {
+pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
     let runtime = Arc::new(Runtime::new()?);
     let (data_directory, temp_dir) = match config.data_directory {
         None => {
@@ -106,12 +104,10 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
             cache: None,
             logical_compaction_window: None,
             workers: config.workers,
-            process: 0,
-            addresses: vec![SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)],
             timely_worker: timely::WorkerConfig::default(),
             data_directory,
             symbiosis_url: None,
-            listen_addr: None,
+            listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: config.tls,
             experimental_mode: config.experimental_mode,
             telemetry_url: None,
@@ -123,8 +119,7 @@ pub fn start_server(config: Config) -> Result<(Server, postgres::Client), Box<dy
         runtime,
         _temp_dir: temp_dir,
     };
-    let client = server.connect()?;
-    Ok((server, client))
+    Ok(server)
 }
 
 pub struct Server {
@@ -154,17 +149,27 @@ impl Server {
         config
     }
 
-    pub fn connect(&self) -> Result<postgres::Client, Box<dyn Error>> {
-        Ok(self.pg_config().connect(postgres::NoTls)?)
+    pub fn connect<T>(&self, tls: T) -> Result<postgres::Client, Box<dyn Error>>
+    where
+        T: MakeTlsConnect<Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    {
+        Ok(self.pg_config().connect(tls)?)
     }
 
-    pub async fn connect_async(
+    pub async fn connect_async<T>(
         &self,
-    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), Box<dyn Error>> {
-        let (client, conn) = self
-            .pg_config_async()
-            .connect(tokio_postgres::NoTls)
-            .await?;
+        tls: T,
+    ) -> Result<(tokio_postgres::Client, tokio::task::JoinHandle<()>), Box<dyn Error>>
+    where
+        T: MakeTlsConnect<Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+    {
+        let (client, conn) = self.pg_config_async().connect(tls).await?;
         let handle = tokio::spawn(async move {
             if let Err(err) = conn.await {
                 panic!("connection error: {}", err);
@@ -172,35 +177,6 @@ impl Server {
         });
         Ok((client, handle))
     }
-}
-
-pub fn generate_certs(cert_path: &Path, key_path: &Path) -> Result<(), Box<dyn Error>> {
-    let rsa = Rsa::generate(2048)?;
-    let pkey = PKey::from_rsa(rsa)?;
-    let name = {
-        let mut builder = X509NameBuilder::new()?;
-        builder.append_entry_by_nid(Nid::COMMONNAME, "test certificate")?;
-        builder.build()
-    };
-    let cert = {
-        let mut builder = X509::builder()?;
-        builder.set_version(2)?;
-        builder.set_pubkey(&pkey)?;
-        builder.set_issuer_name(&name)?;
-        builder.set_subject_name(&name)?;
-        builder.append_extension(
-            SubjectAlternativeName::new()
-                .ip(&Ipv4Addr::LOCALHOST.to_string())
-                .build(&builder.x509v3_context(None, None))?,
-        )?;
-        builder.set_not_before(&*Asn1Time::days_from_now(0)?)?;
-        builder.set_not_after(&*Asn1Time::days_from_now(365)?)?;
-        builder.sign(&pkey, MessageDigest::sha256())?;
-        builder.build()
-    };
-    fs::write(cert_path, &cert.to_pem()?)?;
-    fs::write(key_path, &pkey.private_key_to_pem_pkcs8()?)?;
-    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
@@ -217,5 +193,30 @@ impl<'a> FromSql<'a> for MzTimestamp {
 
     fn accepts(ty: &Type) -> bool {
         pgrepr::Numeric::accepts(ty)
+    }
+}
+
+pub trait PostgresErrorExt {
+    fn unwrap_db_error(self) -> DbError;
+}
+
+impl PostgresErrorExt for postgres::Error {
+    fn unwrap_db_error(self) -> DbError {
+        match self.source().and_then(|e| e.downcast_ref::<DbError>()) {
+            Some(e) => e.clone(),
+            None => panic!("expected DbError, but got: {:?}", self),
+        }
+    }
+}
+
+impl<T, E> PostgresErrorExt for Result<T, E>
+where
+    E: PostgresErrorExt,
+{
+    fn unwrap_db_error(self) -> DbError {
+        match self {
+            Ok(_) => panic!("expected Err(DbError), but got Ok(_)"),
+            Err(e) => e.unwrap_db_error(),
+        }
     }
 }

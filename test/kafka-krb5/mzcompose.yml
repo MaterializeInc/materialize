@@ -80,10 +80,12 @@ services:
 
   materialized:
     mzbuild: materialized
-    command: --logging-granularity=10ms -w1 --disable-telemetry
+    command: -w1 --disable-telemetry
     volumes:
       - secrets:/share/secrets
       - ./kdc/krb5.conf:/etc/krb5.conf
+    environment:
+      - MZ_DEV=1
 
   testdrive:
     mzbuild: testdrive

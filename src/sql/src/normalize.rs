@@ -7,36 +7,45 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+//! SQL normalization routines.
+//!
+//! Normalization is the process of taking relatively unstructured types from
+//! the [`ast`] module and converting them to more structured types.
+//!
+//! [`ast`]: crate::ast
+
 use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, Context};
-use aws_util::aws;
 use rusoto_core::Region;
 
+use aws_util::aws;
 use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType, Function,
-    FunctionArgs, Ident, IfExistsBehavior, ObjectName, Query, Raw, SqlOption, Statement,
-    TableFactor, Value,
+    AstInfo, Connector, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
+    IfExistsBehavior, Query, Raw, RawName, SqlOption, Statement, TableFactor, UnresolvedObjectName,
+    Value,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::plan::error::PlanError;
-use crate::plan::query;
 use crate::plan::statement::StatementContext;
 
+/// Normalizes a single identifier.
 pub fn ident(ident: Ident) -> String {
     ident.as_str().into()
 }
 
+/// Normalizes an identifier that represents a column name.
 pub fn column_name(id: Ident) -> ColumnName {
     ColumnName::from(ident(id))
 }
 
-pub fn object_name(mut name: ObjectName) -> Result<PartialName, PlanError> {
+/// Normalizes an unresolved object name.
+pub fn unresolved_object_name(mut name: UnresolvedObjectName) -> Result<PartialName, PlanError> {
     if name.0.len() < 1 || name.0.len() > 3 {
         return Err(PlanError::MisqualifiedName(name.to_string()));
     }
@@ -53,7 +62,8 @@ pub fn object_name(mut name: ObjectName) -> Result<PartialName, PlanError> {
     Ok(out)
 }
 
-pub fn options(options: &[SqlOption]) -> BTreeMap<String, Value> {
+/// Normalizes a list of `WITH` options.
+pub fn options<T: AstInfo>(options: &[SqlOption<T>]) -> BTreeMap<String, Value> {
     options
         .iter()
         .map(|o| match o {
@@ -70,26 +80,32 @@ pub fn options(options: &[SqlOption]) -> BTreeMap<String, Value> {
         .collect()
 }
 
-pub fn option_objects(options: &[SqlOption]) -> BTreeMap<String, SqlOption> {
+/// Normalizes `WITH` option keys without normalizing their corresponding
+/// values.
+pub fn option_objects(options: &[SqlOption<Raw>]) -> BTreeMap<String, SqlOption<Raw>> {
     options
         .iter()
         .map(|o| (ident(o.name().clone()), o.clone()))
         .collect()
 }
 
-pub fn unresolve(name: FullName) -> ObjectName {
+/// Unnormalizes an object name.
+///
+/// This is the inverse of the [`object_name`] function.
+pub fn unresolve(name: FullName) -> UnresolvedObjectName {
     let mut out = vec![];
     if let DatabaseSpecifier::Name(n) = name.database {
         out.push(Ident::new(n));
     }
     out.push(Ident::new(name.schema));
     out.push(Ident::new(name.item));
-    ObjectName(out)
+    UnresolvedObjectName(out)
 }
 
-/// Normalizes a `CREATE { SOURCE | VIEW | INDEX | SINK }` statement so that the
-/// statement does not depend upon any session parameters, nor specify any
-/// non-default options (like `MATERIALIZED`, `IF NOT EXISTS`, etc).
+/// Normalizes a `CREATE` statement.
+///
+/// The resulting statement will not depend upon any session parameters, nor
+/// specify any non-default options (like `MATERIALIZED`, `IF NOT EXISTS`, etc).
 ///
 /// The goal is to construct a backwards-compatible description of the object.
 /// SQL is the most stable part of Materialize, so SQL is used to describe the
@@ -98,24 +114,26 @@ pub fn create_statement(
     scx: &StatementContext,
     mut stmt: Statement<Raw>,
 ) -> Result<String, PlanError> {
-    let allocate_name = |name: &ObjectName| -> Result<_, PlanError> {
-        Ok(unresolve(scx.allocate_name(object_name(name.clone())?)))
-    };
-
-    let allocate_temporary_name = |name: &ObjectName| -> Result<_, PlanError> {
+    let allocate_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
         Ok(unresolve(
-            scx.allocate_temporary_name(object_name(name.clone())?),
+            scx.allocate_name(unresolved_object_name(name.clone())?),
         ))
     };
 
-    let resolve_item = |name: &ObjectName| -> Result<_, PlanError> {
+    let allocate_temporary_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
+        Ok(unresolve(scx.allocate_temporary_name(
+            unresolved_object_name(name.clone())?,
+        )))
+    };
+
+    let resolve_item = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
         let item = scx.resolve_item(name.clone())?;
         Ok(unresolve(item.name().clone()))
     };
 
     fn normalize_function_name(
         scx: &StatementContext,
-        name: &mut ObjectName,
+        name: &mut UnresolvedObjectName,
     ) -> Result<(), PlanError> {
         let full_name = scx.resolve_function(name.clone())?;
         *name = unresolve(full_name.name().clone());
@@ -169,7 +187,7 @@ pub fn create_statement(
 
         fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Raw>) {
             match table_factor {
-                TableFactor::Table { name, alias } => {
+                TableFactor::Table { name, alias, .. } => {
                     self.visit_object_name_mut(name);
                     if let Some(alias) = alias {
                         self.visit_table_alias_mut(alias);
@@ -204,36 +222,27 @@ pub fn create_statement(
             }
         }
 
-        fn visit_object_name_mut(&mut self, object_name: &'ast mut ObjectName) {
+        fn visit_unresolved_object_name_mut(
+            &mut self,
+            unresolved_object_name: &'ast mut UnresolvedObjectName,
+        ) {
             // Single-part object names can refer to CTEs in addition to
             // catalog objects.
-            if let [ident] = object_name.0.as_slice() {
+            if let [ident] = unresolved_object_name.0.as_slice() {
                 if self.ctes.contains(ident) {
                     return;
                 }
             }
-            match self.scx.resolve_item(object_name.clone()) {
-                Ok(full_name) => *object_name = unresolve(full_name.name().clone()),
+            match self.scx.resolve_item(unresolved_object_name.clone()) {
+                Ok(full_name) => *unresolved_object_name = unresolve(full_name.name().clone()),
                 Err(e) => self.err = Some(e),
             };
         }
 
-        fn visit_table_mut(&mut self, table: &'ast mut <Raw as AstInfo>::Table) {
-            self.visit_object_name_mut(table);
-        }
-
-        fn visit_data_type_mut(&mut self, data_type: &'ast mut DataType) {
-            if let DataType::Other { name, typ_mod } = data_type {
-                let canonical_name = query::canonicalize_type_name_internal(&name.clone());
-                if &canonical_name != name {
-                    // None of our underlying types with aliases support
-                    // typ_mods, while the aliases themselves do, so we should
-                    // ensure they're empty.
-                    *typ_mod = vec![];
-                    *name = canonical_name;
-                }
+        fn visit_object_name_mut(&mut self, object_name: &'ast mut <Raw as AstInfo>::ObjectName) {
+            match object_name {
+                RawName::Name(n) | RawName::Id(_, n) => self.visit_unresolved_object_name_mut(n),
             }
-            visit_mut::visit_data_type_mut(self, data_type)
         }
     }
 
@@ -251,7 +260,7 @@ pub fn create_statement(
         Statement::CreateSource(CreateSourceStatement {
             name,
             col_names: _,
-            connector: _,
+            connector,
             with_options: _,
             format: _,
             envelope: _,
@@ -261,6 +270,12 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
             *materialized = false;
+            if let Connector::Postgres { columns, .. } = connector {
+                let mut normalizer = QueryNormalizer::new(scx);
+                for c in columns {
+                    normalizer.visit_column_def_mut(c);
+                }
+            }
         }
 
         Statement::CreateTable(CreateTableStatement {
@@ -269,8 +284,13 @@ pub fn create_statement(
             constraints: _,
             with_options: _,
             if_not_exists,
+            temporary,
         }) => {
-            *name = allocate_name(name)?;
+            *name = if *temporary {
+                allocate_temporary_name(name)?
+            } else {
+                allocate_name(name)?
+            };
             let mut normalizer = QueryNormalizer::new(scx);
             for c in columns {
                 normalizer.visit_column_def_mut(c);
@@ -326,6 +346,7 @@ pub fn create_statement(
             name: _,
             on_name,
             key_parts,
+            with_options: _,
             if_not_exists,
         }) => {
             *on_name = resolve_item(on_name)?;
@@ -367,39 +388,45 @@ pub fn create_statement(
 
 macro_rules! with_option_type {
     ($name:ident, String) => {
-        if let Some(crate::ast::WithOptionValue::Value(crate::ast::Value::String(value))) = $name {
-            value
-        } else if let Some(crate::ast::WithOptionValue::ObjectName(name)) = $name {
-            crate::ast::display::AstDisplay::to_ast_string(&name)
-        } else {
-            ::anyhow::bail!("expected String");
+        match $name {
+            Some(crate::ast::WithOptionValue::Value(crate::ast::Value::String(value))) => value,
+            Some(crate::ast::WithOptionValue::ObjectName(name)) => {
+                crate::ast::display::AstDisplay::to_ast_string(&name)
+            }
+            _ => ::anyhow::bail!("expected String"),
         }
     };
     ($name:ident, bool) => {
-        if let Some(crate::ast::WithOptionValue::Value(crate::ast::Value::Boolean(value))) = $name {
-            value
-        } else if $name.is_none() {
+        match $name {
+            Some(crate::ast::WithOptionValue::Value(crate::ast::Value::Boolean(value))) => value,
             // Bools, if they have no '= value', are true.
-            true
-        } else {
-            ::anyhow::bail!("expected bool");
+            None => true,
+            _ => ::anyhow::bail!("expected bool"),
         }
     };
     ($name:ident, Interval) => {
-        if let Some(crate::ast::WithOptionValue::Value(Value::String(value))) = $name {
-            ::repr::strconv::parse_interval(&value)?
-        } else if let Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) = $name {
-            ::repr::strconv::parse_interval(&interval.value)?
-        } else {
-            ::anyhow::bail!("expected Interval");
+        match $name {
+            Some(crate::ast::WithOptionValue::Value(Value::String(value))) => {
+                ::repr::strconv::parse_interval(&value)?
+            }
+            Some(crate::ast::WithOptionValue::Value(Value::Interval(interval))) => {
+                ::repr::strconv::parse_interval(&interval.value)?
+            }
+            _ => ::anyhow::bail!("expected Interval"),
         }
     };
 }
 
 /// This macro accepts a struct definition and will generate it and a `try_from`
 /// method that takes a `Vec<WithOption>` which will extract and type check
-/// options based on the struct field names and types. Field names must match
-/// exactly the lowercased option name. Supported types are:
+/// options based on the struct field names and types.
+///
+/// The macro wraps all field types in an `Option` in the generated struct. The
+/// `TryFrom` implementation sets fields to `None` if they are not present in
+/// the provided `WITH` options.
+///
+/// Field names must match exactly the lowercased option name. Supported types
+/// are:
 ///
 /// - `String`: expects a SQL string (`WITH (name = "value")`) or identifier
 ///   (`WITH (name = text)`).
@@ -442,6 +469,7 @@ macro_rules! with_options {
     }
 }
 
+/// Normalizes option values that contain AWS connection parameters.
 pub fn aws_connect_info(
     options: &mut BTreeMap<String, Value>,
     region: Option<String>,
@@ -504,7 +532,7 @@ pub fn aws_connect_info(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashSet};
     use std::error::Error;
     use std::rc::Rc;
 
@@ -519,6 +547,7 @@ mod tests {
         let scx = &StatementContext {
             pcx: &PlanContext::default(),
             catalog: &DummyCatalog,
+            ids: HashSet::new(),
             param_types: Rc::new(RefCell::new(BTreeMap::new())),
         };
 

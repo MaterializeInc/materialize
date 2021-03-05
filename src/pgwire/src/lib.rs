@@ -23,11 +23,9 @@
 #![deny(clippy::as_conversions)]
 
 mod codec;
-mod id_alloc;
 mod message;
 mod protocol;
-mod secrets;
 mod server;
 
 pub use protocol::match_handshake;
-pub use server::Server;
+pub use server::{Config, Server, TlsConfig, TlsMode};

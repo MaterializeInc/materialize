@@ -35,6 +35,8 @@ services:
       - *materialized
     init: true
     command: -w4 --disable-telemetry
+    environment:
+      - MZ_DEV=1
 
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.3
@@ -116,7 +118,6 @@ services:
     depends_on: [schema-registry, control-center]
   control-center:
     image: confluentinc/cp-enterprise-control-center:5.5.3
-    restart: always
     depends_on: [zookeeper, kafka, connect]
     ports:
       - *control-center
@@ -257,4 +258,4 @@ mzworkflows:
           --run-seconds=864000
           -l /dev/stdout
           --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
-          --mz-url=postgresql://materialized:6875/materialize?sslmode=disable
+          --mz-url=postgresql://materialize@materialized:6875/materialize?sslmode=disable

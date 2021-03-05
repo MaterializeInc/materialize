@@ -46,7 +46,7 @@ the following will do the trick if you have the Confluent Platform 5.3+ CLI
 installed and configured:
 
 ```shell
-$ confluent local start schema-registry
+$ confluent local services schema-registry start
 ```
 
 `cargo test` supports many options for precisely controlling what tests get
@@ -315,7 +315,7 @@ run LocalStack:
 
 ```shell
 $ pip install localstack
-$ START_WEB=false SERVICES=kinesis localstack start
+$ START_WEB=false SERVICES=iam,sts,kinesis,s3 localstack start
 ```
 
 If you've previously installed LocalStack, be sure it is v0.11 or later.
@@ -374,7 +374,7 @@ will hamper development as often as it catches regressions.
 
 Nikhil's philosophy is that writing a battery of system tests is a much better
 use of time. Testdrive and sqllogictest have discovered numerous bugs with the
-fiddly bits of timestamp assignment in the dataflow package, even though that's
+fiddly bits of timestamp assignment in the coord package, even though that's
 not what they're designed for. It's true that it's much harder to ascertain what
 exactly went wrong–some of these failures presented as hangs in CI—but I wager
 that you still net save time by not writing overly complicated and brittle unit

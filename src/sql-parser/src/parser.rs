@@ -480,7 +480,7 @@ impl<'a> Parser<'a> {
         Ok(parse(self)?.into_expr())
     }
 
-    fn parse_function(&mut self, name: ObjectName) -> Result<Expr<Raw>, ParserError> {
+    fn parse_function(&mut self, name: UnresolvedObjectName) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let all = self.parse_keyword(ALL);
         let distinct = self.parse_keyword(DISTINCT);
@@ -662,7 +662,7 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: ObjectName::unqualified("date_part"),
+            name: UnresolvedObjectName::unqualified("date_part"),
             args: FunctionArgs::Args(vec![Expr::Value(Value::String(field)), expr]),
             filter: None,
             over: None,
@@ -711,7 +711,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
-            name: ObjectName::unqualified(name),
+            name: UnresolvedObjectName::unqualified(name),
             args: FunctionArgs::Args(exprs),
             filter: None,
             over: None,
@@ -933,7 +933,7 @@ impl<'a> Parser<'a> {
                 AT => {
                     self.expect_keywords(&[TIME, ZONE])?;
                     Ok(Expr::Function(Function {
-                        name: ObjectName(vec!["timezone".into()]),
+                        name: UnresolvedObjectName(vec!["timezone".into()]),
                         args: FunctionArgs::Args(vec![self.parse_subexpr(precedence)?, expr]),
                         filter: None,
                         over: None,
@@ -1318,6 +1318,7 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(SCHEMA) {
             self.parse_create_schema()
         } else if self.parse_keyword(TABLE) {
+            self.prev_token();
             self.parse_create_table()
         } else if self.parse_keyword(OR) || self.parse_keyword(VIEW) {
             self.prev_token();
@@ -1332,6 +1333,10 @@ impl<'a> Parser<'a> {
                 self.prev_token();
                 self.prev_token();
                 self.parse_create_view()
+            } else if self.parse_keyword(TABLE) {
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_table()
             } else {
                 self.expected(
                     self.peek_pos(),
@@ -1400,7 +1405,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_format(&mut self) -> Result<Format, ParserError> {
+    fn parse_format(&mut self) -> Result<Format<Raw>, ParserError> {
         let format = if self.parse_keyword(AVRO) {
             self.expect_keyword(USING)?;
             Format::Avro(self.parse_avro_schema()?)
@@ -1456,7 +1461,7 @@ impl<'a> Parser<'a> {
         Ok(format)
     }
 
-    fn parse_avro_schema(&mut self) -> Result<AvroSchema, ParserError> {
+    fn parse_avro_schema(&mut self) -> Result<AvroSchema<Raw>, ParserError> {
         let avro_schema = if self.parse_keywords(&[CONFLUENT, SCHEMA, REGISTRY]) {
             let url = self.parse_literal_string()?;
 
@@ -1492,7 +1497,19 @@ impl<'a> Parser<'a> {
             }
         } else if self.parse_keyword(SCHEMA) {
             self.prev_token();
-            AvroSchema::Schema(self.parse_schema()?)
+            let schema = self.parse_schema()?;
+            // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
+            // accept `WITH (...)` here.
+            let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
+                self.expect_keyword(WITH)?;
+                self.parse_with_options(false)?
+            } else {
+                vec![]
+            };
+            AvroSchema::Schema {
+                schema,
+                with_options,
+            }
         } else {
             return self.expected(
                 self.peek_pos(),
@@ -1513,7 +1530,7 @@ impl<'a> Parser<'a> {
         Ok(schema)
     }
 
-    fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
+    fn parse_envelope(&mut self) -> Result<Envelope<Raw>, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
@@ -1630,8 +1647,36 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_connector(&mut self) -> Result<Connector, ParserError> {
-        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3])? {
+    fn parse_connector(&mut self) -> Result<Connector<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES])? {
+            POSTGRES => {
+                self.expect_keyword(HOST)?;
+                let conn = self.parse_literal_string()?;
+                self.expect_keyword(PUBLICATION)?;
+                let publication = self.parse_literal_string()?;
+                self.expect_keyword(NAMESPACE)?;
+                let namespace = self.parse_literal_string()?;
+                self.expect_keyword(TABLE)?;
+                let table = self.parse_literal_string()?;
+
+                let (columns, constraints) = self.parse_columns()?;
+
+                if !constraints.is_empty() {
+                    return parser_err!(
+                        self,
+                        self.peek_prev_pos(),
+                        "Cannot specify constraints in postgres table definition"
+                    );
+                }
+
+                Ok(Connector::Postgres {
+                    conn,
+                    publication,
+                    namespace,
+                    table,
+                    columns,
+                })
+            }
             FILE => {
                 let path = self.parse_literal_string()?;
                 let compression = if self.parse_keyword(COMPRESSION) {
@@ -1664,16 +1709,38 @@ impl<'a> Parser<'a> {
                 Ok(Connector::AvroOcf { path })
             }
             S3 => {
-                // FROM S3 BUCKET '<bucket>' OBJECTS FROM SCAN MATCHING '<pattern>'
-                self.expect_keyword(BUCKET)?;
-                let bucket = self.parse_literal_string()?;
-                self.expect_keywords(&[OBJECTS, FROM, SCAN])?;
+                // FROM S3 OBJECTS FROM
+                // (SCAN BUCKET '<bucket>' | SQS NOTIFICATIONS '<channel>')+
+                // MATCHING '<pattern>'
+                self.expect_keywords(&[OBJECTS, FROM])?;
+                let mut key_sources = Vec::new();
+                while let Some(keyword) = self.parse_one_of_keywords(&[SCAN, SQS]) {
+                    match keyword {
+                        SCAN => {
+                            self.expect_keyword(BUCKET)?;
+                            let bucket = self.parse_literal_string()?;
+                            key_sources.push(S3KeySource::Scan { bucket });
+                        }
+                        SQS => {
+                            self.expect_keyword(NOTIFICATIONS)?;
+                            let queue = self.parse_literal_string()?;
+                            key_sources.push(S3KeySource::SqsNotifications { queue });
+                        }
+                        key => unreachable!("Keyword {} is not expected after OBJECTS FROM", key),
+                    }
+                    if !self.consume_token(&Token::Comma) {
+                        break;
+                    }
+                }
                 let pattern = if self.parse_keyword(MATCHING) {
                     Some(self.parse_literal_string()?)
                 } else {
                     None
                 };
-                Ok(Connector::S3 { bucket, pattern })
+                Ok(Connector::S3 {
+                    key_sources,
+                    pattern,
+                })
             }
             _ => unreachable!(),
         }
@@ -1747,10 +1814,13 @@ impl<'a> Parser<'a> {
             }
         };
 
+        let with_options = self.parse_opt_with_options()?;
+
         Ok(Statement::CreateIndex(CreateIndexStatement {
             name,
             on_name,
             key_parts,
+            with_options,
             if_not_exists,
         }))
     }
@@ -1801,7 +1871,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_data_type_option(&mut self) -> Result<SqlOption, ParserError> {
+    fn parse_data_type_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {
         let name = self.parse_identifier()?;
         self.expect_token(&Token::Eq)?;
         Ok(SqlOption::DataType {
@@ -1885,6 +1955,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_table(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
+        self.expect_keyword(TABLE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
@@ -1897,6 +1969,7 @@ impl<'a> Parser<'a> {
             constraints,
             with_options,
             if_not_exists,
+            temporary,
         }))
     }
 
@@ -2049,7 +2122,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_opt_with_sql_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
+    fn parse_opt_with_sql_options(&mut self) -> Result<Vec<SqlOption<Raw>>, ParserError> {
         if self.parse_keyword(WITH) {
             self.parse_options()
         } else {
@@ -2057,14 +2130,14 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_options(&mut self) -> Result<Vec<SqlOption>, ParserError> {
+    fn parse_options(&mut self) -> Result<Vec<SqlOption<Raw>>, ParserError> {
         self.expect_token(&Token::LParen)?;
         let options = self.parse_comma_separated(Parser::parse_sql_option)?;
         self.expect_token(&Token::RParen)?;
         Ok(options)
     }
 
-    fn parse_sql_option(&mut self) -> Result<SqlOption, ParserError> {
+    fn parse_sql_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {
         let name = self.parse_identifier()?;
         self.expect_token(&Token::Eq)?;
         let token = self.peek_token();
@@ -2148,9 +2221,7 @@ impl<'a> Parser<'a> {
                     Some(AlterIndexOptionsList::Reset(reset_options))
                 }
                 Some(SET) => {
-                    self.expect_token(&Token::LParen)?;
-                    let set_options = self.parse_comma_separated(Parser::parse_sql_option)?;
-                    self.expect_token(&Token::RParen)?;
+                    let set_options = self.parse_with_options(true)?;
 
                     Some(AlterIndexOptionsList::Set(set_options))
                 }
@@ -2334,9 +2405,9 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a SQL datatype (in the context of a CREATE TABLE statement for example)
-    fn parse_data_type(&mut self) -> Result<DataType, ParserError> {
+    fn parse_data_type(&mut self) -> Result<DataType<Raw>, ParserError> {
         let other = |name: &str| DataType::Other {
-            name: ObjectName::unqualified(name),
+            name: RawName::Name(UnresolvedObjectName::unqualified(name)),
             typ_mod: vec![],
         };
 
@@ -2350,7 +2421,7 @@ impl<'a> Parser<'a> {
                         "char"
                     };
                     DataType::Other {
-                        name: ObjectName::unqualified(name),
+                        name: RawName::Name(UnresolvedObjectName::unqualified(name)),
                         typ_mod: match self.parse_optional_precision()? {
                             Some(u) => vec![u],
                             None => vec![],
@@ -2358,7 +2429,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 VARCHAR => DataType::Other {
-                    name: ObjectName::unqualified("varchar"),
+                    name: RawName::Name(UnresolvedObjectName::unqualified("varchar")),
                     typ_mod: match self.parse_optional_precision()? {
                         Some(u) => vec![u],
                         None => vec![],
@@ -2368,8 +2439,9 @@ impl<'a> Parser<'a> {
 
                 // Number-like types
                 BIGINT => other("int8"),
+                SMALLINT => other("int2"),
                 DEC | DECIMAL => DataType::Other {
-                    name: ObjectName::unqualified("numeric"),
+                    name: RawName::Name(UnresolvedObjectName::unqualified("numeric")),
                     typ_mod: self.parse_typ_mod()?,
                 },
                 DOUBLE => {
@@ -2427,7 +2499,7 @@ impl<'a> Parser<'a> {
                 _ => {
                     self.prev_token();
                     DataType::Other {
-                        name: self.parse_object_name()?,
+                        name: RawName::Name(self.parse_object_name()?),
                         typ_mod: self.parse_typ_mod()?,
                     }
                 }
@@ -2435,7 +2507,7 @@ impl<'a> Parser<'a> {
             Some(Token::Ident(_)) => {
                 self.prev_token();
                 DataType::Other {
-                    name: self.parse_object_name()?,
+                    name: RawName::Name(self.parse_object_name()?),
                     typ_mod: self.parse_typ_mod()?,
                 }
             }
@@ -2531,7 +2603,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a possibly qualified, possibly quoted identifier, e.g.
     /// `foo` or `myschema."table"`
-    fn parse_object_name(&mut self) -> Result<ObjectName, ParserError> {
+    fn parse_object_name(&mut self) -> Result<UnresolvedObjectName, ParserError> {
         let mut idents = vec![];
         loop {
             idents.push(self.parse_identifier()?);
@@ -2539,7 +2611,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        Ok(ObjectName(idents))
+        Ok(UnresolvedObjectName(idents))
     }
 
     /// Parse a simple one-word identifier (possibly quoted, possibly a keyword)
@@ -2590,7 +2662,7 @@ impl<'a> Parser<'a> {
                     Ok(Expr::QualifiedWildcard(id_parts))
                 } else if self.consume_token(&Token::LParen) {
                     self.prev_token();
-                    self.parse_function(ObjectName(id_parts))
+                    self.parse_function(UnresolvedObjectName(id_parts))
                 } else {
                     Ok(Expr::Identifier(id_parts))
                 }
@@ -2629,7 +2701,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_map(&mut self) -> Result<DataType, ParserError> {
+    fn parse_map(&mut self) -> Result<DataType<Raw>, ParserError> {
         self.expect_token(&Token::LBracket)?;
         let key_type = Box::new(self.parse_data_type()?);
         self.expect_token(&Token::Op("=>".to_owned()))?;
@@ -2796,7 +2868,11 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::LParen)?;
         let query = self.parse_query()?;
         self.expect_token(&Token::RParen)?;
-        Ok(Cte { alias, query })
+        Ok(Cte {
+            alias,
+            query,
+            id: (),
+        })
     }
 
     /// Parse a "query body", which is an expression with roughly the
@@ -3282,6 +3358,27 @@ impl<'a> Parser<'a> {
                 join: Box::new(table_and_joins),
                 alias: self.parse_optional_table_alias()?,
             })
+        } else if self.consume_token(&Token::LBracket) {
+            let id = match self.next_token() {
+                Some(Token::Ident(id)) => id,
+                _ => return parser_err!(self, self.peek_prev_pos(), "expected id"),
+            };
+            self.expect_keyword(AS)?;
+            let name = self.parse_object_name()?;
+            // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
+            if name.0.len() != 3 {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "table name in square brackets must be fully qualified"
+                );
+            }
+            self.expect_token(&Token::RBracket)?;
+
+            Ok(TableFactor::Table {
+                name: RawName::Id(id, name),
+                alias: self.parse_optional_table_alias()?,
+            })
         } else {
             let name = self.parse_object_name()?;
             if self.consume_token(&Token::LParen) {
@@ -3292,7 +3389,7 @@ impl<'a> Parser<'a> {
                 })
             } else {
                 Ok(TableFactor::Table {
-                    name,
+                    name: RawName::Name(name),
                     alias: self.parse_optional_table_alias()?,
                 })
             }

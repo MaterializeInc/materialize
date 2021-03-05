@@ -1,0 +1,42 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License in the LICENSE file at the
+# root of this repository, or online at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+parse-statement
+SELECT * FROM [u123 AS materialize.public.foo]
+----
+SELECT * FROM [u123 AS materialize.public.foo]
+=>
+Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Id("u123", UnresolvedObjectName([Ident("materialize"), Ident("public"), Ident("foo")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT * FROM [u123 AS foo]
+----
+error: table name in square brackets must be fully qualified
+SELECT * FROM [u123 AS foo]
+                       ^
+
+parse-statement
+SELECT * FROM [u123]
+----
+error: Expected AS, found right square bracket
+SELECT * FROM [u123]
+                   ^
+
+parse-statement
+SELECT * FROM [u123 AS materialize.public.foo
+----
+error: Expected right square bracket, found EOF
+SELECT * FROM [u123 AS materialize.public.foo
+                                             ^

@@ -75,9 +75,9 @@ impl SexpParser {
     }
 
     fn is_atom_char(ch: char) -> bool {
-        ch >= 'a' && ch <= 'z'
-            || ch >= 'A' && ch <= 'Z'
-            || ch >= '0' && ch <= '9'
+        ('a'..='z').contains(&ch)
+            || ('A'..='Z').contains(&ch)
+            || ('0'..='9').contains(&ch)
             || ch == '-'
             || ch == '_'
             || ch == '#'
@@ -350,7 +350,7 @@ mod tests {
                     .collect::<Vec<(Row, isize)>>();
 
                 Ok(MirRelationExpr::Constant {
-                    rows,
+                    rows: Ok(rows),
                     typ: parse_type_list(nth(&s, 2)?)?,
                 })
             }
@@ -423,20 +423,8 @@ mod tests {
         match s {
             // TODO(justin): support more scalar exprs.
             Sexp::Atom(s) => match s.as_str() {
-                "true" => Ok(MirScalarExpr::literal(
-                    Ok(Datum::True),
-                    ColumnType {
-                        nullable: false,
-                        scalar_type: ScalarType::Bool,
-                    },
-                )),
-                "false" => Ok(MirScalarExpr::literal(
-                    Ok(Datum::False),
-                    ColumnType {
-                        nullable: false,
-                        scalar_type: ScalarType::Bool,
-                    },
-                )),
+                "true" => Ok(MirScalarExpr::literal(Ok(Datum::True), ScalarType::Bool)),
+                "false" => Ok(MirScalarExpr::literal(Ok(Datum::False), ScalarType::Bool)),
                 s => {
                     match s.chars().next() {
                         None => {
@@ -450,7 +438,7 @@ mod tests {
                         | Some('6') | Some('7') | Some('8') | Some('9') => {
                             Ok(MirScalarExpr::literal(
                                 Ok(Datum::Int64(s.parse::<i64>()?)),
-                                ScalarType::Int64.nullable(false),
+                                ScalarType::Int64,
                             ))
                         }
                         _ => Err(anyhow!("couldn't parse scalar: {}", s)),
