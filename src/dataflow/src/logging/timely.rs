@@ -239,7 +239,6 @@ pub fn construct<A: Allocate>(
                             },
 
                             TimelyEvent::Messages(event) => {
-                                // TODO: add the inverse for received messages
                                 if event.is_send {
                                     messages_sent_session.give((
                                         (
