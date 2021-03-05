@@ -1,6 +1,5 @@
 use chrono::TimeZone;
 use proptest::prelude::*;
-use proptest_derive::Arbitrary;
 use repr::{
     adt::decimal::Significand,
     adt::{array::ArrayDimension, interval::Interval},
@@ -10,7 +9,7 @@ use std::ops::Add;
 use uuid::Uuid;
 
 /// A type similar to [`Datum`] that can be proptest-generated.
-#[derive(Debug, PartialEq, Clone, Arbitrary)]
+#[derive(Debug, PartialEq, Clone)]
 enum PropertizedDatum {
     Null,
     Bool(bool),
@@ -19,45 +18,57 @@ enum PropertizedDatum {
     Float32(f32),
     Float64(f64),
 
-    #[proptest(
-        strategy = "add_arb_duration(chrono::NaiveDate::from_ymd(2000, 01, 01)).prop_map(PropertizedDatum::Date)"
-    )]
     Date(chrono::NaiveDate),
-    #[proptest(
-        strategy = "add_arb_duration(chrono::NaiveTime::from_hms(0, 0, 0)).prop_map(PropertizedDatum::Time)"
-    )]
     Time(chrono::NaiveTime),
-    #[proptest(
-        strategy = "add_arb_duration(chrono::NaiveDateTime::from_timestamp(0, 0)).prop_map(PropertizedDatum::Timestamp)"
-    )]
     Timestamp(chrono::NaiveDateTime),
-    #[proptest(
-        strategy = "add_arb_duration(chrono::Utc.timestamp(0, 0)).prop_map(PropertizedDatum::TimestampTz)"
-    )]
     TimestampTz(chrono::DateTime<chrono::Utc>),
 
-    #[proptest(strategy = "arb_interval().prop_map(PropertizedDatum::Interval)")]
     Interval(Interval),
-    #[proptest(strategy = "arb_significand().prop_map(PropertizedDatum::Decimal)")]
     Decimal(Significand),
 
     Bytes(Vec<u8>),
     String(String),
 
+    Array(PropertizedArray),
+
     // TODO: these variants need reimplementation of the corresponding types:
-    // Array(Array<'a>),
     // List(DatumList<'a>),
     // Map(DatumMap<'a>),
     JsonNull,
-
-    #[proptest(value = "PropertizedDatum::Uuid(Uuid::nil())")]
     Uuid(Uuid),
-
     Dummy,
 }
 
+fn arb_datum() -> BoxedStrategy<PropertizedDatum> {
+    let leaf = prop_oneof![
+        Just(PropertizedDatum::Null),
+        any::<bool>().prop_map(PropertizedDatum::Bool),
+        any::<i32>().prop_map(PropertizedDatum::Int32),
+        any::<i64>().prop_map(PropertizedDatum::Int64),
+        any::<f32>().prop_map(PropertizedDatum::Float32),
+        any::<f64>().prop_map(PropertizedDatum::Float64),
+        add_arb_duration(chrono::NaiveDate::from_ymd(2000, 01, 01))
+            .prop_map(PropertizedDatum::Date),
+        add_arb_duration(chrono::NaiveTime::from_hms(0, 0, 0)).prop_map(PropertizedDatum::Time),
+        add_arb_duration(chrono::NaiveDateTime::from_timestamp(0, 0))
+            .prop_map(PropertizedDatum::Timestamp),
+        add_arb_duration(chrono::Utc.timestamp(0, 0)).prop_map(PropertizedDatum::TimestampTz),
+        arb_interval().prop_map(PropertizedDatum::Interval),
+        arb_significand().prop_map(PropertizedDatum::Decimal),
+        prop::collection::vec(any::<u8>(), 1024).prop_map(PropertizedDatum::Bytes),
+        ".*".prop_map(PropertizedDatum::String),
+        Just(PropertizedDatum::JsonNull),
+        Just(PropertizedDatum::Uuid(Uuid::nil())),
+        Just(PropertizedDatum::Dummy)
+    ];
+    leaf.prop_recursive(3, 8, 16, |inner| {
+        prop_oneof!(arb_array(inner.clone()).prop_map(PropertizedDatum::Array))
+    })
+    .boxed()
+}
+
 fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
-    (1..8_usize)
+    (1..4_usize)
         .prop_map(|length| ArrayDimension {
             lower_bound: 1,
             length,
@@ -68,16 +79,17 @@ fn arb_array_dimension() -> BoxedStrategy<ArrayDimension> {
 #[derive(Debug, PartialEq, Clone)]
 struct PropertizedArray(Row, Vec<PropertizedDatum>);
 
-fn arb_propertized_array() -> BoxedStrategy<PropertizedArray> {
+fn arb_array(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<PropertizedArray> {
+    let element_strategy = element_strategy.clone();
     prop::collection::vec(
         arb_array_dimension(),
         1..(repr::adt::array::MAX_ARRAY_DIMENSIONS as usize),
     )
-    .prop_flat_map(|dimensions| {
+    .prop_flat_map(move |dimensions| {
         let n_elts: usize = dimensions.iter().map(|d| d.length).product();
         (
             Just(dimensions),
-            prop::collection::vec(any::<PropertizedDatum>(), n_elts),
+            prop::collection::vec(element_strategy.clone(), n_elts),
         )
     })
     .prop_map(|(dimensions, elements)| {
@@ -131,6 +143,10 @@ impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
             Decimal(s) => Datum::from(*s),
             Bytes(b) => Datum::from(&b[..]),
             String(s) => Datum::from(s.as_str()),
+            Array(PropertizedArray(row, _)) => {
+                let array = row.unpack_first().unwrap_array();
+                Datum::Array(array)
+            }
             JsonNull => Datum::JsonNull,
             Uuid(u) => Datum::from(*u),
             Dummy => Datum::Dummy,
@@ -140,7 +156,7 @@ impl<'a> Into<Datum<'a>> for &'a PropertizedDatum {
 
 proptest! {
     #[test]
-    fn array_packing_unpacks_correctly(array in arb_propertized_array()) {
+    fn array_packing_unpacks_correctly(array in arb_array(arb_datum())) {
         let PropertizedArray(row, elts) = array;
         let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
         let unpacked_datums: Vec<Datum<'_>> = row.unpack_first().unwrap_array().elements().iter().collect();
@@ -148,7 +164,7 @@ proptest! {
     }
 
     #[test]
-    fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(any::<PropertizedDatum>(), 1..100)) {
+    fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(arb_datum(), 1..100)) {
         let mut packer = RowPacker::new();
         let datums: Vec<Datum<'_>> = prop_datums.iter().map(|pd| pd.into()).collect();
         for d in datums.iter() {
