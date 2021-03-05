@@ -953,7 +953,7 @@ impl HirRelationExpr {
         }
     }
 
-    /// See the documentation for [`ScalarExpr::splice_parameters`].
+    /// See the documentation for [`HirScalarExpr::splice_parameters`].
     pub fn splice_parameters(&mut self, params: &[HirScalarExpr], depth: usize) {
         match self {
             HirRelationExpr::Join {

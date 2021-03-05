@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-
 # Copyright Materialize, Inc. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -8,22 +6,19 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
+
 #
-# lang.js.sh — run JavaScript language tests.
+# Regression test for https://github.com/MaterializeInc/materialize/issues/5983
+#
+# panic with self-join
+#
 
-set -euo pipefail
+$ set-sql-timeout duration=125ms
 
-cd "$(dirname "$0")/../../.."
+> CREATE TABLE t1 (f1 INTEGER);
 
-. misc/shlib/shlib.bash
+> CREATE TABLE t2 (f1 INTEGER, f2 INTEGER);
 
-cd test/lang/js
+> CREATE INDEX i2 ON t2(f1);
 
-yarn install --frozen-lockfile
-
-ci_init
-
-ci_try yarn run fmt-check
-ci_try yarn test
-
-ci_status_report
+> SELECT * FROM t1 WHERE f1 IN (SELECT a1 . f2 FROM t2 AS a1, t2 AS a2 WHERE a2.f1 = a1.f1);
