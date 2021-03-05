@@ -75,7 +75,7 @@ Applied Fixpoint { transforms: [NonNullable, FoldConstants, PredicatePushdown, J
 | | keys = ((#0), (#1))
 
 ====
-No change: FoldConstants, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, Filter, Demand, LiteralLifting], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants
+No change: FoldConstants, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants, Filter, Demand, LiteralLifting], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants
 ====
 Final:
 %0 =

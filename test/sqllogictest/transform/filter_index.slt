@@ -43,6 +43,55 @@ select b, c from foo where a = 5
 this
 -4.400
 
+# Test that a query that joins to a (select literal) gets planned as a filter
+# and not a join.
+query T multiline
+explain plan for select b, c from foo, (select 5 as a) const where foo.a = const.a
+----
+%0 =
+| Get materialize.public.foo (u1)
+| Filter (#0 = 5)
+| Project (#1, #2)
+
+EOF
+
+query TR
+select b, c from foo, (select 5 as a) const where foo.a = const.a
+----
+this
+-4.400
+
+# Test that equality with a literal predicate gets pushed down to both inputs
+# even when one of the join constraints is an expression as opposed to a column reference.
+query T multiline
+explain plan for select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
+----
+%0 =
+| Get materialize.public.foo (u1)
+| Filter (#0 = 3)
+| ArrangeBy (#0)
+
+%1 =
+| Get materialize.public.bar (u3)
+| Filter !(isnull(abs(#0))), (3 = abs(#0))
+
+%2 =
+| Join %0 %1 (= #0 abs(#3))
+| | implementation = Differential %1 %0.(#0)
+| | demand = (#0..#5)
+
+EOF
+
+query ITRITR
+select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
+----
+3
+just
+11.300
+-3
+is
+-1.0000
+
 statement ok
 create index foo_idx on foo(a);
 

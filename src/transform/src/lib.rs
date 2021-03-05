@@ -245,6 +245,8 @@ impl Default for Optimizer {
                 transforms: vec![
                     Box::new(crate::projection_lifting::ProjectionLifting),
                     Box::new(crate::join_implementation::JoinImplementation),
+                    Box::new(crate::column_knowledge::ColumnKnowledge),
+                    Box::new(crate::reduction::FoldConstants),
                     Box::new(crate::fusion::filter::Filter),
                     Box::new(crate::demand::Demand),
                     Box::new(crate::map_lifting::LiteralLifting),

@@ -88,25 +88,7 @@ impl Join {
             *demand = None;
             *implementation = expr::JoinImplementation::Unimplemented;
 
-            // Join variables may not be an equivalence class. Better ensure!
-            for index in 1..equivalences.len() {
-                for inner in 0..index {
-                    if equivalences[index]
-                        .iter()
-                        .any(|pair| equivalences[inner].contains(pair))
-                    {
-                        let to_extend = std::mem::replace(&mut equivalences[index], Vec::new());
-                        equivalences[inner].extend(to_extend);
-                    }
-                }
-            }
-            equivalences.retain(|v| !v.is_empty());
-
-            // put join constraints in a canonical format.
-            for equivalence in equivalences.iter_mut() {
-                equivalence.sort();
-                equivalence.dedup();
-            }
+            expr::canonicalize::canonicalize_equivalences(equivalences);
         }
     }
 }

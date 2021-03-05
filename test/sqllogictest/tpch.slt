@@ -1592,7 +1592,7 @@ ORDER BY
 | ArrangeBy (#0, #1)
 
 %11 =
-| Join %7 %10 (= #11 #25) (= #12 #26)
+| Join %7 %10 (= #0 #26) (= #11 #25)
 | | implementation = Differential %7 %10.(#0, #1)
 | | demand = (#0, #13, #28)
 | Filter ((i32todec(#13) * 1000dec) > #28)

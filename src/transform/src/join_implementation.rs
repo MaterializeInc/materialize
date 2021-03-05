@@ -86,10 +86,7 @@ impl JoinImplementation {
         } = relation
         {
             // Canonicalize the equivalence classes
-            for equivalence in equivalences.iter_mut() {
-                equivalence.sort();
-            }
-            equivalences.sort();
+            expr::canonicalize::canonicalize_equivalences(equivalences);
 
             let input_types = inputs.iter().map(|i| i.typ()).collect::<Vec<_>>();
             // Common information of broad utility.

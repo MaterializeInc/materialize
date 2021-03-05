@@ -166,10 +166,8 @@ impl RedundantJoin {
                         for expr in equivalence.iter_mut() {
                             expr.permute(&projection[..]);
                         }
-                        equivalence.sort();
-                        equivalence.dedup();
                     }
-                    equivalences.retain(|es| es.len() > 1);
+                    expr::canonicalize::canonicalize_equivalences(equivalences);
 
                     // Unset demand and implementation, as irrevocably hosed by this transformation.
                     *demand = None;
