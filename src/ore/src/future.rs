@@ -151,8 +151,8 @@ pub trait OreStreamExt: Stream {
     /// Flattens a stream of streams into one continuous stream, but does not
     /// exhaust each incoming stream before moving on to the next.
     ///
-    /// In other words, this is a combination of [`Stream::flatten`] and
-    /// [`Stream::select`]. The streams may be interleaved in any order, but
+    /// In other words, this is a combination of [`futures::stream::Flatten`] and
+    /// [`futures::stream::select`]. The streams may be interleaved in any order, but
     /// the ordering within one of the underlying streams is preserved.
     fn select_flatten(self) -> SelectFlatten<Self>
     where
@@ -172,7 +172,7 @@ impl<S: Stream> OreStreamExt for S {}
 pub trait OreTryStreamExt: TryStream {
     /// Returns the next element of the stream or EOF.
     ///
-    /// This is like [`Stream::try_next`], but `try_recv` treats EOF as an
+    /// This is like [`futures::stream::TryStreamExt::try_next`], but `try_recv` treats EOF as an
     /// error, and so does not need to wrap the next item in an option type.
     fn try_recv(&mut self) -> TryRecv<'_, Self>
     where
@@ -201,7 +201,7 @@ where
     }
 }
 
-/// The stream returned by [`StreamExt::select_flatten`].
+/// The stream returned by [`OreStreamExt::select_flatten`].
 #[derive(Debug)]
 pub struct SelectFlatten<S>
 where
@@ -292,7 +292,7 @@ where
     })
 }
 
-/// The future returned by [`StreamExt::try_recv`].
+/// The future returned by [`OreTryStreamExt::try_recv`].
 #[derive(Debug)]
 pub struct TryRecv<'a, S>(&'a mut S);
 
@@ -326,7 +326,7 @@ pub trait OreSinkExt<T>: Sink<T> {
         Box::new(self)
     }
 
-    /// Like [`SinkExt::send`], but does not flush the sink after enqueuing
+    /// Like [`futures::sink::SinkExt::send`], but does not flush the sink after enqueuing
     /// `item`.
     fn enqueue(&mut self, item: T) -> Enqueue<Self, T> {
         Enqueue {
@@ -380,7 +380,7 @@ pub fn dev_null<T, E>() -> DevNull<T, E> {
 /// A sink that consumes its input and sends it nowhere.
 ///
 /// Primarily useful as a base sink when folding multiple sinks into one using
-/// [`futures::Sink::fanout`].
+/// [`futures::sink::SinkExt::fanout`].
 #[derive(Debug)]
 pub struct DevNull<T, E>(PhantomData<T>, PhantomData<E>);
 

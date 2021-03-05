@@ -141,7 +141,7 @@ where
     /// assert!(![0.0, 1.0, f32::NAN].iter().mz_is_sorted_by(|a, b| a.partial_cmp(b)));
     /// ```
     ///
-    /// [`is_sorted`]: IteratorExt::is_sorted
+    /// [`std::iter::Iterator::is_sorted`]: IteratorExt::is_sorted
     fn mz_is_sorted_by<F>(mut self, mut compare: F) -> bool
     where
         Self: Sized,
