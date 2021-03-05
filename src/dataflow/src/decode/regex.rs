@@ -18,7 +18,8 @@ use timely::dataflow::{Scope, Stream};
 use dataflow_types::{DataflowError, DecodeError};
 use repr::{Datum, Diff, Row, Timestamp};
 
-use crate::{operator::CollectionExt, source::SourceOutput};
+use crate::operator::CollectionExt;
+use crate::source::SourceOutput;
 
 pub fn regex<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
