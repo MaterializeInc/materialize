@@ -22,6 +22,7 @@ use self::func::{AggregateFunc, TableFunc};
 use crate::explain::Explanation;
 use crate::{DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr};
 
+pub mod canonicalize;
 pub mod func;
 pub mod join_input_mapper;
 

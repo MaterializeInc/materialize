@@ -22,6 +22,13 @@ use repr::RelationType;
 /// 2) It has a position relative to the specific input it came from (local)
 /// This utility focuses on taking expressions that are in terms of
 /// the local input and re-expressing them in global terms and vice versa.
+///
+/// Methods in this class that take an argument `equivalences` are only
+/// guaranteed to return a correct answer if equivalence classes are in
+/// canonical form.
+/// (See [`canonicalize::canonicalize_equivalences`].)
+///
+/// [`canonicalize::canonicalize_equivalences`]: expr::canonicalize::fuse_dedup_equivalences
 #[derive(Debug)]
 pub struct JoinInputMapper {
     /// The number of columns per input. All other fields in this struct are
