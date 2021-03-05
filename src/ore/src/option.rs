@@ -19,6 +19,7 @@
 
 //! Option utilities.
 
+use std::fmt::Display;
 use std::ops::Deref;
 
 /// Extension methods for [`std::option::Option`].
@@ -43,5 +44,71 @@ impl<T> OptionExt<T> for Option<T> {
         T::Target: ToOwned,
     {
         self.as_ref().map(|x| x.deref().to_owned())
+    }
+}
+
+/// Extension methods for things, like `[Option]`, that are displayable if a default value is supplied.
+pub trait OrDisplay<T, D> {
+    /// The type returned by the [`or_display`] function
+    type Displayable: Display;
+    /// Wrap the object in a type that can be displayed, by providing it with a default display value.
+    fn or_display(self, default: D) -> Self::Displayable;
+}
+
+#[derive(Debug)]
+/// A wrapper for `[Option]`, which is displayable if
+/// a default display value is provided.
+pub struct DisplayableOption<T, D> {
+    inner: Option<T>,
+    default: D,
+}
+
+impl<T, D> DisplayableOption<T, D> {
+    /// Consume the `DisplayableOption` and return its constituent parts
+    pub fn into_parts(self) -> (Option<T>, D) {
+        (self.inner, self.default)
+    }
+}
+
+impl<T, D> Display for DisplayableOption<T, D>
+where
+    D: Display,
+    T: Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.inner {
+            Some(t) => write!(f, "{}", t),
+            None => write!(f, "{}", self.default),
+        }
+    }
+}
+
+impl<T, D> OrDisplay<T, D> for Option<T>
+where
+    D: Display,
+    T: Display,
+{
+    type Displayable = DisplayableOption<T, D>;
+
+    fn or_display(self, default: D) -> Self::Displayable {
+        DisplayableOption {
+            inner: self,
+            default,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::option::OrDisplay;
+    #[test]
+    fn test_displayable_option() {
+        let mut maybe = Some(42);
+        let s = format!("Value is {}", maybe.or_display("unknown"));
+        assert_eq!(&s, "Value is 42");
+
+        maybe = None;
+        let s = format!("Value is {}", maybe.or_display("unknown"));
+        assert_eq!(&s, "Value is unknown");
     }
 }
