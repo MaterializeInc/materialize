@@ -349,6 +349,9 @@ impl Trace {
     }
 
     /// Checks if there are finished WAL segments and if so, forms them into batches.
+    ///
+    /// TODO: need to check the invariant that every subsequent log segment starts
+    /// at the most recent `Batch`'s upper bound.
     fn consume_wal(&mut self) -> Result<(), anyhow::Error> {
         let finished_segments = self.find_finished_wal_segments()?;
 
@@ -358,6 +361,7 @@ impl Trace {
             // We only delete the WAL segment after the new `Batch` has been
             // durably persisted.
             // TODO: Need to fsync wal directory here to persist the removal.
+            // Maybe we should do all of the deletes at once.
             fs::remove_file(&segment).with_context(|| {
                 format!(
                     "failed to remove consumed wal segment {}",
@@ -428,6 +432,7 @@ impl Trace {
     ///
     /// TODO: this function needs to think harder to only keep one `Batch` per timestamp
     /// and assure that a contiguous range of timestamps is covered.
+    /// More importantly, the range of times has to be from [ts::min -> upper)
     fn find_batches(&self) -> Result<Vec<Batch>, anyhow::Error> {
         lazy_static! {
             static ref BATCH_REGEX: Regex = Regex::new("^batch-[0-9]+-[0-9]+$").unwrap();

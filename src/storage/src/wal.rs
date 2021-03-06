@@ -18,6 +18,7 @@
 /// that no messages at t < closet_timestamp will be added to the log) to the end of the file.
 /// Each log segment has to start and end with a timestamp progress message so that we can
 /// derive lower and upper bounds for the timestamps contained in that log segment.
+
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
@@ -133,6 +134,9 @@ impl WriteAheadLog {
     }
 
     /// Write a set of (Row, Timestamp, Diff) updates to the write-ahead log.
+    ///
+    /// TODO: Invariant that needs to hold here: every timestamp in each update needs
+    /// to be >= last_closed_timestamp
     fn write(&mut self, updates: &[Update]) -> Result<(), anyhow::Error> {
         // TODO: The allocation discipline for writes could probably be a lot
         // better. Each WAL writer could keep a buffer that it writes into
@@ -157,6 +161,7 @@ impl WriteAheadLog {
     ///
     /// Optionally also switch to a new log segment file if the current log segment file
     /// grows too large.
+    /// TODO: Invariant that needs to be checked here: timestamp > last_closed_timestamp
     fn write_progress(&mut self, timestamp: Timestamp) -> Result<(), anyhow::Error> {
         self.write_progress_inner(timestamp)?;
 
@@ -223,6 +228,13 @@ impl WriteAheadLog {
     }
 
     /// Continue writing to the write-ahead log after a restart.
+    ///
+    /// TODO: the important invariants after restart for the WAL are:
+    /// * potentially many finished segments
+    /// * the finished segments form a prefix of sequence numbers [low_seq_num, high_seq_num)
+    /// * ie no duplicate or missing sequence numbers + low_seq_num >= 0
+    /// * the unfinished wal segment is at `high_seq_number`
+    /// * need to recover `last_closed_timestamp` from the unfinished wal segment
     fn resume(id: GlobalId, base_path: PathBuf) -> Result<WriteAheadLog, anyhow::Error> {
         let mut unfinished_file: Option<(PathBuf, usize)> = None;
         // List out all of the files in the write-ahead log directory. There should
