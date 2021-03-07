@@ -2793,12 +2793,16 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> 
         Value::Number(s) => {
             let d: Decimal = s.parse()?;
             if d.scale() == 0 {
-                match d.significand().try_into() {
-                    Ok(n) => (Datum::Int32(n), ScalarType::Int32),
-                    Err(_) => (
-                        Datum::from(d.significand()),
+                let significand = d.significand();
+                if let Ok(n) = significand.try_into() {
+                    (Datum::Int32(n), ScalarType::Int32)
+                } else if let Ok(n) = significand.try_into() {
+                    (Datum::Int64(n), ScalarType::Int64)
+                } else {
+                    (
+                        Datum::from(significand),
                         ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
-                    ),
+                    )
                 }
             } else {
                 (
