@@ -40,7 +40,7 @@ CREATE MATERIALIZED VIEW jsonified_kafka_source AS
   FROM (
       SELECT convert_from(data, 'utf8') AS data
       FROM json_kafka
-  )
+  );
 ```
 
 ### Caching records to local disk
