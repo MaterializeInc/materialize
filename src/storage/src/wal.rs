@@ -7,29 +7,40 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-/// A Write-ahead log (WAL).
-///
-/// `WriteAheadLogs` is a map from relation ids, to the on-disk `WriteAheadLog` where
-/// we write down all of the updates in that relation as they occur.
-///
-/// Each `WriteAheadLog` lives in its own directory and consists of one or more files, or log
-/// segments. Only one log segment is open for writing, and we append new data updates of the form
-/// `(Row, timestamp, diff)` and timestamp progress messages (basically a message that indicates
-/// that no messages at t < closet_timestamp will be added to the log) to the end of the file.
-/// Each log segment has to start and end with a timestamp progress message so that we can
-/// derive lower and upper bounds for the timestamps contained in that log segment.
+//! A Write-ahead log (WAL).
+//!
+//! `WriteAheadLogs` is a map from relation ids, to the on-disk `WriteAheadLog` where
+//! we write down all of the updates in that relation as they occur.
+//!
+//! Each `WriteAheadLog` lives in its own directory and consists of one or more files, or log
+//! segments. Only one log segment is open for writing, and we append new data updates of the form
+//! `(Row, timestamp, diff)` and timestamp progress messages (basically a message that indicates
+//! that no messages at t < closet_timestamp will be added to the log) to the end of the file.
+//! Each log segment has to start and end with a timestamp progress message so that we can
+//! derive lower and upper bounds for the timestamps contained in that log segment.
 
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
-use byteorder::{NetworkEndian, WriteBytesExt};
+use byteorder::{NetworkEndian, ReadBytesExt, WriteBytesExt};
+use log::error;
+use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 
 use dataflow_types::Update;
 use expr::GlobalId;
 use repr::{Row, Timestamp};
+
+// Data stored in Batches and log segment files.
+#[derive(Debug, PartialEq)]
+pub enum Message {
+    // (Row, time, diff) tuples
+    Data(Update),
+    // Statements about which timestamps we might still receive data at.
+    Progress(Timestamp),
+}
 
 /// Limit at which we will make a new segment.
 ///
@@ -70,6 +81,8 @@ pub struct WriteAheadLog {
     /// Total number of bytes written to this write ahead log.
     /// TODO: this number is not accurate across restarts.
     total_bytes_written: usize,
+    /// Last timestamp closed in this write-ahead log.
+    last_closed_timestamp: Timestamp,
 }
 
 impl WriteAheadLog {
@@ -97,6 +110,7 @@ impl WriteAheadLog {
             current_sequence_number: 0,
             current_bytes_written: 0,
             total_bytes_written: 0,
+            last_closed_timestamp: TimelyTimestamp::minimum(),
         };
 
         // Write a timestamp message here so we can establish `lower` for the first log
@@ -134,10 +148,18 @@ impl WriteAheadLog {
     }
 
     /// Write a set of (Row, Timestamp, Diff) updates to the write-ahead log.
-    ///
-    /// TODO: Invariant that needs to hold here: every timestamp in each update needs
-    /// to be >= last_closed_timestamp
     fn write(&mut self, updates: &[Update]) -> Result<(), anyhow::Error> {
+        // Check that all updates have a timestamp valid timestamp that is >=
+        // the last closed timestamp.
+        for update in updates {
+            if update.timestamp < self.last_closed_timestamp {
+                bail!(
+                    "Invalid update timestamp {} last closed timestamp {}",
+                    update.timestamp,
+                    self.last_closed_timestamp,
+                );
+            }
+        }
         // TODO: The allocation discipline for writes could probably be a lot
         // better. Each WAL writer could keep a buffer that it writes into
         // for everything and fall back to allocating stuff if we run out of
@@ -161,8 +183,16 @@ impl WriteAheadLog {
     ///
     /// Optionally also switch to a new log segment file if the current log segment file
     /// grows too large.
-    /// TODO: Invariant that needs to be checked here: timestamp > last_closed_timestamp
     fn write_progress(&mut self, timestamp: Timestamp) -> Result<(), anyhow::Error> {
+        // This timestamp needs to be greater than the last closed timestamp.
+        if timestamp <= self.last_closed_timestamp {
+            bail!(
+                "Invalid attempt to close timestamp {} last closed {}",
+                timestamp,
+                self.last_closed_timestamp
+            );
+        }
+
         self.write_progress_inner(timestamp)?;
 
         // We only want to rotate the log segments at progress messages
@@ -234,7 +264,6 @@ impl WriteAheadLog {
     /// * the finished segments form a prefix of sequence numbers [low_seq_num, high_seq_num)
     /// * ie no duplicate or missing sequence numbers + low_seq_num >= 0
     /// * the unfinished wal segment is at `high_seq_number`
-    /// * need to recover `last_closed_timestamp` from the unfinished wal segment
     fn resume(id: GlobalId, base_path: PathBuf) -> Result<WriteAheadLog, anyhow::Error> {
         let mut unfinished_file: Option<(PathBuf, usize)> = None;
         // List out all of the files in the write-ahead log directory. There should
@@ -282,6 +311,24 @@ impl WriteAheadLog {
 
         if let Some((unfinished_file, sequence_number)) = unfinished_file {
             // Lets start writing to the previously created file.
+            let messages = read_segment(&unfinished_file)?;
+            let mut last_closed_timestamp = None;
+            for message in messages {
+                match message {
+                    Message::Data(_) => continue,
+                    Message::Progress(timestamp) => {
+                        last_closed_timestamp = Some(timestamp);
+                    }
+                }
+            }
+
+            if last_closed_timestamp.is_none() {
+                bail!(
+                    "unable to determine last closed timestamp from unfinished log segment {}",
+                    unfinished_file.display()
+                );
+            }
+
             let file = open_log_segment(&unfinished_file, false)?;
 
             let ret = Self {
@@ -291,6 +338,7 @@ impl WriteAheadLog {
                 current_sequence_number: sequence_number,
                 current_bytes_written: 0,
                 total_bytes_written: 0,
+                last_closed_timestamp: last_closed_timestamp.expect("known to exist"),
             };
 
             Ok(ret)
@@ -444,4 +492,119 @@ fn open_log_segment(path: &Path, create_new: bool) -> Result<File, anyhow::Error
             path.display()
         )
     })
+}
+
+/// Try to decode the next message from `buf` starting at `offset`.
+///
+/// Returns a Message and the next offset to read from if successful, or None.
+/// TODO: make this API cleaner.
+fn read_message(buf: &[u8], mut offset: usize) -> Option<(Message, usize)> {
+    if offset >= buf.len() {
+        return None;
+    }
+
+    // Let's start by only looking at the buffer at the offset.
+    let (_, data) = buf.split_at(offset);
+
+    if data.len() < 12 {
+        error!(
+            "invalid offset while reading file: {}. Expected at least 12 more bytes have {}",
+            offset,
+            data.len()
+        );
+        return None;
+    }
+
+    // Let's read the header first
+    let mut cursor = Cursor::new(&data);
+
+    let is_progress = cursor.read_u32::<NetworkEndian>().unwrap();
+
+    if is_progress != 0 {
+        // If this is a progress message let's seal a new
+        // set of updates.
+
+        // Lets figure out the time bound.
+        let timestamp = cursor.read_u64::<NetworkEndian>().unwrap();
+        // Advance the offset past what we've read.
+        offset += 12;
+
+        Some((Message::Progress(timestamp), offset))
+    } else {
+        // Let's make sure we have an appropriate number of bytes in the buffer.
+        if data.len() < 24 {
+            error!(
+                "invalid offset while reading file: {}. Expected at least 24 more bytes have {}",
+                offset,
+                data.len()
+            );
+            return None;
+        }
+        // Otherwise lets read the data.
+        let timestamp = cursor.read_u64::<NetworkEndian>().unwrap();
+        let diff = cursor.read_i64::<NetworkEndian>().unwrap() as isize;
+        let len = cursor.read_u32::<NetworkEndian>().unwrap() as usize;
+
+        assert!(diff != 0);
+
+        // Grab the next len bytes after the 24 byte length header, and turn
+        // it into a vector so that we can extract things from it as a Row.
+        // TODO: could we avoid the extra allocation here?
+        let (_, rest) = data.split_at(24);
+
+        if rest.len() < len {
+            error!(
+                "invalid row length: expected {} bytes but only have {} remaining",
+                len,
+                rest.len()
+            );
+            return None;
+        }
+        let row = rest[..len].to_vec();
+
+        let row = unsafe { Row::new(row) };
+        // Update the offset to account for the data we just read
+        offset = offset + 24 + len;
+        Some((
+            Message::Data(Update {
+                row,
+                timestamp,
+                diff,
+            }),
+            offset,
+        ))
+    }
+}
+
+/// Iterator through a set of persisted messages.
+#[derive(Debug)]
+pub struct LogSegmentIter {
+    /// Underlying data from which we read the records.
+    pub data: Vec<u8>,
+    /// Offset into the data.
+    pub offset: usize,
+}
+
+impl Iterator for LogSegmentIter {
+    type Item = Message;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((message, next_offset)) = read_message(&self.data, self.offset) {
+            self.offset = next_offset;
+            Some(message)
+        } else {
+            None
+        }
+    }
+}
+
+impl LogSegmentIter {
+    pub fn new(data: Vec<u8>) -> Self {
+        Self { data, offset: 0 }
+    }
+}
+
+pub fn read_segment(path: &Path) -> Result<Vec<Message>, anyhow::Error> {
+    let data = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    Ok(LogSegmentIter::new(data).collect())
 }

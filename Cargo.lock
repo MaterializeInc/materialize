@@ -3939,6 +3939,7 @@ dependencies = [
  "log",
  "regex",
  "repr",
+ "timely",
  "tokio",
 ]
 

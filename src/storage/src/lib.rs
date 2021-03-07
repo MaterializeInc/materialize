@@ -109,5 +109,5 @@ mod compacter;
 // The WAL writer + encoding definitions live in the WAL module.
 mod wal;
 
-pub use compacter::{Compacter, CompacterMessage, Message, Trace};
-pub use wal::WriteAheadLogs;
+pub use compacter::{Compacter, CompacterMessage, Trace};
+pub use wal::{Message, WriteAheadLogs};
