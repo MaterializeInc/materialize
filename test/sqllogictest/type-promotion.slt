@@ -63,6 +63,39 @@ SELECT 'true' OR 'false'
 ----
 true
 
+# Int literals less than i32::MAX/MIN are int4
+query T
+SELECT pg_typeof(100)
+----
+integer
+
+query T
+SELECT pg_typeof(-100)
+----
+integer
+
+# Int literals that exceed i32, are int8
+query T
+SELECT pg_typeof(2147483648)
+----
+bigint
+
+query T
+SELECT pg_typeof(-2147483649)
+----
+bigint
+
+# Int literals that exceed i64 are numeric
+query T
+SELECT pg_typeof(9223372036854775808)
+----
+numeric(38,0)
+
+query T
+SELECT pg_typeof(-9223372036854775809)
+----
+numeric(38,0)
+
 # Use comparison ops to check for type promotion
 
 # Check int4 promotes to numeric
