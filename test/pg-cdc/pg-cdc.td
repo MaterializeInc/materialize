@@ -135,6 +135,13 @@ Source error: File IO: table not found in the upstream catalog
 ! SELECT * FROM column_type_mismatch;
 internal error: column 0 is not of expected type ColumnType { nullable: true, scalar_type: Timestamp }: Int32(1)
 
+> CREATE MATERIALIZED SOURCE "extra_column"
+  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (f1 INTEGER, f2 TEXT, f3 INTEGER);
+
+# ! SELECT f3 IS NULL FROM extra_column;
+# some-error-expected-here
+
 #
 # This succeeds on the MZ side. An error is thrown on the Postgres side if updates are attempted against such a table
 #
