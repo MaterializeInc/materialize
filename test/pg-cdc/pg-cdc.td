@@ -12,6 +12,10 @@
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
+
+CREATE USER no_replication WITH PASSWORD 'no_replication';
+ALTER USER no_replication WITH LOGIN;
+
 ALTER USER postgres WITH replication;
 DROP PUBLICATION IF EXISTS mz_source;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -93,6 +97,13 @@ Source error: File IO: db error: FATAL: role "no_such_user" does not exist
 ! SELECT * FROM no_such_password;
 internal error: column 0 is not of expected type ColumnType { nullable: true, scalar_type: Timestamp }: Int32(1)
 
+> CREATE MATERIALIZED SOURCE "no_replication"
+  FROM POSTGRES HOST 'host=postgres port=5432 user=no_replication password=no_replication dbname=postgres'
+  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (f1 TIMESTAMP, f2 TEXT);
+
+! SELECT * FROM no_replication;
+Source error: File IO: db error: FATAL: must be superuser or replication role to start walsender
+
 > CREATE MATERIALIZED SOURCE "no_such_dbname"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=no_such_dbname'
   PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (f1 TIMESTAMP, f2 TEXT);
@@ -135,20 +146,20 @@ Source error: File IO: table not found in the upstream catalog
 ! SELECT * FROM column_type_mismatch;
 internal error: column 0 is not of expected type ColumnType { nullable: true, scalar_type: Timestamp }: Int32(1)
 
-> CREATE MATERIALIZED SOURCE "extra_column"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (f1 INTEGER, f2 TEXT, f3 INTEGER);
+#> CREATE MATERIALIZED SOURCE "extra_column"
+#  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+#  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (f1 INTEGER, f2 TEXT, f3 INTEGER);
 
 # ! SELECT f3 IS NULL FROM extra_column;
 # some-error-expected-here
 
-#
-# This succeeds on the MZ side. An error is thrown on the Postgres side if updates are attempted against such a table
-#
-
 > CREATE MATERIALIZED SOURCE "no_replica_identity"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'no_replica_identity' (f1 INTEGER);
+
+#
+# This succeeds on the Mz side but updates are prevented on the Postgres side
+#
 
 > SELECT * FROM no_replica_identity;
 1
@@ -397,3 +408,10 @@ true
 
 > SELECT COUNT(*) = 0 FROM join_view;
 true
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP PUBLICATION mz_source;
+INSERT INTO pk_table VALUES (99999);
+
+! SELECT COUNT(*) = 0 FROM pk_table;
+Source error: File IO: db error: ERROR: publication "mz_source" does not exist
