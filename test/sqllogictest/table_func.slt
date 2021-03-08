@@ -84,7 +84,7 @@ EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
 | Constant ()
 
 %1 =
-| CallTable generate_series(-(2), 2)
+| CallTable generate_series(-2, 2)
 
 %2 =
 | InnerLateralJoin %0 %1 on true
