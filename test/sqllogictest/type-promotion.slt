@@ -63,7 +63,7 @@ SELECT 'true' OR 'false'
 ----
 true
 
-# Int literals less than i32::MAX/MIN are int4
+# Int literals <=32::MAX/>= MIN are int4
 query T
 SELECT pg_typeof(100)
 ----
@@ -74,7 +74,17 @@ SELECT pg_typeof(-100)
 ----
 integer
 
-# Int literals that exceed i32, are int8
+query T
+SELECT pg_typeof(2147483647)
+----
+integer
+
+query T
+SELECT pg_typeof(-2147483648)
+----
+integer
+
+# Int literals that exceed i32 are int8
 query T
 SELECT pg_typeof(2147483648)
 ----
@@ -82,6 +92,16 @@ bigint
 
 query T
 SELECT pg_typeof(-2147483649)
+----
+bigint
+
+query T
+SELECT pg_typeof(9223372036854775807)
+----
+bigint
+
+query T
+SELECT pg_typeof(-9223372036854775808)
 ----
 bigint
 
