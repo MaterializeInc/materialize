@@ -22,7 +22,7 @@
 //! More information about builtin system tables and types can be found in
 //! https://materialize.com/docs/sql/system-tables/.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use lazy_static::lazy_static;
 use postgres_types::{Kind, Type};
@@ -539,6 +539,14 @@ pub const MZ_SOURCE_INFO: BuiltinLog = BuiltinLog {
     variant: LogVariant::Materialized(MaterializedLog::SourceInfo),
     id: GlobalId::System(3026),
     index_id: GlobalId::System(3027),
+};
+
+pub const MZ_MESSAGE_COUNTS: BuiltinLog = BuiltinLog {
+    name: "mz_message_counts",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Timely(TimelyLog::Messages),
+    id: GlobalId::System(3028),
+    index_id: GlobalId::System(3029),
 };
 
 lazy_static! {
@@ -1256,6 +1264,7 @@ lazy_static! {
             Builtin::Log(&MZ_PEEK_ACTIVE),
             Builtin::Log(&MZ_PEEK_DURATIONS),
             Builtin::Log(&MZ_SOURCE_INFO),
+            Builtin::Log(&MZ_MESSAGE_COUNTS),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
             Builtin::Table(&MZ_KAFKA_SINKS),
@@ -1324,6 +1333,43 @@ lazy_static! {
         }
 
         assert!(func_global_id_counter < 3000, "exhausted func global IDs");
+
+        // Ensure the IDs we assign are all unique:
+        let mut encountered = BTreeSet::<GlobalId>::new();
+        let mut encounter =
+            move |kind_name: &str, field_name: &str, identifier: &str, id: &GlobalId| {
+                assert!(
+                    encountered.insert(id.to_owned()),
+                    "{} for {} {:?} is already used as a global ID: {:?}",
+                    field_name,
+                    kind_name,
+                    identifier,
+                    id,
+                );
+            };
+        use Builtin::*;
+        for b in builtins.iter() {
+            match b {
+                Type(BuiltinType{id, ..}) => {
+                    let name = format!("with ID {:?}", id);
+                    encounter("type", "id", &name, id);
+                }
+                Log(BuiltinLog { id, name, index_id, .. }) => {
+                    encounter("type", "id", name, id);
+                    encounter("type", "index_id", name, index_id);
+                }
+                Table(BuiltinTable { id, index_id, name, .. }) => {
+                    encounter("builtin table", "id", name, id);
+                    encounter("builtin table", "index_id", name, index_id);
+                }
+                View(BuiltinView { id, name, .. }) => {
+                    encounter("view", "id", name, id);
+                }
+                Func(BuiltinFunc { id, name, .. }) => {
+                    encounter("function", "id", name, id);
+                }
+            }
+        }
 
         builtins.into_iter().map(|b| (b.id(), b)).collect()
     };
