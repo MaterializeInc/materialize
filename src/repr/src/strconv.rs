@@ -345,7 +345,7 @@ where
     Nestable::MayNeedEscaping
 }
 
-/// Parses a `DateTime<Utc>` from `s`. See [expr::scalar::func::timezone_timestamp] for timezone anomaly considerations.
+/// Parses a `DateTime<Utc>` from `s`. See `expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
 pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
     parse_timestamp_string(s)
         .and_then(|(date, time, timezone)| {

@@ -636,7 +636,7 @@ fn plan_hypothetical_cast(
 }
 
 /// Plans a cast between [`ScalarType`]s, specifying which types of casts are
-/// permitted using [`CastTo`].
+/// permitted using [`CastContext`].
 ///
 /// # Errors
 ///

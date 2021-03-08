@@ -91,7 +91,7 @@ pub fn option_objects(options: &[SqlOption<Raw>]) -> BTreeMap<String, SqlOption<
 
 /// Unnormalizes an object name.
 ///
-/// This is the inverse of the [`object_name`] function.
+/// This is the inverse of the [`unresolved_object_name`] function.
 pub fn unresolve(name: FullName) -> UnresolvedObjectName {
     let mut out = vec![];
     if let DatabaseSpecifier::Name(n) = name.database {

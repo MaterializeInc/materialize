@@ -154,7 +154,7 @@ pub enum HirScalarExpr {
     Select(Box<HirRelationExpr>),
 }
 
-/// A `CoercibleScalarExpr` is a [`ScalarExpr`] whose type is not fully
+/// A `CoercibleScalarExpr` is a [`HirScalarExpr`] whose type is not fully
 /// determined. Several SQL expressions can be freely coerced based upon where
 /// in the expression tree they appear. For example, the string literal '42'
 /// will be automatically coerced to the integer 42 if used in a numeric
@@ -1083,9 +1083,9 @@ impl HirScalarExpr {
         }
     }
 
-    // Like [`ScalarExpr::bind_parameters`]`, except that parameters are
-    // replaced with the corresponding expression fragment from `params` rather
-    // than a datum.
+    /// Like [`HirScalarExpr::bind_parameters`], except that parameters are
+    /// replaced with the corresponding expression fragment from `params` rather
+    /// than a datum.
     ///
     /// Specifically, the parameter `$1` will be replaced with `params[0]`, the
     /// parameter `$2` will be replaced with `params[1]`, and so on. Parameters
