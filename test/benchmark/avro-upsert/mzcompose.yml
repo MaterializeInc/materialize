@@ -158,13 +158,6 @@ mzworkflows:
     - step: start-services
       services: [perf-dash-web]
 
-  benchmark:
-    steps:
-    - step: workflow
-      workflow: setup-benchmark
-    - step: workflow
-      workflow: run-benchmark
-
   setup-benchmark:
     env:
       UPSERT_GENERATOR_DISTRIBUTION: ${UPSERT_GENERATOR_DISTRIBUTION:-benchmark}
@@ -206,6 +199,15 @@ mzworkflows:
       expected_return_code: 0
       print_logs: true
 
+  # The benchmark that we run in the cloud
+  benchmark-large:
+    steps:
+    - step: workflow
+      workflow: setup-benchmark
+    - step: workflow
+      workflow: run-benchmark
+
+  # The benchmark that developers can run on their laptop
   benchmark-medium:
     steps:
     - step: workflow
@@ -218,23 +220,31 @@ mzworkflows:
       UPSERT_GENERATOR_DISTRIBUTION: medium
       UPSERT_GENERATOR_NUM_RECORDS: 20000000
       UPSERT_GENERATOR_PARALLELISM: 8
+    steps:
     - step: workflow
       workflow: setup-benchmark
 
-  setup-benchmark-medium:
+  run-benchmark-medium:
     env:
-      MZ_WORKERS: 8
+      MZ_WORKERS: ${MZ_WORKERS:-8}
       METRIC_VERIFIER_TIMEOUT: 900
       UPSERT_GENERATOR_NUM_RECORDS: 20000000
+    steps:
     - step: workflow
       workflow: run-benchmark
 
+  # The smoketest benchmark that we run in CI
   ci:
     steps:
     - step: workflow
       workflow: setup-benchmark-ci
     - step: workflow
       workflow: run-benchmark-ci
+
+  benchmark-ci:
+    steps:
+      - step: worfklow
+        workflow: ci
 
   setup-benchmark-ci:
     env:
@@ -247,7 +257,7 @@ mzworkflows:
 
   run-benchmark-ci:
     env:
-      MZ_WORKERS: 1
+      MZ_WORKERS: ${MZ_WORKERS:-8}
       METRIC_VERIFIER_TIMEOUT: 30
       UPSERT_GENERATOR_NUM_RECORDS: 100000
     steps:
