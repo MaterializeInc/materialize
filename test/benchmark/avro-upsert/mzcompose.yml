@@ -203,7 +203,23 @@ mzworkflows:
   benchmark-large:
     steps:
     - step: workflow
+      workflow: setup-benchmark-large
+    - step: workflow
+      workflow: run-benchmark-large
+
+  setup-benchmark-large:
+    env:
+      UPSERT_GENERATOR_DISTRIBUTION: benchmark
+      UPSERT_GENERATOR_NUM_RECORDS: 400000000
+    steps:
+    - step: workflow
       workflow: setup-benchmark
+
+  run-benchmark-large:
+    env:
+      MZ_WORKERS: ${MZ_WORKERS:-16}
+      UPSERT_GENERATOR_NUM_RECORDS: 400000000
+    steps:
     - step: workflow
       workflow: run-benchmark
 
