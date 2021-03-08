@@ -260,10 +260,12 @@ impl Action for AddBucketNotifications {
 
         let mut attempts = 0;
         let mut success = false;
-        print!("Verifying SQS notification configuration for up to 2 minutes");
+        print!(
+            "Verifying SQS notification configuration for up to {:?}",
+            self.sqs_validation_timeout
+        );
         let start = Instant::now();
         while start.elapsed() < self.sqs_validation_timeout {
-            // a maximum of ~2 minutes
             state
                 .s3_client
                 .put_object(PutObjectRequest {
@@ -318,12 +320,17 @@ impl Action for AddBucketNotifications {
             print!(".");
         }
         if success {
-            println!(" Success! (in {} attempts)", attempts + 1);
+            println!(
+                " Success! (in {} attempts and {:?})",
+                attempts + 1,
+                start.elapsed()
+            );
             Ok(())
         } else {
             println!(
-                " Error, never got messages (after {} attempts)",
-                attempts + 1
+                " Error, never got messages (after {} attempts and {:?})",
+                attempts + 1,
+                start.elapsed()
             );
             Err("Never got messages on S3 bucket notification queue".to_string())
         }
