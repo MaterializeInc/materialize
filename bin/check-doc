@@ -9,19 +9,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 #
-# lint-slow.sh — slow linters that require building code.
+# check-doc - check the docs for valid links
 
-set -euo pipefail
+export RUSTDOCFLAGS='-D warnings'
 
-. misc/shlib/shlib.bash
-
-ci_init
-
-ci_try bin/xcompile test --locked --doc
-# Intentionally run check last, since otherwise it won't use the cache.
-# https://github.com/rust-lang/rust-clippy/issues/3840
-ci_try bin/check
-
-ci_try bin/check-doc
-
-ci_status_report
+# next thing to fix: expr
+cargo doc \
+    -p mz-avro \
+    -p ccsr \
+    -p interchange \
+    -p ore \
+    ;

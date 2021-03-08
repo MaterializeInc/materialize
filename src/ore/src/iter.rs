@@ -124,7 +124,7 @@ where
     ///
     /// Instead of using `PartialOrd::partial_cmp`, this function uses the given `compare`
     /// function to determine the ordering of two elements. Apart from that, it's equivalent to
-    /// [`is_sorted`]; see its documentation for more information.
+    /// [`Iterator::is_sorted`]; see its documentation for more information.
     ///
     /// **Note:** this is a Materialize forward-port of a forthcoming feature
     /// to the standard library.
