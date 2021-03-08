@@ -17,10 +17,12 @@ use sql_parser::ast::{Ident, UnresolvedObjectName};
 
 /// A fully-qualified name of an item in the catalog.
 ///
-/// Catalog names compare case sensitively. Use [`normalize::object_name`] to
-/// perform proper case folding if converting an [`ObjectName`] to a `FullName`.
+/// Catalog names compare case sensitively. Use
+/// [`normalize::unresolved_object_name`] to
+/// perform proper case folding if converting an [`UnresolvedObjectName`] to a
+/// `FullName`.
 ///
-/// [`normalize::object_name`]: crate::normalize::object_name
+/// [`normalize::unresolved_object_name`]: crate::normalize::unresolved_object_name
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct FullName {
     /// The database name.

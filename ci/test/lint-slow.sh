@@ -22,4 +22,7 @@ ci_try bin/xcompile test --locked --doc
 # https://github.com/rust-lang/rust-clippy/issues/3840
 ci_try bin/check
 
+ci_try bin/doc
+ci_try bin/doc --document-private-items
+
 ci_status_report

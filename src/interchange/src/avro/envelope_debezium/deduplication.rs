@@ -121,7 +121,7 @@ pub(crate) struct DebeziumDeduplicationState {
     ///
     /// A binlog stream is either a file name (for mysql) or "" for postgres.
     ///
-    /// [`DebeziumDeduplicationstrategy`] determines whether messages that are not ahead
+    /// [`DebeziumDeduplicationStrategy`] determines whether messages that are not ahead
     /// of the last recorded pos/row will be skipped.
     binlog_offsets: HashMap<Vec<u8>, (usize, usize, Option<i64>)>,
     /// Whether or not to track every message we've ever seen
