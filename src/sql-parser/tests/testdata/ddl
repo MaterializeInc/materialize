@@ -461,13 +461,40 @@ CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USIN
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Some(Avro(Schema { schema: Inline("string"), with_options: [WithOption { key: Ident("confluent_wire_format"), value: Some(Value(Boolean(false))) }] })), envelope: None, if_not_exists: false, materialized: false })
 
-
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Some(Avro(Schema { schema: File("path"), with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
+
+parse-statement
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=2) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = 2) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Number("2") }], format: Some(Avro(Schema { schema: File("path"), with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
+
+parse-statement
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = []) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Array([]) }], format: Some(Avro(Schema { schema: File("path"), with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
+
+parse-statement
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Array([Number("2")]) }], format: Some(Avro(Schema { schema: File("path"), with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
+
+parse-statement
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2, 40000000]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+----
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2, 40000000]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Array([Number("2"), Number("40000000")]) }], format: Some(Avro(Schema { schema: File("path"), with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE psychic FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' NAMESPACE 'generation1' TABLE 'psychic' (pokedex_id int NOT NULL, evolution int);

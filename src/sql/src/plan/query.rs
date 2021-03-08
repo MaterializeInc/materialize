@@ -2820,6 +2820,9 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> 
         }
         Value::String(s) => return Ok(CoercibleScalarExpr::LiteralString(s.clone())),
         Value::Null => return Ok(CoercibleScalarExpr::LiteralNull),
+        Value::Array(_) => {
+            bail!("bare [] arrays are not supported in this context; use ARRAY[] or LIST[] instead")
+        }
     };
     let expr = HirScalarExpr::literal(datum, scalar_type);
     Ok(expr.into())
