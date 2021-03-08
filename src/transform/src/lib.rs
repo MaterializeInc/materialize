@@ -32,10 +32,8 @@ use expr::{GlobalId, IdGen};
 pub mod column_knowledge;
 pub mod cse;
 pub mod demand;
-pub mod empty_map;
 pub mod fusion;
 pub mod inline_let;
-pub mod join_elision;
 pub mod join_implementation;
 pub mod map_lifting;
 pub mod nonnull_requirements;
@@ -183,7 +181,7 @@ impl Default for Optimizer {
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
             // The first block are peep-hole optimizations that simplify
             // the representation of the query and are largely uncontentious.
-            Box::new(crate::join_elision::JoinElision),
+            Box::new(crate::fusion::join::Join),
             Box::new(crate::inline_let::InlineLet),
             Box::new(crate::reduction::FoldConstants),
             Box::new(crate::split_predicates::SplitPredicates),
@@ -192,10 +190,7 @@ impl Default for Optimizer {
             Box::new(crate::projection_extraction::ProjectionExtraction),
             Box::new(crate::fusion::project::Project),
             Box::new(crate::fusion::join::Join),
-            Box::new(crate::join_elision::JoinElision),
-            Box::new(crate::empty_map::EmptyMap),
             // Early actions include "no-brainer" transformations that reduce complexity in linear passes.
-            Box::new(crate::join_elision::JoinElision),
             Box::new(crate::reduction::FoldConstants),
             Box::new(crate::fusion::filter::Filter),
             Box::new(crate::fusion::map::Map),
@@ -214,8 +209,6 @@ impl Default for Optimizer {
                     Box::new(crate::fusion::project::Project),
                     Box::new(crate::fusion::map::Map),
                     Box::new(crate::fusion::union::Union),
-                    Box::new(crate::empty_map::EmptyMap),
-                    Box::new(crate::join_elision::JoinElision),
                     Box::new(crate::reduce_elision::ReduceElision),
                     Box::new(crate::inline_let::InlineLet),
                     Box::new(crate::update_let::UpdateLet),
@@ -277,7 +270,7 @@ impl Optimizer {
     /// Simple fusion and elision transformations to render the query readable.
     pub fn pre_optimization() -> Self {
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
-            Box::new(crate::join_elision::JoinElision),
+            Box::new(crate::fusion::join::Join),
             Box::new(crate::inline_let::InlineLet),
             Box::new(crate::reduction::FoldConstants),
             Box::new(crate::split_predicates::SplitPredicates),
@@ -286,8 +279,6 @@ impl Optimizer {
             Box::new(crate::projection_extraction::ProjectionExtraction),
             Box::new(crate::fusion::project::Project),
             Box::new(crate::fusion::join::Join),
-            Box::new(crate::join_elision::JoinElision),
-            Box::new(crate::empty_map::EmptyMap),
         ];
         Self { transforms }
     }
