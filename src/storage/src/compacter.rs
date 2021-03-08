@@ -377,7 +377,7 @@ impl Trace {
             .batches
             .last()
             .map(|batch| batch.upper)
-            .unwrap_or(TimelyTimestamp::minimum());
+            .unwrap_or_else(TimelyTimestamp::minimum);
         let finished_segments = self.find_finished_wal_segments()?;
 
         for segment in finished_segments {
