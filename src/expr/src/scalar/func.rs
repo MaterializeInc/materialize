@@ -4288,7 +4288,7 @@ fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let string: &'a str = a.unwrap_str();
-    let n = b.unwrap_int64();
+    let n = b.unwrap_int32();
 
     let mut byte_indices = string.char_indices().map(|(i, _)| i);
 
@@ -4300,6 +4300,9 @@ fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
         })?;
         // nth from the back
         byte_indices.rev().nth(n).unwrap_or(0)
+    } else if n == i32::MIN {
+        // this seems strange but Postgres behaves like this
+        0
     } else {
         let n = n.abs();
         let n = usize::try_from(n).map_err(|_| {

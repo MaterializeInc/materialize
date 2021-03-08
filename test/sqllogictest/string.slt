@@ -1042,3 +1042,21 @@ query T
 SELECT right(e'\u0930\u0903\u0951', -1)
 ----
 ः॑
+
+# integer edge cases
+
+# i32:MIN, this seems strange, but it's what Postgres does
+query T
+SELECT right('hello', -2147483648)
+----
+hello
+
+# i32:MIN + 1
+query T
+SELECT right('hello', -2147483647)
+----
+(empty)
+
+# i64
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT right('hello', 2147483648)
