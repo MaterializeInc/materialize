@@ -512,6 +512,7 @@ mzworkflows:
     env:
       # Use MZ_WORKERS from the environment. If not set, default to empty string
       MZ_WORKERS: ${MZ_WORKERS}
+    steps:
     - step: STEP-NAME
       STEP-OPTION: STEP-OPTION-VALUE
 ```
@@ -524,11 +525,13 @@ mzworkflows:
     env:
       # Use MZ_WORKERS from the environment. If not set, default to empty string
       MZ_WORKERS: ${MZ_WORKERS}
+    steps:
     - step: STEP-NAME
       STEP-OPTION: ${MZ_WORKERS}
 ```
 
-Support for default values works exactly as in bash:
+Support for default values similarly as it does in bash, but the full syntax is not supported. At
+the moment, `mzcompose` only supports default replacement via the `:-` operator:
 
 ```yaml
 mzworkflows:
@@ -536,6 +539,7 @@ mzworkflows:
     env:
       # If MZ_WORKERS is set, use the value from the environment. Otherwise use 16
       MZ_WORKERS: ${MZ_WORKERS:-16}
+    steps:
     - step: STEP-NAME
       STEP-OPTION: STEP-OPTION-VALUE
 ```
@@ -550,6 +554,7 @@ mzworkflows:
     env:
       # Explicitly set the value to 16, ignoring the parent environment
       MZ_WORKERS: 16
+    steps:
     - step: workflow
       workflow: workflow2
   workflow2:
@@ -557,6 +562,7 @@ mzworkflows:
       # MZ_WORKERS will be 16 if called from workflow1
       # If not called from workflow1, it pull the value from the environment or default
       MZ_WORKERS: ${MZ_WORKERS:-32}
+    steps:
     - step: STEP-NAME
       STEP-OPTION: STEP-OPTION-VALUE
 ```
