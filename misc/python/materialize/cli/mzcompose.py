@@ -107,15 +107,6 @@ def main(argv: List[str]) -> int:
             workflow = composition.get_workflow(
                 dict(os.environ), args.first_command_arg
             )
-            # The user has specified a workflow rather than a service. Run the
-            # workflow instead of Docker Compose.
-            if args.remainder:
-                raise errors.MzRuntimeError(
-                    f"cannot specify extra arguments ({' '.join(args.remainder)}) "
-                    "when specifying a workflow (rather than a container)"
-                )
-            workflow.run()
-            return 0
         except KeyError:
             # Restart any dependencies whose definitions have changed. This is
             # Docker Compose's default behavior for `up`, but not for `run`,
@@ -131,6 +122,16 @@ def main(argv: List[str]) -> int:
                     args.first_command_arg,
                 ]
             )
+        else:
+            # The user has specified a workflow rather than a service. Run the
+            # workflow instead of Docker Compose.
+            if args.remainder:
+                raise errors.MzRuntimeError(
+                    f"cannot specify extra arguments ({' '.join(args.remainder)}) "
+                    "when specifying a workflow (rather than a container)"
+                )
+            workflow.run()
+            return 0
 
     # Hand over control to Docker Compose.
     announce("Delegating to Docker Compose")
