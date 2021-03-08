@@ -115,7 +115,7 @@ impl WriteAheadLog {
 
         // Write a timestamp message here so we can establish `lower` for the first log
         // segment.
-        ret.write_progress(0)?;
+        ret.write_progress_inner(0)?;
         Ok(ret)
     }
 
@@ -313,6 +313,8 @@ impl WriteAheadLog {
             // Lets start writing to the previously created file.
             let messages = read_segment(&unfinished_file)?;
             let mut last_closed_timestamp = None;
+
+            // Try to find the last closed timestamp in this WAL segment.
             for message in messages {
                 match message {
                     Message::Data(_) => continue,

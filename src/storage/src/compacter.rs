@@ -122,24 +122,7 @@ impl Batch {
         expected_upper: Option<Timestamp>,
         compaction_frontier: Option<Timestamp>,
     ) -> Result<Self, anyhow::Error> {
-        if messages.len() < 2 {
-            bail!(
-                "Only read {} messages from segment, expected at least 2",
-                messages.len()
-            );
-        }
-
-        // The first and last messages in this list have to progress messages that indicate the [lower, upper) bounds
-        // for the new `Batch`.
-        let lower = match messages.first().expect("known to exist") {
-            Message::Progress(time) => *time,
-            Message::Data(_) => bail!("Invalid data in segment, expected first message to be a progress message, found data"),
-        };
-
-        let upper = match messages.last().expect("known to exist") {
-            Message::Progress(time) => *time,
-            Message::Data(_) => bail!("Invalid data in segment, expected last message to be a progress message, found data"),
-        };
+        let (lower, upper) = get_lower_and_upper_bounds(&messages)?;
 
         if lower != expected_lower {
             bail!("Expected lower of {}, found {}", expected_lower, lower);
@@ -315,7 +298,8 @@ pub struct Trace {
     // newly minted log segments, delete segments as they are converted into `Batch`s and
     // delete the directory when the underlying relation is dropped.
     wal_path: PathBuf,
-    // List of `Batch`s in this trace.
+    // List of `Batch`s in this trace. The `Batch`s have to be sorted by the disjoint time intervals
+    // they are responsible for and together, all of the `Batch`s must cover [T::min, upper_bound).
     batches: Vec<Batch>,
     // Compaction frontier for this trace, as indicated by the `Coordinator`.
     compaction: Option<Timestamp>,
@@ -491,6 +475,8 @@ impl Trace {
             }
         }
 
+        // Verify that all batches span disjoint intervals and that together they
+        // span a contiguous interval from [0, upper)
         let mut previous_upper = TimelyTimestamp::minimum();
         for batch in &batches_to_keep {
             assert!(batch.lower == previous_upper);
@@ -564,6 +550,12 @@ impl Trace {
             out.append(&mut messages);
         }
 
+        let mut expected_lower = self
+            .batches
+            .last()
+            .map(|batch| batch.upper)
+            .unwrap_or_else(TimelyTimestamp::minimum);
+
         let finished_segments = self.find_finished_wal_segments()?;
         let unfinished_segment = self.find_unfinished_wal_segment()?;
 
@@ -571,10 +563,34 @@ impl Trace {
         // time, as does each wal segment.
         for segment in finished_segments {
             let mut messages = read_segment(&segment)?;
-            out.append(&mut messages);
+            let (lower, upper) = get_lower_and_upper_bounds(&messages)?;
+
+            // We've already read this segment and made a batch, can now remove it.
+            if lower != expected_lower {
+                fs::remove_file(&segment).with_context(|| {
+                    format!(
+                        "failed to remove already consumed wal segment {}",
+                        segment.display()
+                    )
+                })?;
+            } else {
+                out.append(&mut messages);
+                expected_lower = upper;
+            }
         }
 
-        out.append(&mut read_segment(&unfinished_segment)?);
+        let mut messages = read_segment(&unfinished_segment)?;
+        let segment_lower_bound = get_lower_bound(&messages)?;
+
+        if segment_lower_bound != expected_lower {
+            bail!(
+                "Received in progress segment with lower bound {} expected {}",
+                segment_lower_bound,
+                expected_lower
+            );
+        }
+
+        out.append(&mut messages);
 
         // Remove duplicated progress messages across wal segments.
         out.dedup();
@@ -724,4 +740,61 @@ fn read_dir_regex(path: &Path, regex: &Regex) -> Result<Vec<PathBuf>, anyhow::Er
     }
 
     Ok(results)
+}
+
+/// Find the [lower, upper) timestamp bounds for the data contained in `messages`.
+///
+/// The first and last messages are required to be instances of `Message::Progress`
+/// that denote those bounds.
+fn get_lower_and_upper_bounds(
+    messages: &[Message],
+) -> Result<(Timestamp, Timestamp), anyhow::Error> {
+    if messages.len() < 2 {
+        bail!(
+            "Only received {} messages, expected at least 2",
+            messages.len()
+        );
+    }
+
+    // The first and last messages in this list have to be progress messages that indicate the [lower, upper) bounds
+    // for the new `Batch`.
+    let lower = match messages.first().expect("known to exist") {
+        Message::Progress(time) => *time,
+        Message::Data(_) => bail!(
+            "Invalid data in segment, expected first message to be a progress message, found data"
+        ),
+    };
+
+    let upper = match messages.last().expect("known to exist") {
+        Message::Progress(time) => *time,
+        Message::Data(_) => bail!(
+            "Invalid data in segment, expected last message to be a progress message, found data"
+        ),
+    };
+
+    if lower > upper {
+        bail!("Invalid lower {} and upper {} bounds.", lower, upper);
+    }
+
+    Ok((lower, upper))
+}
+
+/// Find the lower timestamp bound for data in `messages`.
+///
+/// The first message is required to be an instance of `Message::Progress` that
+/// denotes this bound.
+fn get_lower_bound(messages: &[Message]) -> Result<Timestamp, anyhow::Error> {
+    if messages.is_empty() {
+        bail!("Received no messages, expected at least 1");
+    }
+
+    // The first message has to be a progress message that indicates a lower bound for timestamps for this list of messages.
+    let lower = match messages.first().expect("known to exist") {
+        Message::Progress(time) => *time,
+        Message::Data(_) => bail!(
+            "Invalid data in segment, expected first message to be a progress message, found data"
+        ),
+    };
+
+    Ok(lower)
 }
