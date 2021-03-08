@@ -53,6 +53,7 @@ use anyhow::{bail, Context};
 use lazy_static::lazy_static;
 use log::error;
 use regex::Regex;
+use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use tokio::select;
 use tokio::sync::mpsc;
 
@@ -87,7 +88,7 @@ pub enum CompacterMessage {
 /// for the number of updates at each time.
 /// TODO: Differential has a struct called `Description` that we should eventually re-use
 /// here.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct Batch {
     upper: Timestamp,
     lower: Timestamp,
@@ -101,48 +102,62 @@ impl Batch {
     /// (i. e. keeps a single copy per (Row, time) update), and writes that data, along
     /// with the corresponding [lower, upper) frontiers, to a new file. Returns a
     /// new `Batch` that points to the newly created file.
-    fn create(log_segment_path: &Path, trace_path: &Path) -> Result<Self, anyhow::Error> {
+    fn create(
+        log_segment_path: &Path,
+        trace_path: &Path,
+        expected_lower: Timestamp,
+    ) -> Result<Self, anyhow::Error> {
         let messages = read_segment(log_segment_path)?;
-        Batch::create_from_messages(messages, trace_path, None)
+        Batch::create_from_messages(messages, trace_path, expected_lower, None, None)
     }
 
     /// Read in and consolidate a list of messages, and write them to a new batch file
     /// in `trace_path`.
     ///
     /// Will also compact updates up to `compaction_frontier` if provided.
-    /// TODO: more strongly assert invariants here. For example, the first and
-    /// last messages need to be progress messages that denote a lower and upper
-    /// bound on timestamps respectively.
     fn create_from_messages(
         messages: Vec<Message>,
         trace_path: &Path,
+        expected_lower: Timestamp,
+        expected_upper: Option<Timestamp>,
         compaction_frontier: Option<Timestamp>,
     ) -> Result<Self, anyhow::Error> {
-        let mut upper: Option<Timestamp> = None;
-        let mut lower: Option<Timestamp> = None;
+        if messages.len() < 2 {
+            bail!(
+                "Only read {} messages from segment, expected at least 2",
+                messages.len()
+            );
+        }
+
+        // The first and last messages in this list have to progress messages that indicate the [lower, upper) bounds
+        // for the new `Batch`.
+        let lower = match messages.first().expect("known to exist") {
+            Message::Progress(time) => *time,
+            Message::Data(_) => bail!("Invalid data in segment, expected first message to be a progress message, found data"),
+        };
+
+        let upper = match messages.last().expect("known to exist") {
+            Message::Progress(time) => *time,
+            Message::Data(_) => bail!("Invalid data in segment, expected last message to be a progress message, found data"),
+        };
+
+        if lower != expected_lower {
+            bail!("Expected lower of {}, found {}", expected_lower, lower);
+        }
+
+        if let Some(expected_upper) = expected_upper {
+            if upper != expected_upper {
+                bail!("Expected upper of {}, found {}", expected_upper, upper);
+            }
+        }
+
         let mut time_data = BTreeMap::new();
-        // The messages are going to come in as a time ordered sequence of
-        // progress and data messages, with the first and last messages being
-        // progress messages that denote the lower and upper bounds for timestamps
-        // in the resulting `Batch`. However, there may be more than two timestamp
-        // progress messages present so keep update the upper bound when we see a
-        // newer progress message.
         for message in messages.iter() {
             match message {
-                Message::Progress(time) => match (lower, upper) {
-                    (None, None) => {
-                        lower = Some(*time);
-                    }
-                    (Some(l), None) => {
-                        assert!(*time >= l);
-                        upper = Some(*time);
-                    }
-                    (Some(_), Some(u)) => {
-                        assert!(*time >= u);
-                        upper = Some(*time);
-                    }
-                    (None, Some(_)) => unreachable!(),
-                },
+                Message::Progress(time) => {
+                    assert!(*time >= lower);
+                    assert!(*time <= upper);
+                }
                 Message::Data(Update {
                     row,
                     timestamp,
@@ -154,8 +169,8 @@ impl Batch {
                         *timestamp
                     };
 
-                    let lower =
-                        lower.expect("lower bound should be present before we see any data");
+                    // Note that we only assert that the time is valid wrt to the lower bound
+                    // because the compaction frontier could advance ahead of the upper bound.
                     assert!(time >= lower);
                     let entry = time_data.entry((time, row)).or_insert(0);
                     *entry += diff;
@@ -169,10 +184,6 @@ impl Batch {
 
         // Now let's prepare the output
         let mut buf = Vec::new();
-
-        // Batches are expected to have lower and upper time bounds.
-        let lower = lower.unwrap();
-        let upper = upper.unwrap();
 
         // Frame each batch with its lower and upper bound timestamp.
         // TODO: match the behavior of CDCv2 updates with a count of messages
@@ -247,9 +258,6 @@ impl Batch {
 
     /// Physically concatenate all `Batch`s together into a single `Batch`
     /// and consolidate updates up to the frontier if provided.
-    ///
-    /// TODO: the provided `Batch`s need to span a contiguous time interval in order
-    /// for this to work. Let's verify that.
     fn compact(
         batches: &[Batch],
         trace_path: &Path,
@@ -257,11 +265,36 @@ impl Batch {
     ) -> Result<Self, anyhow::Error> {
         let mut messages = vec![];
 
+        if batches.len() < 2 {
+            bail!(
+                "Need to provide at least two batches to compact together. Received {}",
+                batches.len()
+            );
+        }
+
+        let lower = batches.first().expect("known to exist").lower;
+        let upper = batches.last().expect("known to exist").upper;
+
+        // Check that the provided batches span a contiguous time interval.
+        let mut previous_upper = lower;
+        for batch in batches {
+            assert!(batch.lower == previous_upper);
+            previous_upper = batch.upper;
+        }
+
+        assert!(previous_upper == upper);
+
         for batch in batches {
             messages.append(&mut read_segment(&batch.path)?);
         }
 
-        Batch::create_from_messages(messages, trace_path, compaction_frontier)
+        Batch::create_from_messages(
+            messages,
+            trace_path,
+            lower,
+            Some(upper),
+            compaction_frontier,
+        )
     }
 }
 
@@ -339,14 +372,18 @@ impl Trace {
     }
 
     /// Checks if there are finished WAL segments and if so, forms them into batches.
-    ///
-    /// TODO: need to check the invariant that every subsequent log segment starts
-    /// at the most recent `Batch`'s upper bound.
     fn consume_wal(&mut self) -> Result<(), anyhow::Error> {
+        let mut expected_lower = self
+            .batches
+            .last()
+            .map(|batch| batch.upper)
+            .unwrap_or(TimelyTimestamp::minimum());
         let finished_segments = self.find_finished_wal_segments()?;
 
         for segment in finished_segments {
-            let batch = Batch::create(&segment, &self.trace_path)?;
+            // Check that the new batch starts at the previous upper bound.
+            let batch = Batch::create(&segment, &self.trace_path, expected_lower)?;
+            expected_lower = batch.upper;
             self.batches.push(batch);
             // We only delete the WAL segment after the new `Batch` has been
             // durably persisted.
@@ -435,8 +472,38 @@ impl Trace {
             .map(Batch::reinit)
             .collect::<Result<_, _>>()
             .unwrap();
-        batches.sort_by_key(|batch| batch.lower);
-        Ok(batches)
+
+        // Sort batches by (lower increasing, upper decreasing) so that we can greedily
+        // take the batches that span the largest intervals. We know that we can do this
+        // since we control batch compaction, and all batchs either cover disjoint time
+        // intervals or are strict subsets of another containing batch.
+        batches.sort_by(|a, b| a.lower.cmp(&b.lower).then(a.upper.cmp(&b.upper).reverse()));
+        let mut batches_to_keep = vec![];
+        let mut batches_to_remove = vec![];
+        let mut previous_upper = TimelyTimestamp::minimum();
+
+        for batch in batches {
+            if batch.lower == previous_upper {
+                previous_upper = batch.upper;
+                batches_to_keep.push(batch);
+            } else {
+                batches_to_remove.push(batch);
+            }
+        }
+
+        let mut previous_upper = TimelyTimestamp::minimum();
+        for batch in &batches_to_keep {
+            assert!(batch.lower == previous_upper);
+            previous_upper = batch.upper;
+        }
+
+        for batch in batches_to_remove {
+            fs::remove_file(&batch.path).with_context(|| {
+                format!("failed to remove replaced batch {}", batch.path.display())
+            })?;
+        }
+
+        Ok(batches_to_keep)
     }
 
     /// Try to compact all of the batches we know about into a single batch from
