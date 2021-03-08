@@ -9,6 +9,8 @@
 
 //! Fuses multiple `Filter` operators into one; deduplicates predicates.
 //!
+//! If the `Filter` operator is empty, removes it.
+//!
 //! ```rust
 //! use expr::{MirRelationExpr, MirScalarExpr};
 //! use repr::{ColumnType, Datum, RelationType, ScalarType};

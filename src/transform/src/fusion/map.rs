@@ -14,6 +14,8 @@
 //! detail that is often overlooked and leads to bugs. However, it is
 //! important to coalesce these operators so that we can more easily
 //! move them around other operators together.
+//!
+//! Also removes empty `Map` operators.
 
 use std::mem;
 
@@ -39,6 +41,7 @@ impl crate::Transform for Map {
 
 impl Map {
     /// Fuses a sequence of `Map` operators in to one `Map` operator.
+    /// Remove the map operator if it is empty.
     pub fn action(&self, relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Map { input, scalars } = relation {
             while let MirRelationExpr::Map {
@@ -49,6 +52,10 @@ impl Map {
                 inner_scalars.append(scalars);
                 mem::swap(scalars, inner_scalars);
                 **input = inner_input.take_dangerous();
+            }
+
+            if scalars.is_empty() {
+                *relation = input.take_dangerous();
             }
         }
     }
