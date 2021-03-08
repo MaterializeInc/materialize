@@ -33,6 +33,7 @@ from typing import (
     cast,
 )
 from typing_extensions import Literal
+import functools
 import os
 import pathlib
 import shlex
@@ -166,7 +167,6 @@ class Composition:
         self.name = name
         self.repo = repo
         self.images: List[mzbuild.Image] = []
-        self.workflows: Dict[str, Workflow] = {}
 
         default_tag = os.getenv(f"MZBUILD_TAG", None)
 
@@ -178,41 +178,11 @@ class Composition:
         with open(self.path) as f:
             compose = yaml.safe_load(f)
 
-        workflows = compose.pop("mzworkflows", None)
-        if workflows is not None:
-            # TODO: move this into the workflow so that it can use env vars that are
-            # manually defined.
-            workflows = _substitute_env_vars(workflows)
-            for workflow_name, raw_w in workflows.items():
-                built_steps = []
-                for raw_step in raw_w["steps"]:
-                    step_name = raw_step.pop("step")
-                    step_ty = Steps.named(step_name)
-                    munged = {k.replace("-", "_"): v for k, v in raw_step.items()}
-                    try:
-                        step = step_ty(**munged)
-                    except TypeError as e:
-                        a = " ".join([f"{k}={v}" for k, v in munged.items()])
-                        raise errors.BadSpec(
-                            f"Unable to construct {step_name} with args {a}: {e}"
-                        )
-                    built_steps.append(step)
-                env = raw_w.get("env")
-                if not isinstance(env, dict) and env is not None:
-                    raise errors.BadSpec(
-                        f"Workflow {workflow_name} has wrong type for env: "
-                        f"expected mapping, got {type(env).__name__}: {env}",
-                    )
-                # ensure that integers (e.g. ports) are treated as env vars
-                if isinstance(env, dict):
-                    env = {k: str(v) for k, v in env.items()}
-                self.workflows[workflow_name] = Workflow(
-                    workflow_name, built_steps, env=env, composition=self
-                )
+        # Stash away sub workflows so that we can load them with the correct environment variables
+        self.workflows = compose.pop("mzworkflows", None)
 
         # Resolve all services that reference an `mzbuild` image to a specific
         # `image` reference.
-
         for config in compose["services"].values():
             if "mzbuild" in config:
                 image_name = config["mzbuild"]
@@ -251,6 +221,61 @@ class Composition:
         yaml.dump(compose, tempfile, encoding="utf-8")  # type: ignore
         tempfile.flush()
         self.file = tempfile
+
+    def get_env(self, workflow_name: str, parent_env: Dict[str, str]) -> Dict[str, str]:
+        """Return the desired environment for a workflow."""
+
+        raw_env = self.workflows[workflow_name].get("env")
+
+        if not isinstance(raw_env, dict) and raw_env is not None:
+            raise errors.BadSpec(
+                f"Workflow {workflow_name} has wrong type for env: "
+                f"expected mapping, got {type(raw_env).__name__}: {raw_env}",
+            )
+        # ensure that integers (e.g. ports) are treated as env vars
+        if isinstance(raw_env, dict):
+            raw_env = {k: str(v) for k, v in raw_env.items()}
+
+        # Substitute environment variables from the parent environment, allowing for the child
+        # environment to inherit variables from the parent
+        child_env = _substitute_env_vars(raw_env, parent_env)
+
+        # Merge the child and parent environments, with the child environment having the tie
+        # breaker. This allows for the child to decide if it wants to inherit (from the step
+        # above) or override (from this step).
+        env = dict(**parent_env)
+        if child_env:
+            env.update(**child_env)
+        return env
+
+    def get_workflow(
+        self, parent_env: Dict[str, str], workflow_name: str
+    ) -> "Workflow":
+        """Return sub-workflow, with env vars substituted using the supplied environment."""
+        if not self.workflows:
+            raise KeyError(f"No workflows defined for composition {self.name}")
+        if workflow_name not in self.workflows:
+            raise KeyError(f"No workflow called {workflow_name} in {self.name}")
+
+        # Build this workflow, performing environment substitution as necessary
+        workflow_env = self.get_env(workflow_name, parent_env)
+        workflow = _substitute_env_vars(self.workflows[workflow_name], workflow_env)
+
+        built_steps = []
+        for raw_step in workflow["steps"]:
+            step_name = raw_step.pop("step")
+            step_ty = Steps.named(step_name)
+            munged = {k.replace("-", "_"): v for k, v in raw_step.items()}
+            try:
+                step = step_ty(**munged)
+            except TypeError as e:
+                a = " ".join([f"{k}={v}" for k, v in munged.items()])
+                raise errors.BadSpec(
+                    f"Unable to construct {step_name} with args {a}: {e}"
+                )
+            built_steps.append(step)
+
+        return Workflow(workflow_name, built_steps, env=workflow_env, composition=self)
 
     @classmethod
     def lint(cls, repo: mzbuild.Repository, name: str) -> List[LintError]:
@@ -366,28 +391,31 @@ class Composition:
         return self.docker_inspect("{{.State.Running}}", container_id) == "'true'"
 
 
-def _substitute_env_vars(val: T) -> T:
+def _substitute_env_vars(val: T, env: Dict[str, str]) -> T:
     """Substitute docker-compose style env vars in a dict
 
     This is necessary for mzconduct, since its parameters are not handled by docker-compose
     """
     if isinstance(val, str):
-        val = cast(T, _BASHLIKE_ENV_VAR_PATTERN.sub(_subst, val))
+        val = cast(
+            T, _BASHLIKE_ENV_VAR_PATTERN.sub(functools.partial(_subst, env), val)
+        )
     elif isinstance(val, dict):
         for k, v in val.items():
-            val[k] = _substitute_env_vars(v)
+            val[k] = _substitute_env_vars(v, env)
     elif isinstance(val, list):
-        val = cast(T, [_substitute_env_vars(v) for v in val])
+        val = cast(T, [_substitute_env_vars(v, env) for v in val])
     return val
 
 
-def _subst(match: Match) -> str:
+def _subst(env: Dict[str, str], match: Match) -> str:
     var = match.group("var")
     if var is None:
         raise errors.BadSpec(f"Unable to parse environment variable {match.group(0)}")
     # https://github.com/python/typeshed/issues/3902
     default = cast(Optional[str], match.group("default"))
-    env_val = os.getenv(var)
+
+    env_val = env.get(var)
     if env_val is None and default is None:
         say(f"WARNING: unknown env var {var!r}")
         return cast(str, match.group(0))
@@ -426,11 +454,11 @@ class Workflow:
         self,
         name: str,
         steps: List["WorkflowStep"],
-        env: Optional[Dict[str, str]],
+        env: Dict[str, str],
         composition: Composition,
     ) -> None:
         self.name = name
-        self.env = env if env is not None else {}
+        self.env = env
         self.composition = composition
         self._steps = steps
 
@@ -443,15 +471,6 @@ class Workflow:
     def run(self) -> None:
         for step in self._steps:
             step.run(self)
-
-    def run_with_env(self, env: Dict[str, str]) -> None:
-        """Run a workflow with a parent environment"""
-        old_env = self.env
-        self.env = dict(**old_env, **env)
-        try:
-            self.run()
-        finally:
-            self.env = old_env
 
     def run_compose(
         self, args: List[str], capture: bool = False
@@ -1100,8 +1119,7 @@ class WorkflowWorkflowStep(WorkflowStep):
     def run(self, workflow: Workflow) -> None:
         try:
             # Run the specified workflow with the context of the parent workflow
-            sub_workflow = workflow.composition.workflows[self._workflow]
-            sub_workflow.run_with_env(workflow.env)
+            workflow.composition.get_workflow(workflow.env, self._workflow).run()
         except KeyError:
             raise errors.UnknownItem(
                 f"workflow in {workflow.composition.name}",

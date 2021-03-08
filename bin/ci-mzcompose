@@ -17,6 +17,8 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
+export MZCOMPOSE_TESTING="yeah"
+
 for test_dir in test/mzcompose/* ; do
      [[ ! -d "$test_dir" ]] && continue
     dirname=$(basename "$test_dir")

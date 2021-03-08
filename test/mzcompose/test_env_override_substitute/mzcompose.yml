@@ -1,0 +1,34 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+version: '3.7'
+
+services:
+  check_env_set:
+    image: alpine:3
+
+mzworkflows:
+  # Test that child workflow can explicitly override an environment variable
+  # when the variable is substitutedd during workflow creation.
+  ci:
+    env:
+      ENV_IS_SET: yeah
+    steps:
+      - step: workflow
+        workflow: substitute_overrider
+  substitute_overrider:
+    env:
+      ENV_IS_SET: nope
+    steps:
+      - step: run
+        service: check_env_set
+        command: |
+          /bin/sh -c '
+          set -x ;
+          test "${ENV_IS_SET}" == nope ;'

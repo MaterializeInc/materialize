@@ -103,8 +103,11 @@ def main(argv: List[str]) -> int:
 
     # The `run` command requires special handling.
     if args.command == "run":
-        workflow = composition.workflows.get(args.first_command_arg, None)
-        if workflow is None:
+        try:
+            workflow = composition.get_workflow(
+                dict(os.environ), args.first_command_arg
+            )
+        except KeyError:
             # Restart any dependencies whose definitions have changed. This is
             # Docker Compose's default behavior for `up`, but not for `run`,
             # which is a constant irritation that we paper over here. The trick,
