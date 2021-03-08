@@ -79,3 +79,53 @@ WHERE b = 3 AND c = 3
 | Filter (#2 = 3)
 
 EOF
+
+# Regression test to ensure that a filter gets pushed down to all inputs of a union.
+
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR
+SELECT a FROM (SELECT DISTINCT a FROM x UNION ALL SELECT a FROM y) WHERE a = 3
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.x (u1)
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Project (#0)
+| Distinct group=(#0)
+
+%3 =
+| Get materialize.public.y (u3)
+
+%4 =
+| Join %0 %3
+| | implementation = Unimplemented
+
+%5 =
+| Union %2 %4
+| Filter (#0 = 3)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR
+SELECT a FROM (SELECT DISTINCT a FROM x UNION ALL SELECT a FROM y) WHERE a = 3
+----
+%0 =
+| Get materialize.public.x (u1)
+| Filter (#0 = 3)
+| Distinct group=()
+| Map 3
+
+%1 =
+| Get materialize.public.y (u3)
+| Filter (#0 = 3)
+
+%2 =
+| Union %0 %1
+
+EOF

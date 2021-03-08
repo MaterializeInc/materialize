@@ -30,7 +30,7 @@ steps
 | Union %0 %1
 
 ====
-No change: Join, InlineLet, FoldConstants, Filter, Map, ProjectionExtraction, Project, Join, FoldConstants, Filter, Map, FoldConstants, Fixpoint { transforms: [NonNullable, FoldConstants, PredicatePushdown, Join, Filter, Project, Map, Union, ReduceElision, InlineLet, UpdateLet, ProjectionExtraction, ProjectionLifting, LiteralLifting, NonNullRequirements, ColumnKnowledge, ReductionPushdown, RedundantJoin, TopKElision, Demand, UnionBranchCancellation], limit: 100 }, FoldConstants, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants, Filter, Demand, LiteralLifting, Map], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants
+No change: TopKElision, NonNullRequirements, Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Union, UnionBranchCancellation, FoldConstants] }], limit: 100 }, Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Union, UnionBranchCancellation, FoldConstants] }], limit: 100 }, Fixpoint { transforms: [UpdateLet, ReductionPushdown, ReduceElision, RedundantJoin, LiteralLifting, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Union, UnionBranchCancellation, FoldConstants] }], limit: 100 }, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants, Filter, Demand, LiteralLifting, Map], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants
 ====
 Final:
 %0 =

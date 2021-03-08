@@ -142,6 +142,62 @@ impl Transform for Fixpoint {
     }
 }
 
+/// A sequence of transformations that simplify the `MirRelationExpr`
+#[derive(Debug)]
+pub struct FuseAndCollapse {
+    transforms: Vec<Box<dyn crate::Transform + Send>>,
+}
+
+impl Default for FuseAndCollapse {
+    fn default() -> Self {
+        Self {
+            // TODO: The relative orders of the transforms have not been
+            // determined except where there are comments.
+            // TODO (#6542): All the transforms here except for
+            // `ProjectionLifting` and `InlineLet` can be implemented as free
+            // functions. Note that (#716) proposes the removal of `InlineLet`
+            // as a transform.
+            transforms: vec![
+                Box::new(crate::projection_extraction::ProjectionExtraction),
+                Box::new(crate::projection_lifting::ProjectionLifting),
+                Box::new(crate::fusion::map::Map),
+                Box::new(crate::fusion::filter::Filter),
+                Box::new(crate::fusion::project::Project),
+                Box::new(crate::fusion::join::Join),
+                Box::new(crate::inline_let::InlineLet),
+                Box::new(crate::fusion::union::Union),
+                // This goes after union fusion so we can cancel out
+                // more branches at a time.
+                Box::new(crate::union_cancel::UnionBranchCancellation),
+                // As a final logical action, convert any constant expression to a constant.
+                // Some optimizations fight against this, and we want to be sure to end as a
+                // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
+                // clearly see this.
+                Box::new(crate::reduction::FoldConstants),
+            ],
+        }
+    }
+}
+
+impl Transform for FuseAndCollapse {
+    fn transform(
+        &self,
+        relation: &mut MirRelationExpr,
+        args: TransformArgs,
+    ) -> Result<(), TransformError> {
+        for transform in self.transforms.iter() {
+            transform.transform(
+                relation,
+                TransformArgs {
+                    id_gen: args.id_gen,
+                    indexes: args.indexes,
+                },
+            )?;
+        }
+        Ok(())
+    }
+}
+
 /// A naive optimizer for relation expressions.
 ///
 /// The optimizer currently applies only peep-hole optimizations, from a limited
@@ -178,55 +234,58 @@ impl Optimizer {
 impl Default for Optimizer {
     fn default() -> Self {
         let transforms: Vec<Box<dyn crate::Transform + Send>> = vec![
-            // The first block are peep-hole optimizations that simplify
-            // the representation of the query and are largely uncontentious.
-            Box::new(crate::fusion::join::Join),
-            Box::new(crate::inline_let::InlineLet),
-            Box::new(crate::reduction::FoldConstants),
-            Box::new(crate::fusion::filter::Filter),
-            Box::new(crate::fusion::map::Map),
-            Box::new(crate::projection_extraction::ProjectionExtraction),
-            Box::new(crate::fusion::project::Project),
-            Box::new(crate::fusion::join::Join),
-            // Early actions include "no-brainer" transformations that reduce complexity in linear passes.
-            Box::new(crate::reduction::FoldConstants),
-            Box::new(crate::fusion::filter::Filter),
-            Box::new(crate::fusion::map::Map),
-            Box::new(crate::reduction::FoldConstants),
+            // 1. Structure-agnostic cleanup
+            Box::new(crate::topk_elision::TopKElision),
+            Box::new(crate::nonnull_requirements::NonNullRequirements),
+            // 2. Collapse constants, joins, unions, and lets as much as possible.
+            // TODO: lift filters/maps to maximize ability to collapse
+            // things down?
+            Box::new(crate::Fixpoint {
+                limit: 100,
+                transforms: vec![Box::new(crate::FuseAndCollapse::default())],
+            }),
+            // 3. Move predicate information up and down the tree.
+            //    This also fixes the shape of joins in the plan.
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
-                    Box::new(crate::nonnullable::NonNullable),
-                    Box::new(crate::reduction::FoldConstants),
+                    // Predicate pushdown sets the equivalence classes of joins.
                     Box::new(crate::predicate_pushdown::PredicatePushdown),
-                    Box::new(crate::fusion::join::Join),
-                    Box::new(crate::fusion::filter::Filter),
-                    Box::new(crate::fusion::project::Project),
-                    Box::new(crate::fusion::map::Map),
-                    Box::new(crate::fusion::union::Union),
-                    Box::new(crate::reduce_elision::ReduceElision),
-                    Box::new(crate::inline_let::InlineLet),
-                    Box::new(crate::update_let::UpdateLet),
-                    Box::new(crate::projection_extraction::ProjectionExtraction),
-                    Box::new(crate::projection_lifting::ProjectionLifting),
-                    Box::new(crate::map_lifting::LiteralLifting),
-                    Box::new(crate::nonnull_requirements::NonNullRequirements),
+                    // Lifts the information `!isnull(col)`
+                    Box::new(crate::nonnullable::NonNullable),
+                    // Lifts the information `col = literal`
+                    // TODO (#6613): this also tries to lift `!isnull(col)` but
+                    // less well than the previous transform. Eliminate
+                    // redundancy between the two transforms.
                     Box::new(crate::column_knowledge::ColumnKnowledge),
-                    Box::new(crate::reduction_pushdown::ReductionPushdown),
-                    Box::new(crate::redundant_join::RedundantJoin),
-                    Box::new(crate::topk_elision::TopKElision),
+                    // Lifts the information `col1 = col2`
                     Box::new(crate::demand::Demand),
-                    Box::new(crate::union_cancel::UnionBranchCancellation),
+                    Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
-            // As a final logical action, convert any constant expression to a constant.
-            // Some optimizations fight against this, and we want to be sure to end as a
-            // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
-            // clearly see this.
-            Box::new(crate::reduction::FoldConstants),
-            // TODO (wangandi): materialize#616 the FilterEqualLiteral transform
-            // exists but is currently unevaluated with the new join implementations.
-
+            // 4. Reduce/Join simplifications.
+            Box::new(crate::Fixpoint {
+                limit: 100,
+                transforms: vec![
+                    // Updates key information for let statements
+                    Box::new(crate::update_let::UpdateLet),
+                    // Pushes aggregations down
+                    Box::new(crate::reduction_pushdown::ReductionPushdown),
+                    // Replaces reduces with maps when the group keys are
+                    // unique with maps
+                    Box::new(crate::reduce_elision::ReduceElision),
+                    // Removes redundant inputs from joins.
+                    // Note that this eliminates one redundant input per join,
+                    // so it is necessary to run this section in a loop.
+                    Box::new(crate::redundant_join::RedundantJoin),
+                    // Converts Join {Constant + Input} to Map {Input}
+                    Box::new(crate::map_lifting::LiteralLifting),
+                    Box::new(crate::FuseAndCollapse::default()),
+                ],
+            }),
+            // Physical transforms are above this comment. Logical transforms
+            // are below.
+            // Below this line are logical transforms.
             // Implementation transformations
             Box::new(crate::Fixpoint {
                 limit: 100,
@@ -236,6 +295,8 @@ impl Default for Optimizer {
                     Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::reduction::FoldConstants),
                     Box::new(crate::fusion::filter::Filter),
+                    // fill in the new demand after maps have been shifted
+                    // around.
                     Box::new(crate::demand::Demand),
                     Box::new(crate::map_lifting::LiteralLifting),
                     Box::new(crate::fusion::map::Map),

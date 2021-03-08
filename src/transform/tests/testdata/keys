@@ -63,9 +63,30 @@ steps format=types
 | | keys = ((#0), (#1))
 
 ====
-No change: Join, InlineLet, FoldConstants, Filter, Map, ProjectionExtraction, Project, Join, FoldConstants, Filter, Map, FoldConstants
+No change: TopKElision, NonNullRequirements, Fixpoint { transforms: [FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Union, UnionBranchCancellation, FoldConstants] }], limit: 100 }
 ====
-Applied Fixpoint { transforms: [NonNullable, FoldConstants, PredicatePushdown, Join, Filter, Project, Map, Union, ReduceElision, InlineLet, UpdateLet, ProjectionExtraction, ProjectionLifting, LiteralLifting, NonNullRequirements, ColumnKnowledge, ReductionPushdown, RedundantJoin, TopKElision, Demand, UnionBranchCancellation], limit: 100 }:
+Applied Fixpoint { transforms: [PredicatePushdown, NonNullable, ColumnKnowledge, Demand, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Union, UnionBranchCancellation, FoldConstants] }], limit: 100 }:
+%0 =
+| Get x (u0)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+
+%1 =
+| Get x (u0)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+
+%2 =
+| Join %0 %1 (= #0 #3) (= #2 #5)
+| | implementation = Unimplemented
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+| Project (#0..#2, #0, #4, #2)
+| | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
+| | keys = ((#0), (#1))
+
+====
+Applied Fixpoint { transforms: [UpdateLet, ReductionPushdown, ReduceElision, RedundantJoin, LiteralLifting, FuseAndCollapse { transforms: [ProjectionExtraction, ProjectionLifting, Map, Filter, Project, Join, InlineLet, Union, UnionBranchCancellation, FoldConstants] }], limit: 100 }:
 %0 =
 | Get x (u0)
 | | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
@@ -75,7 +96,7 @@ Applied Fixpoint { transforms: [NonNullable, FoldConstants, PredicatePushdown, J
 | | keys = ((#0), (#1))
 
 ====
-No change: FoldConstants, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants, Filter, Demand, LiteralLifting, Map], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants
+No change: Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants, Filter, Demand, LiteralLifting, Map], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants
 ====
 Final:
 %0 =

@@ -309,7 +309,6 @@ impl PredicatePushdown {
                                 }
                             })
                             .collect();
-
                         *inputs = new_inputs;
 
                         // Recursively descend on the join
@@ -503,7 +502,10 @@ impl PredicatePushdown {
                                 }
                             }
                         });
-                        // Apply the predicates in `list` to value.
+                        // Apply the predicates in `list` to value. Canonicalize
+                        // `list` so that plans are always deterministic.
+                        let mut list = list.into_iter().collect::<Vec<_>>();
+                        expr::canonicalize::canonicalize_predicates(&mut list, &value.typ());
                         **value = value.take_dangerous().filter(list);
                     }
                 }
