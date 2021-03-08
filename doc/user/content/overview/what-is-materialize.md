@@ -109,4 +109,4 @@ To maintain materialized views, most RDBMSes occasionally re-run the view's unde
 
 - [Architecture overview](../architecture) to understand Materialize's internal architecture
 - [API overview](../api-components) to understand what Materialize's SQL API expresses
-- [Materialize CDC](../materialize-cdc) to understand the benefits of the Materialize CDC envelope format
+- [Materialize CDC](../../connect/materialize-cdc) to understand the benefits of the Materialize CDC envelope format

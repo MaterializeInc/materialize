@@ -43,6 +43,7 @@ weight = 40
 name = "Sources"
 parent = "connections"
 url = "/sql/create-source"
+weight= 2
 
 [[menu.main]]
 identifier = "sql"
