@@ -12,13 +12,22 @@
 //! Multiway join planning relies on a broad view of the involved relations,
 //! and chains of binary joins can make this challenging to reason about.
 //! Collecting multiple joins together with their constraints improves
-//! our ability to plan these joins, and reason about other operators motion
-//! aroud them.
+//! our ability to plan these joins, and reason about other operators' motion
+//! around them.
+//!
+//! Also removes unit collections from joins, and joins with fewer than two inputs.
+//!
+//! Unit collections have no columns and a count of one, and a join with such
+//! a collection act as the identity operator on collections. Once removed,
+//! we may find joins with zero or one input, which can be further simplified.
 
 use crate::TransformArgs;
 use expr::{MirRelationExpr, MirScalarExpr};
+use repr::RelationType;
 
 /// Fuses multiple `Join` operators into one `Join` operator.
+///
+/// Removes unit collections from joins, and joins with fewer than two inputs.
 #[derive(Debug)]
 pub struct Join;
 
@@ -81,14 +90,45 @@ impl Join {
                 }
             }
 
+            // Filter join identities out of the inputs.
+            // The join identity is a single 0-ary row constant expression.
+            new_inputs.retain(|input| {
+                if let MirRelationExpr::Constant {
+                    rows: Ok(rows),
+                    typ,
+                } = &input
+                {
+                    !(rows.len() == 1 && typ.column_types.len() == 0 && rows[0].1 == 1)
+                } else {
+                    true
+                }
+            });
+
             new_equivalences.extend(equivalences.drain(..));
+            expr::canonicalize::canonicalize_equivalences(&mut new_equivalences);
 
             *inputs = new_inputs;
             *equivalences = new_equivalences;
             *demand = None;
             *implementation = expr::JoinImplementation::Unimplemented;
 
-            expr::canonicalize::canonicalize_equivalences(equivalences);
+            // If `inputs` is now empty or a singleton (without constraints),
+            // we can remove the join.
+            match inputs.len() {
+                0 => {
+                    // The identity for join is the collection containing a single 0-ary row.
+                    *relation = MirRelationExpr::constant(vec![vec![]], RelationType::empty());
+                }
+                1 => {
+                    // if there are constraints, they probably should have
+                    // been pushed down by predicate pushdown, but .. let's
+                    // not re-write that code here.
+                    if equivalences.is_empty() {
+                        *relation = inputs.pop().unwrap();
+                    }
+                }
+                _ => {}
+            }
         }
     }
 }

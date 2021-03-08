@@ -579,11 +579,12 @@ fn cast_bytes_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'
 
 // TODO(jamii): it would be much more efficient to skip the intermediate
 // repr::jsonb::Jsonb.
-fn cast_string_to_jsonb<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    match strconv::parse_jsonb(a.unwrap_str()) {
-        Err(_) => Datum::Null,
-        Ok(jsonb) => temp_storage.push_unary_row(jsonb.into_row()),
-    }
+fn cast_string_to_jsonb<'a>(
+    a: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let jsonb = strconv::parse_jsonb(a.unwrap_str())?;
+    Ok(temp_storage.push_unary_row(jsonb.into_row()))
 }
 
 fn cast_jsonb_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -3154,6 +3155,7 @@ impl UnaryFunc {
             UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),
             UnaryFunc::CastStringToInterval => cast_string_to_interval(a),
             UnaryFunc::CastStringToUuid => cast_string_to_uuid(a),
+            UnaryFunc::CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
             UnaryFunc::CastDateToTimestamp => Ok(cast_date_to_timestamp(a)),
             UnaryFunc::CastDateToTimestampTz => Ok(cast_date_to_timestamptz(a)),
             UnaryFunc::CastDateToString => Ok(cast_date_to_string(a, temp_storage)),
@@ -3171,7 +3173,6 @@ impl UnaryFunc {
             UnaryFunc::CastIntervalToString => Ok(cast_interval_to_string(a, temp_storage)),
             UnaryFunc::CastIntervalToTime => Ok(cast_interval_to_time(a)),
             UnaryFunc::CastBytesToString => Ok(cast_bytes_to_string(a, temp_storage)),
-            UnaryFunc::CastStringToJsonb => Ok(cast_string_to_jsonb(a, temp_storage)),
             UnaryFunc::CastJsonbOrNullToJsonb => Ok(cast_jsonb_or_null_to_jsonb(a)),
             UnaryFunc::CastJsonbToString => Ok(cast_jsonb_to_string(a, temp_storage)),
             UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
