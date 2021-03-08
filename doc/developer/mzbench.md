@@ -67,8 +67,8 @@ have started up.
 - `benchmark-ci` - for tests that are intended to verify correctness, not performance.
 - `benchmark-medium` - for tests that are intended for developers to understand the performance
   changes between two versions of the code.
-- `benchmark` - for tests that are intended to verify performance in absolute terms. These are the
-  tests that we run in our cloud based benchmarks.
+- `benchmark-large` - for tests that are intended to verify performance in absolute terms. These
+  are the tests that we run in our cloud based benchmarks.
 
 Users of `mzbench` can choose which variant to run by using the `--size` flag.
 
@@ -84,12 +84,12 @@ benchmark:
 This means that, to write a new benchmark that supports running in CI, on laptops and in the
 cloud, 6 workflows must exist:
 
-- `setup-benchmark`
-- `run-benchmark`
 - `setup-benchmark-ci`
 - `run-benchmark-ci`
 - `setup-benchmark-medium`
 - `run-benchmark-medium`
+- `setup-benchmark-large`
+- `run-benchmark-large`
 
 ## Worker Balance Visualization
 

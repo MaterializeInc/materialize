@@ -158,26 +158,26 @@ mzworkflows:
     - step: start-services
       services: [perf-dash-web]
 
-  benchmark:
-    steps:
-    - step: workflow
-      workflow: setup-benchmark
-    - step: workflow
-      workflow: run-benchmark
-
   setup-benchmark:
+    env:
+      UPSERT_GENERATOR_DISTRIBUTION: ${UPSERT_GENERATOR_DISTRIBUTION:-benchmark}
+      UPSERT_GENERATOR_NUM_RECORDS: ${UPSERT_GENERATOR_NUM_RECORDS:-400000000}
+      UPSERT_GENERATOR_PARALLELISM: ${UPSERT_GENERATOR_PARALLELISM:-40}
     steps:
     - step: workflow
       workflow: start-services
     - step: run
       service: avro-upsert-generator
       command: >-
-        --parallelism=40
-        --num-records=400000000
+        --parallelism=${UPSERT_GENERATOR_PARALLELISM}
+        --num-records=${UPSERT_GENERATOR_NUM_RECORDS}
+        --distribution=${UPSERT_GENERATOR_DISTRIBUTION}
 
   run-benchmark:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-16}
+      METRIC_VERIFIER_TIMEOUT: ${METRIC_VERIFIER_TIMEOUT:-3600}
+      UPSERT_GENERATOR_NUM_RECORDS: ${UPSERT_GENERATOR_NUM_RECORDS:-400000000}
     steps:
     - step: remove-services
       services: [materialized, perf-dash-scraper]
@@ -189,9 +189,9 @@ mzworkflows:
       daemon: true
       command: >-
         scrape
-        --timeout-seconds=3600
+        --timeout-seconds=${METRIC_VERIFIER_TIMEOUT}
         "sum(mz_messages_ingested)"
-        "400000000"
+        ${UPSERT_GENERATOR_NUM_RECORDS}
     - step: run
       service: create-views
     - step: wait
@@ -199,6 +199,31 @@ mzworkflows:
       expected_return_code: 0
       print_logs: true
 
+  # The benchmark that we run in the cloud
+  benchmark-large:
+    steps:
+    - step: workflow
+      workflow: setup-benchmark-large
+    - step: workflow
+      workflow: run-benchmark-large
+
+  setup-benchmark-large:
+    env:
+      UPSERT_GENERATOR_DISTRIBUTION: benchmark
+      UPSERT_GENERATOR_NUM_RECORDS: 400000000
+    steps:
+    - step: workflow
+      workflow: setup-benchmark
+
+  run-benchmark-large:
+    env:
+      MZ_WORKERS: ${MZ_WORKERS:-16}
+      UPSERT_GENERATOR_NUM_RECORDS: 400000000
+    steps:
+    - step: workflow
+      workflow: run-benchmark
+
+  # The benchmark that developers can run on their laptop
   benchmark-medium:
     steps:
     - step: workflow
@@ -207,39 +232,53 @@ mzworkflows:
       workflow: run-benchmark-medium
 
   setup-benchmark-medium:
+    env:
+      UPSERT_GENERATOR_DISTRIBUTION: medium
+      UPSERT_GENERATOR_NUM_RECORDS: 20000000
+      UPSERT_GENERATOR_PARALLELISM: 8
     steps:
     - step: workflow
-      workflow: start-services
-    - step: run
-      service: avro-upsert-generator
-      command: >-
-        --parallelism=8
-        --num-records=20000000
-        --distribution=medium
+      workflow: setup-benchmark
 
   run-benchmark-medium:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-8}
+      METRIC_VERIFIER_TIMEOUT: 900
+      UPSERT_GENERATOR_NUM_RECORDS: 20000000
     steps:
-    - step: remove-services
-      services: [materialized, perf-dash-scraper]
-      destroy_volumes: true
-    - step: start-services
-      services: [materialized, perf-dash-scraper]
-    - step: run
-      service: metric-verifier
-      daemon: true
-      command: >-
-        scrape
-        --timeout-seconds=900
-        "sum(mz_messages_ingested)"
-        "20000000"
-    - step: run
-      service: create-views
-    - step: wait
-      service: metric-verifier
-      expected_return_code: 0
-      print_logs: true
+    - step: workflow
+      workflow: run-benchmark
+
+  # The smoketest benchmark that we run in CI
+  ci:
+    steps:
+    - step: workflow
+      workflow: setup-benchmark-ci
+    - step: workflow
+      workflow: run-benchmark-ci
+
+  benchmark-ci:
+    steps:
+      - step: worfklow
+        workflow: ci
+
+  setup-benchmark-ci:
+    env:
+      UPSERT_GENERATOR_DISTRIBUTION: small
+      UPSERT_GENERATOR_NUM_RECORDS: 100000
+      UPSERT_GENERATOR_PARALLELISM: 4
+    steps:
+    - step: workflow
+      workflow: setup-benchmark
+
+  run-benchmark-ci:
+    env:
+      MZ_WORKERS: ${MZ_WORKERS:-8}
+      METRIC_VERIFIER_TIMEOUT: 30
+      UPSERT_GENERATOR_NUM_RECORDS: 100000
+    steps:
+    - step: workflow
+      workflow: run-benchmark
 
   benchmark-insert-with-filter:
     steps:
@@ -278,48 +317,6 @@ mzworkflows:
       service: create-views
       command: >-
         insert_views.sql
-    - step: wait
-      service: metric-verifier
-      expected_return_code: 0
-      print_logs: true
-
-  ci:
-    steps:
-    - step: workflow
-      workflow: setup-benchmark-ci
-    - step: workflow
-      workflow: run-benchmark-ci
-
-  setup-benchmark-ci:
-    steps:
-    - step: workflow
-      workflow: start-services
-    - step: run
-      service: avro-upsert-generator
-      command: >-
-        --parallelism=4
-        --num-records=100000
-        --distribution=small
-
-  run-benchmark-ci:
-    env:
-      MZ_WORKERS: ${MZ_WORKERS:-1}
-    steps:
-    - step: remove-services
-      services: [materialized, perf-dash-scraper]
-      destroy_volumes: true
-    - step: start-services
-      services: [materialized, perf-dash-scraper]
-    - step: run
-      service: metric-verifier
-      daemon: true
-      command: >-
-        scrape
-        --timeout-seconds=30
-        "sum(mz_messages_ingested)"
-        "100000"
-    - step: run
-      service: create-views
     - step: wait
       service: metric-verifier
       expected_return_code: 0

@@ -78,14 +78,14 @@ def main(args: argparse.Namespace) -> None:
         "--mz-find",
         args.composition,
         "run",
-        f"setup-{args.size}",
+        f"setup-benchmark-{args.size}",
     ]
     run_benchmark = [
         mzcompose_location(mz_root),
         "--mz-find",
         args.composition,
         "run",
-        f"run-{args.size}",
+        f"run-benchmark-{args.size}",
     ]
 
     field_names = [
@@ -221,8 +221,8 @@ if __name__ == "__main__":
         "-s",
         "--size",
         type=str,
-        default="benchmark-medium",
-        choices=["benchmark-medium", "benchmark-ci", "benchmark"],
+        default="medium",
+        choices=["medium", "ci", "large"],
         help="Name of the mzcompose composition to run",
     )
 
