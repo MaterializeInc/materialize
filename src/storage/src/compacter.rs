@@ -441,9 +441,7 @@ impl Trace {
     /// Recover all of the `Batch`s we previously knew about (to be used after a
     /// restart)
     ///
-    /// TODO: this function needs to think harder to only keep one `Batch` per timestamp
-    /// and assure that a contiguous range of timestamps is covered.
-    /// More importantly, the range of times has to be from [ts::min -> upper)
+    /// This function also removes `Batch`s that are strict subsets of other `Batch`s.
     fn find_batches(&self) -> Result<Vec<Batch>, anyhow::Error> {
         lazy_static! {
             static ref BATCH_REGEX: Regex = Regex::new("^batch-[0-9]+-[0-9]+$").unwrap();
@@ -457,16 +455,19 @@ impl Trace {
             .collect::<Result<_, _>>()
             .unwrap();
 
-        // Sort batches by (lower increasing, upper decreasing) so that we can greedily
-        // take the batches that span the largest intervals. We know that we can do this
-        // since we control batch compaction, and all batchs either cover disjoint time
-        // intervals or are strict subsets of another containing batch.
+        // Sort `Batch`s by (lower increasing, upper decreasing) so that we can greedily
+        // take the `Batch`s that span the largest intervals. We know that we can do this
+        // since we control `Batch` compaction, and all `Batch`s either cover disjoint time
+        // intervals or are strict subsets of another containing `Batch`.
         batches.sort_by(|a, b| a.lower.cmp(&b.lower).then(a.upper.cmp(&b.upper).reverse()));
         let mut batches_to_keep = vec![];
         let mut batches_to_remove = vec![];
         let mut previous_upper = TimelyTimestamp::minimum();
+        let mut max_upper = TimelyTimestamp::minimum();
 
+        // Greedily select the `Batch`s covering the largest time intervals.
         for batch in batches {
+            max_upper = std::cmp::max(batch.upper, max_upper);
             if batch.lower == previous_upper {
                 previous_upper = batch.upper;
                 batches_to_keep.push(batch);
@@ -477,10 +478,24 @@ impl Trace {
 
         // Verify that all batches span disjoint intervals and that together they
         // span a contiguous interval from [0, upper)
-        let mut previous_upper = TimelyTimestamp::minimum();
         for batch in &batches_to_keep {
-            assert!(batch.lower == previous_upper);
+            if batch.lower != previous_upper {
+                bail!(
+                    "Non-contiguous batch data on restart. Expected lower bound {} received {}",
+                    previous_upper,
+                    batch.lower
+                );
+            }
             previous_upper = batch.upper;
+        }
+
+        // Double check that our assumptions about the structure of `Batch`s hold.
+        if previous_upper != max_upper {
+            bail!(
+                "Corrupted data. Expected to have data up to time {}, but only have data up to {}",
+                max_upper,
+                previous_upper
+            );
         }
 
         for batch in batches_to_remove {
@@ -565,14 +580,24 @@ impl Trace {
             let mut messages = read_segment(&segment)?;
             let (lower, upper) = get_lower_and_upper_bounds(&messages)?;
 
-            // We've already read this segment and made a batch, can now remove it.
             if lower != expected_lower {
-                fs::remove_file(&segment).with_context(|| {
-                    format!(
-                        "failed to remove already consumed wal segment {}",
-                        segment.display()
-                    )
-                })?;
+                if lower > expected_lower || upper > expected_lower {
+                    // We've recived a segment that covers either a non-contiguous interval of time (some times are
+                    // missing) or a partially overlapping interval of time. Either way, we need to error out.
+                    bail!("Received batch with [lower, upper) bounds [{}, {}), expected lower bound: {}",
+                        lower,
+                        upper,
+                        expected_lower
+                    );
+                } else {
+                    // We've already read this segment and made a batch, can now remove it.
+                    fs::remove_file(&segment).with_context(|| {
+                        format!(
+                            "failed to remove already consumed wal segment {}",
+                            segment.display()
+                        )
+                    })?;
+                }
             } else {
                 out.append(&mut messages);
                 expected_lower = upper;
