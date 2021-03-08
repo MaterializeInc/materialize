@@ -503,8 +503,11 @@ mzworkflows:
 
 #### Bash-like Environment Substitution
 
-`mzcompose` performs "bash-like" variable substitution within workflows. For example, you can
-define the following workflow, and it will pull `MZ_WORKERS` from your environment:
+`mzcompose` performs "bash-like" variable substitution within workflows (for `services` the block,
+docker-compose is responsible for [variable
+substitution](https://docs.docker.com/compose/compose-file/compose-file-v3/#variable-substitution)).
+For example, you can define the following workflow, and it will pull `MZ_WORKERS` from your
+environment:
 
 ```yaml
 mzworkflows:
@@ -531,7 +534,8 @@ mzworkflows:
 ```
 
 Support for default values similarly as it does in bash, but the full syntax is not supported. At
-the moment, `mzcompose` only supports default replacement via the `:-` operator:
+the moment, `mzcompose` only supports default replacement via the `:-` operator and only for
+variables using the `${VARIABLE}` syntax:
 
 ```yaml
 mzworkflows:
