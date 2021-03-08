@@ -68,7 +68,7 @@ EXPLAIN PLAN FOR select * from foo inner join bar on foo.a = abs(bar.a) where mo
 
 %1 =
 | Get materialize.public.bar (u3)
-| Filter !(isnull(abs(#0)))
+| Filter !(isnull(abs(#0))), (1 = (abs(#0) % 2))
 
 %2 =
 | Join %0 %1 (= #0 abs(#2))
@@ -115,7 +115,7 @@ where foo.a = bar.a
 
 %1 =
 | Get materialize.public.bar (u3)
-| Filter !(isnull(#0))
+| Filter !(isnull(#0)), !(isnull(#1))
 
 %2 =
 | Get materialize.public.baz (u7)
@@ -125,7 +125,6 @@ where foo.a = bar.a
 | Join %0 %1 %2 (= #0 #2) (= #3 #4)
 | | implementation = Differential %1 %2.(#0) %0.(#0)
 | | demand = (#0, #5)
-| Filter !(isnull(#0))
 | Project (#0, #5)
 
 EOF
@@ -281,3 +280,62 @@ NULL
 2
 3
 2
+
+# tests that equalities involving multi-input equalities become join conditions.
+
+query T multiline
+explain plan for select foo.b, bar.b from foo, bar, (select 1 as a) const where foo.a / bar.a = const.a
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.bar (u3)
+
+%2 =
+| Join %0 %1 (= 1 (#0 / #2))
+| | implementation = Differential %1 %0.()
+| | demand = (#1, #3)
+| Project (#1, #3)
+
+EOF
+
+query II
+select foo.b, bar.b from foo, bar, (select 1 as a) const where foo.a / bar.a = const.a
+----
+4
+NULL
+2
+3
+
+query T multiline
+explain plan for
+select foo.b, bar.b
+from foo, bar, (select -1 as a) const
+where foo.a / bar.a = const.a
+and bar.b - foo.b = foo.a / bar.a
+----
+%0 =
+| Get materialize.public.foo (u1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.bar (u3)
+
+%2 =
+| Join %0 %1 (= -1 (#3 - #1) (#0 / #2))
+| | implementation = Differential %1 %0.()
+| | demand = (#1, #3)
+| Project (#1, #3)
+
+EOF
+
+query II
+select foo.b, bar.b
+from foo, bar, (select -1 as a) const
+where foo.a / bar.a = const.a
+and bar.b - foo.b = foo.a / bar.a
+----
+4
+3

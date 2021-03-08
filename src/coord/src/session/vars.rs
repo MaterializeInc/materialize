@@ -238,7 +238,7 @@ impl Vars {
     /// Sets the configuration parameter named `name` to the value represented
     /// by `value`.
     ///
-    /// Like with [`Var::get`], configuration parameters are matched case
+    /// Like with [`Vars::get`], configuration parameters are matched case
     /// insensitively. If `value` is not valid, as determined by the underlying
     /// configuration parameter, or if the named configuration parameter does
     /// not exist, an error is returned.

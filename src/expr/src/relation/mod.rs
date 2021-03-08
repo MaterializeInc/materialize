@@ -22,6 +22,7 @@ use self::func::{AggregateFunc, TableFunc};
 use crate::explain::Explanation;
 use crate::{DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr};
 
+pub mod canonicalize;
 pub mod func;
 pub mod join_input_mapper;
 
@@ -741,7 +742,7 @@ impl MirRelationExpr {
     /// Returns the distinct global identifiers on which this expression
     /// depends.
     ///
-    /// See [`Relationexpr::global_uses_into`] to reuse an existing vector.
+    /// See [`MirRelationExpr::global_uses_into`] to reuse an existing vector.
     pub fn global_uses(&self) -> Vec<GlobalId> {
         let mut out = vec![];
         self.global_uses_into(&mut out);

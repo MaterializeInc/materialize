@@ -89,7 +89,7 @@ impl Client {
     ///
     /// The request must include the `setup_token` from a
     /// `SessionPropertiesResponse`. If the setup token returned by
-    /// [`session_properties`] is `None`, the cluster is already set up,
+    /// [`Client::session_properties`] is `None`, the cluster is already set up,
     /// and this request will fail.
     ///
     /// The underlying API call is `POST /api/setup`.

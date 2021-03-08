@@ -25,7 +25,7 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Reimplements [`reqwest::Identity::from_pem`] in terms of OpenSSL.
+    /// Reimplements [`reqwest::Certificate::from_pem`] in terms of OpenSSL.
     ///
     /// The implementation in reqwest requires rustls.
     pub fn from_pem(pem: &[u8]) -> Result<Self, openssl::error::ErrorStack> {

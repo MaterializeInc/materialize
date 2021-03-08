@@ -55,7 +55,7 @@ pub struct Writer<W> {
 }
 
 impl<W: Write> Writer<W> {
-    /// Creates a `Writer` for the `Schema` and something implementing the [`io::Write`]
+    /// Creates a `Writer` for the `Schema` and something implementing the [`std::io::Write`]
     /// trait to write to.
     ///
     /// This uses the no-compression [`Codec::Null`] when appending records.
