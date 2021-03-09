@@ -579,11 +579,12 @@ fn cast_bytes_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'
 
 // TODO(jamii): it would be much more efficient to skip the intermediate
 // repr::jsonb::Jsonb.
-fn cast_string_to_jsonb<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    match strconv::parse_jsonb(a.unwrap_str()) {
-        Err(_) => Datum::Null,
-        Ok(jsonb) => temp_storage.push_unary_row(jsonb.into_row()),
-    }
+fn cast_string_to_jsonb<'a>(
+    a: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let jsonb = strconv::parse_jsonb(a.unwrap_str())?;
+    Ok(temp_storage.push_unary_row(jsonb.into_row()))
 }
 
 fn cast_jsonb_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -2254,6 +2255,7 @@ pub enum BinaryFunc {
     MapContainsAnyKeys,
     MapContainsMap,
     ConvertFrom,
+    Position,
     Trim,
     TrimLeading,
     TrimTrailing,
@@ -2408,6 +2410,7 @@ impl BinaryFunc {
             BinaryFunc::ConvertFrom => eager!(convert_from),
             BinaryFunc::Encode => eager!(encode, temp_storage),
             BinaryFunc::Decode => eager!(decode, temp_storage),
+            BinaryFunc::Position => eager!(position),
             BinaryFunc::Trim => Ok(eager!(trim)),
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
@@ -2595,6 +2598,7 @@ impl BinaryFunc {
             ListListConcat | ListElementConcat => input1_type.scalar_type.nullable(true),
             ElementListConcat => input2_type.scalar_type.nullable(true),
             DigestString | DigestBytes => ScalarType::Bytes.nullable(true),
+            Position => ScalarType::Int32.nullable(in_nullable),
             Encode => ScalarType::String.nullable(in_nullable),
             Decode => ScalarType::Bytes.nullable(in_nullable),
             LogDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
@@ -2771,6 +2775,7 @@ impl BinaryFunc {
             | CastFloat64ToDecimal
             | RoundDecimal(_)
             | ConvertFrom
+            | Position
             | Trim
             | TrimLeading
             | TrimTrailing
@@ -2784,6 +2789,19 @@ impl BinaryFunc {
             | LogDecimal(_)
             | Power
             | PowerDecimal(_) => false,
+        }
+    }
+
+    /// Returns the negation of the given binary function, if it exists.
+    pub fn negate(&self) -> Option<Self> {
+        match self {
+            BinaryFunc::Eq => Some(BinaryFunc::NotEq),
+            BinaryFunc::NotEq => Some(BinaryFunc::Eq),
+            BinaryFunc::Lt => Some(BinaryFunc::Gte),
+            BinaryFunc::Gte => Some(BinaryFunc::Lt),
+            BinaryFunc::Gt => Some(BinaryFunc::Lte),
+            BinaryFunc::Lte => Some(BinaryFunc::Gt),
+            _ => None,
         }
     }
 }
@@ -2881,6 +2899,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MapContainsAnyKeys => f.write_str("?|"),
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
+            BinaryFunc::Position => f.write_str("position"),
             BinaryFunc::Trim => f.write_str("btrim"),
             BinaryFunc::TrimLeading => f.write_str("ltrim"),
             BinaryFunc::TrimTrailing => f.write_str("rtrim"),
@@ -3154,6 +3173,7 @@ impl UnaryFunc {
             UnaryFunc::CastStringToTimestampTz => cast_string_to_timestamptz(a),
             UnaryFunc::CastStringToInterval => cast_string_to_interval(a),
             UnaryFunc::CastStringToUuid => cast_string_to_uuid(a),
+            UnaryFunc::CastStringToJsonb => cast_string_to_jsonb(a, temp_storage),
             UnaryFunc::CastDateToTimestamp => Ok(cast_date_to_timestamp(a)),
             UnaryFunc::CastDateToTimestampTz => Ok(cast_date_to_timestamptz(a)),
             UnaryFunc::CastDateToString => Ok(cast_date_to_string(a, temp_storage)),
@@ -3171,7 +3191,6 @@ impl UnaryFunc {
             UnaryFunc::CastIntervalToString => Ok(cast_interval_to_string(a, temp_storage)),
             UnaryFunc::CastIntervalToTime => Ok(cast_interval_to_time(a)),
             UnaryFunc::CastBytesToString => Ok(cast_bytes_to_string(a, temp_storage)),
-            UnaryFunc::CastStringToJsonb => Ok(cast_string_to_jsonb(a, temp_storage)),
             UnaryFunc::CastJsonbOrNullToJsonb => Ok(cast_jsonb_or_null_to_jsonb(a)),
             UnaryFunc::CastJsonbToString => Ok(cast_jsonb_to_string(a, temp_storage)),
             UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
@@ -4208,6 +4227,25 @@ fn make_timestamp<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
 
 fn trim_whitespace<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_str().trim_matches(' '))
+}
+
+fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let substring: &'a str = a.unwrap_str();
+    let string = b.unwrap_str();
+    let char_index = string.find(substring);
+
+    if let Some(char_index) = char_index {
+        // find the index in char space
+        let string_prefix = &string[0..char_index];
+
+        let num_prefix_chars = string_prefix.chars().count();
+        let num_prefix_chars =
+            i32::try_from(num_prefix_chars).map_err(|_| EvalError::Int32OutOfRange)?;
+
+        Ok(Datum::Int32(num_prefix_chars + 1))
+    } else {
+        Ok(Datum::Int32(0))
+    }
 }
 
 fn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {

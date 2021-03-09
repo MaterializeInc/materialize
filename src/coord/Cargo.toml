@@ -40,6 +40,7 @@ serde = "1.0.123"
 serde_json = "1.0.64"
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
+storage = { path = "../storage" }
 symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.2.0"

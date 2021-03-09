@@ -1558,6 +1558,9 @@ lazy_static! {
                     Ok(HirScalarExpr::literal(Datum::String(&name), ScalarType::String))
                 }), 1619;
             },
+            "position" => Scalar {
+                params!(String, String) => BinaryFunc::Position, 849;
+            },
             "power" => Scalar {
                 params!(Float64, Float64) => BinaryFunc::Power, 1368;
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {

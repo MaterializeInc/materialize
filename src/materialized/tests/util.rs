@@ -102,6 +102,7 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
                 }),
             timestamp_frequency: Duration::from_millis(10),
             cache: None,
+            persistence: None,
             logical_compaction_window: None,
             workers: config.workers,
             timely_worker: timely::WorkerConfig::default(),

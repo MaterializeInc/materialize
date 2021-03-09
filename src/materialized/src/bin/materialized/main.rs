@@ -78,6 +78,10 @@ struct Args {
     #[structopt(long)]
     experimental: bool,
 
+    /// Enable persistent tables. Has to be used with --experimental.
+    #[structopt(long)]
+    persistent_tables: bool,
+
     // === Timely worker configuration. ===
     /// Number of dataflow worker threads.
     #[structopt(short, long, env = "MZ_WORKERS", value_name = "N", default_value)]
@@ -349,6 +353,28 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
         None
     };
 
+    let persistence = if args.experimental && args.persistent_tables {
+        let traces_path = data_directory.join("table_traces");
+        let wals_path = data_directory.join("table_wals");
+        fs::create_dir_all(&traces_path).with_context(|| {
+            format!(
+                "trying to create traces directory: {}",
+                traces_path.display()
+            )
+        })?;
+        fs::create_dir_all(&wals_path)
+            .with_context(|| format!("trying to create wal directory: {}", wals_path.display()))?;
+
+        Some(coord::PersistenceConfig {
+            traces_path,
+            wals_path,
+        })
+    } else if args.persistent_tables {
+        bail!("cannot specify --persistent-tables without --experimental");
+    } else {
+        None
+    };
+
     // If --disable-telemetry is present, disable telemetry. Otherwise, if a
     // MZ_TELEMETRY_URL environment variable is set, use that as the telemetry
     // URL. Otherwise (the defaults), enable the production server for release mode
@@ -501,6 +527,7 @@ swap: {swap_total}KB total, {swap_used}KB used",
             logical_compaction_window: args.logical_compaction_window,
             timestamp_frequency: args.timestamp_frequency,
             cache,
+            persistence,
             listen_addr: args.listen_addr,
             tls,
             data_directory,

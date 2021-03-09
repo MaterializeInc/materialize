@@ -330,6 +330,9 @@ impl<'a> Parser<'a> {
             }),
             Token::Keyword(ROW) => self.parse_row_expr(),
             Token::Keyword(TRIM) => self.parse_trim_expr(),
+            Token::Keyword(POSITION) if self.peek_token() == Some(Token::LParen) => {
+                self.parse_position_expr()
+            }
             Token::Keyword(kw) if kw.is_reserved() => {
                 return Err(self.error(
                     self.peek_prev_pos(),
@@ -712,6 +715,31 @@ impl<'a> Parser<'a> {
         self.expect_token(&Token::RParen)?;
         Ok(Expr::Function(Function {
             name: UnresolvedObjectName::unqualified(name),
+            args: FunctionArgs::Args(exprs),
+            filter: None,
+            over: None,
+            distinct: false,
+        }))
+    }
+
+    // Parse calls to position(), which has the special form position('string' in 'string').
+    fn parse_position_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
+        self.expect_token(&Token::LParen)?;
+
+        let mut exprs = Vec::new();
+
+        // we must be greater-equal the precedence of IN, which is Like to avoid
+        // parsing away the IN as part of the sub expression
+        exprs.push(self.parse_subexpr(Precedence::Like)?);
+
+        self.expect_token(&Token::Keyword(IN))?;
+
+        exprs.push(self.parse_expr()?);
+
+        self.expect_token(&Token::RParen)?;
+
+        Ok(Expr::Function(Function {
+            name: UnresolvedObjectName::unqualified("position"),
             args: FunctionArgs::Args(exprs),
             filter: None,
             over: None,
@@ -2327,6 +2355,7 @@ impl<'a> Parser<'a> {
                 Token::Number(ref n) => Ok(Value::Number(n.to_string())),
                 Token::String(ref s) => Ok(Value::String(s.to_string())),
                 Token::HexString(ref s) => Ok(Value::HexString(s.to_string())),
+                Token::LBracket => self.parse_value_array(),
                 _ => parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -2339,6 +2368,21 @@ impl<'a> Parser<'a> {
                 "Expecting a value, but found EOF"
             ),
         }
+    }
+
+    fn parse_value_array(&mut self) -> Result<Value, ParserError> {
+        let mut values = vec![];
+        loop {
+            if let Some(Token::RBracket) = self.peek_token() {
+                break;
+            }
+            values.push(self.parse_value()?);
+            if !self.consume_token(&Token::Comma) {
+                break;
+            }
+        }
+        self.expect_token(&Token::RBracket)?;
+        Ok(Value::Array(values))
     }
 
     fn parse_array(&mut self) -> Result<Expr<Raw>, ParserError> {

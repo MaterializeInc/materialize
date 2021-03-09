@@ -318,5 +318,13 @@ while (true)
 }
 ```
 
+### Interactive `TAIL`
+
+If you want to use `TAIL` from an interactive SQL session (for example in `psql`), wrap the query in `COPY`.
+
+```sql
+COPY (TAIL t) TO STDOUT
+```
+
 [`bigint`]: /sql/types/bigint
 [`numeric`]: /sql/types/numeric
