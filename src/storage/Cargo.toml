@@ -1,0 +1,19 @@
+[package]
+name = "storage"
+description = "Persistent storage of data."
+version = "0.0.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+anyhow = "1.0.38"
+byteorder = "1.4.2"
+crossbeam-channel = "0.5.0"
+dataflow-types = { path = "../dataflow-types" }
+expr = { path = "../expr" }
+lazy_static = "1.4.0"
+log = "0.4.13"
+regex = "1.4.3"
+repr = { path = "../repr" }
+timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
+tokio = "1.2.0"
