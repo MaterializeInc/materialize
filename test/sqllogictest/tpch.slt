@@ -1786,11 +1786,11 @@ ORDER BY
 ----
 %0 =
 | Get materialize.public.customer (u15)
-| Filter (((((((substr(#4, 1, 2) = "13") || (substr(#4, 1, 2) = "31")) || (substr(#4, 1, 2) = "23")) || (substr(#4, 1, 2) = "29")) || (substr(#4, 1, 2) = "30")) || (substr(#4, 1, 2) = "18")) || (substr(#4, 1, 2) = "17"))
+| Filter ((((((("13" = substr(#4, 1, 2)) || ("31" = substr(#4, 1, 2))) || ("23" = substr(#4, 1, 2))) || ("29" = substr(#4, 1, 2))) || ("30" = substr(#4, 1, 2))) || ("18" = substr(#4, 1, 2))) || ("17" = substr(#4, 1, 2)))
 
 %1 =
 | Get materialize.public.customer (u15)
-| Filter (((((((substr(#4, 1, 2) = "13") || (substr(#4, 1, 2) = "31")) || (substr(#4, 1, 2) = "23")) || (substr(#4, 1, 2) = "29")) || (substr(#4, 1, 2) = "30")) || (substr(#4, 1, 2) = "18")) || (substr(#4, 1, 2) = "17")), (#5 > 0dec)
+| Filter ((((((("13" = substr(#4, 1, 2)) || ("31" = substr(#4, 1, 2))) || ("23" = substr(#4, 1, 2))) || ("29" = substr(#4, 1, 2))) || ("30" = substr(#4, 1, 2))) || ("18" = substr(#4, 1, 2))) || ("17" = substr(#4, 1, 2))), (#5 > 0dec)
 | Reduce group=()
 | | agg sum(#5)
 | | agg count(true)
