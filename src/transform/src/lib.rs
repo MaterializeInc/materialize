@@ -45,10 +45,8 @@ pub mod reduce_elision;
 pub mod reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
-pub mod split_predicates;
 pub mod topk_elision;
 pub mod update_let;
-// pub mod use_indexes;
 
 pub mod dataflow;
 pub use dataflow::optimize_dataflow;
@@ -184,7 +182,6 @@ impl Default for Optimizer {
             Box::new(crate::fusion::join::Join),
             Box::new(crate::inline_let::InlineLet),
             Box::new(crate::reduction::FoldConstants),
-            Box::new(crate::split_predicates::SplitPredicates),
             Box::new(crate::fusion::filter::Filter),
             Box::new(crate::fusion::map::Map),
             Box::new(crate::projection_extraction::ProjectionExtraction),
@@ -195,9 +192,6 @@ impl Default for Optimizer {
             Box::new(crate::fusion::filter::Filter),
             Box::new(crate::fusion::map::Map),
             Box::new(crate::reduction::FoldConstants),
-            Box::new(crate::reduction::DeMorgans),
-            Box::new(crate::reduction::UndistributeAnd),
-            Box::new(crate::split_predicates::SplitPredicates),
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
@@ -220,7 +214,6 @@ impl Default for Optimizer {
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     Box::new(crate::redundant_join::RedundantJoin),
                     Box::new(crate::topk_elision::TopKElision),
-                    Box::new(crate::reduction::NegatePredicate),
                     Box::new(crate::demand::Demand),
                 ],
             }),
@@ -273,7 +266,6 @@ impl Optimizer {
             Box::new(crate::fusion::join::Join),
             Box::new(crate::inline_let::InlineLet),
             Box::new(crate::reduction::FoldConstants),
-            Box::new(crate::split_predicates::SplitPredicates),
             Box::new(crate::fusion::filter::Filter),
             Box::new(crate::fusion::map::Map),
             Box::new(crate::projection_extraction::ProjectionExtraction),

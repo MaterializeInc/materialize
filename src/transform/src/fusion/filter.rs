@@ -45,7 +45,7 @@
 //! ```
 
 use crate::TransformArgs;
-use expr::{MirRelationExpr, MirScalarExpr};
+use expr::MirRelationExpr;
 
 /// Fuses multiple `Filter` operators into one and deduplicates predicates.
 #[derive(Debug)]
@@ -65,7 +65,7 @@ impl crate::Transform for Filter {
 }
 
 impl Filter {
-    /// Fuses multiple `Filter` operators into one and deduplicates predicates.
+    /// Fuses multiple `Filter` operators into one and canonicalizes predicates.
     pub fn action(&self, relation: &mut MirRelationExpr) {
         if let MirRelationExpr::Filter { input, predicates } = relation {
             // consolidate nested filters.
@@ -78,39 +78,12 @@ impl Filter {
                 *input = Box::new(inner.take_dangerous());
             }
 
-            for predicate in predicates.iter_mut() {
-                canonicalize_predicate(predicate);
-            }
-            predicates.sort();
-            predicates.dedup();
+            expr::canonicalize::canonicalize_predicates(predicates, &input.typ());
 
             // remove the Filter stage if empty.
             if predicates.is_empty() {
                 *relation = input.take_dangerous();
             }
-        }
-    }
-}
-
-/// Ensures that two equalities are made in a consistent order.
-fn canonicalize_predicate(predicate: &mut MirScalarExpr) {
-    if let MirScalarExpr::CallBinary {
-        func: expr::BinaryFunc::Eq,
-        expr1,
-        expr2,
-    } = predicate
-    {
-        // Canonically order elements so that deduplication works better.
-        if expr2 < expr1 {
-            ::std::mem::swap(expr1, expr2);
-        }
-
-        // Comparison to self is always true unless the element is `Datum::Null`.
-        if expr1 == expr2 {
-            *predicate = expr1
-                .clone()
-                .call_unary(expr::UnaryFunc::IsNull)
-                .call_unary(expr::UnaryFunc::Not);
         }
     }
 }

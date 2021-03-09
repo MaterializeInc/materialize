@@ -2791,6 +2791,19 @@ impl BinaryFunc {
             | PowerDecimal(_) => false,
         }
     }
+
+    /// Returns the negation of the given binary function, if it exists.
+    pub fn negate(&self) -> Option<Self> {
+        match self {
+            BinaryFunc::Eq => Some(BinaryFunc::NotEq),
+            BinaryFunc::NotEq => Some(BinaryFunc::Eq),
+            BinaryFunc::Lt => Some(BinaryFunc::Gte),
+            BinaryFunc::Gte => Some(BinaryFunc::Lt),
+            BinaryFunc::Gt => Some(BinaryFunc::Lte),
+            BinaryFunc::Lte => Some(BinaryFunc::Gt),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for BinaryFunc {
