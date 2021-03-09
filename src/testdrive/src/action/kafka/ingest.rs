@@ -108,7 +108,11 @@ impl Transcoder {
                     out.extend(avro::to_avro_datum(&schema, val).map_err(|e| e.to_string())?);
                     if corrupt_buffer {
                         for x in &mut out {
-                            *x = *x ^ *x;
+                            // We need to corrupt zero-values for Avro, because 0 is always an okay default
+                            *x = match &x {
+                                0 => 1,
+                                _ => *x ^ (*x >> 1),
+                            }
                         }
                     }
                     Ok(Some(out))
@@ -138,7 +142,8 @@ impl Transcoder {
                 let mut out = val.write_to_bytes().map_err(|e| e.to_string())?;
                 if corrupt_buffer {
                     for x in &mut out {
-                        *x = *x ^ *x;
+                        // Zero-ing out bytes is sufficient to corrupt Protobuf data
+                        *x = 0;
                     }
                 }
                 Ok(Some(out))
@@ -156,7 +161,7 @@ impl Transcoder {
                 }
                 if corrupt_buffer {
                     for x in &mut out {
-                        *x = *x ^ *x;
+                        *x = 0;
                     }
                 }
                 Ok(Some(bytes::unescape(&out)?))
