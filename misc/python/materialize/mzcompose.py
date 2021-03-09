@@ -111,7 +111,8 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
         errors.append(LintError(path, f'image {spec} depends on floating "latest" tag'))
 
     if repo == "confluentinc" and image.startswith("cp-"):
-        if tag != LINT_CONFLUENT_PLATFORM_VERSION:
+        # An '$XXX' environment variable may have been used to specify the version
+        if "$" not in tag and tag != LINT_CONFLUENT_PLATFORM_VERSION:
             errors.append(
                 LintError(
                     path,
@@ -121,7 +122,7 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
             )
 
     if repo == "debezium":
-        if tag != LINT_DEBEZIUM_VERSION:
+        if "$" not in tag and tag != LINT_DEBEZIUM_VERSION:
             errors.append(
                 LintError(
                     path,
@@ -271,6 +272,9 @@ class Composition:
 
         built_steps = []
         for raw_step in workflow["steps"]:
+            # A step could be reused over several workflows, so operate on a copy
+            raw_step = raw_step.copy()
+
             step_name = raw_step.pop("step")
             step_ty = Steps.named(step_name)
             munged = {k.replace("-", "_"): v for k, v in raw_step.items()}
