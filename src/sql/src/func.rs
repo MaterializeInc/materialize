@@ -1988,6 +1988,9 @@ lazy_static! {
                         column_names: vec![Some("unnest".into())],
                     })
                 }), oid::FUNC_UNNEST_LIST_OID;
+            },
+            "mz_sleep" => Scalar {
+                params!(Float64) => UnaryFunc::Sleep, 2626;
             }
         }
     };

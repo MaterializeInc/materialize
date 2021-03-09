@@ -356,6 +356,13 @@
     description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
       Users cannot define views with queries containing `now()`.'
 
+  - signature: mz_sleep(d: double precision) -> timestamptz
+    description: |
+      Sleeps during evaluation of the expression for the specified duration in seconds and returns
+      the time at which sleeping finished.  The mz_sleep function is intended to be called
+      interactively, or in transactions during testing. If called in a materialized view, it will be
+      optimized away as aggressively as possible.
+
   - signature: 'to_timestamp(val: double precision) -> timestamptz'
     description: Converts Unix epoch (seconds since 00:00:00 UTC on January 1, 1970)
       to timestamp
