@@ -73,9 +73,9 @@ checksum = "afddf7f520a80dbf76e6f50a35bca42a2331ef227a28b3b6dc5c2e2338d114b1"
 
 [[package]]
 name = "arbitrary"
-version = "0.4.7"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db55d72333851e17d572bec876e390cd3b11eb1ef53ae821dd9f3b653d2b4569"
+checksum = "698b65a961a9d730fb45b6b0327e20207810c9f61ee421b082b27ba003f49e2b"
 
 [[package]]
 name = "arc-swap"
@@ -538,6 +538,7 @@ dependencies = [
  "serde_json",
  "sql",
  "sql-parser",
+ "storage",
  "symbiosis",
  "tempfile",
  "timely",
@@ -1456,9 +1457,9 @@ dependencies = [
 
 [[package]]
 name = "honggfuzz"
-version = "0.5.52"
+version = "0.5.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ead88897bcad1c396806d6ccba260a0363e11da997472e9e19ab9889969083a2"
+checksum = "bea09577d948a98a5f59b7c891e274c4fb35ad52f67782b3d0cb53b9c05301f1"
 dependencies = [
  "arbitrary",
  "lazy_static",
@@ -3903,6 +3904,23 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "storage"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "crossbeam-channel",
+ "dataflow-types",
+ "expr",
+ "lazy_static",
+ "log",
+ "regex",
+ "repr",
+ "timely",
+ "tokio",
+]
 
 [[package]]
 name = "stringprep"
