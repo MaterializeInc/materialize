@@ -33,6 +33,7 @@ services:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+    propagate-uid-gid: true
     volumes:
       # this is the dir that contains all the individual snapshot directories
       - ${MZ_CHBENCH_SNAPSHOT_DIR}:/snapshot
@@ -99,6 +100,7 @@ services:
     image: confluentinc/cp-zookeeper:5.5.3
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+    propagate-uid-gid: true
     volumes:
       - ${MZ_CHBENCH_SNAPSHOT_ZK_DATA:-zk-data}:/var/lib/zookeeper
   kafka:
@@ -122,6 +124,7 @@ services:
       # To avoid race condition with control-center
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
+    propagate-uid-gid: true
     volumes:
       - ${MZ_CHBENCH_SNAPSHOT_KAFKA_DATA:-mzsnap-data}:/var/lib/kafka/data
   connect:
@@ -192,10 +195,12 @@ services:
       - chbench-gen:/gen
   mzutil:
     mzbuild: mzutil
+    propagate-uid-gid: true
     volumes:
       - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
   kafka-util:
     mzbuild: kafka-util
+    propagate-uid-gid: true
     volumes:
       - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
 
@@ -258,6 +263,7 @@ services:
     # run peeker using './mzcompose run peeker' to adjust which queries are peeked,
     # and see /src/peeker/chbench-config.toml for a list of queries
     command: ${PEEKER_CMD:---queries q01,q02,q17}
+    propagate-uid-gid: true
     volumes:
       - ./peeker-config:/etc/peeker
       - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot

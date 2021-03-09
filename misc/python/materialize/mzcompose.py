@@ -204,9 +204,9 @@ class Composition:
                 else:
                     self.images.append(image)
 
-                if "propagate-uid-gid" in config:
-                    config["user"] = f"{os.getuid()}:{os.getgid()}"
-                    del config["propagate-uid-gid"]
+            if "propagate-uid-gid" in config:
+                config["user"] = f"{os.getuid()}:{os.getgid()}"
+                del config["propagate-uid-gid"]
 
         deps = self.repo.resolve_dependencies(self.images)
         for config in compose["services"].values():

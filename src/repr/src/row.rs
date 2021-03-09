@@ -75,7 +75,7 @@ use fmt::Debug;
 /// avoids the allocations involved in `RowPacker::new()`.
 #[derive(Clone, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
-    data: SmallVec<[u8; 16]>,
+    data: SmallVec<[u8; 23]>,
 }
 
 /// These implementations order first by length, and then by slice contents.
@@ -1492,5 +1492,15 @@ mod tests {
                 panic!("Disparity in claimed size for {:?}", value);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn row_size_is_stable() {
+        // nothin depends on this being exactly 32, we just want it to be an active decision if we
+        // change it
+        assert_eq!(std::mem::size_of::<super::Row>(), 32);
     }
 }
