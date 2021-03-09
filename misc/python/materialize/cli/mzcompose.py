@@ -164,9 +164,9 @@ def gen_shortcuts(repo: mzbuild.Repository) -> int:
 exec "$(dirname "$0")/{}/bin/mzcompose" "$@"
 """
     for path in repo.compositions.values():
-        mzcompose_path = path / "mzcompose"
+        mzcompose_path = path.parent / "mzcompose"
         with open(mzcompose_path, "w") as f:
-            f.write(template.format(os.path.relpath(repo.root, path)))
+            f.write(template.format(os.path.relpath(repo.root, path.parent)))
         mzbuild.chmod_x(mzcompose_path)
 
     return 0
