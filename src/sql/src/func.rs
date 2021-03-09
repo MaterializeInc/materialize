@@ -2037,7 +2037,11 @@ lazy_static! {
             },
             "mz_render_typemod" => Scalar {
                 params!(Oid, Int32) => BinaryFunc::MzRenderTypemod, oid::FUNC_MZ_RENDER_TYPEMOD_OID;
+            },
+            "mz_sleep" => Scalar {
+                params!(Float64) => UnaryFunc::Sleep, oid::FUNC_MZ_SLEEP_OID;
             }
+
         }
     };
 }

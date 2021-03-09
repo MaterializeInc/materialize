@@ -1313,6 +1313,12 @@ fn power_dec<'a>(a: Datum<'a>, b: Datum<'a>, scale: u8) -> Result<Datum<'a>, Eva
     cast_float64_to_decimal(Datum::from(a.powf(b)), Datum::from(scale))
 }
 
+fn sleep<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let duration = std::time::Duration::from_secs_f64(a.unwrap_float64());
+    std::thread::sleep(duration);
+    Ok(Datum::from(Utc::now()))
+}
+
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a == b)
 }
@@ -3095,6 +3101,7 @@ pub enum UnaryFunc {
     LnDecimal(u8),
     Exp,
     ExpDecimal(u8),
+    Sleep,
 }
 
 impl UnaryFunc {
@@ -3269,6 +3276,7 @@ impl UnaryFunc {
             UnaryFunc::LnDecimal(scale) => log_dec(a, f64::ln, "ln", *scale),
             UnaryFunc::Exp => exp(a),
             UnaryFunc::ExpDecimal(scale) => exp_dec(a, *scale),
+            UnaryFunc::Sleep => sleep(a),
         }
     }
 
@@ -3427,6 +3435,7 @@ impl UnaryFunc {
             Cot => ScalarType::Float64.nullable(in_nullable),
             Log10 | Ln | Exp => ScalarType::Float64.nullable(in_nullable),
             Log10Decimal(_) | LnDecimal(_) | ExpDecimal(_) => input_type,
+            Sleep => ScalarType::TimestampTz.nullable(false),
         }
     }
 
@@ -3606,6 +3615,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::LnDecimal(_) => f.write_str("lndec"),
             UnaryFunc::ExpDecimal(_) => f.write_str("expdec"),
             UnaryFunc::Exp => f.write_str("expf64"),
+            UnaryFunc::Sleep => f.write_str("mz_sleep"),
         }
     }
 }
