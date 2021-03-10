@@ -381,6 +381,19 @@ mzworkflows:
       service: mzutil
       command: snapshot_view_states.py
 
+
+  setup-benchmark-medium:
+    env:
+      CHBENCH_RUN_SECONDS: 360
+    steps:
+    - step: workflow
+      workflow: prepare-snapshot
+      
+  run-benchmark-medium:
+    steps:
+    - step: workflow
+      workflow: measure-ingest-performance
+
   # Run a workflow to measure the ingest performance of Materialize. Assumes that the you have
   # already called prepare-snapshot and the cluster is still running
   measure-ingest-performance:

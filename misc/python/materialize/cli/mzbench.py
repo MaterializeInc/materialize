@@ -149,6 +149,7 @@ def main(args: argparse.Namespace) -> None:
             )
             raise
 
+        print(output)
         # TODO: Replace parsing output from mzcompose with reading from a well known file or topic
         for line in output.decode().splitlines():
             if line.startswith("SUCCESS!"):
