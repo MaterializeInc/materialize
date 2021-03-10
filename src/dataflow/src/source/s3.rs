@@ -12,11 +12,12 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::{From, TryInto};
 use std::default::Default;
+use std::io::Read;
 use std::ops::AddAssign;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use anyhow::{anyhow, Error};
-use async_compression::tokio::bufread::GzipDecoder;
+use flate2::read::DeflateDecoder;
 use globset::GlobMatcher;
 use metrics::BucketMetrics;
 use notifications::Event;
@@ -588,6 +589,7 @@ async fn download_object(
     let content_encoding = match obj.content_encoding {
         Some(s) => match s.as_ref() {
             "gzip" => Compression::Gzip,
+            "identity" => Compression::None,
             f => {
                 log::warn!("Unsupported content encoding: {}", f);
                 return None;
@@ -597,19 +599,35 @@ async fn download_object(
     };
 
     if let Some(body) = obj.body {
-        let mut reader = match content_encoding {
-            Compression::None => body.into_async_read(),
-            // Compression::Gzip => GzipDecoder::new(body.into_async_read()),
-            Compression::Gzip => body.into_async_read(),
-        };
+        let mut reader = body.into_async_read();
         // unwrap is safe because content length is not allowed to be negative
         let mut buf = Vec::with_capacity(obj.content_length.unwrap_or(1024).try_into().unwrap());
         let mut messages = 0;
+        let mut bytes_read = 0;
 
         let mut sent = Sent::Success;
         match reader.read_to_end(&mut buf).await {
             Ok(_) => {
                 let activate = !buf.is_empty();
+
+                let buf = match content_encoding {
+                    Compression::None => buf,
+                    Compression::Gzip => {
+                        let mut decoded = Vec::new();
+                        let mut decoder = DeflateDecoder::new(&*buf);
+                        match decoder.read_to_end(&mut decoded) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                log::warn!("failed to decode object: {}", e);
+                                return None;
+                            }
+                        }
+                        decoded
+                    }
+                };
+
+                bytes_read = buf.len() as u64;
+
                 for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
                     if tx.send(Ok(InternalMessage { record: line })).is_err() {
                         sent = Sent::SenderClosed;
@@ -632,7 +650,7 @@ async fn download_object(
         }
 
         Some(DownloadMetricUpdate {
-            bytes: buf.len() as u64,
+            bytes: bytes_read,
             messages,
             sent,
         })
