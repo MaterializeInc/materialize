@@ -96,6 +96,8 @@ Operation | Computes
 
 ## Examples
 
+### Return timestamp
+
 ```sql
 SELECT TIMESTAMP '2007-02-01 15:04:05' AS ts_v;
 ```
@@ -105,7 +107,7 @@ SELECT TIMESTAMP '2007-02-01 15:04:05' AS ts_v;
  2007-02-01 15:04:05
 ```
 
-<hr/>
+### Return timestamp with time zone
 
 ```sql
 SELECT TIMESTAMPTZ '2007-02-01 15:04:05+06' AS tstz_v;
@@ -115,3 +117,6 @@ SELECT TIMESTAMPTZ '2007-02-01 15:04:05+06' AS tstz_v;
 -------------------------
  2007-02-01 09:04:05 UTC
 ```
+
+## Related topics
+* [`TIMEZONE` and `AT TIME ZONE` functions](../../functions/timezone-and-at-time-zone)
