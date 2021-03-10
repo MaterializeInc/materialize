@@ -25,7 +25,7 @@ pub struct AppendAction {
     compression: Compression,
 }
 
-enum Compression {
+pub enum Compression {
     Gzip,
     None,
 }
@@ -42,7 +42,7 @@ impl FromStr for Compression {
     }
 }
 
-fn build_compression(cmd: &mut BuiltinCommand) -> Result<Compression, String> {
+pub fn build_compression(cmd: &mut BuiltinCommand) -> Result<Compression, String> {
     match cmd.args.opt_string("compression") {
         Some(s) => s.parse(),
         None => Ok(Compression::None),
