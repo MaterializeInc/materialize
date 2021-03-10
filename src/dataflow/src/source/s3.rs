@@ -16,6 +16,7 @@ use std::ops::AddAssign;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use anyhow::{anyhow, Error};
+use async_compression::tokio::bufread::GzipDecoder;
 use globset::GlobMatcher;
 use metrics::BucketMetrics;
 use notifications::Event;
@@ -30,7 +31,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 use tokio::time::{self, Duration};
 
 use aws_util::aws;
-use dataflow_types::{DataEncoding, ExternalSourceConnector, MzOffset, S3KeySource};
+use dataflow_types::{Compression, DataEncoding, ExternalSourceConnector, MzOffset, S3KeySource};
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::logging::materialized::Logger;
@@ -580,8 +581,27 @@ async fn download_object(
         }
     };
 
+    // TODO: How we should we handle the Content-Type Header?
+    // There are many content types that can be parsed as text, once deflated
+    // And then there are a lot of content types that can't be, but we're not really
+    // handling those either
+    let content_encoding = match obj.content_encoding {
+        Some(s) => match s.as_ref() {
+            "gzip" => Compression::Gzip,
+            f => {
+                log::warn!("Unsupported content encoding: {}", f);
+                return None;
+            }
+        },
+        _ => Compression::None,
+    };
+
     if let Some(body) = obj.body {
-        let mut reader = body.into_async_read();
+        let mut reader = match content_encoding {
+            Compression::None => body.into_async_read(),
+            // Compression::Gzip => GzipDecoder::new(body.into_async_read()),
+            Compression::Gzip => body.into_async_read(),
+        };
         // unwrap is safe because content length is not allowed to be negative
         let mut buf = Vec::with_capacity(obj.content_length.unwrap_or(1024).try_into().unwrap());
         let mut messages = 0;
