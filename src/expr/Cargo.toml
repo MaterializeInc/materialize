@@ -9,7 +9,7 @@ publish = false
 aho-corasick = "0.7.15"
 anyhow = "1.0.38"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
-csv = "1.1.0"
+csv = "1.1.6"
 encoding = "0.2.0"
 enum-iterator = "0.6.0"
 hmac = "0.10.0"
