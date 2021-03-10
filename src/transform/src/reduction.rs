@@ -53,6 +53,16 @@ impl FoldConstants {
                 }
                 for aggregate in aggregates.iter_mut() {
                     aggregate.expr.reduce(&input_typ);
+                    if let (expr::AggregateFunc::Count, MirScalarExpr::Column(c)) =
+                        (&aggregate.func, &aggregate.expr)
+                    {
+                        // An aggregate that is a count of non-nullable data can be replaced by
+                        // count(true).
+                        if !input_typ.column_types[*c].nullable && !aggregate.distinct {
+                            aggregate.expr =
+                                MirScalarExpr::literal_ok(Datum::True, repr::ScalarType::Bool);
+                        }
+                    }
                 }
 
                 // Guard against evaluating expression that may contain temporal expressions.
@@ -104,16 +114,23 @@ impl FoldConstants {
                 // we shouldn't rely on `reduce` not looking at its cardinality to assess
                 // the number of columns.
                 let input_arity = input.arity();
+                let mut current_type =
+                    repr::RelationType::new(relation_type.column_types[..input_arity].to_vec());
+                let mut keys = relation_type.keys.clone();
                 for (index, scalar) in scalars.iter_mut().enumerate() {
-                    let mut current_type = repr::RelationType::new(
-                        relation_type.column_types[..(input_arity + index)].to_vec(),
-                    );
-                    for key in relation_type.keys.iter() {
-                        if key.iter().all(|i| *i < input_arity + index) {
-                            current_type = current_type.with_key(key.clone());
-                        }
+                    // Add the keys that belong in `current_type` for the
+                    // particular scalar
+                    while let Some(pos) = keys
+                        .iter()
+                        .position(|k| k.iter().all(|i| *i < input_arity + index))
+                    {
+                        current_type = current_type.with_key(keys.remove(pos));
                     }
                     scalar.reduce(&current_type);
+                    // Add the type of scalar to `current_type` so it can be
+                    // referred to by the next scalar.
+                    let typ = scalar.typ(&current_type);
+                    current_type.column_types.push(typ);
                 }
 
                 // Guard against evaluating expression that may contain temporal expressions.

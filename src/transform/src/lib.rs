@@ -37,7 +37,6 @@ pub mod inline_let;
 pub mod join_implementation;
 pub mod map_lifting;
 pub mod nonnull_requirements;
-pub mod nonnullable;
 pub mod predicate_pushdown;
 pub mod projection_extraction;
 pub mod projection_lifting;
@@ -195,7 +194,6 @@ impl Default for Optimizer {
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
-                    Box::new(crate::nonnullable::NonNullable),
                     Box::new(crate::reduction::FoldConstants),
                     Box::new(crate::predicate_pushdown::PredicatePushdown),
                     Box::new(crate::fusion::join::Join),

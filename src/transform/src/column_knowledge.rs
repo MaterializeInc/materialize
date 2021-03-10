@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 //! Transformations based on pulling information about individual columns from sources.
+//! TODO(frank): evaluate for redundancy with `reduction::FoldConstants`, or vice-versa.
 
 use std::collections::HashMap;
 

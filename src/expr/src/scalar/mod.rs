@@ -306,9 +306,15 @@ impl MirScalarExpr {
                 if expr.is_literal() {
                     *e = eval(e);
                 } else if *func == UnaryFunc::IsNull {
-                    // (<expr1> <op> <expr2>) IS NULL can often be simplified to
-                    // (<expr1> IS NULL) OR (<expr2> IS NULL).
-                    if let MirScalarExpr::CallBinary { func, expr1, expr2 } = &mut **expr {
+                    if let MirScalarExpr::Column(c) = &**expr {
+                        if !relation_type.column_types[*c].nullable {
+                            // <nonnullable column> IS NULL automatically
+                            // resolves to FALSE
+                            *e = MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool);
+                        }
+                    } else if let MirScalarExpr::CallBinary { func, expr1, expr2 } = &mut **expr {
+                        // (<expr1> <op> <expr2>) IS NULL can often be simplified to
+                        // (<expr1> IS NULL) OR (<expr2> IS NULL).
                         if func.propagates_nulls() && !func.introduces_nulls() {
                             let expr1 = expr1.take().call_unary(UnaryFunc::IsNull);
                             let expr2 = expr2.take().call_unary(UnaryFunc::IsNull);
