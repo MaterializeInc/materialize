@@ -569,7 +569,7 @@ async fn download_object(
     let obj = match client
         .get_object(GetObjectRequest {
             bucket: bucket.clone(),
-            key,
+            key: key.to_string(),
             ..Default::default()
         })
         .await
@@ -591,7 +591,13 @@ async fn download_object(
             "gzip" => Compression::Gzip,
             "identity" => Compression::None,
             f => {
-                log::warn!("Unsupported content encoding: {}", f);
+                if let Err(e) = tx.send(Err(anyhow!(
+                    "Unsupported content encoding '{}' for object {}",
+                    f,
+                    key
+                ))) {
+                    log::warn!("unable to send error on stream: {}", e);
+                }
                 return None;
             }
         },
@@ -610,6 +616,8 @@ async fn download_object(
             Ok(_) => {
                 let activate = !buf.is_empty();
 
+                bytes_read = buf.len() as u64;
+
                 let buf = match content_encoding {
                     Compression::None => buf,
                     Compression::Gzip => {
@@ -618,15 +626,23 @@ async fn download_object(
                         match decoder.read_to_end(&mut decoded) {
                             Ok(_) => {}
                             Err(e) => {
-                                log::warn!("failed to decode object: {}", e);
-                                return None;
+                                if let Err(e) = tx.send(Err(anyhow!(
+                                    "Failed to decode object {} using gzip: {}",
+                                    key,
+                                    e
+                                ))) {
+                                    log::debug!("unable to send error on stream: {}", e);
+                                }
+                                return Some(DownloadMetricUpdate {
+                                    bytes: bytes_read,
+                                    messages,
+                                    sent: Sent::SenderClosed,
+                                });
                             }
                         }
                         decoded
                     }
                 };
-
-                bytes_read = buf.len() as u64;
 
                 for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
                     if tx.send(Ok(InternalMessage { record: line })).is_err() {
@@ -655,7 +671,9 @@ async fn download_object(
             sent,
         })
     } else {
-        log::warn!("get object response had no body");
+        if let Err(e) = tx.send(Err(anyhow!("Get object response had no body: {}", key))) {
+            log::debug!("unable to send error on stream: {}", e);
+        }
         None
     }
 }
