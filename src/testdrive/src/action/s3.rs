@@ -13,8 +13,8 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use flate2::write::DeflateEncoder;
-use flate2::Compression;
+use flate2::write::GzEncoder;
+use flate2::Compression as Flate2Compression;
 use rusoto_core::{ByteStream, RusotoError};
 use rusoto_s3::{
     CreateBucketConfiguration, CreateBucketError, CreateBucketRequest,
@@ -27,7 +27,7 @@ use rusoto_sqs::{
     ReceiveMessageRequest, SetQueueAttributesRequest, Sqs,
 };
 
-use crate::action::file::{build_compression, Compression as Comp};
+use crate::action::file::{build_compression, Compression};
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
@@ -73,7 +73,7 @@ impl Action for CreateBucketAction {
 pub struct PutObjectAction {
     bucket: String,
     key: String,
-    compression: Comp,
+    compression: Compression,
     contents: String,
 }
 
@@ -97,9 +97,9 @@ impl Action for PutObjectAction {
 
         let buffer = self.contents.clone().into_bytes();
         let contents = match self.compression {
-            Comp::None => Ok(buffer),
-            Comp::Gzip => {
-                let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+            Compression::None => Ok(buffer),
+            Compression::Gzip => {
+                let mut encoder = GzEncoder::new(Vec::new(), Flate2Compression::default());
                 encoder
                     .write_all(buffer.as_ref())
                     .map_err(|e| format!("error writing bytes to encoder: {}", e))?;
@@ -116,8 +116,8 @@ impl Action for PutObjectAction {
                 body: Some(ByteStream::from(contents)),
                 content_type: Some("application/octet-stream".to_string()),
                 content_encoding: match self.compression {
-                    Comp::None => None,
-                    Comp::Gzip => Some("gzip".to_string()),
+                    Compression::None => None,
+                    Compression::Gzip => Some("gzip".to_string()),
                 },
                 key: self.key.clone(),
                 ..Default::default()
