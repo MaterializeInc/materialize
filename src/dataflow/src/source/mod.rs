@@ -326,9 +326,6 @@ pub(crate) trait SourceInfo<Out> {
         activator: &Activator,
     ) -> Result<NextMessage<Out>, anyhow::Error>;
 
-    /// Buffer a message that cannot get timestamped
-    fn buffer_message(&mut self, message: SourceMessage<Out>);
-
     // caching
 
     /// Cache a message
@@ -917,6 +914,8 @@ where
 
         let mut read_cached_files = false;
         let mut predecessor = None;
+        // Stash messages we cannot yet timestamp here.
+        let mut buffer = None;
 
         move |cap, output| {
             // First check that the source was successfully created
@@ -980,9 +979,11 @@ where
 
             let mut source_state = (SourceStatus::Alive, MessageProcessing::Active);
             while let (_, MessageProcessing::Active) = source_state {
-                source_state = match source_info.get_next_message(&mut consistency_info, &activator)
-                {
-                    Ok(NextMessage::Ready(message)) => handle_message(
+                // If we previously buffered something, try to ingest that first.
+                // Otherwise, try to pull a new message from the source.
+                source_state = if buffer.is_some() {
+                    let message = buffer.take().unwrap();
+                    handle_message(
                         message,
                         &mut predecessor,
                         &mut consistency_info,
@@ -995,23 +996,42 @@ where
                         output,
                         &mut metric_updates,
                         &timer,
-                    ),
-                    Ok(NextMessage::Pending) => {
-                        // There were no new messages, check again after a delay
-                        (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
-                    }
-                    Ok(NextMessage::Finished) => {
-                        if let Consistency::RealTime = consistency_info.source_type {
-                            (SourceStatus::Done, MessageProcessing::Stopped)
-                        } else {
-                            // The coord drives Doneness decisions for BYO, so we must still return Alive
-                            // on EOF
+                        &mut buffer,
+                    )
+                } else {
+                    match source_info.get_next_message(&mut consistency_info, &activator) {
+                        Ok(NextMessage::Ready(message)) => handle_message(
+                            message,
+                            &mut predecessor,
+                            &mut consistency_info,
+                            source_info,
+                            &id,
+                            &timestamp_histories,
+                            &mut bytes_read,
+                            &mut caching_tx,
+                            &cap,
+                            output,
+                            &mut metric_updates,
+                            &timer,
+                            &mut buffer,
+                        ),
+                        Ok(NextMessage::Pending) => {
+                            // There were no new messages, check again after a delay
                             (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
                         }
-                    }
-                    Err(e) => {
-                        output.session(&cap).give(Err(e.to_string()));
-                        (SourceStatus::Done, MessageProcessing::Stopped)
+                        Ok(NextMessage::Finished) => {
+                            if let Consistency::RealTime = consistency_info.source_type {
+                                (SourceStatus::Done, MessageProcessing::Stopped)
+                            } else {
+                                // The coord drives Doneness decisions for BYO, so we must still return Alive
+                                // on EOF
+                                (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
+                            }
+                        }
+                        Err(e) => {
+                            output.session(&cap).give(Err(e.to_string()));
+                            (SourceStatus::Done, MessageProcessing::Stopped)
+                        }
                     }
                 }
             }
@@ -1074,6 +1094,7 @@ fn handle_message<Out>(
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp)>,
     timer: &std::time::Instant,
+    buffer: &mut Option<SourceMessage<Out>>,
 ) -> (SourceStatus, MessageProcessing)
 where
     Out: Debug + Clone + Send + Default + MaybeLength + 'static,
@@ -1100,7 +1121,7 @@ where
         None => {
             // We have not yet decided on a timestamp for this message,
             // we need to buffer the message
-            source_info.buffer_message(message);
+            *buffer = Some(message);
             (SourceStatus::Alive, MessageProcessing::Yielded)
         }
         Some(ts) => {

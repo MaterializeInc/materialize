@@ -42,8 +42,6 @@ pub struct FileSourceInfo<Out> {
     is_activated_reader: bool,
     /// Receiver channel that ingests records
     receiver_stream: Receiver<Result<Out, Error>>,
-    /// Buffer: store message that cannot yet be timestamped
-    buffer: Option<SourceMessage<Out>>,
     /// Current File Offset. This corresponds to the offset of last processed message
     /// (initially 0 if no records have been processed)
     current_file_offset: FileOffset,
@@ -124,7 +122,6 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
             id: source_id,
             is_activated_reader: active,
             receiver_stream: receiver,
-            buffer: None,
             current_file_offset: FileOffset { offset: 0 },
             logger,
         })
@@ -186,7 +183,6 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
             id: source_id,
             is_activated_reader: active,
             receiver_stream: receiver,
-            buffer: None,
             current_file_offset: FileOffset { offset: 0 },
             logger,
         })
@@ -246,33 +242,25 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         _consistency_info: &mut ConsistencyInfo,
         _activator: &Activator,
     ) -> Result<NextMessage<Out>, anyhow::Error> {
-        if let Some(message) = self.buffer.take() {
-            Ok(NextMessage::Ready(message))
-        } else {
-            match self.receiver_stream.try_recv() {
-                Ok(Ok(record)) => {
-                    self.current_file_offset.offset += 1;
-                    let message = SourceMessage {
-                        partition: PartitionId::File,
-                        offset: self.current_file_offset.into(),
-                        upstream_time_millis: None,
-                        key: None,
-                        payload: Some(record),
-                    };
-                    Ok(NextMessage::Ready(message))
-                }
-                Ok(Err(e)) => {
-                    error!("Failed to read file for {}. Error: {}.", self.id, e);
-                    Err(e)
-                }
-                Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
-                Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
+        match self.receiver_stream.try_recv() {
+            Ok(Ok(record)) => {
+                self.current_file_offset.offset += 1;
+                let message = SourceMessage {
+                    partition: PartitionId::File,
+                    offset: self.current_file_offset.into(),
+                    upstream_time_millis: None,
+                    key: None,
+                    payload: Some(record),
+                };
+                Ok(NextMessage::Ready(message))
             }
+            Ok(Err(e)) => {
+                error!("Failed to read file for {}. Error: {}.", self.id, e);
+                Err(e)
+            }
+            Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
+            Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
         }
-    }
-
-    fn buffer_message(&mut self, message: SourceMessage<Out>) {
-        self.buffer = Some(message);
     }
 }
 
