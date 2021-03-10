@@ -161,30 +161,18 @@ impl PredicatePushdown {
                 // Depending on the type of `input` we have different
                 // logic to apply to consider pushing `predicates` down.
                 match &mut **input {
-                    MirRelationExpr::Let { id, value, body } => {
+                    MirRelationExpr::Let { body, .. } => {
                         // Push all predicates to the body.
                         **body = body
                             .take_dangerous()
                             .filter(std::mem::replace(predicates, Vec::new()));
 
-                        // Push predicates and collect intersection at `Get`s.
-                        self.action(body, get_predicates);
-
-                        // `get_predicates` should now contain the intersection
-                        // of predicates at each *use* of the binding. If it is
-                        // non-empty, we can move those predicates to the value.
-                        if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
-                            if !list.is_empty() {
-                                **value = value.take_dangerous().filter(list);
-                            }
-                        }
-
-                        // Continue recursively on the value.
-                        self.action(value, get_predicates);
+                        self.action(input, get_predicates);
                     }
                     MirRelationExpr::Get { id, .. } => {
                         // We can report the predicates upward in `get_predicates`,
-                        // but we are not yet able to delete them from the `Filter`.
+                        // but we are not yet able to delete them from the
+                        // `Filter`.
                         get_predicates
                             .entry(*id)
                             .or_insert_with(|| predicates.iter().cloned().collect())
@@ -215,11 +203,7 @@ impl PredicatePushdown {
                         // inputs, and failing to
                         let mut pred_not_translated = Vec::new();
 
-                        for predicate in predicates.drain(..) {
-                            // Translate into join variable constraints:
-                            // 1) `nonliteral1 == nonliteral2` constraints
-                            // 2) `expr == literal` where `expr` refers to more
-                            //    than one input.
+                        for mut predicate in predicates.drain(..) {
                             use expr::BinaryFunc;
                             use expr::UnaryFunc;
                             if let MirScalarExpr::CallBinary {
@@ -228,6 +212,10 @@ impl PredicatePushdown {
                                 expr2,
                             } = &predicate
                             {
+                                // Translate into join variable constraints:
+                                // 1) `nonliteral1 == nonliteral2` constraints
+                                // 2) `expr == literal` where `expr` refers to more
+                                //    than one input.
                                 let input_count = input_mapper.lookup_inputs(&predicate).count();
                                 if (!expr1.is_literal() && !expr2.is_literal()) || input_count >= 2
                                 {
@@ -248,6 +236,14 @@ impl PredicatePushdown {
                                     equivalences.push(vec![(**expr1).clone(), (**expr2).clone()]);
                                     continue;
                                 }
+                            } else if let Some((expr1, expr2)) =
+                                Self::extract_equal_or_both_null(&mut predicate)
+                            {
+                                // Also translate into join variable constraints:
+                                // 3) `((nonliteral1 = nonliteral2) || (nonliteral
+                                //    is null && nonliteral2 is null))`
+                                equivalences.push(vec![expr1, expr2]);
+                                continue;
                             }
                             pred_not_translated.push(predicate)
                         }
@@ -463,6 +459,22 @@ impl PredicatePushdown {
                     .or_insert_with(HashSet::new)
                     .clear();
             }
+            MirRelationExpr::Let { id, body, value } => {
+                // Push predicates and collect intersection at `Get`s.
+                self.action(body, get_predicates);
+
+                // `get_predicates` should now contain the intersection
+                // of predicates at each *use* of the binding. If it is
+                // non-empty, we can move those predicates to the value.
+                if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
+                    if !list.is_empty() {
+                        **value = value.take_dangerous().filter(list);
+                    }
+                }
+
+                // Continue recursively on the value.
+                self.action(value, get_predicates);
+            }
             MirRelationExpr::Join {
                 inputs,
                 equivalences,
@@ -606,6 +618,69 @@ impl PredicatePushdown {
                 x.visit1_mut(|e| self.action(e, get_predicates));
             }
         }
+    }
+
+    /// If `s` is of the form
+    /// `(isnull(expr1) && isnull(expr2)) || (expr1 = expr2)`,
+    /// extract `expr1` and `expr2`.
+    fn extract_equal_or_both_null(s: &mut MirScalarExpr) -> Option<(MirScalarExpr, MirScalarExpr)> {
+        // Or, And, and Eq are all commutative functions. For each of these
+        // functions, order expr1 and expr2 so you only need to check
+        // `condition1(expr1) && condition2(expr2)`, and you do
+        // not need to also check for `condition2(expr1) && condition1(expr2)`.
+        use expr::BinaryFunc;
+        use expr::UnaryFunc;
+        if let MirScalarExpr::CallBinary {
+            func: BinaryFunc::Or,
+            expr1,
+            expr2,
+        } = s
+        {
+            if expr2 < expr1 {
+                ::std::mem::swap(expr1, expr2);
+            }
+
+            if let MirScalarExpr::CallBinary {
+                func: BinaryFunc::Eq,
+                expr1: eqinnerexpr1,
+                expr2: eqinnerexpr2,
+            } = &mut **expr2
+            {
+                if eqinnerexpr2 < eqinnerexpr1 {
+                    ::std::mem::swap(eqinnerexpr1, eqinnerexpr2);
+                }
+
+                if let MirScalarExpr::CallBinary {
+                    func: BinaryFunc::And,
+                    expr1: andinnerexpr1,
+                    expr2: andinnerexpr2,
+                } = &mut **expr1
+                {
+                    if andinnerexpr2 < andinnerexpr1 {
+                        ::std::mem::swap(andinnerexpr1, andinnerexpr2);
+                    }
+
+                    if let MirScalarExpr::CallUnary {
+                        func: UnaryFunc::IsNull,
+                        expr: nullexpr1,
+                    } = &**andinnerexpr1
+                    {
+                        if let MirScalarExpr::CallUnary {
+                            func: UnaryFunc::IsNull,
+                            expr: nullexpr2,
+                        } = &**andinnerexpr2
+                        {
+                            if (&**eqinnerexpr1 == &**nullexpr1)
+                                && (&**eqinnerexpr2 == &**nullexpr2)
+                            {
+                                return Some(((**eqinnerexpr1).clone(), (**eqinnerexpr2).clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Defines a criteria for inlining scalar expressions.
