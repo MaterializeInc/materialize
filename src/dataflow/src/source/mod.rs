@@ -33,6 +33,8 @@ use prometheus::{
     IntGaugeVec, UIntGauge, UIntGaugeVec,
 };
 use repr::Timestamp;
+use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::Scope;
 use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
@@ -59,6 +61,9 @@ pub use file::FileSourceInfo;
 pub use kafka::KafkaSourceInfo;
 pub use kinesis::KinesisSourceInfo;
 pub use s3::S3SourceInfo;
+
+// Interval after which the source operator will yield control.
+static YIELD_INTERVAL_MS: u128 = 10;
 
 /// Shared configuration information for all source types.
 pub struct SourceConfig<'a, G> {
@@ -962,7 +967,6 @@ where
             // Bound execution of operator to prevent a single operator from hogging
             // the CPU if there are many messages to process
             let timer = Instant::now();
-            const YIELD_INTERVAL_MS: u128 = 10;
             // Accumulate updates to BYTES_READ_COUNTER for Prometheus metrics collection
             let mut bytes_read = 0;
             // Accumulate updates to offsets for system table metrics collection
@@ -978,89 +982,20 @@ where
             while let (_, MessageProcessing::Active) = source_state {
                 source_state = match source_info.get_next_message(&mut consistency_info, &activator)
                 {
-                    Ok(NextMessage::Ready(message)) => {
-                        let partition = message.partition.clone();
-                        let offset = message.offset;
-                        let msg_predecessor = predecessor;
-                        predecessor = Some(offset);
-
-                        // Update ingestion metrics. Guaranteed to exist as the appropriate
-                        // entry gets created in SourceConstructor or when a new partition
-                        // is discovered
-                        consistency_info
-                            .partition_metrics
-                            .get_mut(&partition)
-                            .unwrap_or_else(|| {
-                                panic!("partition metrics do not exist for partition {}", partition)
-                            })
-                            .offset_received
-                            .set(offset.offset);
-
-                        // Determine the timestamp to which we need to assign this message
-                        let ts = consistency_info.find_matching_timestamp(
-                            &id,
-                            &partition,
-                            offset,
-                            &timestamp_histories,
-                        );
-                        match ts {
-                            None => {
-                                // We have not yet decided on a timestamp for this message,
-                                // we need to buffer the message
-                                source_info.buffer_message(message);
-                                (SourceStatus::Alive, MessageProcessing::Yielded)
-                            }
-                            Some(ts) => {
-                                source_info.cache_message(
-                                    &mut caching_tx,
-                                    &message,
-                                    ts,
-                                    msg_predecessor,
-                                );
-                                // Note: empty and null payload/keys are currently
-                                // treated as the same thing.
-                                let key = message.key.unwrap_or_default();
-                                let out = message.payload.unwrap_or_default();
-                                // Entry for partition_metadata is guaranteed to exist as messages
-                                // are only processed after we have updated the partition_metadata for a
-                                // partition and created a partition queue for it.
-                                consistency_info
-                                    .partition_metadata
-                                    .get_mut(&partition)
-                                    .unwrap()
-                                    .offset = offset;
-                                bytes_read += key.len() as i64;
-                                bytes_read += out.len().unwrap_or(0) as i64;
-                                let ts_cap = cap.delayed(&ts);
-
-                                output.session(&ts_cap).give(Ok(SourceOutput::new(
-                                    key,
-                                    out,
-                                    Some(offset.offset),
-                                    message.upstream_time_millis,
-                                )));
-
-                                // Update ingestion metrics
-                                // Entry is guaranteed to exist as it gets created when we initialise the partition
-                                let partition_metrics = consistency_info
-                                    .partition_metrics
-                                    .get_mut(&partition)
-                                    .unwrap();
-                                partition_metrics.offset_ingested.set(offset.offset);
-                                partition_metrics.messages_ingested.inc();
-
-                                metric_updates.insert(partition, (offset, ts));
-
-                                if timer.elapsed().as_millis() > YIELD_INTERVAL_MS {
-                                    // We didn't drain the entire queue, so indicate that we
-                                    // should run again but yield the CPU to other operators.
-                                    (SourceStatus::Alive, MessageProcessing::Yielded)
-                                } else {
-                                    (SourceStatus::Alive, MessageProcessing::Active)
-                                }
-                            }
-                        }
-                    }
+                    Ok(NextMessage::Ready(message)) => handle_message(
+                        message,
+                        &mut predecessor,
+                        &mut consistency_info,
+                        source_info,
+                        &id,
+                        &timestamp_histories,
+                        &mut bytes_read,
+                        &mut caching_tx,
+                        &cap,
+                        output,
+                        &mut metric_updates,
+                        &timer,
+                    ),
                     Ok(NextMessage::Pending) => {
                         // There were no new messages, check again after a delay
                         (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
@@ -1081,7 +1016,7 @@ where
                 }
             }
 
-            BYTES_READ_COUNTER.inc_by(bytes_read);
+            BYTES_READ_COUNTER.inc_by(bytes_read as i64);
             for (partition, (offset, ts)) in metric_updates {
                 let partition_metrics = consistency_info
                     .partition_metrics
@@ -1114,5 +1049,103 @@ where
     } else {
         // Immediately drop the capability if worker is not an active reader for source
         ((ok_stream, err_stream), None)
+    }
+}
+
+/// Take `message` and assign it the appropriate timestamps and push it into the
+/// dataflow layer, if possible.
+///
+/// TODO: This function is a bit of a mess rn but hopefully this function makes the
+/// existing mess more obvious and points towards ways to improve it.
+fn handle_message<Out>(
+    message: SourceMessage<Out>,
+    predecessor: &mut Option<MzOffset>,
+    consistency_info: &mut ConsistencyInfo,
+    source_info: &mut dyn SourceInfo<Out>,
+    id: &SourceInstanceId,
+    timestamp_histories: &TimestampDataUpdates,
+    bytes_read: &mut usize,
+    caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
+    cap: &Capability<Timestamp>,
+    output: &mut OutputHandle<
+        Timestamp,
+        Result<SourceOutput<Vec<u8>, Out>, String>,
+        Tee<Timestamp, Result<SourceOutput<Vec<u8>, Out>, String>>,
+    >,
+    metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp)>,
+    timer: &std::time::Instant,
+) -> (SourceStatus, MessageProcessing)
+where
+    Out: Debug + Clone + Send + Default + MaybeLength + 'static,
+{
+    let partition = message.partition.clone();
+    let offset = message.offset;
+    let msg_predecessor = *predecessor;
+    *predecessor = Some(offset);
+
+    // Update ingestion metrics. Guaranteed to exist as the appropriate
+    // entry gets created in SourceConstructor or when a new partition
+    // is discovered
+    consistency_info
+        .partition_metrics
+        .get_mut(&partition)
+        .unwrap_or_else(|| panic!("partition metrics do not exist for partition {}", partition))
+        .offset_received
+        .set(offset.offset);
+
+    // Determine the timestamp to which we need to assign this message
+    let ts =
+        consistency_info.find_matching_timestamp(&id, &partition, offset, &timestamp_histories);
+    match ts {
+        None => {
+            // We have not yet decided on a timestamp for this message,
+            // we need to buffer the message
+            source_info.buffer_message(message);
+            (SourceStatus::Alive, MessageProcessing::Yielded)
+        }
+        Some(ts) => {
+            source_info.cache_message(caching_tx, &message, ts, msg_predecessor);
+            // Note: empty and null payload/keys are currently
+            // treated as the same thing.
+            let key = message.key.unwrap_or_default();
+            let out = message.payload.unwrap_or_default();
+            // Entry for partition_metadata is guaranteed to exist as messages
+            // are only processed after we have updated the partition_metadata for a
+            // partition and created a partition queue for it.
+            consistency_info
+                .partition_metadata
+                .get_mut(&partition)
+                .unwrap()
+                .offset = offset;
+            *bytes_read += key.len();
+            *bytes_read += out.len().unwrap_or(0);
+            let ts_cap = cap.delayed(&ts);
+
+            output.session(&ts_cap).give(Ok(SourceOutput::new(
+                key,
+                out,
+                Some(offset.offset),
+                message.upstream_time_millis,
+            )));
+
+            // Update ingestion metrics
+            // Entry is guaranteed to exist as it gets created when we initialise the partition
+            let partition_metrics = consistency_info
+                .partition_metrics
+                .get_mut(&partition)
+                .unwrap();
+            partition_metrics.offset_ingested.set(offset.offset);
+            partition_metrics.messages_ingested.inc();
+
+            metric_updates.insert(partition, (offset, ts));
+
+            if timer.elapsed().as_millis() > YIELD_INTERVAL_MS {
+                // We didn't drain the entire queue, so indicate that we
+                // should run again but yield the CPU to other operators.
+                (SourceStatus::Alive, MessageProcessing::Yielded)
+            } else {
+                (SourceStatus::Alive, MessageProcessing::Active)
+            }
+        }
     }
 }
