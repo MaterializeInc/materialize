@@ -19,14 +19,14 @@ statements. `DROP TABLE` removes tables from your Materialize instance.
 
 Field | Use
 ------|-----
-_data_type_name_ | The name of the table to remove.
-`CASCADE` | Automatically removes any objects that depend on the table, as well as the table.
-`IF EXISTS`  | Do not issue an error if the named table doesn't exist.
-`RESTRICT`  | Don't remove the table if any objects depend on it. _(Default.)_
-  |
+`IF EXISTS`  | Do not return an error if the named table doesn't exist.
+_table_name_ | The name of the table to remove.
+`CASCADE` | Remove the table and its dependent objects.
+`RESTRICT`  | Don't remove the table if any non-index objects depend on it. _(Default.)_
+
 ## Examples
 
-### Drop a table (no dependencies)
+### Remove a table with no dependent objects
 Create a table *t* and verify that it was created:
 
 ```sql
@@ -45,7 +45,7 @@ Remove the table:
 ```sql
 DROP TABLE t;
 ```
-### Drop a table (with dependencies)
+### Remove a table with dependent objects
 
 Create a table *t*:
 
@@ -80,6 +80,22 @@ Remove table *t*:
 
 ```sql
 DROP TABLE t CASCADE;
+```
+
+### Remove a table only if it has no dependent objects
+
+```sql
+DROP TABLE t;
+```
+
+```sql
+DROP TABLE t RESTRICT;
+```
+
+### Do not issue an error if attempting to remove a nonexistent table
+
+```sql
+DROP TABLE IF EXISTS t;
 ```
 
 ## Related pages

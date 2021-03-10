@@ -15,10 +15,10 @@ do not have any indexes.)
 
 Field | Use
 ------|-----
-_view&lowbar;name_ | The name of the index you want to remove.
-`CASCADE` | Automatically removes any objects that depend on the index, as well as the index.
-`IF EXISTS`  |  Do not issue an error if the named index doesn't exist.
-`RESTRICT`  |  Remove the index, converting the materialized view to a non-materialized view. _(Default)._
+`IF EXISTS` | Do not return an error if the named index doesn't exist.
+_index&lowbar;name_ | The name of the index you want to remove.
+`CASCADE` | Remove the index and its dependent objects.
+`RESTRICT` |  Remove the index, converting the materialized view to a non-materialized view. _(Default.)_
 
 ## Details
 
@@ -30,12 +30,14 @@ VIEW`](../create-view).
 
 ### Primary indexes
 
-By default, materialized views only have one index, called the "primary
-index," which stores the result set of the materialized view's embedded `SELECT`
+By default, materialized views only have one index, which we call the "primary
+index," and which stores the result set of the materialized view's embedded `SELECT`
 statement. You can identify the primary index by its name, which follows the
 format `<view name>_primary_idx`.
 
-If you drop the primary index and want to recreate it:
+This primary index doesn't follow the constraints for typical for primary indexes in traditional databases; it is simply the first index created on a view. However, if you remove the primary index, you will not be able to query any columns not included in another index for the materialized view.
+
+If you remove the primary index and want to recreate it:
 
 1. Retrieve the view's embedded `SELECT` statement with [`SHOW CREATE
    VIEW`](../show-create-view).
@@ -45,11 +47,11 @@ If you drop the primary index and want to recreate it:
 Alternatively, you can also [`CREATE INDEX`](../create-index) to materialize any
 view.
 
-Dropping the only index on a materialized view does not remove the view entirely; it merely transforms it to a non-materialized view.
+Removing the only index on a materialized view does not remove the view entirely; it merely transforms it to a non-materialized view.
 
 ## Examples
 
-### Drop indexes (no dependencies)
+### Remove an index with no dependent objects
 
 ```sql
 SHOW VIEWS;
@@ -72,11 +74,14 @@ SHOW INDEXES FROM q01;
 | materialize.public.q01 | materialize.public.q01_geo_idx | ...
 +------------------------+--------------------------------+-----
 ```
+
+You can use the unqualified index name (`q01_geo_idx`) rather the fully qualified name (`materialize.public.q01_geo_idx`).
+
 ```sql
-DROP INDEX materialize.public.q01_geo_idx;
+DROP INDEX q01_geo_idx;
 ```
 
-### Drop indexes and dependent objects
+### Remove an index with dependent objects
 
 ```sql
 SHOW VIEWS;
@@ -99,8 +104,26 @@ SHOW INDEXES FROM q01;
 | materialize.public.q01 | materialize.public.q01_geo_idx | ...
 +------------------------+--------------------------------+-----
 ```
+You can use the unqualified index name (`q01_geo_idx`) rather the fully qualified name (`materialize.public.q01_geo_idx`).
+
 ```sql
-DROP INDEX materialize.public.q01_geo_idx CASCADE;
+DROP INDEX q01_geo_idx CASCADE;
+```
+
+### Remove an index only if it has no dependent objects
+
+```sql
+DROP INDEX q01_geo_idx;
+```
+
+```sql
+DROP INDEX q01_geo_idx RESTRICT;
+```
+
+### Do not issue an error if attempting to remove a nonexistent index
+
+```sql
+DROP INDEX IF EXISTS q01_geo_idx;
 ```
 
 ## Related pages
