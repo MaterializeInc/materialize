@@ -18,7 +18,6 @@ services:
     mzbuild: materialized
     ports:
      - *materialized
-    init: true
     command: --workers ${MZ_WORKERS:-1} --differential-idle-merge-effort=1000 --disable-telemetry
     environment:
       - MZ_LOG=dataflow=error,info
