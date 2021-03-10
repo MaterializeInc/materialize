@@ -38,3 +38,13 @@ row 2
 
 > SELECT * FROM t1
 "2011-11-11" "11:11:11" "2011-11-11 11:11:11"
+
+# Test set-regex
+
+$ set-regex match=u\d+ replacement=UID
+
+> EXPLAIN SELECT * FROM t1;
+"%0 =\n| Get materialize.public.t1 (UID)\n"
+
+! SELECT * FROM u1234;
+unknown catalog item 'UID'

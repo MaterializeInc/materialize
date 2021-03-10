@@ -11,7 +11,6 @@ use std::ascii;
 use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::io::{self, Write};
-use std::time::Duration;
 
 use async_trait::async_trait;
 use md5::{Digest, Md5};
@@ -29,16 +28,16 @@ use sql_parser::ast::{
     CreateViewStatement, Raw, Statement,
 };
 
-use crate::action::{Action, State};
+use crate::action::{Action, SQLContext, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlOutput};
 
 pub struct SqlAction {
     cmd: SqlCommand,
     stmt: Statement<Raw>,
-    timeout: Duration,
+    sql_context: SQLContext,
 }
 
-pub fn build_sql(mut cmd: SqlCommand, timeout: Duration) -> Result<SqlAction, String> {
+pub fn build_sql(mut cmd: SqlCommand, sql_context: SQLContext) -> Result<SqlAction, String> {
     let stmts = sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e))?;
     if stmts.len() != 1 {
@@ -51,7 +50,7 @@ pub fn build_sql(mut cmd: SqlCommand, timeout: Duration) -> Result<SqlAction, St
     Ok(SqlAction {
         cmd,
         stmt: stmts.into_element(),
-        timeout,
+        sql_context: sql_context,
     })
 }
 
@@ -103,7 +102,7 @@ impl Action for SqlAction {
         print_query(&query);
 
         let pgclient = &state.pgclient;
-        retry::retry_for(self.timeout, |retry_state| async move {
+        retry::retry_for(self.sql_context.sql_timeout, |retry_state| async move {
             match self.try_redo(pgclient, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
@@ -188,7 +187,7 @@ impl SqlAction {
             .await
             .map_err(|e| format!("executing query failed: {}", e))?
             .into_iter()
-            .map(decode_row)
+            .map(|row| decode_row(row, self.sql_context.clone()))
             .collect::<Result<_, _>>()?;
         actual.sort();
         match &self.cmd.expected_output {
@@ -271,11 +270,17 @@ impl SqlAction {
 
 pub struct FailSqlAction {
     cmd: FailSqlCommand,
-    timeout: Duration,
+    sql_context: SQLContext,
 }
 
-pub fn build_fail_sql(cmd: FailSqlCommand, timeout: Duration) -> Result<FailSqlAction, String> {
-    Ok(FailSqlAction { cmd, timeout })
+pub fn build_fail_sql(
+    cmd: FailSqlCommand,
+    sql_context: SQLContext,
+) -> Result<FailSqlAction, String> {
+    Ok(FailSqlAction {
+        cmd,
+        sql_context: sql_context,
+    })
 }
 
 #[async_trait]
@@ -289,7 +294,7 @@ impl Action for FailSqlAction {
         print_query(&query);
 
         let pgclient = &state.pgclient;
-        retry::retry_for(self.timeout, |retry_state| async move {
+        retry::retry_for(self.sql_context.sql_timeout, |retry_state| async move {
             match self.try_redo(pgclient, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
@@ -323,16 +328,26 @@ impl FailSqlAction {
                 self.cmd.expected_error
             )),
             Err(err) => {
-                let err_string = err.to_string();
+                let mut err_string = err.to_string();
                 match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
                     Some(err) => {
-                        if err.message().contains(&self.cmd.expected_error) {
+                        err_string = err.message().to_string();
+
+                        if let Some(regex) = &self.sql_context.regex {
+                            err_string = regex
+                                .replace_all(
+                                    &err_string,
+                                    self.sql_context.regex_replacement.as_str(),
+                                )
+                                .to_string();
+                        }
+
+                        if err_string.contains(&self.cmd.expected_error) {
                             Ok(())
                         } else {
                             Err(format!(
                                 "expected error containing '{}', but got '{}'",
-                                self.cmd.expected_error,
-                                err.message()
+                                self.cmd.expected_error, err_string
                             ))
                         }
                     }
@@ -351,7 +366,7 @@ pub fn print_query(query: &str) {
     }
 }
 
-fn decode_row(row: Row) -> Result<Vec<String>, String> {
+fn decode_row(row: Row, sql_context: SQLContext) -> Result<Vec<String>, String> {
     enum ArrayElement<T> {
         Null,
         NonNull(T),
@@ -392,42 +407,48 @@ fn decode_row(row: Row) -> Result<Vec<String>, String> {
     let mut out = vec![];
     for (i, col) in row.columns().iter().enumerate() {
         let ty = col.type_();
-        out.push(
-            match *ty {
-                Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
-                Type::CHAR | Type::TEXT => row.get::<_, Option<String>>(i),
-                Type::TEXT_ARRAY => row
-                    .get::<_, Option<Array<ArrayElement<String>>>>(i)
-                    .map(|a| a.to_string()),
-                Type::BYTEA => row.get::<_, Option<Vec<u8>>>(i).map(|x| {
-                    let s = x.into_iter().map(ascii::escape_default).flatten().collect();
-                    String::from_utf8(s).unwrap()
-                }),
-                Type::INT4 => row.get::<_, Option<i32>>(i).map(|x| x.to_string()),
-                Type::INT8 => row.get::<_, Option<i64>>(i).map(|x| x.to_string()),
-                Type::OID => row.get::<_, Option<u32>>(i).map(|x| x.to_string()),
-                Type::NUMERIC => row.get::<_, Option<Numeric>>(i).map(|x| x.to_string()),
-                Type::FLOAT4 => row.get::<_, Option<f32>>(i).map(|x| x.to_string()),
-                Type::FLOAT8 => row.get::<_, Option<f64>>(i).map(|x| x.to_string()),
-                Type::TIMESTAMP => row
-                    .get::<_, Option<chrono::NaiveDateTime>>(i)
-                    .map(|x| x.to_string()),
-                Type::TIMESTAMPTZ => row
-                    .get::<_, Option<chrono::DateTime<chrono::Utc>>>(i)
-                    .map(|x| x.to_string()),
-                Type::DATE => row
-                    .get::<_, Option<chrono::NaiveDate>>(i)
-                    .map(|x| x.to_string()),
-                Type::TIME => row
-                    .get::<_, Option<chrono::NaiveTime>>(i)
-                    .map(|x| x.to_string()),
-                Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
-                Type::JSONB => row.get::<_, Option<Jsonb>>(i).map(|v| v.0.to_string()),
-                Type::UUID => row.get::<_, Option<uuid::Uuid>>(i).map(|v| v.to_string()),
-                _ => return Err(format!("unable to handle SQL type: {:?}", ty)),
-            }
-            .unwrap_or_else(|| "<null>".into()),
-        )
+        let mut value = match *ty {
+            Type::BOOL => row.get::<_, Option<bool>>(i).map(|x| x.to_string()),
+            Type::CHAR | Type::TEXT => row.get::<_, Option<String>>(i),
+            Type::TEXT_ARRAY => row
+                .get::<_, Option<Array<ArrayElement<String>>>>(i)
+                .map(|a| a.to_string()),
+            Type::BYTEA => row.get::<_, Option<Vec<u8>>>(i).map(|x| {
+                let s = x.into_iter().map(ascii::escape_default).flatten().collect();
+                String::from_utf8(s).unwrap()
+            }),
+            Type::INT4 => row.get::<_, Option<i32>>(i).map(|x| x.to_string()),
+            Type::INT8 => row.get::<_, Option<i64>>(i).map(|x| x.to_string()),
+            Type::OID => row.get::<_, Option<u32>>(i).map(|x| x.to_string()),
+            Type::NUMERIC => row.get::<_, Option<Numeric>>(i).map(|x| x.to_string()),
+            Type::FLOAT4 => row.get::<_, Option<f32>>(i).map(|x| x.to_string()),
+            Type::FLOAT8 => row.get::<_, Option<f64>>(i).map(|x| x.to_string()),
+            Type::TIMESTAMP => row
+                .get::<_, Option<chrono::NaiveDateTime>>(i)
+                .map(|x| x.to_string()),
+            Type::TIMESTAMPTZ => row
+                .get::<_, Option<chrono::DateTime<chrono::Utc>>>(i)
+                .map(|x| x.to_string()),
+            Type::DATE => row
+                .get::<_, Option<chrono::NaiveDate>>(i)
+                .map(|x| x.to_string()),
+            Type::TIME => row
+                .get::<_, Option<chrono::NaiveTime>>(i)
+                .map(|x| x.to_string()),
+            Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
+            Type::JSONB => row.get::<_, Option<Jsonb>>(i).map(|v| v.0.to_string()),
+            Type::UUID => row.get::<_, Option<uuid::Uuid>>(i).map(|v| v.to_string()),
+            _ => return Err(format!("unable to handle SQL type: {:?}", ty)),
+        }
+        .unwrap_or_else(|| "<null>".into());
+
+        if let Some(regex) = &sql_context.regex {
+            value = regex
+                .replace_all(&value, sql_context.regex_replacement.as_str())
+                .to_string();
+        }
+
+        out.push(value);
     }
     Ok(out)
 }

@@ -43,6 +43,7 @@ mod sleep;
 mod sql;
 
 const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
+const DEFAULT_REGEX_REPLACEMENT: &str = "<regex_match>";
 
 /// User-settable configuration parameters.
 #[derive(Debug)]
@@ -103,6 +104,13 @@ pub struct State {
     s3_buckets_created: BTreeSet<String>,
     sqs_client: SqsClient,
     sqs_queues_created: BTreeSet<String>,
+}
+
+#[derive(Clone)]
+pub struct SQLContext {
+    sql_timeout: Duration,
+    regex: Option<Regex>,
+    regex_replacement: String,
 }
 
 impl State {
@@ -289,7 +297,11 @@ where
 pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Error> {
     let mut out = Vec::new();
     let mut vars = HashMap::new();
-    let mut sql_timeout = DEFAULT_SQL_TIMEOUT;
+    let mut sql_context = SQLContext {
+        sql_timeout: DEFAULT_SQL_TIMEOUT,
+        regex: None,
+        regex_replacement: DEFAULT_REGEX_REPLACEMENT.to_string(),
+    };
 
     vars.insert("testdrive.kafka-addr".into(), state.kafka_addr.clone());
     vars.insert(
@@ -407,12 +419,24 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     "s3-add-notifications" => {
                         Box::new(s3::build_add_notifications(builtin).map_err(wrap_err)?)
                     }
+                    "set-regex" => {
+                        let regex_str = builtin.args.string("match").map_err(wrap_err)?;
+                        sql_context.regex = Some(Regex::new(&regex_str).unwrap());
+
+                        let regex_replacement_opt = builtin.args.opt_string("replacement");
+                        if let Some(regex_replacement) = &regex_replacement_opt {
+                            sql_context.regex_replacement = regex_replacement.to_string();
+                        } else {
+                            sql_context.regex_replacement = DEFAULT_REGEX_REPLACEMENT.to_string();
+                        }
+                        continue;
+                    }
                     "set-sql-timeout" => {
                         let duration = builtin.args.string("duration").map_err(wrap_err)?;
                         if duration.to_lowercase() == "default" {
-                            sql_timeout = DEFAULT_SQL_TIMEOUT;
+                            sql_context.sql_timeout = DEFAULT_SQL_TIMEOUT;
                         } else {
-                            sql_timeout = parse_duration::parse(&duration)
+                            sql_context.sql_timeout = parse_duration::parse(&duration)
                                 .map_err(|e| wrap_err(e.to_string()))?;
                         }
                         continue;
@@ -446,12 +470,12 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         }
                     }
                 }
-                Box::new(sql::build_sql(sql, sql_timeout).map_err(wrap_err)?)
+                Box::new(sql::build_sql(sql, sql_context.clone()).map_err(wrap_err)?)
             }
             Command::FailSql(mut sql) => {
                 sql.query = subst(&sql.query)?;
                 sql.expected_error = subst(&sql.expected_error)?;
-                Box::new(sql::build_fail_sql(sql, sql_timeout).map_err(wrap_err)?)
+                Box::new(sql::build_fail_sql(sql, sql_context.clone()).map_err(wrap_err)?)
             }
         };
         out.push(PosAction {
