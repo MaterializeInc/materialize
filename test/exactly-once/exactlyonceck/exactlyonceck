@@ -39,11 +39,13 @@ kill_materialized() {
 wait-for-it --timeout=30 kafka:9092
 wait-for-it --timeout=30 schema-registry:8081
 
+seed=$(od -vAn -N4 -tu4 < /dev/urandom | tr -d '[:space:]')
+
 say "launching materialized-edge"
 launch_materialized edge --log-file=stderr
 
 say "initially populating topics"
-testdrive --kafka-addr kafka:9092 --schema-registry-url=http://schema-registry:8081 <<'EOF'
+testdrive --kafka-addr kafka:9092 --schema-registry-url=http://schema-registry:8081 --seed "$seed" <<'EOF'
 $ set consistency={
      "name": "materialize.byo.consistency",
      "type": "record",
@@ -107,7 +109,7 @@ a  b
 1  2
 
 > CREATE SINK output FROM input_byo
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-sink'
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-sink-${testdrive.seed}'
   WITH (exactly_once=true, consistency=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
@@ -125,7 +127,7 @@ say "launching materialized-edge"
 launch_materialized edge --log-file=stderr
 
 say "validating edge state"
-testdrive --no-reset --kafka-addr kafka:9092 --schema-registry-url=http://schema-registry:8081 <<'EOF'
+testdrive --no-reset --kafka-addr kafka:9092 --schema-registry-url=http://schema-registry:8081 --seed "$seed" <<'EOF'
 $ set consistency={
      "name": "materialize.byo.consistency",
      "type": "record",
