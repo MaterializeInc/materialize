@@ -54,9 +54,6 @@ select * from foo inner join bar on foo.a = bar.a where foo.a = 1
 1
 3
 
-# This is supposed to test that the `mod(foo.a, 2) = 1` gets pushed down to both
-# inputs, but it is not happening due to materialize#4411
-
 # no indexes other than the default foo(a,b) and bar(a,b)
 query T multiline
 EXPLAIN PLAN FOR select * from foo inner join bar on foo.a = abs(bar.a) where mod(foo.a, 2) = 1
