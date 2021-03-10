@@ -57,6 +57,14 @@ from materialize import ui
 T = TypeVar("T")
 say = ui.speaker("C> ")
 
+_BASHLIKE_ALT_VAR_PATTERN = re.compile(
+    r"""\$\{
+        (?P<var>[^:}]+):\+
+        (?P<alt_var>[^}]+)
+        \}""",
+    re.VERBOSE,
+)
+
 _BASHLIKE_ENV_VAR_PATTERN = re.compile(
     r"""\$\{
         (?P<var>[^:}]+)
@@ -400,6 +408,12 @@ def _substitute_env_vars(val: T, env: Dict[str, str]) -> T:
         val = cast(
             T, _BASHLIKE_ENV_VAR_PATTERN.sub(functools.partial(_subst, env), val)
         )
+        val = cast(
+            T,
+            _BASHLIKE_ALT_VAR_PATTERN.sub(
+                functools.partial(_alt_subst, env), cast(str, val)
+            ),
+        )
     elif isinstance(val, dict):
         for k, v in val.items():
             val[k] = _substitute_env_vars(v, env)
@@ -424,6 +438,20 @@ def _subst(env: Dict[str, str], match: Match) -> str:
         env_val = default[2:]
     assert env_val is not None, "should be replaced correctly"
     return env_val
+
+
+def _alt_subst(env: Dict[str, str], match: Match) -> str:
+    var = match.group("var")
+    if var is None:
+        raise errors.BadSpec(f"Unable to parse environment variable {match.group(0)}")
+    # https://github.com/python/typeshed/issues/3902
+    altvar = cast(Optional[str], match.group("alt_var"))
+    assert altvar is not None, "alt var not captured by regex"
+
+    env_val = env.get(var)
+    if env_val is None:
+        return ""
+    return altvar
 
 
 class Workflows:
