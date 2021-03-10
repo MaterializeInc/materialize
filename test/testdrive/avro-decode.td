@@ -190,3 +190,29 @@ $ kafka-ingest format=avro topic=avro-data-no-registry schema=${reader-schema} p
 > SELECT f2
   FROM avro_data_no_registry
 Jokers
+
+# Test decoding of corrupted messages
+$ kafka-create-topic topic=avro-corrupted-values
+
+$ kafka-ingest format=avro topic=avro-corrupted-values schema=${reader-schema} publish=true corrupt-values=true timestamp=1
+{ "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]}, "f6": {"key": 8372} }
+
+> CREATE MATERIALIZED SOURCE avro_corrupted_values
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-corrupted-values-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${reader-schema}'
+
+! SELECT f2 FROM avro_corrupted_values
+Decode error: Text: avro deserialization error: wrong Confluent-style avro serialization magic: expected 0, got 1
+
+# Test decoding of corrupted messages without magic byte
+$ kafka-create-topic topic=avro-corrupted-values2
+
+$ kafka-ingest format=avro topic=avro-corrupted-values2 schema=${reader-schema} publish=true corrupt-values=true confluent-wire-format=false timestamp=1
+{ "f0": {"f0_0": 9999, "f0_1": null}, "f1": {"long": 3456}, "f2": "Jokers", "f5": {"extra_variant": [0,1,2,3,4,5,6,7,8,9]}, "f6": {"key": 8372} }
+
+> CREATE MATERIALIZED SOURCE avro_corrupted_values2
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avro-corrupted-values2-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${reader-schema}' WITH (confluent_wire_format = false)
+
+! SELECT f2 FROM avro_corrupted_values2
+Decode error: Text: avro deserialization error: Decode error: Decoding error: Expected non-negative integer, got -2
