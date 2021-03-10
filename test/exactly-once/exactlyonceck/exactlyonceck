@@ -114,10 +114,10 @@ a  b
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.output
-{"before": null, "after": {"row": {"a": 1, "b": 1}}}
-{"before": null, "after": {"row": {"a": 1, "b": 2}}}
-{"before": null, "after": {"row": {"a": 2, "b": 1}}}
-{"before": null, "after": {"row": {"a": 3, "b": 1}}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 1, "b": 2}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 2, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "1"}}
 EOF
 
 say "killing materialized"
@@ -182,10 +182,10 @@ a  b
 5  2
 
 $ kafka-verify format=avro sink=materialize.public.output
-{"before": null, "after": {"row": {"a": 1, "b": 1}}}
-{"before": null, "after": {"row": {"a": 1, "b": 2}}}
-{"before": null, "after": {"row": {"a": 2, "b": 1}}}
-{"before": null, "after": {"row": {"a": 3, "b": 1}}}
-{"before": null, "after": {"row": {"a": 4, "b": 1}}}
-{"before": null, "after": {"row": {"a": 5, "b": 2}}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 1, "b": 2}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 2, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 4, "b": 1}}, "transaction": {"id": "2"}}
+{"before": null, "after": {"row": {"a": 5, "b": 2}}, "transaction": {"id": "2"}}
 EOF
