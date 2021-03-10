@@ -33,14 +33,20 @@ Materialize will not try to decompress any objects downloaded from this S3 sourc
 cannot be parsed, either due to being compressed or for another reason, will result in errors in
 the error stream for the source.
 
+The `Content-Type` field will be ignored for functional purposes but verified. If the
+`Content-Type` is not `identity`, a debug message will be generated indicating the mismatch.
+
 ### Compression "GZIP"
 
 Materialize will use the gzip algorithm to decompress all objects downloaded from the S3 source.
 Any files that fail to decompress will result in errors in the error stream for the source.
 
+The `Content-Type` field will be ignored for functional purposes but verified. If the
+`Content-Type` is not `gzip`, a debug message will be generated indicating the mismatch.
+
 ### (Optional) Compression "AUTO"
 
-Materialize will use the `Content-Encoding` filed from object metadata to determine how to handle
+Materialize will use the `Content-Encoding` field from object metadata to determine how to handle
 the object.
 
 #### Content-Encoding "identity"
@@ -64,11 +70,29 @@ with S3.
 
 ## Alternatives
 
+### Using Content-Encoding
+
 The first implementation of this feature tried to use the `Content-Encoding` header to
 automatically determine which compression algorithm to use. However, it appears that few
 applications set the header correctly ([Confluent S3
 Connector](https://github.com/confluentinc/kafka-connect-storage-cloud/blob/e2c032b7976e28bafbef594b761c905c8f46ee21/kafka-connect-s3/src/main/java/io/confluent/connect/s3/storage/S3OutputStream.java#L198)
 does not, for example). As such, we need to support adding flags to the source.
+
+### Using Content-Type
+
+Detect which compression algorithm based on the `Content-Type` field from the object metadata. For
+example, `application/x-gzip` would be a gzip compressed object and `text/plain` would be an
+object that is not compressed.
+
+This solution is not ideal, as
+[Type](https://www.w3.org/Protocols/rfc2616/rfc2616-sec7.html#sec7.2.1) is meant to specify the
+media of the underyling data (such as `text/csv` or `text/plain`) and not the compression
+algorithm applied. It should be noted that it is still possible that `Content-Type` can be a media
+type that needs to be decompressed (see `application/x-gzip` example above).
+
+### Using Object Name Suffix
+
+Detect the compression algorithm based on the filename suffix, such as `.gz`.
 
 ## Open questions
 
