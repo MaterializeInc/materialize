@@ -40,7 +40,6 @@ services:
     mzbuild: materialized
     ports:
      - *materialized
-    init: true
     command:
       - --workers=${MZ_WORKERS:-1}
       # We want this to eventually count up to the size of the largest batch in

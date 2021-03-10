@@ -29,7 +29,6 @@ services:
     mzbuild: materialized
     ports:
       - *materialized
-    init: true
     command: -w ${MZ_WORKERS:-4} --disable-telemetry
     environment:
       - MZ_DEV=1

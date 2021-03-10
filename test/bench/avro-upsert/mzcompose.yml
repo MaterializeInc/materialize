@@ -49,7 +49,6 @@ services:
     mzbuild: materialized
     ports:
       - *materialized
-    init: true
     command:
       - --workers=${MZ_WORKERS:-16}
       - --logical-compaction-window=1ms
