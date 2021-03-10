@@ -23,15 +23,15 @@ use timely::{
         channels::pushers::buffer::Session,
         channels::pushers::Counter as PushCounter,
         channels::pushers::Tee,
-        operators::{map::Map, Operator},
+        operators::{map::Map, OkErr, Operator},
         Scope, Stream,
     },
     scheduling::SyncActivator,
 };
 
 use ::mz_avro::{types::Value, Schema};
-use dataflow_types::LinearOperator;
 use dataflow_types::{DataEncoding, RegexEncoding, SourceEnvelope};
+use dataflow_types::{DataflowError, LinearOperator};
 use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState};
 use log::error;
 use repr::Datum;
@@ -133,7 +133,7 @@ pub trait DecoderState {
         bytes: &[u8],
         aux_num: Option<i64>,
         upstream_time_millis: Option<i64>,
-        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
+        session: &mut PushSession<'a, (Result<Row, DataflowError>, Timestamp, Diff)>,
         time: Timestamp,
     );
     /// Register number of success and failures with decoding,
@@ -194,11 +194,11 @@ where
         bytes: &[u8],
         line_no: Option<i64>,
         _upstream_time_millis: Option<i64>,
-        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
+        session: &mut PushSession<'a, (Result<Row, DataflowError>, Timestamp, Diff)>,
         time: Timestamp,
     ) {
         session.give((
-            pack_with_line_no((self.datum_func)(bytes), line_no),
+            Ok(pack_with_line_no((self.datum_func)(bytes), line_no)),
             time,
             1,
         ));
@@ -279,7 +279,13 @@ where
             value_decoder_state.log_error_count();
         }
     });
-    (stream.as_collection(), None)
+
+    let (oks, errs) = stream.ok_err(|(data, time, diff)| match data {
+        Ok(data) => Ok((data, time, diff)),
+        Err(err) => Err((err, time, diff)),
+    });
+
+    (oks.as_collection(), Some(errs.as_collection()))
 }
 
 fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(

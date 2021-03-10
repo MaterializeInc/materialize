@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use log::error;
-
+use dataflow_types::{DataflowError, DecodeError};
 use interchange::protobuf::{self, Decoder};
 use repr::{Diff, Row, Timestamp};
 
@@ -81,22 +80,35 @@ impl DecoderState for ProtobufDecoderState {
         bytes: &[u8],
         position: Option<i64>,
         _: Option<i64>,
-        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
+        session: &mut PushSession<'a, (Result<Row, DataflowError>, Timestamp, Diff)>,
         time: Timestamp,
     ) {
         match self.decoder.decode(bytes, position) {
             Ok(row) => {
                 if let Some(row) = row {
                     self.events_success += 1;
-                    session.give((row, time, 1));
+                    session.give((Ok(row), time, 1));
                 } else {
                     self.events_error += 1;
-                    error!("protobuf deserialization returned None");
+                    session.give((
+                        Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                            "protobuf deserialization returned None"
+                        )))),
+                        time,
+                        1,
+                    ));
                 }
             }
             Err(err) => {
                 self.events_error += 1;
-                error!("protobuf deserialization error: {:#}", err)
+                session.give((
+                    Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                        "protobuf deserialization error: {:#}",
+                        err
+                    )))),
+                    time,
+                    1,
+                ));
             }
         }
     }

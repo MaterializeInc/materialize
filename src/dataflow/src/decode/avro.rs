@@ -8,8 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use futures::executor::block_on;
-use log::error;
 
+use dataflow_types::{DataflowError, DecodeError};
 use interchange::avro::{DebeziumDeduplicationStrategy, Decoder, EnvelopeType};
 use repr::{Diff, Row, Timestamp};
 
@@ -94,18 +94,25 @@ impl DecoderState for AvroDecoderState {
         bytes: &[u8],
         coord: Option<i64>,
         upstream_time_millis: Option<i64>,
-        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
+        session: &mut PushSession<'a, (Result<Row, DataflowError>, Timestamp, Diff)>,
         time: Timestamp,
     ) {
         match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
             Ok(Some(row)) => {
                 self.events_success += 1;
-                session.give((row, time, 1));
+                session.give((Ok(row), time, 1));
             }
             Ok(None) => {}
             Err(err) => {
                 self.events_error += 1;
-                error!("avro deserialization error: {}", err)
+                session.give((
+                    Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                        "avro deserialization error: {}",
+                        err
+                    )))),
+                    time,
+                    1,
+                ));
             }
         }
     }
