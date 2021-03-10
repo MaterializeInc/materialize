@@ -14,7 +14,6 @@ version: "3.7"
 services:
   materialized:
     mzbuild: materialized
-    init: true
     command: -w1 --disable-telemetry
     environment:
       - MZ_DEV=1
