@@ -729,7 +729,6 @@ name = "dataflow"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "async-compression",
  "async-trait",
  "aws-util",
  "bincode",
