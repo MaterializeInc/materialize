@@ -230,6 +230,17 @@ impl RelationDesc {
         RelationDesc { typ, names }
     }
 
+    pub fn from_names_and_types<I, T, N>(iter: I) -> Self
+    where
+        I: IntoIterator<Item = (Option<N>, T)>,
+        T: Into<ColumnType>,
+        N: Into<ColumnName>,
+    {
+        let (names, types): (Vec<_>, Vec<_>) = iter.into_iter().unzip();
+        let types = types.into_iter().map(Into::into).collect();
+        let typ = RelationType::new(types);
+        Self::new(typ, names)
+    }
     /// Concatenates a `RelationDesc` onto the end of this `RelationDesc`.
     pub fn concat(mut self, other: Self) -> Self {
         let self_len = self.typ.column_types.len();

@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
+use std::iter;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -21,11 +22,16 @@ use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
 use expr::MirRelationExpr;
 use expr::TableFunc;
+use expr::UnaryFunc;
 use globset::GlobBuilder;
 use itertools::Itertools;
+use log::error;
 use log::warn;
 use ore::str::StrExt;
 use repr::ColumnName;
+use repr::ColumnType;
+use repr::Datum;
+use repr::Row;
 
 use reqwest::Url;
 
@@ -58,6 +64,7 @@ use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
 use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
+use crate::plan::error::PlanError;
 use crate::plan::expr::{ColumnRef, HirScalarExpr, JoinKind};
 use crate::plan::query::{resolve_names_data_type, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
@@ -163,9 +170,10 @@ pub fn plan_create_table(
     // and NOT NULL constraints.
     let mut column_types = Vec::with_capacity(columns.len());
     let mut defaults = Vec::with_capacity(columns.len());
+    let mut depends_on = Vec::new();
 
     for c in columns {
-        let (aug_data_type, _ids) = resolve_names_data_type(scx, c.data_type.clone())?;
+        let (aug_data_type, ids) = resolve_names_data_type(scx, c.data_type.clone())?;
         let ty = plan::scalar_type_from_sql(scx, &aug_data_type)?;
         let mut nullable = true;
         let mut default = Expr::null();
@@ -175,7 +183,8 @@ pub fn plan_create_table(
                 ColumnOption::Default(expr) => {
                     // Ensure expression can be planned and yields the correct
                     // type.
-                    query::plan_default_expr(scx, expr, &ty)?;
+                    let (_, expr_depends_on) = query::plan_default_expr(scx, expr, &ty)?;
+                    depends_on.extend(expr_depends_on);
                     default = expr.clone();
                 }
                 other => unsupported!(format!("CREATE TABLE with column constraint: {}", other)),
@@ -183,6 +192,7 @@ pub fn plan_create_table(
         }
         column_types.push(ty.nullable(nullable));
         defaults.push(default);
+        depends_on.extend(ids);
     }
 
     let typ = RelationType::new(column_types);
@@ -206,6 +216,7 @@ pub fn plan_create_table(
         name,
         table,
         if_not_exists: *if_not_exists,
+        depends_on,
     })
 }
 
@@ -216,16 +227,112 @@ pub fn describe_create_source(
     Ok(StatementDesc::new(None))
 }
 
+// Flatten one Debezium entry ("before" or "after")
+// into its corresponding data fields, plus an extra column for the diff.
+fn plan_dbz_flatten_one(
+    input: HirRelationExpr,
+    bare_column: usize,
+    diff: i64,
+    n_flattened_cols: usize,
+) -> HirRelationExpr {
+    HirRelationExpr::Map {
+        input: Box::new(HirRelationExpr::Filter {
+            input: Box::new(input),
+            predicates: vec![HirScalarExpr::CallUnary {
+                func: UnaryFunc::Not,
+                expr: Box::new(HirScalarExpr::CallUnary {
+                    func: UnaryFunc::IsNull,
+                    expr: Box::new(HirScalarExpr::Column(ColumnRef {
+                        level: 0,
+                        column: bare_column,
+                    })),
+                }),
+            }],
+        }),
+        scalars: (0..n_flattened_cols)
+            .into_iter()
+            .map(|idx| HirScalarExpr::CallUnary {
+                func: UnaryFunc::RecordGet(idx),
+                expr: Box::new(HirScalarExpr::Column(ColumnRef {
+                    level: 0,
+                    column: bare_column,
+                })),
+            })
+            .chain(iter::once(HirScalarExpr::Literal(
+                Row::pack(iter::once(Datum::Int64(diff))),
+                ColumnType {
+                    nullable: false,
+                    scalar_type: ScalarType::Int64,
+                },
+            )))
+            .collect(),
+    }
+}
+
+fn plan_dbz_flatten(
+    bare_desc: &RelationDesc,
+    input: HirRelationExpr,
+) -> Result<(HirRelationExpr, Vec<Option<ColumnName>>), anyhow::Error> {
+    // This looks horrible, but it is basically pretty simple:
+    // It aims to flatten rows of the shape
+    // (before, after)
+    // into rows whose columns are the individual fields of the before or after record,
+    // plus a "diff" column whose value is -1 for before, and +1 for after.
+    //
+    // They will then be joined with `repeat(diff)` to get the correct stream out.
+    let before_idx = bare_desc
+        .iter_names()
+        .position(|maybe_name| match maybe_name {
+            Some(name) => name.as_str() == "before",
+            None => false,
+        })
+        .ok_or_else(|| anyhow!("Debezium-formatted data must contain a `before` field."))?;
+    let after_idx = bare_desc
+        .iter_names()
+        .position(|maybe_name| match maybe_name {
+            Some(name) => name.as_str() == "after",
+            None => false,
+        })
+        .ok_or_else(|| anyhow!("Debezium-formatted data must contain an `after` field."))?;
+    let before_flattened_cols = match &bare_desc.typ().column_types[before_idx].scalar_type {
+        ScalarType::Record { fields, .. } => fields.clone(),
+        _ => unreachable!(), // This was verified in `Encoding::desc`
+    };
+    let after_flattened_cols = match &bare_desc.typ().column_types[after_idx].scalar_type {
+        ScalarType::Record { fields, .. } => fields.clone(),
+        _ => unreachable!(), // This was verified in `Encoding::desc`
+    };
+    assert!(before_flattened_cols == after_flattened_cols);
+    let n_flattened_cols = before_flattened_cols.len();
+    let old_arity = input.arity();
+    let before_expr = plan_dbz_flatten_one(input.clone(), before_idx, -1, n_flattened_cols);
+    let after_expr = plan_dbz_flatten_one(input, after_idx, 1, n_flattened_cols);
+    let new_arity = before_expr.arity();
+    assert!(new_arity == after_expr.arity());
+    let before_expr = before_expr.project((old_arity..new_arity).collect());
+    let after_expr = after_expr.project((old_arity..new_arity).collect());
+    let united_expr = HirRelationExpr::Union {
+        base: Box::new(before_expr),
+        inputs: vec![after_expr],
+    };
+    let mut col_names = before_flattened_cols
+        .into_iter()
+        .map(|(name, _)| Some(name))
+        .collect::<Vec<_>>();
+    col_names.push(Some("diff".into()));
+    Ok((united_expr, col_names))
+}
+
 fn plan_source_envelope(
     bare_desc: &RelationDesc,
     envelope: &SourceEnvelope,
     post_transform_key: Option<Vec<usize>>,
-) -> (MirRelationExpr, Vec<Option<ColumnName>>) {
+) -> Result<(MirRelationExpr, Vec<Option<ColumnName>>), anyhow::Error> {
     let get_expr = HirRelationExpr::Get {
         id: expr::Id::LocalBareSource,
         typ: bare_desc.typ().clone(),
     };
-    let hir_expr = if let SourceEnvelope::Debezium(_) = envelope {
+    let (hir_expr, column_names) = if let SourceEnvelope::Debezium(_) = envelope {
         // Debezium sources produce a diff in their last column.
         // Thus we need to select all rows but the last, which we repeat by.
         // I.e., for a source with four columns, we do
@@ -235,9 +342,12 @@ fn plan_source_envelope(
         // Then we would get some nice things; for example, automatic tracking of column names.
         //
         // For this simple case, it probably doesn't matter
-        let diff_col = get_expr.arity() - 1;
+
+        let (flattened, mut column_names) = plan_dbz_flatten(bare_desc, get_expr)?;
+
+        let diff_col = flattened.arity() - 1;
         let expr = HirRelationExpr::Join {
-            left: Box::new(get_expr),
+            left: Box::new(flattened),
             right: Box::new(HirRelationExpr::CallTable {
                 func: TableFunc::Repeat,
                 exprs: vec![HirScalarExpr::Column(ColumnRef {
@@ -249,23 +359,22 @@ fn plan_source_envelope(
             kind: JoinKind::Inner { lateral: true },
         }
         .project((0..diff_col).collect());
-        if let Some(post_transform_key) = post_transform_key {
+        let expr = if let Some(post_transform_key) = post_transform_key {
             expr.declare_keys(vec![post_transform_key])
         } else {
             expr
-        }
+        };
+        column_names.pop();
+        (expr, column_names)
     } else {
-        get_expr
+        (
+            get_expr,
+            bare_desc.iter_names().map(|name| name.cloned()).collect(),
+        )
     };
     let mir_expr = hir_expr.lower();
 
-    let column_names = bare_desc
-        .iter_names()
-        .map(|cn| cn.cloned())
-        .take(mir_expr.arity())
-        .collect();
-
-    (mir_expr, column_names)
+    Ok((mir_expr, column_names))
 }
 
 pub fn plan_create_source(
@@ -294,15 +403,33 @@ pub fn plan_create_source(
                     key_schema,
                     value_schema,
                     schema_registry_config,
+                    confluent_wire_format,
                 } = match schema {
                     // TODO(jldlaughlin): we need a way to pass in primary key information
                     // when building a source from a string or file.
-                    AvroSchema::Schema(sql_parser::ast::Schema::Inline(schema)) => Schema {
-                        key_schema: None,
-                        value_schema: schema.clone(),
-                        schema_registry_config: None,
-                    },
-                    AvroSchema::Schema(sql_parser::ast::Schema::File(_)) => {
+                    AvroSchema::Schema {
+                        schema: sql_parser::ast::Schema::Inline(schema),
+                        with_options,
+                    } => {
+                        with_options! {
+                            struct ConfluentMagic {
+                                confluent_wire_format: bool,
+                            }
+                        }
+
+                        Schema {
+                            key_schema: None,
+                            value_schema: schema.clone(),
+                            schema_registry_config: None,
+                            confluent_wire_format: ConfluentMagic::try_from(with_options.clone())?
+                                .confluent_wire_format
+                                .unwrap_or(true),
+                        }
+                    }
+                    AvroSchema::Schema {
+                        schema: sql_parser::ast::Schema::File(_),
+                        ..
+                    } => {
                         unreachable!("File schema should already have been inlined")
                     }
                     AvroSchema::CsrUrl {
@@ -324,6 +451,7 @@ pub fn plan_create_source(
                                 key_schema: seed.key_schema.clone(),
                                 value_schema: seed.value_schema.clone(),
                                 schema_registry_config: Some(ccsr_config),
+                                confluent_wire_format: true,
                             }
                         } else {
                             unreachable!("CSR seed resolution should already have been called")
@@ -335,6 +463,7 @@ pub fn plan_create_source(
                     key_schema,
                     value_schema,
                     schema_registry_config,
+                    confluent_wire_format,
                 })
             }
             Format::Protobuf {
@@ -757,15 +886,26 @@ pub fn plan_create_source(
             if ignore_source_keys {
                 None
             } else {
-                let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
-                    avro::validate_key_schema(key_schema, &bare_desc)
-                        .map(Some)
-                        .unwrap_or_else(|e| {
-                            warn!("Not using key due to error: {}", e);
-                            None
-                        })
-                });
-                key_schema_indices
+                match &bare_desc.typ().column_types[0].scalar_type {
+                    ScalarType::Record { fields, .. } => {
+                        let row_desc = RelationDesc::from_names_and_types(
+                            fields.clone().into_iter().map(|(n, t)| (Some(n), t)),
+                        );
+                        let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
+                            avro::validate_key_schema(key_schema, &row_desc)
+                                .map(Some)
+                                .unwrap_or_else(|e| {
+                                    warn!("Not using key due to error: {}", e);
+                                    None
+                                })
+                        });
+                        key_schema_indices
+                    }
+                    _ => {
+                        error!("Not using key: expected `before` record in first column");
+                        None
+                    }
+                }
             }
         } else {
             None
@@ -782,9 +922,7 @@ pub fn plan_create_source(
     // TODO(brennan): They should not depend on the envelope either. Figure out a way to
     // make all of this more tasteful.
     match (&encoding, &envelope) {
-        (DataEncoding::Avro { .. }, _)
-        | (DataEncoding::Protobuf { .. }, _)
-        | (_, SourceEnvelope::Debezium(_)) => (),
+        (DataEncoding::Avro { .. }, _) | (_, SourceEnvelope::Debezium(_)) => (),
         _ => {
             for (name, ty) in external_connector.metadata_columns() {
                 bare_desc = bare_desc.with_column(name, ty);
@@ -797,7 +935,7 @@ pub fn plan_create_source(
     let name = scx.allocate_name(normalize::unresolved_object_name(name.clone())?);
     let create_sql = normalize::create_statement(&scx, Statement::CreateSource(stmt))?;
 
-    let (expr, column_names) = plan_source_envelope(&bare_desc, &envelope, post_transform_key);
+    let (expr, column_names) = plan_source_envelope(&bare_desc, &envelope, post_transform_key)?;
     let source = Source {
         create_sql,
         connector: SourceConnector::External {
@@ -857,12 +995,16 @@ pub fn plan_create_view(
     } else {
         scx.allocate_name(normalize::unresolved_object_name(name.to_owned())?)
     };
-    let (mut relation_expr, mut desc, finishing) =
-        query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
-    relation_expr.bind_parameters(&params)?;
+    let query::PlannedQuery {
+        mut expr,
+        mut desc,
+        finishing,
+        depends_on,
+    } = query::plan_root_query(scx, query.clone(), QueryLifetime::Static)?;
+    expr.bind_parameters(&params)?;
     //TODO: materialize#724 - persist finishing information with the view?
-    relation_expr.finish(finishing);
-    let relation_expr = relation_expr.lower();
+    expr.finish(finishing);
+    let relation_expr = expr.lower();
     let replace = if *if_exists == IfExistsBehavior::Replace {
         if let Ok(item) = scx.catalog.resolve_item(&name.clone().into()) {
             if relation_expr.global_uses().contains(&item.id()) {
@@ -894,6 +1036,7 @@ pub fn plan_create_view(
         replace,
         materialize,
         if_not_exists,
+        depends_on,
     })
 }
 
@@ -905,7 +1048,7 @@ fn kafka_sink_builder(
     topic_prefix: String,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
-    topic_suffix: String,
+    topic_suffix_nonce: String,
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let (schema_registry_url, ccsr_with_options) = match format {
         Some(Format::Avro(AvroSchema::CsrUrl {
@@ -936,10 +1079,10 @@ fn kafka_sink_builder(
         value_desc.clone(),
         include_consistency,
     );
-    let value_schema = encoder.value_writer_schema().canonical_form();
+    let value_schema = encoder.value_writer_schema().to_string();
     let key_schema = encoder
         .key_writer_schema()
-        .map(|key_schema| key_schema.canonical_form());
+        .map(|key_schema| key_schema.to_string());
 
     // Use the user supplied value for partition count, or default to -1 (broker default)
     let partition_count = match with_options.remove("partition_count") {
@@ -984,7 +1127,7 @@ fn kafka_sink_builder(
         schema_registry_url,
         value_schema,
         topic_prefix,
-        topic_suffix,
+        topic_suffix_nonce,
         partition_count,
         replication_factor,
         fuel: 10000,
@@ -994,6 +1137,7 @@ fn kafka_sink_builder(
         key_schema,
         key_desc_and_indices,
         value_desc,
+        exactly_once: false,
     }))
 }
 
@@ -1053,7 +1197,7 @@ pub fn plan_create_sink(
     };
     let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     let from = scx.resolve_item(from)?;
-    let suffix = format!(
+    let suffix_nonce = format!(
         "{}-{}",
         scx.catalog
             .config()
@@ -1112,6 +1256,10 @@ pub fn plan_create_sink(
         (RelationDesc::new(typ, names), key_indices)
     });
 
+    if key_desc_and_indices.is_none() && envelope == SinkEnvelope::Upsert {
+        return Err(PlanError::UpsertSinkWithoutKey.into());
+    }
+
     let value_desc = match envelope {
         SinkEnvelope::Debezium => envelopes::dbz_desc(desc.clone()),
         SinkEnvelope::Upsert => desc.clone(),
@@ -1120,7 +1268,10 @@ pub fn plan_create_sink(
         }
     };
 
-    let as_of = as_of.map(|e| query::eval_as_of(scx, e)).transpose()?;
+    if as_of.is_some() {
+        bail!("CREATE SINK ... AS OF is no longer supported");
+    }
+
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
         Connector::Kafka { broker, topic, .. } => kafka_sink_builder(
@@ -1130,10 +1281,12 @@ pub fn plan_create_sink(
             topic,
             key_desc_and_indices,
             value_desc,
-            suffix,
+            suffix_nonce,
         )?,
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
-        Connector::AvroOcf { path } => avro_ocf_sink_builder(format, path, suffix, value_desc)?,
+        Connector::AvroOcf { path } => {
+            avro_ocf_sink_builder(format, path, suffix_nonce, value_desc)?
+        }
         Connector::S3 { .. } => unsupported!("S3 sinks"),
         Connector::Postgres { .. } => unsupported!("Postgres sinks"),
     };
@@ -1144,6 +1297,8 @@ pub fn plan_create_sink(
             with_options.keys().join(",")
         )
     }
+    let mut depends_on = vec![from.id()];
+    depends_on.extend(from.uses());
 
     Ok(Plan::CreateSink {
         name,
@@ -1154,8 +1309,8 @@ pub fn plan_create_sink(
             envelope,
         },
         with_snapshot,
-        as_of,
         if_not_exists,
+        depends_on,
     })
 }
 
@@ -1209,7 +1364,7 @@ pub fn plan_create_index(
                 .collect()
         }
     };
-    let keys = query::plan_index_exprs(scx, on_desc, filled_key_parts.clone())?;
+    let (keys, exprs_depend_on) = query::plan_index_exprs(scx, on_desc, filled_key_parts.clone())?;
 
     let index_name = if let Some(name) = name {
         FullName {
@@ -1266,6 +1421,8 @@ pub fn plan_create_index(
     *key_parts = Some(filled_key_parts);
     let if_not_exists = *if_not_exists;
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
+    let mut depends_on = vec![on.id()];
+    depends_on.extend(exprs_depend_on);
 
     Ok(Plan::CreateIndex {
         name: index_name,
@@ -1276,6 +1433,7 @@ pub fn plan_create_index(
         },
         options,
         if_not_exists,
+        depends_on,
     })
 }
 
@@ -1366,10 +1524,10 @@ pub fn plan_create_type(
 
     let inner = match as_type {
         CreateTypeAs::List => TypeInner::List {
-            element_id: ids.remove(0),
+            element_id: *ids.get(0).expect("custom type to have element id"),
         },
         CreateTypeAs::Map => {
-            let key_id = ids.remove(0);
+            let key_id = *ids.get(0).expect("key");
             match scx.catalog.try_get_lossy_scalar_type_by_id(&key_id) {
                 Some(ScalarType::String) => {}
                 Some(t) => bail!(
@@ -1381,16 +1539,15 @@ pub fn plan_create_type(
 
             TypeInner::Map {
                 key_id,
-                value_id: ids.remove(0),
+                value_id: *ids.get(1).expect("value"),
             }
         }
     };
 
-    assert!(ids.is_empty());
-
     Ok(Plan::CreateType {
         name,
         typ: Type { create_sql, inner },
+        depends_on: ids,
     })
 }
 
@@ -1624,20 +1781,27 @@ pub fn plan_drop_item(
     if !cascade {
         for id in catalog_entry.used_by() {
             let dep = scx.catalog.get_item_by_id(id);
-            match dep.item_type() {
-                CatalogItemType::Func
-                | CatalogItemType::Table
-                | CatalogItemType::Source
-                | CatalogItemType::View
-                | CatalogItemType::Sink
-                | CatalogItemType::Type => {
-                    bail!(
-                        "cannot drop {}: still depended upon by catalog item '{}'",
-                        catalog_entry.name(),
-                        dep.name()
-                    );
-                }
-                CatalogItemType::Index => (),
+            match object_type {
+                ObjectType::Type => bail!(
+                    "cannot drop {}: still depended upon by catalog item '{}'",
+                    catalog_entry.name(),
+                    dep.name()
+                ),
+                _ => match dep.item_type() {
+                    CatalogItemType::Func
+                    | CatalogItemType::Table
+                    | CatalogItemType::Source
+                    | CatalogItemType::View
+                    | CatalogItemType::Sink
+                    | CatalogItemType::Type => {
+                        bail!(
+                            "cannot drop {}: still depended upon by catalog item '{}'",
+                            catalog_entry.name(),
+                            dep.name()
+                        );
+                    }
+                    CatalogItemType::Index => (),
+                },
             }
         }
     }

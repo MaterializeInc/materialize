@@ -31,7 +31,7 @@ To get everything you need to run dbt with Materialize, do the following:
           threads: 1
           host: localhost
           port: 6875
-          user: user
+          user: materialize
           pass: pass
           dbname: materialize
           schema: analytics
@@ -54,7 +54,7 @@ To show off that capability, we're going to create [materialized views](https://
 on top of streaming Wikipedia data using dbt.
 
 1. To start, let's set up a stream of Wikipedia's recent changes, and simply write all the data we see
-   to a file. From your shell, run:
+   to a file. From a new shell, run:
    ```nofmt
    while true; do
      curl --max-time 9999999 -N https://stream.wikimedia.org/v2/stream/recentchange >> wikirecent

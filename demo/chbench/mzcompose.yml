@@ -34,6 +34,7 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
     volumes:
+      # this is the dir that contains all the individual snapshot directories
       - ${MZ_CHBENCH_SNAPSHOT_DIR}:/snapshot
   materialized:
     mzbuild: materialized
@@ -98,8 +99,7 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-data:/var/lib/zookeeper/data
-      - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper-log:/var/lib/zookeeper/log
+      - ${MZ_CHBENCH_SNAPSHOT_ZK_DATA:-zk-data}:/var/lib/zookeeper
   kafka:
     image: confluentinc/cp-enterprise-kafka:5.5.3
     ports:
@@ -122,7 +122,7 @@ services:
       CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
       KAFKA_JMX_PORT: 9991
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data:/var/lib/kafka/data
+      - ${MZ_CHBENCH_SNAPSHOT_KAFKA_DATA:-mzsnap-data}:/var/lib/kafka/data
   connect:
     image: debezium/connect:1.4
     environment:
@@ -153,7 +153,6 @@ services:
     depends_on: [schema-registry, control-center]
   control-center:
     image: confluentinc/cp-enterprise-control-center:5.5.3
-    restart: always
     depends_on: [zookeeper, kafka, connect]
     ports:
       - *control-center
@@ -193,11 +192,11 @@ services:
   mzutil:
     mzbuild: mzutil
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT}:/snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
   kafka-util:
     mzbuild: kafka-util
     volumes:
-      - ${MZ_CHBENCH_SNAPSHOT}:/snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
 
   # Metabase
   # We need to ~manually add our `metabase-materialize-driver` to /plugins
@@ -260,7 +259,7 @@ services:
     command: ${PEEKER_CMD:---queries q01,q02,q17}
     volumes:
       - ./peeker-config:/etc/peeker
-      - ${MZ_CHBENCH_SNAPSHOT:-/tmp}:/snapshot
+      - ${MZ_CHBENCH_SNAPSHOT:-mzsnap-data}:/snapshot
   test-correctness:
     # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
     mzbuild: test-correctness
@@ -279,6 +278,10 @@ volumes:
   grafana:
   prometheus:
   view-snapshots:
+
+  # shared volumes for load tests, but a mounted directories for benchmarks
+  mzsnap-data:
+  zk-data:
 
 mzworkflows:
   ci:
@@ -339,6 +342,10 @@ mzworkflows:
   # Once chbench exits, record offsets ingested by Materialize and view states
   # Leaves the cluster running
   setup-ingest-benchmark:
+    env:
+      MZ_CHBENCH_SNAPSHOT: '${MZ_CHBENCH_SNAPSHOT:-./tmp}'
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
     steps:
     - step: workflow
       workflow: bring-up-source-data-mysql
@@ -373,6 +380,10 @@ mzworkflows:
   # Run a workflow to measure the ingest performance of Materialize. Assumes that the you have
   # already called setup-ingest-benchmark and the cluster is still running
   measure-ingest-performance:
+    env:
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
     steps:
     - step: restart-services
       services: [materialized]
@@ -385,6 +396,10 @@ mzworkflows:
   # Record offsets ingested by Materialize and the answers to our count(*) views
   # Take a snapshot of topic schemas and contents
   generate-snapshot:
+    env:
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
     steps:
     - step: run
       service: peeker
@@ -395,6 +410,10 @@ mzworkflows:
   # Run a test that populates Kafka with data from topic snapshots
   # Then run Materialize and measure time until it catches up to snapshotted view state
   setup-replay-benchmark:
+    env:
+      MZ_CHBENCH_SNAPSHOT: ${MZ_CHBENCH_SNAPSHOT:-'./tmp'}
+      MZ_CHBENCH_SNAPSHOT_KAFKA_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/kafka-data'
+      MZ_CHBENCH_SNAPSHOT_ZK_DATA: '${MZ_CHBENCH_SNAPSHOT:-./tmp}/zookeeper'
     steps:
     # start the dashboard before the load data get started so that we have data from
     # the beginning of time

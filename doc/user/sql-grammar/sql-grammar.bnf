@@ -227,7 +227,7 @@ drop_source ::=
   drop_table ::=
     'DROP' 'TABLE' ('IF' 'EXISTS')? table_name ('RESTRICT' | 'CASCADE')?
 drop_type ::=
-  'DROP' data_type_name ('IF' 'EXISTS')? ('RESTRICT' | 'CASCADE')?
+  'DROP' 'TYPE' ('IF' 'EXISTS')? data_type_name ('RESTRICT' | 'CASCADE')?
 drop_view ::=
   'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
 drop_user ::=
@@ -249,6 +249,9 @@ format_spec_avro_kafka ::=
             'FILE' schema_file_path |
             inline_schema
             )
+            (
+                'WITH' '(' inline_schema_with_options ')'
+            )?
         )
     )
 format_spec ::=

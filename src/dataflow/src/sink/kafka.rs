@@ -31,7 +31,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::FrontieredInputHandle;
 use timely::dataflow::Scope;
 
-use dataflow_types::KafkaSinkConnector;
+use dataflow_types::{KafkaSinkConnector, SinkAsOf};
 use expr::GlobalId;
 use interchange::avro::{self, Encoder};
 use repr::{Diff, RelationDesc, Row, Timestamp};
@@ -237,6 +237,7 @@ pub fn kafka<G>(
     connector: KafkaSinkConnector,
     key_desc: Option<RelationDesc>,
     value_desc: RelationDesc,
+    as_of: SinkAsOf,
 ) -> Box<dyn Any>
 where
     G: Scope<Timestamp = Timestamp>,
@@ -244,6 +245,11 @@ where
     let stream = &collection.inner;
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &connector.addrs.to_string());
+
+    // Ensure that messages are sinked in order and without duplicates. Note that
+    // this only applies to a single instance of a producer - in the case of restarts,
+    // all bets are off and full exactly once support is required.
+    config.set("enable.idempotence", "true");
 
     // Increase limits for the Kafka producer's internal buffering of messages
     // Currently we don't have a great backpressure mechanism to tell indexes or
@@ -325,13 +331,21 @@ where
         input.for_each(|_, rows| {
             rows.swap(&mut vector);
             for ((key, value), time, diff) in vector.drain(..) {
-                let should_emit = if connector.strict {
-                    connector.frontier.less_than(&time)
+                let should_emit = if as_of.strict {
+                    as_of.frontier.less_than(&time)
                 } else {
-                    connector.frontier.less_equal(&time)
+                    as_of.frontier.less_equal(&time)
                 };
 
-                if !should_emit {
+                let previously_published = match &connector.consistency {
+                    Some(consistency) => match consistency.gate_ts {
+                        Some(ts) => as_of.frontier.less_equal(&ts),
+                        None => false,
+                    },
+                    None => false,
+                };
+
+                if !should_emit || previously_published {
                     // Skip stale data for already published timestamps
                     continue;
                 }

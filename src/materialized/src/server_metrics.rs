@@ -88,13 +88,18 @@ pub fn load_prom_metrics(start_time: Instant) -> Vec<prometheus::proto::MetricFa
 pub fn filter_metrics<'a>(
     metrics: &'a [prometheus::proto::MetricFamily],
     filter: &HashSet<&str>,
-) -> BTreeMap<&'a str, PromMetric<'a>> {
+) -> BTreeMap<&'a str, Vec<PromMetric<'a>>> {
     metrics
         .iter()
         .filter(|m| filter.contains(m.get_name()))
         .filter_map(|m| PromMetric::from_metric_family(m).ok())
-        .flat_map(|mf| mf)
-        .map(|m| (m.name(), m))
+        .filter_map(|ms| {
+            if let Some(m) = ms.get(0) {
+                Some((m.name(), ms))
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
@@ -193,6 +198,14 @@ impl<'p> PromMetric<'p> {
             PromMetric::Counter { name, .. } => name,
             PromMetric::Gauge { name, .. } => name,
             PromMetric::Histogram { name, .. } => name,
+        }
+    }
+
+    pub fn label(&self, key: &str) -> Option<&str> {
+        match self {
+            PromMetric::Counter { labels, .. } => labels.get(key).copied(),
+            PromMetric::Gauge { labels, .. } => labels.get(key).copied(),
+            PromMetric::Histogram { labels, .. } => labels.get(key).copied(),
         }
     }
 

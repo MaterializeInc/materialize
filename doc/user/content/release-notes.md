@@ -48,6 +48,14 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.7.1 %}}
 
+- **Breaking change.** Change the default
+  [`--logical-compaction-window`](/cli/#compaction-window) from 60 seconds to
+  1 millisecond.
+
+- **Breaking change.** Remove `CREATE SINK ... AS OF`, which did not have
+  sensible behavior after Materialize restarted. The intent is to reintroduce
+  this feature with a more formal model of `AS OF` timestamps. {{% gh 3467 %}}
+
 - Add the [`cbrt` function](/sql/functions/#numbers-func) for computing the
   cube root of a [`double precision`](/sql/types/float).
 
@@ -67,6 +75,10 @@ Wrap your release notes at the 80 character mark.
 
 - Multipartition Kafka sinks with consistency enabled will create single-partition
   consistency topics.
+
+- Kafka sinks are now written via an idempotent producer to avoid duplicate or out
+  of order messages.
+
 - **Breaking change.** Change the behavior of the
   [`round` function](/sql/functions/#numbers-func) when applied to a `real` or
   `double precision` argument to round ties to the nearest even number,
@@ -100,6 +112,8 @@ Wrap your release notes at the 80 character mark.
   the "Upsert" operator no longer shows any records. Actually, the "Upsert"
   operator still has a memory footprint proportional to the number of unique
   keys in the source.
+
+- Add the basic exponentiation, power and [logarithm functions](/sql/functions/#numbers-func).
 
 {{% version-header v0.7.0 %}}
 
@@ -680,7 +694,7 @@ Document new timezone stuff and add a release note about it.
   alongside the data topic; the combination of these two topics is considered
   the Materialize change data capture (CDC) format.
 
-- Introduce the [`AS OF`](/sql/create-sink/#as-of) and
+- Introduce the `AS OF` and
   [`WITH SNAPSHOT`](/sql/create-sink/#with-snapshot-or-without-snapshot) options
   for `CREATE SINK` to provide more control over what data the sink will
   produce.

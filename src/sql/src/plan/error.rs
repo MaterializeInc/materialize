@@ -26,6 +26,7 @@ pub enum PlanError {
     OverqualifiedDatabaseName(String),
     OverqualifiedSchemaName(String),
     Catalog(CatalogError),
+    UpsertSinkWithoutKey,
 }
 
 impl fmt::Display for PlanError {
@@ -56,6 +57,7 @@ impl fmt::Display for PlanError {
                 name
             ),
             Self::Catalog(e) => write!(f, "{}", e),
+            Self::UpsertSinkWithoutKey => write!(f, "upsert sinks must specify a key"),
         }
     }
 }
