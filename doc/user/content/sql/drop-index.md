@@ -16,8 +16,10 @@ Field | Use
 ------|-----
 `IF EXISTS` | Do not return an error if the named index doesn't exist.
 _index&lowbar;name_ | The name of the index you want to remove.
-`CASCADE` | Remove the index and its dependent objects.
+`CASCADE` | Remove the index and its dependent objects. (The syntax is valid, but is purely theoretical, since no other object in Materialize depends on indexes.)
 `RESTRICT` |  Remove the index. _(Default.)_
+
+**Note:** Since indexes do not have dependent objects, `DROP INDEX`, `DROP INDEX RESTRICT`, and `DROP INDEX CASCADE` all do the same thing.
 
 ## Details
 
@@ -48,7 +50,7 @@ view.
 
 ## Examples
 
-### Remove an index with no dependent objects
+### Remove an index
 
 ```sql
 SHOW VIEWS;
@@ -74,40 +76,6 @@ SHOW INDEXES FROM q01;
 
 You can use the unqualified index name (`q01_geo_idx`) rather the fully qualified name (`materialize.public.q01_geo_idx`).
 
-```sql
-DROP INDEX q01_geo_idx;
-```
-
-### Remove an index with dependent objects
-
-```sql
-SHOW VIEWS;
-```
-```nofmt
-+-----------------------------------+
-| VIEWS                             |
-|-----------------------------------|
-| ...                               |
-| q01                               |
-+-----------------------------------+
-```
-```sql
-SHOW INDEXES FROM q01;
-```
-```nofmt
-+------------------------+--------------------------------+-----
-| View                   | Key_name                       | ...
-|------------------------+--------------------------------+----
-| materialize.public.q01 | materialize.public.q01_geo_idx | ...
-+------------------------+--------------------------------+-----
-```
-You can use the unqualified index name (`q01_geo_idx`) rather the fully qualified name (`materialize.public.q01_geo_idx`).
-
-```sql
-DROP INDEX q01_geo_idx CASCADE;
-```
-
-### Remove an index only if it has no dependent objects
 
 ```sql
 DROP INDEX q01_geo_idx;
@@ -115,6 +83,10 @@ DROP INDEX q01_geo_idx;
 
 ```sql
 DROP INDEX q01_geo_idx RESTRICT;
+```
+
+```sql
+DROP INDEX q01_geo_idx CASCADE;
 ```
 
 ### Do not issue an error if attempting to remove a nonexistent index
