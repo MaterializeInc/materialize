@@ -45,7 +45,7 @@ say "launching materialized-edge"
 launch_materialized edge --log-file=stderr
 
 say "initially populating topics"
-testdrive --kafka-addr kafka:9092 --schema-registry-url=http://schema-registry:8081 --seed "$seed" <<'EOF'
+testdrive --kafka-addr kafka:9092 --schema-registry-url=http://schema-registry:8081 --kafka-option=group.id=group1 --seed "$seed" <<'EOF'
 $ set consistency={
      "name": "materialize.byo.consistency",
      "type": "record",
@@ -127,7 +127,7 @@ say "launching materialized-edge"
 launch_materialized edge --log-file=stderr
 
 say "validating edge state"
-testdrive --no-reset --kafka-addr kafka:9092 --schema-registry-url=http://schema-registry:8081 --seed "$seed" <<'EOF'
+testdrive --no-reset --kafka-addr kafka:9092 --schema-registry-url=http://schema-registry:8081 --kafka-option=group.id=group2 --seed "$seed" <<'EOF'
 $ set consistency={
      "name": "materialize.byo.consistency",
      "type": "record",
