@@ -120,6 +120,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
                 dataflow_tx,
                 aws_info.clone(),
                 consumer_activator,
+                s3_conn.compression.clone(),
             ));
             for key_source in s3_conn.key_sources {
                 match key_source {
@@ -179,6 +180,7 @@ async fn download_objects_task(
     tx: SyncSender<anyhow::Result<InternalMessage>>,
     aws_info: aws::ConnectInfo,
     activator: SyncActivator,
+    compression: Compression,
 ) {
     let client = match aws_util::client::s3(aws_info).await {
         Ok(client) => client,
@@ -216,8 +218,15 @@ async fn download_objects_task(
                     seen_buckets.insert(msg.bucket.clone(), bi);
                 };
 
-                let update =
-                    download_object(&tx, &activator, &client, msg.bucket.clone(), msg.key).await;
+                let update = download_object(
+                    &tx,
+                    &activator,
+                    &client,
+                    msg.bucket.clone(),
+                    msg.key,
+                    compression.clone(),
+                )
+                .await;
 
                 if let Some(update) = update {
                     seen_buckets
@@ -565,6 +574,7 @@ async fn download_object(
     client: &S3Client,
     bucket: String,
     key: String,
+    compression: Compression,
 ) -> Option<DownloadMetricUpdate> {
     let obj = match client
         .get_object(GetObjectRequest {
@@ -582,26 +592,27 @@ async fn download_object(
         }
     };
 
-    // TODO: How we should we handle the Content-Type Header?
-    // There are many content types that can be parsed as text, once deflated
-    // And then there are a lot of content types that can't be, but we're not really
-    // handling those either
-    let content_encoding = match obj.content_encoding {
+    // If the Content-Type does not match the compression specified for this
+    // source, emit a debug warning messages and ignore this object
+    match obj.content_encoding {
         Some(s) => match s.as_ref() {
-            "gzip" => Compression::Gzip,
-            "identity" => Compression::None,
-            f => {
-                if let Err(e) = tx.send(Err(anyhow!(
-                    "Unsupported content encoding '{}' for object {}",
-                    f,
-                    key
-                ))) {
-                    log::warn!("unable to send error on stream: {}", e);
+            "gzip" => match compression {
+                Compression::Gzip => (),
+                _ => {
+                    log::debug!("object {} has mismatched Content-Type: {}", key, s);
                 }
-                return None;
+            },
+            "identity" => match compression {
+                Compression::None => (),
+                _ => {
+                    log::debug!("object {} has mismatched Content-Type: {}", key, s);
+                }
+            },
+            _ => {
+                log::debug!("object {} has unrecognized Content-Type: {}", key, s);
             }
         },
-        _ => Compression::None,
+        _ => (),
     };
 
     if let Some(body) = obj.body {
@@ -618,7 +629,7 @@ async fn download_object(
 
                 bytes_read = buf.len() as u64;
 
-                let buf = match content_encoding {
+                let buf = match compression {
                     Compression::None => buf,
                     Compression::Gzip => {
                         let mut decoded = Vec::new();
