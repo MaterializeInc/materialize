@@ -341,7 +341,29 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(id) => self.parse_qualified_identifier(id.into_ident()),
             Token::Ident(id) => self.parse_qualified_identifier(Ident::new(id)),
-            Token::Op(op) if op == "+" || op == "-" => Ok(Expr::Op {
+            Token::Op(op) if op == "-" => {
+                if let Some(Token::Number(n)) = self.peek_token() {
+                    let n = match n.parse::<f64>() {
+                        Ok(n) => n,
+                        Err(_) => {
+                            return Err(
+                                self.error(self.peek_prev_pos(), format!("invalid number {}", n))
+                            )
+                        }
+                    };
+                    if n != 0.0 {
+                        self.prev_token();
+                        return Ok(Expr::Value(self.parse_value()?));
+                    }
+                }
+
+                Ok(Expr::Op {
+                    op,
+                    expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
+                    expr2: None,
+                })
+            }
+            Token::Op(op) if op == "+" => Ok(Expr::Op {
                 op,
                 expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                 expr2: None,

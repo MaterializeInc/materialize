@@ -3688,31 +3688,55 @@ fn pad_leading<'a>(
     Ok(Datum::String(temp_storage.push_string(buf)))
 }
 
-fn substr<'a>(datums: &[Datum<'a>]) -> Datum<'a> {
-    let string: &'a str = datums[0].unwrap_str();
-    let mut chars = string.chars();
+fn substr<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
+    let s: &'a str = datums[0].unwrap_str();
 
-    let start_in_chars = datums[1].unwrap_int64() - 1;
-    let mut start_in_bytes = 0;
-    for _ in 0..cmp::max(start_in_chars, 0) {
-        start_in_bytes += chars.next().map(|char| char.len_utf8()).unwrap_or(0);
-    }
+    let raw_start_idx = datums[1].unwrap_int64() - 1;
+    let start_idx = match usize::try_from(cmp::max(raw_start_idx, 0)) {
+        Ok(i) => i,
+        Err(_) => {
+            return Err(EvalError::InvalidParameterValue(format!(
+                "substring starting index ({}) exceeds min/max position",
+                raw_start_idx
+            )))
+        }
+    } as usize;
+
+    let mut char_indices = s.char_indices();
+    let get_str_index = |(index, _char)| index;
+
+    let str_len = s.len();
+    let start_char_idx = char_indices
+        .nth(start_idx as usize)
+        .map_or(str_len, &get_str_index);
 
     if datums.len() == 3 {
-        let mut length_in_chars = datums[2].unwrap_int64();
-        if length_in_chars < 0 {
-            return Datum::Null;
-        }
-        if start_in_chars < 0 {
-            length_in_chars += start_in_chars;
-        }
-        let mut length_in_bytes = 0;
-        for _ in 0..cmp::max(length_in_chars, 0) {
-            length_in_bytes += chars.next().map(|char| char.len_utf8()).unwrap_or(0);
-        }
-        Datum::String(&string[start_in_bytes..start_in_bytes + length_in_bytes])
+        let end_idx = match datums[2].unwrap_int64() {
+            e if e < 0 => {
+                return Err(EvalError::InvalidParameterValue(
+                    "negative substring length not allowed".to_owned(),
+                ))
+            }
+            e if e == 0 || e + raw_start_idx < 1 => return Ok(Datum::String("")),
+            e => {
+                let e = cmp::min(raw_start_idx + e - 1, e - 1);
+                match usize::try_from(e) {
+                    Ok(i) => i,
+                    Err(_) => {
+                        return Err(EvalError::InvalidParameterValue(format!(
+                            "substring length ({}) exceeds max position",
+                            e
+                        )))
+                    }
+                }
+            }
+        };
+
+        let end_char_idx = char_indices.nth(end_idx).map_or(str_len, &get_str_index);
+
+        Ok(Datum::String(&s[start_char_idx..end_char_idx]))
     } else {
-        Datum::String(&string[start_in_bytes..])
+        Ok(Datum::String(&s[start_char_idx..]))
     }
 }
 
@@ -4537,7 +4561,7 @@ impl VariadicFunc {
             VariadicFunc::Concat => Ok(eager!(text_concat_variadic, temp_storage)),
             VariadicFunc::MakeTimestamp => Ok(eager!(make_timestamp)),
             VariadicFunc::PadLeading => eager!(pad_leading, temp_storage),
-            VariadicFunc::Substr => Ok(eager!(substr)),
+            VariadicFunc::Substr => eager!(substr),
             VariadicFunc::Replace => Ok(eager!(replace, temp_storage)),
             VariadicFunc::JsonbBuildArray => Ok(eager!(jsonb_build_array, temp_storage)),
             VariadicFunc::JsonbBuildObject => Ok(eager!(jsonb_build_object, temp_storage)),
