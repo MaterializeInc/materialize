@@ -1088,6 +1088,16 @@ fn kafka_sink_builder(
         Some(_) => bail!("consistency must be a boolean"),
     };
 
+    let exactly_once = match with_options.remove("exactly_once") {
+        Some(Value::Boolean(b)) => b,
+        None => false,
+        Some(_) => bail!("exactly-once must be a boolean"),
+    };
+
+    if exactly_once && !include_consistency {
+        bail!("exactly-once requires a consistency topic");
+    }
+
     let encoder = Encoder::new(
         key_desc_and_indices
             .as_ref()
@@ -1153,7 +1163,7 @@ fn kafka_sink_builder(
         key_schema,
         key_desc_and_indices,
         value_desc,
-        exactly_once: false,
+        exactly_once,
     }))
 }
 
