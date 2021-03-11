@@ -339,7 +339,7 @@ where
 
                 let previously_published = match &connector.consistency {
                     Some(consistency) => match consistency.gate_ts {
-                        Some(ts) => as_of.frontier.less_equal(&ts),
+                        Some(gate_ts) => time <= gate_ts,
                         None => false,
                     },
                     None => false,
