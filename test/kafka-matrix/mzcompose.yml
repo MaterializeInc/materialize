@@ -69,6 +69,9 @@ mzworkflows:
       - step: run
         service: testdrive-svc
         command: kafka-matrix.td
+      - step: remove-services
+        services: [materialized, schema-registry, kafka, zookeeper]
+        destroy_volumes: true
 
   start-deps:
     steps:

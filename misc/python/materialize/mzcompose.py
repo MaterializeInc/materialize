@@ -596,7 +596,7 @@ class RemoveServicesStep(WorkflowStep):
     """
     Params:
       services: List of service names
-      volumes: Boolean to indicate if the volumes should be removed as well
+      destroy_volumes: Boolean to indicate if the volumes should be removed as well
     """
 
     def __init__(
