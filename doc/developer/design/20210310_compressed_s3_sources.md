@@ -33,16 +33,16 @@ Materialize will not try to decompress any objects downloaded from this S3 sourc
 cannot be parsed, either due to being compressed or for another reason, will result in errors in
 the error stream for the source.
 
-The `Content-Type` field will be ignored for functional purposes but verified. If the
-`Content-Type` is not `identity`, a debug message will be generated indicating the mismatch.
+The `Content-Encoding` field will be ignored for functional purposes but verified. If the
+`Content-Encoding` is not `identity`, a debug message will be generated indicating the mismatch.
 
 ### Compression "GZIP"
 
 Materialize will use the gzip algorithm to decompress all objects downloaded from the S3 source.
 Any files that fail to decompress will result in errors in the error stream for the source.
 
-The `Content-Type` field will be ignored for functional purposes but verified. If the
-`Content-Type` is not `gzip`, a debug message will be generated indicating the mismatch.
+The `Content-Encoding` field will be ignored for functional purposes but verified. If the
+`Content-Encoding` is not `gzip`, a debug message will be generated indicating the mismatch.
 
 ### (Optional) Compression "AUTO"
 
@@ -90,9 +90,20 @@ media of the underyling data (such as `text/csv` or `text/plain`) and not the co
 algorithm applied. It should be noted that it is still possible that `Content-Type` can be a media
 type that needs to be decompressed (see `application/x-gzip` example above).
 
+### Using an Object Manifest
+
+Require that the customer provide an object (or set of objects?) that indicate how each object
+should handled.
+
 ### Using Object Name Suffix
 
 Detect the compression algorithm based on the filename suffix, such as `.gz`.
+
+### Reading Compression Headers / Magic Bytes
+
+We could use automatic filetype detection, ala the `file` unix command, to determine how to decode
+the file. At least one [magic crate](https://docs.rs/magic/0.12.2/magic/#usage-example) exists.
+Magic works quite well for standard filetypes but would it work sufficiently for our purposes?
 
 ## Open questions
 
