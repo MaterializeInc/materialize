@@ -468,6 +468,20 @@ impl PredicatePushdown {
                 // non-empty, we can move those predicates to the value.
                 if let Some(list) = get_predicates.remove(&Id::Local(*id)) {
                     if !list.is_empty() {
+                        // Remove the predicates in `list` from the body.
+                        body.visit_mut(&mut |e| if let MirRelationExpr::Filter {
+                            input,
+                            predicates
+                        } = e {
+                            if let MirRelationExpr::Get {
+                                id: get_id, ..
+                            } = **input {
+                                if get_id == Id::Local(*id) {
+                                    predicates.retain(|p| !list.contains(p))
+                                }
+                            }
+                        });
+                        // Apply the predicates in `list` to value.
                         **value = value.take_dangerous().filter(list);
                     }
                 }
