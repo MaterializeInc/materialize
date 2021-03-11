@@ -304,6 +304,8 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             self.get_worker_partition_count()
         );
 
+        debug!("Returning next message {:?}", next_message);
+
         Ok(next_message)
     }
 
@@ -637,6 +639,11 @@ impl<'a> From<&BorrowedMessage<'a>> for SourceMessage<Vec<u8>> {
         let kafka_offset = KafkaOffset {
             offset: msg.offset(),
         };
+        debug!(
+            "Creating Source message from {:?}, timestamp: {:?}",
+            msg,
+            msg.timestamp().to_millis()
+        );
         Self {
             payload: msg.payload().map(|p| p.to_vec()),
             partition: PartitionId::Kafka(msg.partition()),

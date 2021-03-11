@@ -350,6 +350,7 @@ pub(crate) trait SourceInfo<Out> {
     }
 }
 
+#[derive(Debug)]
 pub(crate) enum NextMessage<Out> {
     Ready(SourceMessage<Out>),
     Pending,
@@ -1099,6 +1100,8 @@ fn handle_message<Out>(
 where
     Out: Debug + Clone + Send + Default + MaybeLength + 'static,
 {
+    debug!("Handling message {:?}", message);
+
     let partition = message.partition.clone();
     let offset = message.offset;
     let msg_predecessor = *predecessor;
@@ -1117,6 +1120,7 @@ where
     // Determine the timestamp to which we need to assign this message
     let ts =
         consistency_info.find_matching_timestamp(&id, &partition, offset, &timestamp_histories);
+    debug!("Consistency info matching ts: {:?}", ts);
     match ts {
         None => {
             // We have not yet decided on a timestamp for this message,
@@ -1142,6 +1146,10 @@ where
             *bytes_read += out.len().unwrap_or(0);
             let ts_cap = cap.delayed(&ts);
 
+            debug!(
+                "Giving message {:?}, upstream_time_millis: {:?}, ts_cap: {:?}",
+                out, message.upstream_time_millis, ts_cap
+            );
             output.session(&ts_cap).give(Ok(SourceOutput::new(
                 key,
                 out,

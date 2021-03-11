@@ -410,7 +410,10 @@ fn kafka_get_next_message(consumer: &mut BaseConsumer) -> Option<Vec<u8>> {
     if let Some(result) = consumer.poll(Duration::from_millis(60)) {
         match result {
             Ok(message) => match message.payload() {
-                Some(p) => Some(p.to_vec()),
+                Some(p) => {
+                    debug!("Returning next BYO message: {:?}", message);
+                    Some(p.to_vec())
+                }
                 None => {
                     error!("unexpected null payload");
                     None

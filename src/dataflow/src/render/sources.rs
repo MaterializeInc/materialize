@@ -14,6 +14,7 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
+use log::info;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
@@ -293,6 +294,8 @@ where
                     (stream, capability)
                 };
 
+                collection.inspect(|x| info!("Inspect after source: {:?}", x));
+
                 // Implement source filtering and projection.
                 // At the moment this is strictly optional, but we perform it anyhow
                 // to demonstrate the intended use.
@@ -367,6 +370,8 @@ where
                             .as_collection();
                     }
                 }
+
+                collection.inspect(|x| info!("Inspect after 'as_of to each timestamp': {:?}", x));
 
                 let get = MirRelationExpr::Get {
                     id: Id::BareSource(src_id),

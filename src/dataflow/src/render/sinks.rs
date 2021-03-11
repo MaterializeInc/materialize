@@ -17,6 +17,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::Consolidate;
 use differential_dataflow::AsCollection;
+use log::info;
 use timely::dataflow::operators::exchange::Exchange;
 use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
@@ -63,6 +64,8 @@ where
                 sink.from_desc.typ().clone(),
             ))
             .expect("Sink source collection not loaded");
+
+        collection.inspect(|x| info!("Inspect initial source input: {:?}", x));
 
         // Some connectors support keys - extract them.
         let key_indices = sink
@@ -135,6 +138,8 @@ where
                 .as_collection(),
         };
 
+        collection.inspect(|x| info!("Inspect after apply envelope: {:?}", x));
+
         // Some sinks require that the timestamp be appended to the end of the value.
         let append_timestamp = match &sink.connector {
             SinkConnector::Kafka(c) => c.consistency.is_some(),
@@ -160,6 +165,8 @@ where
         } else {
             collection
         };
+
+        collection.inspect(|x| info!("Inspect timestamp append: {:?}", x));
 
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
