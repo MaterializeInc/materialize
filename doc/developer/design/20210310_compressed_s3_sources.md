@@ -42,7 +42,10 @@ Materialize will use the gzip algorithm to decompress all objects downloaded fro
 Any files that fail to decompress will result in errors in the error stream for the source.
 
 The `Content-Encoding` field will be ignored for functional purposes but verified. If the
-`Content-Encoding` is not `gzip`, a debug message will be generated indicating the mismatch.
+`Content-Encoding` is not `gzip`, a debug message will be generated indicating the mismatch. A
+mismatch on `Content-Encoding` cannot be a strict error, as there are many producers out there
+that will uploaded compressed data without setting the `Content-Encoding` header, or the
+`Content-Type` header, correctly.
 
 ### (Optional) Compression "AUTO"
 
