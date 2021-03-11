@@ -17,7 +17,7 @@ use std::ops::AddAssign;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use anyhow::{anyhow, Error};
-use flate2::read::GzDecoder;
+use flate2::read::MultiGzDecoder;
 use globset::GlobMatcher;
 use metrics::BucketMetrics;
 use notifications::Event;
@@ -633,7 +633,7 @@ async fn download_object(
                     Compression::None => buf,
                     Compression::Gzip => {
                         let mut decoded = Vec::new();
-                        let mut decoder = GzDecoder::new(&*buf);
+                        let mut decoder = MultiGzDecoder::new(&*buf);
                         match decoder.read_to_end(&mut decoded) {
                             Ok(_) => {}
                             Err(e) => {
