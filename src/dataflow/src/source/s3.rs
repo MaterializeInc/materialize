@@ -120,7 +120,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
                 dataflow_tx,
                 aws_info.clone(),
                 consumer_activator,
-                s3_conn.compression.clone(),
+                s3_conn.compression,
             ));
             for key_source in s3_conn.key_sources {
                 match key_source {
@@ -224,7 +224,7 @@ async fn download_objects_task(
                     &client,
                     msg.bucket.clone(),
                     msg.key,
-                    compression.clone(),
+                    compression,
                 )
                 .await;
 
