@@ -61,8 +61,6 @@ pub struct S3SourceInfo {
     is_activated_reader: bool,
     /// Receiver channel that ingests records
     receiver_stream: Receiver<Result<InternalMessage, Error>>,
-    /// Buffer: store message that cannot yet be timestamped
-    buffer: Option<SourceMessage<Out>>,
     /// Total number of records that this source has read
     offset: S3Offset,
 }
@@ -160,7 +158,6 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             id: source_id,
             is_activated_reader: active,
             receiver_stream: receiver,
-            buffer: None,
             offset: S3Offset(0),
         })
     }
@@ -628,9 +625,6 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
         _consistency_info: &mut ConsistencyInfo,
         _activator: &Activator,
     ) -> Result<NextMessage<Out>, anyhow::Error> {
-        if let Some(message) = self.buffer.take() {
-            return Ok(NextMessage::Ready(message));
-        }
         match self.receiver_stream.try_recv() {
             Ok(Ok(InternalMessage { record })) => {
                 self.offset += 1;
@@ -698,13 +692,6 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
         // how many partitions there are.
         //
         // https://github.com/MaterializeInc/materialize/issues/5715
-    }
-
-    fn buffer_message(&mut self, message: SourceMessage<Out>) {
-        if self.buffer.is_some() {
-            panic!("Internal error: S3 buffer is not empty when asked to buffer message");
-        }
-        self.buffer = Some(message);
     }
 }
 

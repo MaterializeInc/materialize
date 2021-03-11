@@ -315,6 +315,7 @@ $ kafka-ingest format=avro topic=data-consistency2 schema=${consistency}
 {"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": {"int": 1}, "timestamp": 2, "offset": 1}
 {"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": {"int": 2}, "timestamp": 2, "offset": 0}
 {"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": {"int": 3}, "timestamp": 2, "offset": 1}
+{"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": {"int": 2}, "timestamp": 3, "offset": 1}
 
 $ kafka-ingest partition=3 format=avro topic=data-multi schema=${schema} timestamp=1
 {"a": 3, "b": 1}
@@ -336,7 +337,6 @@ $ kafka-ingest partition=1 format=avro topic=data-multi schema=${schema} timesta
 
 
 $ kafka-ingest format=avro topic=data-consistency2 schema=${consistency}
-{"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": {"int": 2}, "timestamp": 3, "offset": 1}
 {"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": {"int": 1}, "timestamp": 3, "offset": 2}
 {"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": {"int": 3}, "timestamp": 3, "offset": 2}
 {"source": "testdrive-data-multi-${testdrive.seed}", "partition_count": 4 , "partition_id": {"int": 0}, "timestamp": 3, "offset": 2}

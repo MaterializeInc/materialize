@@ -303,10 +303,6 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
             })
         }
     }
-
-    fn buffer_message(&mut self, message: SourceMessage<Vec<u8>>) {
-        self.buffered_messages.push_front(message);
-    }
 }
 
 /// Creates the necessary data-structures for shard management

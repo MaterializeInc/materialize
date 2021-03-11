@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::convert::TryInto;
 use std::fs;
 use std::path::PathBuf;
@@ -52,9 +52,6 @@ pub struct KafkaSourceInfo {
     consumer: Arc<BaseConsumer<GlueConsumerContext>>,
     /// List of consumers. A consumer should be assigned per partition to guarantee fairness
     partition_consumers: VecDeque<PartitionConsumer>,
-    /// Metadata to keep track of whether a message is buffered at
-    /// that partition
-    buffered_metadata: HashSet<i32>,
     /// The number of known partitions.
     known_partitions: i32,
     /// Worker ID
@@ -100,9 +97,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     /// It is safe to close the current timestamp if
     /// 1) this worker does not own the current partition
     /// 2) we will never receive a message with a lower or equal timestamp than offset.
-    /// This is true if
-    ///     a) we have already timestamped a message >= offset
-    ///     b) the consumer's position is passed ever returning message <= offset.
+    /// This is true if we have already timestamped a message >= offset.
     fn can_close_timestamp(
         &self,
         consistency_info: &ConsistencyInfo,
@@ -121,44 +116,14 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             .unwrap()
             .offset;
 
-        // For transactional or compacted topics, the "last_offset" may not correspond to
-        // the last record in the topic (either because it has been GCed or because
-        // it corresponds to an abort/commit marker).
-        // topic and partition entries are not guaranteed to exist if the poll request to metadata has not succeeded:
-        // In Kafka, the position of the consumer is set to the offset *after* the last offset that the consumer has
-        // processed, so we have to decrement it by one to get the last processed offset
-
-        // We separate these two cases, as consumer.position() is an expensive call that should
-        // be avoided if possible. Case 1 and 2.a occur first, and we only test 2.b when necessary
-        if !self.has_partition(kafka_pid) // Case 1
-        || last_offset >= offset
-        // Case 2.a
-        {
+        // For transactional or compacted topics, the `last_offset` may not correspond to
+        // an accurate representation of how far we have read up to (because subsequent offsets
+        // have been garbage collected). However, `last_offset` still represents the lower bound
+        // for the value of the next offset in this partition.
+        if !self.has_partition(kafka_pid) || last_offset >= offset {
             true
         } else {
-            let mut current_consumer_position: MzOffset = KafkaOffset {
-                offset: match self.consumer.position() {
-                    Ok(topic_list) => topic_list
-                        .elements_for_topic(&self.topic_name)
-                        .get(kafka_pid as usize)
-                        .map(|el| match el.offset() {
-                            Offset::Offset(o) => o - 1,
-                            _ => -1,
-                        }),
-                    Err(_) => Some(-1),
-                }
-                .unwrap_or(-1),
-            }
-            .into();
-
-            // If a message has been buffered (but not timestamped), the consumer will already have
-            // moved ahead.
-            if self.is_buffered(kafka_pid) {
-                current_consumer_position.offset -= 1;
-            }
-
-            // Case 2.b
-            current_consumer_position >= offset
+            false
         }
     }
     /// Returns the number of partitions expected *for this worker*. Partitions are assigned
@@ -226,8 +191,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         self.ensure_has_partition(consistency_info, PartitionId::Kafka(partition_count - 1));
     }
 
-    /// This function checks whether any messages have been buffered. If yes, returns the buffered
-    /// message. Otherwise, polls from the next consumer for which a message is available. This function polls the set
+    /// This function polls from the next consumer for which a message is available. This function polls the set
     /// round-robin: when a consumer is polled, it is placed at the back of the queue.
     ///
     /// If a message has an offset that is smaller than the next expected offset for this consumer (and this partition)
@@ -285,8 +249,6 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                     PartitionId::Kafka(pid) => pid,
                     _ => unreachable!(),
                 };
-                // There are no more messages buffered on this pid
-                self.buffered_metadata.remove(&partition);
                 let offset = message.offset;
                 // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
                 // a network issue or a new partition added, at which point the consumer may
@@ -343,15 +305,6 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         );
 
         Ok(next_message)
-    }
-
-    fn buffer_message(&mut self, message: SourceMessage<Vec<u8>>) {
-        // Guaranteed to exist as we just read from this consumer
-        let mut consumer = self.partition_consumers.back_mut().unwrap();
-        assert_eq!(message.partition, PartitionId::Kafka(consumer.pid));
-        consumer.buffer = Some(message);
-        // Mark the partition has buffered
-        self.buffered_metadata.insert(consumer.pid);
     }
 
     fn next_cached_file(&mut self) -> Option<Vec<(Vec<u8>, Vec<u8>, Timestamp, i64)>> {
@@ -486,7 +439,6 @@ impl KafkaSourceInfo {
             .unwrap_or_default();
 
         KafkaSourceInfo {
-            buffered_metadata: HashSet::new(),
             topic_name: topic,
             source_name,
             id: source_id,
@@ -515,11 +467,6 @@ impl KafkaSourceInfo {
         // Note: the number of consumers is guaranteed to always be smaller than
         // expected_partition_count (i32)
         self.partition_consumers.len().try_into().unwrap()
-    }
-
-    /// Returns true if a message has been buffered for this partition
-    fn is_buffered(&self, pid: i32) -> bool {
-        self.buffered_metadata.contains(&pid)
     }
 
     /// Creates a new partition queue for `partition_id`.
@@ -700,14 +647,10 @@ impl<'a> From<&BorrowedMessage<'a>> for SourceMessage<Vec<u8>> {
     }
 }
 
-/// Wrapper around a partition containing both a buffer and the underlying consumer
-/// To read from this partition consumer 1) first check whether the buffer is empty. If not,
-/// read from buffer. 2) If buffer is empty, poll consumer to get a new message
+/// Wrapper around a partition containing the underlying consumer
 struct PartitionConsumer {
     /// the partition id with which this consumer is associated
     pid: i32,
-    /// A buffer to store messages that cannot be timestamped yet
-    buffer: Option<SourceMessage<Vec<u8>>>,
     /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<GlueConsumerContext>,
 }
@@ -717,27 +660,20 @@ impl PartitionConsumer {
     fn new(pid: i32, partition_queue: PartitionQueue<GlueConsumerContext>) -> Self {
         PartitionConsumer {
             pid,
-            buffer: None,
             partition_queue,
         }
     }
 
     /// Returns the next message to process for this partition (if any).
-    /// Either reads from the buffer or polls from the consumer
     fn get_next_message(&mut self) -> Result<Option<SourceMessage<Vec<u8>>>, KafkaError> {
-        if let Some(message) = self.buffer.take() {
-            assert_eq!(message.partition, PartitionId::Kafka(self.pid));
-            Ok(Some(message))
-        } else {
-            match self.partition_queue.poll(Duration::from_millis(0)) {
-                Some(Ok(msg)) => {
-                    let result = SourceMessage::from(&msg);
-                    assert_eq!(result.partition, PartitionId::Kafka(self.pid));
-                    Ok(Some(result))
-                }
-                Some(Err(err)) => Err(err),
-                _ => Ok(None),
+        match self.partition_queue.poll(Duration::from_millis(0)) {
+            Some(Ok(msg)) => {
+                let result = SourceMessage::from(&msg);
+                assert_eq!(result.partition, PartitionId::Kafka(self.pid));
+                Ok(Some(result))
             }
+            Some(Err(err)) => Err(err),
+            _ => Ok(None),
         }
     }
 
