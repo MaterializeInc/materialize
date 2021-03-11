@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use differential_dataflow::Collection;
 use lazy_static::lazy_static;
+use log::debug;
 use log::error;
 use prometheus::{
     register_int_counter_vec, register_uint_gauge_vec, IntCounter, IntCounterVec, UIntGauge,
@@ -242,6 +243,7 @@ pub fn kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    debug!("Creating Sink, connector info: {:?}", connector);
     let stream = &collection.inner;
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &connector.addrs.to_string());
@@ -322,6 +324,10 @@ where
         ((Option<Row>, Option<Row>), Timestamp, Diff),
         _,
     >| {
+        debug!("Sink {} invoked", s.name);
+        debug!("Frontier: {:?}", input.frontier());
+        debug!("SinkAsOf: {:?}", as_of);
+        debug!("Consistency: {:?}", connector.consistency);
         if s.shutdown_flag.load(Ordering::SeqCst) {
             error!("shutdown requested for sink: {}", &s.name);
             return false;
@@ -331,6 +337,12 @@ where
         input.for_each(|_, rows| {
             rows.swap(&mut vector);
             for ((key, value), time, diff) in vector.drain(..) {
+                debug!(
+                    "Consumed input ({:?}, {:?}, {:?})",
+                    (&key, &value),
+                    time,
+                    diff
+                );
                 let should_emit = if as_of.strict {
                     as_of.frontier.less_than(&time)
                 } else {
@@ -346,6 +358,10 @@ where
                 };
 
                 if !should_emit || previously_published {
+                    debug!(
+                        "Skipping data should_emit: {}, previously_published: {}",
+                        should_emit, previously_published
+                    );
                     // Skip stale data for already published timestamps
                     continue;
                 }
@@ -376,6 +392,8 @@ where
             }
         });
 
+        debug!("pending_rows: {:?}", pending_rows);
+
         // Move any newly closed timestamps from pending to ready
         let mut closed_ts: Vec<u64> = pending_rows
             .iter()
@@ -383,16 +401,22 @@ where
             .map(|(&ts, _)| ts)
             .collect();
         closed_ts.sort_unstable();
+
+        debug!("closed_ts: {:?}", pending_rows);
+
         closed_ts.into_iter().for_each(|ts| {
             let rows = pending_rows.remove(&ts).unwrap();
             ready_rows.push_back((ts, rows));
         });
+
+        debug!("ready_rows: {:?}", ready_rows);
 
         // Send a bounded number of records to Kafka from the ready queue.
         // This loop has explicitly been designed so that each iteration sends
         // at most one record to Kafka
         for _ in 0..connector.fuel {
             if let Some((ts, rows)) = ready_rows.front() {
+                debug!("Sink {}, {:?}", s.name, state);
                 state = match state {
                     SendState::Init => {
                         let result = if transactional {
@@ -489,6 +513,14 @@ where
                                 Some(total_count),
                             );
 
+                            debug!(
+                                "Sending consistency record: ({:?}, {}, {}, {:?})",
+                                consistency.schema_id,
+                                &ts.to_string(),
+                                "END",
+                                Some(total_count)
+                            );
+
                             let record = BaseRecord::to(&consistency.topic).payload(&encoded);
                             if let Err(retry) = s.send(record) {
                                 return retry;
@@ -502,7 +534,6 @@ where
                         } else {
                             Ok(())
                         };
-
                         match result {
                             Ok(()) => {
                                 ready_rows.pop_front();
@@ -537,18 +568,27 @@ where
         s.metrics.messages_in_flight.set(in_flight as u64);
 
         if !ready_rows.is_empty() {
+            debug!("Rescheduling because ready_rows is not empty");
             // We need timely to reschedule this operator as we have pending
             // items that we need to send to Kafka
             s.activator.activate();
             return true;
+        } else {
+            debug!("NOT rescheduling because ready_rows IS empty");
         }
 
         if in_flight > 0 {
+            debug!(
+                "Rescheduling because we still have in_flight: {}",
+                in_flight
+            );
             // We still have messages that need to be flushed out to Kafka
             // Let's make sure to keep the sink operator around until
             // we flush them out
             s.activator.activate_after(Duration::from_secs(5));
             return true;
+        } else {
+            debug!("NOT rescheduling because we have no in-flight messages");
         }
 
         false
