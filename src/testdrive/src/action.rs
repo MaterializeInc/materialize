@@ -76,6 +76,8 @@ pub struct Config {
     pub reset_materialized: bool,
     /// Emit Buildkite-specific markup.
     pub ci_output: bool,
+    /// A random number to distinguish each TestDrive run.
+    pub seed: Option<u32>,
 }
 
 pub struct State {
@@ -493,7 +495,12 @@ fn substitute_vars(msg: &str, vars: &HashMap<String, String>) -> Result<String, 
 pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), Error>>), Error> {
-    let seed = rand::thread_rng().gen();
+    let seed = if let Some(s) = config.seed {
+        s
+    } else {
+        rand::thread_rng().gen()
+    };
+
     let temp_dir = tempfile::tempdir().err_ctx("creating temporary directory")?;
 
     let materialized_catalog_path = if let Some(path) = &config.materialized_catalog_path {
