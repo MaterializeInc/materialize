@@ -70,6 +70,10 @@ struct Args {
     #[structopt(long)]
     ci_output: bool,
 
+    /// A random number to distinguish each TestDrive run.
+    #[structopt(long)]
+    seed: Option<u32>,
+
     // === Positional arguments. ===
     /// Paths to testdrive scripts to run.
     files: Vec<String>,
@@ -153,6 +157,7 @@ async fn run(args: Args) -> Result<(), Error> {
         materialized_catalog_path: args.validate_catalog,
         reset_materialized: !args.no_reset,
         ci_output: args.ci_output,
+        seed: args.seed,
     };
 
     if args.files.is_empty() {
