@@ -31,6 +31,7 @@ enum ValType {
     String,
     // Number with range [lower, upper]
     Number(i32, i32),
+    Boolean,
 }
 
 // Describes Kafka cluster configurations users can suppply using `CREATE
@@ -76,6 +77,7 @@ impl Config {
     fn validate_val(&self, val: &Value) -> Result<String, anyhow::Error> {
         let val = match (&self.val_type, val) {
             (ValType::String, Value::String(v)) => v.to_string(),
+            (ValType::Boolean, Value::Boolean(b)) => b.to_string(),
             (ValType::Path, Value::String(v)) => {
                 if std::fs::metadata(&v).is_err() {
                     bail!("file does not exist")
@@ -139,6 +141,7 @@ pub fn extract_config(
                 // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 ValType::Number(0, 3_600_000),
             ),
+            Config::new("enable_auto_commit", ValType::Boolean),
             Config::string("security_protocol"),
             Config::path("sasl_kerberos_keytab"),
             Config::string("sasl_username"),
