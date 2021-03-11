@@ -99,5 +99,5 @@ argument to the `MATCHING` clause:
 #### Compression
 
 - Omitting `COMPRESSION` is equivalent to `COMPRESSION NONE`.
-- Using `GZIP` compression requires the file to be a normal `.gz` file (e.g.
-  one produced by `gzip`) or a concatenation of multiple `gzip` member streams.
+- Using `GZIP` compression requires the object be compressed using the `gzip` algorithm or that
+  the object is a concatenation of multiple `gzip` member streams.
