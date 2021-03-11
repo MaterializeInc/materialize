@@ -34,8 +34,6 @@ use crate::source::{
 /// Contains all information necessary to ingest data from file sources (either
 /// regular sources, or Avro OCF sources)
 pub struct FileSourceInfo<Out> {
-    /// Source Name
-    name: String,
     /// Unique source ID
     id: SourceInstanceId,
     /// Field is set if this operator is responsible for ingesting data
@@ -45,8 +43,6 @@ pub struct FileSourceInfo<Out> {
     /// Current File Offset. This corresponds to the offset of last processed message
     /// (initially 0 if no records have been processed)
     current_file_offset: FileOffset,
-    /// Timely worker logger for source events
-    logger: Option<Logger>,
 }
 
 #[derive(Copy, Clone)]
@@ -111,19 +107,19 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
             _ => panic!("Only OCF sources are supported with Avro encoding of values."),
         };
 
-        consistency_info.partition_metrics.insert(
-            PartitionId::File,
-            PartitionMetrics::new(&name, source_id, "", logger.clone()),
-        );
-        consistency_info.update_partition_metadata(PartitionId::File);
+        if active {
+            consistency_info.partition_metrics.insert(
+                PartitionId::File,
+                PartitionMetrics::new(&name, source_id, "", logger),
+            );
+            consistency_info.update_partition_metadata(PartitionId::File);
+        }
 
         Ok(FileSourceInfo {
-            name,
             id: source_id,
             is_activated_reader: active,
             receiver_stream: receiver,
             current_file_offset: FileOffset { offset: 0 },
-            logger,
         })
     }
 }
@@ -172,43 +168,25 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
                 "Only File sources are supported with File/OCF connectors and Vec<u8> encodings"
             ),
         };
-        consistency_info.partition_metrics.insert(
-            PartitionId::File,
-            PartitionMetrics::new(&name, source_id, "", logger.clone()),
-        );
-        consistency_info.update_partition_metadata(PartitionId::File);
+
+        if active {
+            consistency_info.partition_metrics.insert(
+                PartitionId::File,
+                PartitionMetrics::new(&name, source_id, "", logger),
+            );
+            consistency_info.update_partition_metadata(PartitionId::File);
+        }
 
         Ok(FileSourceInfo {
-            name,
             id: source_id,
             is_activated_reader: active,
             receiver_stream: receiver,
             current_file_offset: FileOffset { offset: 0 },
-            logger,
         })
     }
 }
 
 impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
-    fn can_close_timestamp(
-        &self,
-        consistency_info: &ConsistencyInfo,
-        pid: &PartitionId,
-        offset: MzOffset,
-    ) -> bool {
-        if !self.is_activated_reader {
-            true
-        } else {
-            // Guaranteed to exist if we receive a message from this partition
-            let last_offset = consistency_info
-                .partition_metadata
-                .get(&pid)
-                .unwrap()
-                .offset;
-            last_offset >= offset
-        }
-    }
-
     fn get_worker_partition_count(&self) -> i32 {
         1
     }
@@ -217,24 +195,21 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         self.is_activated_reader
     }
 
-    fn ensure_has_partition(&mut self, consistency_info: &mut ConsistencyInfo, pid: PartitionId) {
-        if consistency_info.partition_metrics.len() == 0 {
-            consistency_info.partition_metrics.insert(
-                pid,
-                PartitionMetrics::new(&self.name, self.id, "", self.logger.clone()),
-            );
-        }
+    fn ensure_has_partition(&mut self, _consistency_info: &mut ConsistencyInfo, _pid: PartitionId) {
+        // This function should be a no-op for file sources because they don't have partitions.
+        log::debug!("ensure_has_partition erroneously called for file sources");
     }
 
     fn update_partition_count(
         &mut self,
-        consistency_info: &mut ConsistencyInfo,
+        _consistency_info: &mut ConsistencyInfo,
         partition_count: i32,
     ) {
         if partition_count > 1 {
             error!("Files cannot have multiple partitions");
         }
-        self.ensure_has_partition(consistency_info, PartitionId::File);
+        // This function should be a no-op for file sources because they don't have partitions.
+        log::debug!("update_partition_count erroneously called for file sources");
     }
 
     fn get_next_message(
