@@ -389,7 +389,14 @@ where
 
                 // Do whatever envelope processing is required.
                 self.ensure_rendered(&expr, scope, scope.index());
-                let new_get = MirRelationExpr::global_get(src_id, expr.typ());
+
+                // Using `src.desc.typ()` here instead of `expr.typ()` is a bit of a hack to get around the fact
+                // that the typ might have changed due to the `LinearOperator` logic above,
+                // and so views, which are using the source's typ as described in the catalog, wouldn't be able to find it.
+                //
+                // Everything should still work out fine, since that typ has only changed in non-essential ways
+                // (e.g., nullability flags and primary key information)
+                let new_get = MirRelationExpr::global_get(src_id, src.desc.typ().clone());
                 self.clone_from_to(&expr, &new_get);
 
                 let token = Rc::new(capability);
