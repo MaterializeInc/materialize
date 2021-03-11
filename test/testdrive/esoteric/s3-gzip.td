@@ -7,11 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set bucket=materialize-ci-testdrive-gzip-${testdrive.seed}
+# Test explicit lack of compression
+$ set bucket=materialize-ci-testdrive-none-${testdrive.seed}
 
 $ s3-create-bucket bucket=${bucket}
 
-$ s3-put-object bucket=${bucket} key=short/compressed compression=gzip
+$ s3-put-object bucket=${bucket} key=short/compressed
 a1
 a2
 a3
@@ -21,8 +22,9 @@ b1
 b2
 b3
 
-> CREATE MATERIALIZED SOURCE s3_all
+> CREATE MATERIALIZED SOURCE s3_all_none
   FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
+  COMPRESSION NONE
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -32,10 +34,80 @@ b3
   )
   FORMAT TEXT;
 
-> SELECT * FROM s3_all ORDER BY mz_record;
+> SELECT * FROM s3_all_none ORDER BY mz_record;
 a1 1
 a2 2
 a3 3
 b1 4
 b2 5
 b3 6
+
+# Test explicit lack of compression
+$ set bucket=materialize-ci-testdrive-gzip-${testdrive.seed}
+
+$ s3-create-bucket bucket=${bucket}
+
+$ s3-put-object bucket=${bucket} key=short/compressed compression=gzip
+a1
+a2
+a3
+
+$ s3-put-object bucket=${bucket} key=short/uncompressed compression=gzip
+b1
+b2
+b3
+
+> CREATE MATERIALIZED SOURCE s3_all_gzip
+  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
+  COMPRESSION GZIP
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT TEXT;
+
+> SELECT * FROM s3_all_gzip ORDER BY mz_record;
+a1 1
+a2 2
+a3 3
+b1 4
+b2 5
+b3 6
+
+# Test automatic decompression handling
+# $ set bucket=materialize-ci-testdrive-auto-${testdrive.seed}
+#
+# $ s3-create-bucket bucket=${bucket}
+#
+# $ s3-put-object bucket=${bucket} key=short/compressed compression=gzip
+# a1
+# a2
+# a3
+#
+# $ s3-put-object bucket=${bucket} key=short/uncompressed
+# b1
+# b2
+# b3
+#
+# > CREATE MATERIALIZED SOURCE s3_all_auto
+#   FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
+#   COMPRESSION AUTO
+#   WITH (
+#     region = '${testdrive.aws-region}',
+#     endpoint = '${testdrive.aws-endpoint}',
+#     access_key_id = '${testdrive.aws-access-key-id}',
+#     secret_access_key = '${testdrive.aws-secret-access-key}',
+#     token = '${testdrive.aws-token}'
+#   )
+#   FORMAT TEXT;
+#
+# > SELECT * FROM s3_all ORDER BY mz_record;
+# a1 1
+# a2 2
+# a3 3
+# b1 4
+# b2 5
+# b3 6

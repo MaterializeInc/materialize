@@ -638,6 +638,7 @@ pub fn plan_create_source(
         Connector::S3 {
             key_sources,
             pattern,
+            compression,
         } => {
             scx.require_experimental_mode("S3 Sources")?;
             let aws_info = normalize::aws_connect_info(&mut with_options, None)?;
@@ -669,6 +670,10 @@ pub fn plan_create_source(
                     })
                     .transpose()?,
                 aws_info,
+                compression: match compression {
+                    Compression::Gzip => dataflow_types::Compression::Gzip,
+                    Compression::None => dataflow_types::Compression::None,
+                },
             });
             let encoding = get_encoding(format)?;
             (connector, encoding)
