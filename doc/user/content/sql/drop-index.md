@@ -6,8 +6,7 @@ menu:
     parent: 'sql'
 ---
 
-`DROP INDEX` removes an index from a materialized view. (Non-materialized views
-do not have any indexes.)
+`DROP INDEX` removes an index from a materialized view. (Non-materialized views do not have any indexes.)
 
 ## Syntax
 
@@ -18,24 +17,24 @@ Field | Use
 `IF EXISTS` | Do not return an error if the named index doesn't exist.
 _index&lowbar;name_ | The name of the index you want to remove.
 `CASCADE` | Remove the index and its dependent objects.
-`RESTRICT` |  Remove the index, converting the materialized view to a non-materialized view. _(Default.)_
+`RESTRICT` |  Remove the index. _(Default.)_
 
 ## Details
 
 ### Indexes and materialized views
 
-If you drop the only index on a materialized view, it becomes a non-materialized
-view. For more details on non-materialized views, see [`CREATE
-VIEW`](../create-view).
-
 ### Primary indexes
 
 By default, materialized views only have one index, which we call the "primary
-index," and which stores the result set of the materialized view's embedded `SELECT`
+index", and which stores the result set of the materialized view's embedded `SELECT`
 statement. You can identify the primary index by its name, which follows the
 format `<view name>_primary_idx`.
 
-This primary index doesn't follow the constraints for typical for primary indexes in traditional databases; it is simply the first index created on a view. However, if you remove the primary index, you will not be able to query any columns not included in another index for the materialized view.
+This primary index doesn't follow the constraints for typical for primary indexes in traditional databases; it is simply the first index created on a view. Please keep in mind the following constraints:
+
+* If you remove the primary index, you will not be able to query any columns that are not included in another index for the view.
+* If the primary index is the **only** index on the view, you will not be able to query any columns at all and the materialized view will become a non-materialized view. For more details on non-materialized views, see [`CREATE
+VIEW`](../create-view).
 
 If you remove the primary index and want to recreate it:
 
@@ -46,8 +45,6 @@ If you remove the primary index and want to recreate it:
 
 Alternatively, you can also [`CREATE INDEX`](../create-index) to materialize any
 view.
-
-Removing the only index on a materialized view does not remove the view entirely; it merely transforms it to a non-materialized view.
 
 ## Examples
 
