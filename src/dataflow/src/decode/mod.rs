@@ -401,13 +401,8 @@ where
         (_, SourceEnvelope::CdcV2) => {
             unreachable!("Internal error: CDCv2 is not supported yet on non-Avro sources.")
         }
-        (DataEncoding::Avro(enc), SourceEnvelope::Debezium(_)) => {
-            // can't get this from the above match arm because:
-            // `error[E0658]: binding by-move and by-ref in the same pattern is unstable`
-            let dedup_strat = match envelope {
-                SourceEnvelope::Debezium(ds) => *ds,
-                _ => unreachable!(),
-            };
+        (DataEncoding::Avro(enc), SourceEnvelope::Debezium(ds)) => {
+            let dedup_strat = *ds;
             let fields = match &desc.typ().column_types[0].scalar_type {
                 ScalarType::Record { fields, .. } => fields.clone(),
                 _ => unreachable!(),
