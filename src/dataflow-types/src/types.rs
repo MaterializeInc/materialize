@@ -538,7 +538,7 @@ impl SourceEnvelope {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Compression {
     Gzip,
     None,
@@ -720,6 +720,7 @@ pub struct S3SourceConnector {
     pub key_sources: Vec<S3KeySource>,
     pub pattern: Option<Glob>,
     pub aws_info: aws::ConnectInfo,
+    pub compression: Compression,
 }
 
 /// A Source of Object Key names, the argument of the `OBJECTS FROM` clause

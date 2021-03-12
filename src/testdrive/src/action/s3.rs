@@ -9,10 +9,13 @@
 
 use std::collections::HashMap;
 use std::default::Default;
+use std::io::Write;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use rusoto_core::RusotoError;
+use flate2::write::GzEncoder;
+use flate2::Compression as Flate2Compression;
+use rusoto_core::{ByteStream, RusotoError};
 use rusoto_s3::{
     CreateBucketConfiguration, CreateBucketError, CreateBucketRequest,
     GetBucketNotificationConfigurationRequest, PutBucketNotificationConfigurationRequest,
@@ -24,6 +27,7 @@ use rusoto_sqs::{
     ReceiveMessageRequest, SetQueueAttributesRequest, Sqs,
 };
 
+use crate::action::file::{build_compression, Compression};
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
@@ -69,6 +73,7 @@ impl Action for CreateBucketAction {
 pub struct PutObjectAction {
     bucket: String,
     key: String,
+    compression: Compression,
     contents: String,
 }
 
@@ -76,6 +81,7 @@ pub fn build_put_object(mut cmd: BuiltinCommand) -> Result<PutObjectAction, Stri
     Ok(PutObjectAction {
         bucket: cmd.args.string("bucket")?,
         key: cmd.args.string("key")?,
+        compression: build_compression(&mut cmd)?,
         contents: cmd.input.join("\n"),
     })
 }
@@ -89,11 +95,30 @@ impl Action for PutObjectAction {
     async fn redo(&self, state: &mut State) -> Result<(), String> {
         println!("Creating S3 Bucket {}", self.bucket);
 
+        let buffer = self.contents.clone().into_bytes();
+        let contents = match self.compression {
+            Compression::None => Ok(buffer),
+            Compression::Gzip => {
+                let mut encoder = GzEncoder::new(Vec::new(), Flate2Compression::default());
+                encoder
+                    .write_all(buffer.as_ref())
+                    .map_err(|e| format!("error writing bytes to encoder: {}", e))?;
+                encoder
+                    .finish()
+                    .map_err(|e| format!("error compressing contents: {}", e))
+            }
+        }?;
+
         state
             .s3_client
             .put_object(PutObjectRequest {
                 bucket: self.bucket.clone(),
-                body: Some(self.contents.clone().into_bytes().into()),
+                body: Some(ByteStream::from(contents)),
+                content_type: Some("application/octet-stream".to_string()),
+                content_encoding: match self.compression {
+                    Compression::None => None,
+                    Compression::Gzip => Some("gzip".to_string()),
+                },
                 key: self.key.clone(),
                 ..Default::default()
             })

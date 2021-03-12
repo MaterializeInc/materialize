@@ -95,3 +95,9 @@ argument to the `MATCHING` clause:
 | `2020/**/*.json`   | `2020/11/uuid.json` | `data/2020/uuid.json` , `2020/11/uuid.csv` |
 | `*`                | `a`                 | `a/b`                                      |
 | `202{0,1}/*/*.csv` | `2020/11/data.csv`  | `2022/11/data.csv` , `2020/11/01/data.csv` |
+
+#### Compression
+
+- Omitting `COMPRESSION` is equivalent to `COMPRESSION NONE`.
+- Using `GZIP` compression requires the object be compressed using the `gzip` algorithm or that
+  the object is a concatenation of multiple `gzip` member streams.

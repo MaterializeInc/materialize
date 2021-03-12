@@ -2,3 +2,4 @@
 **SCAN BUCKET** *bucket_name* | Materialized will scan the bucket to find the set of objects to download. See [Scanning Buckets](#scanning-s3-buckets).
 **SQS NOTIFICATIONS** *queue_name* | Materialized will subscribe to the specified queue and download new objects. See [Listening to SQS Notifications](#listening-to-sqs-notifications).
 **MATCHING** *pattern* | A glob-style pattern to filter objects to ingest. See [Patterns](#patterns). Default is to ingest all objects.
+**COMPRESSION** _algorithm_ | The compression algorithm used to decode downloaded objects. See [Compression](#compression).

@@ -120,6 +120,7 @@ create_source_s3_text ::=
     )
   )*
   ('MATCHING' pattern)?
+  ('COMPRESSION' ('NONE' | 'GZIP'))?
   'WITH' '('
       'region =' region
       aws_credentials?
@@ -140,6 +141,7 @@ create_source_s3_json ::=
     )
   )*
   ('MATCHING' pattern)?
+  ('COMPRESSION' ('NONE' | 'GZIP'))?
   'WITH' '('
       'region =' region
       aws_credentials?
@@ -157,6 +159,7 @@ create_source_s3_csv ::=
     )
   )*
   ('MATCHING' pattern)?
+  ('COMPRESSION' ('NONE' | 'GZIP'))?
   'WITH' '('
       'region =' region
       aws_credentials?

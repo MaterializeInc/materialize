@@ -1787,9 +1787,15 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
+                let compression = if self.parse_keyword(COMPRESSION) {
+                    self.parse_compression()?
+                } else {
+                    Compression::None
+                };
                 Ok(Connector::S3 {
                     key_sources,
                     pattern,
+                    compression,
                 })
             }
             _ => unreachable!(),
