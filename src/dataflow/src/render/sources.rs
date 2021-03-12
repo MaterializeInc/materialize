@@ -48,10 +48,63 @@ where
         src_id: GlobalId,
         mut src: SourceDesc,
     ) {
+        // Extract the linear operators, as we will need to manipulate them.
+        // extracting them reduces the change we might accidentally communicate
+        // them through `src`.
+        let mut linear_operators = src.operators.take();
+
         // Blank out trivial linear operators.
-        if let Some(operator) = &src.operators {
+        if let Some(operator) = &linear_operators {
             if operator.is_trivial(src.arity()) {
-                src.operators = None;
+                linear_operators = None;
+            }
+        }
+
+        // Before proceeding, we may need to remediate sources with non-trivial relational
+        // expressions that post-process the bare source. If the expression is trivial, a
+        // get of the bare source, we can present `src.operators` to the source directly.
+        // Otherwise, we need to zero out `src.operators` and instead perform that logic
+        // at the end of `src.optimized_expr`.
+        //
+        // This has a lot of potential for improvement in the near future.
+        use expr::Id::BareSource;
+        match &mut src.optimized_expr.0 {
+            // If the expression is just the source, no need to do anything special.
+            MirRelationExpr::Get {
+                id: BareSource(x), ..
+            } if *x == src_id => {}
+            // A non-trivial expression should tack on filtering and projection, and
+            // also blank out the operator so that it is not applied any earlier.
+            x => {
+                if let Some(operators) = linear_operators.take() {
+                    // Deconstruct fields, as each will be used independently and will
+                    // each invalidate `operators`.
+                    let predicates = operators.predicates;
+                    let projection = operators.projection;
+                    // Non-empty predicates require a filter.
+                    if !predicates.is_empty() {
+                        *x = x.take_dangerous().filter(predicates);
+                    }
+                    // Non-trivial demand information calls for a map and projection.
+                    let rel_typ = x.typ();
+                    let arity = rel_typ.column_types.len();
+                    if (0..arity).any(|x| !projection.contains(&x)) {
+                        let mut dummies = Vec::new();
+                        let mut demand_projection = Vec::new();
+                        for (column, typ) in rel_typ.column_types.into_iter().enumerate() {
+                            if projection.contains(&column) {
+                                demand_projection.push(column);
+                            } else {
+                                demand_projection.push(arity + dummies.len());
+                                dummies.push(expr::MirScalarExpr::literal_ok(
+                                    Datum::Dummy,
+                                    typ.scalar_type,
+                                ));
+                            }
+                        }
+                        *x = x.take_dangerous().map(dummies).project(demand_projection);
+                    }
+                }
             }
         }
 
@@ -208,7 +261,7 @@ where
                             self.as_of_frontier.clone(),
                             key_decoder,
                             value_decoder,
-                            &mut src.operators,
+                            &mut linear_operators,
                             src.bare_desc.typ().arity(),
                         )
                     } else {
@@ -219,7 +272,7 @@ where
                             encoding,
                             &self.debug_name,
                             &envelope,
-                            &mut src.operators,
+                            &mut linear_operators,
                             fast_forwarded,
                             src.bare_desc.clone(),
                         );
@@ -242,7 +295,7 @@ where
                 // Implement source filtering and projection.
                 // At the moment this is strictly optional, but we perform it anyhow
                 // to demonstrate the intended use.
-                if let Some(mut operators) = src.operators.clone() {
+                if let Some(mut operators) = linear_operators {
                     // Determine replacement values for unused columns.
                     let source_type = src.bare_desc.typ();
                     let position_or = (0..source_type.arity())
@@ -336,7 +389,14 @@ where
 
                 // Do whatever envelope processing is required.
                 self.ensure_rendered(&expr, scope, scope.index());
-                let new_get = MirRelationExpr::global_get(src_id, expr.typ());
+
+                // Using `src.desc.typ()` here instead of `expr.typ()` is a bit of a hack to get around the fact
+                // that the typ might have changed due to the `LinearOperator` logic above,
+                // and so views, which are using the source's typ as described in the catalog, wouldn't be able to find it.
+                //
+                // Everything should still work out fine, since that typ has only changed in non-essential ways
+                // (e.g., nullability flags and primary key information)
+                let new_get = MirRelationExpr::global_get(src_id, src.desc.typ().clone());
                 self.clone_from_to(&expr, &new_get);
 
                 let token = Rc::new(capability);
