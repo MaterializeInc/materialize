@@ -103,6 +103,11 @@ services:
     command: >-
       start
       --smp 1
+      --memory 1G  \
+      --reserve-memory 0M \
+      --overprovisioned \
+      --node-id 0 \
+      --check=false
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.3
     environment:
