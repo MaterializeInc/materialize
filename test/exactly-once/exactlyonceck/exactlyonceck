@@ -30,7 +30,7 @@ launch_materialized() {
 }
 
 kill_materialized() {
-  kill "$materialized_pid"
+  kill -KILL "$materialized_pid"
   wait 2> /dev/null
 }
 
