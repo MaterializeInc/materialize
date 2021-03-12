@@ -39,7 +39,7 @@ pub use scalar::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalError, MirScalarExpr};
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
-/// [`Optimizer`].
+/// `transform::Optimizer`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct OptimizedMirRelationExpr(pub MirRelationExpr);
 

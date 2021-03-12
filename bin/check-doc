@@ -11,12 +11,21 @@
 #
 # check-doc - check the docs for valid links
 
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+source misc/shlib/shlib.bash
+
 export RUSTDOCFLAGS='-D warnings'
 
-# next thing to fix: expr
-cargo doc \
+# to find the next thing to fix add `-p materialized` to the below list, `cargo doc` will stop
+# compiling on the first dependency that has invalid docs.
+runv cargo doc \
     -p mz-avro \
     -p ccsr \
+    -p expr \
     -p interchange \
     -p ore \
+    -p transform \
+    -p sql \
     ;

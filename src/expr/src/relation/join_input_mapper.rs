@@ -26,9 +26,7 @@ use repr::RelationType;
 /// Methods in this class that take an argument `equivalences` are only
 /// guaranteed to return a correct answer if equivalence classes are in
 /// canonical form.
-/// (See [`canonicalize::canonicalize_equivalences`].)
-///
-/// [`canonicalize::canonicalize_equivalences`]: expr::canonicalize::fuse_dedup_equivalences
+/// (See [`crate::relation::canonicalize::canonicalize_equivalences`].)
 #[derive(Debug)]
 pub struct JoinInputMapper {
     /// The number of columns per input. All other fields in this struct are
