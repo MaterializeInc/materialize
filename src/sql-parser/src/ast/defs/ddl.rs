@@ -272,6 +272,7 @@ pub enum Connector<T: AstInfo> {
         key_sources: Vec<S3KeySource>,
         /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
         pattern: Option<String>,
+        compression: Compression,
     },
     Postgres {
         /// The postgres connection string
@@ -325,6 +326,7 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
             Connector::S3 {
                 key_sources,
                 pattern,
+                compression,
             } => {
                 f.write_str("S3 OBJECTS FROM");
                 f.write_node(&display::comma_separated(key_sources));
@@ -332,6 +334,10 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                     f.write_str(" MATCHING '");
                     f.write_str(&display::escape_single_quote_string(pattern));
                     f.write_str("'");
+                }
+                if compression != &Default::default() {
+                    f.write_str(" COMPRESSION ");
+                    f.write_node(compression);
                 }
             }
             Connector::Postgres {

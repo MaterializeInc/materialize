@@ -12,10 +12,12 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::{From, TryInto};
 use std::default::Default;
+use std::io::Read;
 use std::ops::AddAssign;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use anyhow::{anyhow, Error};
+use flate2::read::MultiGzDecoder;
 use globset::GlobMatcher;
 use metrics::BucketMetrics;
 use notifications::Event;
@@ -30,7 +32,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 use tokio::time::{self, Duration};
 
 use aws_util::aws;
-use dataflow_types::{DataEncoding, ExternalSourceConnector, MzOffset, S3KeySource};
+use dataflow_types::{Compression, DataEncoding, ExternalSourceConnector, MzOffset, S3KeySource};
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::logging::materialized::Logger;
@@ -116,6 +118,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
                 dataflow_tx,
                 aws_info.clone(),
                 consumer_activator,
+                s3_conn.compression,
             ));
             for key_source in s3_conn.key_sources {
                 match key_source {
@@ -174,6 +177,7 @@ async fn download_objects_task(
     tx: SyncSender<anyhow::Result<InternalMessage>>,
     aws_info: aws::ConnectInfo,
     activator: SyncActivator,
+    compression: Compression,
 ) {
     let client = match aws_util::client::s3(aws_info).await {
         Ok(client) => client,
@@ -211,8 +215,15 @@ async fn download_objects_task(
                     seen_buckets.insert(msg.bucket.clone(), bi);
                 };
 
-                let update =
-                    download_object(&tx, &activator, &client, msg.bucket.clone(), msg.key).await;
+                let update = download_object(
+                    &tx,
+                    &activator,
+                    &client,
+                    msg.bucket.clone(),
+                    msg.key,
+                    compression,
+                )
+                .await;
 
                 if let Some(update) = update {
                     seen_buckets
@@ -560,11 +571,12 @@ async fn download_object(
     client: &S3Client,
     bucket: String,
     key: String,
+    compression: Compression,
 ) -> Option<DownloadMetricUpdate> {
     let obj = match client
         .get_object(GetObjectRequest {
             bucket: bucket.clone(),
-            key,
+            key: key.to_string(),
             ..Default::default()
         })
         .await
@@ -577,16 +589,60 @@ async fn download_object(
         }
     };
 
+    // If the Content-Type does not match the compression specified for this
+    // source, emit a debug warning messages and ignore this object
+    if let Some(s) = obj.content_encoding.as_deref() {
+        match (s, compression) {
+            ("gzip", Compression::Gzip) => (),
+            ("identity", Compression::None) => (),
+            // TODO: switch to `("identity" | "gzip", _)` when or_patterns stabilizes
+            ("identity", _) | ("gzip", _) => {
+                log::debug!("object {} has mismatched Content-Type: {}", key, s)
+            }
+            _ => log::debug!("object {} has unrecognized Content-Type: {}", key, s),
+        };
+    };
+
     if let Some(body) = obj.body {
         let mut reader = body.into_async_read();
         // unwrap is safe because content length is not allowed to be negative
         let mut buf = Vec::with_capacity(obj.content_length.unwrap_or(1024).try_into().unwrap());
         let mut messages = 0;
+        let mut bytes_read = 0;
 
         let mut sent = Sent::Success;
         match reader.read_to_end(&mut buf).await {
             Ok(_) => {
                 let activate = !buf.is_empty();
+
+                bytes_read = buf.len() as u64;
+
+                let buf = match compression {
+                    Compression::None => buf,
+                    Compression::Gzip => {
+                        let mut decoded = Vec::new();
+                        let mut decoder = MultiGzDecoder::new(&*buf);
+                        match decoder.read_to_end(&mut decoded) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                if let Err(e) = tx.send(Err(anyhow!(
+                                    "Failed to decode object {} using gzip: {}",
+                                    key,
+                                    e
+                                ))) {
+                                    log::debug!("unable to send error on stream: {}", e);
+                                }
+                                return Some(DownloadMetricUpdate {
+                                    bytes: bytes_read,
+                                    messages,
+                                    sent: Sent::SenderClosed,
+                                });
+                            }
+                        }
+                        decoded
+                    }
+                };
+
                 for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
                     if tx.send(Ok(InternalMessage { record: line })).is_err() {
                         sent = Sent::SenderClosed;
@@ -609,12 +665,14 @@ async fn download_object(
         }
 
         Some(DownloadMetricUpdate {
-            bytes: buf.len() as u64,
+            bytes: bytes_read,
             messages,
             sent,
         })
     } else {
-        log::warn!("get object response had no body");
+        if let Err(e) = tx.send(Err(anyhow!("Get object response had no body: {}", key))) {
+            log::debug!("unable to send error on stream: {}", e);
+        }
         None
     }
 }

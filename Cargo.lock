@@ -4230,6 +4230,7 @@ dependencies = [
  "ccsr",
  "chrono",
  "coord",
+ "flate2",
  "futures",
  "interchange",
  "itertools",
