@@ -9,13 +9,13 @@
 
 ARG BUILDKITE_BUILD_NUMBER
 
-MZFROM materialized AS edge
+MZFROM materialized AS materialized
 MZFROM testdrive AS testdrive
 FROM ubuntu:bionic-20200403
 
 RUN apt-get update && apt-get install -y curl postgresql-client-10 wait-for-it
 
-COPY --from=edge /usr/local/bin/materialized /usr/local/bin/materialized-edge
+COPY --from=materialized /usr/local/bin/materialized /usr/local/bin/materialized
 COPY --from=testdrive /usr/local/bin/testdrive /usr/local/bin/testdrive
 COPY exactlyonceck /usr/local/bin/exactlyonceck
 

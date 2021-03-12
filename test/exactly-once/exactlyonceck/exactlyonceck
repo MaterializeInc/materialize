@@ -23,9 +23,7 @@ run_sql() {
 }
 
 launch_materialized() {
-    name=$1
-    shift
-    "materialized-$name" -w1 "$@" &
+    materialized -w1 "$@" &
     materialized_pid=$?
     wait-for-it --timeout=30 -q localhost:6875
     run_sql "SELECT 1" > /dev/null
@@ -41,8 +39,8 @@ wait-for-it --timeout=30 schema-registry:8081
 
 seed=$(od -vAn -N4 -tu4 < /dev/urandom | tr -d '[:space:]')
 
-say "launching materialized-edge"
-launch_materialized edge --log-file=stderr
+say "launching materialized"
+launch_materialized --log-file=stderr
 
 say "initially populating topics"
 testdrive --kafka-addr kafka:9092 --schema-registry-url=http://schema-registry:8081 --kafka-option=group.id=group1 --seed "$seed" <<'EOF'
@@ -123,10 +121,10 @@ EOF
 say "killing materialized"
 kill_materialized
 
-say "launching materialized-edge"
-launch_materialized edge --log-file=stderr
+say "launching materialized"
+launch_materialized --log-file=stderr
 
-say "validating edge state"
+say "validating output topic after restart"
 testdrive --no-reset --kafka-addr kafka:9092 --schema-registry-url=http://schema-registry:8081 --kafka-option=group.id=group2 --seed "$seed" <<'EOF'
 $ set consistency={
      "name": "materialize.byo.consistency",
