@@ -440,6 +440,7 @@ impl PredicatePushdown {
                     MirRelationExpr::Union { base, inputs } => {
                         let predicates = std::mem::replace(predicates, Vec::new());
                         *base = Box::new(base.take_dangerous().filter(predicates.clone()));
+                        self.action(base, get_predicates);
                         for input in inputs {
                             *input = input.take_dangerous().filter(predicates.clone());
                             self.action(input, get_predicates);
