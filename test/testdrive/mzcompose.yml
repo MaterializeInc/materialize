@@ -74,7 +74,7 @@ services:
     - tmp:/share/tmp
     propagate-uid-gid: true
     init: true
-    depends_on: [kafka, zookeeper, schema-registry, materialized]
+    depends_on: [kafka, schema-registry, materialized]
   materialized:
     mzbuild: materialized
     command: >-
@@ -94,23 +94,21 @@ services:
     volumes:
     - mzdata:/share/mzdata
     - tmp:/share/tmp
-  zookeeper:
-    image: confluentinc/cp-zookeeper:5.5.3
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
   kafka:
-    image: confluentinc/cp-kafka:5.5.3
+    image: vectorized/redpanda
     environment:
-    - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
     - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
     - KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
     - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    command: >-
+      start
+      --smp 1
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.3
     environment:
     - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
     - SCHEMA_REGISTRY_HOST_NAME=localhost
-    depends_on: [kafka, zookeeper]
+    depends_on: [kafka]
   localstack:
     image: localstack/localstack:0.12.5
     environment:
