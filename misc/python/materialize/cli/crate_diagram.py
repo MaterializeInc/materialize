@@ -22,6 +22,7 @@ materialize ecosystem.
 import subprocess
 import sys
 import os
+import difflib
 from collections import defaultdict
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -40,7 +41,10 @@ from materialize.spawn import runv
     default=None,
     help="The svg diagram to create, otherwise just print dot to stdout",
 )
-def main(include_timely: bool, create_diagram: Optional[str]) -> None:
+@click.option("--check", default=None)
+def main(
+    include_timely: bool, create_diagram: Optional[str], check: Optional[str]
+) -> None:
     root = Path(os.environ["MZ_ROOT"])
     root_cargo = root / "Cargo.toml"
     with root_cargo.open() as fh:
@@ -81,7 +85,7 @@ def main(include_timely: bool, create_diagram: Optional[str]) -> None:
         member_meta["differential-dataflow"] = {"has_bin": False, "description": ""}
         member_meta["timely"] = {"has_bin": False, "description": ""}
 
-    if create_diagram is not None:
+    if check or create_diagram is not None:
         out = NamedTemporaryFile(mode="w+", prefix="mz-arch-diagram-")
     else:
         out = sys.stdout
@@ -103,8 +107,34 @@ def main(include_timely: bool, create_diagram: Optional[str]) -> None:
             if e.stdout:
                 print(e.stdout.decode("utf-8"))
             print(f"ERROR running dot, source in {debug}")
-    else:
-        print("didn't create diag")
+
+    if check:
+        with open(check) as fh:
+            existing = fh.read()
+        out.seek(0)
+        new = out.read()
+        import itertools
+
+        if new != existing:
+            print(
+                "ERROR: crate diagram has changed {} {}".format(len(existing), len(new))
+            )
+            existing_lines = existing.splitlines(keepends=True)
+            new_lines = new.splitlines(keepends=True)
+            sys.stdout.writelines(
+                difflib.context_diff(
+                    existing_lines, new_lines, fromfile="existing", tofile="new", n=1
+                )
+            )
+
+            print()
+            print(
+                "    HELP: run this script with the --create-diagram to update the diagram"
+            )
+            args = [a if a != "--check" else ">" for a in sys.argv[1:]]
+            print("    HELP: run this to fix CI:", "crate-diagram", " ".join(args))
+
+            sys.exit(1)
 
 
 def output(
@@ -116,6 +146,17 @@ def output(
     def disp(val: str, out: IO = out, **kwargs: Any) -> None:
         print(val, file=out, **kwargs)
 
+    disp(
+        """// Copyright Materialize, Inc. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file at the root of this repository.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+"""
+    )
     disp("digraph packages {")
     for area, members in areas.items():
         disp(f"    subgraph cluster_{area} {{")

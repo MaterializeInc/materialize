@@ -20,5 +20,6 @@ ci_init
 ci_try bin/lint
 ci_try cargo --locked fmt -- --check
 ci_try cargo --locked deny check licenses bans sources
+ci_try bin/crate-diagram --include-timely --check doc/developer/assets/crate-diagram.gv
 
 ci_status_report

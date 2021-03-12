@@ -1,0 +1,224 @@
+// Copyright Materialize, Inc. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file at the root of this repository.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+digraph packages {
+    subgraph cluster_demo {
+        label = "/demo";
+        color = blue;
+        "billing-demo" [tooltip="Microservice demo using Materialize to power a real-time billing usecase",shape=Mdiamond,color=red];
+    }
+    subgraph cluster_fuzz {
+        label = "/fuzz";
+        color = blue;
+        "fuzz" [tooltip="fuzz"];
+    }
+    subgraph cluster_play {
+        label = "/play";
+        color = blue;
+        "mbta-to-mtrlz" [tooltip="Converts MBTA streams to Kafka streams to use in Materialize",shape=Mdiamond,color=red];
+    }
+    subgraph cluster_src {
+        label = "/src";
+        color = blue;
+        "mz-avro" [tooltip="Library for working with Apache Avro in Rust"];
+        "avro-derive" [tooltip="avro-derive"];
+        "aws-util" [tooltip="Internal AWS utility library for Materialize."];
+        "build-info" [tooltip="Metadata about a Materialize build."];
+        "ccsr" [tooltip="Confluent-compatible schema registry API client."];
+        "coord" [tooltip="Coordinates client requests with the dataflow layer."];
+        "dataflow-bin" [tooltip="Utility binaries for the dataflow crate."];
+        "dataflow-types" [tooltip="Types for the dataflow crate."];
+        "dataflow" [tooltip="Materialized's Timely and Differential Dataflow server."];
+        "expr" [tooltip="The core expression language for Materialize."];
+        "interchange" [tooltip="Translations for various data serialization formats."];
+        "kafka-util" [tooltip="Utilities for working with Kafka."];
+        "materialized" [tooltip="Streaming SQL materialized views.",shape=Mdiamond,color=red];
+        "metabase" [tooltip="An API client for Metabase."];
+        "mz-process-collector" [tooltip="mz-process-collector"];
+        "ore" [tooltip="Internal utility libraries for Materialize."];
+        "peeker" [tooltip="Run peek against materialized, reporting metrics",shape=Mdiamond,color=red];
+        "pgrepr" [tooltip="Representation of and serialization for PostgreSQL data types."];
+        "pgtest" [tooltip="Postgres wire protocol test framework.",shape=Mdiamond,color=red];
+        "pgwire" [tooltip="A server for the PostgreSQL wire protocol."];
+        "prof" [tooltip="CPU and memory profiling tools."];
+        "protoc" [tooltip="A pure Rust protobuf compiler."];
+        "repr" [tooltip="The core data types for Materialize."];
+        "sql" [tooltip="SQL–dataflow translation."];
+        "sqllogictest" [tooltip="A driver for sqllogictest, a SQL correctness testing framework.",shape=Mdiamond,color=red];
+        "sql-parser" [tooltip="The lexer and parser for Materialize's SQL dialect."];
+        "storage" [tooltip="Persistent storage of data."];
+        "symbiosis" [tooltip="Built-in OLTP support via symbiosis."];
+        "testdrive" [tooltip="Integration test driver for Materialize.",shape=Mdiamond,color=red];
+        "transform" [tooltip="Transformations of Materialize expressions."];
+        "walkabout" [tooltip="AST visitor generation."];
+    }
+    subgraph cluster_test {
+        label = "/test";
+        color = blue;
+        "chaos" [tooltip="Chaos test integrations with Materialize.",shape=Mdiamond,color=red];
+        "test-correctness" [tooltip="Verifies CH-benCHmark correctness."];
+        "metabase-smoketest" [tooltip="A simple smoke test for Metabase and Materialize.",shape=Mdiamond,color=red];
+        "perf-kinesis" [tooltip="Tool to test Materialize's performance with AWS Kinesis.",shape=Mdiamond,color=red];
+        "perf-upsert" [tooltip="Performance test using Materialize and upsert text sources",shape=Mdiamond,color=red];
+        "s3-datagen" [tooltip="Generate data in S3 for testing our S3 sources",shape=Mdiamond,color=red];
+        "smith-fuzz" [tooltip="Fuzzer intergration using Smith to generate Materialize inputs",shape=Mdiamond,color=red];
+        "test-util" [tooltip="Utilities for testing Materialize"];
+    }
+    subgraph cluster_timely {
+        label = "/timely";
+        color = blue;
+        "differential-dataflow" [tooltip=""];
+        "timely" [tooltip=""];
+    }
+    "billing-demo" -> "ore" [edgetooltip="billing-demo -> ore",URL="none"];
+    "billing-demo" -> "test-util" [edgetooltip="billing-demo -> test-util",URL="none"];
+    "fuzz" -> "repr" [edgetooltip="fuzz -> repr",URL="none"];
+    "fuzz" -> "sql-parser" [edgetooltip="fuzz -> sql-parser",URL="none"];
+    "mbta-to-mtrlz" -> "ore" [edgetooltip="mbta-to-mtrlz -> ore",URL="none"];
+    "mbta-to-mtrlz" -> "test-util" [edgetooltip="mbta-to-mtrlz -> test-util",URL="none"];
+    "mz-avro" -> "avro-derive" [edgetooltip="mz-avro -> avro-derive",URL="none"];
+    "coord" -> "aws-util" [edgetooltip="coord -> aws-util",URL="none"];
+    "coord" -> "build-info" [edgetooltip="coord -> build-info",URL="none"];
+    "coord" -> "ccsr" [edgetooltip="coord -> ccsr",URL="none"];
+    "coord" -> "dataflow" [edgetooltip="coord -> dataflow",URL="none"];
+    "coord" -> "dataflow-types" [edgetooltip="coord -> dataflow-types",URL="none"];
+    "coord" -> "differential-dataflow" [edgetooltip="coord -> differential-dataflow",URL="none"color=green,style=dashed];
+    "coord" -> "expr" [edgetooltip="coord -> expr",URL="none"];
+    "coord" -> "interchange" [edgetooltip="coord -> interchange",URL="none"];
+    "coord" -> "mz-avro" [edgetooltip="coord -> mz-avro",URL="none"];
+    "coord" -> "ore" [edgetooltip="coord -> ore",URL="none"];
+    "coord" -> "pgrepr" [edgetooltip="coord -> pgrepr",URL="none"];
+    "coord" -> "repr" [edgetooltip="coord -> repr",URL="none"];
+    "coord" -> "sql" [edgetooltip="coord -> sql",URL="none"];
+    "coord" -> "sql-parser" [edgetooltip="coord -> sql-parser",URL="none"];
+    "coord" -> "storage" [edgetooltip="coord -> storage",URL="none"];
+    "coord" -> "symbiosis" [edgetooltip="coord -> symbiosis",URL="none"];
+    "coord" -> "timely" [edgetooltip="coord -> timely",URL="none"color=green,style=dashed];
+    "coord" -> "transform" [edgetooltip="coord -> transform",URL="none"];
+    "dataflow-bin" -> "ore" [edgetooltip="dataflow-bin -> ore",URL="none"];
+    "dataflow-bin" -> "timely" [edgetooltip="dataflow-bin -> timely",URL="none"color=green,style=dashed];
+    "dataflow-types" -> "aws-util" [edgetooltip="dataflow-types -> aws-util",URL="none"];
+    "dataflow-types" -> "ccsr" [edgetooltip="dataflow-types -> ccsr",URL="none"];
+    "dataflow-types" -> "expr" [edgetooltip="dataflow-types -> expr",URL="none"];
+    "dataflow-types" -> "interchange" [edgetooltip="dataflow-types -> interchange",URL="none"];
+    "dataflow-types" -> "kafka-util" [edgetooltip="dataflow-types -> kafka-util",URL="none"];
+    "dataflow-types" -> "repr" [edgetooltip="dataflow-types -> repr",URL="none"];
+    "dataflow-types" -> "timely" [edgetooltip="dataflow-types -> timely",URL="none"color=green,style=dashed];
+    "dataflow" -> "aws-util" [edgetooltip="dataflow -> aws-util",URL="none"];
+    "dataflow" -> "ccsr" [edgetooltip="dataflow -> ccsr",URL="none"];
+    "dataflow" -> "dataflow-types" [edgetooltip="dataflow -> dataflow-types",URL="none"];
+    "dataflow" -> "differential-dataflow" [edgetooltip="dataflow -> differential-dataflow",URL="none"color=green,style=dashed];
+    "dataflow" -> "expr" [edgetooltip="dataflow -> expr",URL="none"];
+    "dataflow" -> "interchange" [edgetooltip="dataflow -> interchange",URL="none"];
+    "dataflow" -> "kafka-util" [edgetooltip="dataflow -> kafka-util",URL="none"];
+    "dataflow" -> "mz-avro" [edgetooltip="dataflow -> mz-avro",URL="none"];
+    "dataflow" -> "ore" [edgetooltip="dataflow -> ore",URL="none"];
+    "dataflow" -> "repr" [edgetooltip="dataflow -> repr",URL="none"];
+    "dataflow" -> "timely" [edgetooltip="dataflow -> timely",URL="none"color=green,style=dashed];
+    "expr" -> "ore" [edgetooltip="expr -> ore",URL="none"];
+    "expr" -> "pgrepr" [edgetooltip="expr -> pgrepr",URL="none"];
+    "expr" -> "repr" [edgetooltip="expr -> repr",URL="none"];
+    "interchange" -> "avro-derive" [edgetooltip="interchange -> avro-derive",URL="none"];
+    "interchange" -> "ccsr" [edgetooltip="interchange -> ccsr",URL="none"];
+    "interchange" -> "differential-dataflow" [edgetooltip="interchange -> differential-dataflow",URL="none"color=green,style=dashed];
+    "interchange" -> "timely" [edgetooltip="interchange -> timely",URL="none"color=green,style=dashed];
+    "interchange" -> "mz-avro" [edgetooltip="interchange -> mz-avro",URL="none"];
+    "interchange" -> "ore" [edgetooltip="interchange -> ore",URL="none"];
+    "interchange" -> "repr" [edgetooltip="interchange -> repr",URL="none"];
+    "kafka-util" -> "ccsr" [edgetooltip="kafka-util -> ccsr",URL="none"];
+    "kafka-util" -> "mz-avro" [edgetooltip="kafka-util -> mz-avro",URL="none"];
+    "kafka-util" -> "ore" [edgetooltip="kafka-util -> ore",URL="none"];
+    "materialized" -> "build-info" [edgetooltip="materialized -> build-info",URL="none"];
+    "materialized" -> "coord" [edgetooltip="materialized -> coord",URL="none"];
+    "materialized" -> "dataflow" [edgetooltip="materialized -> dataflow",URL="none"];
+    "materialized" -> "dataflow-types" [edgetooltip="materialized -> dataflow-types",URL="none"];
+    "materialized" -> "differential-dataflow" [edgetooltip="materialized -> differential-dataflow",URL="none"color=green,style=dashed];
+    "materialized" -> "mz-process-collector" [edgetooltip="materialized -> mz-process-collector",URL="none"];
+    "materialized" -> "ore" [edgetooltip="materialized -> ore",URL="none"];
+    "materialized" -> "pgwire" [edgetooltip="materialized -> pgwire",URL="none"];
+    "materialized" -> "prof" [edgetooltip="materialized -> prof",URL="none"];
+    "materialized" -> "repr" [edgetooltip="materialized -> repr",URL="none"];
+    "materialized" -> "sql" [edgetooltip="materialized -> sql",URL="none"];
+    "materialized" -> "sql-parser" [edgetooltip="materialized -> sql-parser",URL="none"];
+    "materialized" -> "timely" [edgetooltip="materialized -> timely",URL="none"color=green,style=dashed];
+    "peeker" -> "mz-process-collector" [edgetooltip="peeker -> mz-process-collector",URL="none"];
+    "peeker" -> "ore" [edgetooltip="peeker -> ore",URL="none"];
+    "pgrepr" -> "ore" [edgetooltip="pgrepr -> ore",URL="none"];
+    "pgrepr" -> "repr" [edgetooltip="pgrepr -> repr",URL="none"];
+    "pgtest" -> "ore" [edgetooltip="pgtest -> ore",URL="none"];
+    "pgwire" -> "coord" [edgetooltip="pgwire -> coord",URL="none"];
+    "pgwire" -> "dataflow-types" [edgetooltip="pgwire -> dataflow-types",URL="none"];
+    "pgwire" -> "expr" [edgetooltip="pgwire -> expr",URL="none"];
+    "pgwire" -> "ore" [edgetooltip="pgwire -> ore",URL="none"];
+    "pgwire" -> "pgrepr" [edgetooltip="pgwire -> pgrepr",URL="none"];
+    "pgwire" -> "repr" [edgetooltip="pgwire -> repr",URL="none"];
+    "pgwire" -> "sql" [edgetooltip="pgwire -> sql",URL="none"];
+    "protoc" -> "ore" [edgetooltip="protoc -> ore",URL="none"];
+    "repr" -> "ore" [edgetooltip="repr -> ore",URL="none"];
+    "sql" -> "aws-util" [edgetooltip="sql -> aws-util",URL="none"];
+    "sql" -> "build-info" [edgetooltip="sql -> build-info",URL="none"];
+    "sql" -> "ccsr" [edgetooltip="sql -> ccsr",URL="none"];
+    "sql" -> "dataflow-types" [edgetooltip="sql -> dataflow-types",URL="none"];
+    "sql" -> "expr" [edgetooltip="sql -> expr",URL="none"];
+    "sql" -> "interchange" [edgetooltip="sql -> interchange",URL="none"];
+    "sql" -> "mz-avro" [edgetooltip="sql -> mz-avro",URL="none"];
+    "sql" -> "ore" [edgetooltip="sql -> ore",URL="none"];
+    "sql" -> "pgrepr" [edgetooltip="sql -> pgrepr",URL="none"];
+    "sql" -> "repr" [edgetooltip="sql -> repr",URL="none"];
+    "sql" -> "sql-parser" [edgetooltip="sql -> sql-parser",URL="none"];
+    "sqllogictest" -> "expr" [edgetooltip="sqllogictest -> expr",URL="none"];
+    "sqllogictest" -> "materialized" [edgetooltip="sqllogictest -> materialized",URL="none"];
+    "sqllogictest" -> "ore" [edgetooltip="sqllogictest -> ore",URL="none"];
+    "sqllogictest" -> "pgrepr" [edgetooltip="sqllogictest -> pgrepr",URL="none"];
+    "sqllogictest" -> "repr" [edgetooltip="sqllogictest -> repr",URL="none"];
+    "sqllogictest" -> "sql" [edgetooltip="sqllogictest -> sql",URL="none"];
+    "sqllogictest" -> "timely" [edgetooltip="sqllogictest -> timely",URL="none"color=green,style=dashed];
+    "sql-parser" -> "ore" [edgetooltip="sql-parser -> ore",URL="none"];
+    "sql-parser" -> "repr" [edgetooltip="sql-parser -> repr",URL="none"];
+    "storage" -> "dataflow-types" [edgetooltip="storage -> dataflow-types",URL="none"];
+    "storage" -> "expr" [edgetooltip="storage -> expr",URL="none"];
+    "storage" -> "repr" [edgetooltip="storage -> repr",URL="none"];
+    "storage" -> "timely" [edgetooltip="storage -> timely",URL="none"color=green,style=dashed];
+    "symbiosis" -> "dataflow-types" [edgetooltip="symbiosis -> dataflow-types",URL="none"];
+    "symbiosis" -> "expr" [edgetooltip="symbiosis -> expr",URL="none"];
+    "symbiosis" -> "ore" [edgetooltip="symbiosis -> ore",URL="none"];
+    "symbiosis" -> "pgrepr" [edgetooltip="symbiosis -> pgrepr",URL="none"];
+    "symbiosis" -> "repr" [edgetooltip="symbiosis -> repr",URL="none"];
+    "symbiosis" -> "sql" [edgetooltip="symbiosis -> sql",URL="none"];
+    "testdrive" -> "aws-util" [edgetooltip="testdrive -> aws-util",URL="none"];
+    "testdrive" -> "ccsr" [edgetooltip="testdrive -> ccsr",URL="none"];
+    "testdrive" -> "coord" [edgetooltip="testdrive -> coord",URL="none"];
+    "testdrive" -> "interchange" [edgetooltip="testdrive -> interchange",URL="none"];
+    "testdrive" -> "kafka-util" [edgetooltip="testdrive -> kafka-util",URL="none"];
+    "testdrive" -> "mz-avro" [edgetooltip="testdrive -> mz-avro",URL="none"];
+    "testdrive" -> "ore" [edgetooltip="testdrive -> ore",URL="none"];
+    "testdrive" -> "pgrepr" [edgetooltip="testdrive -> pgrepr",URL="none"];
+    "testdrive" -> "repr" [edgetooltip="testdrive -> repr",URL="none"];
+    "testdrive" -> "sql-parser" [edgetooltip="testdrive -> sql-parser",URL="none"];
+    "transform" -> "dataflow-types" [edgetooltip="transform -> dataflow-types",URL="none"];
+    "transform" -> "expr" [edgetooltip="transform -> expr",URL="none"];
+    "transform" -> "repr" [edgetooltip="transform -> repr",URL="none"];
+    "walkabout" -> "ore" [edgetooltip="walkabout -> ore",URL="none"];
+    "chaos" -> "ore" [edgetooltip="chaos -> ore",URL="none"];
+    "chaos" -> "test-util" [edgetooltip="chaos -> test-util",URL="none"];
+    "test-correctness" -> "mz-process-collector" [edgetooltip="test-correctness -> mz-process-collector",URL="none"];
+    "test-correctness" -> "ore" [edgetooltip="test-correctness -> ore",URL="none"];
+    "test-correctness" -> "pgrepr" [edgetooltip="test-correctness -> pgrepr",URL="none"];
+    "metabase-smoketest" -> "metabase" [edgetooltip="metabase-smoketest -> metabase",URL="none"];
+    "metabase-smoketest" -> "ore" [edgetooltip="metabase-smoketest -> ore",URL="none"];
+    "perf-kinesis" -> "aws-util" [edgetooltip="perf-kinesis -> aws-util",URL="none"];
+    "perf-kinesis" -> "ore" [edgetooltip="perf-kinesis -> ore",URL="none"];
+    "perf-kinesis" -> "test-util" [edgetooltip="perf-kinesis -> test-util",URL="none"];
+    "perf-upsert" -> "test-util" [edgetooltip="perf-upsert -> test-util",URL="none"];
+    "s3-datagen" -> "aws-util" [edgetooltip="s3-datagen -> aws-util",URL="none"];
+    "s3-datagen" -> "ore" [edgetooltip="s3-datagen -> ore",URL="none"];
+    "smith-fuzz" -> "test-util" [edgetooltip="smith-fuzz -> test-util",URL="none"];
+    "test-util" -> "kafka-util" [edgetooltip="test-util -> kafka-util",URL="none"];
+    "test-util" -> "ore" [edgetooltip="test-util -> ore",URL="none"];
+}
