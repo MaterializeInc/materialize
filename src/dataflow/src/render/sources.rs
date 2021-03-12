@@ -67,12 +67,13 @@ where
         // at the end of `src.optimized_expr`.
         //
         // This has a lot of potential for improvement in the near future.
-        use expr::Id::BareSource;
+        use expr::Id::LocalBareSource;
         match &mut src.optimized_expr.0 {
             // If the expression is just the source, no need to do anything special.
             MirRelationExpr::Get {
-                id: BareSource(x), ..
-            } if *x == src_id => {}
+                id: LocalBareSource,
+                ..
+            } => {}
             // A non-trivial expression should tack on filtering and projection, and
             // also blank out the operator so that it is not applied any earlier.
             x => {
