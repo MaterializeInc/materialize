@@ -594,25 +594,16 @@ async fn download_object(
 
     // If the Content-Type does not match the compression specified for this
     // source, emit a debug warning messages and ignore this object
-    match obj.content_encoding {
-        Some(s) => match s.as_ref() {
-            "gzip" => match compression {
-                Compression::Gzip => (),
-                _ => {
-                    log::debug!("object {} has mismatched Content-Type: {}", key, s);
-                }
-            },
-            "identity" => match compression {
-                Compression::None => (),
-                _ => {
-                    log::debug!("object {} has mismatched Content-Type: {}", key, s);
-                }
-            },
-            _ => {
-                log::debug!("object {} has unrecognized Content-Type: {}", key, s);
+    if let Some(s) = obj.content_encoding.as_deref() {
+        match (s, compression) {
+            ("gzip", Compression::Gzip) => (),
+            ("identity", Compression::None) => (),
+            // TODO: switch to `("identity" | "gzip", _)` when or_patterns stabilizes
+            ("identity", _) | ("gzip", _) => {
+                log::debug!("object {} has mismatched Content-Type: {}", key, s)
             }
-        },
-        _ => (),
+            _ => log::debug!("object {} has unrecognized Content-Type: {}", key, s),
+        };
     };
 
     if let Some(body) = obj.body {
