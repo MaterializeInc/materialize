@@ -291,6 +291,17 @@ acceptable for:
     entry. Changes to Materialize very rarely require changes in rust-sasl, so
     maintaining the two separately does not introduce much overhead.
 
+## Our Crates
+
+We break up our rust code into crates mostly to improve compilation time, but
+also sometimes because our code is intended to be open sourced or to be re-used
+between different binaries.
+
+This is a graph of our crates, to give a general sense of how things fit
+together:
+
+![crate diagram](assets/crate-diagram.svg)
+
 [Apache Kafka]: https://kafka.apache.org
 [Apache ZooKeeper]: https://zookeeper.apache.org
 [askama]: https://github.com/djc/askama
