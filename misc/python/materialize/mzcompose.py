@@ -228,6 +228,7 @@ class Composition:
         tempfile = TemporaryFile()
         os.set_inheritable(tempfile.fileno(), True)
         yaml.dump(compose, tempfile, encoding="utf-8")  # type: ignore
+        yaml.dump(compose, sys.stdout, encoding="utf-8")  # type: ignore
         tempfile.flush()
         self.file = tempfile
 
