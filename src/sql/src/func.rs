@@ -1575,6 +1575,9 @@ lazy_static! {
             "replace" => Scalar {
                 params!(String, String, String) => VariadicFunc::Replace, 2087;
             },
+            "right" => Scalar {
+                params!(String, Int32) => BinaryFunc::Right, 3061;
+            },
             "round" => Scalar {
                 params!(Float32) => UnaryFunc::RoundFloat32, oid::FUNC_ROUND_F32_OID;
                 params!(Float64) => UnaryFunc::RoundFloat64, 1342;

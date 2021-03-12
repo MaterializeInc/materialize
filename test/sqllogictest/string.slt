@@ -938,3 +938,125 @@ query I
 SELECT position(e'\u0903\u0951' IN e'\u0930\u0903\u0951')
 ----
 2
+
+### right ###
+statement ok
+CREATE TABLE righttest (strcol char(15), vccol varchar(15), smicol smallint, intcol int)
+
+statement ok
+INSERT INTO righttest VALUES ('Mg', 'Mn', 1, -1), ('magnesium', 'manganese', 3, NULL),
+    (NULL, NULL, 0, 0), ('24.31', '54.94', 3, -3), ('长久不见', '爱不释手', NULL, 3),
+    ('', '', -1, 2)
+
+# invalid input
+statement error
+SELECT right(42)
+
+statement error
+SELECT right('str')
+
+statement error
+SELECT right(42, 'str')
+
+statement error
+SELECT right('str', 42, 17)
+
+# standard tests
+
+#TODO: materialize#589 select right(strcol, foo) from righttest
+
+# edge case
+query T rowsort
+SELECT right(vccol, 0) FROM righttest
+----
+(empty)
+(empty)
+NULL
+(empty)
+(empty)
+(empty)
+
+# from the back
+query T rowsort
+SELECT right(vccol, 2) FROM righttest
+----
+Mn
+se
+NULL
+94
+释手
+(empty)
+
+# from the front
+query T rowsort
+SELECT right(vccol, -2) FROM righttest
+----
+(empty)
+nganese
+NULL
+.94
+释手
+(empty)
+
+query TT rowsort
+SELECT right(vccol, smicol), right(vccol, intcol) FROM righttest
+----
+n   n
+ese NULL
+NULL    NULL
+.94    94
+NULL    不释手
+(empty) (empty)
+
+
+# NULL inputs
+query T
+SELECT right(NULL, 99)
+----
+NULL
+
+query T
+SELECT right('str', NULL)
+----
+NULL
+
+# combining characters
+
+query T
+SELECT right('रः॑', 0)
+----
+(empty)
+
+query T
+SELECT right('रः॑', 1)
+----
+ ॑
+
+query T
+SELECT right('रः॑', -1)
+----
+ः॑
+
+# this is exactly the same as above, but using unicode escapes
+query T
+SELECT right(e'\u0930\u0903\u0951', -1)
+----
+ः॑
+
+# integer edge cases
+
+# i32:MIN, this seems strange, but it's what Postgres does
+query T
+SELECT right('hello', -2147483648)
+----
+hello
+
+# i32:MIN + 1
+query T
+SELECT right('hello', -2147483647)
+----
+(empty)
+
+# i64
+query error arguments cannot be implicitly cast to any implementation's parameters
+SELECT right('hello', 2147483648)
