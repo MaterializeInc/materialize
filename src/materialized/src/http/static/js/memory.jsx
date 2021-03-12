@@ -229,8 +229,8 @@ function View(props) {
       setOpers(opers);
 
       const chan_table = await query(`
-        SELECT DISTINCT
-          id, source_node, target_node, sent
+        SELECT
+          id, source_node, target_node, sum(sent) as sent
         FROM
           mz_catalog.mz_dataflow_channels AS channels
           LEFT JOIN mz_catalog.mz_message_counts AS counts
@@ -253,7 +253,9 @@ function View(props) {
                       WHERE
                         id = ${props.dataflow_id}
                     )
-            );
+            )
+        GROUP BY id, source_node, target_node
+        ;
       `);
       // {id: [source, target]}.
       const chans = Object.fromEntries(
