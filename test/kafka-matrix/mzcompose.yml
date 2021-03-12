@@ -68,7 +68,7 @@ mzworkflows:
         workflow: start-deps
       - step: run
         service: testdrive-svc
-        command: kafka-matrix.td
+        command: kafka-matrix.td /tests/avro-sinks.td /tests/avro-sources.td /tests/upsert-kafka.td
       - step: remove-services
         services: [materialized, schema-registry, kafka, zookeeper]
         destroy_volumes: true
@@ -107,6 +107,7 @@ services:
       - .:/workdir
       - mzdata:/share/mzdata
       - tmp:/share/tmp
+      - ../testdrive:/tests
     propagate-uid-gid: true
     init: true
     depends_on: [kafka, zookeeper, schema-registry, materialized]
