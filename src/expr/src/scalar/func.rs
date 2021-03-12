@@ -2262,6 +2262,7 @@ pub enum BinaryFunc {
     MapContainsMap,
     ConvertFrom,
     Position,
+    Right,
     Trim,
     TrimLeading,
     TrimTrailing,
@@ -2417,6 +2418,7 @@ impl BinaryFunc {
             BinaryFunc::Encode => eager!(encode, temp_storage),
             BinaryFunc::Decode => eager!(decode, temp_storage),
             BinaryFunc::Position => eager!(position),
+            BinaryFunc::Right => eager!(right),
             BinaryFunc::Trim => Ok(eager!(trim)),
             BinaryFunc::TrimLeading => Ok(eager!(trim_leading)),
             BinaryFunc::TrimTrailing => Ok(eager!(trim_trailing)),
@@ -2466,7 +2468,7 @@ impl BinaryFunc {
                 ScalarType::Bool.nullable(true)
             }
 
-            ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Trim | TrimLeading
+            ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Right | Trim | TrimLeading
             | TrimTrailing => ScalarType::String.nullable(in_nullable),
 
             AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 | EncodedBytesCharLength => {
@@ -2782,6 +2784,7 @@ impl BinaryFunc {
             | RoundDecimal(_)
             | ConvertFrom
             | Position
+            | Right
             | Trim
             | TrimLeading
             | TrimTrailing
@@ -2906,6 +2909,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RoundDecimal(_) => f.write_str("round"),
             BinaryFunc::ConvertFrom => f.write_str("convert_from"),
             BinaryFunc::Position => f.write_str("position"),
+            BinaryFunc::Right => f.write_str("right"),
             BinaryFunc::Trim => f.write_str("btrim"),
             BinaryFunc::TrimLeading => f.write_str("ltrim"),
             BinaryFunc::TrimTrailing => f.write_str("rtrim"),
@@ -4280,6 +4284,34 @@ fn position<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     } else {
         Ok(Datum::Int32(0))
     }
+}
+
+fn right<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let string: &'a str = a.unwrap_str();
+    let n = b.unwrap_int32();
+
+    let mut byte_indices = string.char_indices().map(|(i, _)| i);
+
+    let start_in_bytes = if n == 0 {
+        string.len()
+    } else if n > 0 {
+        let n = usize::try_from(n - 1).map_err(|_| {
+            EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
+        })?;
+        // nth from the back
+        byte_indices.rev().nth(n).unwrap_or(0)
+    } else if n == i32::MIN {
+        // this seems strange but Postgres behaves like this
+        0
+    } else {
+        let n = n.abs();
+        let n = usize::try_from(n).map_err(|_| {
+            EvalError::InvalidParameterValue(format!("invalid parameter n: {:?}", n))
+        })?;
+        byte_indices.nth(n).unwrap_or_else(|| string.len())
+    };
+
+    Ok(Datum::String(&string[start_in_bytes..]))
 }
 
 fn trim<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {

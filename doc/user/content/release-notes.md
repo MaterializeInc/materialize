@@ -115,6 +115,8 @@ Wrap your release notes at the 80 character mark.
 
 - Add `position` to the [string function](/sql/functions#string-func) suite.
 
+- Add `right` to the [string function](/sql/functions#string-func) suite.
+
 {{% version-header v0.7.0 %}}
 
 - **Known issue.** You cannot upgrade nodes created with versions v0.6.1 or

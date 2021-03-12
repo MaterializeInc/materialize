@@ -259,6 +259,9 @@
   - signature: 'replace(s: str, f: str, r: str) -> str'
     description: "`s` with all instances of `f` replaced with `r`"
 
+  - signature: 'right(s: str, n: int) -> str'
+    description: The last `n` characters of `s`. If `n` is negative, all but the first `|n|` characters of `s`.
+
   - signature: 'rtrim(s: str) -> str'
     description: Trim all spaces from the right side of `s`.
 
