@@ -402,7 +402,7 @@ where
             .collect();
         closed_ts.sort_unstable();
 
-        debug!("closed_ts: {:?}", pending_rows);
+        debug!("closed_ts: {:?}", closed_ts);
 
         closed_ts.into_iter().for_each(|ts| {
             let rows = pending_rows.remove(&ts).unwrap();
