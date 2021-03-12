@@ -93,7 +93,7 @@ media of the underyling data (such as `text/csv` or `text/plain`) and not the co
 algorithm applied. It should be noted that it is still possible that `Content-Type` can be a media
 type that needs to be decompressed (see `application/x-gzip` example above).
 
-### Using an Object Manifest
+### Using an Object Manifest - #5502
 
 Require that the customer provide an object (or set of objects?) that indicate how each object
 should handled.
