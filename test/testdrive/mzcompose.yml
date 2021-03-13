@@ -96,30 +96,21 @@ services:
     - tmp:/share/tmp
   kafka:
     image: vectorized/redpanda:v21.3.4
-    ports:
-      - 9092:9092
-      - 29092:29092
-    entrypoint:
-      - /usr/bin/rpk
-      - redpanda
-      - start
-      - --smp
-      - "1"
-      - --memory
-      - "1G"
-      - --reserve-memory
-      - "0M"
-      - --overprovisioned
-      - --node-id
-      - "0"
-      - --kafka-addr
-      - "PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092"
-      - --advertise-kafka-addr
-      - "PLAINTEXT://kafka:29092,OUTSIDE://localhost:9092"
+    command: >-
+      start
+      --smp 1
+      --memory 1G
+      --reserve-memory 0M
+      --overprovisioned
+      --node-id 0
+      --kafka-addr PLAINTEXT://0.0.0.0:9092
+      --advertise-kafka-addr PLAINTEXT://kafka:9092
+    volumes:
+      - redpanda:/var/lib/redpanda/data
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.3
     environment:
-    - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:29092
+    - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka:9092
     - SCHEMA_REGISTRY_HOST_NAME=localhost
     depends_on: [kafka]
   localstack:
@@ -132,4 +123,5 @@ services:
 
 volumes:
   mzdata:
+  redpanda:
   tmp:
