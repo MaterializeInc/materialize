@@ -22,3 +22,7 @@ services:
     ports:
     - 9092:9092
     - 29092:29092
+    volumes:
+    - redpanda:/var/lib/redpanda/data
+volumes:
+  redpanda: null
