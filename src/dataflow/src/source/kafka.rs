@@ -131,18 +131,14 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                         self.logger.clone(),
                     ),
                 );
+                consistency_info.update_partition_metadata(PartitionId::Kafka(i));
             }
-            consistency_info.update_partition_metadata(PartitionId::Kafka(i));
         }
         self.known_partitions = cmp::max(self.known_partitions, pid + 1);
 
         assert_eq!(
             self.get_worker_partition_count(),
             self.get_partition_consumers_count()
-        );
-        assert_eq!(
-            self.known_partitions as usize,
-            consistency_info.partition_metadata.len()
         );
     }
 

@@ -528,7 +528,7 @@ impl ConsistencyInfo {
         source: &mut dyn SourceInfo<Out>,
         timestamp_histories: &TimestampDataUpdates,
     ) {
-        let mut changed = false;
+        let mut min_closed_timestamp_unowned_partitions: Option<Timestamp> = None;
 
         if let Consistency::BringYourOwn(_) = self.source_type {
             // Determine which timestamps have been closed. A timestamp is closed once we have processed
@@ -544,9 +544,18 @@ impl ConsistencyInfo {
                         // Iterate over each partition that we know about
                         for (pid, entries) in entries {
                             source.ensure_has_partition(self, pid.clone());
-
                             if !self.partition_metadata.contains_key(pid) {
-                                // We are not responsible for this partition and can ignore it.
+                                // We need to grab the min closed (max) timestamp from partitions we
+                                // don't own.
+
+                                if let Some((_, timestamp, _)) = entries.back() {
+                                    min_closed_timestamp_unowned_partitions =
+                                        match min_closed_timestamp_unowned_partitions.as_mut() {
+                                            Some(min) => Some(std::cmp::min(*timestamp, *min)),
+                                            None => Some(*timestamp),
+                                        };
+                                }
+
                                 continue;
                             }
 
@@ -587,7 +596,6 @@ impl ConsistencyInfo {
                                 let cons_info = self.partition_metadata.get_mut(pid).unwrap();
                                 if cons_info.offset >= *offset {
                                     cons_info.ts = *ts;
-                                    changed = true;
                                 } else {
                                     break;
                                 }
@@ -598,17 +606,27 @@ impl ConsistencyInfo {
                 }
             }
 
-            //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
-            //  timestamp across partitions.
-            let min = self
+            //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum of
+            //  * closed timestamps across all partitions we own
+            //  * maximum bound timestamps across all partitions we don't own.
+            let min_closed_timestamp_owned_partitions = self
                 .partition_metadata
                 .iter()
                 .map(|(_, cons_info)| cons_info.ts)
-                .min()
-                .unwrap_or(0);
+                .min();
+
+            let min = match (
+                min_closed_timestamp_owned_partitions,
+                min_closed_timestamp_unowned_partitions,
+            ) {
+                (None, None) => 0,
+                (Some(owned), None) => owned,
+                (None, Some(unowned)) => unowned,
+                (Some(owned), Some(unowned)) => std::cmp::min(owned, unowned),
+            };
 
             // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
-            if changed && min > 0 {
+            if min > self.last_closed_ts {
                 self.source_metrics.capability.set(min);
                 cap.downgrade(&(&min + 1));
                 self.last_closed_ts = min;
