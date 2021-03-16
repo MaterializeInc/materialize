@@ -12,7 +12,6 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{self, PathBuf};
-use std::time::Duration;
 
 use async_trait::async_trait;
 
@@ -147,7 +146,7 @@ impl Action for VerifyAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = retry::retry_for(Duration::from_secs(8), |_| async {
+        let path = retry::retry_for(state.default_timeout, |_| async {
             let row = state
                 .pgclient
                 .query_one(
