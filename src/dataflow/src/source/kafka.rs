@@ -93,39 +93,6 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
 }
 
 impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
-    /// This function determines whether it is safe to close the current timestamp.
-    /// It is safe to close the current timestamp if
-    /// 1) this worker does not own the current partition
-    /// 2) we will never receive a message with a lower or equal timestamp than offset.
-    /// This is true if we have already timestamped a message >= offset.
-    fn can_close_timestamp(
-        &self,
-        consistency_info: &ConsistencyInfo,
-        pid: &PartitionId,
-        offset: MzOffset,
-    ) -> bool {
-        let kafka_pid = match pid {
-            PartitionId::Kafka(pid) => *pid,
-            // KafkaSourceInfo should only receive PartitionId::Kafka
-            _ => unreachable!(),
-        };
-
-        let last_offset = consistency_info
-            .partition_metadata
-            .get(&pid)
-            .unwrap()
-            .offset;
-
-        // For transactional or compacted topics, the `last_offset` may not correspond to
-        // an accurate representation of how far we have read up to (because subsequent offsets
-        // have been garbage collected). However, `last_offset` still represents the lower bound
-        // for the value of the next offset in this partition.
-        if !self.has_partition(kafka_pid) || last_offset >= offset {
-            true
-        } else {
-            false
-        }
-    }
     /// Returns the number of partitions expected *for this worker*. Partitions are assigned
     /// round-robin in worker id order offset by the hash of the source_id
     fn get_worker_partition_count(&self) -> i32 {
@@ -164,18 +131,14 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                         self.logger.clone(),
                     ),
                 );
+                consistency_info.update_partition_metadata(PartitionId::Kafka(i));
             }
-            consistency_info.update_partition_metadata(PartitionId::Kafka(i));
         }
         self.known_partitions = cmp::max(self.known_partitions, pid + 1);
 
         assert_eq!(
             self.get_worker_partition_count(),
             self.get_partition_consumers_count()
-        );
-        assert_eq!(
-            self.known_partitions as usize,
-            consistency_info.partition_metadata.len()
         );
     }
 

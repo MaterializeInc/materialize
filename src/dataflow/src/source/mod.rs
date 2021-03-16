@@ -280,19 +280,6 @@ impl MaybeLength for Value {
 pub(crate) trait SourceInfo<Out> {
     // BYO consistency methods
 
-    /// This function determines whether it is safe to close the current timestamp.
-    ///
-    /// It is safe to close the current timestamp if:
-    ///
-    /// 1) this worker does not own the current partition
-    /// 2) we will never receive a message with a lower or equal timestamp than offset.
-    fn can_close_timestamp(
-        &self,
-        consistency_info: &ConsistencyInfo,
-        pid: &PartitionId,
-        offset: MzOffset,
-    ) -> bool;
-
     /// Returns the number of partitions expected *for this worker*. Partitions are assigned
     /// round-robin in worker id order
     /// Note: we currently support two types of sources: those which support multithreaded reads
@@ -407,7 +394,9 @@ pub struct ConsistencyInfo {
     /// Frequency at which we should downgrade capability (in milliseconds)
     downgrade_capability_frequency: u64,
     /// Per partition (a partition ID in Kafka is an i32), keep track of the last closed offset
-    /// and the last closed timestamp
+    /// and the last closed timestamp.
+    /// Note that we only keep track of partitions this worker is responsible for in this
+    /// hashmap.
     pub partition_metadata: HashMap<PartitionId, ConsInfo>,
     /// Optional: Materialize Offset from which source should start reading (default is 0)
     start_offsets: HashMap<PartitionId, MzOffset>,
@@ -539,11 +528,12 @@ impl ConsistencyInfo {
         source: &mut dyn SourceInfo<Out>,
         timestamp_histories: &TimestampDataUpdates,
     ) {
-        let mut changed = false;
+        let mut min_closed_timestamp_unowned_partitions: Option<Timestamp> = None;
 
         if let Consistency::BringYourOwn(_) = self.source_type {
             // Determine which timestamps have been closed. A timestamp is closed once we have processed
-            // all messages that we are going to process for this timestamp across all partitions
+            // all messages that we are going to process for this timestamp across all partitions that the
+            // worker knows about (i.e. the ones the worker has been assigned to read from).
             // In practice, the following happens:
             // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
             // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
@@ -554,6 +544,20 @@ impl ConsistencyInfo {
                         // Iterate over each partition that we know about
                         for (pid, entries) in entries {
                             source.ensure_has_partition(self, pid.clone());
+                            if !self.partition_metadata.contains_key(pid) {
+                                // We need to grab the min closed (max) timestamp from partitions we
+                                // don't own.
+
+                                if let Some((_, timestamp, _)) = entries.back() {
+                                    min_closed_timestamp_unowned_partitions =
+                                        match min_closed_timestamp_unowned_partitions.as_mut() {
+                                            Some(min) => Some(std::cmp::min(*timestamp, *min)),
+                                            None => Some(*timestamp),
+                                        };
+                                }
+
+                                continue;
+                            }
 
                             let existing_ts = self.partition_metadata.get(pid).unwrap().ts;
                             // Check whether timestamps can be closed on this partition
@@ -589,16 +593,10 @@ impl ConsistencyInfo {
                                         .set(self.partition_metadata.get(pid).unwrap().ts);
                                 }
 
-                                if source.can_close_timestamp(&self, pid, *offset) {
-                                    // We have either 1) seen all messages corresponding to this timestamp for this
-                                    // partition 2) do not own this partition 3) the consumer has forwarded past the
-                                    // timestamped offset. Either way, we have the guarantee tha we will never see a message with a < timestamp
-                                    // again
-                                    // We can close the timestamp (on this partition) and remove the associated metadata
-                                    self.partition_metadata.get_mut(&pid).unwrap().ts = *ts;
-                                    changed = true;
+                                let cons_info = self.partition_metadata.get_mut(pid).unwrap();
+                                if cons_info.offset >= *offset {
+                                    cons_info.ts = *ts;
                                 } else {
-                                    // Offset isn't at a timestamp boundary, we take no action
                                     break;
                                 }
                             }
@@ -608,17 +606,27 @@ impl ConsistencyInfo {
                 }
             }
 
-            //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum
-            //  timestamp across partitions.
-            let min = self
+            //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum of
+            //  * closed timestamps across all partitions we own
+            //  * maximum bound timestamps across all partitions we don't own.
+            let min_closed_timestamp_owned_partitions = self
                 .partition_metadata
                 .iter()
                 .map(|(_, cons_info)| cons_info.ts)
-                .min()
-                .unwrap_or(0);
+                .min();
+
+            let min = match (
+                min_closed_timestamp_owned_partitions,
+                min_closed_timestamp_unowned_partitions,
+            ) {
+                (None, None) => 0,
+                (Some(owned), None) => owned,
+                (None, Some(unowned)) => unowned,
+                (Some(owned), Some(unowned)) => std::cmp::min(owned, unowned),
+            };
 
             // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
-            if changed && min > 0 {
+            if min > self.last_closed_ts {
                 self.source_metrics.capability.set(min);
                 cap.downgrade(&(&min + 1));
                 self.last_closed_ts = min;

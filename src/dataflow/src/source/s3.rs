@@ -59,8 +59,6 @@ pub struct S3SourceInfo {
     // differential control
     /// Unique source ID
     id: SourceInstanceId,
-    /// Field is set if this operator is responsible for ingesting data
-    is_activated_reader: bool,
     /// Receiver channel that ingests records
     receiver_stream: Receiver<Result<InternalMessage, Error>>,
     /// Total number of records that this source has read
@@ -150,16 +148,17 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
         };
 
         let pid = PartitionId::S3;
-        consistency_info.partition_metrics.insert(
-            pid.clone(),
-            PartitionMetrics::new(&source_name, source_id, "s3", logger),
-        );
-        consistency_info.update_partition_metadata(pid);
 
+        if active {
+            consistency_info.partition_metrics.insert(
+                pid.clone(),
+                PartitionMetrics::new(&source_name, source_id, "s3", logger),
+            );
+            consistency_info.update_partition_metadata(pid);
+        }
         Ok(S3SourceInfo {
             source_name,
             id: source_id,
-            is_activated_reader: active,
             receiver_stream: receiver,
             offset: S3Offset(0),
         })
@@ -705,26 +704,6 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
             }
             Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
             Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
-        }
-    }
-
-    fn can_close_timestamp(
-        &self,
-        consistency_info: &ConsistencyInfo,
-        pid: &PartitionId,
-        offset: MzOffset,
-    ) -> bool {
-        if !self.is_activated_reader {
-            true
-        } else {
-            // TODO: when is this ever not true for S3?
-            let last_offset = consistency_info
-                .partition_metadata
-                .get(&pid)
-                // Guaranteed to exist for S3
-                .unwrap()
-                .offset;
-            last_offset >= offset
         }
     }
 
