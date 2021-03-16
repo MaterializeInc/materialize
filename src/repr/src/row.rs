@@ -75,7 +75,7 @@ use fmt::Debug;
 /// avoids the allocations involved in `RowPacker::new()`.
 #[derive(Clone, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
-    data: SmallVec<[u8; 23]>,
+    data: SmallVec<[u8; 24]>,
 }
 
 /// These implementations order first by length, and then by slice contents.
