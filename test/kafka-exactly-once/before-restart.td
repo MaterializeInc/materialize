@@ -52,11 +52,6 @@ $ kafka-create-topic topic=input
     WITH (consistency = 'testdrive-input-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}'
 
-> CREATE SINK output FROM input_byo
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-sink-${testdrive.seed}'
-  WITH (exactly_once=true, consistency=true)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
 $ kafka-ingest format=avro topic=input-consistency schema=${consistency}
 {"source": "testdrive-input-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 10, "offset": 4}
 {"source": "testdrive-input-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 30, "offset": 6}
@@ -75,6 +70,12 @@ $ kafka-ingest format=avro topic=input schema=${schema} timestamp=3
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=4
 {"a": 3, "b": 4}
 {"a": 5, "b": 6}
+
+> CREATE SINK output FROM input_byo
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-sink-${testdrive.seed}'
+  WITH (exactly_once=true, consistency=true)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
 
 $ kafka-verify format=avro sink=materialize.public.output
 {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "10"}}
