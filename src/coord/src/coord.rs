@@ -2227,17 +2227,7 @@ impl Coordinator {
         self.catalog_transact(ops).await?;
         Ok(match ty {
             ObjectType::Schema => unreachable!(),
-            ObjectType::Source => {
-                for id in items.iter() {
-                    self.update_timestamper(*id, false).await;
-                    if let Some(cache_tx) = &mut self.cache_tx {
-                        cache_tx
-                            .send(CacheMessage::DropSource(*id))
-                            .expect("cache receiver should not drop first");
-                    }
-                }
-                ExecuteResponse::DroppedSource
-            }
+            ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
             ObjectType::Table => {
                 for id in items.iter() {
@@ -3064,6 +3054,12 @@ impl Coordinator {
                                 -1,
                             )
                             .await;
+                            self.update_timestamper(entry.id(), false).await;
+                            if let Some(cache_tx) = &mut self.cache_tx {
+                                cache_tx
+                                    .send(CacheMessage::DropSource(entry.id()))
+                                    .expect("cache receiver should not drop first");
+                            }
                         }
                         CatalogItem::View(_) => {
                             self.report_view_update(
