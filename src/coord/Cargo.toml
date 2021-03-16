@@ -43,7 +43,7 @@ sql-parser = { path = "../sql-parser" }
 storage = { path = "../storage" }
 symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.2.0"
+tokio = "1.3.0"
 tokio-postgres = "0.7"
 tokio-stream = "0.1.3"
 transform = { path = "../transform" }
