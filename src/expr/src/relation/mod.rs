@@ -28,7 +28,7 @@ pub mod join_input_mapper;
 
 /// An abstract syntax tree which defines a collection.
 ///
-/// The AST is meant reflect the capabilities of the [`differential_dataflow::Collection`] type,
+/// The AST is meant reflect the capabilities of the `differential_dataflow::Collection` type,
 /// written generically enough to avoid run-time compilation work.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum MirRelationExpr {
@@ -97,7 +97,7 @@ pub enum MirRelationExpr {
         /// expensive to reproduce, so restricting what we produce
         /// as output can be a substantial win.
         ///
-        /// See [`expr::transform::Demand`] for more details.
+        /// See `transform::Demand` for more details.
         demand: Option<Vec<usize>>,
     },
     /// Keep rows from a dataflow where all the predicates are true
@@ -135,7 +135,7 @@ pub enum MirRelationExpr {
         /// dummy values at the end of its computation, avoiding the maintenance of values
         /// not present in this list (when it is non-None).
         ///
-        /// See [`expr::transform::Demand`] for more details.
+        /// See `transform::Demand` for more details.
         demand: Option<Vec<usize>>,
         /// Join implementation information.
         implementation: JoinImplementation,

@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! [`Args::from_cli`] parses the command line arguments from the cli and the config file
-
 use std::result::Result as StdResult;
 use std::time::Duration;
 

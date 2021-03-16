@@ -79,11 +79,11 @@ impl Protoc {
     /// Executes the compilation.
     ///
     /// The generated files are placed into `out_dir` according to the
-    /// conventions of the [`protoc_codegen_pure`]. Rougly speaking, for each
-    /// input file `path/to/file.proto`, this method generates the Rust file
-    /// `OUT_DIR/path/to/file.rs`. The details involve some special rules for
-    /// escaping Rust keywords and special characters, but you will have to
-    /// consult the `protoc_codegen_pure` source code for details.
+    /// conventions of the [`protobuf_codegen_pure`] crate. Roughly speaking, for
+    /// each input file `path/to/file.proto`, this method generates the Rust
+    /// file `OUT_DIR/path/to/file.rs`. The details involve some special rules
+    /// for escaping Rust keywords and special characters, but you will have to
+    /// consult the `protobuf_codegen_pure` source code for details.
     pub fn compile_into(&mut self, out_dir: &Path) -> Result<(), anyhow::Error> {
         if !out_dir.exists() {
             bail!(

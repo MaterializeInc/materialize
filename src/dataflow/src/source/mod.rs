@@ -458,7 +458,7 @@ impl ConsistencyInfo {
     /// Updates the underlying partition metadata structure to include the current partition.
     /// New partitions must always be added with a minimum closed offset of (last_closed_ts)
     /// They are guaranteed to only receive timestamp update greater than last_closed_ts (this
-    /// is enforced in [coord::timestamp::is_ts_valid]
+    /// is enforced in `coord::timestamp::is_ts_valid`.
     pub fn update_partition_metadata(&mut self, pid: PartitionId) {
         let cons_info = ConsInfo {
             offset: self.get_partition_start_offset(&pid),
@@ -519,7 +519,7 @@ impl ConsistencyInfo {
     /// This method assumes that timestamps are inserted in increasing order in the hashmap
     /// (even across partitions). This means that once we see a timestamp with ts x, no entry with
     /// ts (x-1) will ever be inserted. Entries with timestamp x might still be inserted in different
-    /// partitions. This is guaranteed by the [coord::timestamp::is_ts_valid] method.
+    /// partitions. This is guaranteed by the `coord::timestamp::is_ts_valid` method.
     ///
     fn downgrade_capability<Out: Send + Clone + 'static>(
         &mut self,
