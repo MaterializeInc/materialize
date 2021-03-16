@@ -92,27 +92,39 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
             _ => unreachable!(),
         };
 
-        let state = block_on(create_state(
-            kc,
-            &source_name,
-            source_id,
-            consistency_info,
-            logger.clone(),
-        ));
+        let state = block_on(create_state(kc));
         match state {
-            Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok(KinesisSourceInfo {
-                name: source_name,
-                id: source_id,
-                is_activated_reader: active,
-                kinesis_client,
-                logger,
-                shard_queue,
-                last_checked_shards: Instant::now(),
-                buffered_messages: VecDeque::new(),
-                shard_set,
-                stream_name,
-                processed_message_count: 0,
-            }),
+            Ok((kinesis_client, stream_name, shard_set, shard_queue)) => {
+                if active {
+                    for shard_id in &shard_set {
+                        let kinesis_id = PartitionId::Kinesis(shard_id.clone());
+                        consistency_info.update_partition_metadata(kinesis_id.clone());
+                        consistency_info.partition_metrics.insert(
+                            kinesis_id.clone(),
+                            PartitionMetrics::new(
+                                &source_name,
+                                source_id,
+                                &kinesis_id.to_string(),
+                                logger.clone(),
+                            ),
+                        );
+                    }
+                }
+
+                Ok(KinesisSourceInfo {
+                    name: source_name,
+                    id: source_id,
+                    is_activated_reader: active,
+                    kinesis_client,
+                    logger,
+                    shard_queue,
+                    last_checked_shards: Instant::now(),
+                    buffered_messages: VecDeque::new(),
+                    shard_set,
+                    stream_name,
+                    processed_message_count: 0,
+                })
+            }
             Err(e) => Err(anyhow!("{}", e)),
         }
     }
@@ -164,25 +176,6 @@ impl KinesisSourceInfo {
 }
 
 impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
-    fn can_close_timestamp(
-        &self,
-        consistency_info: &ConsistencyInfo,
-        pid: &PartitionId,
-        offset: MzOffset,
-    ) -> bool {
-        if !self.is_activated_reader {
-            true
-        } else {
-            // Guaranteed to exist if we receive a message from this partition
-            let last_offset = consistency_info
-                .partition_metadata
-                .get(&pid)
-                .unwrap()
-                .offset;
-            last_offset >= offset
-        }
-    }
-
     fn get_worker_partition_count(&self) -> i32 {
         if self.is_activated_reader {
             // Kinesis does not support more than i32 partitions
@@ -309,10 +302,6 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
 // todo: Better error handling here! Not all errors mean we're done/can't progress.
 async fn create_state(
     c: KinesisSourceConnector,
-    name: &str,
-    id: SourceInstanceId,
-    consistency_info: &mut ConsistencyInfo,
-    logger: Option<Logger>,
 ) -> Result<
     (
         KinesisClient,
@@ -327,16 +316,10 @@ async fn create_state(
     let shard_set: HashSet<String> = get_shard_ids(&kinesis_client, &c.stream_name).await?;
     let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
     for shard_id in &shard_set {
-        let kinesis_id = PartitionId::Kinesis(shard_id.clone());
         shard_queue.push_back((
             shard_id.clone(),
             get_shard_iterator(&kinesis_client, &c.stream_name, shard_id).await?,
         ));
-        consistency_info.update_partition_metadata(kinesis_id.clone());
-        consistency_info.partition_metrics.insert(
-            kinesis_id.clone(),
-            PartitionMetrics::new(name, id, &kinesis_id.to_string(), logger.clone()),
-        );
     }
 
     Ok((
