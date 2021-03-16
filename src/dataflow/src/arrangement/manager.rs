@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::ord::{OrdKeyBatch, OrdValBatch};
-use differential_dataflow::trace::implementations::spine_fueled_neu::Spine;
+use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::TraceReader;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
