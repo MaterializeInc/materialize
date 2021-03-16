@@ -280,12 +280,6 @@ impl MaybeLength for Value {
 pub(crate) trait SourceInfo<Out> {
     // BYO consistency methods
 
-    /// Returns the number of partitions expected *for this worker*. Partitions are assigned
-    /// round-robin in worker id order
-    /// Note: we currently support two types of sources: those which support multithreaded reads
-    /// and those which don't.
-    fn get_worker_partition_count(&self) -> i32;
-
     /// Returns true if this worker is responsible for this partition
     /// This is dependent on whether the source supports multi-worker reads or not.
     fn has_partition(&self, partition_id: PartitionId) -> bool;

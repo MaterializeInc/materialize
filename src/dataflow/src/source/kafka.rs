@@ -93,14 +93,6 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
 }
 
 impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
-    /// Returns the number of partitions expected *for this worker*. Partitions are assigned
-    /// round-robin in worker id order offset by the hash of the source_id
-    fn get_worker_partition_count(&self) -> i32 {
-        (0..self.known_partitions)
-            .filter(|pid| has_partition(self.id.source_id, self.worker_id, self.worker_count, *pid))
-            .count() as i32
-    }
-
     /// Returns true if this worker is responsible for this partition
     fn has_partition(&self, partition_id: PartitionId) -> bool {
         let pid = match partition_id {
@@ -135,11 +127,6 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             }
         }
         self.known_partitions = cmp::max(self.known_partitions, pid + 1);
-
-        assert_eq!(
-            self.get_worker_partition_count(),
-            self.get_partition_consumers_count()
-        );
     }
 
     /// Updates the Kafka source to reflect the new partition count.
@@ -262,10 +249,6 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 attempts += 1;
             }
         }
-        assert_eq!(
-            self.get_partition_consumers_count(),
-            self.get_worker_partition_count()
-        );
 
         Ok(next_message)
     }
