@@ -187,10 +187,6 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
 }
 
 impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
-    fn get_worker_partition_count(&self) -> i32 {
-        1
-    }
-
     fn has_partition(&self, _: PartitionId) -> bool {
         self.is_activated_reader
     }

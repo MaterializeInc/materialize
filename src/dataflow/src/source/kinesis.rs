@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{HashSet, VecDeque};
-use std::convert::TryInto;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -176,15 +175,6 @@ impl KinesisSourceInfo {
 }
 
 impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
-    fn get_worker_partition_count(&self) -> i32 {
-        if self.is_activated_reader {
-            // Kinesis does not support more than i32 partitions
-            self.shard_set.len().try_into().unwrap()
-        } else {
-            0
-        }
-    }
-
     fn has_partition(&self, _partition_id: PartitionId) -> bool {
         self.is_activated_reader
     }
