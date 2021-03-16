@@ -127,11 +127,15 @@ impl Action for VerifyAction {
             .map_err(|e| format!("creating kafka consumer: {}", e))?;
         consumer.subscribe(&[&topic]).map_err(|e| e.to_string())?;
 
-        // Wait up to 10 seconds for each message.
+        // Wait up to 15 seconds for each message.
         let message_stream = consumer
             .stream()
             .take(self.expected_messages.len())
-            .timeout(Duration::from_secs(15));
+            .timeout(Duration::from_secs_f64(if state.default_timeout > 15.0 {
+                state.default_timeout
+            } else {
+                15.0
+            }));
         pin!(message_stream);
 
         let mut actual_messages = vec![];

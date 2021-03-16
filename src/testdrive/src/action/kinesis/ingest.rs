@@ -68,7 +68,7 @@ impl Action for IngestAction {
 
             // The Kinesis stream might not be immediately available,
             // be prepared to back off.
-            retry::retry_for(Duration::from_secs(8), |_| async {
+            retry::retry_for(Duration::from_secs_f64(state.default_timeout), |_| async {
                 match state.kinesis_client.put_record(put_input.clone()).await {
                     Ok(_output) => Ok(()),
                     Err(RusotoError::Service(PutRecordError::ResourceNotFound(err))) => {

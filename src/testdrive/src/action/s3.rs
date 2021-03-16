@@ -140,7 +140,10 @@ pub struct AddBucketNotifications {
     sqs_validation_timeout: Duration,
 }
 
-pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotifications, String> {
+pub fn build_add_notifications(
+    mut cmd: BuiltinCommand,
+    state: &State,
+) -> Result<AddBucketNotifications, String> {
     let events = cmd
         .args
         .opt_string("events")
@@ -166,7 +169,13 @@ pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotif
             .opt_string("sqs-validation-timeout")
             .map(|t| parse_duration::parse(&t).map_err(|e| e.to_string()))
             .transpose()?
-            .unwrap_or_else(|| Duration::from_secs(120)),
+            .unwrap_or_else(|| {
+                Duration::from_secs_f64(if state.default_timeout > 120.0 {
+                    state.default_timeout
+                } else {
+                    120.0
+                })
+            }),
     })
 }
 
