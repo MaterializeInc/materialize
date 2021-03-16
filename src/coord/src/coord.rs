@@ -305,8 +305,8 @@ impl Coordinator {
                         self.indexes
                             .insert(*id, Frontiers::new(self.num_workers(), Some(1_000)));
                     } else {
-                        self.ship_dataflow(self.dataflow_builder().build_index_dataflow(*id))
-                            .await?;
+                        let df = self.dataflow_builder().build_index_dataflow(*id);
+                        self.ship_dataflow(df).await?;
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -1079,15 +1079,15 @@ impl Coordinator {
             frontier: self.determine_frontier(sink.from),
             strict: !sink.with_snapshot,
         };
-        self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
+        let df = self.dataflow_builder().build_sink_dataflow(
             name.to_string(),
             id,
             sink.from,
             connector,
             sink.envelope,
             as_of,
-        ))
-        .await
+        );
+        self.ship_dataflow(df).await
     }
 
     /// Insert a single row into a given catalog view.
@@ -1897,8 +1897,8 @@ impl Coordinator {
                 if let Some(tables) = &mut self.persisted_tables {
                     tables.create(table_id);
                 }
-                self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                    .await?;
+                let df = self.dataflow_builder().build_index_dataflow(index_id);
+                self.ship_dataflow(df).await?;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1961,8 +1961,8 @@ impl Coordinator {
             Ok(()) => {
                 self.update_timestamper(source_id, true).await;
                 if let Some(index_id) = index_id {
-                    self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                        .await?;
+                    let df = self.dataflow_builder().build_index_dataflow(index_id);
+                    self.ship_dataflow(df).await?;
                 }
 
                 self.maybe_begin_caching(source_id, &source.connector).await;
@@ -2111,8 +2111,8 @@ impl Coordinator {
         match self.catalog_transact(ops).await {
             Ok(()) => {
                 if let Some(index_id) = index_id {
-                    self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                        .await?;
+                    let df = self.dataflow_builder().build_index_dataflow(index_id);
+                    self.ship_dataflow(df).await?;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2151,8 +2151,8 @@ impl Coordinator {
         };
         match self.catalog_transact(vec![op]).await {
             Ok(()) => {
-                self.ship_dataflow(self.dataflow_builder().build_index_dataflow(id))
-                    .await?;
+                let df = self.dataflow_builder().build_index_dataflow(id);
+                self.ship_dataflow(df).await?;
                 self.set_index_options(id, options);
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
@@ -2527,7 +2527,7 @@ impl Coordinator {
         session.add_drop_sink(sink_id);
         let (tx, rx) = mpsc::unbounded_channel();
 
-        self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
+        let df = self.dataflow_builder().build_sink_dataflow(
             sink_name,
             sink_id,
             source_id,
@@ -2542,8 +2542,8 @@ impl Coordinator {
                 frontier,
                 strict: !with_snapshot,
             },
-        ))
-        .await?;
+        );
+        self.ship_dataflow(df).await?;
 
         let resp = ExecuteResponse::Tailing { rx };
 
