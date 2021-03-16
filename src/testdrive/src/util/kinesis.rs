@@ -10,19 +10,18 @@
 use std::convert::TryFrom;
 use std::time::Duration;
 
-use rusoto_kinesis::{DescribeStreamInput, Kinesis, KinesisClient};
+use crate::action::State;
+use rusoto_kinesis::{DescribeStreamInput, Kinesis};
 
 use ore::retry;
 
-pub const DEFAULT_KINESIS_TIMEOUT: Duration = Duration::from_millis(12700);
-
 pub async fn wait_for_stream_shards(
-    kinesis_client: &KinesisClient,
+    state: &State,
     stream_name: String,
     target_shard_count: i64,
 ) -> Result<(), String> {
-    retry::retry_for(Duration::from_secs(60), |_| async {
-        let description = kinesis_client
+    retry::retry_for(Duration::from_secs_f64(if state.default_timeout > 60.0 { state.default_timeout } else { 60.0 }), |_| async {
+        let description = state.kinesis_client
             .describe_stream(DescribeStreamInput {
                 exclusive_start_shard_id: None,
                 limit: None,

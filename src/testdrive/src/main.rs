@@ -70,6 +70,10 @@ struct Args {
     #[structopt(long)]
     ci_output: bool,
 
+    /// Default timeout in seconds.
+    #[structopt(long, default_value = "10")]
+    default_timeout: f64,
+
     // === Positional arguments. ===
     /// Paths to testdrive scripts to run.
     files: Vec<String>,
@@ -95,7 +99,7 @@ async fn run(args: Args) -> Result<(), Error> {
                 // or not it was provided.
                 let region: rusoto_core::Region = region;
 
-                let timeout = Duration::from_secs(5);
+                let timeout = Duration::from_secs_f64(args.default_timeout);
                 let mut provider = ChainProvider::new();
                 provider.set_timeout(timeout);
                 let credentials = provider
@@ -153,6 +157,7 @@ async fn run(args: Args) -> Result<(), Error> {
         materialized_catalog_path: args.validate_catalog,
         reset_materialized: !args.no_reset,
         ci_output: args.ci_output,
+        default_timeout: args.default_timeout
     };
 
     if args.files.is_empty() {

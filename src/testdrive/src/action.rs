@@ -42,7 +42,6 @@ mod s3;
 mod sleep;
 mod sql;
 
-const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
 const DEFAULT_REGEX_REPLACEMENT: &str = "<regex_match>";
 
 /// User-settable configuration parameters.
@@ -77,6 +76,8 @@ pub struct Config {
     pub reset_materialized: bool,
     /// Emit Buildkite-specific markup.
     pub ci_output: bool,
+    /// Default SQL timeout.
+    pub default_timeout: f64,
 }
 
 pub struct State {
@@ -98,12 +99,13 @@ pub struct State {
     aws_region: rusoto_core::Region,
     aws_account: String,
     aws_credentials: AwsCredentials,
-    kinesis_client: KinesisClient,
+    pub kinesis_client: KinesisClient,
     kinesis_stream_names: Vec<String>,
     s3_client: S3Client,
     s3_buckets_created: BTreeSet<String>,
     sqs_client: SqsClient,
     sqs_queues_created: BTreeSet<String>,
+    pub default_timeout: f64,
 }
 
 #[derive(Clone)]
@@ -209,7 +211,7 @@ impl State {
     }
 
     async fn delete_bucket_objects(&self, bucket: String) -> Result<(), Error> {
-        ore::retry::retry_for(Duration::from_secs(5), |_| async {
+        ore::retry::retry_for(Duration::from_secs_f64(self.default_timeout), |_| async {
             // loop until error or response has no continuation token
             let mut continuation_token = None;
             loop {
@@ -248,7 +250,7 @@ impl State {
     }
 
     pub async fn reset_sqs(&self) -> Result<(), Error> {
-        ore::retry::retry_for(Duration::from_secs(5), |_| async {
+        ore::retry::retry_for(Duration::from_secs_f64(self.default_timeout), |_| async {
             for queue_url in &self.sqs_queues_created {
                 self.sqs_client
                     .delete_queue(DeleteQueueRequest {
@@ -298,7 +300,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
     let mut out = Vec::new();
     let mut vars = HashMap::new();
     let mut sql_context = SQLContext {
-        sql_timeout: DEFAULT_SQL_TIMEOUT,
+        sql_timeout: Duration::from_secs_f64(state.default_timeout),
         regex: None,
         regex_replacement: DEFAULT_REGEX_REPLACEMENT.to_string(),
     };
@@ -368,6 +370,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
         "testdrive.materialized-user".into(),
         state.materialized_user.clone(),
     );
+
     for cmd in cmds {
         let pos = cmd.pos;
         let wrap_err = |e| InputError { msg: e, pos };
@@ -417,7 +420,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     }
                     "s3-put-object" => Box::new(s3::build_put_object(builtin).map_err(wrap_err)?),
                     "s3-add-notifications" => {
-                        Box::new(s3::build_add_notifications(builtin).map_err(wrap_err)?)
+                        Box::new(s3::build_add_notifications(builtin, state).map_err(wrap_err)?)
                     }
                     "set-regex" => {
                         let regex_str = builtin.args.string("match").map_err(wrap_err)?;
@@ -434,7 +437,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     "set-sql-timeout" => {
                         let duration = builtin.args.string("duration").map_err(wrap_err)?;
                         if duration.to_lowercase() == "default" {
-                            sql_context.sql_timeout = DEFAULT_SQL_TIMEOUT;
+                            sql_context.sql_timeout = Duration::from_secs_f64(state.default_timeout);
                         } else {
                             sql_context.sql_timeout = parse_duration::parse(&duration)
                                 .map_err(|e| wrap_err(e.to_string()))?;
@@ -611,7 +614,7 @@ pub async fn create_state(
             &[format!("connection string: {}", config.kafka_addr)],
         )?;
 
-        let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
+        let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs_f64(config.default_timeout)));
 
         let producer: FutureProducer = kafka_config.create().err_hint(
             "opening Kafka producer connection",
@@ -680,6 +683,7 @@ pub async fn create_state(
         s3_buckets_created: BTreeSet::new(),
         sqs_client,
         sqs_queues_created: BTreeSet::new(),
+        default_timeout: config.default_timeout
     };
     Ok((state, pgconn_task))
 }
