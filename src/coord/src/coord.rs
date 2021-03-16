@@ -2229,15 +2229,7 @@ impl Coordinator {
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
-            ObjectType::Table => {
-                for id in items.iter() {
-                    if let Some(tables) = &mut self.persisted_tables {
-                        tables.destroy(*id);
-                    }
-                }
-
-                ExecuteResponse::DroppedTable
-            }
+            ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
             ObjectType::Type => ExecuteResponse::DroppedType,
@@ -3043,6 +3035,9 @@ impl Coordinator {
                                 -1,
                             )
                             .await;
+                            if let Some(tables) = &mut self.persisted_tables {
+                                tables.destroy(entry.id());
+                            }
                         }
                         CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
