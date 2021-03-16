@@ -188,6 +188,7 @@ class CargoBuild(CargoPreImage):
         self.bin = config.pop("bin", None)
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
+        self.assets_dir = config.pop("assets_dir", None)
         if self.bin is None:
             raise ValueError("mzbuild config is missing pre-build target")
 
@@ -237,6 +238,10 @@ class CargoBuild(CargoPreImage):
                 for d in self.extract.get(package, []):
                     shutil.copy(Path(message["out_dir"]) / d, self.path / Path(d).name)
 
+        if self.assets_dir:
+            shutil.rmtree(self.path / "assets_dir", ignore_errors=True)
+            shutil.copytree(self.rd.root / self.assets_dir, self.path / "assets_dir")
+
     def run(self) -> None:
         super().run()
         self.build()
@@ -244,7 +249,15 @@ class CargoBuild(CargoPreImage):
     def inputs(self) -> Set[str]:
         crate = self.rd.cargo_workspace.crate_for_bin(self.bin)
         deps = self.rd.cargo_workspace.transitive_path_dependencies(crate)
-        return super().inputs() | set(inp for dep in deps for inp in dep.inputs())
+        inputs = super().inputs() | set(inp for dep in deps for inp in dep.inputs())
+
+        if self.assets_dir:
+            inputs = inputs | set(
+                self.rd.root / self.assets_dir / f
+                for f in os.listdir(self.rd.root / self.assets_dir)
+            )
+
+        return inputs
 
 
 # TODO(benesch): make this less hardcoded and custom.

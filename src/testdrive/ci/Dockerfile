@@ -20,5 +20,8 @@ WORKDIR /workdir
 RUN mkdir -p /share/tmp && chmod 777 /share/tmp
 RUN mkdir -p /share/mzdata && chmod 777 /share/mzdata
 
+COPY assets_dir /testdrive-tests
+RUN chmod 777 /testdrive-tests
+
 VOLUME /share/tmp
 VOLUME /share/mzdata
