@@ -27,7 +27,7 @@ parse_duration = "2.1.0"
 pgrepr = { path = "../pgrepr" }
 postgres-types = { version = "0.2.0", features = ["with-chrono-0_4", "with-uuid-0_8"] }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
-regex = "1.4.3"
+regex = "1.4.5"
 repr = { path = "../repr" }
 reqwest = "0.11.1"
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
