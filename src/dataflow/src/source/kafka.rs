@@ -93,16 +93,6 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
 }
 
 impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
-    /// Returns true if this worker is responsible for this partition
-    fn has_partition(&self, partition_id: PartitionId) -> bool {
-        let pid = match partition_id {
-            PartitionId::Kafka(pid) => pid,
-            _ => unreachable!(),
-        };
-
-        self.has_partition(pid)
-    }
-
     /// Ensures that a partition queue for `pid` exists.
     /// In Kafka, partitions are assigned contiguously. This function consequently
     /// creates partition queues for every p <= pid

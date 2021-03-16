@@ -51,8 +51,6 @@ pub struct KinesisSourceInfo {
     name: String,
     /// Unique Source Id
     id: SourceInstanceId,
-    /// Field is set if this operator is responsible for ingesting data
-    is_activated_reader: bool,
     /// Kinesis client used to obtain records
     kinesis_client: KinesisClient,
     /// Timely worker logger for source events
@@ -113,7 +111,6 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
                 Ok(KinesisSourceInfo {
                     name: source_name,
                     id: source_id,
-                    is_activated_reader: active,
                     kinesis_client,
                     logger,
                     shard_queue,
@@ -175,10 +172,6 @@ impl KinesisSourceInfo {
 }
 
 impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
-    fn has_partition(&self, _partition_id: PartitionId) -> bool {
-        self.is_activated_reader
-    }
-
     fn ensure_has_partition(&mut self, _consistency_info: &mut ConsistencyInfo, _pid: PartitionId) {
         //TODO(natacha): do nothing for now, as do not currently use timestamper
     }

@@ -36,8 +36,6 @@ use crate::source::{
 pub struct FileSourceInfo<Out> {
     /// Unique source ID
     id: SourceInstanceId,
-    /// Field is set if this operator is responsible for ingesting data
-    is_activated_reader: bool,
     /// Receiver channel that ingests records
     receiver_stream: Receiver<Result<Out, Error>>,
     /// Current File Offset. This corresponds to the offset of last processed message
@@ -117,7 +115,6 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
 
         Ok(FileSourceInfo {
             id: source_id,
-            is_activated_reader: active,
             receiver_stream: receiver,
             current_file_offset: FileOffset { offset: 0 },
         })
@@ -179,7 +176,6 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
 
         Ok(FileSourceInfo {
             id: source_id,
-            is_activated_reader: active,
             receiver_stream: receiver,
             current_file_offset: FileOffset { offset: 0 },
         })
@@ -187,10 +183,6 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
 }
 
 impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
-    fn has_partition(&self, _: PartitionId) -> bool {
-        self.is_activated_reader
-    }
-
     fn ensure_has_partition(&mut self, _consistency_info: &mut ConsistencyInfo, _pid: PartitionId) {
         // This function should be a no-op for file sources because they don't have partitions.
         log::debug!("ensure_has_partition erroneously called for file sources");
