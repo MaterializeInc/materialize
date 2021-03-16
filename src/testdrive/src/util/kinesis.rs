@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::convert::TryFrom;
 use std::time::Duration;
 
@@ -14,14 +15,13 @@ use rusoto_kinesis::{DescribeStreamInput, Kinesis, KinesisClient};
 
 use ore::retry;
 
-pub const DEFAULT_KINESIS_TIMEOUT: Duration = Duration::from_millis(12700);
-
 pub async fn wait_for_stream_shards(
     kinesis_client: &KinesisClient,
     stream_name: String,
     target_shard_count: i64,
+    timeout: Duration,
 ) -> Result<(), String> {
-    retry::retry_for(Duration::from_secs(60), |_| async {
+    retry::retry_for(cmp::max(timeout, Duration::from_secs(60)), |_| async {
         let description = kinesis_client
             .describe_stream(DescribeStreamInput {
                 exclusive_start_shard_id: None,

@@ -50,7 +50,12 @@ impl Action for CreateStreamAction {
             .map_err(|e| format!("creating stream: {}", e))?;
         state.kinesis_stream_names.push(stream_name.clone());
 
-        util::kinesis::wait_for_stream_shards(&state.kinesis_client, stream_name, self.shard_count)
-            .await
+        util::kinesis::wait_for_stream_shards(
+            &state.kinesis_client,
+            stream_name,
+            self.shard_count,
+            state.default_timeout,
+        )
+        .await
     }
 }
