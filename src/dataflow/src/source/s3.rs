@@ -707,10 +707,6 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
         }
     }
 
-    fn has_partition(&self, _partition_id: PartitionId) -> bool {
-        panic!("s3 sources do not support BYO consistency: has_partition")
-    }
-
     fn ensure_has_partition(&mut self, _consistency_info: &mut ConsistencyInfo, _pid: PartitionId) {
         panic!("s3 sources do not support BYO consistency: ensure_has_partition")
     }

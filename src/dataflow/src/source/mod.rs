@@ -280,10 +280,6 @@ impl MaybeLength for Value {
 pub(crate) trait SourceInfo<Out> {
     // BYO consistency methods
 
-    /// Returns true if this worker is responsible for this partition
-    /// This is dependent on whether the source supports multi-worker reads or not.
-    fn has_partition(&self, partition_id: PartitionId) -> bool;
-
     /// Ensures that the partition `pid` exists for this source. Once this function has been
     /// called, the source should be able to receive messages from this partition
     fn ensure_has_partition(&mut self, consistency_info: &mut ConsistencyInfo, pid: PartitionId);
