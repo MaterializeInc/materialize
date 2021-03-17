@@ -7,7 +7,7 @@ menu:
 ---
 
 The `jsonb_agg(expression)` function aggregates all values indicated by its expression,
-returning the values (including nulls) as a jsonb array.
+returning the values (including nulls) as a [`jsonb`](/sql/types/jsonb) array.
 
 ## Signatures
 
@@ -17,7 +17,7 @@ _expression_ | [jsonb](../../types) | The values you want aggregated.
 
 ### Return value
 
-`jsonb_agg` returns the aggregated values as a jsonb array.
+`jsonb_agg` returns the aggregated values as a `jsonb` array.
 
 ## Details
 
@@ -28,9 +28,9 @@ is considered an incremental view maintenance anti-pattern. Any change to the da
 underlying the function call will require the function to be recomputed entirely,
 discarding the benefits of maintaining incremental updates.
 
-Instead, it is recommended to materialize all components required for the `jsonb_agg`
-function call and create a non-materialized view using `jsonb_agg` on top of
-that. That pattern is illustrated in the following statements:
+Instead, we recommend that you materialize all components required for the
+`jsonb_agg` function call and create a non-materialized view using `jsonb_agg`
+on top of that. That pattern is illustrated in the following statements:
 
 ```sql
 CREATE MATERIALIZED VIEW foo_view AS SELECT * FROM foo;
@@ -57,3 +57,7 @@ SELECT jsonb_agg('example'::text);
 -------------
  ["example"]
 ```
+
+## See also
+
+* [`jsonb_object_agg`](/sql/functions/jsonb_object_agg)
