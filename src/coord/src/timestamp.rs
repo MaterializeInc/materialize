@@ -365,13 +365,7 @@ fn byo_extract_update_from_bytes(
                     }
                 };
                 let partition = match &consumer.connector {
-                    ByoTimestampConnector::Kinesis(_) => match split[2].parse::<String>() {
-                        Ok(s) => PartitionId::Kinesis(s),
-                        Err(err) => {
-                            error!("incorrect timestamp format {}", err);
-                            continue;
-                        }
-                    },
+                    ByoTimestampConnector::Kinesis(_) => PartitionId::Kinesis,
                     ByoTimestampConnector::Kafka(_) => match split[2].parse::<i32>() {
                         Ok(i) => PartitionId::Kafka(i),
                         Err(err) => {
@@ -491,10 +485,8 @@ fn parse_byo(record: Vec<(String, Value)>) -> (String, i32, PartitionId, u64, Mz
             if let Value::Union { inner: value, .. } = value {
                 if let Value::Int(pid) = *value {
                     partition_id = PartitionId::Kafka(pid);
-                } else if let Value::String(s) = *value {
-                    partition_id = PartitionId::Kinesis(s);
                 } else {
-                    panic!("String or Int expected");
+                    panic!("Int expected");
                 }
             } else {
                 panic!("Union expected");
@@ -554,9 +546,7 @@ fn generate_ts_updates_from_debezium(
                                     ByoTimestampConnector::File(_)
                                     | ByoTimestampConnector::Ocf(_) => PartitionId::File,
                                     ByoTimestampConnector::Kafka(_) => PartitionId::Kafka(0),
-                                    ByoTimestampConnector::Kinesis(_) => {
-                                        PartitionId::Kinesis(String::new())
-                                    }
+                                    ByoTimestampConnector::Kinesis(_) => PartitionId::Kinesis,
                                 },
                                 byo_consumer.last_ts,
                                 byo_consumer.last_offset,
