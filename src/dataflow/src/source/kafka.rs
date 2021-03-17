@@ -22,7 +22,7 @@ use rdkafka::error::KafkaError;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
-use timely::scheduling::activate::{Activator, SyncActivator};
+use timely::scheduling::activate::SyncActivator;
 
 use dataflow_types::{
     DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
@@ -148,11 +148,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     ///
     /// If a message has an offset that is smaller than the next expected offset for this consumer (and this partition)
     /// we skip this message, and seek to the appropriate offset
-    fn get_next_message(
-        &mut self,
-        _consistency_info: &mut ConsistencyInfo,
-        activator: &Activator,
-    ) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
         // Poll the consumer once. Since we split the consumer's partitions out into separate queues and poll those individually,
         // we expect this poll to always return None - but it's necessary to drive logic that consumes from rdkafka's internal
         // event queue, such as statistics callbacks.
@@ -238,7 +234,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                     // We explicitly should not consume the message as we have already processed it
                     // However, we make sure to activate the source to make sure that we get a chance
                     // to read from this consumer again (even if no new data arrives)
-                    activator.activate();
+                    next_message = NextMessage::TransientDelay;
                 } else {
                     next_message = NextMessage::Ready(message);
                     *last_offset_ref = offset;

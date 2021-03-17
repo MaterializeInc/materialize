@@ -19,7 +19,7 @@ use log::error;
 use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
-use timely::scheduling::{Activator, SyncActivator};
+use timely::scheduling::SyncActivator;
 
 use dataflow_types::{DataEncoding, ExternalSourceConnector, KinesisSourceConnector, MzOffset};
 use expr::{PartitionId, SourceInstanceId};
@@ -159,11 +159,7 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
         //TODO(natacha): do nothing for now as do not currently use timestamper
     }
 
-    fn get_next_message(
-        &mut self,
-        _consistency_info: &mut ConsistencyInfo,
-        activator: &Activator,
-    ) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
 
         //TODO move to timestamper
@@ -195,9 +191,8 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
                             // todo@jldlaughlin: Parse this to determine fatal/retriable?
                             error!("{}", e);
                             self.shard_queue.push_back((shard_id, shard_iterator));
-                            activator.activate();
                             // Do not send error message as this would cause source to terminate
-                            return Ok(NextMessage::Pending);
+                            return Ok(NextMessage::TransientDelay);
                         }
                         Err(RusotoError::Service(GetRecordsError::ExpiredIterator(e))) => {
                             // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
@@ -208,7 +203,6 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
                             GetRecordsError::ProvisionedThroughputExceeded(_),
                         )) => {
                             self.shard_queue.push_back((shard_id, shard_iterator));
-                            activator.activate();
                             // Do not send error message as this would cause source to terminate
                             return Ok(NextMessage::Pending);
                         }
