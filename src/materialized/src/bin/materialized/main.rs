@@ -412,7 +412,11 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                 // with the user-specified `env_filter`.
                 tracing_subscriber::registry()
                     .with(env_filter)
-                    .with(fmt::layer().with_writer(io::stderr))
+                    .with(
+                        fmt::layer()
+                            .with_writer(io::stderr)
+                            .with_ansi(atty::is(atty::Stream::Stderr)),
+                    )
                     .init()
             }
             log_file => {
@@ -444,7 +448,9 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                         })
                     })
                     .with(FilterLayer::new(
-                        fmt::layer().with_writer(io::stderr),
+                        fmt::layer()
+                            .with_writer(io::stderr)
+                            .with_ansi(atty::is(atty::Stream::Stderr)),
                         stderr_level,
                     ))
                     .init()

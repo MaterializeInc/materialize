@@ -1915,6 +1915,7 @@ dependencies = [
  "askama",
  "assert_cmd",
  "async-trait",
+ "atty",
  "backtrace",
  "build-info",
  "bytes",
