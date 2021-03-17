@@ -160,6 +160,23 @@ class PreImage:
         return ""
 
 
+class Directory(PreImage):
+    """ A `PreImage` action where all files in a directory are defined as inputs."""
+
+    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+        super().__init__(rd, path)
+
+        self.source = config.pop("source", None)
+
+        if self.source is None:
+            raise ValueError("mzbuild config is missing 'source' argument")
+        else:
+            self.source = self.rd.root / self.source
+
+    def inputs(self) -> Set[str]:
+        return set(self.source / f for f in os.listdir(self.source))
+
+
 class CargoPreImage(PreImage):
     """A `PreImage` action that uses Cargo."""
 
@@ -355,6 +372,8 @@ class Image:
                     self.pre_image = CargoBuild(self.rd, self.path, pre_image)
                 elif typ == "cargo-test":
                     self.pre_image = CargoTest(self.rd, self.path, pre_image)
+                elif typ == "directory":
+                    self.pre_image = Directory(self.rd, self.path, pre_image)
                 else:
                     raise ValueError(
                         f"mzbuild config in {self.path} has unknown pre-image type"
