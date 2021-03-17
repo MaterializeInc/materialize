@@ -3468,6 +3468,7 @@ pub async fn serve(
         build_info,
     })?;
     let cluster_id = catalog.config().cluster_id;
+    let session_id = catalog.config().session_id;
 
     let (worker_txs, worker_rxs): (Vec<_>, Vec<_>) =
         (0..workers).map(|_| crossbeam_channel::unbounded()).unzip();
@@ -3537,6 +3538,7 @@ pub async fn serve(
             });
             let handle = Handle {
                 cluster_id,
+                session_id,
                 _thread: thread.join_on_drop(),
             };
             let client = Client::new(cmd_tx);
