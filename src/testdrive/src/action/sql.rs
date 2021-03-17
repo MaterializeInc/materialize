@@ -28,16 +28,16 @@ use sql_parser::ast::{
     CreateViewStatement, Raw, Statement,
 };
 
-use crate::action::{Action, SQLContext, State};
+use crate::action::{Action, SqlContext, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlOutput};
 
 pub struct SqlAction {
     cmd: SqlCommand,
     stmt: Statement<Raw>,
-    sql_context: SQLContext,
+    sql_context: SqlContext,
 }
 
-pub fn build_sql(mut cmd: SqlCommand, sql_context: SQLContext) -> Result<SqlAction, String> {
+pub fn build_sql(mut cmd: SqlCommand, sql_context: SqlContext) -> Result<SqlAction, String> {
     let stmts = sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e))?;
     if stmts.len() != 1 {
@@ -50,7 +50,7 @@ pub fn build_sql(mut cmd: SqlCommand, sql_context: SQLContext) -> Result<SqlActi
     Ok(SqlAction {
         cmd,
         stmt: stmts.into_element(),
-        sql_context: sql_context,
+        sql_context,
     })
 }
 
@@ -102,7 +102,7 @@ impl Action for SqlAction {
         print_query(&query);
 
         let pgclient = &state.pgclient;
-        retry::retry_for(self.sql_context.sql_timeout, |retry_state| async move {
+        retry::retry_for(self.sql_context.timeout, |retry_state| async move {
             match self.try_redo(pgclient, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
@@ -270,12 +270,12 @@ impl SqlAction {
 
 pub struct FailSqlAction {
     cmd: FailSqlCommand,
-    sql_context: SQLContext,
+    sql_context: SqlContext,
 }
 
 pub fn build_fail_sql(
     cmd: FailSqlCommand,
-    sql_context: SQLContext,
+    sql_context: SqlContext,
 ) -> Result<FailSqlAction, String> {
     Ok(FailSqlAction {
         cmd,
@@ -294,7 +294,7 @@ impl Action for FailSqlAction {
         print_query(&query);
 
         let pgclient = &state.pgclient;
-        retry::retry_for(self.sql_context.sql_timeout, |retry_state| async move {
+        retry::retry_for(self.sql_context.timeout, |retry_state| async move {
             match self.try_redo(pgclient, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
@@ -366,7 +366,7 @@ pub fn print_query(query: &str) {
     }
 }
 
-fn decode_row(row: Row, sql_context: SQLContext) -> Result<Vec<String>, String> {
+fn decode_row(row: Row, sql_context: SqlContext) -> Result<Vec<String>, String> {
     enum ArrayElement<T> {
         Null,
         NonNull(T),
