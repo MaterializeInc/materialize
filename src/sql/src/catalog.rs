@@ -150,6 +150,8 @@ pub struct CatalogConfig {
     pub nonce: u64,
     /// A persistent UUID associated with the catalog.
     pub cluster_id: Uuid,
+    /// A transient UUID associated with this process.
+    pub session_id: Uuid,
     /// Expresses whether or not the catalog allows experimental mode features.
     pub experimental_mode: bool,
     /// The path in which source caching data is stored, if source caching is
@@ -329,6 +331,7 @@ const DUMMY_CONFIG: CatalogConfig = CatalogConfig {
     startup_time: SystemTime::UNIX_EPOCH,
     nonce: 0,
     cluster_id: Uuid::from_u128(0),
+    session_id: Uuid::from_u128(0),
     experimental_mode: false,
     cache_directory: None,
     build_info: &DUMMY_BUILD_INFO,

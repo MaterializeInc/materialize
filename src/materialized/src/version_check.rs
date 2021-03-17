@@ -32,11 +32,14 @@ const TELEMETRY_FREQUENCY: Duration = Duration::from_secs(3600);
 ///
 /// The first time we get the most recent version of materialized this will
 /// report a warning if an upgrade is available.
-pub async fn check_version_loop(telemetry_url: String, cluster_id: String, start_time: Instant) {
+pub async fn check_version_loop(
+    telemetry_url: String,
+    cluster_id: Uuid,
+    session_id: Uuid,
+    start_time: Instant,
+) {
     let current_version =
         Version::parse(BUILD_INFO.version).expect("crate version is not valid semver");
-
-    let session_id = Uuid::new_v4();
 
     let version_url = format!("{}/api/v1/version/{}", telemetry_url, cluster_id);
     let latest_version = fetch_latest_version(&version_url, start_time, session_id).await;

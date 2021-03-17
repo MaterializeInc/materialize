@@ -2054,6 +2054,12 @@ lazy_static! {
             "mz_render_typemod" => Scalar {
                 params!(Oid, Int32) => BinaryFunc::MzRenderTypemod, oid::FUNC_MZ_RENDER_TYPEMOD_OID;
             },
+            // This ought to be exposed in `mz_catalog`, but its name is rather
+            // confusing. It does not identify the SQL session, but the
+            // invocation of this `materialized` process.
+            "mz_session_id" => Scalar {
+                params!() => Operation::nullary(mz_session_id), oid::FUNC_MZ_SESSION_ID_OID;
+            },
             "mz_sleep" => Scalar {
                 params!(Float64) => UnaryFunc::Sleep, oid::FUNC_MZ_SLEEP_OID;
             }
@@ -2075,6 +2081,13 @@ fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<HirScalarExpr
 fn mz_cluster_id(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
     Ok(HirScalarExpr::literal(
         Datum::from(ecx.catalog().config().cluster_id),
+        ScalarType::Uuid,
+    ))
+}
+
+fn mz_session_id(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+    Ok(HirScalarExpr::literal(
+        Datum::from(ecx.catalog().config().session_id),
         ScalarType::Uuid,
     ))
 }

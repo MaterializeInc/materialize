@@ -39,6 +39,7 @@ use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::HirRelationExpr;
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
+use uuid::Uuid;
 
 use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
@@ -466,6 +467,7 @@ impl Catalog {
                 nonce: rand::random(),
                 experimental_mode,
                 cluster_id,
+                session_id: Uuid::new_v4(),
                 cache_directory: config.cache_directory.clone(),
                 build_info: config.build_info,
             },
