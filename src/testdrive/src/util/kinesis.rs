@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use rusoto_kinesis::{DescribeStreamInput, Kinesis, KinesisClient};
 
-use ore::retry;
+use ore::retry::Retry;
 
 pub const DEFAULT_KINESIS_TIMEOUT: Duration = Duration::from_millis(12700);
 
@@ -21,39 +21,41 @@ pub async fn wait_for_stream_shards(
     stream_name: String,
     target_shard_count: i64,
 ) -> Result<(), String> {
-    retry::retry_for(Duration::from_secs(60), |_| async {
-        let description = kinesis_client
-            .describe_stream(DescribeStreamInput {
-                exclusive_start_shard_id: None,
-                limit: None,
-                stream_name: stream_name.clone(),
-            })
-            .await
-            .map_err(|e| format!("getting current shard count: {}", e))?
-            .stream_description;
-        if description.stream_status != "ACTIVE" {
-            return Err(format!(
-                "stream {} is not active, is {}",
-                stream_name, description.stream_status
-            ));
-        }
+    Retry::default()
+        .max_tries(10)
+        .retry(|_| async {
+            let description = kinesis_client
+                .describe_stream(DescribeStreamInput {
+                    exclusive_start_shard_id: None,
+                    limit: None,
+                    stream_name: stream_name.clone(),
+                })
+                .await
+                .map_err(|e| format!("getting current shard count: {}", e))?
+                .stream_description;
+            if description.stream_status != "ACTIVE" {
+                return Err(format!(
+                    "stream {} is not active, is {}",
+                    stream_name, description.stream_status
+                ));
+            }
 
-        let active_shards_len = i64::try_from(
-            description
-                .shards
-                .iter()
-                .filter(|shard| shard.sequence_number_range.ending_sequence_number.is_none())
-                .count(),
-        )
-        .map_err(|e| format!("converting shard length to i64: {}", e))?;
-        if active_shards_len != target_shard_count {
-            return Err(format!(
-                "expected {} shards, found {}",
-                target_shard_count, active_shards_len
-            ));
-        }
+            let active_shards_len = i64::try_from(
+                description
+                    .shards
+                    .iter()
+                    .filter(|shard| shard.sequence_number_range.ending_sequence_number.is_none())
+                    .count(),
+            )
+            .map_err(|e| format!("converting shard length to i64: {}", e))?;
+            if active_shards_len != target_shard_count {
+                return Err(format!(
+                    "expected {} shards, found {}",
+                    target_shard_count, active_shards_len
+                ));
+            }
 
-        Ok(())
-    })
-    .await
+            Ok(())
+        })
+        .await
 }

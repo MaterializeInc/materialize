@@ -9,13 +9,10 @@
 
 # Tests for testdrive itself.
 
-# Uncomment to test that timeouts happen in the time desired.
+# Uncomment to test that timeouts happen in the retries desired.
 #
-# Note that the duration string format can be anything parsable
-# by the parse_duration create
-#
-# $ set-sql-timeout duration=2minutes
-# $ set-sql-timeout duration=default
+# $ set-sql-retries retries=3
+# $ set-sql-retries retries=default
 # > select * from nonexistent
 
 # Test that hashing rows works and is consistent.

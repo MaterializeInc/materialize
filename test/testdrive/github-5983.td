@@ -13,7 +13,7 @@
 # panic with self-join
 #
 
-$ set-sql-timeout duration=125ms
+$ set-sql-retries retries=3
 
 > CREATE TABLE t1 (f1 INTEGER);
 

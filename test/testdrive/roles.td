@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-sql-timeout duration=1s
+$ set-sql-retries retries=3
 
 # Verify initial roles.
 > SELECT id, name FROM mz_roles

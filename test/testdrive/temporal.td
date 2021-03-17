@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-sql-timeout duration=125ms
+$ set-sql-retries retries=3
 
 #
 # Using mz_logical_timestamp() with a VIEW source

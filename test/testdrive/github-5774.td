@@ -13,7 +13,7 @@
 # wrong result with inner join
 #
 
-$ set-sql-timeout duration=125ms
+$ set-sql-retries retries=3
 
 > CREATE TABLE customer (c_custkey integer);
 

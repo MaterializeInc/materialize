@@ -11,7 +11,7 @@
 # Regression test for a panic fixed by https://github.com/MaterializeInc/materialize/pull/5873
 #
 
-$ set-sql-timeout duration=125ms
+$ set-sql-retries retries=3
 
 > CREATE TABLE customer (
     c_custkey     integer,
