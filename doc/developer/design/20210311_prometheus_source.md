@@ -1,6 +1,6 @@
 # Summary
 
-This design doc introduces a way to import data from prometheus metrics endpoints into materialized views that can be inspected with SQL commands.
+This design doc introduces a way to import data from our internal prometheus registry into materialized views that can be inspected with SQL commands.
 
 # Goals
 
@@ -12,11 +12,13 @@ This design doc introduces a way to import data from prometheus metrics endpoint
 
 # Non-Goals
 
+None of the following are intended to be done with this design:
+
 * Export our system table logs as prometheus (yet) -- this design covers only the "metrics import" direction.
 
-* Come up with a data retention scheme other than "older than n minutes gets dropped". If this was a full-featured time series database design, we'd want to thin metrics into minute/hour/day buckets. This isn't that.
+* Expose any `CREATE SOURCE` mechanics for importing from arbitrary/external prometheus endpoints.
 
-* (Maybe) don't even expose the `CREATE SOURCE` mechanics externally?
+* Come up with a data retention scheme other than "older than n minutes gets dropped". If this was a full-featured time series database design, we'd want to thin metrics into minute/hour/day buckets. This isn't that.
 
 # Description
 
@@ -25,19 +27,10 @@ This design doc introduces a way to import data from prometheus metrics endpoint
     If applicable, be sure to call out any new testing/validation that will be required
 -->
 
-To import prometheus metrics, a process must regularly scrape an endpoint. Something like the following would be our external interface:
+By implementing this design, we'll make the following changes to materialized:
 
-```sql
-CREATE SOURCE metrics_table_name
-PROMETHEUS ENDPOINT 'http://localhost:9090/metrics'
-WITH (
-    metadata_table = "metrics_table_meta",
-    poll_interval = '1 minute'::interval,
-    retain_data = '5 minutes'::interval
-);
-```
-
-This creates two relations that have schemas similar to the following:
+1. Introduce a background task that regularly scrapes the internal metrics registry using the registry's [`gather`](https://docs.rs/prometheus/0.12.0/prometheus/struct.Registry.html#method.gather) method (currently we can use the global registry, but later we'll need a handle to the ["materialized" metrics registry][#5825]; the mechanism will remain the same).
+2. Ingest the generated metrics into a dataflow that populates metrics into tables like the following:
 
 ```sql
 CREATE TABLE metrics_table_name (
@@ -54,8 +47,13 @@ CREATE TABLE metrics_table_meta (
 );
 ```
 
-Once created, the source polls the endpoint once a minute (via the configured the `poll_interval` duration), and retains metric readings for 5 minutes.
+3. This not-quite-source polls the endpoint once a minute (via the configured the `poll_interval` duration), and retains metric readings for a number of minutes (strawman proposal: 5 minutes) to make it possible for users to visualize changes in the metrics as they would with a "full" metrics pipeline.
 
+## Possible work after this proposal is implemented
+
+* As noted above, after [#5825] is implemented, we'll have to adjust the import task outlined above to receive & use the new registry.
+
+* Once we have a way to import our process's own prometheus metrics, one could introduce a way (a full-fledged `SOURCE`) to read from arbitrary prometheus endpoints. This is explicitly a non-goal right now, and doesn't really align with our product direction right now... but it would be a fun skunkworks project.
 
 # Alternatives
 
@@ -77,15 +75,11 @@ The downsides, however, are somewhat big:
 
 * Adding metrics gets more difficult. You not only have to figure out how go get your number counted the right way, you also have to figure out how to aggregate it properly in the dataflow world. We worry that this might mean that useful operational metrics don't get added as soon/as quickly as they'd be necessary, making it harder to run the system.
 
-### Do not scrape arbitrary prometheus endpoints, instead scrape our internal metrics registry
+### Scrape a prometheus HTTP endpoint instead of our internal registry
 
-This would get around the need to introduce an externally-definable source, and automatically feed a dataflow that we can keep up to date automatically.
+Prometheus offers a second kind of public interface besides the metrics registry: The HTTP endpoint that a prometheus database scraper itself uses to read the metrics. We could make a source definition that polls the HTTP endpoint and constructs metrics data from that, and even offer a CREATE SOURCE mechanic to productize this.
 
-There's one major reason why I think this would be harder to implement right now: Being able to pull in all our metrics depends on [#5825], which would be a pretty heavy re-work of our internal structures (have to thread a registry through to various bits that don't have a place to hold that registry yet, like the pgwire implementation).
-
-Besides that, I think it's somewhat nice to represent this data as a source that we poll, and internally, our metrics could still be realized like this once a fix for [#5825] lands.
-
-[#5825]: https://github.com/MaterializeInc/materialize/issues/5825
+It'd be more complicated to do this (only [one crate](https://crates.io/crates/prometheus-parse) of unknown quality exists out there that even parses textual representations of prometheus metrics), and would dilute our product direction somewhat. Using the internal-only pathway through the registry also doesn't expose us to errors from the network.
 
 ## Alternative details
 
@@ -132,13 +126,16 @@ I think if we want to go down this road, we'll want something like an "is a" tab
 
 # Open questions
 
-* Should we expose the CREATE SOURCE mechanics for this externally? It probably
-  has very limited utility for our users outside "read our metrics".
+- [x] Should we expose the CREATE SOURCE mechanics for this externally? It probably
+      has very limited utility for our users outside "read our metrics".
+      (The answer is "no")
 
-* Is it better to be fully normalized and have two tables, or better to have the kind of measurement in the measurement table and not have the "meta" table?
+- [ ] Is it better to be fully normalized and have two tables, or better to have the kind of measurement in the measurement table and not have the "meta" table?
 
 <!--
 // Anything currently unanswered that needs specific focus. This section may be expanded during the doc meeting as
 // other unknowns are pointed out.
 // These questions may be technical, product, or anything in-between.
 -->
+
+[#5825]: https://github.com/MaterializeInc/materialize/issues/5825
