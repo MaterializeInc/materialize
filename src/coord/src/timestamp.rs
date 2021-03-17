@@ -1401,7 +1401,7 @@ impl Timestamper {
                         None
                     }
                     Err(e) => {
-                        error!(
+                        warn!(
                             "Unable to fetch metadata about consistency topic {}; \
                              assuming it exists with one partition (error: {})",
                             timestamp_topic, e
