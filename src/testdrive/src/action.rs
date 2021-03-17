@@ -107,8 +107,8 @@ pub struct State {
 }
 
 #[derive(Clone)]
-pub struct SQLContext {
-    sql_timeout: Duration,
+pub struct SqlContext {
+    timeout: Duration,
     regex: Option<Regex>,
     regex_replacement: String,
 }
@@ -297,8 +297,8 @@ where
 pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Error> {
     let mut out = Vec::new();
     let mut vars = HashMap::new();
-    let mut sql_context = SQLContext {
-        sql_timeout: DEFAULT_SQL_TIMEOUT,
+    let mut sql_context = SqlContext {
+        timeout: DEFAULT_SQL_TIMEOUT,
         regex: None,
         regex_replacement: DEFAULT_REGEX_REPLACEMENT.to_string(),
     };
@@ -420,23 +420,20 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         Box::new(s3::build_add_notifications(builtin).map_err(wrap_err)?)
                     }
                     "set-regex" => {
-                        let regex_str = builtin.args.string("match").map_err(wrap_err)?;
-                        sql_context.regex = Some(Regex::new(&regex_str).unwrap());
-
-                        let regex_replacement_opt = builtin.args.opt_string("replacement");
-                        if let Some(regex_replacement) = &regex_replacement_opt {
-                            sql_context.regex_replacement = regex_replacement.to_string();
-                        } else {
-                            sql_context.regex_replacement = DEFAULT_REGEX_REPLACEMENT.to_string();
-                        }
+                        sql_context.regex = Some(builtin.args.parse("match").map_err(wrap_err)?);
+                        sql_context.regex_replacement = match builtin.args.opt_string("replacement")
+                        {
+                            None => DEFAULT_REGEX_REPLACEMENT.into(),
+                            Some(replacement) => replacement,
+                        };
                         continue;
                     }
                     "set-sql-timeout" => {
                         let duration = builtin.args.string("duration").map_err(wrap_err)?;
                         if duration.to_lowercase() == "default" {
-                            sql_context.sql_timeout = DEFAULT_SQL_TIMEOUT;
+                            sql_context.timeout = DEFAULT_SQL_TIMEOUT;
                         } else {
-                            sql_context.sql_timeout = parse_duration::parse(&duration)
+                            sql_context.timeout = parse_duration::parse(&duration)
                                 .map_err(|e| wrap_err(e.to_string()))?;
                         }
                         continue;
