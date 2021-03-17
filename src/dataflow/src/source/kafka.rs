@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::cmp;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::convert::TryInto;
 use std::fs;
 use std::path::PathBuf;
@@ -60,6 +60,10 @@ pub struct KafkaSourceInfo {
     worker_count: i32,
     /// Files to read on startup
     cached_files: Vec<PathBuf>,
+    /// Map from partition -> most recently read offset
+    last_offsets: HashMap<i32, i64>,
+    /// Map from partition -> offset to start reading at
+    start_offsets: HashMap<i32, i64>,
     /// Timely worker logger for source events
     logger: Option<Logger>,
 }
@@ -74,7 +78,7 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
         logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        _: &mut ConsistencyInfo,
+        consistency_info: &mut ConsistencyInfo,
         _: DataEncoding,
     ) -> Result<KafkaSourceInfo, anyhow::Error> {
         match connector {
@@ -86,6 +90,7 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
                 logger,
                 consumer_activator,
                 kc,
+                consistency_info.start_offsets.clone(),
             )),
             _ => unreachable!(),
         }
@@ -114,6 +119,13 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                     ),
                 );
                 consistency_info.update_partition_metadata(PartitionId::Kafka(i));
+
+                // Indicate a last offset of -1 if we have not been instructed to
+                // have a specific start offset for this topic.
+                let start_offset = *self.start_offsets.get(&i).unwrap_or(&-1);
+                let prev = self.last_offsets.insert(i, start_offset);
+
+                assert!(prev.is_none());
             }
         }
         self.known_partitions = cmp::max(self.known_partitions, pid + 1);
@@ -138,7 +150,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     /// we skip this message, and seek to the appropriate offset
     fn get_next_message(
         &mut self,
-        consistency_info: &mut ConsistencyInfo,
+        _consistency_info: &mut ConsistencyInfo,
         activator: &Activator,
     ) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
         // Poll the consumer once. Since we split the consumer's partitions out into separate queues and poll those individually,
@@ -165,18 +177,17 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
             let message = match partition_queue.get_next_message() {
                 Err(e) => {
                     let pid = partition_queue.pid();
-                    let last_offset = consistency_info
-                        .partition_metadata
-                        .get(&PartitionId::Kafka(pid))
-                        .unwrap()
-                        .offset;
+                    let last_offset = self
+                        .last_offsets
+                        .get(&pid)
+                        .expect("partition known to be installed");
 
                     error!(
                         "kafka error consuming from source: {} topic: {}: partition: {} last processed offset: {} : {}",
                         self.source_name,
                         self.topic_name,
                         pid,
-                        last_offset.offset,
+                        last_offset,
                         e
                     );
                     None
@@ -189,7 +200,9 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                     PartitionId::Kafka(pid) => pid,
                     _ => unreachable!(),
                 };
-                let offset = message.offset;
+
+                // Convert the received offset back from a 1-indexed MzOffset to the correct offset.
+                let offset = message.offset.offset - 1;
                 // Offsets are guaranteed to be 1) monotonically increasing *unless* there is
                 // a network issue or a new partition added, at which point the consumer may
                 // start processing the topic from the beginning, or we may see duplicate offsets
@@ -197,38 +210,38 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                 // that we are ever going to see holds.
                 // Offsets are guaranteed to be contiguous when compaction is disabled. If compaction
                 // is enabled, there may be gaps in the sequence.
-                // If we see an "old" offset, we fast-forward the consumer and skip that message
+                // If we see an "old" offset, we ast-forward the consumer and skip that message
 
                 // Given the explicit consumer to partition assignment, we should never receive a message
                 // for a partition for which we have no metadata
-                assert!(consistency_info.knows_of(PartitionId::Kafka(partition)));
+                assert!(self.last_offsets.contains_key(&partition));
 
-                let mut last_offset = consistency_info
-                    .partition_metadata
-                    .get(&PartitionId::Kafka(partition))
-                    .unwrap()
-                    .offset;
+                let last_offset_ref = self
+                    .last_offsets
+                    .get_mut(&partition)
+                    .expect("partition known to be installed");
 
+                let last_offset = *last_offset_ref;
                 if offset <= last_offset {
                     warn!(
                         "Kafka message before expected offset: \
                              source {} (reading topic {}, partition {}) \
-                             received Mz offset {} expected Mz offset {:?}",
+                             received offset {} expected offset {:?}",
                         self.source_name,
                         self.topic_name,
                         partition,
                         offset,
-                        last_offset.offset + 1
+                        last_offset + 1,
                     );
                     // Seek to the *next* offset (aka last_offset + 1) that we have not yet processed
-                    last_offset.offset += 1;
-                    self.fast_forward_consumer(partition, last_offset.into());
+                    self.fast_forward_consumer(partition, last_offset + 1);
                     // We explicitly should not consume the message as we have already processed it
                     // However, we make sure to activate the source to make sure that we get a chance
                     // to read from this consumer again (even if no new data arrives)
                     activator.activate();
                 } else {
                     next_message = NextMessage::Ready(message);
+                    *last_offset_ref = offset;
                 }
             }
             self.partition_consumers.push_back(partition_queue);
@@ -311,6 +324,7 @@ impl KafkaSourceInfo {
         logger: Option<Logger>,
         consumer_activator: SyncActivator,
         kc: KafkaSourceConnector,
+        start_offsets: HashMap<PartitionId, MzOffset>,
     ) -> KafkaSourceInfo {
         let KafkaSourceConnector {
             addrs,
@@ -374,6 +388,21 @@ impl KafkaSourceInfo {
             })
             .unwrap_or_default();
 
+        let start_offsets = start_offsets
+            .iter()
+            .map(|(k, v)| {
+                let key = if let PartitionId::Kafka(pid) = k {
+                    *pid
+                } else {
+                    panic!("received unexpected partition id type for kafka source")
+                };
+
+                let value = v.offset - 1;
+
+                (key, value)
+            })
+            .collect();
+
         KafkaSourceInfo {
             topic_name: topic,
             source_name,
@@ -383,6 +412,8 @@ impl KafkaSourceInfo {
             consumer: Arc::new(consumer),
             worker_id,
             worker_count,
+            last_offsets: HashMap::new(),
+            start_offsets,
             cached_files,
             logger,
         }
@@ -457,11 +488,11 @@ impl KafkaSourceInfo {
     /// Fast-forward consumer to specified Kafka Offset. Prints a warning if failed to do so
     /// Assumption: if offset does not exist (for instance, because of compaction), will seek
     /// to the next available offset
-    fn fast_forward_consumer(&self, pid: i32, next_offset: KafkaOffset) {
+    fn fast_forward_consumer(&self, pid: i32, next_offset: i64) {
         let res = self.consumer.seek(
             &self.topic_name,
             pid,
-            Offset::Offset(next_offset.offset),
+            Offset::Offset(next_offset),
             Duration::from_secs(1),
         );
         match res {
@@ -474,15 +505,15 @@ impl KafkaSourceInfo {
                         _ => None,
                     });
                 if let Some(position) = position {
-                    info!(
-                        "Tried to fast-forward consumer on partition PID: {} to Kafka offset {}. Consumer is now at position {}",
-                        pid, next_offset.offset, position);
-                    if *position != next_offset.offset {
-                        warn!("We did not seek to the expected Kafka offset. Current Kafka offset: {} Expected Kafka offset: {}", position, next_offset.offset);
+                    if *position != next_offset {
+                        warn!("Did not fast-forward consumer on partition PID: {} to the correct Kafka offset. Currently at offset: {} Expected offset: {}",
+                              pid, position, next_offset);
+                    } else {
+                        info!("Successfully fast-forwarded consumer on partition PID: {} to Kafka offset {}.", pid, position);
                     }
                 } else {
-                    warn!("Tried to fast-forward consumer on partition PID:{} to Kafka offset {}. Could not obtain new consumer position",
-                          pid, next_offset.offset);
+                    warn!("Tried to fast-forward consumer on partition PID: {} to Kafka offset {}. Could not obtain new consumer position",
+                          pid, next_offset);
                 }
             }
             Err(e) => error!(
