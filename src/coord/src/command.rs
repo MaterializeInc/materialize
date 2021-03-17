@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use derivative::Derivative;
+use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 
 use dataflow_types::PeekResponse;
@@ -234,6 +235,13 @@ pub enum ExecuteResponse {
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
+}
+
+/// The response to [`SessionClient::simple_execute`](crate::SessionClient::simple_execute).
+#[derive(Debug, Serialize)]
+pub struct SimpleExecuteResponse {
+    pub rows: Vec<Vec<serde_json::Value>>,
+    pub col_names: Vec<Option<String>>,
 }
 
 /// The state of a cancellation request.
