@@ -27,7 +27,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use lazy_static::lazy_static;
 use postgres_types::{Kind, Type};
 
-use dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
+use dataflow_types::logging::{
+    DifferentialLog, LogVariant, MaterializedLog, RDKafkaLog, TimelyLog,
+};
 use expr::GlobalId;
 use repr::{RelationDesc, ScalarType};
 
@@ -547,6 +549,14 @@ pub const MZ_MESSAGE_COUNTS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Timely(TimelyLog::Messages),
     id: GlobalId::System(3028),
     index_id: GlobalId::System(3029),
+};
+
+pub const MZ_KAFKA_STATISTICS: BuiltinLog = BuiltinLog {
+    name: "mz_kafka_statistics",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::RDKafkaLog(RDKafkaLog::ConsumerStatistics),
+    id: GlobalId::System(3030),
+    index_id: GlobalId::System(3031),
 };
 
 lazy_static! {
@@ -1265,6 +1275,7 @@ lazy_static! {
             Builtin::Log(&MZ_PEEK_DURATIONS),
             Builtin::Log(&MZ_SOURCE_INFO),
             Builtin::Log(&MZ_MESSAGE_COUNTS),
+            Builtin::Log(&MZ_KAFKA_STATISTICS),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
             Builtin::Table(&MZ_KAFKA_SINKS),

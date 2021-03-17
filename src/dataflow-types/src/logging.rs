@@ -28,6 +28,7 @@ pub enum LogVariant {
     Timely(TimelyLog),
     Differential(DifferentialLog),
     Materialized(MaterializedLog),
+    RDKafkaLog(RDKafkaLog),
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +56,10 @@ pub enum MaterializedLog {
     PeekCurrent,
     PeekDuration,
     SourceInfo,
+}
+#[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
+pub enum RDKafkaLog {
+    ConsumerStatistics,
 }
 
 impl LogVariant {
@@ -174,6 +179,16 @@ impl LogVariant {
                 .with_column("duration_ns", ScalarType::Int64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
+
+            LogVariant::RDKafkaLog(RDKafkaLog::ConsumerStatistics) => RelationDesc::empty()
+                .with_column("source_name", ScalarType::String.nullable(false))
+                .with_column("source_id", ScalarType::String.nullable(false))
+                .with_column("consumer_name", ScalarType::String.nullable(false))
+                .with_column("rx", ScalarType::Int64.nullable(false))
+                .with_column("rx_bytes", ScalarType::Int64.nullable(false))
+                .with_column("tx", ScalarType::Int64.nullable(false))
+                .with_column("tx_bytes", ScalarType::Int64.nullable(false))
+                .with_key(vec![0, 1, 2]),
         }
     }
 
@@ -222,6 +237,10 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::SourceInfo) => vec![],
             LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],
+            LogVariant::RDKafkaLog(RDKafkaLog::ConsumerStatistics) => vec![(
+                LogVariant::Materialized(MaterializedLog::SourceInfo),
+                vec![(0, 0), (1, 1)],
+            )],
         }
     }
 }
