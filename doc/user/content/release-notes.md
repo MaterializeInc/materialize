@@ -51,6 +51,13 @@ Wrap your release notes at the 80 character mark.
 - Add the [`jsonb_object_agg`](/sql/functions/jsonb_object_agg) function to
   aggregate rows into a JSON object.
 
+- Permit the [`jsonb`](/sql/types/jsonb) type to store all 64-bit integers
+  {{% gh 5919 %}}.
+  Previously integers in the following ranges were rejected:
+
+    * [-2<sup>64</sup>, -(2^<sup>53</sup>-1)]
+    * [2<sup>53</sup> - 1, 2^<sup>64</sup>-1].
+
 {{% version-header v0.7.1 %}}
 
 - **Breaking change.** Change the default

@@ -67,20 +67,6 @@ impl From<UnaryFunc> for CastTemplate {
     }
 }
 
-// A cast template for converting expressions of type `Jsonb` to numeric types.
-// The produced casts will cast the expression to `Float64` and then to
-// `cast_to`.
-fn from_jsonb_f64_cast(
-    ecx: &ExprContext,
-    _ccx: CastContext,
-    _from_type: &ScalarType,
-    to_type: &ScalarType,
-) -> Option<impl FnOnce(HirScalarExpr) -> HirScalarExpr> {
-    let from_f64_to_cast =
-        get_cast(ecx, CastContext::Explicit, &ScalarType::Float64, &to_type).unwrap();
-    Some(|e: HirScalarExpr| from_f64_to_cast(e.call_unary(UnaryFunc::CastJsonbToFloat64)))
-}
-
 /// Describes the context of a cast.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum CastContext {
@@ -164,8 +150,7 @@ lazy_static! {
             (Float32, Float64) => Implicit: CastFloat32ToFloat64,
             (Float32, Decimal) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
-                let s = HirScalarExpr::literal(Datum::from(i32::from(s)), to_type.clone());
-                Some(|e: HirScalarExpr| e.call_binary(s, BinaryFunc::CastFloat32ToDecimal))
+                Some(move |e: HirScalarExpr| e.call_unary(CastFloat32ToDecimal(s)))
             }),
             (Float32, String) => Assignment: CastFloat32ToString,
 
@@ -175,8 +160,7 @@ lazy_static! {
             (Float64, Float32) => Assignment: CastFloat64ToFloat32,
             (Float64, Decimal) => Assignment: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let (_, s) = to_type.unwrap_decimal_parts();
-                let s = HirScalarExpr::literal(Datum::from(i32::from(s)), to_type.clone());
-                Some(|e: HirScalarExpr| e.call_binary(s, BinaryFunc::CastFloat64ToDecimal))
+                Some(move |e: HirScalarExpr| e.call_unary(CastFloat64ToDecimal(s)))
             }),
             (Float64, String) => Assignment: CastFloat64ToString,
 
@@ -314,11 +298,14 @@ lazy_static! {
 
             // JSONB
             (Jsonb, Bool) => Explicit: CastJsonbToBool,
-            (Jsonb, Int32) => Explicit: CastTemplate::new(from_jsonb_f64_cast),
-            (Jsonb, Int64) => Explicit: CastTemplate::new(from_jsonb_f64_cast),
-            (Jsonb, Float32) => Explicit: CastTemplate::new(from_jsonb_f64_cast),
+            (Jsonb, Int32) => Explicit: CastJsonbToInt32,
+            (Jsonb, Int64) => Explicit: CastJsonbToInt64,
+            (Jsonb, Float32) => Explicit: CastJsonbToFloat32,
             (Jsonb, Float64) => Explicit: CastJsonbToFloat64,
-            (Jsonb, Decimal) => Explicit: CastTemplate::new(from_jsonb_f64_cast),
+            (Jsonb, Decimal) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let (_, s) = to_type.unwrap_decimal_parts();
+                Some(move |e: HirScalarExpr| e.call_unary(CastJsonbToDecimal(s)))
+            }),
             (Jsonb, String) => Assignment: CastJsonbToString,
 
             // UUID
@@ -428,12 +415,13 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
     use ScalarType::*;
 
     match ecx.scalar_type(&expr) {
-        Bool | Jsonb => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
-        Int32 | Int64 | Float32 | Float64 | Decimal(..) => {
-            plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Float64)
-                .expect("cast known to exist")
-                .call_unary(UnaryFunc::CastJsonbOrNullToJsonb)
-        }
+        Bool | Jsonb | Int64 | Float64 => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        Int32 => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Int64)
+            .expect("cast known to exist")
+            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        Float32 | Decimal(..) => plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Float64)
+            .expect("cast known to exist")
+            .call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
         Record { fields, .. } => {
             let mut exprs = vec![];
             for (i, (name, _ty)) in fields.iter().enumerate() {

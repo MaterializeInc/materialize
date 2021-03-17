@@ -563,7 +563,7 @@ CREATE TYPE jsonb_map_c AS MAP (key_type=text, value_type=jsonb);
 query T
 SELECT '{a=>\{\"1\":2\}}'::jsonb_map_c::text;
 ----
-{a=>"{\"1\":2.0}"}
+{a=>"{\"1\":2}"}
 
 # 🔬🔬 Check custom type name resolution
 
