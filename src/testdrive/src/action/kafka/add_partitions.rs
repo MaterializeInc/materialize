@@ -14,7 +14,7 @@ use rdkafka::admin::NewPartitions;
 use rdkafka::producer::Producer;
 
 use ore::collections::CollectionExt;
-use ore::retry;
+use ore::retry::Retry;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -81,27 +81,29 @@ impl Action for AddPartitionsAction {
             return Err(e.to_string());
         }
 
-        retry::retry_for(state.default_timeout, |_| async {
-            let metadata = state
-                .kafka_producer
-                .client()
-                .fetch_metadata(Some(&topic_name), Some(Duration::from_secs(1)))
-                .map_err(|e| e.to_string())?;
-            if metadata.topics().len() != 1 {
-                return Err("metadata fetch returned no topics".to_string());
-            }
-            let topic = metadata.topics().into_element();
-            if topic.partitions().len() != self.partitions {
-                return Err(format!(
-                    "topic {} has {} partitions when exactly {} was expected",
-                    topic_name,
-                    topic.partitions().len(),
-                    self.partitions,
-                ));
-            }
-            Ok(())
-        })
-        .await?;
+        Retry::default()
+            .max_duration(state.default_timeout)
+            .retry(|_| async {
+                let metadata = state
+                    .kafka_producer
+                    .client()
+                    .fetch_metadata(Some(&topic_name), Some(Duration::from_secs(1)))
+                    .map_err(|e| e.to_string())?;
+                if metadata.topics().len() != 1 {
+                    return Err("metadata fetch returned no topics".to_string());
+                }
+                let topic = metadata.topics().into_element();
+                if topic.partitions().len() != self.partitions {
+                    return Err(format!(
+                        "topic {} has {} partitions when exactly {} was expected",
+                        topic_name,
+                        topic.partitions().len(),
+                        self.partitions,
+                    ));
+                }
+                Ok(())
+            })
+            .await?;
 
         state.kafka_topics.insert(topic_name, self.partitions);
         Ok(())

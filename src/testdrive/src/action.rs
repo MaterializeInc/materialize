@@ -27,6 +27,7 @@ use rusoto_sqs::{DeleteQueueRequest, Sqs, SqsClient};
 use url::Url;
 
 use aws_util::aws;
+use ore::retry::Retry;
 use repr::strconv;
 
 use crate::error::{DynError, Error, InputError, ResultExt};
@@ -213,58 +214,62 @@ impl State {
     }
 
     async fn delete_bucket_objects(&self, bucket: String) -> Result<(), Error> {
-        ore::retry::retry_for(self.default_timeout, |_| async {
-            // loop until error or response has no continuation token
-            let mut continuation_token = None;
-            loop {
-                let response = self
-                    .s3_client
-                    .list_objects_v2(ListObjectsV2Request {
-                        bucket: bucket.clone(),
-                        continuation_token: continuation_token.take(),
-                        ..Default::default()
-                    })
-                    .await
-                    .with_err_ctx(|| format!("listing objects for bucket {}", bucket))?;
+        Retry::default()
+            .max_duration(self.default_timeout)
+            .retry(|_| async {
+                // loop until error or response has no continuation token
+                let mut continuation_token = None;
+                loop {
+                    let response = self
+                        .s3_client
+                        .list_objects_v2(ListObjectsV2Request {
+                            bucket: bucket.clone(),
+                            continuation_token: continuation_token.take(),
+                            ..Default::default()
+                        })
+                        .await
+                        .with_err_ctx(|| format!("listing objects for bucket {}", bucket))?;
 
-                if let Some(objects) = response.contents {
-                    for obj in objects {
-                        self.s3_client
-                            .delete_object(DeleteObjectRequest {
-                                bucket: bucket.clone(),
-                                key: obj.key.clone().unwrap(),
-                                ..Default::default()
-                            })
-                            .await
-                            .with_err_ctx(|| {
-                                format!("deleting object {}/{}", bucket, obj.key.unwrap())
-                            })?;
+                    if let Some(objects) = response.contents {
+                        for obj in objects {
+                            self.s3_client
+                                .delete_object(DeleteObjectRequest {
+                                    bucket: bucket.clone(),
+                                    key: obj.key.clone().unwrap(),
+                                    ..Default::default()
+                                })
+                                .await
+                                .with_err_ctx(|| {
+                                    format!("deleting object {}/{}", bucket, obj.key.unwrap())
+                                })?;
+                        }
                     }
-                }
 
-                if response.next_continuation_token.is_none() {
-                    return Ok(());
+                    if response.next_continuation_token.is_none() {
+                        return Ok(());
+                    }
+                    continuation_token = response.next_continuation_token;
                 }
-                continuation_token = response.next_continuation_token;
-            }
-        })
-        .await
+            })
+            .await
     }
 
     pub async fn reset_sqs(&self) -> Result<(), Error> {
-        ore::retry::retry_for(self.default_timeout, |_| async {
-            for queue_url in &self.sqs_queues_created {
-                self.sqs_client
-                    .delete_queue(DeleteQueueRequest {
-                        queue_url: queue_url.clone(),
-                    })
-                    .await
-                    .with_err_ctx(|| format!("Deleting sqs queue: {}", queue_url))?
-            }
+        Retry::default()
+            .max_duration(self.default_timeout)
+            .retry(|_| async {
+                for queue_url in &self.sqs_queues_created {
+                    self.sqs_client
+                        .delete_queue(DeleteQueueRequest {
+                            queue_url: queue_url.clone(),
+                        })
+                        .await
+                        .with_err_ctx(|| format!("Deleting sqs queue: {}", queue_url))?
+                }
 
-            Ok(())
-        })
-        .await
+                Ok(())
+            })
+            .await
     }
 }
 

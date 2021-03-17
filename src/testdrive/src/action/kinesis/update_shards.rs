@@ -14,7 +14,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rusoto_kinesis::{DescribeStreamInput, Kinesis, UpdateShardCountInput};
 
-use ore::retry;
+use ore::retry::Retry;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -59,9 +59,9 @@ impl Action for UpdateShardCountAction {
             .map_err(|e| format!("adding shards to stream {}: {}", &stream_name, e))?;
 
         // Verify the current shard count.
-        retry::retry_for(
-            cmp::max(state.default_timeout, Duration::from_secs(60)),
-            |_| async {
+        Retry::default()
+            .max_duration(cmp::max(state.default_timeout, Duration::from_secs(60)))
+            .retry(|_| async {
                 // Wait for shards to stop updating.
                 let description = state
                     .kinesis_client
@@ -97,8 +97,7 @@ impl Action for UpdateShardCountAction {
                     ));
                 }
                 Ok(())
-            },
-        )
-        .await
+            })
+            .await
     }
 }

@@ -18,20 +18,21 @@ use metabase::{
     DatabaseMetadata, LoginRequest, SetupDatabase, SetupDatabaseDetails, SetupPrefs, SetupRequest,
     SetupUser, Table, TableField,
 };
-use ore::retry;
+use ore::retry::Retry;
 
 const DUMMY_EMAIL: &str = "ci@materialize.io";
 const DUMMY_PASSWORD: &str = "dummy1";
 
 async fn connect_materialized() -> Result<tokio_postgres::Client, anyhow::Error> {
-    retry::retry_for(Duration::from_secs(30), |_| async {
-        let res = TcpStream::connect("materialized:6875").await;
-        if let Err(e) = &res {
-            log::debug!("error connecting to materialized: {}", e);
-        }
-        res
-    })
-    .await?;
+    Retry::default()
+        .retry(|_| async {
+            let res = TcpStream::connect("materialized:6875").await;
+            if let Err(e) = &res {
+                log::debug!("error connecting to materialized: {}", e);
+            }
+            res
+        })
+        .await?;
     let (client, conn) = tokio_postgres::connect(
         "postgres://materialize@materialized:6875/materialize",
         NoTls,
@@ -49,14 +50,16 @@ async fn connect_materialized() -> Result<tokio_postgres::Client, anyhow::Error>
 async fn connect_metabase() -> Result<metabase::Client, anyhow::Error> {
     let mut client =
         metabase::Client::new("http://metabase:3000").context("failed creating metabase client")?;
-    let setup_token = retry::retry_for(Duration::from_secs(30), |_| async {
-        let res = client.session_properties().await;
-        if let Err(e) = &res {
-            log::debug!("error connecting to metabase: {}", e);
-        }
-        res.map(|res| res.setup_token)
-    })
-    .await?;
+    let setup_token = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| async {
+            let res = client.session_properties().await;
+            if let Err(e) = &res {
+                log::debug!("error connecting to metabase: {}", e);
+            }
+            res.map(|res| res.setup_token)
+        })
+        .await?;
     let session_id = match setup_token {
         None => {
             let req = LoginRequest {
@@ -152,23 +155,24 @@ async fn main() -> Result<(), anyhow::Error> {
     // The database sync happens asynchronously and the API doesn't appear to
     // expose when it is complete, so just retry a few times waiting for the
     // metadata we expect.
-    retry::retry_for(Duration::from_secs(15), |_| async {
-        let mut metadata = metabase_client.database_metadata(mzdb.id).await?;
-        metadata.tables.sort_by(|a, b| a.name.cmp(&b.name));
-        for t in &mut metadata.tables {
-            t.fields.sort_by(|a, b| a.name.cmp(&b.name));
-        }
-        log::debug!("Materialize database metadata: {:#?}", metadata);
-        if expected_metadata != metadata {
-            bail!(
-                "metadata did not match\nexpected:\n{:#?}\nactual:\n{:#?}",
-                expected_metadata,
-                metadata,
-            );
-        }
-        Ok(())
-    })
-    .await?;
+    Retry::default()
+        .retry(|_| async {
+            let mut metadata = metabase_client.database_metadata(mzdb.id).await?;
+            metadata.tables.sort_by(|a, b| a.name.cmp(&b.name));
+            for t in &mut metadata.tables {
+                t.fields.sort_by(|a, b| a.name.cmp(&b.name));
+            }
+            log::debug!("Materialize database metadata: {:#?}", metadata);
+            if expected_metadata != metadata {
+                bail!(
+                    "metadata did not match\nexpected:\n{:#?}\nactual:\n{:#?}",
+                    expected_metadata,
+                    metadata,
+                );
+            }
+            Ok(())
+        })
+        .await?;
 
     println!("OK");
     Ok(())

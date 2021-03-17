@@ -15,7 +15,7 @@ use std::path::{self, PathBuf};
 
 use async_trait::async_trait;
 
-use ore::retry;
+use ore::retry::Retry;
 
 use crate::action::{Action, State, SyncAction};
 use crate::format::avro::{self, Codec, Reader, Writer};
@@ -146,22 +146,24 @@ impl Action for VerifyAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let path = retry::retry_for(state.default_timeout, |_| async {
-            let row = state
-                .pgclient
-                .query_one(
-                    "SELECT path FROM mz_catalog_names
+        let path = Retry::default()
+            .max_duration(state.default_timeout)
+            .retry(|_| async {
+                let row = state
+                    .pgclient
+                    .query_one(
+                        "SELECT path FROM mz_catalog_names
                      JOIN mz_avro_ocf_sinks ON global_id = sink_id
                      WHERE name = $1",
-                    &[&self.sink],
-                )
-                .await
-                .map_err(|e| format!("querying materialize: {}", e.to_string()))?;
-            let bytes: Vec<u8> = row.get("path");
-            Ok::<_, String>(PathBuf::from(OsString::from_vec(bytes)))
-        })
-        .await
-        .map_err(|e| format!("retrieving path: {:?}", e))?;
+                        &[&self.sink],
+                    )
+                    .await
+                    .map_err(|e| format!("querying materialize: {}", e.to_string()))?;
+                let bytes: Vec<u8> = row.get("path");
+                Ok::<_, String>(PathBuf::from(OsString::from_vec(bytes)))
+            })
+            .await
+            .map_err(|e| format!("retrieving path: {:?}", e))?;
 
         println!("Verifying results in file {}", path.display());
 
