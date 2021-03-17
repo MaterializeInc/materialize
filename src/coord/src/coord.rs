@@ -2227,27 +2227,9 @@ impl Coordinator {
         self.catalog_transact(ops).await?;
         Ok(match ty {
             ObjectType::Schema => unreachable!(),
-            ObjectType::Source => {
-                for id in items.iter() {
-                    self.update_timestamper(*id, false).await;
-                    if let Some(cache_tx) = &mut self.cache_tx {
-                        cache_tx
-                            .send(CacheMessage::DropSource(*id))
-                            .expect("cache receiver should not drop first");
-                    }
-                }
-                ExecuteResponse::DroppedSource
-            }
+            ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
-            ObjectType::Table => {
-                for id in items.iter() {
-                    if let Some(tables) = &mut self.persisted_tables {
-                        tables.destroy(*id);
-                    }
-                }
-
-                ExecuteResponse::DroppedTable
-            }
+            ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
             ObjectType::Type => ExecuteResponse::DroppedType,
@@ -3053,6 +3035,9 @@ impl Coordinator {
                                 -1,
                             )
                             .await;
+                            if let Some(tables) = &mut self.persisted_tables {
+                                tables.destroy(entry.id());
+                            }
                         }
                         CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
@@ -3064,6 +3049,12 @@ impl Coordinator {
                                 -1,
                             )
                             .await;
+                            self.update_timestamper(entry.id(), false).await;
+                            if let Some(cache_tx) = &mut self.cache_tx {
+                                cache_tx
+                                    .send(CacheMessage::DropSource(entry.id()))
+                                    .expect("cache receiver should not drop first");
+                            }
                         }
                         CatalogItem::View(_) => {
                             self.report_view_update(

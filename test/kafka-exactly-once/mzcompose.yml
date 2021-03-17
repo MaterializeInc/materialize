@@ -10,68 +10,32 @@
 version: '3.7'
 
 mzworkflows:
-  kafka-matrix:
-    steps:
-      - step: workflow
-        workflow: kafka-latest
-
-      - step: workflow
-        workflow: kafka-6_1_0
-
-      - step: workflow
-        workflow: kafka-6_0_2
-
-      - step: workflow
-        workflow: kafka-5_5_3
-
-      - step: workflow
-        workflow: kafka-5_4_3
-
-  kafka-latest:
+  kafka-exactly-once:
     env:
       KAFKA_VERSION: latest
-    steps:
-      - step: workflow
-        workflow: test-kafka
-
-  kafka-6_1_0:
-    env:
-      KAFKA_VERSION: 6.1.0
-    steps:
-      - step: workflow
-        workflow: test-kafka
-
-  kafka-6_0_2:
-    env:
-      KAFKA_VERSION: 6.0.2
-    steps:
-      - step: workflow
-        workflow: test-kafka
-
-  kafka-5_5_3:
-    env:
-      KAFKA_VERSION: 5.5.3
-    steps:
-      - step: workflow
-        workflow: test-kafka
-
-  kafka-5_4_3:
-    env:
-      KAFKA_VERSION: 5.4.3
-    steps:
-      - step: workflow
-        workflow: test-kafka
-
-  test-kafka:
+      # when testing this on your local machine update SEED
+      # when running this repeatedly to ensure topics don't clash
+      SEED: ${SEED:-1}
     steps:
       - step: workflow
         workflow: start-deps
+
       - step: run
         service: testdrive-svc
-        command: kafka-matrix.td /tests/avro-sinks.td /tests/avro-sources.td /tests/upsert-kafka.td
-      - step: remove-services
-        services: [materialized, schema-registry, kafka, zookeeper]
-        destroy_volumes: true
+        command: --seed ${SEED} --kafka-option=group.id=group1 before-restart.td
+
+      - step: kill-services
+        services: [materialized]
+
+      - step: start-services
+        services: [materialized]
+
+      - step: wait-for-mz
+        service: materialized
+
+      - step: run
+        service: testdrive-svc
+        command: --seed ${SEED} --no-reset --kafka-option=group.id=group2 after-restart.td
 
   start-deps:
     steps:
@@ -85,6 +49,7 @@ mzworkflows:
         host: schema-registry
         port: 8081
       - step: wait-for-mz
+        service: materialized
 
 services:
   testdrive-svc:
@@ -97,39 +62,33 @@ services:
         --kafka-addr=kafka:9092
         --schema-registry-url=http://schema-registry:8081
         --materialized-url=postgres://materialize@materialized:6875
-        --validate-catalog=/share/mzdata/catalog
         $$*
       - bash
-    environment:
-      - TMPDIR=/share/tmp
-      - MZ_LOG
     volumes:
       - .:/workdir
       - mzdata:/share/mzdata
-      - tmp:/share/tmp
-      - ../testdrive:/tests
     propagate-uid-gid: true
     init: true
-    depends_on: [kafka, zookeeper, schema-registry, materialized]
+
   materialized:
     mzbuild: materialized
     command: >-
       --data-directory=/share/mzdata
-      -w1 --experimental
-      --cache-max-pending-records 1
+      -w1
       --disable-telemetry
-    ports:
-      - 6875
     environment:
       - MZ_DEV=1
-      - MZ_LOG=${MZ_LOG:-dataflow::source::s3=trace,info}
+      - MZ_LOG=${MZ_LOG:-dataflow::sink::kafka=debug,dataflow::source::kafka=debug,coord::timestamp=debug,dataflow::source=debug,info}
+    ports:
+      - 6875
     volumes:
       - mzdata:/share/mzdata
-      - tmp:/share/tmp
+
   zookeeper:
     image: confluentinc/cp-zookeeper:$KAFKA_VERSION
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
+
   kafka:
     image: confluentinc/cp-kafka:$KAFKA_VERSION
     environment:
@@ -137,6 +96,7 @@ services:
       - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
       - KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
       - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+
   schema-registry:
     image: confluentinc/cp-schema-registry:$KAFKA_VERSION
     environment:
@@ -146,4 +106,3 @@ services:
 
 volumes:
   mzdata:
-  tmp:

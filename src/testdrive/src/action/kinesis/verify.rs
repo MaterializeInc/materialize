@@ -19,7 +19,6 @@ use aws_util::kinesis::{get_shard_ids, get_shard_iterator};
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
-use crate::util::kinesis::DEFAULT_KINESIS_TIMEOUT;
 
 pub struct VerifyAction {
     stream_prefix: String,
@@ -76,7 +75,7 @@ impl Action for VerifyAction {
                     Some(0) => (),
                     _ => shard_iterators.push_back(output.next_shard_iterator),
                 };
-                if timer.elapsed() > DEFAULT_KINESIS_TIMEOUT {
+                if timer.elapsed() > state.default_timeout {
                     // Unable to read all Kinesis records in the default
                     // time allotted -- fail.
                     return Err(format!(

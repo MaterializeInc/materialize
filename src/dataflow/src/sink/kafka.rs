@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use differential_dataflow::Collection;
 use lazy_static::lazy_static;
-use log::error;
+use log::{error, info};
 use prometheus::{
     register_int_counter_vec, register_uint_gauge_vec, IntCounter, IntCounterVec, UIntGauge,
     UIntGaugeVec,
@@ -323,7 +323,7 @@ where
         _,
     >| {
         if s.shutdown_flag.load(Ordering::SeqCst) {
-            error!("shutdown requested for sink: {}", &s.name);
+            info!("shutting down sink: {}", &s.name);
             return false;
         }
 
@@ -339,7 +339,7 @@ where
 
                 let previously_published = match &connector.consistency {
                     Some(consistency) => match consistency.gate_ts {
-                        Some(ts) => as_of.frontier.less_equal(&ts),
+                        Some(gate_ts) => time <= gate_ts,
                         None => false,
                     },
                     None => false,
