@@ -137,7 +137,7 @@ impl fmt::Display for SourceInstanceId {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
-    Kinesis(String),
+    Kinesis,
     File,
     S3,
 }

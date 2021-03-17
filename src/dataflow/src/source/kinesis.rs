@@ -47,14 +47,8 @@ const KINESIS_SHARD_REFRESH_RATE: Duration = Duration::from_secs(60);
 
 /// Contains all information necessary to ingest data from Kinesis
 pub struct KinesisSourceInfo {
-    /// Source Name
-    name: String,
-    /// Unique Source Id
-    id: SourceInstanceId,
     /// Kinesis client used to obtain records
     kinesis_client: KinesisClient,
-    /// Timely worker logger for source events
-    logger: Option<Logger>,
     /// The name of the stream
     stream_name: String,
     /// The set of active shards
@@ -93,26 +87,21 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
         match state {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => {
                 if active {
-                    for shard_id in &shard_set {
-                        let kinesis_id = PartitionId::Kinesis(shard_id.clone());
-                        consistency_info.update_partition_metadata(kinesis_id.clone());
-                        consistency_info.partition_metrics.insert(
-                            kinesis_id.clone(),
-                            PartitionMetrics::new(
-                                &source_name,
-                                source_id,
-                                &kinesis_id.to_string(),
-                                logger.clone(),
-                            ),
-                        );
-                    }
+                    let kinesis_id = PartitionId::Kinesis;
+                    consistency_info.update_partition_metadata(kinesis_id.clone());
+                    consistency_info.partition_metrics.insert(
+                        kinesis_id.clone(),
+                        PartitionMetrics::new(
+                            &source_name,
+                            source_id,
+                            &kinesis_id.to_string(),
+                            logger,
+                        ),
+                    );
                 }
 
                 Ok(KinesisSourceInfo {
-                    name: source_name,
-                    id: source_id,
                     kinesis_client,
-                    logger,
                     shard_queue,
                     last_checked_shards: Instant::now(),
                     buffered_messages: VecDeque::new(),
@@ -127,10 +116,7 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
 }
 
 impl KinesisSourceInfo {
-    async fn update_shard_information(
-        &mut self,
-        consistency_info: &mut ConsistencyInfo,
-    ) -> Result<(), anyhow::Error> {
+    async fn update_shard_information(&mut self) -> Result<(), anyhow::Error> {
         let new_shards: HashSet<String> = get_shard_ids(&self.kinesis_client, &self.stream_name)
             .await?
             .difference(&self.shard_set)
@@ -142,17 +128,6 @@ impl KinesisSourceInfo {
                 shard_id.clone(),
                 get_shard_iterator(&self.kinesis_client, &self.stream_name, &shard_id).await?,
             ));
-            let kinesis_id = PartitionId::Kinesis(shard_id);
-            consistency_info.update_partition_metadata(kinesis_id.clone());
-            consistency_info.partition_metrics.insert(
-                kinesis_id.clone(),
-                PartitionMetrics::new(
-                    &self.name,
-                    self.id,
-                    &kinesis_id.to_string(),
-                    self.logger.clone(),
-                ),
-            );
         }
         Ok(())
     }
@@ -186,14 +161,14 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
 
     fn get_next_message(
         &mut self,
-        consistency_info: &mut ConsistencyInfo,
+        _consistency_info: &mut ConsistencyInfo,
         activator: &Activator,
     ) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
 
         //TODO move to timestamper
         if self.last_checked_shards.elapsed() >= KINESIS_SHARD_REFRESH_RATE {
-            if let Err(e) = block_on(self.update_shard_information(consistency_info)) {
+            if let Err(e) = block_on(self.update_shard_information()) {
                 error!("{:#?}", e);
                 return Err(anyhow::Error::msg(e.to_string()));
             }
@@ -259,7 +234,7 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
                         let data = record.data.as_ref().to_vec();
                         self.processed_message_count += 1;
                         let source_message = SourceMessage {
-                            partition: PartitionId::Kinesis(shard_id.clone()),
+                            partition: PartitionId::Kinesis,
                             offset: MzOffset {
                                 //TODO: should MzOffset be modified to be a string?
                                 offset: self.processed_message_count,
