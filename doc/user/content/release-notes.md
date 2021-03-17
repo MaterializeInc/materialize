@@ -61,6 +61,9 @@ Wrap your release notes at the 80 character mark.
 - Add the [`pg_postmaster_start_time`](/sql/functions#postgresql-compatibility-func)
   function, which reports the time at which the server started.
 
+- Add the [`mz_workers`](/sql/functions#postgresql-compatibility-func)
+  function, which reports the number of workers in use by the server.
+
 - Add the [`mz_uptime`](/sql/functions#system-information-func)
   function, which reports the duration for which the server has been running.
 

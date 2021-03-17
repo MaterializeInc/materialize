@@ -3466,6 +3466,7 @@ pub async fn serve(
         enable_logging: logging.is_some(),
         cache_directory: cache_config.map(|c| c.path),
         build_info,
+        num_workers: workers,
     })?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
