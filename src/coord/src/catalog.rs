@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::SystemTime;
+use std::time::Instant;
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
@@ -463,7 +463,8 @@ impl Catalog {
             storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
             config: sql::catalog::CatalogConfig {
-                startup_time: SystemTime::now(),
+                start_time: Utc::now(),
+                start_instant: Instant::now(),
                 nonce: rand::random(),
                 experimental_mode,
                 cluster_id,

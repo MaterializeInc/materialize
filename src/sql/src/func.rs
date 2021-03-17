@@ -1531,6 +1531,9 @@ lazy_static! {
             "pg_get_userbyid" => Scalar {
                 params!(Oid) => sql_op!("'unknown (OID=' || $1 || ')'"), 1642;
             },
+            "pg_postmaster_start_time" => Scalar {
+                params!() => Operation::nullary(pg_postmaster_start_time), 2560;
+            },
             "pg_table_is_visible" => Scalar {
                 params!(Oid) => sql_op!(
                     "(SELECT s.name = ANY(current_schemas(true))
@@ -1954,6 +1957,9 @@ lazy_static! {
             "mz_logical_timestamp" => Scalar {
                 params!() => NullaryFunc::MzLogicalTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
             },
+            "mz_uptime" => Scalar {
+                params!() => Operation::nullary(mz_uptime), oid::FUNC_MZ_UPTIME_OID;
+            },
             "mz_version" => Scalar {
                 params!() => Operation::nullary(|ecx| {
                     let version = ecx.catalog().config().build_info.human_version();
@@ -2063,7 +2069,6 @@ lazy_static! {
             "mz_sleep" => Scalar {
                 params!(Float64) => UnaryFunc::Sleep, oid::FUNC_MZ_SLEEP_OID;
             }
-
         }
     };
 }
@@ -2089,6 +2094,25 @@ fn mz_session_id(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
     Ok(HirScalarExpr::literal(
         Datum::from(ecx.catalog().config().session_id),
         ScalarType::Uuid,
+    ))
+}
+
+fn mz_uptime(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+    match ecx.qcx.lifetime {
+        QueryLifetime::OneShot => Ok(HirScalarExpr::literal(
+            Datum::from(chrono::Duration::from_std(
+                ecx.catalog().config().start_instant.elapsed(),
+            )?),
+            ScalarType::Interval,
+        )),
+        QueryLifetime::Static => bail!("mz_uptime cannot be used in static queries"),
+    }
+}
+
+fn pg_postmaster_start_time(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+    Ok(HirScalarExpr::literal(
+        Datum::from(ecx.catalog().config().start_time),
+        ScalarType::TimestampTz,
     ))
 }
 
