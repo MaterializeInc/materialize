@@ -338,7 +338,6 @@ where
                 self.collections
                     .insert(get.clone(), (collection, err_collection));
 
-                // Do whatever envelope processing is required.
                 let token = Rc::new(capability);
                 self.source_tokens.insert(src_id, token.clone());
 
