@@ -13,10 +13,15 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
+use dataflow_types::PeekResponse;
+use ore::collections::CollectionExt;
 use ore::thread::JoinOnDropHandle;
+use repr::{Datum, ScalarType};
 use sql::ast::{Raw, Statement};
 
-use crate::command::{Cancelled, Command, ExecuteResponse, Response, StartupResponse};
+use crate::command::{
+    Cancelled, Command, ExecuteResponse, Response, SimpleExecuteResponse, StartupResponse,
+};
 use crate::error::CoordError;
 use crate::id_alloc::IdAllocator;
 use crate::session::{EndTransactionAction, Session};
@@ -265,6 +270,111 @@ impl SessionClient {
     pub async fn dump_catalog(&mut self) -> Result<String, CoordError> {
         self.send(|tx, session| Command::DumpCatalog { session, tx })
             .await
+    }
+
+    /// Executes a SQL statement using a simple protocol that does not involve
+    /// portals.
+    ///
+    /// The standard flow for executing a SQL statement requires parsing the
+    /// statement, binding it into a portal, and then executing that portal.
+    /// This function is a wrapper around that complexity with a simpler
+    /// interface. The provided `stmt` is executed directly, and its results
+    /// are returned as a vector of rows, where each row is a vector of JSON
+    /// objects.
+    pub async fn simple_execute(
+        &mut self,
+        stmt: &str,
+    ) -> Result<SimpleExecuteResponse, CoordError> {
+        // Convert most floats to a JSON Number. JSON Numbers don't support NaN or
+        // Infinity, so those will still be rendered as strings.
+        fn float_to_json(f: f64) -> serde_json::Value {
+            match serde_json::Number::from_f64(f) {
+                Some(n) => serde_json::Value::Number(n),
+                None => serde_json::Value::String(f.to_string()),
+            }
+        }
+
+        let stmts = sql::parse::parse(&stmt).map_err(|e| CoordError::Unstructured(e.into()))?;
+        if stmts.len() != 1 {
+            coord_bail!("expected exactly 1 statement");
+        }
+        let stmt = stmts.into_element();
+
+        self.session().start_transaction();
+
+        const EMPTY_PORTAL: &str = "";
+        let params = vec![];
+        self.declare(EMPTY_PORTAL.into(), stmt, params).await?;
+        let desc = self
+            .session()
+            .get_portal(EMPTY_PORTAL)
+            .map(|portal| portal.desc.clone())
+            .expect("unnamed portal should be present");
+        if !desc.param_types.is_empty() {
+            coord_bail!("parameters are not supported");
+        }
+
+        let res = self.execute(EMPTY_PORTAL.into()).await?;
+
+        let rows = match res {
+            ExecuteResponse::SendingRows(rows) => {
+                let response = rows.await;
+                response
+            }
+            _ => coord_bail!("unsupported statement type"),
+        };
+        let rows = match rows {
+            PeekResponse::Rows(rows) => rows,
+            PeekResponse::Error(e) => coord_bail!("{}", e),
+            PeekResponse::Canceled => coord_bail!("execution canceled"),
+        };
+        let mut sql_rows: Vec<Vec<serde_json::Value>> = vec![];
+        let (col_names, col_types) = match desc.relation_desc {
+            Some(desc) => (
+                desc.iter_names()
+                    .map(|name| name.map(|name| name.to_string()))
+                    .collect(),
+                desc.typ().column_types.clone(),
+            ),
+            None => (vec![], vec![]),
+        };
+        for row in rows {
+            let datums = row.unpack();
+            sql_rows.push(
+                datums
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, datum)| match datum {
+                        // Convert some common things to a native JSON value. This doesn't need to be
+                        // too exhaustive because the SQL-over-HTTP interface is currently not hooked
+                        // up to arbitrary external user queries.
+                        Datum::Null | Datum::JsonNull => serde_json::Value::Null,
+                        Datum::False => serde_json::Value::Bool(false),
+                        Datum::True => serde_json::Value::Bool(true),
+                        Datum::Int32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+                        Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+                        Datum::Float32(n) => float_to_json(n.into_inner() as f64),
+                        Datum::Float64(n) => float_to_json(n.into_inner()),
+                        Datum::String(s) => serde_json::Value::String(s.to_string()),
+                        Datum::Decimal(d) => serde_json::Value::String(if col_types.len() > idx {
+                            match col_types[idx].scalar_type {
+                                ScalarType::Decimal(_precision, scale) => {
+                                    d.with_scale(scale).to_string()
+                                }
+                                _ => datum.to_string(),
+                            }
+                        } else {
+                            datum.to_string()
+                        }),
+                        _ => serde_json::Value::String(datum.to_string()),
+                    })
+                    .collect(),
+            );
+        }
+        Ok(SimpleExecuteResponse {
+            rows: sql_rows,
+            col_names,
+        })
     }
 
     /// Terminates this client session.

@@ -1972,7 +1972,6 @@ dependencies = [
  "sha2",
  "shell-words",
  "sql",
- "sql-parser",
  "structopt",
  "sysctl",
  "sysinfo",
