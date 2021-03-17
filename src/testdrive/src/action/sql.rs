@@ -21,7 +21,7 @@ use tokio_postgres::types::{FromSql, Type};
 
 use coord::catalog::Catalog;
 use ore::collections::CollectionExt;
-use ore::retry;
+use ore::retry::Retry;
 use pgrepr::{Interval, Jsonb, Numeric};
 use sql_parser::ast::{
     CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement, CreateTableStatement,
@@ -102,30 +102,32 @@ impl Action for SqlAction {
         print_query(&query);
 
         let pgclient = &state.pgclient;
-        retry::retry_for(self.sql_context.timeout, |retry_state| async move {
-            match self.try_redo(pgclient, &query).await {
-                Ok(()) => {
-                    if retry_state.i != 0 {
-                        println!();
+        Retry::default()
+            .max_duration(self.sql_context.timeout)
+            .retry(|retry_state| async move {
+                match self.try_redo(pgclient, &query).await {
+                    Ok(()) => {
+                        if retry_state.i != 0 {
+                            println!();
+                        }
+                        println!("rows match; continuing");
+                        Ok(())
                     }
-                    println!("rows match; continuing");
-                    Ok(())
+                    Err(e) => {
+                        if retry_state.i == 0 {
+                            print!("rows didn't match; sleeping to see if dataflow catches up");
+                        }
+                        if let Some(backoff) = retry_state.next_backoff {
+                            print!(" {:?}", backoff);
+                            io::stdout().flush().unwrap();
+                        } else {
+                            println!();
+                        }
+                        Err(e)
+                    }
                 }
-                Err(e) => {
-                    if retry_state.i == 0 {
-                        print!("rows didn't match; sleeping to see if dataflow catches up");
-                    }
-                    if let Some(backoff) = retry_state.next_backoff {
-                        print!(" {:?}", backoff);
-                        io::stdout().flush().unwrap();
-                    } else {
-                        println!();
-                    }
-                    Err(e)
-                }
-            }
-        })
-        .await?;
+            })
+            .await?;
 
         if let Some(path) = &state.materialized_catalog_path {
             match self.stmt {
@@ -294,7 +296,9 @@ impl Action for FailSqlAction {
         print_query(&query);
 
         let pgclient = &state.pgclient;
-        retry::retry_for(self.sql_context.timeout, |retry_state| async move {
+        Retry::default()
+            .max_duration(self.sql_context.timeout)
+            .retry(|retry_state| async move {
             match self.try_redo(pgclient, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {

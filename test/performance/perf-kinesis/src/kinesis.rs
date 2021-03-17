@@ -20,7 +20,7 @@ use rusoto_kinesis::{
     PutRecordsError, PutRecordsInput, PutRecordsRequestEntry,
 };
 
-use ore::retry;
+use ore::retry::Retry;
 use test_util::generator;
 
 const DUMMY_PARTITION_KEY: &str = "dummy";
@@ -42,27 +42,29 @@ pub async fn create_stream(
         .await
         .context("creating Kinesis stream")?;
 
-    let stream_arn = retry::retry_for(Duration::from_secs(120), |_| async {
-        let description = &kinesis_client
-            .describe_stream(DescribeStreamInput {
-                exclusive_start_shard_id: None,
-                limit: None,
-                stream_name: stream_name.to_string(),
-            })
-            .await
-            .context("describing Kinesis stream")?
-            .stream_description;
-        match description.stream_status.as_ref() {
-            ACTIVE => Ok(description.stream_arn.clone()),
-            other_status => Err(anyhow::Error::msg(format!(
-                "Stream {} is not yet ACTIVE, is {}",
-                stream_name.to_string(),
-                other_status
-            ))),
-        }
-    })
-    .await
-    .context("Kinesis stream never became ACTIVE")?;
+    let stream_arn = Retry::default()
+        .max_duration(Duration::from_secs(120))
+        .retry(|_| async {
+            let description = &kinesis_client
+                .describe_stream(DescribeStreamInput {
+                    exclusive_start_shard_id: None,
+                    limit: None,
+                    stream_name: stream_name.to_string(),
+                })
+                .await
+                .context("describing Kinesis stream")?
+                .stream_description;
+            match description.stream_status.as_ref() {
+                ACTIVE => Ok(description.stream_arn.clone()),
+                other_status => Err(anyhow::Error::msg(format!(
+                    "Stream {} is not yet ACTIVE, is {}",
+                    stream_name.to_string(),
+                    other_status
+                ))),
+            }
+        })
+        .await
+        .context("Kinesis stream never became ACTIVE")?;
 
     Ok(stream_arn)
 }
