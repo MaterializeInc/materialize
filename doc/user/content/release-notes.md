@@ -46,6 +46,11 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.7.2 %}}
+
+- Add the [`jsonb_object_agg`](/sql/functions/jsonb_object_agg) function to
+  aggregate rows into a JSON object.
+
 {{% version-header v0.7.1 %}}
 
 - **Breaking change.** Change the default

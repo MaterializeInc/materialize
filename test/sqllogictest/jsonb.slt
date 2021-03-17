@@ -1900,3 +1900,50 @@ query TTT
 SELECT jsonb_agg((a, b)), jsonb_agg(a), jsonb_agg(b) FROM t2
 ----
 [{"f1":null,"f2":"2020-01-02"},{"f1":1.0,"f2":"2020-01-01"}] [null,1.0] ["2020-01-01","2020-01-02"]
+
+# jsonb_object_agg
+
+query T
+SELECT jsonb_object_agg(k, v) FROM (SELECT 1 AS k, 2 AS V WHERE false)
+----
+NULL
+
+query T
+SELECT jsonb_object_agg('one', 2)
+----
+{"one":2.0}
+
+query T
+SELECT jsonb_object_agg(1, 2)
+----
+{"1":2.0}
+
+query T
+SELECT jsonb_object_agg(k, v) FROM (SELECT a - 1 AS k, a AS v from t1 where a IS NOT NULL)
+----
+{"0":1.0,"1":2.0,"2":3.0}
+
+query T
+SELECT jsonb_object_agg(column1, column2) FROM (VALUES ('a', null), ('b', 1))
+----
+{"a":null,"b":1.0}
+
+query T
+SELECT jsonb_object_agg(column1, column2) FROM (VALUES ('b', 2), ('a', 1))
+----
+{"a":1.0,"b":2.0}
+
+query T
+SELECT jsonb_object_agg(column1, column2) FROM (VALUES ('a', 1), ('a', 2))
+----
+{"a":1.0}
+
+query T
+SELECT jsonb_object_agg(null, null)
+----
+{}
+
+query T
+SELECT jsonb_object_agg(a, a) FILTER (WHERE a IS NOT NULL) FROM t1
+----
+{"1":1.0,"2":2.0,"3":3.0}

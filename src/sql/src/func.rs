@@ -1769,6 +1769,19 @@ lazy_static! {
                     Ok((e, AggregateFunc::JsonbAgg))
                 }), 3267;
             },
+            "jsonb_object_agg" => Aggregate {
+                params!(Any, Any) => Operation::binary(|ecx, key, val| {
+                    let key = typeconv::to_string(ecx, key);
+                    let val = typeconv::to_jsonb(ecx, val);
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("key"), ColumnName::from("val")],
+                        },
+                        exprs: vec![key, val],
+                    };
+                    Ok((e, AggregateFunc::JsonbObjectAgg))
+                }), 3267;
+            },
             "string_agg" => Aggregate {
                 params!(Any, String) => Operation::binary(|_ecx, _lhs, _rhs| unsupported!("string_agg")), 3538;
             },

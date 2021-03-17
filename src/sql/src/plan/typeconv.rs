@@ -428,7 +428,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
     use ScalarType::*;
 
     match ecx.scalar_type(&expr) {
-        Bool => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
+        Bool | Jsonb => expr.call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
         Int32 | Int64 | Float32 | Float64 | Decimal(..) => {
             plan_cast("to_jsonb", ecx, CastContext::Explicit, expr, &Float64)
                 .expect("cast known to exist")
@@ -451,7 +451,6 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
                 exprs,
             }
         }
-        Jsonb => expr,
         _ => to_string(ecx, expr).call_unary(UnaryFunc::CastJsonbOrNullToJsonb),
     }
 }

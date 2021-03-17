@@ -393,6 +393,8 @@ pub enum AggregateFunc {
     /// layer, this function filters out `Datum::Null`, for consistency with
     /// the other aggregate functions.
     JsonbAgg,
+    /// Aggregates pairs of JSON-typed `Datum`s into a JSON object.
+    JsonbObjectAgg,
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -433,6 +435,7 @@ impl AggregateFunc {
             AggregateFunc::Any => expr::AggregateFunc::Any,
             AggregateFunc::All => expr::AggregateFunc::All,
             AggregateFunc::JsonbAgg => expr::AggregateFunc::JsonbAgg,
+            AggregateFunc::JsonbObjectAgg => expr::AggregateFunc::JsonbObjectAgg,
             AggregateFunc::Dummy => expr::AggregateFunc::Dummy,
         }
     }
@@ -459,6 +462,7 @@ impl AggregateFunc {
             AggregateFunc::Any => ScalarType::Bool,
             AggregateFunc::All => ScalarType::Bool,
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
+            AggregateFunc::JsonbObjectAgg => ScalarType::Jsonb,
             AggregateFunc::SumInt32 => ScalarType::Int64,
             AggregateFunc::SumInt64 => {
                 ScalarType::Decimal(repr::adt::decimal::MAX_DECIMAL_PRECISION, 0)
