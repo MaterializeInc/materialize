@@ -46,6 +46,14 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.7.2 %}}
+
+- Add the [`pg_postmaster_start_time`](/sql/functions#postgresql-compatibility-func)
+  function, which reports the time at which the server started.
+
+- Add the [`mz_uptime`](/sql/functions#system-information-func)
+  function, which reports the duration for which the server has been running.
+
 {{% version-header v0.7.1 %}}
 
 - **Breaking change.** Change the default
