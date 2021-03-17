@@ -887,6 +887,10 @@ pub enum EvalError {
         byte_sequence: String,
         encoding_name: String,
     },
+    InvalidJsonbCast {
+        from: String,
+        to: String,
+    },
     InvalidRegex(String),
     InvalidRegexFlag(char),
     InvalidParameterValue(String),
@@ -922,6 +926,9 @@ impl fmt::Display for EvalError {
                 c.escape_default()
             ),
             EvalError::InvalidBase64EndSequence => f.write_str("invalid base64 end sequence"),
+            EvalError::InvalidJsonbCast { from, to } => {
+                write!(f, "cannot cast jsonb {} to type {}", from, to)
+            }
             EvalError::InvalidTimezone(tz) => write!(f, "invalid time zone '{}'", tz),
             EvalError::InvalidTimezoneInterval => {
                 f.write_str("timezone interval must not contain months or years")

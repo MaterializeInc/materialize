@@ -346,6 +346,7 @@ impl<'a> Datum<'a> {
                     Datum::JsonNull
                     | Datum::False
                     | Datum::True
+                    | Datum::Int64(_)
                     | Datum::Float64(_)
                     | Datum::String(_) => true,
                     Datum::List(list) => list

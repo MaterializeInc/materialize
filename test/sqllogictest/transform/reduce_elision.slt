@@ -15,4 +15,4 @@ select (select sum(1) from (select c) group by c) from (select 1 as c)
 query T
 select (select jsonb_agg(1) from (select c) group by c) from (select 1 as c)
 ----
-[1.0]
+[1]

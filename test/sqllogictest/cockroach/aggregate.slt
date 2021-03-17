@@ -103,7 +103,7 @@ SELECT json_agg(1)
 query T
 SELECT jsonb_agg(1)
 ----
-[1.0]
+[1]
 
 # Some aggregate functions are not normalized to NULL when given a NULL
 # argument.
@@ -186,7 +186,7 @@ SELECT json_agg(1) FROM kv
 query T
 SELECT jsonb_agg(1) FROM kv
 ----
-[1.0,1.0,1.0,1.0,1.0,1.0]
+[1,1,1,1,1,1]
 
 # Even with no aggregate functions, grouping occurs in the presence of GROUP BY.
 query I rowsort
