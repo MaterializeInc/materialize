@@ -74,6 +74,10 @@ struct Args {
     #[structopt(long, default_value = "10")]
     default_timeout: f64,
 
+    /// A random number to distinguish each TestDrive run.
+    #[structopt(long)]
+    seed: Option<u32>,
+
     // === Positional arguments. ===
     /// Paths to testdrive scripts to run.
     files: Vec<String>,
@@ -159,6 +163,7 @@ async fn run(args: Args) -> Result<(), Error> {
         reset_materialized: !args.no_reset,
         ci_output: args.ci_output,
         default_timeout,
+        seed: args.seed,
     };
 
     if args.files.is_empty() {
