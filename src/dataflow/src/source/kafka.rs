@@ -652,7 +652,11 @@ struct GlueConsumerContext(SyncActivator);
 
 impl ClientContext for GlueConsumerContext {
     fn stats(&self, statistics: Statistics) {
-        info!("Client stats: {:#?}", statistics);
+        info!(
+            "Client stats: name={}, tx={}, tx_bytes={}, rx={}, rx_bytes={}",
+            statistics.name, statistics.tx, statistics.tx_bytes, statistics.rx, statistics.rx_bytes,
+        );
+        // info!("Client stats: {:#?}", statistics);
     }
 }
 
