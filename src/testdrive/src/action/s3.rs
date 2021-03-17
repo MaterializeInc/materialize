@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::collections::HashMap;
 use std::default::Default;
 use std::io::Write;
@@ -142,7 +143,7 @@ pub struct AddBucketNotifications {
     bucket_prefix: String,
 
     sqs_test_prefix: String,
-    sqs_validation_timeout: Duration,
+    sqs_validation_timeout: Option<Duration>,
 }
 
 pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotifications, String> {
@@ -169,8 +170,7 @@ pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotif
         .args
         .opt_string("sqs-validation-timeout")
         .map(|t| parse_duration::parse(&t).map_err(|e| e.to_string()))
-        .transpose()?
-        .unwrap_or_else(|| Duration::from_secs(120));
+        .transpose()?;
 
     cmd.args.done()?;
 
@@ -290,6 +290,10 @@ impl Action for AddBucketNotifications {
                 )
             })?;
 
+        let sqs_validation_timeout = self
+            .sqs_validation_timeout
+            .unwrap_or_else(|| cmp::max(state.default_timeout, Duration::from_secs(120)));
+
         // Wait until we are sure that the configuration has taken effect
         //
         // AWS doesn't specify anywhere how long it should take for
@@ -301,10 +305,10 @@ impl Action for AddBucketNotifications {
         let mut success = false;
         print!(
             "Verifying SQS notification configuration for up to {:?}",
-            self.sqs_validation_timeout
+            sqs_validation_timeout
         );
         let start = Instant::now();
-        while start.elapsed() < self.sqs_validation_timeout {
+        while start.elapsed() < sqs_validation_timeout {
             state
                 .s3_client
                 .put_object(PutObjectRequest {

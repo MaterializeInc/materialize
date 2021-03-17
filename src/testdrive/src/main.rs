@@ -70,6 +70,10 @@ struct Args {
     #[structopt(long)]
     ci_output: bool,
 
+    /// Default timeout in seconds.
+    #[structopt(long, default_value = "10")]
+    default_timeout: f64,
+
     // === Positional arguments. ===
     /// Paths to testdrive scripts to run.
     files: Vec<String>,
@@ -88,6 +92,8 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), Error> {
+    let default_timeout = Duration::from_secs_f64(args.default_timeout);
+
     let (aws_region, aws_account, aws_credentials) =
         match (args.aws_region.parse(), args.aws_endpoint) {
             (Ok(region), None) => {
@@ -95,14 +101,13 @@ async fn run(args: Args) -> Result<(), Error> {
                 // or not it was provided.
                 let region: rusoto_core::Region = region;
 
-                let timeout = Duration::from_secs(5);
                 let mut provider = ChainProvider::new();
-                provider.set_timeout(timeout);
+                provider.set_timeout(default_timeout);
                 let credentials = provider
                     .credentials()
                     .await
                     .err_ctx("Retrieving aws credentials")?;
-                let account = aws::account(provider, region.clone(), timeout)
+                let account = aws::account(provider, region.clone(), default_timeout)
                     .await
                     .err_ctx("getting AWS account details")?;
                 (region, account, credentials)
@@ -153,6 +158,7 @@ async fn run(args: Args) -> Result<(), Error> {
         materialized_catalog_path: args.validate_catalog,
         reset_materialized: !args.no_reset,
         ci_output: args.ci_output,
+        default_timeout,
     };
 
     if args.files.is_empty() {
