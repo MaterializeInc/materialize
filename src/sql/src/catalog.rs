@@ -161,6 +161,8 @@ pub struct CatalogConfig {
     pub cache_directory: Option<PathBuf>,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
+    /// The number of worker in use by the server.
+    pub num_workers: usize,
 }
 
 /// A database in a [`Catalog`].
@@ -339,6 +341,7 @@ lazy_static! {
         experimental_mode: false,
         cache_directory: None,
         build_info: &DUMMY_BUILD_INFO,
+        num_workers: 0,
     };
 }
 
