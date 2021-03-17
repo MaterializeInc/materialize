@@ -471,6 +471,7 @@ impl Catalog {
                 session_id: Uuid::new_v4(),
                 cache_directory: config.cache_directory.clone(),
                 build_info: config.build_info,
+                num_workers: config.num_workers,
             },
         };
         let mut events = vec![];
@@ -765,6 +766,7 @@ impl Catalog {
             experimental_mode: None,
             cache_directory: None,
             build_info: &DUMMY_BUILD_INFO,
+            num_workers: 0,
         })?;
         Ok(catalog)
     }

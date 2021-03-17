@@ -26,4 +26,6 @@ pub struct Config<'a> {
     pub cache_directory: Option<PathBuf>,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
+    /// The number of workers in use by the server.
+    pub num_workers: usize,
 }
