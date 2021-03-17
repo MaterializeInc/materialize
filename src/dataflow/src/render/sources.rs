@@ -335,8 +335,7 @@ where
                 };
 
                 // Introduce the stream by name, as an unarranged collection.
-                self.collections
-                    .insert(get.clone(), (collection, err_collection));
+                self.collections.insert(get, (collection, err_collection));
 
                 let token = Rc::new(capability);
                 self.source_tokens.insert(src_id, token.clone());
