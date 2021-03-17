@@ -261,7 +261,8 @@ pub async fn serve(
     if let Some(telemetry_url) = config.telemetry_url {
         tokio::spawn(version_check::check_version_loop(
             telemetry_url,
-            coord_handle.cluster_id().to_string(),
+            coord_handle.cluster_id(),
+            coord_handle.session_id(),
             start_time,
         ));
     }
