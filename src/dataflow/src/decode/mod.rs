@@ -217,8 +217,28 @@ pub(crate) fn get_decoder(
     encoding: DataEncoding,
     debug_name: &str,
     worker_index: usize,
+    envelope: &SourceEnvelope,
+    desc: Option<&RelationDesc>,
 ) -> Box<dyn DecoderState> {
     let avro_err = "Failed to create Avro decoder";
+    let (dedupe_strat, dbz_key_indices, envelope_type) = match (&encoding, envelope) {
+        (DataEncoding::Avro(val_enc), SourceEnvelope::Debezium(ds)) => {
+            if let Some(desc) = desc {
+                let dbz_key_indices = find_dbz_key_indices(desc, val_enc.key_schema.as_deref());
+                (
+                    Some(*ds),
+                    dbz_key_indices,
+                    interchange::avro::EnvelopeType::Debezium,
+                )
+            } else {
+                panic!(
+                    "missing relationdesc for debezium source: {} {:?}",
+                    debug_name, encoding
+                );
+            }
+        }
+        _ => (None, None, interchange::avro::EnvelopeType::Upsert),
+    };
     match encoding {
         DataEncoding::Protobuf(enc) => Box::new(protobuf::ProtobufDecoderState::new(
             &enc.descriptors,
@@ -228,12 +248,12 @@ pub(crate) fn get_decoder(
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
                 val_enc.schema_registry_config,
-                interchange::avro::EnvelopeType::Upsert,
+                envelope_type,
                 false,
                 format!("{}-values", debug_name),
                 worker_index,
-                None,
-                None,
+                dedupe_strat,
+                dbz_key_indices,
                 val_enc.confluent_wire_format,
             )
             .expect(avro_err),
@@ -407,20 +427,7 @@ where
         }
         (DataEncoding::Avro(enc), SourceEnvelope::Debezium(ds)) => {
             let dedup_strat = *ds;
-            let fields = match &desc.typ().column_types[0].scalar_type {
-                ScalarType::Record { fields, .. } => fields.clone(),
-                _ => unreachable!(),
-            };
-            let row_desc =
-                RelationDesc::from_names_and_types(fields.into_iter().map(|(n, t)| (Some(n), t)));
-            let dbz_key_indices = enc.key_schema.as_ref().and_then(|key_schema| {
-                interchange::avro::validate_key_schema(key_schema, &row_desc)
-                    .map(Some)
-                    .unwrap_or_else(|e| {
-                        warn!("Not using key due to error: {}", e);
-                        None
-                    })
-            });
+            let dbz_key_indices = find_dbz_key_indices(&desc, enc.key_schema.as_deref());
             (
                 decode_values_inner(
                     stream,
@@ -502,4 +509,22 @@ where
             unreachable!("Internal error: postgres sources are never decoded");
         }
     }
+}
+
+fn find_dbz_key_indices(desc: &RelationDesc, key_schema: Option<&str>) -> Option<Vec<usize>> {
+    let fields = match &desc.typ().column_types[0].scalar_type {
+        ScalarType::Record { fields, .. } => fields.clone(),
+        _ => unreachable!(),
+    };
+    let row_desc =
+        RelationDesc::from_names_and_types(fields.into_iter().map(|(n, t)| (Some(n), t)));
+    let dbz_key_indices = key_schema.and_then(|key_schema| {
+        interchange::avro::validate_key_schema(key_schema, &row_desc)
+            .map(Some)
+            .unwrap_or_else(|e| {
+                warn!("Not using key due to error: {}", e);
+                None
+            })
+    });
+    dbz_key_indices
 }
