@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::iter;
 use std::path::PathBuf;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
@@ -1225,11 +1225,7 @@ pub fn plan_create_sink(
     let from = scx.resolve_item(from)?;
     let suffix_nonce = format!(
         "{}-{}",
-        scx.catalog
-            .config()
-            .startup_time
-            .duration_since(UNIX_EPOCH)?
-            .as_secs(),
+        scx.catalog.config().start_time.timestamp(),
         scx.catalog.config().nonce
     );
 

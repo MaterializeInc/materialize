@@ -13,8 +13,11 @@
 
 use std::fmt;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::Instant;
 use std::{error::Error, unimplemented};
+
+use chrono::{DateTime, Utc, MIN_DATETIME};
+use lazy_static::lazy_static;
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
@@ -139,10 +142,9 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
 #[derive(Debug, Clone)]
 pub struct CatalogConfig {
     /// Returns the time at which the catalog booted.
-    ///
-    /// NOTE(benesch): this is only necessary for producing unique Kafka sink
-    /// topics. Perhaps we can remove this when #2915 is complete.
-    pub startup_time: SystemTime,
+    pub start_time: DateTime<Utc>,
+    /// Returns the instant at which the catalog booted.
+    pub start_instant: Instant,
     /// A random integer associated with this instance of the catalog.
     ///
     /// NOTE(benesch): this is only necessary for producing unique Kafka sink
@@ -327,15 +329,18 @@ impl Error for CatalogError {}
 #[derive(Debug)]
 pub struct DummyCatalog;
 
-const DUMMY_CONFIG: CatalogConfig = CatalogConfig {
-    startup_time: SystemTime::UNIX_EPOCH,
-    nonce: 0,
-    cluster_id: Uuid::from_u128(0),
-    session_id: Uuid::from_u128(0),
-    experimental_mode: false,
-    cache_directory: None,
-    build_info: &DUMMY_BUILD_INFO,
-};
+lazy_static! {
+    static ref DUMMY_CONFIG: CatalogConfig = CatalogConfig {
+        start_time: MIN_DATETIME,
+        start_instant: Instant::now(),
+        nonce: 0,
+        cluster_id: Uuid::from_u128(0),
+        session_id: Uuid::from_u128(0),
+        experimental_mode: false,
+        cache_directory: None,
+        build_info: &DUMMY_BUILD_INFO,
+    };
+}
 
 impl Catalog for DummyCatalog {
     fn search_path(&self, _: bool) -> Vec<&str> {
