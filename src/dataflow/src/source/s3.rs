@@ -26,7 +26,7 @@ use rusoto_sqs::{
     ChangeMessageVisibilityBatchRequest, ChangeMessageVisibilityBatchRequestEntry,
     DeleteMessageRequest, GetQueueUrlRequest, ReceiveMessageRequest, Sqs,
 };
-use timely::scheduling::{Activator, SyncActivator};
+use timely::scheduling::SyncActivator;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio::time::{self, Duration};
@@ -677,11 +677,7 @@ async fn download_object(
 }
 
 impl SourceInfo<Vec<u8>> for S3SourceInfo {
-    fn get_next_message(
-        &mut self,
-        _consistency_info: &mut ConsistencyInfo,
-        _activator: &Activator,
-    ) -> Result<NextMessage<Out>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(InternalMessage { record })) => {
                 self.offset += 1;

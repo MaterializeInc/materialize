@@ -17,7 +17,7 @@ use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
 use inotify::{Inotify, WatchMask};
 use log::error;
-use timely::scheduling::{Activator, SyncActivator};
+use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
     AvroOcfEncoding, Compression, DataEncoding, ExternalSourceConnector, MzOffset,
@@ -200,11 +200,7 @@ impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
         log::debug!("update_partition_count erroneously called for file sources");
     }
 
-    fn get_next_message(
-        &mut self,
-        _consistency_info: &mut ConsistencyInfo,
-        _activator: &Activator,
-    ) -> Result<NextMessage<Out>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(record)) => {
                 self.current_file_offset.offset += 1;

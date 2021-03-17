@@ -297,11 +297,7 @@ pub(crate) trait SourceInfo<Out> {
     // source reading
 
     /// Returns the next message read from the source
-    fn get_next_message(
-        &mut self,
-        consistency_info: &mut ConsistencyInfo,
-        activator: &Activator,
-    ) -> Result<NextMessage<Out>, anyhow::Error>;
+    fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error>;
 
     // caching
 
@@ -330,6 +326,7 @@ pub(crate) trait SourceInfo<Out> {
 pub(crate) enum NextMessage<Out> {
     Ready(SourceMessage<Out>),
     Pending,
+    TransientDelay,
     Finished,
 }
 
@@ -997,7 +994,7 @@ where
                         &mut buffer,
                     )
                 } else {
-                    match source_info.get_next_message(&mut consistency_info, &activator) {
+                    match source_info.get_next_message() {
                         Ok(NextMessage::Ready(message)) => handle_message(
                             message,
                             &mut predecessor,
@@ -1013,6 +1010,10 @@ where
                             &timer,
                             &mut buffer,
                         ),
+                        Ok(NextMessage::TransientDelay) => {
+                            // There was a temporary hiccup in getting messages, check again asap.
+                            (SourceStatus::Alive, MessageProcessing::Yielded)
+                        }
                         Ok(NextMessage::Pending) => {
                             // There were no new messages, check again after a delay
                             (SourceStatus::Alive, MessageProcessing::YieldedWithDelay)
