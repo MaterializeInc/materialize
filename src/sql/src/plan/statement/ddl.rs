@@ -1089,6 +1089,7 @@ fn kafka_sink_builder(
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     topic_suffix_nonce: String,
+    root_dependencies: &[&dyn CatalogItem],
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let (schema_registry_url, ccsr_with_options) = match format {
         Some(Format::Avro(AvroSchema::CsrUrl {
@@ -1120,6 +1121,24 @@ fn kafka_sink_builder(
 
     if exactly_once && !include_consistency {
         bail!("exactly-once requires a consistency topic");
+    }
+
+    if exactly_once {
+        for item in root_dependencies.iter() {
+            if item.item_type() == CatalogItemType::Source
+                && !item.source_connector()?.yields_stable_input()
+            {
+                bail!(
+                    "all input sources of an exactly-once Kafka sink must be replayable, {} is not",
+                    item.name()
+                );
+            } else if item.item_type() != CatalogItemType::Source {
+                bail!(
+                    "all inputs of an exactly-once Kafka sink must be sources, {} is not",
+                    item.name()
+                );
+            };
+        }
     }
 
     let encoder = Encoder::new(
@@ -1319,6 +1338,11 @@ pub fn plan_create_sink(
         bail!("CREATE SINK ... AS OF is no longer supported");
     }
 
+    let mut depends_on = vec![from.id()];
+    depends_on.extend(from.uses());
+
+    let root_user_dependencies = get_root_dependencies(scx, &depends_on);
+
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
         Connector::Kafka { broker, topic, .. } => kafka_sink_builder(
@@ -1329,6 +1353,7 @@ pub fn plan_create_sink(
             key_desc_and_indices,
             value_desc,
             suffix_nonce,
+            &root_user_dependencies,
         )?,
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
         Connector::AvroOcf { path } => {
@@ -1345,8 +1370,6 @@ pub fn plan_create_sink(
             with_options.keys().join(",")
         )
     }
-    let mut depends_on = vec![from.id()];
-    depends_on.extend(from.uses());
 
     Ok(Plan::CreateSink {
         name,
@@ -1360,6 +1383,35 @@ pub fn plan_create_sink(
         if_not_exists,
         depends_on,
     })
+}
+
+/// Returns only those `CatalogItem`s that don't have any other user
+/// dependencies. Those are the root dependencies.
+fn get_root_dependencies<'a>(
+    scx: &'a StatementContext,
+    depends_on: &[GlobalId],
+) -> Vec<&'a dyn CatalogItem> {
+    let mut result = Vec::new();
+    let mut work_queue: Vec<&GlobalId> = Vec::new();
+    let mut visited = HashSet::new();
+    work_queue.extend(depends_on.iter().filter(|id| id.is_user()));
+
+    while let Some(dep) = work_queue.pop() {
+        let item = scx.get_item_by_id(&dep);
+        let transitive_uses = item.uses().iter().filter(|id| id.is_user());
+        let mut transitive_uses = transitive_uses.peekable();
+        if let Some(_) = transitive_uses.peek() {
+            for transitive_dep in transitive_uses {
+                if visited.insert(transitive_dep) {
+                    work_queue.push(transitive_dep);
+                }
+            }
+        } else {
+            // no transitive uses, so we must be a root dependency
+            result.push(item);
+        }
+    }
+    result
 }
 
 pub fn describe_create_index(
