@@ -28,7 +28,6 @@ pub enum LogVariant {
     Timely(TimelyLog),
     Differential(DifferentialLog),
     Materialized(MaterializedLog),
-    RDKafkaLog(RDKafkaLog),
 }
 
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
@@ -53,13 +52,10 @@ pub enum MaterializedLog {
     DataflowCurrent,
     DataflowDependency,
     FrontierCurrent,
+    KafkaConsumerInfo,
     PeekCurrent,
     PeekDuration,
     SourceInfo,
-}
-#[derive(Hash, Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
-pub enum RDKafkaLog {
-    ConsumerStatistics,
 }
 
 impl LogVariant {
@@ -167,6 +163,16 @@ impl LogVariant {
                 .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false)),
 
+            LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo) => RelationDesc::empty()
+                .with_column("source_name", ScalarType::String.nullable(false))
+                .with_column("source_id", ScalarType::String.nullable(false))
+                .with_column("consumer_name", ScalarType::String.nullable(false))
+                .with_column("rx", ScalarType::Int64.nullable(false))
+                .with_column("rx_bytes", ScalarType::Int64.nullable(false))
+                .with_column("tx", ScalarType::Int64.nullable(false))
+                .with_column("tx_bytes", ScalarType::Int64.nullable(false))
+                .with_key(vec![0, 1, 2]),
+
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
                 .with_column("uuid", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false))
@@ -179,16 +185,6 @@ impl LogVariant {
                 .with_column("duration_ns", ScalarType::Int64.nullable(false))
                 .with_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1]),
-
-            LogVariant::RDKafkaLog(RDKafkaLog::ConsumerStatistics) => RelationDesc::empty()
-                .with_column("source_name", ScalarType::String.nullable(false))
-                .with_column("source_id", ScalarType::String.nullable(false))
-                .with_column("consumer_name", ScalarType::String.nullable(false))
-                .with_column("rx", ScalarType::Int64.nullable(false))
-                .with_column("rx_bytes", ScalarType::Int64.nullable(false))
-                .with_column("tx", ScalarType::Int64.nullable(false))
-                .with_column("tx_bytes", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1, 2]),
         }
     }
 
@@ -234,13 +230,13 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => vec![],
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => vec![],
-            LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
-            LogVariant::Materialized(MaterializedLog::SourceInfo) => vec![],
-            LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],
-            LogVariant::RDKafkaLog(RDKafkaLog::ConsumerStatistics) => vec![(
+            LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo) => vec![(
                 LogVariant::Materialized(MaterializedLog::SourceInfo),
                 vec![(0, 0), (1, 1)],
             )],
+            LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
+            LogVariant::Materialized(MaterializedLog::SourceInfo) => vec![],
+            LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],
         }
     }
 }

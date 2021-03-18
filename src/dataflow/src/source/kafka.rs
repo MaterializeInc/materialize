@@ -34,11 +34,22 @@ use repr::{CachedRecord, CachedRecordIter, Timestamp};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
+use crate::logging::materialized::{Logger, MaterializedEvent};
+use crate::server::CacheMessage;
 use crate::source::cache::{RecordFileMetadata, WorkerCacheData};
 use crate::source::{
     ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
 };
-use crate::{logging::materialized::Logger, server::CacheMessage};
+
+/// Values recorded from the last rdkafka statistics callback, used to generate a
+/// diff of values for logging
+pub struct PreviousStats {
+    consumer_name: Option<String>,
+    rx: i64,
+    rx_bytes: i64,
+    tx: i64,
+    tx_bytes: i64,
+}
 
 /// Contains all information necessary to ingest data from Kafka
 pub struct KafkaSourceInfo {
@@ -62,6 +73,10 @@ pub struct KafkaSourceInfo {
     cached_files: Vec<PathBuf>,
     /// Timely worker logger for source events
     logger: Option<Logger>,
+    /// Channel to receive Kafka statistics objects from the stats callback
+    stats_rx: crossbeam_channel::Receiver<Statistics>,
+    /// Memoized Statistics for a consumer
+    previous_stats: PreviousStats,
 }
 
 impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
@@ -154,6 +169,33 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
                     "unexpected receipt of kafka message from non-partitioned queue for source: {} topic: {} partition: {} offset: {}",
                     self.source_name, self.topic_name, m.partition(), m.offset()
                 ),
+            }
+        }
+
+        // Read any statistics objects generated via the GlueConsumerContext::stats callback
+        while let Ok(statistics) = self.stats_rx.try_recv() {
+            if let Some(logger) = self.logger.as_mut() {
+                // If this is the first callback, initialize our consumer name
+                // so that we can later retract this when the source is dropped
+                match self.previous_stats.consumer_name {
+                    None => self.previous_stats.consumer_name = Some(statistics.name.clone()),
+                    _ => (),
+                }
+
+                logger.log(MaterializedEvent::KafkaConsumerInfo {
+                    source_name: self.source_name.to_string(),
+                    source_id: self.id,
+                    consumer_name: statistics.name,
+                    rx: statistics.rx - self.previous_stats.rx,
+                    rx_bytes: statistics.rx_bytes - self.previous_stats.rx_bytes,
+                    tx: statistics.tx - self.previous_stats.tx,
+                    tx_bytes: statistics.tx_bytes - self.previous_stats.tx_bytes,
+                });
+
+                self.previous_stats.rx = statistics.rx;
+                self.previous_stats.rx_bytes = statistics.rx_bytes;
+                self.previous_stats.tx = statistics.tx;
+                self.previous_stats.tx_bytes = statistics.tx_bytes;
             }
         }
 
@@ -329,8 +371,12 @@ impl KafkaSourceInfo {
             cluster_id,
             &config_options,
         );
+        let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
         let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
-            .create_with_context(GlueConsumerContext(consumer_activator))
+            .create_with_context(GlueConsumerContext {
+                activator: consumer_activator,
+                stats_tx: stats_tx,
+            })
             .expect("Failed to create Kafka Consumer");
         let cached_files = kc
             .cached_files
@@ -385,6 +431,14 @@ impl KafkaSourceInfo {
             worker_count,
             cached_files,
             logger,
+            stats_rx,
+            previous_stats: PreviousStats {
+                consumer_name: None,
+                rx: 0,
+                rx_bytes: 0,
+                tx: 0,
+                tx_bytes: 0,
+            },
         }
     }
 
@@ -489,6 +543,25 @@ impl KafkaSourceInfo {
                 "Failed to fast-forward consumer for source:{}, Error:{}",
                 self.source_name, e
             ),
+        }
+    }
+}
+
+impl Drop for KafkaSourceInfo {
+    fn drop(&mut self) {
+        // Retract any metrics logged for this source
+        if let Some(logger) = self.logger.as_mut() {
+            if let Some(consumer_name) = self.previous_stats.consumer_name.as_ref() {
+                logger.log(MaterializedEvent::KafkaConsumerInfo {
+                    source_name: self.source_name.to_string(),
+                    source_id: self.id,
+                    consumer_name: consumer_name.to_string(),
+                    rx: -self.previous_stats.rx,
+                    rx_bytes: -self.previous_stats.rx_bytes,
+                    tx: -self.previous_stats.tx,
+                    tx_bytes: -self.previous_stats.tx_bytes,
+                });
+            }
         }
     }
 }
@@ -621,21 +694,24 @@ impl PartitionConsumer {
 
 /// An implementation of [`ConsumerContext`] that unparks the wrapped thread
 /// when the message queue switches from nonempty to empty.
-struct GlueConsumerContext(SyncActivator);
+struct GlueConsumerContext {
+    activator: SyncActivator,
+    stats_tx: crossbeam_channel::Sender<Statistics>,
+}
 
 impl ClientContext for GlueConsumerContext {
     fn stats(&self, statistics: Statistics) {
-        info!(
-            "Client stats: name={}, tx={}, tx_bytes={}, rx={}, rx_bytes={}",
-            statistics.name, statistics.tx, statistics.tx_bytes, statistics.rx, statistics.rx_bytes,
-        );
+        self.stats_tx
+            .send(statistics)
+            .expect("timely operator hung up while Kafka source active");
+        self.activate();
         // info!("Client stats: {:#?}", statistics);
     }
 }
 
 impl GlueConsumerContext {
     fn activate(&self) {
-        self.0
+        self.activator
             .activate()
             .expect("timely operator hung up while Kafka source active");
     }
