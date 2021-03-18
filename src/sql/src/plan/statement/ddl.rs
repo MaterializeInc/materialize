@@ -878,7 +878,7 @@ pub fn plan_create_source(
             DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
                 *key_schema = None;
             }
-            DataEncoding::Bytes | DataEncoding::Text => {
+            DataEncoding::Bytes | DataEncoding::Text | DataEncoding::Protobuf(_) => {
                 if let DataEncoding::Avro(_) = &key_encoding {
                     unsupported!("Avro key for this format");
                 }

@@ -220,6 +220,10 @@ pub(crate) fn get_decoder(
 ) -> Box<dyn DecoderState> {
     let avro_err = "Failed to create Avro decoder";
     match encoding {
+        DataEncoding::Protobuf(enc) => Box::new(protobuf::ProtobufDecoderState::new(
+            &enc.descriptors,
+            &enc.message_name,
+        )),
         DataEncoding::Avro(val_enc) => Box::new(
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,

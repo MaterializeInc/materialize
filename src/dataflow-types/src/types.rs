@@ -395,6 +395,10 @@ impl DataEncoding {
             }) => {
                 let d = decode_descriptors(descriptors)?;
                 validate_descriptors(message_name, &d)?
+                    .into_iter()
+                    .fold(key_desc, |desc, (name, ty)| {
+                        desc.with_column(name.unwrap(), ty)
+                    })
             }
             DataEncoding::Regex(RegexEncoding { regex }) => regex
                 .capture_names()
