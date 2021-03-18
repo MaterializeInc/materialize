@@ -929,7 +929,7 @@ SELECT v, mark, count(*) FILTER (WHERE k > 5), count(*), max(k) FILTER (WHERE k 
 4 true 1 3 3
 NULL true 0 1 5
 
-query error FILTER specified but abs\(\) is not an aggregate function
+query error FILTER specified, but abs is not an aggregate function
 SELECT k, abs(k) FILTER (WHERE k=1) FROM kv
 
 query error Expected end of statement, found left parenthesis
