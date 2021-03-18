@@ -22,12 +22,12 @@ INSERT INTO unencoded VALUES (NULL), ('\x00fffe65'), ('a'), ('ab'), ('abc'), ('a
 query TT
 SELECT encode(val, 'base64'), decode(encode(val, 'base64'), 'base64') FROM unencoded ORDER BY val
 ----
-NULL      NULL
 AP/+ZQ==  [0,␠255,␠254,␠101]
 YQ==      a
 YWI=      ab
 YWJj      abc
 YWJjZA==  abcd
+NULL      NULL
 
 # base64 special case: test that the encoded output is wrapped at 76 characters.
 
@@ -60,12 +60,12 @@ SELECT decode(e'aaa\u0002', 'base64')
 query TT
 SELECT encode(val, 'hex'), decode(encode(val, 'hex'), 'hex') FROM unencoded ORDER BY val
 ----
-NULL      NULL
 00fffe65  [0,␠255,␠254,␠101]
 61        a
 6162      ab
 616263    abc
 61626364  abcd
+NULL      NULL
 
 # hex special case: encoded bytes can be separated by whitespace.
 
@@ -90,12 +90,12 @@ SELECT decode('0', 'hex')
 query TT
 SELECT encode(val, 'escape'), decode(encode(val, 'escape'), 'escape') FROM unencoded ORDER BY val
 ----
-NULL           NULL
 \000\377\376e  [0,␠255,␠254,␠101]
 a              a
 ab             ab
 abc            abc
 abcd           abcd
+NULL           NULL
 
 query error invalid input syntax for type bytea
 SELECT decode('\9', 'escape')

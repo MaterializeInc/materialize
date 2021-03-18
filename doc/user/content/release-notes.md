@@ -48,6 +48,9 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.7.2 %}}
 
+- **Breaking change.** Sort `NULL`s last, to match the default sort order in
+  PostgreSQL.
+
 - Add the [`jsonb_object_agg`](/sql/functions/jsonb_object_agg) function to
   aggregate rows into a JSON object.
 
