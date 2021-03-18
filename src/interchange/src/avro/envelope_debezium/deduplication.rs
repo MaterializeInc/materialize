@@ -50,7 +50,7 @@ use super::RowCoordinates;
 /// instances pointing at the same Kafka topic that mean that the Debezium guarantees do
 /// not hold, in which case we are required to track individual messages, instead of just
 /// the highest-ever-seen message.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum DebeziumDeduplicationStrategy {
     /// We can trust high water mark
     Ordered,

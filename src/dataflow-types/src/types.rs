@@ -537,7 +537,7 @@ pub enum UpsertMode {
     /// Treat the entire upsert value as something to flatten
     Flat,
     /// Just ignore the `before` portion of a if the debezium key is new
-    Debezium,
+    Debezium(DebeziumDeduplicationStrategy),
 }
 
 impl SourceEnvelope {

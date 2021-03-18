@@ -30,7 +30,7 @@ use timely::{
 };
 
 use ::mz_avro::{types::Value, Schema};
-use dataflow_types::{DataEncoding, RegexEncoding, SourceEnvelope};
+use dataflow_types::{DataEncoding, RegexEncoding, SourceEnvelope, UpsertMode};
 use dataflow_types::{DataflowError, LinearOperator};
 use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState, EnvelopeType};
 use log::error;
@@ -227,20 +227,15 @@ pub(crate) fn get_decoder(
             &enc.message_name,
         )),
         DataEncoding::Avro(val_enc) => {
-            let (dedupe_strat, dbz_key_indices, envelope_type) = match envelope {
-                SourceEnvelope::Debezium(ds) => desc
-                    .map(|desc| {
-                        (
-                            Some(*ds),
-                            find_dbz_key_indices(desc, val_enc.key_schema.as_deref()),
-                            EnvelopeType::Debezium,
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        unreachable!("RelationDesc required for Debezium Source: {}", debug_name);
-                    }),
-                _ => (None, None, EnvelopeType::Upsert),
+            let (dedupe_strat, envelope_type) = match envelope {
+                SourceEnvelope::Debezium(ds) => (Some(*ds), EnvelopeType::Debezium),
+                SourceEnvelope::Upsert(_enc, UpsertMode::Debezium(ds)) => {
+                    (Some(*ds), EnvelopeType::Debezium)
+                }
+                _ => (None, EnvelopeType::Upsert),
             };
+            let dbz_key_indices =
+                desc.and_then(|desc| find_dbz_key_indices(desc, val_enc.key_schema.as_deref()));
             Box::new(
                 avro::AvroDecoderState::new(
                     &val_enc.value_schema,
@@ -512,7 +507,11 @@ where
 fn find_dbz_key_indices(desc: &RelationDesc, key_schema: Option<&str>) -> Option<Vec<usize>> {
     let fields = match &desc.typ().column_types[0].scalar_type {
         ScalarType::Record { fields, .. } => fields.clone(),
-        _ => unreachable!(),
+        typ => unreachable!(
+            "Expected Record, got {:?} desc: {:#?}",
+            typ,
+            desc.typ().column_types
+        ),
     };
     let row_desc =
         RelationDesc::from_names_and_types(fields.into_iter().map(|(n, t)| (Some(n), t)));

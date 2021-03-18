@@ -335,7 +335,7 @@ fn plan_source_envelope(
 
     let do_dbz_logic = matches!(envelope,
                                 SourceEnvelope::Debezium(_) |
-                                SourceEnvelope::Upsert(_, UpsertMode::Debezium));
+                                SourceEnvelope::Upsert(_, UpsertMode::Debezium(_)));
 
     let (hir_expr, column_names) = if do_dbz_logic {
         // Debezium sources produce a diff in their last column.
@@ -823,7 +823,9 @@ pub fn plan_create_source(
                 }
                 let our_mode = match mode {
                     sql_parser::ast::UpsertMode::Flat => UpsertMode::Flat,
-                    sql_parser::ast::UpsertMode::Debezium => UpsertMode::Debezium,
+                    sql_parser::ast::UpsertMode::Debezium => {
+                        UpsertMode::Debezium(dedupe_strategy(&mut with_options)?)
+                    }
                 };
                 SourceEnvelope::Upsert(key_encoding, our_mode)
             }
@@ -1229,10 +1231,15 @@ pub fn plan_create_sink(
 
     let envelope = match envelope {
         None | Some(Envelope::Debezium) => SinkEnvelope::Debezium,
-        Some(Envelope::Upsert(None)) => SinkEnvelope::Upsert,
+        Some(Envelope::Upsert(None, sql_parser::ast::UpsertMode::Flat)) => SinkEnvelope::Upsert,
+        Some(Envelope::Upsert(None, sql_parser::ast::UpsertMode::Debezium)) => {
+            unsupported!("Debezium Upsert sinks")
+        }
         Some(Envelope::CdcV2) => unsupported!("CDCv2 sinks"),
         Some(Envelope::None) => unsupported!("\"ENVELOPE NONE\" sinks"),
-        Some(Envelope::Upsert(Some(_))) => unsupported!("Upsert sinks with custom key encodings"),
+        Some(Envelope::Upsert(Some(_), _)) => {
+            unsupported!("Upsert sinks with custom key encodings")
+        }
     };
     let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     let from = scx.resolve_item(from)?;

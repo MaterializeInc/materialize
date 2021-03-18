@@ -269,7 +269,7 @@ where
                                                 session.give((new_value, cap.time().clone(), 1));
                                             }
                                         }
-                                        UpsertMode::Debezium => {
+                                        UpsertMode::Debezium(_) => {
                                             let is_new = current_keys.insert(decoded_key);
                                             if is_new {
                                                 // repack row without the before field
