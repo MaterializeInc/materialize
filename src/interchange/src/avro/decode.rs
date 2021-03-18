@@ -101,7 +101,12 @@ impl Decoder {
         })
     }
 
-    /// Decodes Avro-encoded `bytes` into a `DiffPair`.
+    /// Decodes Avro-encoded `bytes` into a [`Row`]
+    ///
+    /// For flat data `Row` is what you expect, but for `Debezium` data you may be surprised to see
+    /// a single row returned here. The `Row` returned by this method for Debezium-format data will
+    /// contain the `before` and `after` fields, which are later unwrapped by some planned SQL
+    /// operations.
     pub async fn decode(
         &mut self,
         bytes: &[u8],
