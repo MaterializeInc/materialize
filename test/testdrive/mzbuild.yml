@@ -9,7 +9,3 @@
 
 name: testdrive-with-tests
 publish: false
-
-pre-image:
-  type: directory
-  source: test/testdrive
