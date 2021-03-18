@@ -125,6 +125,7 @@ where foo.a = bar.a
 | Join %0 %1 %2 (= #0 #2) (= #3 #4)
 | | implementation = Differential %1 %2.(#0) %0.(#0)
 | | demand = (#0, #5)
+| Filter !(isnull(#0))
 | Project (#0, #5)
 
 EOF
