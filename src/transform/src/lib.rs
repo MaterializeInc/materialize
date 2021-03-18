@@ -29,7 +29,6 @@ use expr::MirRelationExpr;
 use expr::MirScalarExpr;
 use expr::{GlobalId, IdGen};
 
-pub mod column_knowledge;
 pub mod cse;
 pub mod demand;
 pub mod fusion;
@@ -210,7 +209,6 @@ impl Default for Optimizer {
                     Box::new(crate::projection_lifting::ProjectionLifting),
                     Box::new(crate::map_lifting::LiteralLifting),
                     Box::new(crate::nonnull_requirements::NonNullRequirements),
-                    Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     Box::new(crate::redundant_join::RedundantJoin),
                     Box::new(crate::topk_elision::TopKElision),
@@ -231,7 +229,6 @@ impl Default for Optimizer {
                 transforms: vec![
                     Box::new(crate::projection_lifting::ProjectionLifting),
                     Box::new(crate::join_implementation::JoinImplementation),
-                    Box::new(crate::column_knowledge::ColumnKnowledge),
                     Box::new(crate::reduction::FoldConstants),
                     Box::new(crate::fusion::filter::Filter),
                     Box::new(crate::demand::Demand),
