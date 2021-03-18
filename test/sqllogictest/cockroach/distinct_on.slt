@@ -209,19 +209,21 @@ SELECT DISTINCT ON (x) x FROM xyz ORDER BY x DESC
 
 # We add a filter to eliminate one of the rows that may be flakily returned
 # depending on parallel execution of DISTINCT ON.
+# Note: Result differs from Cockroach but matches Postgres.
 query III
 SELECT DISTINCT ON (x, z) y, z, x FROM xyz WHERE (x,y,z) != (4, 1, 6) ORDER BY z
 ----
-1 NULL 1
 2 1 1
 1 2 1
 2 3 2
 5 6 4
+1 NULL 1
 
+# Note: Result differs from Cockroach but matches Postgres.
 query III
 SELECT DISTINCT ON (x) y, z, x FROM xyz ORDER BY x ASC, z DESC, y DESC
 ----
-1 2 1
+1 NULL 1
 2 3 2
 5 6 4
 

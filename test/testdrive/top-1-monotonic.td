@@ -223,10 +223,10 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=5
 <null>
 
 > SELECT * FROM order_by_limit;
-<null>
+0
 
 > SELECT * from order_by_desc_limit;
-234
+<null>
 
 > SELECT * FROM group_by_in_top_1;
 -234
@@ -245,9 +245,9 @@ $ kafka-ingest format=avro topic=top1 schema=${schema} publish=true timestamp=5
 -123
 0
 0
-0
-0
-0
+<null>
+<null>
+<null>
 <null>
 <null>
 <null>

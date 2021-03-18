@@ -458,20 +458,23 @@ SELECT count(1) from kv
 query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT count(k, v) FROM kv
 
+# Note: Result differs from Cockroach but matches Postgres.
 query II
 SELECT v, count(k) FROM kv GROUP BY v ORDER BY v
 ----
-NULL 1
 2 3
 4 2
+NULL 1
 
+# Note: Result differs from Cockroach but matches Postgres.
 query II
 SELECT v, count(k) FROM kv GROUP BY v ORDER BY v DESC
 ----
+NULL 1
 4 2
 2 3
-NULL 1
 
+# Note: Result differs from Cockroach but matches Postgres.
 query II
 SELECT v, count(k) FROM kv GROUP BY v ORDER BY count(k) DESC
 ----
@@ -479,19 +482,21 @@ SELECT v, count(k) FROM kv GROUP BY v ORDER BY count(k) DESC
 4 2
 NULL 1
 
+# Note: Result differs from Cockroach but matches Postgres.
 query II
 SELECT v, count(k) FROM kv GROUP BY v ORDER BY v-count(k)
 ----
-NULL 1
 2 3
 4 2
+NULL 1
 
+# Note: Result differs from Cockroach but matches Postgres.
 query II
 SELECT v, count(k) FROM kv GROUP BY v ORDER BY 1 DESC
 ----
+NULL 1
 4 2
 2 3
-NULL 1
 
 query III colnames
 SELECT count(*), count(k), count(kv.v) FROM kv

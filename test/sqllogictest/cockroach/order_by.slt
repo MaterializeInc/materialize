@@ -29,12 +29,13 @@ CREATE TABLE t (
 statement ok
 INSERT INTO t VALUES (1, 9, true), (2, 8, false), (3, 7, NULL)
 
+# Note: Result differs from Cockroach but matches Postgres.
 query B
 SELECT c FROM t ORDER BY c
 ----
-NULL
 false
 true
+NULL
 
 # The following test ensures that the "rowsort" directive
 # in TestLogic does its work properly.
@@ -45,12 +46,13 @@ false
 NULL
 true
 
+# Note: Result differs from Cockroach but matches Postgres.
 query B
 SELECT c FROM t ORDER BY c DESC
 ----
+NULL
 true
 false
-NULL
 
 query II
 SELECT a, b FROM t ORDER BY b

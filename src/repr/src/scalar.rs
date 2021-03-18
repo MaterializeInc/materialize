@@ -26,8 +26,6 @@ use crate::{ColumnName, ColumnType, DatumList, DatumMap};
 /// A single value.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Datum<'a> {
-    /// An unknown value.
-    Null,
     /// The `false` boolean value.
     False,
     /// The `true` boolean value.
@@ -95,6 +93,10 @@ pub enum Datum<'a> {
     // TODO(benesch): get rid of this variant. With a more capable optimizer, I
     // don't think there would be any need for dummy datums.
     Dummy,
+    // Keep `Null` last so that it sorts last, to match the default sort order
+    // in PostgreSQL.
+    /// An unknown value.
+    Null,
 }
 
 impl<'a> Datum<'a> {

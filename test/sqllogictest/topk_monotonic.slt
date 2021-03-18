@@ -45,26 +45,28 @@ EOF
 
 mode cockroach
 
+# Note: Result differs from Cockroach but matches Postgres (modulo rowsort).
 query TT rowsort
 SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (SELECT name FROM cities WHERE state = grp.state ORDER BY pop DESC LIMIT 1)
 ----
 AZ  Phoenix
-CA  Los_Angeles
+CA  Nullsville
 IL  Chicago
 NY  New_York
 Nostate Nulltown
 TX  Houston
 
 # Also check ASC to stress NULL handling in the monoid.
+# Note: Result differs from Cockroach but matches Postgres (modulo rowsort).
 query TT rowsort
 SELECT state, name FROM
     (SELECT DISTINCT state FROM cities) grp,
     LATERAL (SELECT name FROM cities WHERE state = grp.state ORDER BY pop LIMIT 1)
 ----
 AZ  Phoenix
-CA  Nullsville
+CA  San_Francisco
 IL  Chicago
 NY  New_York
 Nostate  Nulltown

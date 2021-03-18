@@ -266,11 +266,10 @@ SELECT ARRAY[2] < ARRAY[1, 2], ARRAY[2] <= ARRAY[1, 2]
 ----
 false false
 
-# todo(uce): uncomment after #5982
-#query BB
-#SELECT ARRAY[1] < ARRAY[NULL]::int[], ARRAY[1] <= ARRAY[NULL]::int[]
-#----
-#true true
+query BB
+SELECT ARRAY[1] < ARRAY[NULL]::int[], ARRAY[1] <= ARRAY[NULL]::int[]
+----
+true true
 
 query BB
 SELECT ARRAY[1] > ARRAY[1], ARRAY[1] >= ARRAY[1]
