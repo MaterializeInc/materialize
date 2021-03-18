@@ -106,7 +106,6 @@ impl MapFilterProject {
         datums: &'b mut Vec<Datum<'a>>,
         arena: &'a RowArena,
     ) -> Result<Option<impl Iterator<Item = Datum<'a>> + 'b>, EvalError> {
-        println!("datums before evaluation: {:?}", datums);
         let mut expression = 0;
         for (support, predicate) in self.predicates.iter() {
             while self.input_arity + expression < *support {
@@ -121,7 +120,6 @@ impl MapFilterProject {
             datums.push(self.expressions[expression].eval(&datums[..], &arena)?);
             expression += 1;
         }
-        println!("projecting datums: {:?} {:?}", self.projection, datums);
         Ok(Some(self.projection.iter().map(move |i| datums[*i])))
     }
 
