@@ -4,6 +4,10 @@ Specifying `ENVELOPE UPSERT` creates a source that supports Kafka's standard
 key-value convention, and supports inserts, updates, and deletes within
 Materialize. The source is also compatible with Kafka's log-compaction feature.
 
+While the upsert envelope format is more expressive, it comes with the tradeoffs
+of being slower and more memory intensive to ingest, because processing this format
+requires maintaining state proportional to the number of unique keys.
+
 #### Inserts, updates, deletes
 
 When Materialize receives a message, it checks the message's key and offset.
