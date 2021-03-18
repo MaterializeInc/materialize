@@ -65,7 +65,7 @@ steps format=types
 ====
 No change: Join, InlineLet, FoldConstants, Filter, Map, ProjectionExtraction, Project, Join, FoldConstants, Filter, Map, FoldConstants
 ====
-Applied Fixpoint { transforms: [NonNullable, FoldConstants, PredicatePushdown, Join, Filter, Project, Map, Union, ReduceElision, InlineLet, UpdateLet, ProjectionExtraction, ProjectionLifting, LiteralLifting, NonNullRequirements, ColumnKnowledge, ReductionPushdown, RedundantJoin, TopKElision, Demand], limit: 100 }:
+Applied Fixpoint { transforms: [NonNullable, FoldConstants, PredicatePushdown, Join, Filter, Project, Map, Union, ReduceElision, InlineLet, UpdateLet, ProjectionExtraction, ProjectionLifting, LiteralLifting, NonNullRequirements, ReductionPushdown, RedundantJoin, TopKElision, Demand], limit: 100 }:
 %0 =
 | Get x (u0)
 | | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
@@ -75,7 +75,7 @@ Applied Fixpoint { transforms: [NonNullable, FoldConstants, PredicatePushdown, J
 | | keys = ((#0), (#1))
 
 ====
-No change: FoldConstants, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, ColumnKnowledge, FoldConstants, Filter, Demand, LiteralLifting], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants
+No change: FoldConstants, Fixpoint { transforms: [ProjectionLifting, JoinImplementation, FoldConstants, Filter, Demand, LiteralLifting], limit: 100 }, ReductionPushdown, Map, ProjectionLifting, JoinImplementation, Project, FoldConstants
 ====
 Final:
 %0 =
