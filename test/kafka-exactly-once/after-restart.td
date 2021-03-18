@@ -7,48 +7,73 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set consistency={
-     "name": "materialize.byo.consistency",
-     "type": "record",
-     "fields": [
-         {
-           "name": "source",
-           "type": "string"
-         },
-         {
-           "name": "partition_count",
-           "type": "int"
-         },
-         {
-           "name": "partition_id",
-           "type": ["int","string"]
-         },
-         {
-            "name": "timestamp",
-            "type": "long"
-         },
-         {
-           "name": "offset",
-           "type": "long"
-         }
-     ]
-  }
-
 $ set schema={
     "type": "record",
     "name": "envelope",
     "fields": [
-      {"name": "a", "type": "long"},
-      {"name": "b", "type": "long"}
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] }
     ]
   }
 
-$ kafka-ingest format=avro topic=input-consistency schema=${consistency} timestamp=2
-{"source": "testdrive-input-${testdrive.seed}", "partition_count": 1, "partition_id": {"int": 0}, "timestamp": 52, "offset": 10}
+$ set trxschemakey={
+      "name": "io.debezium.connector.common.TransactionMetadataKey",
+      "type": "record",
+      "fields": [
+          {
+              "name": "id",
+              "type": "string"
+          }
+      ]
+  }
+
+$ set trxschema={
+    "type":"record", "name":"TransactionMetadataValue", "namespace":"io.debezium.connector.common",
+    "fields":[
+    {"name":"status","type":"string"},
+    {"name":"id","type": "string"},
+    {"name": "event_count",
+    "type": ["null", "long"],
+    "default": null
+    },
+    {"name":"data_collections","type":["null",{"type":"array",
+    "items": {"type":"record",
+    "name":"ConnectDefault",
+    "namespace":"io.confluent.connect.Avro",
+    "fields": [ {
+    "name": "data_collection",
+    "type": "string"
+    },
+    {
+    "name": "event_count",
+    "type": "long" }]}}],
+    "default": null}],
+    "connect.name": "io.debezium.connector.common.TransactionMetadataValue"
+    }
+
+$ kafka-ingest format=avro topic=input-consistency timestamp=1 schema=${trxschemakey}
+{"id": "52"}
+
+$ kafka-ingest format=avro topic=input-consistency timestamp=1 schema=${trxschema}
+{"status":"BEGIN","id":"52","event_count":null,"data_collections":null}
+{"status":"END","id":"52","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-input-${testdrive.seed}"}]}}
 
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=14
-{"a": 4, "b": 1}
-{"a": 5, "b": 2}
+{"before": null, "after": {"row": {"a": 4, "b": 1}}}
+{"before": null, "after": {"row": {"a": 5, "b": 2}}}
 
 > SELECT * FROM input_byo
 a  b
@@ -65,13 +90,13 @@ a  b
 5  2
 
 $ kafka-verify format=avro sink=materialize.public.output
-{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "10"}}
-{"before": null, "after": {"row": {"a": 1, "b": 2}}, "transaction": {"id": "10"}}
-{"before": null, "after": {"row": {"a": 2, "b": 1}}, "transaction": {"id": "10"}}
-{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "10"}}
-{"before": null, "after": {"row": {"a": 11, "b": 11}}, "transaction": {"id": "30"}}
-{"before": null, "after": {"row": {"a": 22, "b": 11}}, "transaction": {"id": "30"}}
-{"before": null, "after": {"row": {"a": 3, "b": 4}}, "transaction": {"id": "40"}}
-{"before": null, "after": {"row": {"a": 5, "b": 6}}, "transaction": {"id": "40"}}
-{"before": null, "after": {"row": {"a": 4, "b": 1}}, "transaction": {"id": "52"}}
-{"before": null, "after": {"row": {"a": 5, "b": 2}}, "transaction": {"id": "52"}}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 1, "b": 2}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 2, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "1"}}
+{"before": null, "after": {"row": {"a": 11, "b": 11}}, "transaction": {"id": "2"}}
+{"before": null, "after": {"row": {"a": 22, "b": 11}}, "transaction": {"id": "2"}}
+{"before": null, "after": {"row": {"a": 3, "b": 4}}, "transaction": {"id": "3"}}
+{"before": null, "after": {"row": {"a": 5, "b": 6}}, "transaction": {"id": "3"}}
+{"before": null, "after": {"row": {"a": 4, "b": 1}}, "transaction": {"id": "4"}}
+{"before": null, "after": {"row": {"a": 5, "b": 2}}, "transaction": {"id": "4"}}

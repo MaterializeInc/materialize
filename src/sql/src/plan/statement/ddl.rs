@@ -593,6 +593,13 @@ pub fn plan_create_source(
                 cached_files: None,
             });
             let encoding = get_encoding(format)?;
+
+            if consistency != Consistency::RealTime
+                && *envelope != sql_parser::ast::Envelope::Debezium
+            {
+                bail!("BYO consistency only supported for Debezium Kafka sources");
+            }
+
             (connector, encoding)
         }
         Connector::Kinesis { arn, .. } => {
@@ -630,8 +637,7 @@ pub fn plan_create_source(
             };
             consistency = match with_options.remove("consistency") {
                 None => Consistency::RealTime,
-                Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
-                Some(_) => bail!("consistency must be a string"),
+                Some(_) => bail!("BYO consistency not supported for file sources"),
             };
             ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
 
@@ -751,6 +757,12 @@ pub fn plan_create_source(
                 Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
                 Some(_) => bail!("consistency must be a string"),
             };
+
+            if consistency != Consistency::RealTime
+                && *envelope != sql_parser::ast::Envelope::Debezium
+            {
+                bail!("BYO consistency only supported for Debezium Avro OCF sources");
+            }
 
             ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
 
