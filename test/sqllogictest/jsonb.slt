@@ -29,7 +29,24 @@ SELECT '[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[
 query T
 SELECT '{"a": 1, "a": 2, "a": 3}'::jsonb
 ----
-{"a":3.0}
+{"a":3}
+
+# Regression test for #5919, in which 64-bit integers could not be represented
+# in the jsonb type.
+query T
+SELECT '1614259308542846100'::jsonb
+----
+1614259308542846100
+
+query T
+SELECT '9223372036854775807'::jsonb
+----
+9223372036854775807
+
+query error invalid input syntax for type jsonb: 9223372036854775808 is out of range for a jsonb number
+SELECT '9223372036854775808'::jsonb
+----
+9223372036854775808
 
 statement ok
 CREATE TABLE test_jsonb (
@@ -101,27 +118,27 @@ NULL
 query T
 SELECT test_json ->> 6 FROM test_jsonb WHERE json_type = 'array'
 ----
-[1.0,2.0,3.0]
+[1,2,3]
 
 query T
 SELECT test_json ->> 7 FROM test_jsonb WHERE json_type = 'array'
 ----
-{"f1":9.0}
+{"f1":9}
 
 query T
 SELECT test_json ->> 'field4' FROM test_jsonb WHERE json_type = 'object'
 ----
-4.0
+4
 
 query T
 SELECT test_json ->> 'field5' FROM test_jsonb WHERE json_type = 'object'
 ----
-[1.0,2.0,3.0]
+[1,2,3]
 
 query T
 SELECT test_json ->> 'field6' FROM test_jsonb WHERE json_type = 'object'
 ----
-{"f1":9.0}
+{"f1":9}
 
 query T
 SELECT test_json ->> 2 FROM test_jsonb WHERE json_type = 'scalar'
@@ -477,7 +494,7 @@ false
 query T
 SELECT '1'::JSONB
 ----
-1.0
+1
 
 query T
 SELECT pg_typeof('1'::JSONB)
@@ -490,7 +507,7 @@ SELECT '{'::JSONB
 query T
 SELECT '{"a":1}'::JSONB->'a'
 ----
-1.0
+1
 
 query T
 SELECT pg_typeof('{"a":1}'::JSONB->'a')
@@ -500,12 +517,12 @@ jsonb
 query T
 SELECT '{"a":1,"b":2}'::JSONB->'b'
 ----
-2.0
+2
 
 query T
 SELECT '{"a":1,"b":{"c":3}}'::JSONB->'b'->'c'
 ----
-3.0
+3
 
 query TT
 SELECT '{"a":1,"b":2}'::JSONB->'c','{"c":1}'::JSONB->'a'
@@ -520,7 +537,7 @@ NULL NULL
 query T
 SELECT '[1,2,3]'::JSONB->0
 ----
-1.0
+1
 
 query T
 SELECT '[1,2,3]'::JSONB->3
@@ -550,7 +567,7 @@ text
 query T
 SELECT '{"a":1,"b":2}'::JSONB->>'b'
 ----
-2.0
+2
 
 query TT
 SELECT '{"a":1,"b":2}'::JSONB->>'c','{"c":1}'::JSONB->>'a'
@@ -565,7 +582,7 @@ NULL NULL
 query T
 SELECT '[1,2,3]'::JSONB->>0
 ----
-1.0
+1
 
 query T
 SELECT '[1,2,3]'::JSONB->>3
@@ -702,18 +719,18 @@ SELECT '{"a":1}'::JSONB - 'a'
 query T
 SELECT '{"a":1}'::JSONB - 'b'
 ----
-{"a":1.0}
+{"a":1}
 
 # `-` is one of the very few cases that PG errors in a JSON type mismatch with operators.
 query T
 SELECT '[1,2,3]'::JSONB - 0
 ----
-[2.0,3.0]
+[2,3]
 
 query T
 SELECT '[1,2,3]'::JSONB - 1
 ----
-[1.0,3.0]
+[1,3]
 
 query T
 SELECT '3'::JSONB - 'b'
@@ -840,7 +857,7 @@ SELECT '["1","2","3"]'::JSONB - ''
 query T
 SELECT '[1,"1",1.0]'::JSONB - '1'
 ----
-[1.0,1.0]
+[1,1.0]
 
 # query T
 # SELECT '[1,2,3]'::JSONB #- ARRAY['0']
@@ -923,7 +940,7 @@ SELECT a,b FROM json_family ORDER BY a
 ----
 a    b
 0  {}
-1  {"a":123.0,"c":"asdf"}
+1  {"a":123,"c":"asdf"}
 
 statement ok
 DROP TABLE json_family
@@ -968,7 +985,7 @@ null
 query T
 SELECT to_jsonb(123::INT)
 ----
-123.0
+123
 
 query T
 SELECT to_jsonb('\a'::TEXT)
@@ -1070,27 +1087,27 @@ SELECT to_jsonb(1.234::FLOAT)
 query T rowsort
 SELECT * FROM jsonb_array_elements('[1,2,3]')
 ----
-1.0
-2.0
-3.0
+1
+2
+3
 
 query T rowsort
 SELECT * FROM jsonb_array_elements('[1,true,null,"text",-1.234,{"2":3,"4":"5"},[1,2,3]]')
 ----
-1.0
-true
-null
 "text"
 -1.234
-{"2":3.0,"4":"5"}
-[1.0,2.0,3.0]
+1
+[1,2,3]
+null
+true
+{"2":3,"4":"5"}
 
 query T rowsort
 SELECT js.value->>'a' FROM jsonb_array_elements('[{"a":1},{"a":2},{"a":3}]') js
 ----
-1.0
-2.0
-3.0
+1
+2
+3
 
 query T
 SELECT * FROM jsonb_array_elements('[]')
@@ -1105,27 +1122,27 @@ SELECT * FROM jsonb_array_elements('{"1":2}')
 query T rowsort
 SELECT * FROM jsonb_array_elements_text('[1,2,3]')
 ----
-1.0
-2.0
-3.0
+1
+2
+3
 
 query T rowsort
 SELECT * FROM jsonb_array_elements_text('[1,2,3]')
 ----
-1.0
-2.0
-3.0
+1
+2
+3
 
 query T rowsort
 SELECT * FROM jsonb_array_elements_text('[1,true,null,"text",-1.234,{"2":3,"4":"5"},[1,2,3]]')
 ----
-1.0
-true
-NULL
-text
 -1.234
-{"2":3.0,"4":"5"}
-[1.0,2.0,3.0]
+1
+NULL
+[1,2,3]
+text
+true
+{"2":3,"4":"5"}
 
 query T
 SELECT * FROM jsonb_array_elements('[]')
@@ -1188,17 +1205,17 @@ SELECT jsonb_build_object()
 query T
 SELECT jsonb_build_object('a',2,'b',4)
 ----
-{"a":2.0,"b":4.0}
+{"a":2,"b":4}
 
 query T
 SELECT jsonb_build_object(true,'val',1,0,1.3,2,date '2019-02-03' - date '2019-01-01',4)
 ----
-{"1":0.0,"1.3":2.0,"33 days":4.0,"true":"val"}
+{"1":0,"1.3":2,"33 days":4,"true":"val"}
 
 query T
 SELECT jsonb_build_object('a',1,'b',1.2::float,'c',true,'d',null,'e','{"x":3,"y":[1,2,3]}'::JSONB)
 ----
-{"a":1.0,"b":1.2,"c":true,"d":null,"e":{"x":3.0,"y":[1.0,2.0,3.0]}}
+{"a":1,"b":1.2,"c":true,"d":null,"e":{"x":3,"y":[1,2,3]}}
 
 query T
 SELECT jsonb_build_object(
@@ -1206,12 +1223,12 @@ SELECT jsonb_build_object(
        'd',jsonb_build_object('e',jsonb_build_array(9,8,7))
 )
 ----
-{"a":{"b":false,"c":99.0},"d":{"e":[9.0,8.0,7.0]}}
+{"a":{"b":false,"c":99},"d":{"e":[9,8,7]}}
 
 query T
 SELECT jsonb_build_object(a,3) FROM (SELECT 1 AS a,2 AS b) r
 ----
-{"1":3.0}
+{"1":3}
 
 # query T
 # SELECT jsonb_build_object('\a'::TEXT COLLATE "fr_FR",1)
@@ -1221,7 +1238,7 @@ SELECT jsonb_build_object(a,3) FROM (SELECT 1 AS a,2 AS b) r
 query T
 SELECT jsonb_build_object('\a',1)
 ----
-{"\\a":1.0}
+{"\\a":1}
 
 # query T
 # SELECT jsonb_build_object(jsonb_object_keys('{"x":3,"y":4}'::JSONB),2)
@@ -1297,12 +1314,12 @@ SELECT jsonb_build_object(1,2,3)
 query T
 SELECT '[1,2,3]'::JSONB || '[4,5,6]'::JSONB
 ----
-[1.0,2.0,3.0,4.0,5.0,6.0]
+[1,2,3,4,5,6]
 
 query T
 SELECT '{"a":1,"b":2}'::JSONB || '{"b":3,"c":4}'::JSONB
 ----
-{"a":1.0,"b":3.0,"c":4.0}
+{"a":1,"b":3,"c":4}
 
 query T
 SELECT '{"a":1,"b":2}'::JSONB || '"c"'::JSONB
@@ -1314,7 +1331,7 @@ NULL
 query T
 SELECT '[1,2,3]'::jsonb || '[4,5,6]'
 ----
-[1.0,2.0,3.0,4.0,5.0,6.0]
+[1,2,3,4,5,6]
 
 query T
 SELECT jsonb_build_array()
@@ -1459,11 +1476,11 @@ query TT colnames,rowsort
 SELECT * from jsonb_each('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}'::JSONB) q
 ----
 key  value
-f1   [1.0,2.0,3.0]
-f2   {"f3":1.0}
-f4   null
-f5   99.0
-f6   "stringy"
+f1  [1,2,3]
+f2  {"f3":1}
+f4  null
+f5  99
+f6  "stringy"
 
 query TT
 SELECT * FROM jsonb_each('[1]')
@@ -1481,11 +1498,11 @@ query TT colnames,rowsort
 SELECT * from jsonb_each('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}'::JSONB) q
 ----
 key  value
-f1   [1.0,2.0,3.0]
-f2   {"f3":1.0}
-f4   null
-f5   99.0
-f6   "stringy"
+f1  [1,2,3]
+f2  {"f3":1}
+f4  null
+f5  99
+f6  "stringy"
 
 query TT
 SELECT * FROM jsonb_each_text('[1]')
@@ -1507,11 +1524,11 @@ query TT colnames,rowsort
 SELECT * from jsonb_each_text('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}') q
 ----
 key  value
-f1   [1.0,2.0,3.0]
-f2   {"f3":1.0}
-f4   NULL
-f5   99.0
-f6   stringy
+f1  [1,2,3]
+f2  {"f3":1}
+f4  NULL
+f5  99
+f6  stringy
 
 query TT
 SELECT * FROM jsonb_each_text('[1]')
@@ -1533,11 +1550,11 @@ query TT colnames,rowsort
 SELECT * from jsonb_each_text('{"f1":[1,2,3],"f2":{"f3":1},"f4":null,"f5":99,"f6":"stringy"}') q
 ----
 key  value
-f1   [1.0,2.0,3.0]
-f2   {"f3":1.0}
-f4   NULL
-f5   99.0
-f6   stringy
+f1  [1,2,3]
+f2  {"f3":1}
+f4  NULL
+f5  99
+f6  stringy
 
 # query T
 # SELECT json_set('{"a":1}','{a}'::STRING[],'2')
@@ -1643,7 +1660,7 @@ NULL
 query T
 SELECT jsonb_strip_nulls('1'::JSONB)
 ----
-1.0
+1
 
 query T
 SELECT jsonb_strip_nulls('"a string"'::JSONB)
@@ -1658,17 +1675,17 @@ null
 query T
 SELECT jsonb_strip_nulls('[1,2,null,3,4]'::JSONB)
 ----
-[1.0,2.0,null,3.0,4.0]
+[1,2,null,3,4]
 
 query T
 SELECT jsonb_strip_nulls('{"a":1,"b":null,"c":[2,null,3],"d":{"e":4,"f":null}}'::JSONB)
 ----
-{"a":1.0,"c":[2.0,null,3.0],"d":{"e":4.0}}
+{"a":1,"c":[2,null,3],"d":{"e":4}}
 
 query T
 SELECT jsonb_strip_nulls('[1,{"a":1,"b":null,"c":2},3]'::JSONB)
 ----
-[1.0,{"a":1.0,"c":2.0},3.0]
+[1,{"a":1,"c":2},3]
 
 query T
 SELECT jsonb_strip_nulls('{"a":{"b":null,"c":null},"d":{}}'::JSONB)
@@ -1683,7 +1700,7 @@ NULL
 query T
 SELECT jsonb_strip_nulls('1'::JSONB)
 ----
-1.0
+1
 
 query T
 SELECT jsonb_strip_nulls('"a string"'::JSONB)
@@ -1698,17 +1715,17 @@ null
 query T
 SELECT jsonb_strip_nulls('[1,2,null,3,4]'::JSONB)
 ----
-[1.0,2.0,null,3.0,4.0]
+[1,2,null,3,4]
 
 query T
 SELECT jsonb_strip_nulls('{"a":1,"b":null,"c":[2,null,3],"d":{"e":4,"f":null}}'::JSONB)
 ----
-{"a":1.0,"c":[2.0,null,3.0],"d":{"e":4.0}}
+{"a":1,"c":[2,null,3],"d":{"e":4}}
 
 query T
 SELECT jsonb_strip_nulls('[1,{"a":1,"b":null,"c":2},3]'::JSONB)
 ----
-[1.0,{"a":1.0,"c":2.0},3.0]
+[1,{"a":1,"c":2},3]
 
 query T
 SELECT jsonb_strip_nulls('{"a":{"b":null,"c":null},"d":{}}'::JSONB)
@@ -1763,32 +1780,22 @@ SELECT ('1'::jsonb)::float;
 ----
 1.000
 
-query T
+query error cannot cast jsonb string to type double precision
 SELECT ('"Infinity"'::jsonb)::float;
-----
-inf
 
-query T
+query error cannot cast jsonb string to type double precision
 SELECT ('"-Infinity"'::jsonb)::float;
-----
--inf
 
-query T
+query error cannot cast jsonb string to type double precision
 SELECT ('"NaN"'::jsonb)::float;
-----
-NaN
 
 # not a number
-query T
+query error cannot cast jsonb array to type double precision
 SELECT ('[1]'::jsonb)::float;
-----
-NULL
 
 # not a number
-query T
+query error cannot cast jsonb string to type double precision
 SELECT ('"1"'::jsonb)::float;
-----
-NULL
 
 query T
 SELECT ('1'::jsonb)::int;
@@ -1800,10 +1807,8 @@ query error 9999999999999999999 is out of range for a jsonb number at line 1
 SELECT ('9999999999999999999'::jsonb)::int;
 
 # not a number
-query T
+query error cannot cast jsonb array to type integer
 SELECT ('[1]'::jsonb)::int;
-----
-NULL
 
 query error CAST does not support casting from jsonb to timestamp
 SELECT ('"1969-06-01 10:10:10.410"'::jsonb)::timestamp;
@@ -1854,7 +1859,7 @@ NULL
 query T
 SELECT jsonb_agg(1)
 ----
-[1.0]
+[1]
 
 statement ok
 CREATE TABLE t1 (a int)
@@ -1865,22 +1870,22 @@ INSERT INTO t1 VALUES (1), (2), (3), (NULL)
 query T
 SELECT jsonb_agg(a) FROM (select a from t1 where a IS NOT NULL)
 ----
-[2.0,3.0,1.0]
+[1,2,3]
 
 query T
 SELECT jsonb_agg(a) FROM t1
 ----
-[null,2.0,3.0,1.0]
+[null,1,2,3]
 
 query T
 SELECT jsonb_agg(a::text::jsonb) FROM t1
 ----
-[null,2.0,3.0,1.0]
+[null,1,2,3]
 
 query T
 SELECT jsonb_agg(a) FILTER (WHERE a IS NOT NULL) FROM t1
 ----
-[2.0,3.0,1.0]
+[1,2,3]
 
 query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT jsonb_agg(1, 2)
@@ -1894,12 +1899,12 @@ INSERT INTO t2 VALUES (1, date '2020-01-01'), (NULL, date '2020-01-02')
 query T
 SELECT jsonb_agg((a, b)) FROM t2
 ----
-[{"f1":null,"f2":"2020-01-02"},{"f1":1.0,"f2":"2020-01-01"}]
+[{"f1":null,"f2":"2020-01-02"},{"f1":1,"f2":"2020-01-01"}]
 
 query TTT
 SELECT jsonb_agg((a, b)), jsonb_agg(a), jsonb_agg(b) FROM t2
 ----
-[{"f1":null,"f2":"2020-01-02"},{"f1":1.0,"f2":"2020-01-01"}] [null,1.0] ["2020-01-01","2020-01-02"]
+[{"f1":null,"f2":"2020-01-02"},{"f1":1,"f2":"2020-01-01"}]  [null,1]  ["2020-01-01","2020-01-02"]
 
 # jsonb_object_agg
 
@@ -1911,32 +1916,32 @@ NULL
 query T
 SELECT jsonb_object_agg('one', 2)
 ----
-{"one":2.0}
+{"one":2}
 
 query T
 SELECT jsonb_object_agg(1, 2)
 ----
-{"1":2.0}
+{"1":2}
 
 query T
 SELECT jsonb_object_agg(k, v) FROM (SELECT a - 1 AS k, a AS v from t1 where a IS NOT NULL)
 ----
-{"0":1.0,"1":2.0,"2":3.0}
+{"0":1,"1":2,"2":3}
 
 query T
 SELECT jsonb_object_agg(column1, column2) FROM (VALUES ('a', null), ('b', 1))
 ----
-{"a":null,"b":1.0}
+{"a":null,"b":1}
 
 query T
 SELECT jsonb_object_agg(column1, column2) FROM (VALUES ('b', 2), ('a', 1))
 ----
-{"a":1.0,"b":2.0}
+{"a":1,"b":2}
 
 query T
 SELECT jsonb_object_agg(column1, column2) FROM (VALUES ('a', 1), ('a', 2))
 ----
-{"a":1.0}
+{"a":1}
 
 query T
 SELECT jsonb_object_agg(null, null)
@@ -1946,4 +1951,4 @@ SELECT jsonb_object_agg(null, null)
 query T
 SELECT jsonb_object_agg(a, a) FILTER (WHERE a IS NOT NULL) FROM t1
 ----
-{"1":1.0,"2":2.0,"3":3.0}
+{"1":1,"2":2,"3":3}

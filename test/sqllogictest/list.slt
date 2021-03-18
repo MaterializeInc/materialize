@@ -2035,7 +2035,7 @@ CREATE TYPE jsonb_list_c AS LIST (element_type=jsonb);
 query T
 SELECT '{\{\"1\":2\}}'::jsonb_list_c::text;
 ----
-{"{\"1\":2.0}"}
+{"{\"1\":2}"}
 
 # 🔬🔬 Check custom type name resolution
 
