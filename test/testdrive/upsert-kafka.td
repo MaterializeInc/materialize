@@ -235,6 +235,64 @@ b\xc3\xadrdmore  géese            6
 mammal1          mouse            9
 mammalmore       herd             10
 
+$ kafka-create-topic topic=textproto
+
+> CREATE MATERIALIZED SOURCE textproto
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-textproto-${testdrive.seed}'
+      WITH (consistency = 'testdrive-data-consistency2-${testdrive.seed}')
+  FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
+  ENVELOPE UPSERT FORMAT TEXT
+
+> CREATE MATERIALIZED SOURCE bytesproto
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-textproto-${testdrive.seed}'
+        WITH (consistency = 'testdrive-data-consistency2-${testdrive.seed}')
+  FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
+  ENVELOPE UPSERT FORMAT BYTES
+
+$ kafka-ingest format=protobuf message=struct topic=textproto key-format=bytes key-terminator=: publish=true
+fish:{"int": 1, "bad_int": 1, "bin": "ONE", "st": "my-string"}
+bìrd1:{"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
+birdmore: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
+mammal1: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
+bìrd1:
+birdmore: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "stuff"}
+mämmalmore: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
+bìrd1:{"int": 2, "bad_int": 1, "bin": "ONE", "st": "something-valid"}
+mammal1:
+mammalmore: {"int": 2, "bad_int": 2, "bin": "ONE", "st": "something-valid"}
+
+$ kafka-ingest format=bytes topic=data-consistency2
+testdrive-textproto-${testdrive.seed},1,0,1,3
+
+> SELECT * FROM bytesproto
+fish 1 1 ONE my-string 1
+b\xc3\xacrd1 2 2 ONE something-valid 2
+birdmore 2 2 ONE something-valid 3
+
+> SELECT * FROM textproto
+fish 1 1 ONE my-string 1
+bìrd1 2 2 ONE something-valid 2
+birdmore 2 2 ONE something-valid 3
+
+$ kafka-ingest format=bytes topic=data-consistency2
+testdrive-textproto-${testdrive.seed},1,0,2,10
+
+> SELECT * FROM bytesproto
+fish 1 1 ONE my-string 1
+birdmore 2 2 ONE stuff 6
+m\xc3\xa4mmalmore 2 2 ONE something-valid 7
+b\xc3\xacrd1 2 1 ONE something-valid 8
+mammalmore 2 2 ONE something-valid 10
+
+> SELECT * FROM textproto
+fish 1 1 ONE my-string 1
+birdmore 2 2 ONE stuff 6
+mämmalmore 2 2 ONE something-valid 7
+bìrd1 2 1 ONE something-valid 8
+mammalmore 2 2 ONE something-valid 10
+
 $ kafka-create-topic topic=nullkey
 
 # A null key should result in an error decoding that row but not a panic
