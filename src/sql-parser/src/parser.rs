@@ -1591,7 +1591,14 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            Envelope::Upsert(format)
+            Envelope::Upsert(format, UpsertMode::Flat)
+        } else if self.parse_keyword(DBZUPSERT) {
+            let format = if self.parse_keyword(FORMAT) {
+                Some(self.parse_format()?)
+            } else {
+                None
+            };
+            Envelope::Upsert(format, UpsertMode::Debezium)
         } else if self.parse_keyword(MATERIALIZE) {
             Envelope::CdcV2
         } else {

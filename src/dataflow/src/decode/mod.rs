@@ -32,7 +32,7 @@ use timely::{
 use ::mz_avro::{types::Value, Schema};
 use dataflow_types::{DataEncoding, RegexEncoding, SourceEnvelope};
 use dataflow_types::{DataflowError, LinearOperator};
-use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState};
+use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState, EnvelopeType};
 use log::error;
 use repr::Datum;
 use repr::{Diff, Row, RowPacker, Timestamp};
@@ -98,7 +98,7 @@ where
                         ))
                     }
                 }
-                SourceEnvelope::Upsert(_) => unreachable!("Upsert is not supported for AvroOCF"),
+                SourceEnvelope::Upsert(_, _) => unreachable!("Upsert is not supported for AvroOCF"),
                 SourceEnvelope::CdcV2 => unreachable!("CDC envelope is not supported for AvroOCF"),
             }
             .unwrap_or_else(|e| {
@@ -217,6 +217,8 @@ pub(crate) fn get_decoder(
     encoding: DataEncoding,
     debug_name: &str,
     worker_index: usize,
+    envelope: &SourceEnvelope,
+    desc: Option<&RelationDesc>,
 ) -> Box<dyn DecoderState> {
     let avro_err = "Failed to create Avro decoder";
     match encoding {
@@ -224,20 +226,36 @@ pub(crate) fn get_decoder(
             &enc.descriptors,
             &enc.message_name,
         )),
-        DataEncoding::Avro(val_enc) => Box::new(
-            avro::AvroDecoderState::new(
-                &val_enc.value_schema,
-                val_enc.schema_registry_config,
-                interchange::avro::EnvelopeType::Upsert,
-                false,
-                format!("{}-values", debug_name),
-                worker_index,
-                None,
-                None,
-                val_enc.confluent_wire_format,
+        DataEncoding::Avro(val_enc) => {
+            let (dedupe_strat, dbz_key_indices, envelope_type) = match envelope {
+                SourceEnvelope::Debezium(ds) => desc
+                    .map(|desc| {
+                        (
+                            Some(*ds),
+                            find_dbz_key_indices(desc, val_enc.key_schema.as_deref()),
+                            EnvelopeType::Debezium,
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        unreachable!("RelationDesc required for Debezium Source: {}", debug_name);
+                    }),
+                _ => (None, None, EnvelopeType::Upsert),
+            };
+            Box::new(
+                avro::AvroDecoderState::new(
+                    &val_enc.value_schema,
+                    val_enc.schema_registry_config,
+                    envelope_type,
+                    false,
+                    format!("{}-values", debug_name),
+                    worker_index,
+                    dedupe_strat,
+                    dbz_key_indices,
+                    val_enc.confluent_wire_format,
+                )
+                .expect(avro_err),
             )
-            .expect(avro_err),
-        ),
+        }
         DataEncoding::Bytes => Box::new(OffsetDecoderState::from(bytes_to_datum)),
         DataEncoding::Text => Box::new(OffsetDecoderState::from(text_to_datum)),
         _ => unreachable!("Unsupported encoding combination"),
@@ -389,7 +407,7 @@ where
     let op_name = format!("{}Decode", encoding.op_name());
     let worker_index = stream.scope().index();
     match (encoding, envelope) {
-        (_, SourceEnvelope::Upsert(_)) => {
+        (_, SourceEnvelope::Upsert(_, _)) => {
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
         }
         (DataEncoding::Csv(enc), SourceEnvelope::None) => (
@@ -407,20 +425,7 @@ where
         }
         (DataEncoding::Avro(enc), SourceEnvelope::Debezium(ds)) => {
             let dedup_strat = *ds;
-            let fields = match &desc.typ().column_types[0].scalar_type {
-                ScalarType::Record { fields, .. } => fields.clone(),
-                _ => unreachable!(),
-            };
-            let row_desc =
-                RelationDesc::from_names_and_types(fields.into_iter().map(|(n, t)| (Some(n), t)));
-            let dbz_key_indices = enc.key_schema.as_ref().and_then(|key_schema| {
-                interchange::avro::validate_key_schema(key_schema, &row_desc)
-                    .map(Some)
-                    .unwrap_or_else(|e| {
-                        warn!("Not using key due to error: {}", e);
-                        None
-                    })
-            });
+            let dbz_key_indices = find_dbz_key_indices(&desc, enc.key_schema.as_deref());
             (
                 decode_values_inner(
                     stream,
@@ -502,4 +507,22 @@ where
             unreachable!("Internal error: postgres sources are never decoded");
         }
     }
+}
+
+fn find_dbz_key_indices(desc: &RelationDesc, key_schema: Option<&str>) -> Option<Vec<usize>> {
+    let fields = match &desc.typ().column_types[0].scalar_type {
+        ScalarType::Record { fields, .. } => fields.clone(),
+        _ => unreachable!(),
+    };
+    let row_desc =
+        RelationDesc::from_names_and_types(fields.into_iter().map(|(n, t)| (Some(n), t)));
+    let dbz_key_indices = key_schema.and_then(|key_schema| {
+        interchange::avro::validate_key_schema(key_schema, &row_desc)
+            .map(Some)
+            .unwrap_or_else(|e| {
+                warn!("Not using key due to error: {}", e);
+                None
+            })
+    });
+    dbz_key_indices
 }

@@ -319,7 +319,7 @@ impl DataEncoding {
     pub fn desc(&self, envelope: &SourceEnvelope) -> Result<RelationDesc, anyhow::Error> {
         // Add columns for the key, if using the upsert envelope.
         let key_desc = match envelope {
-            SourceEnvelope::Upsert(key_encoding) => {
+            SourceEnvelope::Upsert(key_encoding, _) => {
                 let key_desc = key_encoding.desc(&SourceEnvelope::None)?;
 
                 // It doesn't make sense for the key to have keys.
@@ -527,8 +527,17 @@ pub struct SinkAsOf {
 pub enum SourceEnvelope {
     None,
     Debezium(DebeziumDeduplicationStrategy),
-    Upsert(DataEncoding),
+    Upsert(DataEncoding, UpsertMode),
     CdcV2,
+}
+
+/// Whether we perform upsert by Kafka values or keys
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UpsertMode {
+    /// Treat the entire upsert value as something to flatten
+    Flat,
+    /// Just ignore the `before` portion of a if the debezium key is new
+    Debezium,
 }
 
 impl SourceEnvelope {
@@ -536,7 +545,7 @@ impl SourceEnvelope {
         match self {
             SourceEnvelope::None => avro::EnvelopeType::None,
             SourceEnvelope::Debezium { .. } => avro::EnvelopeType::Debezium,
-            SourceEnvelope::Upsert(_) => avro::EnvelopeType::Upsert,
+            SourceEnvelope::Upsert(_, _) => avro::EnvelopeType::Upsert,
             SourceEnvelope::CdcV2 => avro::EnvelopeType::CdcV2,
         }
     }

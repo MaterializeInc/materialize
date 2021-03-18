@@ -40,7 +40,7 @@ use dataflow_types::{
     DataEncoding, ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder,
     KafkaSourceConnector, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
     RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector,
-    SourceEnvelope,
+    SourceEnvelope, UpsertMode,
 };
 use expr::GlobalId;
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -332,7 +332,12 @@ fn plan_source_envelope(
         id: expr::Id::LocalBareSource,
         typ: bare_desc.typ().clone(),
     };
-    let (hir_expr, column_names) = if let SourceEnvelope::Debezium(_) = envelope {
+
+    let do_dbz_logic = matches!(envelope,
+                                SourceEnvelope::Debezium(_) |
+                                SourceEnvelope::Upsert(_, UpsertMode::Debezium));
+
+    let (hir_expr, column_names) = if do_dbz_logic {
         // Debezium sources produce a diff in their last column.
         // Thus we need to select all rows but the last, which we repeat by.
         // I.e., for a source with four columns, we do
@@ -793,48 +798,10 @@ pub fn plan_create_source(
     let envelope = match &envelope {
         sql_parser::ast::Envelope::None => SourceEnvelope::None,
         sql_parser::ast::Envelope::Debezium => {
-            let dedup_strat = match with_options.remove("deduplication") {
-                None => DebeziumDeduplicationStrategy::Ordered,
-                Some(Value::String(s)) => {
-                    match s.as_str() {
-                        "full" => DebeziumDeduplicationStrategy::Full,
-                        "ordered" => DebeziumDeduplicationStrategy::Ordered,
-                        "full_in_range" => {
-                            match (
-                                with_options.remove("deduplication_start"),
-                                with_options.remove("deduplication_end"),
-                            ) {
-                                (Some(Value::String(start)), Some(Value::String(end))) => {
-                                    let deduplication_pad_start = match with_options.remove("deduplication_pad_start") {
-                                        Some(Value::String(start)) => Some(start),
-                                        Some(v) => bail!("Expected string for deduplication_pad_start, got: {:?}", v),
-                                        None => None
-                                    };
-                                    DebeziumDeduplicationStrategy::full_in_range(
-                                        &start,
-                                        &end,
-                                        deduplication_pad_start.as_deref(),
-                                    )
-                                    .map_err(|e| {
-                                        anyhow!("Unable to create deduplication strategy: {}", e)
-                                    })?
-                                }
-                                (_, _) => bail!(
-                                    "deduplication full_in_range requires both \
-                                 'deduplication_start' and 'deduplication_end' parameters"
-                                ),
-                            }
-                        }
-                        _ => bail!(
-                            "deduplication must be one of 'ordered' 'full', or 'full_in_range'."
-                        ),
-                    }
-                }
-                _ => bail!("deduplication must be one of 'ordered', 'full' or 'full_in_range'."),
-            };
+            let dedup_strat = dedupe_strategy(&mut with_options)?;
             SourceEnvelope::Debezium(dedup_strat)
         }
-        sql_parser::ast::Envelope::Upsert(key_format) => match connector {
+        sql_parser::ast::Envelope::Upsert(key_format, mode) => match connector {
             Connector::Kafka { .. } => {
                 let mut key_encoding = if key_format.is_some() {
                     get_encoding(key_format)?
@@ -854,7 +821,11 @@ pub fn plan_create_source(
                     DataEncoding::Bytes | DataEncoding::Text => {}
                     _ => unsupported!("format for upsert key"),
                 }
-                SourceEnvelope::Upsert(key_encoding)
+                let our_mode = match mode {
+                    sql_parser::ast::UpsertMode::Flat => UpsertMode::Flat,
+                    sql_parser::ast::UpsertMode::Debezium => UpsertMode::Debezium,
+                };
+                SourceEnvelope::Upsert(key_encoding, our_mode)
             }
             _ => unsupported!("upsert envelope for non-Kafka sources"),
         },
@@ -873,7 +844,7 @@ pub fn plan_create_source(
         }
     };
 
-    if let SourceEnvelope::Upsert(key_encoding) = &envelope {
+    if let SourceEnvelope::Upsert(key_encoding, _) = &envelope {
         match &mut encoding {
             DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
                 *key_schema = None;
@@ -978,6 +949,48 @@ pub fn plan_create_source(
         source,
         if_not_exists,
         materialized,
+    })
+}
+
+fn dedupe_strategy(
+    with_options: &mut BTreeMap<String, Value>,
+) -> Result<DebeziumDeduplicationStrategy, anyhow::Error> {
+    Ok(match with_options.remove("deduplication") {
+        None => DebeziumDeduplicationStrategy::Ordered,
+        Some(Value::String(s)) => match s.as_str() {
+            "full" => DebeziumDeduplicationStrategy::Full,
+            "ordered" => DebeziumDeduplicationStrategy::Ordered,
+            "full_in_range" => {
+                match (
+                    with_options.remove("deduplication_start"),
+                    with_options.remove("deduplication_end"),
+                ) {
+                    (Some(Value::String(start)), Some(Value::String(end))) => {
+                        let deduplication_pad_start = match with_options
+                            .remove("deduplication_pad_start")
+                        {
+                            Some(Value::String(start)) => Some(start),
+                            Some(v) => {
+                                bail!("Expected string for deduplication_pad_start, got: {:?}", v)
+                            }
+                            None => None,
+                        };
+                        DebeziumDeduplicationStrategy::full_in_range(
+                            &start,
+                            &end,
+                            deduplication_pad_start.as_deref(),
+                        )
+                        .map_err(|e| anyhow!("Unable to create deduplication strategy: {}", e))?
+                    }
+                    (_, _) => bail!(
+                        "deduplication full_in_range requires both \
+                             'deduplication_start' and 'deduplication_end' parameters"
+                    ),
+                }
+            }
+            _ => bail!("deduplication must be one of 'ordered' 'full', or 'full_in_range'."),
+        },
+        _ => bail!("deduplication must be one of 'ordered', 'full' or 'full_in_range'."),
     })
 }
 

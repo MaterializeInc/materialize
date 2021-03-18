@@ -145,8 +145,14 @@ pub enum Format<T: AstInfo> {
 pub enum Envelope<T: AstInfo> {
     None,
     Debezium,
-    Upsert(Option<Format<T>>),
+    Upsert(Option<Format<T>>, UpsertMode),
     CdcV2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum UpsertMode {
+    Flat,
+    Debezium,
 }
 
 impl<T: AstInfo> Default for Envelope<T> {
@@ -165,8 +171,12 @@ impl<T: AstInfo> AstDisplay for Envelope<T> {
             Self::Debezium => {
                 f.write_str("DEBEZIUM");
             }
-            Self::Upsert(format) => {
-                f.write_str("UPSERT");
+            Self::Upsert(format, mode) => {
+                match mode {
+                    UpsertMode::Flat => f.write_str("UPSERT"),
+                    UpsertMode::Debezium => f.write_str("DBZUPSERT"),
+                }
+
                 if let Some(format) = format {
                     f.write_str(" FORMAT ");
                     f.write_node(format);

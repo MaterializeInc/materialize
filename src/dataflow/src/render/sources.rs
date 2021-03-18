@@ -253,38 +253,51 @@ where
                             .as_collection(),
                     );
 
-                    let (stream, errors) = if let SourceEnvelope::Upsert(key_encoding) = &envelope {
-                        let value_decoder = get_decoder(encoding, &self.debug_name, scope.index());
-                        let key_decoder =
-                            get_decoder(key_encoding.clone(), &self.debug_name, scope.index());
-                        super::upsert::decode_stream(
-                            &ok_source,
-                            self.as_of_frontier.clone(),
-                            key_decoder,
-                            value_decoder,
-                            &mut linear_operators,
-                            src.bare_desc.typ().arity(),
-                        )
-                    } else {
-                        // TODO(brennan) -- this should just be a MirRelationExpr::FlatMap using regexp_extract, csv_extract,
-                        // a hypothetical future avro_extract, protobuf_extract, etc.
-                        let ((stream, errors), extra_token) = decode_values(
-                            &ok_source,
-                            encoding,
-                            &self.debug_name,
-                            &envelope,
-                            &mut linear_operators,
-                            fast_forwarded,
-                            src.bare_desc.clone(),
-                        );
-                        if let Some(tok) = extra_token {
-                            self.additional_tokens
-                                .entry(src_id)
-                                .or_insert_with(Vec::new)
-                                .push(Rc::new(tok));
-                        }
-                        (stream, errors)
-                    };
+                    let (stream, errors) =
+                        if let SourceEnvelope::Upsert(key_encoding, mode) = &envelope {
+                            let value_decoder = get_decoder(
+                                encoding,
+                                &self.debug_name,
+                                scope.index(),
+                                &envelope,
+                                Some(&src.bare_desc),
+                            );
+                            let key_decoder = get_decoder(
+                                key_encoding.clone(),
+                                &self.debug_name,
+                                scope.index(),
+                                &envelope,
+                                None,
+                            );
+                            super::upsert::decode_stream(
+                                &ok_source,
+                                self.as_of_frontier.clone(),
+                                key_decoder,
+                                value_decoder,
+                                &mut linear_operators,
+                                src.bare_desc.typ().arity(),
+                                *mode,
+                            )
+                        } else {
+                            // TODO(brennan) -- this should just be a MirRelationExpr::FlatMap using regexp_extract, csv_extract,
+                            // a hypothetical future avro_extract, protobuf_extract, etc.
+                            let ((stream, errors), extra_token) = decode_values(
+                                &ok_source,
+                                encoding,
+                                &self.debug_name,
+                                &envelope,
+                                &mut linear_operators,
+                                fast_forwarded,
+                                src.bare_desc.clone(),
+                            );
+                            if let Some(tok) = extra_token {
+                                self.additional_tokens
+                                    .entry(src_id)
+                                    .or_insert_with(Vec::new)
+                                    .push(Rc::new(tok));
+                            }
+                            (stream, errors)
+                        };
 
                     if let Some(errors) = errors {
                         error_collections.push(errors);
@@ -348,7 +361,7 @@ where
 
                 // Apply `as_of` to each timestamp.
                 match envelope {
-                    SourceEnvelope::Upsert(_) => {}
+                    SourceEnvelope::Upsert(_, _) => {}
                     _ => {
                         let as_of_frontier1 = self.as_of_frontier.clone();
                         collection = collection
