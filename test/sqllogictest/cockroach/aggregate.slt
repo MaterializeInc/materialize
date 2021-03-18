@@ -236,7 +236,7 @@ SELECT * FROM kv GROUP BY v, count(DISTINCT w)
 query error aggregate functions are not allowed in GROUP BY
 SELECT count(DISTINCT w) FROM kv GROUP BY 1
 
-query error aggregate functions are not allowed in RETURNING
+query error Expected end of statement, found identifier
 INSERT INTO kv (k, v) VALUES (99, 100) RETURNING sum(v)
 
 query error LIMIT must be an integer constant
@@ -432,7 +432,7 @@ SELECT 3 FROM kv GROUP BY k HAVING v > 2
 query error does not exist
 SELECT k FROM kv HAVING k > 7
 
-query error syntax error at or near ","
+query error Expected right parenthesis, found comma
 SELECT count(*, 1) FROM kv
 
 query I
@@ -870,8 +870,6 @@ INSERT INTO bools VALUES (false), (false)
 
 query error supported
 SELECT bool_and(b), bool_or(b) FROM bools
-----
-false true
 
 # not supported yet
 # statement OK
@@ -934,7 +932,7 @@ NULL true 0 1 5
 query error FILTER specified but abs\(\) is not an aggregate function
 SELECT k, abs(k) FILTER (WHERE k=1) FROM kv
 
-query error syntax error at or near "filter"
+query error Expected end of statement, found left parenthesis
 SELECT k FILTER (WHERE k=1) FROM kv GROUP BY k
 
 query error aggregate functions are not allowed in FILTER
@@ -1076,10 +1074,6 @@ SELECT 1 FROM kv GROUP BY v, w::DECIMAL HAVING w::DECIMAL > 1
 # Regression test for distsql aggregator crash when using hash aggregation.
 query error supported
 SELECT v, array_agg('a') FROM kv GROUP BY v
-----
-2     {a,a,a}
-4     {a,a}
-NULL  {a}
 
 query I
 SELECT 123 FROM kv ORDER BY max(v)
@@ -1130,132 +1124,66 @@ SELECT company_id, string_agg(employee, ',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
-1           A
-2           B,B
-3           C,C,C
-4           D,D,D,D
 
 query error supported
 SELECT company_id, string_agg(DISTINCT employee, ',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
-1           A
-2           B
-3           C
-4           D
 
-query error supported
+query error unknown catalog item 'b'
 SELECT company_id, string_agg(employee::BYTEA, b',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
-1           A
-2           B,B
-3           C,C,C
-4           D,D,D,D
 
 query error supported
 SELECT company_id, string_agg(employee, '')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
-1           A
-2           BB
-3           CCC
-4           DDDD
 
-query error supported
+query error unknown catalog item 'b'
 SELECT company_id, string_agg(employee::BYTEA, b'')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
-1           A
-2           BB
-3           CCC
-4           DDDD
 
 query error supported
 SELECT company_id, string_agg(employee, NULL)
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
-1           A
-2           BB
-3           CCC
-4           DDDD
 
 query error supported
 SELECT company_id, string_agg(employee::BYTEA, NULL)
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
-1           A
-2           BB
-3           CCC
-4           DDDD
 
 query error supported
 SELECT company_id, string_agg(NULL::TEXT, ',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
-1           NULL
-2           NULL
-3           NULL
-4           NULL
 
 query error supported
 SELECT company_id, string_agg(NULL::BYTEA, ',')
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
-1           NULL
-2           NULL
-3           NULL
-4           NULL
 
 query error supported
 SELECT company_id, string_agg(NULL::TEXT, NULL)
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
-1           NULL
-2           NULL
-3           NULL
-4           NULL
 
 query error supported
 SELECT company_id, string_agg(NULL::BYTEA, NULL)
 FROM string_agg_test
 GROUP BY company_id
 ORDER BY company_id;
-----
-company_id  string_agg
-1           NULL
-2           NULL
-3           NULL
-4           NULL
 
 query error supported
 SELECT company_id, string_agg(NULL, NULL)

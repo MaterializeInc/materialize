@@ -45,8 +45,6 @@ SELECT '9223372036854775807'::jsonb
 
 query error invalid input syntax for type jsonb: 9223372036854775808 is out of range for a jsonb number
 SELECT '9223372036854775808'::jsonb
-----
-9223372036854775808
 
 statement ok
 CREATE TABLE test_jsonb (

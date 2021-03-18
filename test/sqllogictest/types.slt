@@ -335,13 +335,11 @@ SELECT '1'::pg_catalog.regclass
 
 # 🔬🔬 record
 
-query T
-SELECT ROW(1, 2) AS record;
-----
-(1,2)
+query error type "record" does not exist
+SELECT ROW(1, 2)::record;
 
 query error type "pg_catalog.record" does not exist
-SELECT ROW(1, 2) AS pg_catalog.record;
+SELECT ROW(1, 2)::pg_catalog.record;
 
 # 🔬🔬 text
 
