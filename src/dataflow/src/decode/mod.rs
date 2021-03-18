@@ -505,6 +505,7 @@ where
 }
 
 fn find_dbz_key_indices(desc: &RelationDesc, key_schema: Option<&str>) -> Option<Vec<usize>> {
+    println!("column types {:?}", desc.typ().column_types);
     let fields = match &desc.typ().column_types[0].scalar_type {
         ScalarType::Record { fields, .. } => fields.clone(),
         typ => unreachable!(
