@@ -62,6 +62,8 @@ pub struct KafkaSourceInfo {
     cached_files: Vec<PathBuf>,
     /// Timely worker logger for source events
     logger: Option<Logger>,
+    /// Timely worker logger for source events
+    rdkafka_logger: Option<Logger>,
 }
 
 impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
@@ -72,6 +74,7 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
         worker_id: usize,
         worker_count: usize,
         logger: Option<Logger>,
+        rdkafka_logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         _: &mut ConsistencyInfo,
@@ -84,6 +87,7 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
                 worker_id,
                 worker_count,
                 logger,
+                rdkafka_logger,
                 consumer_activator,
                 kc,
             )),
@@ -309,6 +313,7 @@ impl KafkaSourceInfo {
         worker_id: usize,
         worker_count: usize,
         logger: Option<Logger>,
+        rdkafka_logger: Option<Logger>,
         consumer_activator: SyncActivator,
         kc: KafkaSourceConnector,
     ) -> KafkaSourceInfo {
@@ -329,8 +334,8 @@ impl KafkaSourceInfo {
             cluster_id,
             &config_options,
         );
-        let consumer: BaseConsumer<GlueConsumerContext> = kafka_config
-            .create_with_context(GlueConsumerContext(consumer_activator))
+        let consumer: BaseConsumer<GlueConsumerContext, Logger> = kafka_config
+            .create_with_context(GlueConsumerContext(consumer_activator, rdkafka_logger))
             .expect("Failed to create Kafka Consumer");
         let cached_files = kc
             .cached_files
@@ -385,6 +390,7 @@ impl KafkaSourceInfo {
             worker_count,
             cached_files,
             logger,
+            rdkafka_logger,
         }
     }
 
@@ -621,7 +627,7 @@ impl PartitionConsumer {
 
 /// An implementation of [`ConsumerContext`] that unparks the wrapped thread
 /// when the message queue switches from nonempty to empty.
-struct GlueConsumerContext(SyncActivator);
+struct GlueConsumerContext(SyncActivator, Logger);
 
 impl ClientContext for GlueConsumerContext {
     fn stats(&self, statistics: Statistics) {

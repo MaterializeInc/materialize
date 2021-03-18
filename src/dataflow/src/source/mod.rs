@@ -94,6 +94,7 @@ pub struct SourceConfig<'a, G> {
     pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// Timely worker logger for source events
     pub logger: Option<Logger>,
+    pub rdkafka_logger: Option<Logger>,
 }
 
 #[derive(Clone, Serialize, Debug, Deserialize)]
@@ -237,6 +238,7 @@ pub(crate) trait SourceConstructor<Out> {
         worker_id: usize,
         worker_count: usize,
         logger: Option<Logger>,
+        rdkafka_logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -879,6 +881,7 @@ where
         encoding,
         mut caching_tx,
         logger,
+        rdkafka_logger,
         ..
     } = config;
     let (stream, capability) = source(scope, name.clone(), move |info| {
@@ -904,6 +907,7 @@ where
             worker_id,
             worker_count,
             logger,
+            rdkafka_logger,
             scope.sync_activator_for(&info.address[..]),
             source_connector.clone(),
             &mut consistency_info,

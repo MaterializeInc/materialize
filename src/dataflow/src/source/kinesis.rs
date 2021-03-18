@@ -79,6 +79,7 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
         _worker_id: usize,
         _worker_count: usize,
         logger: Option<Logger>,
+        _: Option<Logger>,
         _consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,

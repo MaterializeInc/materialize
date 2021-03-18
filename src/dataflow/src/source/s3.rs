@@ -92,6 +92,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
         worker_id: usize,
         _worker_count: usize,
         logger: Option<Logger>,
+        _: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,

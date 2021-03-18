@@ -11,10 +11,13 @@
 
 pub mod differential;
 pub mod materialized;
+pub mod rdkafka;
 pub mod timely;
 
 use ::timely::dataflow::operators::capture::{Event, EventPusher};
-use dataflow_types::logging::{DifferentialLog, LogVariant, MaterializedLog, TimelyLog};
+use dataflow_types::logging::{
+    DifferentialLog, LogVariant, MaterializedLog, RDKafkaLog, TimelyLog,
+};
 use repr::Timestamp;
 use std::time::Duration;
 

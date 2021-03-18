@@ -45,6 +45,7 @@ where
         render_state: &mut RenderState,
         scope: &mut Child<'g, G, G::Timestamp>,
         materialized_logging: Option<Logger>,
+        rdkafka_logging: Option<Logger>,
         src_id: GlobalId,
         mut src: SourceDesc,
     ) {
@@ -178,6 +179,7 @@ where
                     worker_id: scope.index(),
                     worker_count: scope.peers(),
                     logger: materialized_logging,
+                    rdkafka_logger: rdkafka_logging,
                     encoding: encoding.clone(),
                     caching_tx,
                 };

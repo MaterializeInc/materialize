@@ -554,7 +554,7 @@ pub const MZ_MESSAGE_COUNTS: BuiltinLog = BuiltinLog {
 pub const MZ_KAFKA_CONSUMER_STATISTICS: BuiltinLog = BuiltinLog {
     name: "mz_kafka_consumer_statistics",
     schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::RDKafkaLog(RDKafkaLog::ConsumerStatistics),
+    variant: LogVariant::RDKafkaLog(RDKafkaLog::ConsumerInfo),
     id: GlobalId::System(3030),
     index_id: GlobalId::System(3031),
 };

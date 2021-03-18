@@ -164,6 +164,7 @@ pub fn build_dataflow<A: Allocate>(
     let worker_logging = timely_worker.log_register().get("timely");
     let name = format!("Dataflow: {}", &dataflow.debug_name);
     let materialized_logging = timely_worker.log_register().get("materialized");
+    let rdkafka_logging = timely_worker.log_register().get("rdkafka");
 
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         // The scope.clone() occurs to allow import in the region.
@@ -188,6 +189,7 @@ pub fn build_dataflow<A: Allocate>(
                     render_state,
                     region,
                     materialized_logging.clone(),
+                    rdkafka_logging.clone(),
                     src_id,
                     src,
                 );

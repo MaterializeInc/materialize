@@ -295,10 +295,13 @@ where
         let mut d_logger = BatchLogger::new(d_linked.clone(), granularity_ms);
         let m_linked = std::rc::Rc::new(EventLink::new());
         let mut m_logger = BatchLogger::new(m_linked.clone(), granularity_ms);
+        let rdkafka_linked = std::rc::Rc::new(EventLink::new());
+        let mut rdkafka_logger = BatchLogger::new(rdkafka_linked.clone(), granularity_ms);
 
         let mut t_traces = HashMap::new();
         let mut d_traces = HashMap::new();
         let mut m_traces = HashMap::new();
+        let mut rdkafka_traces = HashMap::new();
 
         if !logging.log_logging {
             // Construct logging dataflows and endpoints before registering any.
@@ -316,6 +319,11 @@ where
                 &mut self.timely_worker,
                 logging,
                 m_linked.clone(),
+            ));
+            rdkafka_traces.extend(logging::rdkafka::construct(
+                &mut self.timely_worker,
+                logging,
+                rdkafka_linked.clone(),
             ));
         }
 
@@ -338,6 +346,13 @@ where
             "materialized",
             Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
                 m_logger.publish_batch(time, data)
+            }),
+        );
+
+        self.timely_worker.log_register().insert_logger(
+            "rdkafka",
+            Logger::new(now, unix, self.timely_worker.index(), move |time, data| {
+                rdkafka_logger.publish_batch(time, data)
             }),
         );
 
@@ -373,6 +388,11 @@ where
                 logging,
                 m_linked,
             ));
+            rdkafka_traces.extend(logging::rdkafka::construct(
+                &mut self.timely_worker,
+                logging,
+                rdkafka_linked.clone(),
+            ));
         }
 
         // Install traces as maintained indexes
@@ -393,6 +413,14 @@ where
             logger.log(MaterializedEvent::Frontier(id, 0, 1));
         }
         for (log, (_, trace)) in m_traces {
+            let id = logging.active_logs[&log];
+            self.render_state
+                .traces
+                .set(id, TraceBundle::new(trace, errs.clone()));
+            self.reported_frontiers.insert(id, Antichain::from_elem(0));
+            logger.log(MaterializedEvent::Frontier(id, 0, 1));
+        }
+        for (log, (_, trace)) in rdkafka_traces {
             let id = logging.active_logs[&log];
             self.render_state
                 .traces
