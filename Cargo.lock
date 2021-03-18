@@ -752,6 +752,7 @@ dependencies = [
  "crossbeam-channel",
  "csv-core",
  "dataflow-types",
+ "dec",
  "differential-dataflow",
  "dogsdogsdogs",
  "expr",

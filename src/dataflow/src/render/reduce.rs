@@ -62,6 +62,7 @@
 
 use std::collections::BTreeMap;
 
+use dec::{Context as DecCx, Decimal128};
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::DiffVector;
 use differential_dataflow::hashable::Hashable;
@@ -1134,6 +1135,7 @@ where
                     Datum::Float64(f) => ((*f * float_scale) as i128, 1),
                     Datum::Decimal(d) => (d.as_i128(), 1),
                     Datum::Null => (0, 0),
+                    Datum::Numeric(n) => (n.0.coefficient(), 1),
                     x => panic!("Accumulating non-integer data: {:?}", x),
                 }
             }
@@ -1265,6 +1267,11 @@ where
                             Datum::Float64(((agg1 as f64) / float_scale).into())
                         }
                         (AggregateFunc::SumDecimal, _) => Datum::from(agg1),
+                        (AggregateFunc::SumNumeric, _) => {
+                            let mut cx = DecCx::<Decimal128>::default();
+                            let d = cx.from_i128(agg1);
+                            Datum::from(d)
+                        },
                         x => panic!("Unexpected accumulable aggregation: {:?}", x),
                     };
 
@@ -1321,6 +1328,7 @@ fn reduction_type(func: &AggregateFunc) -> ReductionType {
         | AggregateFunc::SumFloat32
         | AggregateFunc::SumFloat64
         | AggregateFunc::SumDecimal
+        | AggregateFunc::SumNumeric
         | AggregateFunc::Count
         | AggregateFunc::Any
         | AggregateFunc::All
@@ -1454,6 +1462,7 @@ pub mod monoids {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumDecimal
+            | AggregateFunc::SumNumeric
             | AggregateFunc::Count
             | AggregateFunc::Any
             | AggregateFunc::All

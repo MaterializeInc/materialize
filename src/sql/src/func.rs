@@ -1802,6 +1802,7 @@ lazy_static! {
                     // Plus we will one day want to support this overload.
                     unsupported!("sum(interval)");
                 }), 2113;
+                params!(Numeric{ scale: None }) => AggregateFunc::SumNumeric, 21140;
             },
 
             // Table functions.
