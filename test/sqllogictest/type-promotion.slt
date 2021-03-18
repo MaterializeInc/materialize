@@ -310,8 +310,6 @@ SELECT '1'::interval::bigint
 
 query error cannot cast jsonb object to type bigint
 SELECT '{}'::jsonb::bigint;
-----
-NULL
 
 query R
 SELECT '1'::jsonb::bigint;
@@ -459,8 +457,6 @@ SELECT '1'::interval::numeric
 
 query error cannot cast jsonb object to type numeric
 SELECT '{}'::jsonb::numeric;
-----
-NULL
 
 query R
 SELECT '1'::jsonb::numeric;
@@ -515,8 +511,6 @@ SELECT '1'::interval::double
 
 query error cannot cast jsonb object to type double precision
 SELECT '{}'::jsonb::double;
-----
-NULL
 
 query T
 SELECT '1'::jsonb::double;
@@ -569,10 +563,8 @@ SELECT 2::int::real;
 query error CAST does not support casting from interval to real
 SELECT '1'::interval::real
 
-query error cannot cast jsonb object to type float
+query error cannot cast jsonb object to type real
 SELECT '{}'::jsonb::real;
-----
-NULL
 
 query R
 SELECT '2'::jsonb::real;
