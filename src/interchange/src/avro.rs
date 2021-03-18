@@ -34,7 +34,9 @@ use self::envelope_debezium::{AvroDebeziumDecoder, DebeziumDeduplicationState, R
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EnvelopeType {
     None,
+    /// An envelope that contains "before" and "after" fields
     Debezium,
+    /// Same as None, but validates that the top level item is a record
     Upsert,
     CdcV2,
 }

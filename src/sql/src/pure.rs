@@ -105,7 +105,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
         }
 
         purify_format(format, connector, col_names, file, &config_options).await?;
-        if let sql_parser::ast::Envelope::Upsert(format) = envelope {
+        if let sql_parser::ast::Envelope::Upsert(format, _) = envelope {
             purify_format(format, connector, col_names, None, &config_options).await?;
         }
     }

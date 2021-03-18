@@ -332,7 +332,12 @@ fn plan_source_envelope(
         id: expr::Id::LocalBareSource,
         typ: bare_desc.typ().clone(),
     };
-    let (hir_expr, column_names) = if let SourceEnvelope::Debezium(_) = envelope {
+
+    let do_dbz_logic = matches!(envelope,
+                                SourceEnvelope::Debezium(_) |
+                                SourceEnvelope::Upsert(_, UpsertMode::Debezium));
+
+    let (hir_expr, column_names) = if do_dbz_logic {
         // Debezium sources produce a diff in their last column.
         // Thus we need to select all rows but the last, which we repeat by.
         // I.e., for a source with four columns, we do
@@ -834,7 +839,7 @@ pub fn plan_create_source(
             };
             SourceEnvelope::Debezium(dedup_strat)
         }
-        sql_parser::ast::Envelope::Upsert(key_format) => match connector {
+        sql_parser::ast::Envelope::Upsert(key_format, mode) => match connector {
             Connector::Kafka { .. } => {
                 let mut key_encoding = if key_format.is_some() {
                     get_encoding(key_format)?
@@ -854,7 +859,11 @@ pub fn plan_create_source(
                     DataEncoding::Bytes | DataEncoding::Text => {}
                     _ => unsupported!("format for upsert key"),
                 }
-                SourceEnvelope::Upsert(key_encoding, UpsertMode::Value)
+                let our_mode = match mode {
+                    sql_parser::ast::UpsertMode::Flat => UpsertMode::Flat,
+                    sql_parser::ast::UpsertMode::Debezium => UpsertMode::Debezium,
+                };
+                SourceEnvelope::Upsert(key_encoding, our_mode)
             }
             _ => unsupported!("upsert envelope for non-Kafka sources"),
         },
@@ -1216,10 +1225,15 @@ pub fn plan_create_sink(
 
     let envelope = match envelope {
         None | Some(Envelope::Debezium) => SinkEnvelope::Debezium,
-        Some(Envelope::Upsert(None)) => SinkEnvelope::Upsert,
+        Some(Envelope::Upsert(None, sql_parser::ast::UpsertMode::Flat)) => SinkEnvelope::Upsert,
+        Some(Envelope::Upsert(None, sql_parser::ast::UpsertMode::Debezium)) => {
+            unsupported!("Upsert sinks with Debezium format")
+        }
         Some(Envelope::CdcV2) => unsupported!("CDCv2 sinks"),
         Some(Envelope::None) => unsupported!("\"ENVELOPE NONE\" sinks"),
-        Some(Envelope::Upsert(Some(_))) => unsupported!("Upsert sinks with custom key encodings"),
+        Some(Envelope::Upsert(Some(_), _)) => {
+            unsupported!("Upsert sinks with custom key encodings")
+        }
     };
     let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     let from = scx.resolve_item(from)?;

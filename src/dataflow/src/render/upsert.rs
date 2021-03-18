@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -21,7 +21,7 @@ use timely::progress::Antichain;
 use dataflow_types::{DataflowError, DecodeError, LinearOperator, UpsertMode};
 use expr::{EvalError, MirScalarExpr};
 use log::error;
-use repr::{Datum, Diff, Row, RowArena, Timestamp};
+use repr::{Datum, Diff, Row, RowArena, RowPacker, Timestamp};
 
 use crate::decode::DecoderState;
 use crate::operator::StreamExt;
@@ -137,11 +137,15 @@ where
             // this is a map of (decoded key) -> (decoded_value). We store the
             // latest value for a given key that way we know what to retract if
             // a new value with the same key comes along
+            //
+            // This is not used for debezium upsert mode
             let mut current_values = HashMap::new();
+            // Track whether or not a key has been seen, so that we can omit the retraction for new
+            // debezium-upsert values
+            let mut current_keys = HashSet::new();
 
             let mut vector = Vec::new();
             let mut row_packer = repr::RowPacker::new();
-
             move |input, output| {
                 // Digest each input, reduce by presented timestamp.
                 input.for_each(|cap, data| {
@@ -161,6 +165,7 @@ where
                         }
 
                         if let Some(new_offset) = new_position {
+                            // TODO: handle deciding if we skip the internal debezium "before" data
                             let entry = to_send
                                 .entry(time)
                                 .or_insert_with(|| (cap.delayed(&time), HashMap::new()))
@@ -247,23 +252,62 @@ where
                                     // We store errors as well as non-None values, so that they can be
                                     // retracted if new rows show up for the same key.
                                     let new_value = decoded_value.transpose();
-                                    let old_value = if let Some(new_value) = &new_value {
-                                        current_values.insert(decoded_key, new_value.clone())
-                                    } else {
-                                        current_values.remove(&decoded_key)
-                                    };
-                                    if let Some(old_value) = old_value {
-                                        // retract old value
-                                        session.give((old_value, cap.time().clone(), -1));
-                                    }
-                                    if let Some(new_value) = new_value {
-                                        // give new value
-                                        session.give((new_value, cap.time().clone(), 1));
+                                    match mode {
+                                        UpsertMode::Flat => {
+                                            let old_value = if let Some(new_value) = &new_value {
+                                                current_values
+                                                    .insert(decoded_key, new_value.clone())
+                                            } else {
+                                                current_values.remove(&decoded_key)
+                                            };
+                                            if let Some(old_value) = old_value {
+                                                // retract old value
+                                                session.give((old_value, cap.time().clone(), -1));
+                                            }
+                                            if let Some(new_value) = new_value {
+                                                println!("upsert creating value {:?}", new_value);
+                                                // give new value
+                                                session.give((new_value, cap.time().clone(), 1));
+                                            }
+                                        }
+                                        UpsertMode::Debezium => {
+                                            let is_new = current_keys.insert(decoded_key);
+                                            if is_new {
+                                                // repack row without the before field
+                                                if let Some(Ok(row)) = new_value {
+                                                    let mut new_row = RowPacker::new();
+                                                    let after =
+                                                        row.iter().skip(1).next().unwrap_or_else(
+                                                            || {
+                                                                panic!(
+                                                                "expected debezium-formatted data \
+                                                                 to have an after list, got: {:?}",
+                                                                row
+                                                            )
+                                                            },
+                                                        );
+                                                    new_row.push(Datum::Null);
+                                                    if let Datum::List(datums) = after {
+                                                        new_row.push_list(datums.iter());
+                                                    }
+                                                    let row = new_row.finish();
+                                                    session.give((Ok(row), cap.time().clone(), 1))
+                                                } else if let Some(err) = new_value {
+                                                    session.give((err, cap.time().clone(), 1))
+                                                }
+                                            } else if let Some(new_value) = new_value {
+                                                session.give((new_value, cap.time().clone(), 1))
+                                            }
+                                        }
                                     }
                                 }
                                 Ok(None) => {}
                                 Err(err) => {
-                                    error!("key decoding error: {}", err);
+                                    error!(
+                                        "key decoding error: {} key: {:?}",
+                                        err,
+                                        String::from_utf8_lossy(&*key)
+                                    );
                                 }
                             }
                         }

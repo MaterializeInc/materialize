@@ -534,8 +534,10 @@ pub enum SourceEnvelope {
 /// Whether we perform upsert by Kafka values or keys
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UpsertMode {
-    Key,
-    Value,
+    /// Treat the entire upsert value as something to flatten
+    Flat,
+    /// Just ignore the `before` portion of a if the debezium key is new
+    Debezium,
 }
 
 impl SourceEnvelope {
@@ -543,8 +545,7 @@ impl SourceEnvelope {
         match self {
             SourceEnvelope::None => avro::EnvelopeType::None,
             SourceEnvelope::Debezium { .. } => avro::EnvelopeType::Debezium,
-            SourceEnvelope::Upsert(_, UpsertMode::Value) => avro::EnvelopeType::Upsert,
-            SourceEnvelope::Upsert(_, UpsertMode::Key) => avro::EnvelopeType::KeyUpsert,
+            SourceEnvelope::Upsert(_, _) => avro::EnvelopeType::Upsert,
             SourceEnvelope::CdcV2 => avro::EnvelopeType::CdcV2,
         }
     }

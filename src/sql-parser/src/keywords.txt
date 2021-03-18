@@ -68,6 +68,7 @@ Database
 Databases
 Day
 Days
+DbzUpsert
 Debezium
 Dec
 Decimal
