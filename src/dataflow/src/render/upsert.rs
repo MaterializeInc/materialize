@@ -286,9 +286,19 @@ where
                                                             )
                                                             },
                                                         );
+
                                                     new_row.push(Datum::Null);
-                                                    if let Datum::List(datums) = after {
-                                                        new_row.push_list(datums.iter());
+                                                    if let Datum::List(after_datums) = after {
+                                                        println!(
+                                                            "row: {:?}\nafter: {:?}",
+                                                            row, after_datums
+                                                        );
+                                                        new_row.push_list(after_datums.iter());
+                                                    } else {
+                                                        println!(
+                                                            "Unexpected type for after: {:?}\nrow:{:?}",
+                                                            after, row
+                                                        );
                                                     }
                                                     let row = new_row.finish();
                                                     session.give((Ok(row), cap.time().clone(), 1))

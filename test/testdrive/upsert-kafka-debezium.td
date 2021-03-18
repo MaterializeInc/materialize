@@ -44,13 +44,13 @@ $ set schema={
 $ kafka-create-topic topic=dbzupsert
 
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
-{"key": "fish"} {"before": {"row": {"animal": "fish"}}, "after": {"row": {"animal": "lizard"}}}
+{"key": "scale"} {"before": {"row": {"animal": "fish"}}, "after": {"row": {"animal": "lizard"}}}
 
 
 > CREATE MATERIALIZED SOURCE doin_upsert
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
-  ENVELOPE DBZUPSERT
+  ENVELOPE DBZUPSERT FORMAT AVRO USING SCHEMA '${keyschema}'
 
 > SELECT * FROM doin_upsert
 animal
