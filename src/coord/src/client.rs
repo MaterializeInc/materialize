@@ -9,6 +9,7 @@
 
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
@@ -33,6 +34,8 @@ use crate::session::{EndTransactionAction, Session};
 /// outstanding [`Client`]s for the coordinator have dropped.
 pub struct Handle {
     pub(crate) cluster_id: Uuid,
+    pub(crate) session_id: Uuid,
+    pub(crate) start_instant: Instant,
     pub(crate) _thread: JoinOnDropHandle<()>,
 }
 
@@ -43,6 +46,20 @@ impl Handle {
     /// created and persists until the data directory is deleted.
     pub fn cluster_id(&self) -> Uuid {
         self.cluster_id
+    }
+
+    /// Returns the session ID associated with this coordinator.
+    ///
+    /// The session ID is generated on coordinator boot. It lasts for the
+    /// lifetime of the coordinator. Restarting the coordinator will result
+    /// in a new session ID.
+    pub fn session_id(&self) -> Uuid {
+        self.session_id
+    }
+
+    /// Returns the instant at which the coordinator booted.
+    pub fn start_instant(&self) -> Instant {
+        self.start_instant
     }
 }
 

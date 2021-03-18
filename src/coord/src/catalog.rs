@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::SystemTime;
+use std::time::Instant;
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
@@ -39,6 +39,7 @@ use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::HirRelationExpr;
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
+use uuid::Uuid;
 
 use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
@@ -462,12 +463,15 @@ impl Catalog {
             storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
             config: sql::catalog::CatalogConfig {
-                startup_time: SystemTime::now(),
+                start_time: Utc::now(),
+                start_instant: Instant::now(),
                 nonce: rand::random(),
                 experimental_mode,
                 cluster_id,
+                session_id: Uuid::new_v4(),
                 cache_directory: config.cache_directory.clone(),
                 build_info: config.build_info,
+                num_workers: config.num_workers,
             },
         };
         let mut events = vec![];
@@ -762,6 +766,7 @@ impl Catalog {
             experimental_mode: None,
             cache_directory: None,
             build_info: &DUMMY_BUILD_INFO,
+            num_workers: 0,
         })?;
         Ok(catalog)
     }

@@ -60,3 +60,6 @@ pub const OP_MOD_F32_OID: u32 = 16_431;
 pub const OP_MOD_F64_OID: u32 = 16_432;
 pub const OP_UNARY_PLUS_OID: u32 = 16_433;
 pub const FUNC_MZ_SLEEP_OID: u32 = 16_434;
+pub const FUNC_MZ_SESSION_ID_OID: u32 = 16_435;
+pub const FUNC_MZ_UPTIME_OID: u32 = 16436;
+pub const FUNC_MZ_WORKERS_OID: u32 = 16437;
