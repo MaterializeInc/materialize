@@ -27,7 +27,7 @@ $ set schema={
             "type": "record",
             "fields": [
               {
-                "name": "animal",
+                "name": "creature",
                 "type": "string"
               }]
            },
@@ -44,7 +44,7 @@ $ set schema={
 $ kafka-create-topic topic=dbzupsert
 
 $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
-{"key": "scale"} {"before": {"row": {"animal": "fish"}}, "after": {"row": {"animal": "lizard"}}}
+{"key": "scale"} {"before": {"row": {"creature": "fish"}}, "after": {"row": {"creature": "lizard"}}}
 
 
 > CREATE MATERIALIZED SOURCE doin_upsert
@@ -53,6 +53,36 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
   ENVELOPE DBZUPSERT FORMAT AVRO USING SCHEMA '${keyschema}'
 
 > SELECT * FROM doin_upsert
-animal
+creature
 ----
 lizard
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+{"key": "scale"} {"before": {"row": {"creature": "lizard"}}, "after": {"row": {"creature": "dino"}}}
+
+> SELECT * FROM doin_upsert
+creature
+----
+dino
+
+$ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschema} schema=${schema} publish=true
+{"key": "feather"} {"before": null, "after": {"row": {"creature": "archeopteryx"}}}
+{"key": "feather"} {"before": {"row": {"creature": "archeopteryx"}}, "after": {"row": {"creature": "velociraptor"}}}
+
+> SELECT * FROM doin_upsert ORDER BY creature
+creature
+----
+dino
+velociraptor
+
+> CREATE MATERIALIZED SOURCE upsert_full_dedupe
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  WITH (deduplication = 'full')
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DBZUPSERT FORMAT AVRO USING SCHEMA '${keyschema}'
+
+> SELECT * FROM upsert_no_dedupe ORDER BY creature
+creature
+----
+dino
+velociraptor
