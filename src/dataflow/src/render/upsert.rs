@@ -276,21 +276,22 @@ where
                                                 // repack row without the before field
                                                 if let Some(Ok(row)) = new_value {
                                                     let mut new_row = RowPacker::new();
+                                                    let mut row_iter = row.iter();
+                                                    let key =
+                                                        row_iter.next().expect("must have a key");
+                                                    let _before = row_iter.next();
                                                     let after =
-                                                        row.iter().skip(1).next().unwrap_or_else(
-                                                            || {
-                                                                panic!(
+                                                        row_iter.next().unwrap_or_else(|| {
+                                                            panic!(
                                                                 "expected debezium-formatted data \
                                                                  to have an after list, got: {:?}",
                                                                 row
                                                             )
-                                                            },
-                                                        );
+                                                        });
 
+                                                    new_row.push(key);
                                                     new_row.push(Datum::Null);
-                                                    if let Datum::List(after_datums) = after {
-                                                        new_row.push_list(after_datums.iter());
-                                                    }
+                                                    new_row.push(after);
                                                     let row = new_row.finish();
                                                     session.give((Ok(row), cap.time().clone(), 1))
                                                 } else if let Some(err) = new_value {
