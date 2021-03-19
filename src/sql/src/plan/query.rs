@@ -2653,14 +2653,20 @@ fn plan_op(
 
 fn plan_function<'a>(
     ecx: &ExprContext,
-    sql_func: &'a Function<Aug>,
+    Function {
+        name,
+        args,
+        filter,
+        over,
+        distinct,
+    }: &'a Function<Aug>,
 ) -> Result<HirScalarExpr, anyhow::Error> {
-    let impls = match resolve_func(ecx, &sql_func.name, &sql_func.args)? {
+    let impls = match resolve_func(ecx, name, args)? {
         Func::Aggregate(_) if ecx.allow_aggregates => {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
             bail!(
                 "Internal error: encountered unplanned aggregate function: {:?}",
-                sql_func,
+                name,
             )
         }
         Func::Aggregate(_) => {
@@ -2669,31 +2675,34 @@ fn plan_function<'a>(
         Func::Table(_) => {
             unsupported!(
                 1546,
-                format!("table function ({}) in scalar position", sql_func.name)
+                format!("table function ({}) in scalar position", name)
             );
         }
         Func::Scalar(impls) => impls,
     };
 
-    if sql_func.over.is_some() {
+    if over.is_some() {
         unsupported!(213, "window functions");
     }
-    if sql_func.filter.is_some() {
+    if *distinct {
         bail!(
-            "FILTER specified but {}() is not an aggregate function",
-            sql_func.name
+            "DISTINCT specified, but {} is not an aggregate function",
+            name
+        );
+    }
+    if filter.is_some() {
+        bail!(
+            "FILTER specified, but {} is not an aggregate function",
+            name
         );
     }
 
-    let args = match &sql_func.args {
-        FunctionArgs::Star => bail!(
-            "* argument is invalid with non-aggregate function {}",
-            sql_func.name
-        ),
+    let args = match &args {
+        FunctionArgs::Star => bail!("* argument is invalid with non-aggregate function {}", name),
         FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
 
-    let name = normalize::unresolved_object_name(sql_func.name.clone())?;
+    let name = normalize::unresolved_object_name(name.clone())?;
     func::select_impl(ecx, FuncSpec::Func(&name), impls, args)
 }
 
