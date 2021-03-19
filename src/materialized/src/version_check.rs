@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::{self, Duration};
 use uuid::Uuid;
 
-use ore::retry::RetryBuilder;
+use ore::retry::Retry;
 
 use crate::server_metrics::{filter_metrics, load_prom_metrics, METRIC_WORKER_COUNT};
 use crate::BUILD_INFO;
@@ -75,11 +75,10 @@ async fn fetch_latest_version(
     start_time: Instant,
     session_id: Uuid,
 ) -> String {
-    RetryBuilder::new()
-        .max_sleep(None)
-        .max_backoff(TELEMETRY_FREQUENCY)
+    Retry::default()
         .initial_backoff(Duration::from_secs(1))
-        .build()
+        .clamp_backoff(TELEMETRY_FREQUENCY)
+        .max_tries(usize::MAX)
         .retry(|_state| async {
             let version_request = V1VersionRequest {
                 version: BUILD_INFO.version,
