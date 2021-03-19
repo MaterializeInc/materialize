@@ -343,7 +343,10 @@ fn try_push_projection_order_by(
     for (out_i, in_i) in project.iter().copied().enumerate() {
         unproject[in_i] = Some(out_i);
     }
-    if order_by.iter().all(|ob| unproject[ob.column].is_some()) {
+    if order_by
+        .iter()
+        .all(|ob| ob.column < unproject.len() && unproject[ob.column].is_some())
+    {
         let trivial_project = (0..project.len()).collect();
         *expr = expr.take().project(mem::replace(project, trivial_project));
         for ob in order_by {
