@@ -136,12 +136,11 @@ struct ByoTimestampConsumer {
     /// The name of the source with which this connector is associated
     ///
     /// * For kafka this is the topic
-    /// * For kinesis this is the stream name
     /// * For file types this is the file name
     source_name: String,
     /// The format of the connector
     envelope: ConsistencyFormatting,
-    /// The max assigned timestamp. Should be max(last_partition_ts)
+    /// The max assigned timestamp.
     last_ts: u64,
     /// The max offset for which a timestamp has been assigned
     last_offset: MzOffset,
