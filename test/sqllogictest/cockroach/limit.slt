@@ -57,7 +57,7 @@ statement error LIMIT must be an integer constant
 SELECT generate_series FROM generate_series(1, 100) FETCH NEXT 1 + 1 ROWS ONLY;
 
 # TODO(benesch): support this.
-query error LIMIT must be an integer constant
+query error Expected a keyword at the beginning of a statement, found number
 SELECT generate_series FROM generate_series(1, 100) ORDER BY generate_series FETCH FIRST (1 + 1) ROWS ONLY;
 ----
 1
@@ -91,7 +91,7 @@ SELECT k, v FROM t ORDER BY k OFFSET 5
 6  -36
 
 # TODO(benesch): support this.
-query error LIMIT must be an integer constant
+query error Expected end of statement, found number
 SELECT k, v FROM t ORDER BY v LIMIT (1+4) OFFSET 1
 ----
 4  -16
@@ -101,7 +101,7 @@ SELECT k, v FROM t ORDER BY v LIMIT (1+4) OFFSET 1
 5  25
 
 # TODO(benesch): support this.
-query error LIMIT must be an integer constant
+query error Expected end of statement, found number
 SELECT k, v FROM t ORDER BY v DESC LIMIT (1+4) OFFSET 1
 ----
 3  9
@@ -141,28 +141,28 @@ SELECT k FROM (SELECT k, v, w FROM t ORDER BY v LIMIT 4)
 # Use expression for LIMIT/OFFSET value.
 # TODO(benesch): support this.
 
-query error LIMIT must be an integer constant
+query error Expected end of statement, found number
 SELECT k, v FROM t ORDER BY k LIMIT length(pg_typeof(123))
 ----
 1  1
 2  -4
 3  9
 
-query error LIMIT must be an integer constant
+query error Expected end of statement, found number
 SELECT k, v FROM t ORDER BY k LIMIT length(pg_typeof(123)) OFFSET length(pg_typeof(123))-2
 ----
 2  -4
 3  9
 4  -16
 
-query error LIMIT must be an integer constant
+query error Expected end of statement, found number
 SELECT k, v FROM t ORDER BY k OFFSET (SELECT count(*)-3 FROM t)
 ----
 4  -16
 5  25
 6  -36
 
-query error LIMIT must be an integer constant
+query error Expected end of statement, found number
 SELECT k, v FROM t ORDER BY k LIMIT (SELECT count(*)-3 FROM t) OFFSET (SELECT count(*)-5 FROM t)
 ----
 2  -4

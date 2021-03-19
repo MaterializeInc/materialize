@@ -746,5 +746,5 @@ SELECT (1, 2, 3) IS NULL AS r
 ----
 false
 
-query error syntax error
+query error Expected an expression, found right parenthesis
 SELECT () = ()
