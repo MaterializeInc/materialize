@@ -495,14 +495,6 @@ impl MirScalarExpr {
                     if expr2 < expr1 {
                         ::std::mem::swap(expr1, expr2);
                     }
-
-                    // Comparison to self is always true unless the element is `Datum::Null`.
-                    if expr1 == expr2 {
-                        *e = expr1
-                            .clone()
-                            .call_unary(UnaryFunc::IsNull)
-                            .call_unary(UnaryFunc::Not);
-                    }
                 }
             }
             MirScalarExpr::CallVariadic { func, exprs } => {
