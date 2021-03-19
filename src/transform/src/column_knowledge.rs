@@ -253,13 +253,9 @@ impl ColumnKnowledge {
                     know = know
                         .into_iter()
                         .zip_eq(ColumnKnowledge::harvest(input, knowledge)?)
-                        .map(|(k1, k2)| DatumKnowledge {
-                            value: if k1.value == k2.value {
-                                k1.value.clone()
-                            } else {
-                                None
-                            },
-                            nullable: k1.nullable || k2.nullable,
+                        .map(|(mut k1, k2)| {
+                            k1.union(&k2);
+                            k1
                         })
                         .collect();
                 }
@@ -279,11 +275,18 @@ pub struct DatumKnowledge {
 }
 
 impl DatumKnowledge {
-    // Intersects the two knowledge about a column.
+    // Intersects the possible states of a column.
     fn absorb(&mut self, other: &Self) {
         self.nullable &= other.nullable;
         if self.value.is_none() {
             self.value = other.value.clone()
+        }
+    }
+    // Unions (weakens) the possible states of a column.
+    fn union(&mut self, other: &Self) {
+        self.nullable |= other.nullable;
+        if self.value != other.value {
+            self.value = None;
         }
     }
 }
@@ -380,17 +383,18 @@ pub fn optimize(
                 DatumKnowledge::default()
             }
         }
-        MirScalarExpr::If { cond, then, els } => {
-            if let Some((Ok(value), _typ)) = optimize(cond, input_type, column_knowledge).value {
-                match value.unpack_first() {
-                    Datum::True => *expr = (**then).clone(),
-                    Datum::False | Datum::Null => *expr = (**els).clone(),
-                    d => panic!("IF condition evaluated to non-boolean datum {:?}", d),
-                }
-                optimize(expr, input_type, column_knowledge)
-            } else {
-                DatumKnowledge::default()
-            }
+        MirScalarExpr::If { cond: _, then, els } => {
+            // Leave `cond` un-optimized, as we should not remove the conditional
+            // nature of the evaluation based on column knowledge: the resulting
+            // expression could then move down past a filter or join that provided
+            // the guarantees, and would become wrong.
+            //
+            // Instead, we can optimize each of the branches, and union the states
+            // of their columns.
+            let mut know1 = optimize(then, input_type, column_knowledge);
+            let know2 = optimize(els, input_type, column_knowledge);
+            know1.union(&know2);
+            know1
         }
     }
 }
