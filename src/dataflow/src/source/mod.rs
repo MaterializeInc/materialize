@@ -1073,7 +1073,7 @@ where
             // Downgrade capability (if possible)
             consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
 
-            while let Some(file) = cached_files.pop() {
+            if let Some(file) = cached_files.pop() {
                 // TODO(rkhaitan) change this to properly re-use old timestamps.
                 // Currently this is hard to do because there can be arbitrary delays between
                 // different workers being scheduled, and this means that all cached state
