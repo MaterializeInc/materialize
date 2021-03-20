@@ -311,7 +311,7 @@ fn generate_ts_updates_from_debezium(
                 // entries in data_collection do not contain server_name
                 // so we discard it before doing the comparison.
                 // We check for both here
-                //TODO(): possible performance issue here?
+                // TODO(): possible performance issue here?
                 let parsed_source_name = byo_consumer.source_name.split('.').skip(1).join(".");
                 if byo_consumer.source_name == topic.trim() || parsed_source_name == topic.trim() {
                     byo_consumer.last_offset.offset += count;
@@ -321,7 +321,6 @@ fn generate_ts_updates_from_debezium(
                         coord::AdvanceSourceTimestamp {
                             id: *id,
                             update: TimestampSourceUpdate::BringYourOwn(
-                                1,
                                 match byo_consumer.connector {
                                     ByoTimestampConnector::Ocf(_) => PartitionId::File,
                                     ByoTimestampConnector::Kafka(_) => PartitionId::Kafka(0),
