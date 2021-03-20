@@ -235,8 +235,8 @@ pub type PartitionCount = i32;
 pub enum TimestampDataUpdate {
     /// RT sources see a current estimate of the number of partitions for the soruce
     RealTime(PartitionCount),
-    /// BYO sources see a list of (PartitionCount, Timestamp, MzOffset) timestamp updates
-    BringYourOwn(HashMap<PartitionId, VecDeque<(PartitionCount, Timestamp, MzOffset)>>),
+    /// BYO sources see a list of (Timestamp, MzOffset) timestamp updates
+    BringYourOwn(HashMap<PartitionId, VecDeque<(Timestamp, MzOffset)>>),
 }
 /// Map of source ID to timestamp data updates (RT or BYO).
 pub type TimestampDataUpdates = Rc<RefCell<HashMap<GlobalId, TimestampDataUpdate>>>;
@@ -722,18 +722,14 @@ where
                 if let Some(ts_entries) = timestamps.get_mut(&id) {
                     match ts_entries {
                         TimestampDataUpdate::BringYourOwn(entries) => {
-                            if let TimestampSourceUpdate::BringYourOwn(
-                                partition_count,
-                                pid,
-                                timestamp,
-                                offset,
-                            ) = update
+                            if let TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) =
+                                update
                             {
                                 let partition_entries =
                                     entries.entry(pid).or_insert_with(VecDeque::new);
-                                let (_, last_ts, last_offset) = partition_entries
+                                let (last_ts, last_offset) = partition_entries
                                     .back()
-                                    .unwrap_or(&(0, 0, MzOffset { offset: 0 }));
+                                    .unwrap_or(&(0, MzOffset { offset: 0 }));
                                 assert!(
                                     offset >= *last_offset,
                                     "offset should not go backwards, but {} < {}",
@@ -746,7 +742,7 @@ where
                                     timestamp,
                                     last_ts
                                 );
-                                partition_entries.push_back((partition_count, timestamp, offset));
+                                partition_entries.push_back((timestamp, offset));
                             } else {
                                 panic!("Unexpected message type. Expected BYO update.")
                             }

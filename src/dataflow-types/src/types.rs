@@ -656,10 +656,10 @@ pub struct KafkaOffset {
 pub enum TimestampSourceUpdate {
     /// Update for an RT source: contains an updated partition count for this source
     RealTime(i32),
-    ///  Timestamp update for a BYO source: contains an updated partition count for this source,
-    /// combined with a PartitionID, Timestamp, MzOffset tuple. This tuple informs workers that
-    /// messages with Offset on PartitionId will be timestamped with Timestamp.
-    BringYourOwn(i32, PartitionId, u64, MzOffset),
+    /// Timestamp update for a BYO source: contains a PartitionID, Timestamp,
+    /// MzOffset tuple. This tuple informs workers that messages with Offset on
+    /// PartitionId will be timestamped with Timestamp.
+    BringYourOwn(PartitionId, u64, MzOffset),
 }
 
 /// Convert from KafkaOffset to MzOffset (1-indexed)
