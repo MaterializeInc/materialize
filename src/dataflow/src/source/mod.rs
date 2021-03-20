@@ -535,7 +535,7 @@ impl ConsistencyInfo {
                                 // We need to grab the min closed (max) timestamp from partitions we
                                 // don't own.
 
-                                if let Some((_, timestamp, _)) = entries.back() {
+                                if let Some((timestamp, _)) = entries.back() {
                                     min_closed_timestamp_unowned_partitions =
                                         match min_closed_timestamp_unowned_partitions.as_mut() {
                                             Some(min) => Some(std::cmp::min(*timestamp, *min)),
@@ -553,7 +553,7 @@ impl ConsistencyInfo {
                             // set of timestamp bindings to find a match every time. This is
                             // clearly suboptimal and can be improved upon with a better
                             // API for sources to interact with timestamp binding information.
-                            for (partition_count, ts, offset) in entries {
+                            for (ts, offset) in entries {
                                 if existing_ts >= *ts {
                                     //skip old records
                                     continue;
@@ -569,10 +569,6 @@ impl ConsistencyInfo {
                                     *ts > 0,
                                     "Internal error! Received a zero-timestamp. Materialize will crash now."
                                 );
-
-                                // This timestamp update was done with the expectation that there were more partitions
-                                // than we know about.
-                                source.update_partition_count(self, *partition_count);
 
                                 if let Some(pmetrics) = self.partition_metrics.get_mut(pid) {
                                     pmetrics
@@ -665,7 +661,7 @@ impl ConsistencyInfo {
                 None => None,
                 Some(TimestampDataUpdate::BringYourOwn(entries)) => match entries.get(partition) {
                     Some(entries) => {
-                        for (_, ts, max_offset) in entries {
+                        for (ts, max_offset) in entries {
                             if offset <= *max_offset {
                                 return Some(ts.clone());
                             }
