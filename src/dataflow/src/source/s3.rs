@@ -154,7 +154,7 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
                 pid.clone(),
                 PartitionMetrics::new(&source_name, source_id, "s3", logger),
             );
-            consistency_info.update_partition_metadata(pid);
+            consistency_info.update_partition_metadata(&pid);
         }
         Ok(S3SourceInfo {
             source_name,
@@ -701,22 +701,6 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
             Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
             Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
         }
-    }
-
-    fn ensure_has_partition(&mut self, _consistency_info: &mut ConsistencyInfo, _pid: PartitionId) {
-        panic!("s3 sources do not support BYO consistency: ensure_has_partition")
-    }
-
-    fn update_partition_count(
-        &mut self,
-        _consistency_info: &mut ConsistencyInfo,
-        _partition_count: i32,
-    ) {
-        // We can't do anything with just the number of "partitions" that we
-        // know about, fundamentally we know more than the timestamper about
-        // how many partitions there are.
-        //
-        // https://github.com/MaterializeInc/materialize/issues/5715
     }
 }
 

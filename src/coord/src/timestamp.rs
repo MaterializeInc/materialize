@@ -870,18 +870,23 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
                             "Discovered {} new ({} total) kafka partitions for topic {} (source {})",
                             diff, new_partition_count, c.topic, c.id,
                         );
+
+                        for partition in current_partition_count..new_partition_count {
+                            c.coordination_state
+                                .coordinator_channel
+                                .send(coord::Message::AdvanceSourceTimestamp(
+                                    coord::AdvanceSourceTimestamp {
+                                        id: c.id,
+                                        update: TimestampSourceUpdate::RealTime(
+                                            PartitionId::Kafka(partition),
+                                        ),
+                                    },
+                                ))
+                                .expect(
+                                    "Failed to send update to coordinator. This should not happen",
+                                );
+                        }
                         current_partition_count = new_partition_count;
-                        c.coordination_state
-                            .coordinator_channel
-                            .send(coord::Message::AdvanceSourceTimestamp(
-                                coord::AdvanceSourceTimestamp {
-                                    id: c.id,
-                                    update: TimestampSourceUpdate::RealTime(
-                                        current_partition_count,
-                                    ),
-                                },
-                            ))
-                            .expect("Failed to send update to coordinator. This should not happen");
                     }
                     cmp::Ordering::Less => {
                         error!(
