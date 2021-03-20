@@ -240,29 +240,28 @@ fn show_tables<'a>(
     from: Option<UnresolvedObjectName>,
     filter: Option<ShowStatementFilter<Raw>>,
 ) -> Result<ShowSelect<'a>, anyhow::Error> {
-    if extended {
-        unsupported!("SHOW EXTENDED TABLES");
-    }
-
     let schema = if let Some(from) = from {
         scx.resolve_schema(from)?
     } else {
         scx.resolve_default_schema()?
     };
 
-    let query = if full {
-        format!(
+    let mut query = format!(
             "SELECT name, mz_internal.mz_classify_object_id(id) AS type
             FROM mz_catalog.mz_tables
             WHERE schema_id = {}",
             schema.id(),
-        )
-    } else {
-        format!(
+    );
+    if extended {
+        query += " OR s.database_id IS NULL";
+    } 
+    if !full {
+        query = format!(
             "SELECT name FROM mz_catalog.mz_tables WHERE schema_id = {}",
             schema.id(),
-        )
-    };
+        );
+    }
+
     Ok(ShowSelect::new(scx, query, filter))
 }
 
