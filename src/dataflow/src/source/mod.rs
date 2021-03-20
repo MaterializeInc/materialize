@@ -531,7 +531,7 @@ impl ConsistencyInfo {
     }
 
     /// Returns true if this worker is responsible for handling this partition
-    fn responsible_for(&self, pid: PartitionId) -> bool {
+    fn responsible_for(&self, pid: &PartitionId) -> bool {
         match pid {
             PartitionId::File | PartitionId::S3 | PartitionId::Kinesis => self.active,
             PartitionId::Kafka(p) => {
@@ -545,7 +545,7 @@ impl ConsistencyInfo {
 
                 // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
                 // overflow.
-                let hash = (self.source_global_id.hashed() >> 32) + p as u64;
+                let hash = (self.source_global_id.hashed() >> 32) + *p as u64;
                 (hash % self.worker_count as u64) == self.worker_id as u64
             }
         }
@@ -553,8 +553,8 @@ impl ConsistencyInfo {
 
     /// Returns true if we currently know of particular partition. We know (and have updated the
     /// metadata for this partition) if there is an entry for it
-    pub fn knows_of(&self, pid: PartitionId) -> bool {
-        self.partition_metadata.contains_key(&pid)
+    pub fn knows_of(&self, pid: &PartitionId) -> bool {
+        self.partition_metadata.contains_key(pid)
     }
 
     /// Updates the underlying partition metadata structure to include the current partition.
@@ -734,8 +734,12 @@ impl ConsistencyInfo {
             // capability
             if let Some(entries) = timestamp_histories.borrow().get(&id.source_id) {
                 match entries {
-                    TimestampDataUpdate::RealTime(partition_count) => {
-                        source.update_partition_count(self, *partition_count)
+                    TimestampDataUpdate::RealTime(partitions) => {
+                        for pid in partitions {
+                            if !self.knows_of(pid) && self.responsible_for(pid) {
+                                source.ensure_has_partition(self, pid.clone());
+                            }
+                        }
                     }
                     _ => panic!("Unexpected timestamp message. Expected RT update."),
                 }
@@ -1035,7 +1039,7 @@ where
                     Ok(Some(meta)) => {
                         assert_eq!(id.source_id, meta.source_id);
                         // FIXME
-                        consistency_info.responsible_for(PartitionId::Kafka(meta.partition_id))
+                        consistency_info.responsible_for(&PartitionId::Kafka(meta.partition_id))
                     }
                     _ => {
                         error!("Failed to parse path: {}", f.display());
