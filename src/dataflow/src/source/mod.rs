@@ -24,7 +24,7 @@ use timely::dataflow::{
 };
 
 use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError};
-use expr::{PartitionId, SourceInstanceId};
+use expr::{GlobalId, PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
 use log::{debug, error};
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -302,7 +302,7 @@ pub(crate) trait SourceInfo<Out> {
     fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error>;
 }
 
-/// TODO document
+/// FIXME document + rename this trait
 pub trait CacheMessageTrait {
     /// Cache a message
     fn cache_message(
@@ -471,13 +471,25 @@ pub struct ConsistencyInfo {
     source_metrics: SourceMetrics,
     /// Per-partition Prometheus metrics.
     partition_metrics: HashMap<PartitionId, PartitionMetrics>,
+
+    /// FIXME
+    /// source global id
+    source_global_id: GlobalId,
+    /// True if this worker is the active reader
+    active: bool,
+    /// id of worker
+    worker_id: usize,
+    /// total number of workers
+    worker_count: usize,
 }
 
 impl ConsistencyInfo {
     fn new(
+        active: bool,
         source_name: String,
         source_id: SourceInstanceId,
         worker_id: usize,
+        worker_count: usize,
         consistency: Consistency,
         timestamp_frequency: Duration,
         connector: &ExternalSourceConnector,
@@ -511,6 +523,31 @@ impl ConsistencyInfo {
             // we have never downgraded, so make sure the initial value is outside of our frequency
             time_since_downgrade: Instant::now() - timestamp_frequency - Duration::from_secs(1),
             partition_metrics: Default::default(),
+            source_global_id: source_id.source_id,
+            active,
+            worker_id,
+            worker_count,
+        }
+    }
+
+    /// Returns true if this worker is responsible for handling this partition
+    fn responsible_for(&self, pid: PartitionId) -> bool {
+        match pid {
+            PartitionId::File | PartitionId::S3 | PartitionId::Kinesis => self.active,
+            PartitionId::Kafka(p) => {
+                // We want to distribute partitions across workers evenly, such that
+                // - different partitions for the same source are uniformly distributed across workers
+                // - the same partition id across different sources are uniformly distributed across workers
+                // - the same partition id across different instances of the same source is sent to
+                //   the same worker.
+                // We achieve this by taking a hash of the `source_id` (not the source instance id) and using
+                // that to offset distributing partitions round robin across workers.
+
+                // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
+                // overflow.
+                let hash = (self.source_global_id.hashed() >> 32) + p as u64;
+                (hash % self.worker_count as u64) == self.worker_id as u64
+            }
         }
     }
 
@@ -962,9 +999,11 @@ where
 
         // Create control plane information (Consistency-related information)
         let mut consistency_info = ConsistencyInfo::new(
+            active,
             name.clone(),
             id,
             worker_id,
+            worker_count,
             consistency,
             timestamp_frequency,
             &source_connector,
@@ -999,12 +1038,8 @@ where
                 match metadata {
                     Ok(Some(meta)) => {
                         assert_eq!(id.source_id, meta.source_id);
-                        self::kafka::has_partition(
-                            id.source_id,
-                            worker_id as i32,
-                            worker_count as i32,
-                            meta.partition_id,
-                        )
+                        // FIXME
+                        consistency_info.responsible_for(PartitionId::Kafka(meta.partition_id))
                     }
                     _ => {
                         error!("Failed to parse path: {}", f.display());
