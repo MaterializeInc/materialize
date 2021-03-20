@@ -280,23 +280,9 @@ impl MaybeLength for Value {
 /// Each source must implement this trait. Sources will then get created as part of the
 /// [`create_source`] function.
 pub(crate) trait SourceInfo<Out> {
-    // BYO consistency methods
-
     /// Ensures that the partition `pid` exists for this source. Once this function has been
     /// called, the source should be able to receive messages from this partition
-    fn ensure_has_partition(&mut self, consistency_info: &mut ConsistencyInfo, pid: PartitionId);
-
-    // BYO  + RT methods
-
-    /// Informs source that there are now `partition_count` entries for this source
-    // this might be better as BYO-only, but it is actually called in RT timestamping as well
-    fn update_partition_count(
-        &mut self,
-        consistency_info: &mut ConsistencyInfo,
-        partition_count: i32,
-    );
-
-    // source reading
+    fn ensure_has_partition(&mut self, pid: PartitionId) -> PartitionMetrics;
 
     /// Returns the next message read from the source
     fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error>;
@@ -561,12 +547,12 @@ impl ConsistencyInfo {
     /// New partitions must always be added with a minimum closed offset of (last_closed_ts)
     /// They are guaranteed to only receive timestamp update greater than last_closed_ts (this
     /// is enforced in `coord::timestamp::is_ts_valid`.
-    pub fn update_partition_metadata(&mut self, pid: PartitionId) {
+    pub fn update_partition_metadata(&mut self, pid: &PartitionId) {
         let cons_info = ConsInfo {
             offset: self.get_partition_start_offset(&pid),
             ts: self.last_closed_ts,
         };
-        self.partition_metadata.insert(pid, cons_info);
+        self.partition_metadata.insert(pid.clone(), cons_info);
     }
 
     fn get_partition_start_offset(&self, pid: &PartitionId) -> MzOffset {
@@ -645,7 +631,13 @@ impl ConsistencyInfo {
                     TimestampDataUpdate::BringYourOwn(entries) => {
                         // Iterate over each partition that we know about
                         for (pid, entries) in entries {
-                            source.ensure_has_partition(self, pid.clone());
+                            if !self.knows_of(pid) && self.responsible_for(pid) {
+                                let partition_metrics = source.ensure_has_partition(pid.clone());
+                                self.update_partition_metadata(pid);
+                                self.partition_metrics
+                                    .insert(pid.clone(), partition_metrics);
+                            }
+
                             if !self.partition_metadata.contains_key(pid) {
                                 // We need to grab the min closed (max) timestamp from partitions we
                                 // don't own.
@@ -737,7 +729,10 @@ impl ConsistencyInfo {
                     TimestampDataUpdate::RealTime(partitions) => {
                         for pid in partitions {
                             if !self.knows_of(pid) && self.responsible_for(pid) {
-                                source.ensure_has_partition(self, pid.clone());
+                                let partition_metrics = source.ensure_has_partition(pid.clone());
+                                self.update_partition_metadata(pid);
+                                self.partition_metrics
+                                    .insert(pid.clone(), partition_metrics);
                             }
                         }
                     }

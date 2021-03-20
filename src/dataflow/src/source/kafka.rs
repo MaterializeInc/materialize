@@ -13,7 +13,6 @@ use std::convert::TryInto;
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::hashable::Hashable;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
@@ -25,7 +24,7 @@ use timely::scheduling::activate::SyncActivator;
 use dataflow_types::{
     DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
 };
-use expr::{GlobalId, PartitionId, SourceInstanceId};
+use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{error, info, log_enabled, warn};
 use uuid::Uuid;
@@ -51,8 +50,6 @@ pub struct KafkaSourceInfo {
     known_partitions: i32,
     /// Worker ID
     worker_id: i32,
-    /// Worker Count
-    worker_count: i32,
     /// Map from partition -> most recently read offset
     last_offsets: HashMap<i32, i64>,
     /// Map from partition -> offset to start reading at
@@ -67,7 +64,7 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
         source_id: SourceInstanceId,
         _active: bool,
         worker_id: usize,
-        worker_count: usize,
+        _worker_count: usize,
         logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
@@ -79,7 +76,6 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
                 source_name,
                 source_id,
                 worker_id,
-                worker_count,
                 logger,
                 consumer_activator,
                 kc,
@@ -94,46 +90,28 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     /// Ensures that a partition queue for `pid` exists.
     /// In Kafka, partitions are assigned contiguously. This function consequently
     /// creates partition queues for every p <= pid
-    fn ensure_has_partition(&mut self, consistency_info: &mut ConsistencyInfo, pid: PartitionId) {
+    fn ensure_has_partition(&mut self, pid: PartitionId) -> PartitionMetrics {
         let pid = match pid {
             PartitionId::Kafka(p) => p,
             _ => unreachable!(),
         };
-        for i in self.known_partitions..=pid {
-            if self.has_partition(i) {
-                self.create_partition_queue(i);
-                consistency_info.partition_metrics.insert(
-                    PartitionId::Kafka(i),
-                    PartitionMetrics::new(
-                        &self.topic_name,
-                        self.id,
-                        &i.to_string(),
-                        self.logger.clone(),
-                    ),
-                );
-                consistency_info.update_partition_metadata(PartitionId::Kafka(i));
 
-                // Indicate a last offset of -1 if we have not been instructed to
-                // have a specific start offset for this topic.
-                let start_offset = *self.start_offsets.get(&i).unwrap_or(&-1);
-                let prev = self.last_offsets.insert(i, start_offset);
+        self.create_partition_queue(pid);
+        let metrics = PartitionMetrics::new(
+            &self.topic_name,
+            self.id,
+            &pid.to_string(),
+            self.logger.clone(),
+        );
 
-                assert!(prev.is_none());
-            }
-        }
+        // Indicate a last offset of -1 if we have not been instructed to
+        // have a specific start offset for this topic.
+        let start_offset = *self.start_offsets.get(&pid).unwrap_or(&-1);
+        let prev = self.last_offsets.insert(pid, start_offset);
+
+        assert!(prev.is_none());
         self.known_partitions = cmp::max(self.known_partitions, pid + 1);
-    }
-
-    /// Updates the Kafka source to reflect the new partition count.
-    /// Kafka creates partitions with contiguous IDs, starting from 0.
-    /// as PIDs are contiguous, we ensure that we have created partitions up to PID
-    /// (partition_count-1) as partitions are 0-indexed.
-    fn update_partition_count(
-        &mut self,
-        consistency_info: &mut ConsistencyInfo,
-        partition_count: i32,
-    ) {
-        self.ensure_has_partition(consistency_info, PartitionId::Kafka(partition_count - 1));
+        metrics
     }
 
     /// This function polls from the next consumer for which a message is available. This function polls the set
@@ -252,7 +230,6 @@ impl KafkaSourceInfo {
         source_name: String,
         source_id: SourceInstanceId,
         worker_id: usize,
-        worker_count: usize,
         logger: Option<Logger>,
         consumer_activator: SyncActivator,
         kc: KafkaSourceConnector,
@@ -267,7 +244,6 @@ impl KafkaSourceInfo {
             ..
         } = kc;
         let worker_id = worker_id.try_into().unwrap();
-        let worker_count = worker_count.try_into().unwrap();
         let kafka_config = create_kafka_config(
             &source_name,
             &addrs,
@@ -302,21 +278,10 @@ impl KafkaSourceInfo {
             known_partitions: 0,
             consumer: Arc::new(consumer),
             worker_id,
-            worker_count,
             last_offsets: HashMap::new(),
             start_offsets,
             logger,
         }
-    }
-
-    /// Returns true if this worker is responsible for this partition
-    fn has_partition(&self, partition_id: i32) -> bool {
-        has_partition(
-            self.id.source_id,
-            self.worker_id,
-            self.worker_count,
-            partition_id,
-        )
     }
 
     /// Returns a count of total number of consumers for this source
@@ -562,27 +527,4 @@ impl ConsumerContext for GlueConsumerContext {
     fn message_queue_nonempty_callback(&self) {
         self.activate();
     }
-}
-
-// We want to distribute partitions across workers evenly, such that
-// - different partitions for the same source are uniformly distributed across workers
-// - the same partition id across different sources are uniformly distributed across workers
-// - the same partition id across different instances of the same source is sent to
-//   the same worker.
-// We achieve this by taking a hash of the `source_id` (not the source instance id) and using
-// that to offset distributing partitions round robin across workers.
-pub fn has_partition(
-    source_id: GlobalId,
-    worker_id: i32,
-    worker_count: i32,
-    partition_id: i32,
-) -> bool {
-    assert!(worker_id >= 0);
-    assert!(worker_count > worker_id);
-    assert!(partition_id >= 0);
-
-    // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
-    // overflow.
-    let hash = (source_id.hashed() >> 32) + partition_id as u64;
-    (hash % worker_count as u64) == worker_id as u64
 }

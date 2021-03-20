@@ -88,7 +88,7 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => {
                 if active {
                     let kinesis_id = PartitionId::Kinesis;
-                    consistency_info.update_partition_metadata(kinesis_id.clone());
+                    consistency_info.update_partition_metadata(&kinesis_id);
                     consistency_info.partition_metrics.insert(
                         kinesis_id.clone(),
                         PartitionMetrics::new(
@@ -147,16 +147,9 @@ impl KinesisSourceInfo {
 }
 
 impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
-    fn ensure_has_partition(&mut self, _consistency_info: &mut ConsistencyInfo, _pid: PartitionId) {
+    fn ensure_has_partition(&mut self, _pid: PartitionId) -> PartitionMetrics {
         //TODO(natacha): do nothing for now, as do not currently use timestamper
-    }
-
-    fn update_partition_count(
-        &mut self,
-        _consistency_info: &mut ConsistencyInfo,
-        _partition_count: i32,
-    ) {
-        //TODO(natacha): do nothing for now as do not currently use timestamper
+        panic!("not done yet")
     }
 
     fn get_next_message(&mut self) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
