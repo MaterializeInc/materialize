@@ -90,7 +90,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     /// Ensures that a partition queue for `pid` exists.
     /// In Kafka, partitions are assigned contiguously. This function consequently
     /// creates partition queues for every p <= pid
-    fn ensure_has_partition(&mut self, pid: PartitionId) -> PartitionMetrics {
+    fn add_partition(&mut self, pid: PartitionId) -> PartitionMetrics {
         let pid = match pid {
             PartitionId::Kafka(p) => p,
             _ => unreachable!(),

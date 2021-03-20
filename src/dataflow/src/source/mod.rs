@@ -282,7 +282,9 @@ impl MaybeLength for Value {
 pub(crate) trait SourceInfo<Out> {
     /// Ensures that the partition `pid` exists for this source. Once this function has been
     /// called, the source should be able to receive messages from this partition
-    fn ensure_has_partition(&mut self, pid: PartitionId) -> PartitionMetrics;
+    fn add_partition(&mut self, _pid: PartitionId) -> PartitionMetrics {
+        panic!("add partiton not supported for source!");
+    }
 
     /// Returns the next message read from the source
     fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error>;
@@ -632,7 +634,7 @@ impl ConsistencyInfo {
                         // Iterate over each partition that we know about
                         for (pid, entries) in entries {
                             if !self.knows_of(pid) && self.responsible_for(pid) {
-                                let partition_metrics = source.ensure_has_partition(pid.clone());
+                                let partition_metrics = source.add_partition(pid.clone());
                                 self.update_partition_metadata(pid);
                                 self.partition_metrics
                                     .insert(pid.clone(), partition_metrics);
@@ -729,7 +731,7 @@ impl ConsistencyInfo {
                     TimestampDataUpdate::RealTime(partitions) => {
                         for pid in partitions {
                             if !self.knows_of(pid) && self.responsible_for(pid) {
-                                let partition_metrics = source.ensure_has_partition(pid.clone());
+                                let partition_metrics = source.add_partition(pid.clone());
                                 self.update_partition_metadata(pid);
                                 self.partition_metrics
                                     .insert(pid.clone(), partition_metrics);

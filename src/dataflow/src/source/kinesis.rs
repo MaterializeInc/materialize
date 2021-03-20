@@ -147,11 +147,6 @@ impl KinesisSourceInfo {
 }
 
 impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
-    fn ensure_has_partition(&mut self, _pid: PartitionId) -> PartitionMetrics {
-        //TODO(natacha): do nothing for now, as do not currently use timestamper
-        panic!("not done yet")
-    }
-
     fn get_next_message(&mut self) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
 

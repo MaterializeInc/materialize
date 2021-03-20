@@ -183,11 +183,6 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
 }
 
 impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
-    fn ensure_has_partition(&mut self, _pid: PartitionId) -> PartitionMetrics {
-        // This function should be a no-op for file sources because they don't have partitions.
-        panic!("ensure_has_partition erroneously called for file sources");
-    }
-
     fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(record)) => {

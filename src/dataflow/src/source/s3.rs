@@ -702,10 +702,6 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
             Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
         }
     }
-
-    fn ensure_has_partition(&mut self, _pid: PartitionId) -> PartitionMetrics {
-        panic!("s3 sources do not support BYO consistency: ensure_has_partition")
-    }
 }
 
 // Helper utilities
