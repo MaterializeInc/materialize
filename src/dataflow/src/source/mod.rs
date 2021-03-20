@@ -15,6 +15,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fmt::{self, Debug};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use timely::dataflow::{
@@ -32,7 +33,7 @@ use prometheus::{
     register_uint_gauge_vec, DeleteOnDropCounter, DeleteOnDropGauge, IntCounter, IntCounterVec,
     IntGaugeVec, UIntGauge, UIntGaugeVec,
 };
-use repr::Timestamp;
+use repr::{CachedRecord, CachedRecordIter, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::Scope;
@@ -44,6 +45,7 @@ use super::source::util::source;
 use crate::logging::materialized::{Logger, MaterializedEvent};
 use crate::operator::StreamExt;
 use crate::server::{TimestampDataUpdate, TimestampDataUpdates};
+use crate::source::cache::{RecordFileMetadata, WorkerCacheData};
 use crate::CacheMessage;
 
 mod file;
@@ -298,28 +300,104 @@ pub(crate) trait SourceInfo<Out> {
 
     /// Returns the next message read from the source
     fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error>;
+}
 
-    // caching
-
+/// TODO document
+pub trait CacheMessageTrait {
     /// Cache a message
     fn cache_message(
-        &self,
-        _caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
-        _message: &SourceMessage<Out>,
-        _timestamp: Timestamp,
-        _offset: Option<MzOffset>,
-    ) {
-        // Default implementation is to do nothing
-    }
+        message: &SourceMessage<Self>,
+        source_id: SourceInstanceId,
+        caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
+        timestamp: Timestamp,
+        offset: Option<MzOffset>,
+    ) where
+        Self: Sized;
 
     /// Read back data from a previously cached file.
     /// Reads messages back from files in offset order, and returns None when there is
     /// no more data left to process
     /// TODO(rkhaitan): clean this up to return a proper type and potentially a iterator.
-    fn next_cached_file(&mut self) -> Option<Vec<(Vec<u8>, Out, Timestamp, i64)>> {
-        // Default implementation is to do nothing.
-        debug!("unimplemented: this source does not support reading cached files");
-        None
+    fn read_file(path: PathBuf) -> Vec<SourceMessage<Self>>
+    where
+        Self: Sized;
+}
+
+impl CacheMessageTrait for Vec<u8> {
+    fn cache_message(
+        message: &SourceMessage<Vec<u8>>,
+        source_id: SourceInstanceId,
+        caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
+        timestamp: Timestamp,
+        predecessor: Option<MzOffset>,
+    ) {
+        // Send this record to be cached
+        if let Some(caching_tx) = caching_tx {
+            let partition_id = match message.partition {
+                PartitionId::Kafka(p) => p,
+                _ => unreachable!(),
+            };
+
+            // TODO(rkhaitan): let's experiment with wrapping these in a
+            // Arc so we don't have to clone.
+            let key = message.key.clone().unwrap_or_default();
+            let value = message.payload.clone().unwrap_or_default();
+
+            let cache_data = CacheMessage::Data(WorkerCacheData {
+                source_id: source_id.source_id,
+                partition_id,
+                record: CachedRecord {
+                    predecessor: predecessor.map(|p| p.offset),
+                    offset: message.offset.offset,
+                    timestamp,
+                    key,
+                    value,
+                },
+            });
+
+            // TODO(benesch): the lack of backpressure here can result in
+            // unbounded memory usage.
+            caching_tx
+                .send(cache_data)
+                .expect("caching receiver should never drop first");
+        }
+    }
+
+    fn read_file(path: PathBuf) -> Vec<SourceMessage<Vec<u8>>> {
+        debug!("reading cached data from {}", path.display());
+        let data = ::std::fs::read(&path).unwrap_or_else(|e| {
+            error!("failed to read source cache file {}: {}", path.display(), e);
+            vec![]
+        });
+
+        CachedRecordIter::new(data)
+            .map(move |r| {
+                SourceMessage {
+                    key: Some(r.key),
+                    payload: Some(r.value),
+                    offset: MzOffset { offset: r.offset },
+                    upstream_time_millis: None,
+                    // TODO: FIXME
+                    partition: PartitionId::Kafka(0),
+                }
+            })
+            .collect()
+    }
+}
+
+impl CacheMessageTrait for mz_avro::types::Value {
+    fn cache_message(
+        _message: &SourceMessage<Self>,
+        _source_id: SourceInstanceId,
+        _caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
+        _timestamp: Timestamp,
+        _offset: Option<MzOffset>,
+    ) {
+        panic!("source caching is not supported for Avro OCF sources");
+    }
+
+    fn read_file(_path: PathBuf) -> Vec<SourceMessage<Self>> {
+        panic!("source caching is not supported for Avro OCF sources");
     }
 }
 
@@ -861,7 +939,7 @@ pub(crate) fn create_source<G, S: 'static, Out>(
 where
     G: Scope<Timestamp = Timestamp>,
     S: SourceInfo<Out> + SourceConstructor<Out>,
-    Out: Debug + Clone + Send + Default + MaybeLength + 'static,
+    Out: Debug + Clone + Send + Default + MaybeLength + CacheMessageTrait + 'static,
 {
     let SourceConfig {
         name,
@@ -907,7 +985,41 @@ where
             encoding,
         );
 
-        let mut read_cached_files = false;
+        let cached_files = dataflow_types::cached_files(&source_connector);
+        let mut cached_files: Vec<_> = cached_files
+            .iter()
+            .map(|f| {
+                let metadata = RecordFileMetadata::from_path(f);
+                (f, metadata)
+            })
+            .filter(|(f, metadata)| {
+                // We partition the given partitions up amongst workers, so we need to be
+                // careful not to process a partition that this worker was not allocated (or
+                // else we would process files multiple times).
+                match metadata {
+                    Ok(Some(meta)) => {
+                        assert_eq!(id.source_id, meta.source_id);
+                        self::kafka::has_partition(
+                            id.source_id,
+                            worker_id as i32,
+                            worker_count as i32,
+                            meta.partition_id,
+                        )
+                    }
+                    _ => {
+                        error!("Failed to parse path: {}", f.display());
+                        false
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        cached_files.sort_by_key(|(_, metadata)| match metadata {
+            Ok(Some(meta)) => -meta.start_offset,
+            _ => unreachable!(),
+        });
+
+        let mut cached_files: Vec<_> = cached_files.iter().map(|(f, _)| (*f).clone()).collect();
+
         let mut predecessor = None;
         // Stash messages we cannot yet timestamp here.
         let mut buffer = None;
@@ -929,33 +1041,32 @@ where
             // Downgrade capability (if possible)
             consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
 
-            if !read_cached_files {
-                if let Some(msgs) = source_info.next_cached_file() {
-                    // TODO(rkhaitan) change this to properly re-use old timestamps.
-                    // Currently this is hard to do because there can be arbitrary delays between
-                    // different workers being scheduled, and this means that all cached state
-                    // can potentially get pulled into memory without being able to close timestamps
-                    // which causes the system to go out of memory.
-                    // For now, constrain we constrain caching to RT sources, and we re-assign
-                    // timestamps to cached messages on startup.
-                    let ts = consistency_info.find_matching_rt_timestamp();
-                    let ts_cap = cap.delayed(&ts);
-                    for m in msgs {
-                        output.session(&ts_cap).give(Ok(SourceOutput::new(
-                            m.0,
-                            m.1,
-                            Some(m.3),
-                            None, // upstream timestamps are normalized before they are cached
-                        )));
-                    }
+            while let Some(file) = cached_files.pop() {
+                // TODO(rkhaitan) change this to properly re-use old timestamps.
+                // Currently this is hard to do because there can be arbitrary delays between
+                // different workers being scheduled, and this means that all cached state
+                // can potentially get pulled into memory without being able to close timestamps
+                // which causes the system to go out of memory.
+                // For now, constrain we constrain caching to RT sources, and we re-assign
+                // timestamps to cached messages on startup.
+                let ts = consistency_info.find_matching_rt_timestamp();
+                let ts_cap = cap.delayed(&ts);
 
-                    // Yield to give downstream operators time to handle this data.
-                    activator.activate_after(Duration::from_millis(10));
-                    return SourceStatus::Alive;
-                } else {
-                    // We've finished reading all cache data
-                    read_cached_files = true;
+                let messages = CacheMessageTrait::read_file(file);
+
+                for message in messages {
+                    let key = message.key.unwrap_or_default();
+                    let out = message.payload.unwrap_or_default();
+                    output.session(&ts_cap).give(Ok(SourceOutput::new(
+                        key,
+                        out,
+                        Some(message.offset.offset),
+                        message.upstream_time_millis,
+                    )));
                 }
+                // Yield to give downstream operators time to handle this data.
+                activator.activate_after(Duration::from_millis(10));
+                return SourceStatus::Alive;
             }
 
             // Bound execution of operator to prevent a single operator from hogging
@@ -982,7 +1093,6 @@ where
                         message,
                         &mut predecessor,
                         &mut consistency_info,
-                        source_info,
                         &id,
                         &timestamp_histories,
                         &mut bytes_read,
@@ -999,7 +1109,6 @@ where
                             message,
                             &mut predecessor,
                             &mut consistency_info,
-                            source_info,
                             &id,
                             &timestamp_histories,
                             &mut bytes_read,
@@ -1080,7 +1189,6 @@ fn handle_message<Out>(
     message: SourceMessage<Out>,
     predecessor: &mut Option<MzOffset>,
     consistency_info: &mut ConsistencyInfo,
-    source_info: &mut dyn SourceInfo<Out>,
     id: &SourceInstanceId,
     timestamp_histories: &TimestampDataUpdates,
     bytes_read: &mut usize,
@@ -1096,7 +1204,7 @@ fn handle_message<Out>(
     buffer: &mut Option<SourceMessage<Out>>,
 ) -> (SourceStatus, MessageProcessing)
 where
-    Out: Debug + Clone + Send + Default + MaybeLength + 'static,
+    Out: Debug + Clone + Send + Default + MaybeLength + CacheMessageTrait + 'static,
 {
     let partition = message.partition.clone();
     let offset = message.offset;
@@ -1124,7 +1232,7 @@ where
             (SourceStatus::Alive, MessageProcessing::Yielded)
         }
         Some(ts) => {
-            source_info.cache_message(caching_tx, &message, ts, msg_predecessor);
+            CacheMessageTrait::cache_message(&message, *id, caching_tx, ts, msg_predecessor);
             // Note: empty and null payload/keys are currently
             // treated as the same thing.
             let key = message.key.unwrap_or_default();
