@@ -26,7 +26,7 @@ use timely::dataflow::{
 use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError};
 use expr::{GlobalId, PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
-use log::{debug, error};
+use log::{debug, error, trace};
 use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{
     register_int_counter, register_int_counter_vec, register_int_gauge_vec,
@@ -381,7 +381,8 @@ impl CacheMessageTrait for mz_avro::types::Value {
         _timestamp: Timestamp,
         _offset: Option<MzOffset>,
     ) {
-        panic!("source caching is not supported for Avro OCF sources");
+        // Just no-op for OCF sources
+        trace!("source caching is not supported for Avro OCF sources");
     }
 
     fn read_file(_path: PathBuf) -> Vec<SourceMessage<Self>> {
