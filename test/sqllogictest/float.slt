@@ -75,8 +75,8 @@ SELECT '-2147483777'::float4::int;
 
 # Invalid type mods
 
-query error precision for type float must be within ([1-53])
+query error precision for type float must be within \(\[1-53\]\)
 SELECT 1::float(0);
 
-query error precision for type float must be within ([1-53])
+query error precision for type float must be within \(\[1-53\]\)
 SELECT 1::float(55);

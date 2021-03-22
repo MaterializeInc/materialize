@@ -12,10 +12,12 @@
 
 > VALUES
   ('1'::jsonb),
+  ('1.0'::jsonb),
   ('["a", "b"]'::jsonb),
   ('{"c": ["d"]}'::jsonb),
   ('null'::jsonb),
   (NULL::jsonb)
+"1"
 "1.0"
 "[\"a\",\"b\"]"
 "{\"c\":[\"d\"]}"

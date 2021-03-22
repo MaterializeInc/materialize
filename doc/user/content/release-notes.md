@@ -51,6 +51,26 @@ Wrap your release notes at the 80 character mark.
 - Add the [`jsonb_object_agg`](/sql/functions/jsonb_object_agg) function to
   aggregate rows into a JSON object.
 
+- Permit the [`jsonb`](/sql/types/jsonb) type to store all 64-bit integers
+  {{% gh 5919 %}}.
+  Previously integers in the following ranges were rejected:
+
+    * [-2<sup>64</sup>, -(2^<sup>53</sup>-1)]
+    * [2<sup>53</sup> - 1, 2^<sup>64</sup>-1].
+
+- Add the [`pg_postmaster_start_time`](/sql/functions#postgresql-compatibility-func)
+  function, which reports the time at which the server started.
+
+- Add the [`mz_workers`](/sql/functions#postgresql-compatibility-func)
+  function, which reports the number of workers in use by the server.
+
+- Add the [`mz_uptime`](/sql/functions#system-information-func)
+  function, which reports the duration for which the server has been running.
+
+- Avoid panicking when planning SQL queries of the form
+  `SELECT DISTINCT ... ORDER BY <expr>` where `expr` is not a simple column
+  reference {{% gh 6021 %}}.
+
 {{% version-header v0.7.1 %}}
 
 - **Breaking change.** Change the default

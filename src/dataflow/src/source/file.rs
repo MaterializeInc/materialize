@@ -17,7 +17,7 @@ use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
 use inotify::{Inotify, WatchMask};
 use log::error;
-use timely::scheduling::{Activator, SyncActivator};
+use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
     AvroOcfEncoding, Compression, DataEncoding, ExternalSourceConnector, MzOffset,
@@ -110,7 +110,7 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
                 PartitionId::File,
                 PartitionMetrics::new(&name, source_id, "", logger),
             );
-            consistency_info.update_partition_metadata(PartitionId::File);
+            consistency_info.update_partition_metadata(&PartitionId::File);
         }
 
         Ok(FileSourceInfo {
@@ -171,7 +171,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
                 PartitionId::File,
                 PartitionMetrics::new(&name, source_id, "", logger),
             );
-            consistency_info.update_partition_metadata(PartitionId::File);
+            consistency_info.update_partition_metadata(&PartitionId::File);
         }
 
         Ok(FileSourceInfo {
@@ -183,28 +183,7 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
 }
 
 impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
-    fn ensure_has_partition(&mut self, _consistency_info: &mut ConsistencyInfo, _pid: PartitionId) {
-        // This function should be a no-op for file sources because they don't have partitions.
-        log::debug!("ensure_has_partition erroneously called for file sources");
-    }
-
-    fn update_partition_count(
-        &mut self,
-        _consistency_info: &mut ConsistencyInfo,
-        partition_count: i32,
-    ) {
-        if partition_count > 1 {
-            error!("Files cannot have multiple partitions");
-        }
-        // This function should be a no-op for file sources because they don't have partitions.
-        log::debug!("update_partition_count erroneously called for file sources");
-    }
-
-    fn get_next_message(
-        &mut self,
-        _consistency_info: &mut ConsistencyInfo,
-        _activator: &Activator,
-    ) -> Result<NextMessage<Out>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(record)) => {
                 self.current_file_offset.offset += 1;

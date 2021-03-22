@@ -264,14 +264,6 @@ impl<'a> Explanation<'a> {
                         .unwrap_or_else(|| "?".to_owned()),
                     id,
                 )?,
-                Id::BareSource(id) => writeln!(
-                    f,
-                    "| Get Bare Source for {} ({})",
-                    self.expr_humanizer
-                        .humanize_id(*id)
-                        .unwrap_or_else(|| "?".to_owned()),
-                    id,
-                )?,
             },
             Project { outputs, .. } => {
                 writeln!(f, "| Project {}", bracketed("(", ")", Indices(outputs)))?

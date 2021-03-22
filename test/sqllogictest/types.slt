@@ -263,19 +263,19 @@ SELECT pg_catalog.interval '1-2 3 4:5:6.7' DAY
 query T
 SELECT '{"1":2,"3":4}'::jsonb
 ----
-{"1":2.0,"3":4.0}
+{"1":2,"3":4}
 
 query T
 SELECT '{"1":2,"3":4}'::pg_catalog.jsonb
 ----
-{"1":2.0,"3":4.0}
+{"1":2,"3":4}
 
 # 🔬🔬🔬 jsonb aliases
 
 query T
 SELECT '{"1":2,"3":4}'::json
 ----
-{"1":2.0,"3":4.0}
+{"1":2,"3":4}
 
 query error unknown catalog item 'pg_catalog.json'
 SELECT '{"1":2,"3":4}'::pg_catalog.json
@@ -335,13 +335,11 @@ SELECT '1'::pg_catalog.regclass
 
 # 🔬🔬 record
 
-query T
-SELECT ROW(1, 2) AS record;
-----
-(1,2)
+query error type "pg_catalog.record" does not exist
+SELECT ROW(1, 2)::record;
 
 query error type "pg_catalog.record" does not exist
-SELECT ROW(1, 2) AS pg_catalog.record;
+SELECT ROW(1, 2)::pg_catalog.record;
 
 # 🔬🔬 text
 

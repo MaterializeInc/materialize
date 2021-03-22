@@ -3438,7 +3438,7 @@ impl<'a> Parser<'a> {
             self.expect_keyword(AS)?;
             let name = self.parse_object_name()?;
             // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
-            if name.0.len() != 3 {
+            if name.0.len() < 2 {
                 return parser_err!(
                     self,
                     self.peek_prev_pos(),

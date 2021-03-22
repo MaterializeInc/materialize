@@ -361,45 +361,45 @@ fn push_column(
     match sql_type {
         DataType::Other { name, typ_mod } => {
             match name.raw_name().to_string().as_str() {
-                "bool" => {
+                "pg_catalog.bool" => {
                     let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
                     row.push(bool.into());
                 }
-                "bytea" => {
+                "pg_catalog.bytea" => {
                     let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
                     row.push(bytes.as_deref().into());
                 }
-                "char" | "text" | "varchar" => {
+                "pg_catalog.char" | "pg_catalog.text" | "pg_catalog.varchar" => {
                     let string = get_column_inner::<String>(postgres_row, i, nullable)?;
                     row.push(string.as_deref().into());
                 }
-                "date" => {
+                "pg_catalog.date" => {
                     let d: chrono::NaiveDate =
                         get_column_inner::<chrono::NaiveDate>(postgres_row, i, nullable)?.unwrap();
                     row.push(Datum::Date(d));
                 }
-                "float4" => {
+                "pg_catalog.float4" => {
                     let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(f32::from);
                     row.push(f.into());
                 }
-                "float8" => {
+                "pg_catalog.float8" => {
                     let f = get_column_inner::<f64>(postgres_row, i, nullable)?;
                     row.push(f.into());
                 }
-                "int4" => {
+                "pg_catalog.int4" => {
                     let i = get_column_inner::<i32>(postgres_row, i, nullable)?;
                     row.push(i.into());
                 }
-                "int8" => {
+                "pg_catalog.int8" => {
                     let i = get_column_inner::<i64>(postgres_row, i, nullable)?;
                     row.push(i.into());
                 }
-                "interval" => {
+                "pg_catalog.interval" => {
                     let iv =
                         get_column_inner::<pgrepr::Interval>(postgres_row, i, nullable)?.unwrap();
                     row.push(Datum::Interval(iv.0));
                 }
-                "jsonb" => {
+                "pg_catalog.jsonb" => {
                     let jsonb = get_column_inner::<Jsonb>(postgres_row, i, nullable)?;
                     if let Some(jsonb) = jsonb {
                         row.extend_by_row(&jsonb.0.into_row())
@@ -407,7 +407,7 @@ fn push_column(
                         row.push(Datum::Null)
                     }
                 }
-                "numeric" => {
+                "pg_catalog.numeric" => {
                     let (_, desired_scale) = sql::plan::unwrap_numeric_typ_mod(typ_mod)?;
                     match get_column_inner::<pgrepr::Numeric>(postgres_row, i, nullable)? {
                         None => row.push(Datum::Null),
@@ -428,23 +428,23 @@ fn push_column(
                         }
                     }
                 }
-                "int2" | "smallint" => {
+                "pg_catalog.int2" | "pg_catalog.smallint" => {
                     let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(i32::from);
                     row.push(i.into());
                 }
-                "timestamp" => {
+                "pg_catalog.timestamp" => {
                     let d: chrono::NaiveDateTime =
                         get_column_inner::<chrono::NaiveDateTime>(postgres_row, i, nullable)?
                             .unwrap();
                     row.push(Datum::Timestamp(d));
                 }
-                "timestamptz" => {
+                "pg_catalog.timestamptz" => {
                     let d: chrono::DateTime<Utc> =
                         get_column_inner::<chrono::DateTime<Utc>>(postgres_row, i, nullable)?
                             .unwrap();
                     row.push(Datum::TimestampTz(d));
                 }
-                "uuid" => {
+                "pg_catalog.uuid" => {
                     let u = get_column_inner::<Uuid>(postgres_row, i, nullable)?.unwrap();
                     row.push(Datum::Uuid(u));
                 }

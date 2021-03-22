@@ -76,6 +76,7 @@
 //! ```
 
 use std::borrow::Cow;
+use std::convert::TryFrom;
 use std::fmt;
 use std::io;
 use std::str::{self, FromStr};
@@ -271,7 +272,8 @@ impl JsonbPacker {
 enum Command<'de> {
     Null,
     Bool(bool),
-    Number(f64),
+    Int64(i64),
+    Float64(f64),
     String(Cow<'de, str>),
     Array(usize), // further commands
     Map(usize),   // further commands
@@ -314,13 +316,7 @@ impl<'a, 'de> Visitor<'de> for Collector<'a, 'de> {
     where
         E: de::Error,
     {
-        if value > (1 << 53) || value < (-1 << 53) {
-            return Err(de::Error::custom(format!(
-                "{} is out of range for a jsonb number",
-                value
-            )));
-        }
-        self.0.push(Command::Number(value as f64));
+        self.0.push(Command::Int64(value));
         Ok(())
     }
 
@@ -329,19 +325,16 @@ impl<'a, 'de> Visitor<'de> for Collector<'a, 'de> {
     where
         E: de::Error,
     {
-        if value > (1 << 53) {
-            return Err(de::Error::custom(format!(
-                "{} is out of range for a jsonb number",
-                value
-            )));
-        }
-        self.0.push(Command::Number(value as f64));
+        let value = i64::try_from(value).map_err(|_| {
+            de::Error::custom(format!("{} is out of range for a jsonb number", value))
+        })?;
+        self.0.push(Command::Int64(value));
         Ok(())
     }
 
     #[inline]
     fn visit_f64<E>(self, value: f64) -> Result<(), E> {
-        self.0.push(Command::Number(value));
+        self.0.push(Command::Float64(value));
         Ok(())
     }
 
@@ -404,7 +397,8 @@ fn pack_value<'a, 'scratch>(
     match &value[0] {
         Command::Null => packer.push(Datum::JsonNull),
         Command::Bool(b) => packer.push(if *b { Datum::True } else { Datum::False }),
-        Command::Number(n) => packer.push(Datum::Float64((*n).into())),
+        Command::Int64(n) => packer.push(Datum::Int64(*n)),
+        Command::Float64(n) => packer.push(Datum::Float64((*n).into())),
         Command::String(s) => packer.push(Datum::String(s)),
         Command::Array(further) => {
             let range = &value[1..][..*further];
@@ -497,6 +491,7 @@ impl Serialize for JsonbDatum<'_> {
             Datum::JsonNull => serializer.serialize_none(),
             Datum::True => serializer.serialize_bool(true),
             Datum::False => serializer.serialize_bool(false),
+            Datum::Int64(n) => serializer.serialize_i64(n),
             Datum::Float64(f) => serializer.serialize_f64(*f),
             Datum::String(s) => serializer.serialize_str(s),
             Datum::List(list) => {

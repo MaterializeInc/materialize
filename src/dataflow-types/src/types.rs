@@ -76,7 +76,7 @@ pub struct BuildDesc {
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Default)]
 pub struct DataflowDesc {
-    pub source_imports: BTreeMap<GlobalId, SourceDesc>,
+    pub source_imports: BTreeMap<GlobalId, (SourceDesc, GlobalId)>,
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order as the Vec
@@ -131,17 +131,15 @@ impl DataflowDesc {
         id: GlobalId,
         connector: SourceConnector,
         bare_desc: RelationDesc,
-        optimized_expr: OptimizedMirRelationExpr,
-        desc: RelationDesc,
+        orig_id: GlobalId,
     ) {
         let source_description = SourceDesc {
             connector,
             operators: None,
             bare_desc,
-            optimized_expr,
-            desc,
         };
-        self.source_imports.insert(id, source_description);
+        self.source_imports
+            .insert(id, (source_description, orig_id));
     }
 
     pub fn add_view_to_build(
@@ -280,9 +278,9 @@ impl DataflowDesc {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, desc) in self.source_imports.iter() {
+        for (source_id, (desc, _orig_id)) in self.source_imports.iter() {
             if source_id == id {
-                return desc.arity();
+                return desc.bare_desc.arity();
             }
         }
         for (_index_id, (desc, typ)) in self.index_imports.iter() {
@@ -395,6 +393,10 @@ impl DataEncoding {
             }) => {
                 let d = decode_descriptors(descriptors)?;
                 validate_descriptors(message_name, &d)?
+                    .into_iter()
+                    .fold(key_desc, |desc, (name, ty)| {
+                        desc.with_column(name.unwrap(), ty)
+                    })
             }
             DataEncoding::Regex(RegexEncoding { regex }) => regex
                 .capture_names()
@@ -483,15 +485,6 @@ pub struct SourceDesc {
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
     pub bare_desc: RelationDesc,
-    pub optimized_expr: OptimizedMirRelationExpr,
-    pub desc: RelationDesc,
-}
-
-impl SourceDesc {
-    /// Computes the arity of this source.
-    pub fn arity(&self) -> usize {
-        self.optimized_expr.0.arity()
-    }
 }
 
 /// A sink for updates to a relational collection.
@@ -650,12 +643,12 @@ pub struct KafkaOffset {
 /// with Timestamp.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TimestampSourceUpdate {
-    /// Update for an RT source: contains an updated partition count for this source
-    RealTime(i32),
-    ///  Timestamp update for a BYO source: contains an updated partition count for this source,
-    /// combined with a PartitionID, Timestamp, MzOffset tuple. This tuple informs workers that
-    /// messages with Offset on PartitionId will be timestamped with Timestamp.
-    BringYourOwn(i32, PartitionId, u64, MzOffset),
+    /// Update for an RT source: contains a new partition to add to this source.
+    RealTime(PartitionId),
+    /// Timestamp update for a BYO source: contains a PartitionID, Timestamp,
+    /// MzOffset tuple. This tuple informs workers that messages with Offset on
+    /// PartitionId will be timestamped with Timestamp.
+    BringYourOwn(PartitionId, u64, MzOffset),
 }
 
 /// Convert from KafkaOffset to MzOffset (1-indexed)
