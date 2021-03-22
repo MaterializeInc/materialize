@@ -32,6 +32,7 @@ use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 /// Values recorded from the last rdkafka statistics callback, used to generate a
 /// diff of values for logging
+#[derive(Default)]
 pub struct PreviousStats {
     consumer_name: Option<String>,
     rxmsgs: i64,
@@ -535,15 +536,7 @@ impl PartitionConsumer {
         PartitionConsumer {
             pid,
             partition_queue,
-            previous_stats: PreviousStats {
-                consumer_name: None,
-                rxmsgs: 0,
-                rxbytes: 0,
-                txmsgs: 0,
-                txbytes: 0,
-                app_offset: 0,
-                consumer_lag: 0,
-            },
+            previous_stats: PreviousStats::default(),
         }
     }
 
