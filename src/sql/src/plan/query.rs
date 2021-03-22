@@ -37,8 +37,8 @@ use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     AstInfo, Cte, DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource,
     JoinConstraint, JoinOperator, Limit, OrderByExpr, Query, Raw, RawName, Select, SelectItem,
-    SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, UnresolvedObjectName, Value,
-    Values,
+    SetExpr, SetOperator, Statement, TableAlias, TableFactor, TableWithJoins, UnresolvedObjectName,
+    Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -71,13 +71,32 @@ pub struct Aug;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ResolvedObjectName {
-    id: Id,
-    raw_name: PartialName,
+    pub id: Id,
+    pub raw_name: PartialName,
+    // Whether this object, when printed out, should use [id AS name] syntax. We
+    // want this for things like tables and sources, but not for things like
+    // types.
+    pub print_id: bool,
 }
 
 impl AstDisplay for ResolvedObjectName {
     fn fmt(&self, f: &mut AstFormatter) {
-        f.write_str(format!("[{}: {}]", self.id, self.raw_name));
+        if self.print_id {
+            f.write_str(format!("[{} AS ", self.id));
+        }
+        let n = self.raw_name();
+        if let Some(database) = n.database {
+            f.write_node(&Ident::new(database));
+            f.write_str(".");
+        }
+        if let Some(schema) = n.schema {
+            f.write_node(&Ident::new(schema));
+            f.write_str(".");
+        }
+        f.write_node(&Ident::new(n.item));
+        if self.print_id {
+            f.write_str("]");
+        }
     }
 }
 
@@ -178,6 +197,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         return ResolvedObjectName {
                             id: Id::Local(*id),
                             raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
+                            print_id: false,
                         };
                     }
                 }
@@ -186,9 +206,14 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 match self.catalog.resolve_item(&name) {
                     Ok(item) => {
                         self.ids.insert(item.id());
+                        let print_id = !matches!(
+                            item.item_type(),
+                            CatalogItemType::Func | CatalogItemType::Type
+                        );
                         ResolvedObjectName {
                             id: Id::Global(item.id()),
-                            raw_name: name,
+                            raw_name: item.name().clone().into(),
+                            print_id,
                         }
                     }
                     Err(e) => {
@@ -198,6 +223,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         ResolvedObjectName {
                             id: Id::Local(LocalId::new(0)),
                             raw_name: name,
+                            print_id: false,
                         }
                     }
                 }
@@ -217,10 +243,26 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 ResolvedObjectName {
                     id: Id::Global(gid),
                     raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
+                    print_id: true,
                 }
             }
         }
     }
+}
+
+pub fn resolve_names_stmt(
+    catalog: &dyn Catalog,
+    stmt: Statement<Raw>,
+) -> Result<Statement<Aug>, anyhow::Error> {
+    let mut n = NameResolver {
+        status: Ok(()),
+        catalog,
+        ctes: HashMap::new(),
+        ids: HashSet::new(),
+    };
+    let result = n.fold_statement(stmt);
+    n.status?;
+    Ok(result)
 }
 
 // Attaches additional information to a `Raw` AST, resulting in an `Aug` AST, by
