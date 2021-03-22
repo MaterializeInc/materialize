@@ -78,7 +78,7 @@ tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.4.0", features = ["sync"] }
 tokio-openssl = "0.6.1"
-tokio-stream = { version = "0.1.4", features = ["net"] }
+tokio-stream = { version = "0.1.5", features = ["net"] }
 tracing = "0.1.25"
 # TODO(benesch): we can use the default features here once tracing-subscriber
 # does not enable chrono's "oldtime" feature.
