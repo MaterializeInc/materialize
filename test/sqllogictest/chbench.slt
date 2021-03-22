@@ -1111,7 +1111,6 @@ ORDER BY su_suppkey
 | Join %0 %3 %6 (= #0 #7) (= #8 #9)
 | | implementation = Differential %0.(#0) %3.(#0) %6.(#0)
 | | demand = (#0..#2, #4, #8)
-| Filter !(isnull(#8))
 | Project (#0..#2, #4, #8)
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#4)

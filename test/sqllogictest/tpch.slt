@@ -1687,6 +1687,8 @@ ORDER BY
 | Filter (datetots(#12) < 1996-01-01 00:00:00), (#12 >= 1995-01-01)
 | Reduce group=(#0, #1)
 | | agg sum(#6)
+| Map (5dec * #2)
+| ArrangeBy (#0, #1)
 
 %11 =
 | Join %7 %10 (= #0 #26) (= #11 #25)
