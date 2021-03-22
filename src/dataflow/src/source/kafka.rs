@@ -21,21 +21,16 @@ use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
 
-use dataflow_types::{
-    DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
-};
+use dataflow_types::{DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector};
 use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{error, info, log_enabled, warn};
 use uuid::Uuid;
 
-use crate::logging::materialized::Logger;
-use crate::source::{
-    ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
-};
+use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 /// Contains all information necessary to ingest data from Kafka
-pub struct KafkaSourceInfo {
+pub struct KafkaSourceReader {
     /// Name of the topic on which this source is backed on
     topic_name: String,
     /// Name of the source (will have format kafka-source-id)
@@ -54,56 +49,36 @@ pub struct KafkaSourceInfo {
     last_offsets: HashMap<i32, i64>,
     /// Map from partition -> offset to start reading at
     start_offsets: HashMap<i32, i64>,
-    /// Timely worker logger for source events
-    logger: Option<Logger>,
 }
 
-impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
+impl SourceReader<Vec<u8>> for KafkaSourceReader {
+    /// Create a new instance of a Kafka reader.
     fn new(
         source_name: String,
         source_id: SourceInstanceId,
-        _active: bool,
         worker_id: usize,
-        _worker_count: usize,
-        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        consistency_info: &mut ConsistencyInfo,
         _: DataEncoding,
-    ) -> Result<KafkaSourceInfo, anyhow::Error> {
+    ) -> Result<(KafkaSourceReader, Option<PartitionId>), anyhow::Error> {
         match connector {
-            ExternalSourceConnector::Kafka(kc) => Ok(KafkaSourceInfo::new(
-                source_name,
-                source_id,
-                worker_id,
-                logger,
-                consumer_activator,
-                kc,
-                consistency_info.start_offsets.clone(),
+            ExternalSourceConnector::Kafka(kc) => Ok((
+                KafkaSourceReader::new(source_name, source_id, worker_id, consumer_activator, kc),
+                None,
             )),
             _ => unreachable!(),
         }
     }
-}
-
-impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     /// Ensures that a partition queue for `pid` exists.
     /// In Kafka, partitions are assigned contiguously. This function consequently
     /// creates partition queues for every p <= pid
-    fn add_partition(&mut self, pid: PartitionId) -> PartitionMetrics {
+    fn add_partition(&mut self, pid: PartitionId) {
         let pid = match pid {
             PartitionId::Kafka(p) => p,
             _ => unreachable!(),
         };
 
         self.create_partition_queue(pid);
-        let metrics = PartitionMetrics::new(
-            &self.topic_name,
-            self.id,
-            &pid.to_string(),
-            self.logger.clone(),
-        );
-
         // Indicate a last offset of -1 if we have not been instructed to
         // have a specific start offset for this topic.
         let start_offset = *self.start_offsets.get(&pid).unwrap_or(&-1);
@@ -111,7 +86,6 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
 
         assert!(prev.is_none());
         self.known_partitions = cmp::max(self.known_partitions, pid + 1);
-        metrics
     }
 
     /// This function polls from the next consumer for which a message is available. This function polls the set
@@ -224,17 +198,15 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     }
 }
 
-impl KafkaSourceInfo {
+impl KafkaSourceReader {
     /// Constructor
     pub fn new(
         source_name: String,
         source_id: SourceInstanceId,
         worker_id: usize,
-        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         kc: KafkaSourceConnector,
-        start_offsets: HashMap<PartitionId, MzOffset>,
-    ) -> KafkaSourceInfo {
+    ) -> KafkaSourceReader {
         let KafkaSourceConnector {
             addrs,
             topic,
@@ -255,22 +227,9 @@ impl KafkaSourceInfo {
             .create_with_context(GlueConsumerContext(consumer_activator))
             .expect("Failed to create Kafka Consumer");
 
-        let start_offsets = start_offsets
-            .iter()
-            .map(|(k, v)| {
-                let key = if let PartitionId::Kafka(pid) = k {
-                    *pid
-                } else {
-                    panic!("received unexpected partition id type for kafka source")
-                };
+        let start_offsets = kc.start_offsets.iter().map(|(k, v)| (*k, v - 1)).collect();
 
-                let value = v.offset - 1;
-
-                (key, value)
-            })
-            .collect();
-
-        KafkaSourceInfo {
+        KafkaSourceReader {
             topic_name: topic,
             source_name,
             id: source_id,
@@ -280,7 +239,6 @@ impl KafkaSourceInfo {
             worker_id,
             last_offsets: HashMap::new(),
             start_offsets,
-            logger,
         }
     }
 

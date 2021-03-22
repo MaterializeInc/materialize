@@ -59,10 +59,10 @@ pub mod cache;
 use differential_dataflow::Hashable;
 pub use file::read_file_task;
 pub use file::FileReadStyle;
-pub use file::FileSourceInfo;
-pub use kafka::KafkaSourceInfo;
-pub use kinesis::KinesisSourceInfo;
-pub use s3::S3SourceInfo;
+pub use file::FileSourceReader;
+pub use kafka::KafkaSourceReader;
+pub use kinesis::KinesisSourceReader;
+pub use s3::S3SourceReader;
 
 // Interval after which the source operator will yield control.
 static YIELD_INTERVAL_MS: u128 = 10;
@@ -227,27 +227,6 @@ lazy_static! {
         register_int_counter!("mz_bytes_read_total", "Count of bytes read from sources").unwrap();
 }
 
-/// Creates a specific source, parameterised by 'Out'. Out denotes the encoding
-/// of the ingested data (Vec<u8> or Value).
-pub(crate) trait SourceConstructor<Out> {
-    /// Constructor for source creation
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        source_name: String,
-        source_id: SourceInstanceId,
-        active: bool,
-        worker_id: usize,
-        worker_count: usize,
-        logger: Option<Logger>,
-        consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
-        consistency_info: &mut ConsistencyInfo,
-        encoding: DataEncoding,
-    ) -> Result<Self, anyhow::Error>
-    where
-        Self: Sized + SourceInfo<Out>;
-}
-
 /// Types that implement this trait expose a length function
 pub trait MaybeLength {
     /// Returns the size of the object
@@ -277,16 +256,42 @@ impl MaybeLength for Value {
     }
 }
 
-/// Each source must implement this trait. Sources will then get created as part of the
-/// [`create_source`] function.
-pub(crate) trait SourceInfo<Out> {
-    /// Ensures that the partition `pid` exists for this source. Once this function has been
-    /// called, the source should be able to receive messages from this partition
-    fn add_partition(&mut self, _pid: PartitionId) -> PartitionMetrics {
+/// This trait defines the interface between Materialize and external sources, and
+/// must be implemented for every new kind of source.
+///
+/// TODO: this trait is still a little too Kafka-centric, specifically the concept of
+/// a "partition" is baked into this trait and introduces some cognitive overhead as
+/// we are forced to treat things like file sources as "single-partition"
+pub(crate) trait SourceReader<Out> {
+    /// Create a new source reader.
+    ///
+    /// This function returns the source reader and optionally, any "partition" it's
+    /// already reading. In practice, the partition is only non-None for static sources
+    /// that either don't truly have partitions or have a fixed number of partitions.
+    fn new(
+        source_name: String,
+        source_id: SourceInstanceId,
+        worker_id: usize,
+        consumer_activator: SyncActivator,
+        connector: ExternalSourceConnector,
+        encoding: DataEncoding,
+    ) -> Result<(Self, Option<PartitionId>), anyhow::Error>
+    where
+        Self: Sized;
+
+    /// Instruct the source to start subscribing to `pid`.
+    ///
+    /// Many (most?) sources do not actually have partitions and for those kinds
+    /// of sources the default implementation is a panic (to make sure we don't
+    /// inadvertently call this at runtime).
+    fn add_partition(&mut self, _pid: PartitionId) {
         panic!("add partiton not supported for source!");
     }
 
-    /// Returns the next message read from the source
+    /// Returns the next message available from the source.
+    ///
+    /// Note that implementers are required to present messages in strictly ascending\
+    /// offset order within each partition.
     fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error>;
 }
 
@@ -454,14 +459,10 @@ pub struct ConsistencyInfo {
     /// Note that we only keep track of partitions this worker is responsible for in this
     /// hashmap.
     pub partition_metadata: HashMap<PartitionId, ConsInfo>,
-    /// Optional: Materialize Offset from which source should start reading (default is 0)
-    start_offsets: HashMap<PartitionId, MzOffset>,
     /// Source Type (Real-time or BYO)
     source_type: Consistency,
     /// Per-source Prometheus metrics.
     source_metrics: SourceMetrics,
-    /// Per-partition Prometheus metrics.
-    partition_metrics: HashMap<PartitionId, PartitionMetrics>,
     /// source global id
     source_global_id: GlobalId,
     /// True if this worker is the active reader
@@ -481,37 +482,22 @@ impl ConsistencyInfo {
         worker_count: usize,
         consistency: Consistency,
         timestamp_frequency: Duration,
-        connector: &ExternalSourceConnector,
+        logger: Option<Logger>,
     ) -> ConsistencyInfo {
-        let start_offsets = match connector {
-            ExternalSourceConnector::Kafka(kc) => {
-                let mut start_offsets = HashMap::new();
-
-                for (partition, offset) in kc.start_offsets.iter() {
-                    start_offsets
-                        .insert(PartitionId::Kafka(*partition), MzOffset { offset: *offset });
-                }
-
-                start_offsets
-            }
-            _ => HashMap::new(),
-        };
-
         ConsistencyInfo {
             last_closed_ts: 0,
             // Safe conversion: statement.rs checks that value specified fits in u64
             downgrade_capability_frequency: timestamp_frequency.as_millis().try_into().unwrap(),
             partition_metadata: HashMap::new(),
-            start_offsets,
             source_type: consistency,
             source_metrics: SourceMetrics::new(
                 &source_name,
-                &source_id.to_string(),
+                source_id,
                 &worker_id.to_string(),
+                logger,
             ),
             // we have never downgraded, so make sure the initial value is outside of our frequency
             time_since_downgrade: Instant::now() - timestamp_frequency - Duration::from_secs(1),
-            partition_metrics: Default::default(),
             source_global_id: source_id.source_id,
             active,
             worker_id,
@@ -552,17 +538,10 @@ impl ConsistencyInfo {
     /// is enforced in `coord::timestamp::is_ts_valid`.
     pub fn update_partition_metadata(&mut self, pid: &PartitionId) {
         let cons_info = ConsInfo {
-            offset: self.get_partition_start_offset(&pid),
+            offset: MzOffset { offset: 0 },
             ts: self.last_closed_ts,
         };
         self.partition_metadata.insert(pid.clone(), cons_info);
-    }
-
-    fn get_partition_start_offset(&self, pid: &PartitionId) -> MzOffset {
-        self.start_offsets
-            .get(pid)
-            .unwrap_or(&MzOffset { offset: 0 })
-            .clone()
     }
 
     /// Generates a timestamp that is guaranteed to be monotonically increasing.
@@ -616,7 +595,7 @@ impl ConsistencyInfo {
         &mut self,
         id: &SourceInstanceId,
         cap: &mut Capability<Timestamp>,
-        source: &mut dyn SourceInfo<Out>,
+        source: &mut dyn SourceReader<Out>,
         timestamp_histories: &TimestampDataUpdates,
     ) {
         let mut min_closed_timestamp_unowned_partitions: Option<Timestamp> = None;
@@ -635,10 +614,9 @@ impl ConsistencyInfo {
                         // Iterate over each partition that we know about
                         for (pid, entries) in entries {
                             if !self.knows_of(pid) && self.responsible_for(pid) {
-                                let partition_metrics = source.add_partition(pid.clone());
+                                source.add_partition(pid.clone());
                                 self.update_partition_metadata(pid);
-                                self.partition_metrics
-                                    .insert(pid.clone(), partition_metrics);
+                                self.source_metrics.add_partition(pid);
                             }
 
                             if !self.partition_metadata.contains_key(pid) {
@@ -668,19 +646,14 @@ impl ConsistencyInfo {
                                     //skip old records
                                     continue;
                                 }
-                                let partition_start_offset = self.get_partition_start_offset(pid);
-                                assert!(
-                                    *offset >= partition_start_offset,
-                                    "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
-                                    offset, partition_start_offset
-                                );
-
                                 assert!(
                                     *ts > 0,
                                     "Internal error! Received a zero-timestamp. Materialize will crash now."
                                 );
 
-                                if let Some(pmetrics) = self.partition_metrics.get_mut(pid) {
+                                if let Some(pmetrics) =
+                                    self.source_metrics.partition_metrics.get_mut(pid)
+                                {
                                     pmetrics
                                         .closed_ts
                                         .set(self.partition_metadata.get(pid).unwrap().ts);
@@ -732,10 +705,9 @@ impl ConsistencyInfo {
                     TimestampDataUpdate::RealTime(partitions) => {
                         for pid in partitions {
                             if !self.knows_of(pid) && self.responsible_for(pid) {
-                                let partition_metrics = source.add_partition(pid.clone());
+                                source.add_partition(pid.clone());
                                 self.update_partition_metadata(pid);
-                                self.partition_metrics
-                                    .insert(pid.clone(), partition_metrics);
+                                self.source_metrics.add_partition(pid);
                             }
                         }
                     }
@@ -804,11 +776,22 @@ pub struct SourceMetrics {
     operator_scheduled_counter: IntCounter,
     /// Value of the capability associated with this source
     capability: UIntGauge,
+    /// Per-partition Prometheus metrics.
+    pub partition_metrics: HashMap<PartitionId, PartitionMetrics>,
+    logger: Option<Logger>,
+    source_name: String,
+    source_id: SourceInstanceId,
 }
 
 impl SourceMetrics {
     /// Initialises source metrics for a given (source_id, worker_id)
-    pub fn new(source_name: &str, source_id: &str, worker_id: &str) -> SourceMetrics {
+    pub fn new(
+        source_name: &str,
+        source_id: SourceInstanceId,
+        worker_id: &str,
+        logger: Option<Logger>,
+    ) -> SourceMetrics {
+        let source_id_string = source_id.to_string();
         lazy_static! {
             static ref OPERATOR_SCHEDULED_COUNTER: IntCounterVec = register_int_counter_vec!(
                 "mz_operator_scheduled_total",
@@ -823,10 +806,65 @@ impl SourceMetrics {
             )
             .unwrap();
         }
-        let labels = &[source_name, source_id, worker_id];
+        let labels = &[source_name, &source_id_string, worker_id];
         SourceMetrics {
             operator_scheduled_counter: OPERATOR_SCHEDULED_COUNTER.with_label_values(labels),
             capability: CAPABILITY.with_label_values(labels),
+            partition_metrics: Default::default(),
+            logger,
+            source_name: source_name.to_string(),
+            source_id,
+        }
+    }
+
+    /// Add metrics for `partition_id`
+    pub fn add_partition(&mut self, partition_id: &PartitionId) {
+        if self.partition_metrics.contains_key(partition_id) {
+            error!(
+                "incorrectly adding a duplicate partition metric in source: {} partition: {}",
+                self.source_id, partition_id
+            );
+            return;
+        }
+
+        let metric = PartitionMetrics::new(&self.source_name, self.source_id, partition_id);
+        self.partition_metrics.insert(partition_id.clone(), metric);
+    }
+
+    /// Log updates to which offsets / timestamps read up to.
+    pub fn record_partition_offsets(&mut self, offsets: HashMap<PartitionId, (MzOffset, u64)>) {
+        if self.logger.is_none() {
+            return;
+        }
+
+        for (partition, (offset, timestamp)) in offsets {
+            if let Some(metric) = self.partition_metrics.get_mut(&partition) {
+                metric.record_offset(
+                    &mut self.logger.as_mut().unwrap(),
+                    &self.source_name,
+                    self.source_id,
+                    &partition,
+                    offset.offset,
+                    timestamp as i64,
+                );
+            }
+        }
+    }
+}
+
+impl Drop for SourceMetrics {
+    fn drop(&mut self) {
+        // retract our partition from logging
+        if let Some(logger) = self.logger.as_mut() {
+            for (partition, metric) in self.partition_metrics.iter() {
+                logger.log(MaterializedEvent::SourceInfo {
+                    source_name: self.source_name.clone(),
+                    source_id: self.source_id,
+                    partition_id: partition.to_string(),
+                    offset: -metric.last_offset,
+                    timestamp: -metric.last_timestamp,
+                });
+            }
         }
     }
 }
@@ -841,26 +879,28 @@ pub struct PartitionMetrics {
     closed_ts: DeleteOnDropGauge<'static, AtomicU64>,
     /// Total number of messages that have been received by the source and timestamped
     messages_ingested: DeleteOnDropCounter<'static, AtomicI64>,
-    logger: Option<Logger>,
-    source_name: String,
-    source_id: SourceInstanceId,
-    partition_id: String,
     last_offset: i64,
     last_timestamp: i64,
 }
 
 impl PartitionMetrics {
     /// Record the latest offset ingested high-water mark
-    pub fn record_offset(&mut self, offset: i64, timestamp: i64) {
-        if let Some(logger) = self.logger.as_mut() {
-            logger.log(MaterializedEvent::SourceInfo {
-                source_name: self.source_name.clone(),
-                source_id: self.source_id,
-                partition_id: self.partition_id.clone(),
-                offset: offset - self.last_offset,
-                timestamp: timestamp - self.last_timestamp,
-            });
-        }
+    fn record_offset(
+        &mut self,
+        logger: &mut Logger,
+        source_name: &str,
+        source_id: SourceInstanceId,
+        partition_id: &PartitionId,
+        offset: i64,
+        timestamp: i64,
+    ) {
+        logger.log(MaterializedEvent::SourceInfo {
+            source_name: source_name.to_string(),
+            source_id,
+            partition_id: partition_id.to_string(),
+            offset: offset - self.last_offset,
+            timestamp: timestamp - self.last_timestamp,
+        });
         self.last_offset = offset;
         self.last_timestamp = timestamp;
     }
@@ -869,8 +909,7 @@ impl PartitionMetrics {
     pub fn new(
         source_name: &str,
         source_id: SourceInstanceId,
-        partition_id: &str,
-        logger: Option<Logger>,
+        partition_id: &PartitionId,
     ) -> PartitionMetrics {
         const LABELS: &[&str] = &["topic", "source_id", "source_instance", "partition_id"];
         lazy_static! {
@@ -904,7 +943,7 @@ impl PartitionMetrics {
             source_name,
             &source_id.source_id.to_string(),
             &source_id.dataflow_id.to_string(),
-            partition_id,
+            &partition_id.to_string(),
         ];
         PartitionMetrics {
             offset_ingested: DeleteOnDropGauge::new_with_error_handler(
@@ -927,27 +966,8 @@ impl PartitionMetrics {
                 &MESSAGES_INGESTED,
                 |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
-            logger,
-            source_name: source_name.to_string(),
-            source_id,
-            partition_id: partition_id.to_string(),
             last_offset: 0,
             last_timestamp: 0,
-        }
-    }
-}
-
-impl Drop for PartitionMetrics {
-    fn drop(&mut self) {
-        // retract our partition from logging
-        if let Some(logger) = self.logger.as_mut() {
-            logger.log(MaterializedEvent::SourceInfo {
-                source_name: self.source_name.clone(),
-                source_id: self.source_id,
-                partition_id: self.partition_id.clone(),
-                offset: -self.last_offset,
-                timestamp: -self.last_timestamp,
-            });
         }
     }
 }
@@ -973,7 +993,7 @@ pub(crate) fn create_source<G, S: 'static, Out>(
 )
 where
     G: Scope<Timestamp = Timestamp>,
-    S: SourceInfo<Out> + SourceConstructor<Out>,
+    S: SourceReader<Out>,
     Out: Debug + Clone + Send + Default + MaybeLength + SourceCache + 'static,
 {
     let SourceConfig {
@@ -1004,23 +1024,38 @@ where
             worker_count,
             consistency,
             timestamp_frequency,
-            &source_connector,
+            logger.clone(),
         );
 
         // Create source information (this function is specific to a specific
         // source
-        let mut source_info: Result<S, anyhow::Error> = SourceConstructor::<Out>::new(
-            name.clone(),
-            id,
-            active,
-            worker_id,
-            worker_count,
-            logger,
-            scope.sync_activator_for(&info.address[..]),
-            source_connector.clone(),
-            &mut consistency_info,
-            encoding,
-        );
+
+        let mut source_reader: Option<S> = if !active {
+            None
+        } else {
+            match SourceReader::<Out>::new(
+                name.clone(),
+                id,
+                worker_id,
+                scope.sync_activator_for(&info.address[..]),
+                source_connector.clone(),
+                encoding,
+            ) {
+                Ok((source_reader, partition)) => {
+                    if let Some(pid) = partition {
+                        consistency_info.source_metrics.add_partition(&pid);
+                        consistency_info.update_partition_metadata(&pid);
+                    }
+
+                    Some(source_reader)
+                }
+
+                Err(e) => {
+                    error!("Failed to create source: {}", e);
+                    None
+                }
+            }
+        };
 
         let cached_files = dataflow_types::cached_files(&source_connector);
         let mut cached_files = crate::source::cache::cached_files_for_worker(
@@ -1035,20 +1070,15 @@ where
 
         move |cap, output| {
             // First check that the source was successfully created
-            let source_info = match &mut source_info {
-                Ok(source_info) => source_info,
-                Err(e) => {
-                    error!("Failed to create source: {}", e);
+            let source_reader = match &mut source_reader {
+                Some(source_reader) => source_reader,
+                None => {
                     return SourceStatus::Done;
                 }
             };
 
-            if !active {
-                return SourceStatus::Done;
-            }
-
             // Downgrade capability (if possible)
-            consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
+            consistency_info.downgrade_capability(&id, cap, source_reader, &timestamp_histories);
 
             if let Some(file) = cached_files.pop() {
                 // TODO(rkhaitan) change this to properly re-use old timestamps.
@@ -1113,7 +1143,7 @@ where
                         &mut buffer,
                     )
                 } else {
-                    match source_info.get_next_message() {
+                    match source_reader.get_next_message() {
                         Ok(NextMessage::Ready(message)) => handle_message(
                             message,
                             &mut predecessor,
@@ -1154,16 +1184,12 @@ where
             }
 
             BYTES_READ_COUNTER.inc_by(bytes_read as i64);
-            for (partition, (offset, ts)) in metric_updates {
-                let partition_metrics = consistency_info
-                    .partition_metrics
-                    .get_mut(&partition)
-                    .unwrap();
-                partition_metrics.record_offset(offset.offset, ts as i64);
-            }
+            consistency_info
+                .source_metrics
+                .record_partition_offsets(metric_updates);
 
             // Downgrade capability (if possible) before exiting
-            consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
+            consistency_info.downgrade_capability(&id, cap, source_reader, &timestamp_histories);
 
             let (source_status, processing_status) = source_state;
             // Schedule our next activation
@@ -1221,9 +1247,10 @@ where
     *predecessor = Some(offset);
 
     // Update ingestion metrics. Guaranteed to exist as the appropriate
-    // entry gets created in SourceConstructor or when a new partition
+    // entry gets created in SourceReader or when a new partition
     // is discovered
     consistency_info
+        .source_metrics
         .partition_metrics
         .get_mut(&partition)
         .unwrap_or_else(|| panic!("partition metrics do not exist for partition {}", partition))
@@ -1268,6 +1295,7 @@ where
             // Update ingestion metrics
             // Entry is guaranteed to exist as it gets created when we initialise the partition
             let partition_metrics = consistency_info
+                .source_metrics
                 .partition_metrics
                 .get_mut(&partition)
                 .unwrap();
