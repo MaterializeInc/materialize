@@ -297,6 +297,13 @@ impl CatalogItem {
         }
     }
 
+    pub fn source_connector(&self, name: &FullName) -> Result<&SourceConnector, SqlCatalogError> {
+        match &self {
+            CatalogItem::Source(source) => Ok(&source.connector),
+            _ => Err(SqlCatalogError::UnknownSource(name.to_string())),
+        }
+    }
+
     /// Collects the identifiers of the dataflows that this item depends
     /// upon.
     pub fn uses(&self) -> &[GlobalId] {
@@ -405,6 +412,12 @@ impl CatalogEntry {
     /// Returns the [`sql::func::Func`] associated with this `CatalogEntry`.
     pub fn func(&self) -> Result<&'static sql::func::Func, SqlCatalogError> {
         self.item.func(&self.name)
+    }
+
+    /// Returns the [`dataflow_types::SourceConnector`] associated with
+    /// this `CatalogEntry`.
+    pub fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
+        self.item.source_connector(&self.name)
     }
 
     /// Reports whether this catalog entry is a table.
@@ -2347,6 +2360,10 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 
     fn func(&self) -> Result<&'static sql::func::Func, SqlCatalogError> {
         Ok(self.func()?)
+    }
+
+    fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
+        Ok(self.source_connector()?)
     }
 
     fn create_sql(&self) -> &str {

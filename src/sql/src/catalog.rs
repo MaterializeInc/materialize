@@ -17,6 +17,7 @@ use std::time::Instant;
 use std::{error::Error, unimplemented};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
+use dataflow_types::SourceConnector;
 use lazy_static::lazy_static;
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
@@ -218,6 +219,12 @@ pub trait CatalogItem {
     /// anything other than a function), it returns an error.
     fn func(&self) -> Result<&'static Func, CatalogError>;
 
+    /// Returns the resolved source connector.
+    ///
+    /// If the catalog item is not of a type that contains a `SourceConnector`
+    /// (i.e., anything other than sources), it returns an error.
+    fn source_connector(&self) -> Result<&SourceConnector, CatalogError>;
+
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;
 
@@ -290,6 +297,8 @@ pub enum CatalogError {
     UnknownItem(String),
     /// Unknown function.
     UnknownFunction(String),
+    /// Unknown source.
+    UnknownSource(String),
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -304,6 +313,7 @@ impl fmt::Display for CatalogError {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
+            Self::UnknownSource(name) => write!(f, "source \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
