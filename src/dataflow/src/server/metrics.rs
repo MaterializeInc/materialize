@@ -115,6 +115,8 @@ struct CommandsProcessedMetrics {
     enable_feedback: IntCounter,
     enable_logging_int: i32,
     enable_logging: IntCounter,
+    sync_prometheus_int: i32,
+    sync_prometheus: IntCounter,
     enable_caching_int: i32,
     enable_caching: IntCounter,
     shutdown_int: i32,
@@ -162,6 +164,8 @@ impl CommandsProcessedMetrics {
             enable_feedback: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "enable_feedback"]),
             enable_logging_int: 0,
             enable_logging: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "enable_logging"]),
+            sync_prometheus_int: 0,
+            sync_prometheus: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "sync_prometheus"]),
             enable_caching_int: 0,
             enable_caching: COMMANDS_PROCESSED_RAW.with_label_values(&[worker, "enable_caching"]),
             shutdown_int: 0,
@@ -192,6 +196,7 @@ impl CommandsProcessedMetrics {
             SequencedCommand::EnableFeedback(..) => self.enable_feedback_int += 1,
             SequencedCommand::EnableCaching(..) => self.enable_caching_int += 1,
             SequencedCommand::EnableLogging(_) => self.enable_logging_int += 1,
+            SequencedCommand::SyncPrometheus => self.sync_prometheus_int += 1,
             SequencedCommand::Shutdown { .. } => self.shutdown_int += 1,
             SequencedCommand::AdvanceAllLocalInputs { .. } => {
                 self.advance_all_local_inputs_int += 1
