@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use differential_dataflow::difference::{DiffPair, DiffVector};
+use differential_dataflow::difference::DiffPair;
 use differential_dataflow::operators::count::CountTotal;
 use log::error;
 use timely::communication::Allocate;
@@ -39,22 +39,27 @@ pub enum MaterializedEvent {
         /// Globally unique identifier for the source on which the dataflow depends.
         source: GlobalId,
     },
-    /// Tracks the source name, id, partition id, and received/ingested offsets
+    /// Tracks statistics for a particular Kafka consumer / partition pair
+    /// Reference: https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md
     KafkaConsumerInfo {
-        /// Materialize name of the source
-        source_name: String,
-        /// Materialize source identifier
-        source_id: SourceInstanceId,
         /// Kafka name for the consumer
         consumer_name: String,
+        /// Materialize source identifier
+        source_id: SourceInstanceId,
+        /// The Kafka partition ID for these metrics (may be multiple per consumer)
+        partition_id: String,
         /// Number of message sets received from Brokers
-        rx: i64,
+        rxmsgs: i64,
         /// Number of bytes received from Brokers
-        rx_bytes: i64,
+        rxbytes: i64,
         /// Number of message sets sent to Brokers
-        tx: i64,
+        txmsgs: i64,
         /// Number of bytes transmitted to Brokers
-        tx_bytes: i64,
+        txbytes: i64,
+        /// How far into the topic our consumer has read
+        app_offset: i64,
+        /// How many messages remain until our consumer reaches the (hi|lo) watermark
+        consumer_lag: i64,
     },
     /// Peek command, true for install and false for retire.
     Peek(Peek, bool),
@@ -209,18 +214,26 @@ pub fn construct<A: Allocate>(
                                 ));
                             }
                             MaterializedEvent::KafkaConsumerInfo {
-                                source_name,
-                                source_id,
                                 consumer_name,
-                                rx,
-                                rx_bytes,
-                                tx,
-                                tx_bytes,
+                                source_id,
+                                partition_id,
+                                rxmsgs,
+                                rxbytes,
+                                txmsgs,
+                                txbytes,
+                                app_offset,
+                                consumer_lag,
                             } => {
                                 kafka_consumer_info_session.give((
-                                    (source_name, source_id, consumer_name),
+                                    (consumer_name, source_id, partition_id),
                                     time_ms,
-                                    DiffVector::new(vec![rx, rx_bytes, tx, tx_bytes]),
+                                    DiffPair::new(
+                                        DiffPair::new(
+                                            DiffPair::new(rxmsgs, rxbytes),
+                                            DiffPair::new(txmsgs, txbytes),
+                                        ),
+                                        DiffPair::new(app_offset, consumer_lag),
+                                    ),
                                 ));
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
@@ -286,15 +299,17 @@ pub fn construct<A: Allocate>(
         use differential_dataflow::operators::Count;
         let kafka_consumer_info_current = kafka_consumer_info.as_collection().count().map({
             let mut row_packer = repr::RowPacker::new();
-            move |((source_name, source_id, consumer_name), diff_vector)| {
+            move |((consumer_name, source_id, partition_id), pairs)| {
                 row_packer.pack(&[
-                    Datum::String(&source_name),
-                    Datum::String(&source_id.to_string()),
                     Datum::String(&consumer_name),
-                    Datum::Int64(diff_vector[0]),
-                    Datum::Int64(diff_vector[1]),
-                    Datum::Int64(diff_vector[2]),
-                    Datum::Int64(diff_vector[3]),
+                    Datum::String(&source_id.to_string()),
+                    Datum::String(&partition_id),
+                    Datum::Int64(pairs.element1.element1.element1),
+                    Datum::Int64(pairs.element1.element1.element2),
+                    Datum::Int64(pairs.element1.element2.element1),
+                    Datum::Int64(pairs.element1.element2.element2),
+                    Datum::Int64(pairs.element2.element1),
+                    Datum::Int64(pairs.element2.element2),
                 ])
             }
         });

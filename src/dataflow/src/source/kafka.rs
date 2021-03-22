@@ -38,10 +38,12 @@ use crate::source::{
 /// diff of values for logging
 pub struct PreviousStats {
     consumer_name: Option<String>,
-    rx: i64,
-    rx_bytes: i64,
-    tx: i64,
-    tx_bytes: i64,
+    rxmsgs: i64,
+    rxbytes: i64,
+    txmsgs: i64,
+    txbytes: i64,
+    app_offset: i64,
+    consumer_lag: i64,
 }
 
 /// Contains all information necessary to ingest data from Kafka
@@ -68,8 +70,6 @@ pub struct KafkaSourceInfo {
     logger: Option<Logger>,
     /// Channel to receive Kafka statistics objects from the stats callback
     stats_rx: crossbeam_channel::Receiver<Statistics>,
-    /// Memoized Statistics for a consumer
-    previous_stats: PreviousStats,
 }
 
 impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
@@ -153,27 +153,37 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
         // Read any statistics objects generated via the GlueConsumerContext::stats callback
         while let Ok(statistics) = self.stats_rx.try_recv() {
             if let Some(logger) = self.logger.as_mut() {
-                // If this is the first callback, initialize our consumer name
-                // so that we can later retract this when the source is dropped
-                match self.previous_stats.consumer_name {
-                    None => self.previous_stats.consumer_name = Some(statistics.name.clone()),
-                    _ => (),
+                for mut part in self.partition_consumers.iter_mut() {
+                    // If this is the first callback, initialize our consumer name
+                    // so that we can later retract this when the source is dropped
+                    match part.previous_stats.consumer_name {
+                        None => part.previous_stats.consumer_name = Some(statistics.name.clone()),
+                        _ => (),
+                    }
+
+                    let partition_stats =
+                        &statistics.topics[self.topic_name.as_str()].partitions[&part.pid];
+
+                    logger.log(MaterializedEvent::KafkaConsumerInfo {
+                        consumer_name: statistics.name.to_string(),
+                        source_id: self.id,
+                        partition_id: partition_stats.partition.to_string(),
+                        rxmsgs: partition_stats.rxmsgs - part.previous_stats.rxmsgs,
+                        rxbytes: partition_stats.rxbytes - part.previous_stats.rxbytes,
+                        txmsgs: partition_stats.txmsgs - part.previous_stats.txmsgs,
+                        txbytes: partition_stats.txbytes - part.previous_stats.txbytes,
+                        app_offset: partition_stats.app_offset - part.previous_stats.app_offset,
+                        consumer_lag: partition_stats.consumer_lag
+                            - part.previous_stats.consumer_lag,
+                    });
+
+                    part.previous_stats.rxmsgs = partition_stats.rxmsgs;
+                    part.previous_stats.rxbytes = partition_stats.rxbytes;
+                    part.previous_stats.txmsgs = partition_stats.txmsgs;
+                    part.previous_stats.txbytes = partition_stats.txbytes;
+                    part.previous_stats.app_offset = partition_stats.app_offset;
+                    part.previous_stats.consumer_lag = partition_stats.consumer_lag;
                 }
-
-                logger.log(MaterializedEvent::KafkaConsumerInfo {
-                    source_name: self.source_name.to_string(),
-                    source_id: self.id,
-                    consumer_name: statistics.name,
-                    rx: statistics.rx - self.previous_stats.rx,
-                    rx_bytes: statistics.rx_bytes - self.previous_stats.rx_bytes,
-                    tx: statistics.tx - self.previous_stats.tx,
-                    tx_bytes: statistics.tx_bytes - self.previous_stats.tx_bytes,
-                });
-
-                self.previous_stats.rx = statistics.rx;
-                self.previous_stats.rx_bytes = statistics.rx_bytes;
-                self.previous_stats.tx = statistics.tx;
-                self.previous_stats.tx_bytes = statistics.tx_bytes;
             }
         }
 
@@ -327,13 +337,6 @@ impl KafkaSourceInfo {
             start_offsets,
             logger,
             stats_rx,
-            previous_stats: PreviousStats {
-                consumer_name: None,
-                rx: 0,
-                rx_bytes: 0,
-                tx: 0,
-                tx_bytes: 0,
-            },
         }
     }
 
@@ -436,16 +439,20 @@ impl Drop for KafkaSourceInfo {
     fn drop(&mut self) {
         // Retract any metrics logged for this source
         if let Some(logger) = self.logger.as_mut() {
-            if let Some(consumer_name) = self.previous_stats.consumer_name.as_ref() {
-                logger.log(MaterializedEvent::KafkaConsumerInfo {
-                    source_name: self.source_name.to_string(),
-                    source_id: self.id,
-                    consumer_name: consumer_name.to_string(),
-                    rx: -self.previous_stats.rx,
-                    rx_bytes: -self.previous_stats.rx_bytes,
-                    tx: -self.previous_stats.tx,
-                    tx_bytes: -self.previous_stats.tx_bytes,
-                });
+            for part in self.partition_consumers.iter_mut() {
+                if let Some(consumer_name) = part.previous_stats.consumer_name.as_ref() {
+                    logger.log(MaterializedEvent::KafkaConsumerInfo {
+                        consumer_name: consumer_name.to_string(),
+                        source_id: self.id,
+                        partition_id: part.pid.to_string(),
+                        rxmsgs: -part.previous_stats.rxmsgs,
+                        rxbytes: -part.previous_stats.rxbytes,
+                        txmsgs: -part.previous_stats.txmsgs,
+                        txbytes: -part.previous_stats.txbytes,
+                        app_offset: -part.previous_stats.app_offset,
+                        consumer_lag: -part.previous_stats.consumer_lag,
+                    });
+                }
             }
         }
     }
@@ -547,6 +554,8 @@ struct PartitionConsumer {
     pid: i32,
     /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<GlueConsumerContext>,
+    /// Memoized Statistics for a partition consumer
+    previous_stats: PreviousStats,
 }
 
 impl PartitionConsumer {
@@ -555,6 +564,15 @@ impl PartitionConsumer {
         PartitionConsumer {
             pid,
             partition_queue,
+            previous_stats: PreviousStats {
+                consumer_name: None,
+                rxmsgs: 0,
+                rxbytes: 0,
+                txmsgs: 0,
+                txbytes: 0,
+                app_offset: 0,
+                consumer_lag: 0,
+            },
         }
     }
 

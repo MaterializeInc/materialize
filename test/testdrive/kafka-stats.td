@@ -44,25 +44,32 @@ b  sum
 1  6
 2  1
 
-# It would be lovely to try and assert on the actual value for metrics here. Unfortunately,
-# librdkafka is chatty and the metrics continue to change even when no data is being written. As
-# such, we'll need to settle for a query that simply asserts the presence of a single source in
-# the table:
+# There should only be metrics from a single partition consumer
 > SELECT count(*) FROM mz_kafka_consumer_statistics
 1
 
-# and that each of the metrics should be non-zero:
-> SELECT count(*) FROM mz_kafka_consumer_statistics where rx = 0
-0
+# We should have read 4 messages
+> SELECT count(*) FROM mz_kafka_consumer_statistics where rx_msgs = 4
+1
 
+# and they should have non-zero bytes
 > SELECT count(*) FROM mz_kafka_consumer_statistics where rx_bytes = 0
 0
 
-> SELECT count(*) FROM mz_kafka_consumer_statistics where tx = 0
-0
+# We have not transmitted anything
+> SELECT count(*) FROM mz_kafka_consumer_statistics where tx_msgs = 0
+1
 
 > SELECT count(*) FROM mz_kafka_consumer_statistics where tx_bytes = 0
-0
+1
+
+# We should have read 4 records
+> SELECT count(*) FROM mz_kafka_consumer_statistics where app_offset = 4
+1
+
+# And we should not be lagging
+> SELECT count(*) FROM mz_kafka_consumer_statistics where consumer_lag = 0
+1
 
 # Drop the sources and verify that metrics have been removed
 > DROP VIEW test1
