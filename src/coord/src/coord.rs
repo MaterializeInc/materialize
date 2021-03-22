@@ -27,6 +27,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
+use self::prometheus::{Scraper, ScraperMessage};
 use anyhow::{anyhow, Context};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
@@ -97,6 +98,7 @@ use crate::util::ClientTransmitter;
 mod arrangement_state;
 mod dataflow_builder;
 mod metrics;
+mod prometheus;
 
 #[derive(Debug)]
 pub enum Message {
@@ -105,6 +107,7 @@ pub enum Message {
     AdvanceSourceTimestamp(AdvanceSourceTimestamp),
     StatementReady(StatementReady),
     SinkConnectorReady(SinkConnectorReady),
+    Broadcast(SequencedCommand),
     Shutdown,
 }
 
@@ -140,6 +143,7 @@ pub struct SinkConnectorReady {
 pub struct LoggingConfig {
     pub granularity: Duration,
     pub log_logging: bool,
+    pub retain_readings_for: Duration,
 }
 
 /// Configures a coordinator.
@@ -432,6 +436,7 @@ impl Coordinator {
         cmd_rx: mpsc::UnboundedReceiver<Command>,
         feedback_rx: mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
         _timestamper_thread_handle: JoinOnDropHandle<()>,
+        _metric_thread_handle: Option<JoinOnDropHandle<()>>,
     ) {
         let cmd_stream = UnboundedReceiverStream::new(cmd_rx)
             .map(Message::Command)
@@ -459,6 +464,7 @@ impl Coordinator {
                 Message::AdvanceSourceTimestamp(advance) => {
                     self.message_advance_source_timestamp(advance).await
                 }
+                Message::Broadcast(cmd) => self.broadcast(cmd),
                 Message::Shutdown => {
                     self.message_shutdown().await;
                     break;
@@ -3492,6 +3498,31 @@ pub async fn serve(
     })
     .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
 
+    let (metric_scraper_handle, metric_scraper_tx) = if let Some(LoggingConfig {
+        granularity,
+        retain_readings_for,
+        ..
+    }) = logging
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut scraper = Scraper::new(
+            granularity,
+            retain_readings_for,
+            ::prometheus::default_registry(),
+            rx,
+            internal_cmd_tx.clone(),
+        );
+        let executor = TokioHandle::current();
+        let scraper_thread_handle = thread::spawn(move || {
+            let _executor_guard = executor.enter();
+            scraper.run();
+        })
+        .join_on_drop();
+        (Some(scraper_thread_handle), Some(tx))
+    } else {
+        (None, None)
+    };
+
     // Spawn timestamper after any fallible operations so that if bootstrap fails we still
     // tell it to shut down.
     let (ts_tx, ts_rx) = std::sync::mpsc::channel();
@@ -3549,6 +3580,7 @@ pub async fn serve(
                     cmd_rx,
                     feedback_rx,
                     timestamper_thread_handle,
+                    metric_scraper_handle,
                 ))
             });
             let handle = Handle {
@@ -3561,6 +3593,7 @@ pub async fn serve(
             Ok((handle, client))
         }
         Err(e) => {
+            metric_scraper_tx.map(|tx| tx.send(ScraperMessage::Shutdown).unwrap());
             // Tell the timestamper thread to shut down.
             ts_tx.send(TimestampMessage::Shutdown).unwrap();
             // Explicitly drop the timestamper handle here so we can wait for

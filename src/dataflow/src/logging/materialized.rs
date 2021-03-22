@@ -81,6 +81,15 @@ pub enum MaterializedEvent {
         /// Difference between the previous timestamp and current highest timestamp we've seen
         timestamp: i64,
     },
+    /// A batch of metrics scraped from prometheus.
+    PrometheusMetrics {
+        /// timestamp in millis from UNIX epoch at which these metrics were scraped.
+        timestamp: u64,
+        /// duration in millis when this batch of metrics gets invalidated.
+        retain_for: u64,
+        /// The metrics that were scraped from the registry.
+        metrics: Vec<Metric>,
+    },
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
 }
@@ -102,6 +111,95 @@ impl Peek {
     /// Create a new peek from its arguments.
     pub fn new(id: GlobalId, time: Timestamp, conn_id: u32) -> Self {
         Self { id, time, conn_id }
+    }
+}
+
+/// The kind of a prometheus metric in a batch of metrics
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub enum MetricType {
+    /// A prometheus counter
+    Counter,
+    /// A prometheus gauge
+    Gauge,
+    /// A prometheus summary
+    Summary,
+    /// A prometheus histogram
+    Histogram,
+    /// An untyped metric
+    Untyped,
+}
+
+impl MetricType {
+    fn as_str(&self) -> &'static str {
+        use MetricType::*;
+        match self {
+            Counter => "counter",
+            Gauge => "gauge",
+            Summary => "summary",
+            Histogram => "histogram",
+            Untyped => "untyped",
+        }
+    }
+}
+
+impl From<prometheus::proto::MetricType> for MetricType {
+    fn from(f: prometheus::proto::MetricType) -> Self {
+        use prometheus::proto::MetricType::*;
+        match f {
+            COUNTER => MetricType::Counter,
+            GAUGE => MetricType::Gauge,
+            SUMMARY => MetricType::Summary,
+            HISTOGRAM => MetricType::Histogram,
+
+            UNTYPED => MetricType::Untyped,
+        }
+    }
+}
+
+/// A prometheus metric, identified by its name and its associated readings.
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct Metric {
+    meta: MetricMeta,
+    readings: Vec<MetricReading>,
+}
+
+/// Information about the prometheus metric.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub struct MetricMeta {
+    name: String,
+    kind: MetricType,
+    help: String,
+}
+
+impl MetricMeta {
+    fn as_packed_row(&self, packer: &mut repr::RowPacker) -> repr::Row {
+        packer.pack(&[
+            Datum::from(self.name.as_str()),
+            Datum::from(self.kind.as_str()),
+            Datum::from(self.help.as_str()),
+        ])
+    }
+}
+
+impl Metric {
+    /// Construct a new prometheus Metric.
+    pub fn new(name: String, kind: MetricType, help: String, readings: Vec<MetricReading>) -> Self {
+        let meta = MetricMeta { name, kind, help };
+        Self { meta, readings }
+    }
+}
+
+/// A metric reading at a time for a set of labels.
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct MetricReading {
+    labels: Vec<(String, String)>,
+    value: f64,
+}
+
+impl MetricReading {
+    /// Construct a new metric reading with the given labels and a value.
+    pub fn new(labels: Vec<(String, String)>, value: f64) -> Self {
+        Self { labels, value }
     }
 }
 
@@ -133,17 +231,22 @@ pub fn construct<A: Allocate>(
         let (mut dependency_out, dependency) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
         let (mut kafka_consumer_info_out, kafka_consumer_info) = demux.new_output();
+        let (mut metrics_out, metrics) = demux.new_output();
+        let (mut metrics_meta_out, metrics_meta) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
         let (mut source_info_out, source_info) = demux.new_output();
 
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
+            let mut active_metrics = std::collections::HashMap::<MetricMeta, Timestamp>::new();
             let mut active_dataflows = std::collections::HashMap::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
                 let mut frontier = frontier_out.activate();
                 let mut kafka_consumer_info = kafka_consumer_info_out.activate();
+                let mut metrics = metrics_out.activate();
+                let mut metrics_meta = metrics_meta_out.activate();
                 let mut peek = peek_out.activate();
                 let mut source_info = source_info_out.activate();
 
@@ -154,6 +257,8 @@ pub fn construct<A: Allocate>(
                     let mut dependency_session = dependency.session(&time);
                     let mut frontier_session = frontier.session(&time);
                     let mut kafka_consumer_info_session = kafka_consumer_info.session(&time);
+                    let mut metrics_session = metrics.session(&time);
+                    let mut metrics_meta_session = metrics_meta.session(&time);
                     let mut peek_session = peek.session(&time);
                     let mut source_info_session = source_info.session(&time);
 
@@ -263,6 +368,44 @@ pub fn construct<A: Allocate>(
                                     (offset, timestamp),
                                 ));
                             }
+                            MaterializedEvent::PrometheusMetrics {
+                                metrics,
+                                timestamp,
+                                retain_for,
+                            } => {
+                                let chrono_timestamp = chrono::NaiveDateTime::from_timestamp(0, 0)
+                                    + chrono::Duration::from_std(Duration::from_millis(timestamp))
+                                        .expect("Couldn't convert timestamps");
+                                for metric in metrics {
+                                    for reading in metric.readings {
+                                        row_packer.push(Datum::from(metric.meta.name.as_str()));
+                                        row_packer.push(Datum::from(chrono_timestamp));
+                                        row_packer.push_dict(reading.labels.iter().map(
+                                            |(name, value)| {
+                                                (name.as_str(), Datum::from(value.as_str()))
+                                            },
+                                        ));
+                                        row_packer.push(Datum::from(reading.value));
+                                        let row = row_packer.finish_and_reuse();
+
+                                        metrics_session.give((row.clone(), time_ms, 1));
+                                        metrics_session.give((row, time_ms + retain_for, -1));
+                                    }
+                                    // Expire the metadata of a metric reading when the reading
+                                    // would expire, but refresh its lifetime when we get another
+                                    // reading referencing that metadata:
+                                    let meta = metric.meta;
+                                    let meta_expiry =
+                                        active_metrics.get(&meta).copied().unwrap_or(0);
+                                    if meta_expiry <= time_ms {
+                                        let row = meta.as_packed_row(&mut row_packer);
+                                        metrics_meta_session.give((row.clone(), time_ms, 1));
+                                        metrics_meta_session.give((row, time_ms + retain_for, -1));
+                                        active_metrics
+                                            .insert(meta, time_ms + retain_for as Timestamp);
+                                    }
+                                }
+                            }
                         }
                     }
                 });
@@ -325,6 +468,9 @@ pub fn construct<A: Allocate>(
                 ])
             }
         });
+
+        let metrics_current = metrics.as_collection();
+        let metrics_meta_current = metrics_meta.as_collection();
 
         let peek_current = peek
             .map(move |(name, worker, is_install, time_ns)| {
@@ -437,6 +583,14 @@ pub fn construct<A: Allocate>(
             (
                 LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo),
                 kafka_consumer_info_current,
+            ),
+            (
+                LogVariant::Materialized(MaterializedLog::Metrics),
+                metrics_current,
+            ),
+            (
+                LogVariant::Materialized(MaterializedLog::MetricsMeta),
+                metrics_meta_current,
             ),
             (
                 LogVariant::Materialized(MaterializedLog::PeekCurrent),
