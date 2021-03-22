@@ -27,10 +27,10 @@ use kafka_util::KafkaAddrs;
 use log::{error, info, log_enabled, warn};
 use uuid::Uuid;
 
-use crate::source::{ConsistencyInfo, NextMessage, SourceConstructor, SourceInfo, SourceMessage};
+use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 /// Contains all information necessary to ingest data from Kafka
-pub struct KafkaSourceInfo {
+pub struct KafkaSourceReader {
     /// Name of the topic on which this source is backed on
     topic_name: String,
     /// Name of the source (will have format kafka-source-id)
@@ -51,31 +51,24 @@ pub struct KafkaSourceInfo {
     start_offsets: HashMap<i32, i64>,
 }
 
-impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
+impl SourceReader<Vec<u8>> for KafkaSourceReader {
+    /// Create a new instance of a Kafka reader.
     fn new(
         source_name: String,
         source_id: SourceInstanceId,
-        _active: bool,
         worker_id: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        _consistency_info: &mut ConsistencyInfo,
         _: DataEncoding,
-    ) -> Result<KafkaSourceInfo, anyhow::Error> {
+    ) -> Result<(KafkaSourceReader, Option<PartitionId>), anyhow::Error> {
         match connector {
-            ExternalSourceConnector::Kafka(kc) => Ok(KafkaSourceInfo::new(
-                source_name,
-                source_id,
-                worker_id,
-                consumer_activator,
-                kc,
+            ExternalSourceConnector::Kafka(kc) => Ok((
+                KafkaSourceReader::new(source_name, source_id, worker_id, consumer_activator, kc),
+                None,
             )),
             _ => unreachable!(),
         }
     }
-}
-
-impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     /// Ensures that a partition queue for `pid` exists.
     /// In Kafka, partitions are assigned contiguously. This function consequently
     /// creates partition queues for every p <= pid
@@ -205,7 +198,7 @@ impl SourceInfo<Vec<u8>> for KafkaSourceInfo {
     }
 }
 
-impl KafkaSourceInfo {
+impl KafkaSourceReader {
     /// Constructor
     pub fn new(
         source_name: String,
@@ -213,7 +206,7 @@ impl KafkaSourceInfo {
         worker_id: usize,
         consumer_activator: SyncActivator,
         kc: KafkaSourceConnector,
-    ) -> KafkaSourceInfo {
+    ) -> KafkaSourceReader {
         let KafkaSourceConnector {
             addrs,
             topic,
@@ -236,7 +229,7 @@ impl KafkaSourceInfo {
 
         let start_offsets = kc.start_offsets.iter().map(|(k, v)| (*k, v - 1)).collect();
 
-        KafkaSourceInfo {
+        KafkaSourceReader {
             topic_name: topic,
             source_name,
             id: source_id,
