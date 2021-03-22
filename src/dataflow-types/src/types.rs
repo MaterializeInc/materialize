@@ -549,6 +549,25 @@ pub enum SourceConnector {
     Local,
 }
 
+impl SourceConnector {
+    /// Returns `true` if this connector yields input data (including
+    /// timestamps) that is stable across restarts. This is important for
+    /// exactly-once Sinks that need to ensure that the same data is written,
+    /// even when failures/restarts happen.
+    pub fn yields_stable_input(&self) -> bool {
+        if let SourceConnector::External {
+            connector: ExternalSourceConnector::Kafka(_),
+            consistency: Consistency::BringYourOwn(_),
+            ..
+        } = self
+        {
+            true
+        } else {
+            false
+        }
+    }
+}
+
 pub fn cached_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {
     match e {
         ExternalSourceConnector::Kafka(KafkaSourceConnector { cached_files, .. }) => {
