@@ -47,7 +47,7 @@ CREATE TABLE mz_calalog.metrics_meta (
 );
 ```
 
-3. This not-quite-source polls the endpoint once a minute (via the configured the `poll_interval` duration), and retains metric readings for a number of minutes (strawman proposal: 5 minutes) to make it possible for users to visualize changes in the metrics as they would with a "full" metrics pipeline.
+3. This not-quite-source polls the endpoint once in the `--introspection-frequency` period (a duration that defaults to 1 second), and retains metric readings for configurable period of time (probably on the order of 5 minutes, 300 full scrapes' worth of data) to make it possible for users to visualize changes in the metrics as they would with a "full" metrics pipeline.
 
 ## Possible work after this proposal is implemented
 
