@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::convert;
 use std::fs::File;
 use std::io::Read;
+use std::option::Option;
 use std::sync::Mutex;
 
 use anyhow::bail;
@@ -41,6 +42,7 @@ struct Config {
     name: &'static str,
     val_type: ValType,
     transform: fn(String) -> String,
+    default: fn() -> Option<String>,
 }
 
 impl Config {
@@ -49,6 +51,7 @@ impl Config {
             name,
             val_type,
             transform: convert::identity,
+            default: || -> Option<String> { None },
         }
     }
 
@@ -66,6 +69,12 @@ impl Config {
     // it is validated.
     fn transform(mut self, f: fn(String) -> String) -> Self {
         self.transform = f;
+        self
+    }
+
+    // Allows for returning a default value for this configuration option
+    fn default(mut self, f: fn() -> Option<String>) -> Self {
+        self.default = f;
         self
     }
 
@@ -105,7 +114,12 @@ fn extract(
                 Ok(v) => v,
                 Err(e) => bail!("Invalid WITH option {}={}: {}", config.name, v, e),
             },
-            None => continue,
+            None => match (config.default)() {
+                Some(v) => v,
+                None => {
+                    continue;
+                }
+            },
         };
         out.insert(config.get_key(), value);
     }
@@ -134,7 +148,8 @@ pub fn extract_config(
                 // The range of values comes from `statistics.interval.ms` in
                 // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 ValType::Number(0, 86_400_000),
-            ),
+            )
+            .default(|| Some("1000".to_string())),
             Config::new(
                 "topic_metadata_refresh_interval_ms",
                 // The range of values comes from `topic.metadata.refresh.interval.ms` in
