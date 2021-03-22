@@ -22,14 +22,16 @@ use super::*;
 pub struct DataflowBuilder<'a> {
     catalog: &'a Catalog,
     indexes: &'a ArrangementFrontiers<Timestamp>,
+    transient_id_counter: &'a mut u64,
 }
 
 impl Coordinator {
     /// Creates a new dataflow builder from the catalog and indexes in `self`.
-    pub fn dataflow_builder(&self) -> DataflowBuilder {
+    pub fn dataflow_builder(&mut self) -> DataflowBuilder {
         DataflowBuilder {
             catalog: &self.catalog,
             indexes: &self.indexes,
+            transient_id_counter: &mut self.transient_id_counter,
         }
     }
 }
@@ -37,7 +39,7 @@ impl Coordinator {
 impl<'a> DataflowBuilder<'a> {
     /// Imports the view, source, or table with `id` into the provided
     /// dataflow description.
-    fn import_into_dataflow(&self, id: &GlobalId, dataflow: &mut DataflowDesc) {
+    fn import_into_dataflow(&mut self, id: &GlobalId, dataflow: &mut DataflowDesc) {
         // Avoid importing the item redundantly.
         if dataflow.is_imported(id) {
             return;
@@ -60,21 +62,19 @@ impl<'a> DataflowBuilder<'a> {
                 .expect("indexes can only be built on items with descs");
             dataflow.add_index_import(*index_id, index_desc, desc.typ().clone(), *id);
         } else {
+            // This is only needed in the case of a source with a transformation, but we generate it now to
+            // get around borrow checker issues.
+            let transient_id = *self.transient_id_counter;
+            *self.transient_id_counter = transient_id
+                .checked_add(1)
+                .expect("id counter overflows i64");
             match self.catalog.get_by_id(id).item() {
                 CatalogItem::Table(table) => {
-                    let optimized_expr = OptimizedMirRelationExpr::declare_optimized(
-                        sql::plan::HirRelationExpr::Get {
-                            id: Id::BareSource(*id),
-                            typ: table.desc.typ().clone(),
-                        }
-                        .lower(),
-                    );
                     dataflow.add_source_import(
                         *id,
                         SourceConnector::Local,
                         table.desc.clone(),
-                        optimized_expr,
-                        table.desc.clone(),
+                        *id,
                     );
                 }
                 CatalogItem::Source(source) => {
@@ -108,16 +108,33 @@ impl<'a> DataflowBuilder<'a> {
                     // Default back to the regular connector if we didn't get a augmented one.
                     let connector = connector.unwrap_or_else(|| source.connector.clone());
 
-                    dataflow.add_source_import(
-                        *id,
-                        connector,
-                        source.bare_desc.clone(),
-                        source.optimized_expr.clone(),
-                        source.desc.clone(),
-                    );
+                    if source.optimized_expr.0.is_trivial_source() {
+                        dataflow.add_source_import(*id, connector, source.bare_desc.clone(), *id);
+                    } else {
+                        // From the dataflow layer's perspective, the source transformation is just a view (across which it should be able to do whole-dataflow optimizations).
+                        // Install it as such (giving the source a global transient ID by which the view/transformation can refer to it)
+                        let bare_source_id = GlobalId::Transient(transient_id);
+                        dataflow.add_source_import(
+                            bare_source_id,
+                            connector,
+                            source.bare_desc.clone(),
+                            *id,
+                        );
+                        let mut transformation = source.optimized_expr.clone();
+                        transformation.0.visit_mut(&mut |node| {
+                            match node {
+                                MirRelationExpr::Get { id, .. } if *id == Id::LocalBareSource => {
+                                    *id = Id::Global(bare_source_id);
+                                }
+                                _ => {}
+                            };
+                        });
+                        self.import_view_into_dataflow(id, &transformation, dataflow);
+                    }
                 }
                 CatalogItem::View(view) => {
-                    self.import_view_into_dataflow(id, &view.optimized_expr, dataflow);
+                    let expr = view.optimized_expr.clone();
+                    self.import_view_into_dataflow(id, &expr, dataflow);
                 }
                 _ => unreachable!(),
             }
@@ -127,7 +144,7 @@ impl<'a> DataflowBuilder<'a> {
     /// Imports the view with the specified ID and expression into the provided
     /// dataflow description.
     pub fn import_view_into_dataflow(
-        &self,
+        &mut self,
         view_id: &GlobalId,
         view: &OptimizedMirRelationExpr,
         dataflow: &mut DataflowDesc,
@@ -164,7 +181,7 @@ impl<'a> DataflowBuilder<'a> {
     }
 
     /// Builds a dataflow description for the index with the specified ID.
-    pub fn build_index_dataflow(&self, id: GlobalId) -> DataflowDesc {
+    pub fn build_index_dataflow(&mut self, id: GlobalId) -> DataflowDesc {
         let index_entry = self.catalog.get_by_id(&id);
         let index = match index_entry.item() {
             CatalogItem::Index(index) => index,
@@ -173,16 +190,18 @@ impl<'a> DataflowBuilder<'a> {
         let on_entry = self.catalog.get_by_id(&index.on);
         let on_type = on_entry.desc().unwrap().typ().clone();
         let mut dataflow = DataflowDesc::new(index_entry.name().to_string());
-        self.import_into_dataflow(&index.on, &mut dataflow);
-        dataflow.add_index_to_build(id, index.on.clone(), on_type.clone(), index.keys.clone());
-        dataflow.add_index_export(id, index.on, on_type, index.keys.clone());
+        let on_id = index.on;
+        let keys = index.keys.clone();
+        self.import_into_dataflow(&on_id, &mut dataflow);
+        dataflow.add_index_to_build(id, on_id.clone(), on_type.clone(), keys.clone());
+        dataflow.add_index_export(id, on_id, on_type, keys);
         dataflow
     }
 
     /// Builds a dataflow description for the sink with the specified name,
     /// ID, source, and output connector.
     pub fn build_sink_dataflow(
-        &self,
+        &mut self,
         name: String,
         id: GlobalId,
         from: GlobalId,

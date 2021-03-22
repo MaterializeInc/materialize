@@ -21,9 +21,6 @@ pub enum Id {
     Local(LocalId),
     /// An identifier that refers to a global dataflow.
     Global(GlobalId),
-    /// Bare sources don't (yet?) live in the same namespace as catalog items (including the final, possibly transformed source.)
-    /// This gives us a way to refer to them in relation expressions
-    BareSource(GlobalId),
     /// Used to refer to a bare source within the RelationExpr defining the transformation of that source (before an ID has been
     /// allocated for the bare source).
     LocalBareSource,
@@ -34,7 +31,6 @@ impl fmt::Display for Id {
         match self {
             Id::Local(id) => id.fmt(f),
             Id::Global(id) => id.fmt(f),
-            Id::BareSource(id) => write!(f, "{}(bare)", id),
             Id::LocalBareSource => write!(f, "(bare source for this source)"),
         }
     }
