@@ -47,6 +47,9 @@ where
         materialized_logging: Option<Logger>,
         src_id: GlobalId,
         mut src: SourceDesc,
+        // The original ID of the source, before it was decomposed into a bare source (which might have its own transient ID)
+        // and a relational transformation (which has the original source ID).
+        orig_id: GlobalId,
     ) {
         // Extract the linear operators, as we will need to manipulate them.
         // extracting them reduces the change we might accidentally communicate
@@ -55,7 +58,7 @@ where
 
         // Blank out trivial linear operators.
         if let Some(operator) = &linear_operators {
-            if operator.is_trivial(src.arity()) {
+            if operator.is_trivial(src.bare_desc.arity()) {
                 linear_operators = None;
             }
         }
@@ -67,49 +70,7 @@ where
         // at the end of `src.optimized_expr`.
         //
         // This has a lot of potential for improvement in the near future.
-        use expr::Id::LocalBareSource;
-        match &mut src.optimized_expr.0 {
-            // If the expression is just the source, no need to do anything special.
-            MirRelationExpr::Get {
-                id: LocalBareSource,
-                ..
-            } => {}
-            // A non-trivial expression should tack on filtering and projection, and
-            // also blank out the operator so that it is not applied any earlier.
-            x => {
-                if let Some(operators) = linear_operators.take() {
-                    // Deconstruct fields, as each will be used independently and will
-                    // each invalidate `operators`.
-                    let predicates = operators.predicates;
-                    let projection = operators.projection;
-                    // Non-empty predicates require a filter.
-                    if !predicates.is_empty() {
-                        *x = x.take_dangerous().filter(predicates);
-                    }
-                    // Non-trivial demand information calls for a map and projection.
-                    let rel_typ = x.typ();
-                    let arity = rel_typ.column_types.len();
-                    if (0..arity).any(|x| !projection.contains(&x)) {
-                        let mut dummies = Vec::new();
-                        let mut demand_projection = Vec::new();
-                        for (column, typ) in rel_typ.column_types.into_iter().enumerate() {
-                            if projection.contains(&column) {
-                                demand_projection.push(column);
-                            } else {
-                                demand_projection.push(arity + dummies.len());
-                                dummies.push(expr::MirScalarExpr::literal_ok(
-                                    Datum::Dummy,
-                                    typ.scalar_type,
-                                ));
-                            }
-                        }
-                        *x = x.take_dangerous().map(dummies).project(demand_projection);
-                    }
-                }
-            }
-        }
-
-        match src.connector {
+        match src.connector.clone() {
             SourceConnector::Local => {
                 let ((handle, capability), stream) = scope.new_unordered_input();
                 render_state
@@ -133,7 +94,7 @@ where
 
                 // This uid must be unique across all different instantiations of a source
                 let uid = SourceInstanceId {
-                    source_id: src_id,
+                    source_id: orig_id,
                     dataflow_id: self.dataflow_id,
                 };
 
@@ -369,36 +330,12 @@ where
                 }
 
                 let get = MirRelationExpr::Get {
-                    id: Id::BareSource(src_id),
+                    id: Id::Global(src_id),
                     typ: src.bare_desc.typ().clone(),
                 };
 
                 // Introduce the stream by name, as an unarranged collection.
-                self.collections
-                    .insert(get.clone(), (collection, err_collection));
-
-                let mut expr = src.optimized_expr.0;
-                expr.visit_mut(&mut |node| {
-                    if let MirRelationExpr::Get {
-                        id: Id::LocalBareSource,
-                        ..
-                    } = node
-                    {
-                        *node = get.clone()
-                    }
-                });
-
-                // Do whatever envelope processing is required.
-                self.ensure_rendered(&expr, scope, scope.index());
-
-                // Using `src.desc.typ()` here instead of `expr.typ()` is a bit of a hack to get around the fact
-                // that the typ might have changed due to the `LinearOperator` logic above,
-                // and so views, which are using the source's typ as described in the catalog, wouldn't be able to find it.
-                //
-                // Everything should still work out fine, since that typ has only changed in non-essential ways
-                // (e.g., nullability flags and primary key information)
-                let new_get = MirRelationExpr::global_get(src_id, src.desc.typ().clone());
-                self.clone_from_to(&expr, &new_get);
+                self.collections.insert(get, (collection, err_collection));
 
                 let token = Rc::new(capability);
                 self.source_tokens.insert(src_id, token.clone());
@@ -407,7 +344,7 @@ where
                 // on timestamp advancement queries
                 render_state
                     .ts_source_mapping
-                    .entry(uid.source_id)
+                    .entry(orig_id)
                     .or_insert_with(Vec::new)
                     .push(Rc::downgrade(&token));
             }

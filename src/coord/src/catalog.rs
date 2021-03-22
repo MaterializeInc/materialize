@@ -551,7 +551,7 @@ impl Catalog {
                     let index_name = format!("{}_primary_idx", log.name);
                     let oid = catalog.allocate_oid()?;
                     let expr = HirRelationExpr::Get {
-                        id: Id::BareSource(log.id),
+                        id: Id::LocalBareSource,
                         typ: log.variant.desc().typ().clone(),
                     }
                     .lower();

@@ -1186,6 +1186,11 @@ impl MirRelationExpr {
             keys,
         }
     }
+
+    /// Returns whether this collection is just a `Get` wrapping an underlying bare source.
+    pub fn is_trivial_source(&self) -> bool {
+        matches!(self, MirRelationExpr::Get {id: Id::LocalBareSource, ..})
+    }
 }
 
 /// Specification for an ordering by a column.

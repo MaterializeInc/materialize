@@ -323,6 +323,7 @@ pub(crate) trait SourceInfo<Out> {
     }
 }
 
+#[derive(Debug)]
 pub(crate) enum NextMessage<Out> {
     Ready(SourceMessage<Out>),
     Pending,
