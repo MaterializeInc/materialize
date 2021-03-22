@@ -87,7 +87,7 @@ Evaluation error: more than one record produced in subquery
 ! SELECT * FROM two_rows WHERE (SELECT f1 FROM two_rows) > (SELECT f1 FROM one_row);
 Evaluation error: more than one record produced in subquery
 
-! SELECT * FROM two_rows AS o WHERE (SELECT f1 FROM two_rows AS i WHERE o.f1 = i.f1) = 1 AND f1 = 2;
+! SELECT * FROM two_rows AS o WHERE (SELECT f1 FROM two_rows AS i WHERE o.f2 = i.f2) = 1 AND f1 = 2;
 Evaluation error: more than one record produced in subquery
 
 ! SELECT * FROM two_rows JOIN two_rows ON (SELECT TRUE FROM two_rows);
@@ -127,9 +127,6 @@ true
 > SELECT (SELECT f1 FROM two_rows ORDER BY 1 LIMIT 1) FROM two_rows;
 1
 1
-
-! SELECT * FROM two_rows AS a1 WHERE 1 = ( SELECT 2 FROM two_rows ORDER BY 1 LIMIT 1 )
-Evaluation error: more than one record produced in subquery
 
 > SELECT * FROM two_rows AS a1 WHERE 1 = ( SELECT 1 FROM two_rows ORDER BY 1 LIMIT 1 )
 1 1
