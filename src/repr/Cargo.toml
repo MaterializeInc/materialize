@@ -38,4 +38,4 @@ uuid = "0.8.2"
 [dev-dependencies]
 criterion = "0.3.0"
 rand = "0.8.3"
-proptest = "0.10.1"
+proptest = "1.0.0"
