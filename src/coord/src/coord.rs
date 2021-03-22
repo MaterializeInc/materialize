@@ -2750,6 +2750,43 @@ impl Coordinator {
                 }
                 explanation.to_string()
             }
+            ExplainStage::DataflowPlan => {
+                let optimized_plan =
+                    self.prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?;
+                let mut dataflow = DataflowDesc::new(format!("explanation"));
+                self.dataflow_builder().import_view_into_dataflow(
+                    // TODO: If explaining a view, pipe the actual id of the view.
+                    &GlobalId::Explain,
+                    &optimized_plan,
+                    &mut dataflow,
+                );
+                transform::optimize_dataflow(&mut dataflow);
+                let catalog = self.catalog.for_session(session);
+                let mut explanation = expr::explain::Explanation::new_from_dataflow(
+                    dataflow
+                        .source_imports
+                        .iter()
+                        .filter_map(|(id, source_desc)| {
+                            if let Some(operator) = &source_desc.0.operators {
+                                Some((*id, &operator.predicates, &operator.projection))
+                            } else {
+                                None
+                            }
+                        }),
+                    dataflow
+                        .objects_to_build
+                        .iter()
+                        .map(|build_desc| (build_desc.id, build_desc.relation_expr.as_ref())),
+                    &catalog,
+                );
+                if let Some(row_set_finishing) = row_set_finishing {
+                    explanation.explain_row_set_finishing(row_set_finishing);
+                }
+                if options.typed {
+                    explanation.explain_types();
+                }
+                explanation.to_string()
+            }
         };
         let rows = vec![Row::pack_slice(&[Datum::from(&*explanation_string)])];
         Ok(send_immediate_rows(rows))

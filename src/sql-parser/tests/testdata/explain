@@ -66,3 +66,17 @@ EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
 EXPLAIN TYPED OPTIMIZED PLAN FOR VIEW foo
 =>
 Explain(ExplainStatement { stage: OptimizedPlan, explainee: View(UnresolvedObjectName([Ident("foo")])), options: ExplainOptions { typed: true } })
+
+parse-statement
+EXPLAIN DATAFLOW FOR VIEW foo
+----
+EXPLAIN DATAFLOW PLAN FOR VIEW foo
+=>
+Explain(ExplainStatement { stage: DataflowPlan, explainee: View(UnresolvedObjectName([Ident("foo")])), options: ExplainOptions { typed: false } })
+
+parse-statement
+EXPLAIN TYPED DATAFLOW PLAN FOR SELECT 'blah'
+----
+EXPLAIN TYPED DATAFLOW PLAN FOR SELECT 'blah'
+=>
+Explain(ExplainStatement { stage: DataflowPlan, explainee: Query(Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Value(String("blah")), alias: None }], from: [], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }), options: ExplainOptions { typed: true } })

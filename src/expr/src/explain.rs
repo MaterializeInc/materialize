@@ -31,21 +31,17 @@ use std::iter;
 use ore::str::StrExt;
 use repr::RelationType;
 
-use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, MirRelationExpr, RowSetFinishing};
+use crate::{
+    ExprHumanizer, GlobalId, Id, JoinImplementation, LocalId, MirRelationExpr, MirScalarExpr,
+    RowSetFinishing,
+};
 
-/// An `Explanation` facilitates pretty-printing of a [`MirRelationExpr`].
-///
-/// By default, the [`fmt::Display`] implementation renders the expression as
-/// described in the module docs. Additional information may be attached to the
-/// explanation via the other public methods on the type.
+/// An `ViewExplanation` facilitates pretty-printing of a [`MirRelationExpr`].
 #[derive(Debug)]
-pub struct Explanation<'a> {
-    expr_humanizer: &'a dyn ExprHumanizer,
+struct ViewExplanation<'a> {
     /// One `ExplanationNode` for each `MirRelationExpr` in the plan, in
     /// left-to-right post-order.
     nodes: Vec<ExplanationNode<'a>>,
-    /// An optional `RowSetFinishing` to mention at the end.
-    finishing: Option<RowSetFinishing>,
     /// Records the chain ID that was assigned to each expression.
     expr_chains: HashMap<*const MirRelationExpr, usize>,
     /// Records the chain ID that was assigned to each let.
@@ -55,6 +51,30 @@ pub struct Explanation<'a> {
     /// The ID of the current chain. Incremented while constructing the
     /// `Explanation`.
     chain: usize,
+}
+
+/// An `Explanation` facilitates pretty-printing of a `DataflowDesc`.
+///
+/// Only the parts of the `DataflowDesc` that are relevant to seeing how a
+/// view/query is planned are printed. Because the `dataflow-types` crate
+/// depends on the `expr` crate and not the other way around, only components of
+/// the `DataflowDesc` visible to the `expr` crate are stored in this struct.
+///
+/// By default, the [`fmt::Display`] implementation renders the expression as
+/// described in the module docs. Additional information may be attached to the
+/// explanation via the other public methods on the type.
+#[derive(Debug)]
+pub struct Explanation<'a> {
+    expr_humanizer: &'a dyn ExprHumanizer,
+    /// Each source with some `LinearOperator`.
+    /// The tuple is (id, predicates, projection)
+    sources: Vec<(GlobalId, &'a Vec<MirScalarExpr>, &'a Vec<usize>)>,
+    /// One `ViewExplanation` per view in the dataflow.
+    views: Vec<(GlobalId, ViewExplanation<'a>)>,
+    /// An optional `RowSetFinishing` to mention at the end.
+    finishing: Option<RowSetFinishing>,
+    /// The view currently being explained.
+    current_view: ViewExplanation<'a>,
 }
 
 #[derive(Debug)]
@@ -70,20 +90,51 @@ pub struct ExplanationNode<'a> {
 impl<'a> fmt::Display for Explanation<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut prev_chain = usize::max_value();
-        for node in &self.nodes {
-            if node.chain != prev_chain {
-                if node.chain != 0 {
-                    writeln!(f)?;
-                }
-                write!(f, "%{} =", node.chain)?;
-                if let Some(local_id) = self.chain_local_ids.get(&node.chain) {
-                    write!(f, " Let {} =", local_id)?;
-                }
+        for (id, predicates, projection) in &self.sources {
+            writeln!(
+                f,
+                "Source {} ({}):",
+                self.expr_humanizer
+                    .humanize_id(*id)
+                    .unwrap_or_else(|| "?".to_owned()),
+                id,
+            )?;
+            writeln!(f, "| Filter {}", separated(", ", predicates.iter()))?;
+            writeln!(f, "| Project {}", bracketed("(", ")", Indices(projection)))?;
+            writeln!(f)?;
+        }
+        for (view_num, (id, view)) in self.views.iter().enumerate() {
+            if view_num > 0 {
                 writeln!(f)?;
             }
-            prev_chain = node.chain;
+            if self.sources.len() > 0 || self.views.len() > 1 {
+                match id {
+                    GlobalId::Explain => writeln!(f, "Query:")?,
+                    _ => writeln!(
+                        f,
+                        "View {} ({}):",
+                        self.expr_humanizer
+                            .humanize_id(*id)
+                            .unwrap_or_else(|| "?".to_owned()),
+                        id
+                    )?,
+                }
+            }
+            for node in view.nodes.iter() {
+                if node.chain != prev_chain {
+                    if node.chain != 0 {
+                        writeln!(f)?;
+                    }
+                    write!(f, "%{} =", node.chain)?;
+                    if let Some(local_id) = view.chain_local_ids.get(&node.chain) {
+                        write!(f, " Let {} =", local_id)?;
+                    }
+                    writeln!(f)?;
+                }
+                prev_chain = node.chain;
 
-            self.fmt_node(f, node)?;
+                view.fmt_node(f, node, self.expr_humanizer)?;
+            }
         }
 
         if let Some(finishing) = &self.finishing {
@@ -110,100 +161,50 @@ impl<'a> Explanation<'a> {
         expr: &'a MirRelationExpr,
         expr_humanizer: &'a dyn ExprHumanizer,
     ) -> Explanation<'a> {
-        use MirRelationExpr::*;
-
-        // Do a post-order traversal of the expression, grouping "chains" of
-        // nodes together as we go. We have to break the chain whenever we
-        // encounter a node with multiple inputs, like a join.
-
-        fn walk<'a>(expr: &'a MirRelationExpr, explanation: &mut Explanation<'a>) {
-            // First, walk the children, in order to perform a post-order
-            // traversal.
-            match expr {
-                // Leaf expressions. Nothing more to visit.
-                // TODO [btv] Explain complex sources.
-                Constant { .. } | Get { .. } => (),
-                // Single-input expressions continue the chain.
-                Project { input, .. }
-                | Map { input, .. }
-                | FlatMap { input, .. }
-                | Filter { input, .. }
-                | Reduce { input, .. }
-                | TopK { input, .. }
-                | Negate { input, .. }
-                | Threshold { input, .. }
-                | DeclareKeys { input, .. }
-                | ArrangeBy { input, .. } => walk(input, explanation),
-                // For join and union, each input may need to go in its own
-                // chain.
-                Join { inputs, .. } => walk_many(inputs, explanation),
-                Union { base, inputs, .. } => {
-                    walk_many(iter::once(&**base).chain(inputs), explanation)
-                }
-                Let { id, body, value } => {
-                    // Similarly the definition of a let goes in its own chain.
-                    walk(value, explanation);
-                    explanation.chain += 1;
-
-                    // Keep track of the chain ID <-> local ID correspondence.
-                    let value_chain = explanation.expr_chain(value);
-                    explanation.local_id_chains.insert(*id, value_chain);
-                    explanation.chain_local_ids.insert(value_chain, *id);
-
-                    walk(body, explanation);
-                }
-            }
-
-            // Then record the node.
-            explanation.nodes.push(ExplanationNode {
-                expr,
-                typ: None,
-                chain: explanation.chain,
-            });
-            explanation
-                .expr_chains
-                .insert(expr as *const MirRelationExpr, explanation.chain);
-        }
-
-        fn walk_many<'a, E>(exprs: E, explanation: &mut Explanation<'a>)
-        where
-            E: IntoIterator<Item = &'a MirRelationExpr>,
-        {
-            for expr in exprs {
-                // Elide chains that would consist only a of single Get node.
-                if let MirRelationExpr::Get {
-                    id: Id::Local(id), ..
-                } = expr
-                {
-                    explanation.expr_chains.insert(
-                        expr as *const MirRelationExpr,
-                        explanation.local_id_chains[id],
-                    );
-                } else {
-                    walk(expr, explanation);
-                    explanation.chain += 1;
-                }
-            }
-        }
-
         let mut explanation = Explanation {
             expr_humanizer,
-            nodes: vec![],
+            sources: vec![],
+            views: vec![],
             finishing: None,
-            expr_chains: HashMap::new(),
-            local_id_chains: HashMap::new(),
-            chain_local_ids: HashMap::new(),
-            chain: 0,
+            current_view: ViewExplanation::new(),
         };
-        walk(expr, &mut explanation);
+        explanation.current_view.walk(expr);
+        explanation.views.push((
+            GlobalId::Explain,
+            std::mem::replace(&mut explanation.current_view, ViewExplanation::new()),
+        ));
+        explanation
+    }
+
+    pub fn new_from_dataflow(
+        sources: impl Iterator<Item = (GlobalId, &'a Vec<MirScalarExpr>, &'a Vec<usize>)>,
+        views: impl Iterator<Item = (GlobalId, &'a MirRelationExpr)>,
+        expr_humanizer: &'a dyn ExprHumanizer,
+    ) -> Explanation<'a> {
+        let mut explanation = Explanation {
+            expr_humanizer,
+            sources: sources.collect::<Vec<_>>(),
+            views: vec![],
+            finishing: None,
+            current_view: ViewExplanation::new(),
+        };
+        for (id, expr) in views {
+            explanation.current_view.walk(expr);
+            explanation.views.push((
+                id,
+                std::mem::replace(&mut explanation.current_view, ViewExplanation::new()),
+            ));
+        }
         explanation
     }
 
     /// Attach type information into the explanation.
     pub fn explain_types(&mut self) {
-        for node in &mut self.nodes {
-            // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
-            node.typ = Some(node.expr.typ());
+        for (_, view) in &mut self.views {
+            for node in view.nodes.iter_mut() {
+                // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
+                node.typ = Some(node.expr.typ());
+            }
         }
     }
 
@@ -211,8 +212,94 @@ impl<'a> Explanation<'a> {
     pub fn explain_row_set_finishing(&mut self, finishing: RowSetFinishing) {
         self.finishing = Some(finishing);
     }
+}
 
-    fn fmt_node(&self, f: &mut fmt::Formatter, node: &ExplanationNode) -> fmt::Result {
+impl<'a> ViewExplanation<'a> {
+    fn new() -> ViewExplanation<'a> {
+        ViewExplanation {
+            nodes: vec![],
+            expr_chains: HashMap::new(),
+            local_id_chains: HashMap::new(),
+            chain_local_ids: HashMap::new(),
+            chain: 0,
+        }
+    }
+
+    // Do a post-order traversal of the expression, grouping "chains" of
+    // views together as we go. We have to break the chain whenever we
+    // encounter a node with multiple inputs, like a join.
+    fn walk(&mut self, expr: &'a MirRelationExpr) {
+        use MirRelationExpr::*;
+        // First, walk the children, in order to perform a post-order
+        // traversal.
+        match expr {
+            // Leaf expressions. Nothing more to visit.
+            // TODO [btv] Explain complex sources.
+            Constant { .. } | Get { .. } => (),
+            // Single-input expressions continue the chain.
+            Project { input, .. }
+            | Map { input, .. }
+            | FlatMap { input, .. }
+            | Filter { input, .. }
+            | Reduce { input, .. }
+            | TopK { input, .. }
+            | Negate { input, .. }
+            | Threshold { input, .. }
+            | DeclareKeys { input, .. }
+            | ArrangeBy { input, .. } => self.walk(input),
+            // For join and union, each input may need to go in its own
+            // chain.
+            Join { inputs, .. } => self.walk_many(inputs),
+            Union { base, inputs, .. } => self.walk_many(iter::once(&**base).chain(inputs)),
+            Let { id, body, value } => {
+                // Similarly the definition of a let goes in its own chain.
+                self.walk(value);
+                self.chain += 1;
+
+                // Keep track of the chain ID <-> local ID correspondence.
+                let value_chain = self.expr_chain(value);
+                self.local_id_chains.insert(*id, value_chain);
+                self.chain_local_ids.insert(value_chain, *id);
+
+                self.walk(body);
+            }
+        }
+
+        // Then record the node.
+        self.nodes.push(ExplanationNode {
+            expr,
+            typ: None,
+            chain: self.chain,
+        });
+        self.expr_chains
+            .insert(expr as *const MirRelationExpr, self.chain);
+    }
+
+    fn walk_many<E>(&mut self, exprs: E)
+    where
+        E: IntoIterator<Item = &'a MirRelationExpr>,
+    {
+        for expr in exprs {
+            // Elide chains that would consist only a of single Get node.
+            if let MirRelationExpr::Get {
+                id: Id::Local(id), ..
+            } = expr
+            {
+                self.expr_chains
+                    .insert(expr as *const MirRelationExpr, self.local_id_chains[id]);
+            } else {
+                self.walk(expr);
+                self.chain += 1;
+            }
+        }
+    }
+
+    fn fmt_node(
+        &self,
+        f: &mut fmt::Formatter,
+        node: &ExplanationNode,
+        expr_humanizer: &'a dyn ExprHumanizer,
+    ) -> fmt::Result {
         use MirRelationExpr::*;
 
         match node.expr {
@@ -244,7 +331,7 @@ impl<'a> Explanation<'a> {
                 Id::Global(id) => writeln!(
                     f,
                     "| Get {} ({})",
-                    self.expr_humanizer
+                    expr_humanizer
                         .humanize_id(*id)
                         .unwrap_or_else(|| "?".to_owned()),
                     id,
@@ -382,7 +469,7 @@ impl<'a> Explanation<'a> {
         if let Some(RelationType { column_types, keys }) = &node.typ {
             let column_types: Vec<_> = column_types
                 .iter()
-                .map(|c| self.expr_humanizer.humanize_column_type(c))
+                .map(|c| expr_humanizer.humanize_column_type(c))
                 .collect();
             writeln!(f, "| | types = ({})", separated(", ", column_types))?;
             writeln!(

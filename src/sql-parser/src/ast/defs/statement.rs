@@ -1423,6 +1423,9 @@ pub enum ExplainStage {
     DecorrelatedPlan,
     /// The expr::MirRelationExpr after optimization
     OptimizedPlan,
+    /// The sequence of expr::MirRelationExpr after
+    /// the whole dataflow has been optimized
+    DataflowPlan,
 }
 
 impl AstDisplay for ExplainStage {
@@ -1431,6 +1434,7 @@ impl AstDisplay for ExplainStage {
             ExplainStage::RawPlan => f.write_str("RAW PLAN"),
             ExplainStage::DecorrelatedPlan => f.write_str("DECORRELATED PLAN"),
             ExplainStage::OptimizedPlan => f.write_str("OPTIMIZED PLAN"),
+            ExplainStage::DataflowPlan => f.write_str("DATAFLOW PLAN"),
         }
     }
 }
