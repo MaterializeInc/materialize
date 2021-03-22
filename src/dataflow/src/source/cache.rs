@@ -12,15 +12,17 @@
 // TODO: currently everything is fairly Kafka-centric and we should probably
 // not directly usable for some other source types.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Error;
 use log::error;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use expr::GlobalId;
+use expr::{GlobalId, PartitionId};
 use repr::CachedRecord;
+
+use crate::source::ConsistencyInfo;
 
 static RECORD_FILE_PREFIX: &str = "materialize";
 
@@ -125,4 +127,61 @@ pub struct WorkerCacheData {
     pub partition_id: i32,
     /// The record itself.
     pub record: CachedRecord,
+}
+
+/// Get partition id information from a path to cached data.
+pub fn cached_file_partition(path: &Path) -> Option<PartitionId> {
+    match RecordFileMetadata::from_path(path) {
+        Ok(Some(meta)) => {
+            // Currently source caching only supports Kafka
+            Some(PartitionId::Kafka(meta.partition_id))
+        }
+        _ => {
+            error!(
+                "failed to get cache metadata info about path: {}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// Extract the subset of cached data files a given worker needs to replay.
+///
+/// Note that this list is ordered in reverse offset order, so that users can pop()
+/// elements in offset order.
+pub fn cached_files_for_worker(
+    source_id: GlobalId,
+    files: Vec<PathBuf>,
+    consistency_info: &ConsistencyInfo,
+) -> Vec<PathBuf> {
+    let mut cached_files: Vec<_> = files
+        .iter()
+        .map(|f| {
+            let metadata = RecordFileMetadata::from_path(f);
+            (f, metadata)
+        })
+        .filter(|(f, metadata)| {
+            // We partition the given partitions up amongst workers, so we need to be
+            // careful not to process a partition that this worker was not allocated (or
+            // else we would process files multiple times).
+            match metadata {
+                Ok(Some(meta)) => {
+                    assert_eq!(source_id, meta.source_id);
+                    // Source caching is only enabled for Kafka sources at the moment
+                    consistency_info.responsible_for(&PartitionId::Kafka(meta.partition_id))
+                }
+                _ => {
+                    error!("Failed to parse path: {}", f.display());
+                    false
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+    cached_files.sort_by_key(|(_, metadata)| match metadata {
+        Ok(Some(meta)) => -meta.start_offset,
+        _ => unreachable!(),
+    });
+
+    cached_files.iter().map(|(f, _)| (*f).clone()).collect()
 }
