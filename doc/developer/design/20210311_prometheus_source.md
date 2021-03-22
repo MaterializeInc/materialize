@@ -126,12 +126,6 @@ I think if we want to go down this road, we'll want something like an "is a" tab
 
 # Open questions
 
-- [x] Should we expose the CREATE SOURCE mechanics for this externally? It probably
-      has very limited utility for our users outside "read our metrics".
-      (The answer is "no")
-
-- [ ] Is it better to be fully normalized and have two tables, or better to have the kind of measurement in the measurement table and not have the "meta" table?
-
 <!--
 // Anything currently unanswered that needs specific focus. This section may be expanded during the doc meeting as
 // other unknowns are pointed out.
