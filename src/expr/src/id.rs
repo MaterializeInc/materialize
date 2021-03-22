@@ -127,7 +127,7 @@ impl fmt::Display for SourceInstanceId {
 
 /// Unique identifier for each part of a whole source.
 ///     Kafka -> partition
-///     Kinesis -> shard
+///     Kinesis -> currently treated as single partition, should be shard.
 ///     File -> only one
 ///     S3 -> https://github.com/MaterializeInc/materialize/issues/5715
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
@@ -143,7 +143,8 @@ impl fmt::Display for PartitionId {
         match self {
             PartitionId::Kafka(id) => write!(f, "{}", id.to_string()),
             PartitionId::S3 => write!(f, "s3"),
-            _ => write!(f, "0"),
+            PartitionId::Kinesis => write!(f, "kinesis"),
+            PartitionId::File => write!(f, "0"),
         }
     }
 }

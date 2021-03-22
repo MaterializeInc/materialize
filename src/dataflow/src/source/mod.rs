@@ -237,8 +237,6 @@ pub(crate) trait SourceConstructor<Out> {
         source_id: SourceInstanceId,
         active: bool,
         worker_id: usize,
-        worker_count: usize,
-        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -282,7 +280,7 @@ impl MaybeLength for Value {
 pub(crate) trait SourceInfo<Out> {
     /// Ensures that the partition `pid` exists for this source. Once this function has been
     /// called, the source should be able to receive messages from this partition
-    fn add_partition(&mut self, _pid: PartitionId) -> PartitionMetrics {
+    fn add_partition(&mut self, _pid: PartitionId) {
         panic!("add partiton not supported for source!");
     }
 
@@ -460,8 +458,6 @@ pub struct ConsistencyInfo {
     source_type: Consistency,
     /// Per-source Prometheus metrics.
     source_metrics: SourceMetrics,
-    /// Per-partition Prometheus metrics.
-    partition_metrics: HashMap<PartitionId, PartitionMetrics>,
     /// source global id
     source_global_id: GlobalId,
     /// True if this worker is the active reader
@@ -482,6 +478,7 @@ impl ConsistencyInfo {
         consistency: Consistency,
         timestamp_frequency: Duration,
         connector: &ExternalSourceConnector,
+        logger: Option<Logger>,
     ) -> ConsistencyInfo {
         let start_offsets = match connector {
             ExternalSourceConnector::Kafka(kc) => {
@@ -506,12 +503,12 @@ impl ConsistencyInfo {
             source_type: consistency,
             source_metrics: SourceMetrics::new(
                 &source_name,
-                &source_id.to_string(),
+                source_id,
                 &worker_id.to_string(),
+                logger,
             ),
             // we have never downgraded, so make sure the initial value is outside of our frequency
             time_since_downgrade: Instant::now() - timestamp_frequency - Duration::from_secs(1),
-            partition_metrics: Default::default(),
             source_global_id: source_id.source_id,
             active,
             worker_id,
@@ -635,10 +632,9 @@ impl ConsistencyInfo {
                         // Iterate over each partition that we know about
                         for (pid, entries) in entries {
                             if !self.knows_of(pid) && self.responsible_for(pid) {
-                                let partition_metrics = source.add_partition(pid.clone());
+                                source.add_partition(pid.clone());
                                 self.update_partition_metadata(pid);
-                                self.partition_metrics
-                                    .insert(pid.clone(), partition_metrics);
+                                self.source_metrics.add_partition(pid);
                             }
 
                             if !self.partition_metadata.contains_key(pid) {
@@ -680,7 +676,9 @@ impl ConsistencyInfo {
                                     "Internal error! Received a zero-timestamp. Materialize will crash now."
                                 );
 
-                                if let Some(pmetrics) = self.partition_metrics.get_mut(pid) {
+                                if let Some(pmetrics) =
+                                    self.source_metrics.partition_metrics.get_mut(pid)
+                                {
                                     pmetrics
                                         .closed_ts
                                         .set(self.partition_metadata.get(pid).unwrap().ts);
@@ -732,10 +730,9 @@ impl ConsistencyInfo {
                     TimestampDataUpdate::RealTime(partitions) => {
                         for pid in partitions {
                             if !self.knows_of(pid) && self.responsible_for(pid) {
-                                let partition_metrics = source.add_partition(pid.clone());
+                                source.add_partition(pid.clone());
                                 self.update_partition_metadata(pid);
-                                self.partition_metrics
-                                    .insert(pid.clone(), partition_metrics);
+                                self.source_metrics.add_partition(pid);
                             }
                         }
                     }
@@ -804,11 +801,22 @@ pub struct SourceMetrics {
     operator_scheduled_counter: IntCounter,
     /// Value of the capability associated with this source
     capability: UIntGauge,
+    /// Per-partition Prometheus metrics.
+    pub partition_metrics: HashMap<PartitionId, PartitionMetrics>,
+    logger: Option<Logger>,
+    source_name: String,
+    source_id: SourceInstanceId,
 }
 
 impl SourceMetrics {
     /// Initialises source metrics for a given (source_id, worker_id)
-    pub fn new(source_name: &str, source_id: &str, worker_id: &str) -> SourceMetrics {
+    pub fn new(
+        source_name: &str,
+        source_id: SourceInstanceId,
+        worker_id: &str,
+        logger: Option<Logger>,
+    ) -> SourceMetrics {
+        let source_id_string = source_id.to_string();
         lazy_static! {
             static ref OPERATOR_SCHEDULED_COUNTER: IntCounterVec = register_int_counter_vec!(
                 "mz_operator_scheduled_total",
@@ -823,10 +831,65 @@ impl SourceMetrics {
             )
             .unwrap();
         }
-        let labels = &[source_name, source_id, worker_id];
+        let labels = &[source_name, &source_id_string, worker_id];
         SourceMetrics {
             operator_scheduled_counter: OPERATOR_SCHEDULED_COUNTER.with_label_values(labels),
             capability: CAPABILITY.with_label_values(labels),
+            partition_metrics: Default::default(),
+            logger,
+            source_name: source_name.to_string(),
+            source_id,
+        }
+    }
+
+    /// Add metrics for `partition_id`
+    pub fn add_partition(&mut self, partition_id: &PartitionId) {
+        if self.partition_metrics.contains_key(partition_id) {
+            error!(
+                "incorrectly adding a duplicate partition metric in source: {} partition: {}",
+                self.source_id, partition_id
+            );
+            return;
+        }
+
+        let metric = PartitionMetrics::new(&self.source_name, self.source_id, partition_id);
+        self.partition_metrics.insert(partition_id.clone(), metric);
+    }
+
+    /// Log updates to which offsets / timestamps read up to.
+    pub fn record_partition_offsets(&mut self, offsets: HashMap<PartitionId, (MzOffset, u64)>) {
+        if self.logger.is_none() {
+            return;
+        }
+
+        for (partition, (offset, timestamp)) in offsets {
+            if let Some(metric) = self.partition_metrics.get_mut(&partition) {
+                metric.record_offset(
+                    &mut self.logger.as_mut().unwrap(),
+                    &self.source_name,
+                    self.source_id,
+                    &partition,
+                    offset.offset,
+                    timestamp as i64,
+                );
+            }
+        }
+    }
+}
+
+impl Drop for SourceMetrics {
+    fn drop(&mut self) {
+        // retract our partition from logging
+        if let Some(logger) = self.logger.as_mut() {
+            for (partition, metric) in self.partition_metrics.iter() {
+                logger.log(MaterializedEvent::SourceInfo {
+                    source_name: self.source_name.clone(),
+                    source_id: self.source_id,
+                    partition_id: partition.to_string(),
+                    offset: -metric.last_offset,
+                    timestamp: -metric.last_timestamp,
+                });
+            }
         }
     }
 }
@@ -841,26 +904,28 @@ pub struct PartitionMetrics {
     closed_ts: DeleteOnDropGauge<'static, AtomicU64>,
     /// Total number of messages that have been received by the source and timestamped
     messages_ingested: DeleteOnDropCounter<'static, AtomicI64>,
-    logger: Option<Logger>,
-    source_name: String,
-    source_id: SourceInstanceId,
-    partition_id: String,
     last_offset: i64,
     last_timestamp: i64,
 }
 
 impl PartitionMetrics {
     /// Record the latest offset ingested high-water mark
-    pub fn record_offset(&mut self, offset: i64, timestamp: i64) {
-        if let Some(logger) = self.logger.as_mut() {
-            logger.log(MaterializedEvent::SourceInfo {
-                source_name: self.source_name.clone(),
-                source_id: self.source_id,
-                partition_id: self.partition_id.clone(),
-                offset: offset - self.last_offset,
-                timestamp: timestamp - self.last_timestamp,
-            });
-        }
+    fn record_offset(
+        &mut self,
+        logger: &mut Logger,
+        source_name: &str,
+        source_id: SourceInstanceId,
+        partition_id: &PartitionId,
+        offset: i64,
+        timestamp: i64,
+    ) {
+        logger.log(MaterializedEvent::SourceInfo {
+            source_name: source_name.to_string(),
+            source_id,
+            partition_id: partition_id.to_string(),
+            offset: offset - self.last_offset,
+            timestamp: timestamp - self.last_timestamp,
+        });
         self.last_offset = offset;
         self.last_timestamp = timestamp;
     }
@@ -869,8 +934,7 @@ impl PartitionMetrics {
     pub fn new(
         source_name: &str,
         source_id: SourceInstanceId,
-        partition_id: &str,
-        logger: Option<Logger>,
+        partition_id: &PartitionId,
     ) -> PartitionMetrics {
         const LABELS: &[&str] = &["topic", "source_id", "source_instance", "partition_id"];
         lazy_static! {
@@ -904,7 +968,7 @@ impl PartitionMetrics {
             source_name,
             &source_id.source_id.to_string(),
             &source_id.dataflow_id.to_string(),
-            partition_id,
+            &partition_id.to_string(),
         ];
         PartitionMetrics {
             offset_ingested: DeleteOnDropGauge::new_with_error_handler(
@@ -927,27 +991,8 @@ impl PartitionMetrics {
                 &MESSAGES_INGESTED,
                 |e, v| log::debug!("unable to delete metric {}: {}", v.fq_name(), e),
             ),
-            logger,
-            source_name: source_name.to_string(),
-            source_id,
-            partition_id: partition_id.to_string(),
             last_offset: 0,
             last_timestamp: 0,
-        }
-    }
-}
-
-impl Drop for PartitionMetrics {
-    fn drop(&mut self) {
-        // retract our partition from logging
-        if let Some(logger) = self.logger.as_mut() {
-            logger.log(MaterializedEvent::SourceInfo {
-                source_name: self.source_name.clone(),
-                source_id: self.source_id,
-                partition_id: self.partition_id.clone(),
-                offset: -self.last_offset,
-                timestamp: -self.last_timestamp,
-            });
         }
     }
 }
@@ -1005,6 +1050,7 @@ where
             consistency,
             timestamp_frequency,
             &source_connector,
+            logger.clone(),
         );
 
         // Create source information (this function is specific to a specific
@@ -1014,8 +1060,6 @@ where
             id,
             active,
             worker_id,
-            worker_count,
-            logger,
             scope.sync_activator_for(&info.address[..]),
             source_connector.clone(),
             &mut consistency_info,
@@ -1154,13 +1198,9 @@ where
             }
 
             BYTES_READ_COUNTER.inc_by(bytes_read as i64);
-            for (partition, (offset, ts)) in metric_updates {
-                let partition_metrics = consistency_info
-                    .partition_metrics
-                    .get_mut(&partition)
-                    .unwrap();
-                partition_metrics.record_offset(offset.offset, ts as i64);
-            }
+            consistency_info
+                .source_metrics
+                .record_partition_offsets(metric_updates);
 
             // Downgrade capability (if possible) before exiting
             consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
@@ -1224,6 +1264,7 @@ where
     // entry gets created in SourceConstructor or when a new partition
     // is discovered
     consistency_info
+        .source_metrics
         .partition_metrics
         .get_mut(&partition)
         .unwrap_or_else(|| panic!("partition metrics do not exist for partition {}", partition))
@@ -1268,6 +1309,7 @@ where
             // Update ingestion metrics
             // Entry is guaranteed to exist as it gets created when we initialise the partition
             let partition_metrics = consistency_info
+                .source_metrics
                 .partition_metrics
                 .get_mut(&partition)
                 .unwrap();

@@ -24,10 +24,7 @@ use timely::scheduling::SyncActivator;
 use dataflow_types::{DataEncoding, ExternalSourceConnector, KinesisSourceConnector, MzOffset};
 use expr::{PartitionId, SourceInstanceId};
 
-use crate::logging::materialized::Logger;
-use crate::source::{
-    ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
-};
+use crate::source::{ConsistencyInfo, NextMessage, SourceConstructor, SourceInfo, SourceMessage};
 
 lazy_static! {
     static ref MILLIS_BEHIND_LATEST: IntGaugeVec = register_int_gauge_vec!(
@@ -67,12 +64,10 @@ pub struct KinesisSourceInfo {
 
 impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
     fn new(
-        source_name: String,
-        source_id: SourceInstanceId,
+        _source_name: String,
+        _source_id: SourceInstanceId,
         active: bool,
         _worker_id: usize,
-        _worker_count: usize,
-        logger: Option<Logger>,
         _consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -87,17 +82,9 @@ impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
         match state {
             Ok((kinesis_client, stream_name, shard_set, shard_queue)) => {
                 if active {
-                    let kinesis_id = PartitionId::Kinesis;
-                    consistency_info.update_partition_metadata(&kinesis_id);
-                    consistency_info.partition_metrics.insert(
-                        kinesis_id.clone(),
-                        PartitionMetrics::new(
-                            &source_name,
-                            source_id,
-                            &kinesis_id.to_string(),
-                            logger,
-                        ),
-                    );
+                    let pid = PartitionId::Kinesis;
+                    consistency_info.source_metrics.add_partition(&pid);
+                    consistency_info.update_partition_metadata(&pid);
                 }
 
                 Ok(KinesisSourceInfo {
