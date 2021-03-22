@@ -30,17 +30,17 @@ None of the following are intended to be done with this design:
 By implementing this design, we'll make the following changes to materialized:
 
 1. Introduce a background task that regularly scrapes the internal metrics registry using the registry's [`gather`](https://docs.rs/prometheus/0.12.0/prometheus/struct.Registry.html#method.gather) method (currently we can use the global registry, but later we'll need a handle to the ["materialized" metrics registry][#5825]; the mechanism will remain the same).
-2. Ingest the generated metrics into a dataflow that populates metrics into tables like the following:
+2. Ingest the generated metrics into a dataflow that populates metrics into tables like the following (names subject to change when we implement this):
 
 ```sql
-CREATE TABLE metrics_table_name (
+CREATE TABLE mz_catalog.metrics (
     metric TEXT,
     ts TIMESTAMP,
     labels JSONB,
     value float8
 );
 
-CREATE TABLE metrics_table_meta (
+CREATE TABLE mz_calalog.metrics_meta (
     metric TEXT,
     metric_type TEXT,
     help TEXT
