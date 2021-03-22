@@ -26,10 +26,7 @@ use expr::{PartitionId, SourceInstanceId};
 use mz_avro::types::Value;
 use mz_avro::{AvroRead, Schema, Skip};
 
-use crate::logging::materialized::Logger;
-use crate::source::{
-    ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
-};
+use crate::source::{ConsistencyInfo, NextMessage, SourceConstructor, SourceInfo, SourceMessage};
 
 /// Contains all information necessary to ingest data from file sources (either
 /// regular sources, or Avro OCF sources)
@@ -60,12 +57,10 @@ impl From<FileOffset> for MzOffset {
 
 impl SourceConstructor<Value> for FileSourceInfo<Value> {
     fn new(
-        name: String,
+        _name: String,
         source_id: SourceInstanceId,
         active: bool,
         _: usize,
-        _: usize,
-        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -106,11 +101,9 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
         };
 
         if active {
-            consistency_info.partition_metrics.insert(
-                PartitionId::File,
-                PartitionMetrics::new(&name, source_id, "", logger),
-            );
-            consistency_info.update_partition_metadata(&PartitionId::File);
+            let pid = PartitionId::File;
+            consistency_info.source_metrics.add_partition(&pid);
+            consistency_info.update_partition_metadata(&pid);
         }
 
         Ok(FileSourceInfo {
@@ -123,12 +116,10 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
 
 impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
     fn new(
-        name: String,
+        _name: String,
         source_id: SourceInstanceId,
         active: bool,
         worker_id: usize,
-        _: usize,
-        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -167,11 +158,9 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
         };
 
         if active {
-            consistency_info.partition_metrics.insert(
-                PartitionId::File,
-                PartitionMetrics::new(&name, source_id, "", logger),
-            );
-            consistency_info.update_partition_metadata(&PartitionId::File);
+            let pid = PartitionId::File;
+            consistency_info.source_metrics.add_partition(&pid);
+            consistency_info.update_partition_metadata(&pid);
         }
 
         Ok(FileSourceInfo {

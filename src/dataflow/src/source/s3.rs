@@ -35,10 +35,7 @@ use aws_util::aws;
 use dataflow_types::{Compression, DataEncoding, ExternalSourceConnector, MzOffset, S3KeySource};
 use expr::{PartitionId, SourceInstanceId};
 
-use crate::logging::materialized::Logger;
-use crate::source::{
-    ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
-};
+use crate::source::{ConsistencyInfo, NextMessage, SourceConstructor, SourceInfo, SourceMessage};
 
 use self::metrics::ScanBucketMetrics;
 use self::notifications::{EventType, TestEvent};
@@ -90,8 +87,6 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
         source_id: SourceInstanceId,
         active: bool,
         worker_id: usize,
-        _worker_count: usize,
-        logger: Option<Logger>,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         consistency_info: &mut ConsistencyInfo,
@@ -147,13 +142,9 @@ impl SourceConstructor<Vec<u8>> for S3SourceInfo {
             rx
         };
 
-        let pid = PartitionId::S3;
-
         if active {
-            consistency_info.partition_metrics.insert(
-                pid.clone(),
-                PartitionMetrics::new(&source_name, source_id, "s3", logger),
-            );
+            let pid = PartitionId::S3;
+            consistency_info.source_metrics.add_partition(&pid);
             consistency_info.update_partition_metadata(&pid);
         }
         Ok(S3SourceInfo {
