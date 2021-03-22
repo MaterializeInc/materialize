@@ -26,11 +26,11 @@ use expr::{PartitionId, SourceInstanceId};
 use mz_avro::types::Value;
 use mz_avro::{AvroRead, Schema, Skip};
 
-use crate::source::{ConsistencyInfo, NextMessage, SourceConstructor, SourceInfo, SourceMessage};
+use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 /// Contains all information necessary to ingest data from file sources (either
 /// regular sources, or Avro OCF sources)
-pub struct FileSourceInfo<Out> {
+pub struct FileSourceReader<Out> {
     /// Unique source ID
     id: SourceInstanceId,
     /// Receiver channel that ingests records
@@ -55,17 +55,15 @@ impl From<FileOffset> for MzOffset {
     }
 }
 
-impl SourceConstructor<Value> for FileSourceInfo<Value> {
+impl SourceReader<Value> for FileSourceReader<Value> {
     fn new(
         _name: String,
         source_id: SourceInstanceId,
-        active: bool,
         _: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        consistency_info: &mut ConsistencyInfo,
         encoding: DataEncoding,
-    ) -> Result<FileSourceInfo<Value>, anyhow::Error> {
+    ) -> Result<(FileSourceReader<Value>, Option<PartitionId>), anyhow::Error> {
         let receiver = match connector {
             ExternalSourceConnector::AvroOcf(oc) => {
                 let reader_schema = match &encoding {
@@ -100,34 +98,51 @@ impl SourceConstructor<Value> for FileSourceInfo<Value> {
             _ => panic!("Only OCF sources are supported with Avro encoding of values."),
         };
 
-        if active {
-            let pid = PartitionId::File;
-            consistency_info.source_metrics.add_partition(&pid);
-            consistency_info.update_partition_metadata(&pid);
-        }
+        Ok((
+            FileSourceReader {
+                id: source_id,
+                receiver_stream: receiver,
+                current_file_offset: FileOffset { offset: 0 },
+            },
+            Some(PartitionId::File),
+        ))
+    }
 
-        Ok(FileSourceInfo {
-            id: source_id,
-            receiver_stream: receiver,
-            current_file_offset: FileOffset { offset: 0 },
-        })
+    fn get_next_message(&mut self) -> Result<NextMessage<Value>, anyhow::Error> {
+        match self.receiver_stream.try_recv() {
+            Ok(Ok(record)) => {
+                self.current_file_offset.offset += 1;
+                let message = SourceMessage {
+                    partition: PartitionId::File,
+                    offset: self.current_file_offset.into(),
+                    upstream_time_millis: None,
+                    key: None,
+                    payload: Some(record),
+                };
+                Ok(NextMessage::Ready(message))
+            }
+            Ok(Err(e)) => {
+                error!("Failed to read file for {}. Error: {}.", self.id, e);
+                Err(e)
+            }
+            Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
+            Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
+        }
     }
 }
 
-impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
+impl SourceReader<Vec<u8>> for FileSourceReader<Vec<u8>> {
     fn new(
         _name: String,
         source_id: SourceInstanceId,
-        active: bool,
         worker_id: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        consistency_info: &mut ConsistencyInfo,
         _: DataEncoding,
-    ) -> Result<FileSourceInfo<Vec<u8>>, anyhow::Error> {
+    ) -> Result<(FileSourceReader<Vec<u8>>, Option<PartitionId>), anyhow::Error> {
         let receiver = match connector {
-            ExternalSourceConnector::File(fc) if active => {
-                log::debug!("creating FileSourceInfo worker_id={}", worker_id);
+            ExternalSourceConnector::File(fc) => {
+                log::debug!("creating FileSourceReader worker_id={}", worker_id);
                 let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
                 let (tx, rx) = std::sync::mpsc::sync_channel(10000);
                 let tail = if fc.tail {
@@ -147,32 +162,22 @@ impl SourceConstructor<Vec<u8>> for FileSourceInfo<Vec<u8>> {
                 });
                 rx
             }
-            ExternalSourceConnector::File(_) => {
-                log::trace!("creating stub FileSourceInfo worker_id={}", worker_id);
-                let (_tx, rx) = std::sync::mpsc::sync_channel(0);
-                rx
-            }
             _ => panic!(
                 "Only File sources are supported with File/OCF connectors and Vec<u8> encodings"
             ),
         };
 
-        if active {
-            let pid = PartitionId::File;
-            consistency_info.source_metrics.add_partition(&pid);
-            consistency_info.update_partition_metadata(&pid);
-        }
-
-        Ok(FileSourceInfo {
-            id: source_id,
-            receiver_stream: receiver,
-            current_file_offset: FileOffset { offset: 0 },
-        })
+        Ok((
+            FileSourceReader {
+                id: source_id,
+                receiver_stream: receiver,
+                current_file_offset: FileOffset { offset: 0 },
+            },
+            Some(PartitionId::File),
+        ))
     }
-}
 
-impl<Out> SourceInfo<Out> for FileSourceInfo<Out> {
-    fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(record)) => {
                 self.current_file_offset.offset += 1;

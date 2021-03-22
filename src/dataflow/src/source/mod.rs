@@ -59,10 +59,10 @@ pub mod cache;
 use differential_dataflow::Hashable;
 pub use file::read_file_task;
 pub use file::FileReadStyle;
-pub use file::FileSourceInfo;
-pub use kafka::KafkaSourceInfo;
-pub use kinesis::KinesisSourceInfo;
-pub use s3::S3SourceInfo;
+pub use file::FileSourceReader;
+pub use kafka::KafkaSourceReader;
+pub use kinesis::KinesisSourceReader;
+pub use s3::S3SourceReader;
 
 // Interval after which the source operator will yield control.
 static YIELD_INTERVAL_MS: u128 = 10;
@@ -227,24 +227,6 @@ lazy_static! {
         register_int_counter!("mz_bytes_read_total", "Count of bytes read from sources").unwrap();
 }
 
-/// Creates a specific source, parameterised by 'Out'. Out denotes the encoding
-/// of the ingested data (Vec<u8> or Value).
-pub(crate) trait SourceConstructor<Out> {
-    /// Constructor for source creation
-    fn new(
-        source_name: String,
-        source_id: SourceInstanceId,
-        active: bool,
-        worker_id: usize,
-        consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
-        consistency_info: &mut ConsistencyInfo,
-        encoding: DataEncoding,
-    ) -> Result<Self, anyhow::Error>
-    where
-        Self: Sized + SourceInfo<Out>;
-}
-
 /// Types that implement this trait expose a length function
 pub trait MaybeLength {
     /// Returns the size of the object
@@ -274,16 +256,42 @@ impl MaybeLength for Value {
     }
 }
 
-/// Each source must implement this trait. Sources will then get created as part of the
-/// [`create_source`] function.
-pub(crate) trait SourceInfo<Out> {
-    /// Ensures that the partition `pid` exists for this source. Once this function has been
-    /// called, the source should be able to receive messages from this partition
+/// This trait defines the interface between Materialize and external sources, and
+/// must be implemented for every new kind of source.
+///
+/// TODO: this trait is still a little too Kafka-centric, specifically the concept of
+/// a "partition" is baked into this trait and introduces some cognitive overhead as
+/// we are forced to treat things like file sources as "single-partition"
+pub(crate) trait SourceReader<Out> {
+    /// Create a new source reader.
+    ///
+    /// This function returns the source reader and optionally, any "partition" it's
+    /// already reading. In practice, the partition is only non-None for static sources
+    /// that either don't truly have partitions or have a fixed number of partitions.
+    fn new(
+        source_name: String,
+        source_id: SourceInstanceId,
+        worker_id: usize,
+        consumer_activator: SyncActivator,
+        connector: ExternalSourceConnector,
+        encoding: DataEncoding,
+    ) -> Result<(Self, Option<PartitionId>), anyhow::Error>
+    where
+        Self: Sized;
+
+    /// Instruct the source to start subscribing to `pid`.
+    ///
+    /// Many (most?) sources do not actually have partitions and for those kinds
+    /// of sources the default implementation is a panic (to make sure we don't
+    /// inadvertently call this at runtime).
     fn add_partition(&mut self, _pid: PartitionId) {
         panic!("add partiton not supported for source!");
     }
 
-    /// Returns the next message read from the source
+    /// Returns the next message available from the source.
+    ///
+    /// Note that implementers are required to present messages in strictly ascending\
+    /// offset order within each partition.
     fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error>;
 }
 
@@ -587,7 +595,7 @@ impl ConsistencyInfo {
         &mut self,
         id: &SourceInstanceId,
         cap: &mut Capability<Timestamp>,
-        source: &mut dyn SourceInfo<Out>,
+        source: &mut dyn SourceReader<Out>,
         timestamp_histories: &TimestampDataUpdates,
     ) {
         let mut min_closed_timestamp_unowned_partitions: Option<Timestamp> = None;
@@ -985,7 +993,7 @@ pub(crate) fn create_source<G, S: 'static, Out>(
 )
 where
     G: Scope<Timestamp = Timestamp>,
-    S: SourceInfo<Out> + SourceConstructor<Out>,
+    S: SourceReader<Out>,
     Out: Debug + Clone + Send + Default + MaybeLength + SourceCache + 'static,
 {
     let SourceConfig {
@@ -1021,16 +1029,33 @@ where
 
         // Create source information (this function is specific to a specific
         // source
-        let mut source_info: Result<S, anyhow::Error> = SourceConstructor::<Out>::new(
-            name.clone(),
-            id,
-            active,
-            worker_id,
-            scope.sync_activator_for(&info.address[..]),
-            source_connector.clone(),
-            &mut consistency_info,
-            encoding,
-        );
+
+        let mut source_reader: Option<S> = if !active {
+            None
+        } else {
+            match SourceReader::<Out>::new(
+                name.clone(),
+                id,
+                worker_id,
+                scope.sync_activator_for(&info.address[..]),
+                source_connector.clone(),
+                encoding,
+            ) {
+                Ok((source_reader, partition)) => {
+                    if let Some(pid) = partition {
+                        consistency_info.source_metrics.add_partition(&pid);
+                        consistency_info.update_partition_metadata(&pid);
+                    }
+
+                    Some(source_reader)
+                }
+
+                Err(e) => {
+                    error!("Failed to create source: {}", e);
+                    None
+                }
+            }
+        };
 
         let cached_files = dataflow_types::cached_files(&source_connector);
         let mut cached_files = crate::source::cache::cached_files_for_worker(
@@ -1045,20 +1070,15 @@ where
 
         move |cap, output| {
             // First check that the source was successfully created
-            let source_info = match &mut source_info {
-                Ok(source_info) => source_info,
-                Err(e) => {
-                    error!("Failed to create source: {}", e);
+            let source_reader = match &mut source_reader {
+                Some(source_reader) => source_reader,
+                None => {
                     return SourceStatus::Done;
                 }
             };
 
-            if !active {
-                return SourceStatus::Done;
-            }
-
             // Downgrade capability (if possible)
-            consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
+            consistency_info.downgrade_capability(&id, cap, source_reader, &timestamp_histories);
 
             if let Some(file) = cached_files.pop() {
                 // TODO(rkhaitan) change this to properly re-use old timestamps.
@@ -1123,7 +1143,7 @@ where
                         &mut buffer,
                     )
                 } else {
-                    match source_info.get_next_message() {
+                    match source_reader.get_next_message() {
                         Ok(NextMessage::Ready(message)) => handle_message(
                             message,
                             &mut predecessor,
@@ -1169,7 +1189,7 @@ where
                 .record_partition_offsets(metric_updates);
 
             // Downgrade capability (if possible) before exiting
-            consistency_info.downgrade_capability(&id, cap, source_info, &timestamp_histories);
+            consistency_info.downgrade_capability(&id, cap, source_reader, &timestamp_histories);
 
             let (source_status, processing_status) = source_state;
             // Schedule our next activation
@@ -1227,7 +1247,7 @@ where
     *predecessor = Some(offset);
 
     // Update ingestion metrics. Guaranteed to exist as the appropriate
-    // entry gets created in SourceConstructor or when a new partition
+    // entry gets created in SourceReader or when a new partition
     // is discovered
     consistency_info
         .source_metrics

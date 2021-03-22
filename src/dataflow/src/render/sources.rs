@@ -33,7 +33,9 @@ use crate::render::context::Context;
 use crate::render::RenderState;
 use crate::server::LocalInput;
 use crate::source::SourceConfig;
-use crate::source::{self, FileSourceInfo, KafkaSourceInfo, KinesisSourceInfo, S3SourceInfo};
+use crate::source::{
+    self, FileSourceReader, KafkaSourceReader, KinesisSourceReader, S3SourceReader,
+};
 
 impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, Timestamp>
 where
@@ -149,7 +151,7 @@ where
                     connector
                 {
                     let ((source, err_source), capability) =
-                        source::create_source::<_, FileSourceInfo<Value>, Value>(
+                        source::create_source::<_, FileSourceReader<Value>, Value>(
                             source_config,
                             connector,
                         );
@@ -185,19 +187,22 @@ where
                 } else {
                     let ((ok_source, err_source), capability) = match connector {
                         ExternalSourceConnector::Kafka(_) => {
-                            source::create_source::<_, KafkaSourceInfo, _>(source_config, connector)
+                            source::create_source::<_, KafkaSourceReader, _>(
+                                source_config,
+                                connector,
+                            )
                         }
                         ExternalSourceConnector::Kinesis(_) => {
-                            source::create_source::<_, KinesisSourceInfo, _>(
+                            source::create_source::<_, KinesisSourceReader, _>(
                                 source_config,
                                 connector,
                             )
                         }
                         ExternalSourceConnector::S3(_) => {
-                            source::create_source::<_, S3SourceInfo, _>(source_config, connector)
+                            source::create_source::<_, S3SourceReader, _>(source_config, connector)
                         }
                         ExternalSourceConnector::File(_) => {
-                            source::create_source::<_, FileSourceInfo<Vec<u8>>, Vec<u8>>(
+                            source::create_source::<_, FileSourceReader<Vec<u8>>, Vec<u8>>(
                                 source_config,
                                 connector,
                             )

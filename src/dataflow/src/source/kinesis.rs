@@ -24,7 +24,7 @@ use timely::scheduling::SyncActivator;
 use dataflow_types::{DataEncoding, ExternalSourceConnector, KinesisSourceConnector, MzOffset};
 use expr::{PartitionId, SourceInstanceId};
 
-use crate::source::{ConsistencyInfo, NextMessage, SourceConstructor, SourceInfo, SourceMessage};
+use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 lazy_static! {
     static ref MILLIS_BEHIND_LATEST: IntGaugeVec = register_int_gauge_vec!(
@@ -43,7 +43,7 @@ lazy_static! {
 const KINESIS_SHARD_REFRESH_RATE: Duration = Duration::from_secs(60);
 
 /// Contains all information necessary to ingest data from Kinesis
-pub struct KinesisSourceInfo {
+pub struct KinesisSourceReader {
     /// Kinesis client used to obtain records
     kinesis_client: KinesisClient,
     /// The name of the stream
@@ -62,47 +62,7 @@ pub struct KinesisSourceInfo {
     processed_message_count: i64,
 }
 
-impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
-    fn new(
-        _source_name: String,
-        _source_id: SourceInstanceId,
-        active: bool,
-        _worker_id: usize,
-        _consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
-        consistency_info: &mut ConsistencyInfo,
-        _encoding: DataEncoding,
-    ) -> Result<Self, anyhow::Error> {
-        let kc = match connector {
-            ExternalSourceConnector::Kinesis(kc) => kc,
-            _ => unreachable!(),
-        };
-
-        let state = block_on(create_state(kc));
-        match state {
-            Ok((kinesis_client, stream_name, shard_set, shard_queue)) => {
-                if active {
-                    let pid = PartitionId::Kinesis;
-                    consistency_info.source_metrics.add_partition(&pid);
-                    consistency_info.update_partition_metadata(&pid);
-                }
-
-                Ok(KinesisSourceInfo {
-                    kinesis_client,
-                    shard_queue,
-                    last_checked_shards: Instant::now(),
-                    buffered_messages: VecDeque::new(),
-                    shard_set,
-                    stream_name,
-                    processed_message_count: 0,
-                })
-            }
-            Err(e) => Err(anyhow!("{}", e)),
-        }
-    }
-}
-
-impl KinesisSourceInfo {
+impl KinesisSourceReader {
     async fn update_shard_information(&mut self) -> Result<(), anyhow::Error> {
         let new_shards: HashSet<String> = get_shard_ids(&self.kinesis_client, &self.stream_name)
             .await?
@@ -133,7 +93,37 @@ impl KinesisSourceInfo {
     }
 }
 
-impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
+impl SourceReader<Vec<u8>> for KinesisSourceReader {
+    fn new(
+        _source_name: String,
+        _source_id: SourceInstanceId,
+        _worker_id: usize,
+        _consumer_activator: SyncActivator,
+        connector: ExternalSourceConnector,
+        _encoding: DataEncoding,
+    ) -> Result<(Self, Option<PartitionId>), anyhow::Error> {
+        let kc = match connector {
+            ExternalSourceConnector::Kinesis(kc) => kc,
+            _ => unreachable!(),
+        };
+
+        let state = block_on(create_state(kc));
+        match state {
+            Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok((
+                KinesisSourceReader {
+                    kinesis_client,
+                    shard_queue,
+                    last_checked_shards: Instant::now(),
+                    buffered_messages: VecDeque::new(),
+                    shard_set,
+                    stream_name,
+                    processed_message_count: 0,
+                },
+                Some(PartitionId::Kinesis),
+            )),
+            Err(e) => Err(anyhow!("{}", e)),
+        }
+    }
     fn get_next_message(&mut self) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
 
