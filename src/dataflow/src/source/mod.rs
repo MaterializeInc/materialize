@@ -231,7 +231,6 @@ lazy_static! {
 /// of the ingested data (Vec<u8> or Value).
 pub(crate) trait SourceConstructor<Out> {
     /// Constructor for source creation
-    #[allow(clippy::too_many_arguments)]
     fn new(
         source_name: String,
         source_id: SourceInstanceId,
@@ -452,8 +451,6 @@ pub struct ConsistencyInfo {
     /// Note that we only keep track of partitions this worker is responsible for in this
     /// hashmap.
     pub partition_metadata: HashMap<PartitionId, ConsInfo>,
-    /// Optional: Materialize Offset from which source should start reading (default is 0)
-    start_offsets: HashMap<PartitionId, MzOffset>,
     /// Source Type (Real-time or BYO)
     source_type: Consistency,
     /// Per-source Prometheus metrics.
@@ -477,29 +474,13 @@ impl ConsistencyInfo {
         worker_count: usize,
         consistency: Consistency,
         timestamp_frequency: Duration,
-        connector: &ExternalSourceConnector,
         logger: Option<Logger>,
     ) -> ConsistencyInfo {
-        let start_offsets = match connector {
-            ExternalSourceConnector::Kafka(kc) => {
-                let mut start_offsets = HashMap::new();
-
-                for (partition, offset) in kc.start_offsets.iter() {
-                    start_offsets
-                        .insert(PartitionId::Kafka(*partition), MzOffset { offset: *offset });
-                }
-
-                start_offsets
-            }
-            _ => HashMap::new(),
-        };
-
         ConsistencyInfo {
             last_closed_ts: 0,
             // Safe conversion: statement.rs checks that value specified fits in u64
             downgrade_capability_frequency: timestamp_frequency.as_millis().try_into().unwrap(),
             partition_metadata: HashMap::new(),
-            start_offsets,
             source_type: consistency,
             source_metrics: SourceMetrics::new(
                 &source_name,
@@ -549,17 +530,10 @@ impl ConsistencyInfo {
     /// is enforced in `coord::timestamp::is_ts_valid`.
     pub fn update_partition_metadata(&mut self, pid: &PartitionId) {
         let cons_info = ConsInfo {
-            offset: self.get_partition_start_offset(&pid),
+            offset: MzOffset { offset: 0 },
             ts: self.last_closed_ts,
         };
         self.partition_metadata.insert(pid.clone(), cons_info);
-    }
-
-    fn get_partition_start_offset(&self, pid: &PartitionId) -> MzOffset {
-        self.start_offsets
-            .get(pid)
-            .unwrap_or(&MzOffset { offset: 0 })
-            .clone()
     }
 
     /// Generates a timestamp that is guaranteed to be monotonically increasing.
@@ -664,13 +638,6 @@ impl ConsistencyInfo {
                                     //skip old records
                                     continue;
                                 }
-                                let partition_start_offset = self.get_partition_start_offset(pid);
-                                assert!(
-                                    *offset >= partition_start_offset,
-                                    "Internal error! Timestamping offset went below start: {} < {}. Materialize will now crash.",
-                                    offset, partition_start_offset
-                                );
-
                                 assert!(
                                     *ts > 0,
                                     "Internal error! Received a zero-timestamp. Materialize will crash now."
@@ -1049,7 +1016,6 @@ where
             worker_count,
             consistency,
             timestamp_frequency,
-            &source_connector,
             logger.clone(),
         );
 

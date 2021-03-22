@@ -21,9 +21,7 @@ use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
 
-use dataflow_types::{
-    DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, MzOffset,
-};
+use dataflow_types::{DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector};
 use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{error, info, log_enabled, warn};
@@ -61,7 +59,7 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
         worker_id: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        consistency_info: &mut ConsistencyInfo,
+        _consistency_info: &mut ConsistencyInfo,
         _: DataEncoding,
     ) -> Result<KafkaSourceInfo, anyhow::Error> {
         match connector {
@@ -71,7 +69,6 @@ impl SourceConstructor<Vec<u8>> for KafkaSourceInfo {
                 worker_id,
                 consumer_activator,
                 kc,
-                consistency_info.start_offsets.clone(),
             )),
             _ => unreachable!(),
         }
@@ -216,7 +213,6 @@ impl KafkaSourceInfo {
         worker_id: usize,
         consumer_activator: SyncActivator,
         kc: KafkaSourceConnector,
-        start_offsets: HashMap<PartitionId, MzOffset>,
     ) -> KafkaSourceInfo {
         let KafkaSourceConnector {
             addrs,
@@ -238,20 +234,7 @@ impl KafkaSourceInfo {
             .create_with_context(GlueConsumerContext(consumer_activator))
             .expect("Failed to create Kafka Consumer");
 
-        let start_offsets = start_offsets
-            .iter()
-            .map(|(k, v)| {
-                let key = if let PartitionId::Kafka(pid) = k {
-                    *pid
-                } else {
-                    panic!("received unexpected partition id type for kafka source")
-                };
-
-                let value = v.offset - 1;
-
-                (key, value)
-            })
-            .collect();
+        let start_offsets = kc.start_offsets.iter().map(|(k, v)| (*k, v - 1)).collect();
 
         KafkaSourceInfo {
             topic_name: topic,
