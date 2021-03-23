@@ -554,6 +554,14 @@ pub const MZ_MESSAGE_COUNTS: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3029),
 };
 
+pub const MZ_KAFKA_CONSUMER_STATISTICS: BuiltinLog = BuiltinLog {
+    name: "mz_kafka_consumer_statistics",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo),
+    id: GlobalId::System(3030),
+    index_id: GlobalId::System(3031),
+};
+
 lazy_static! {
     pub static ref MZ_VIEW_KEYS: BuiltinTable = BuiltinTable {
         name: "mz_view_keys",
@@ -1271,6 +1279,7 @@ lazy_static! {
             Builtin::Log(&MZ_PEEK_DURATIONS),
             Builtin::Log(&MZ_SOURCE_INFO),
             Builtin::Log(&MZ_MESSAGE_COUNTS),
+            Builtin::Log(&MZ_KAFKA_CONSUMER_STATISTICS),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
             Builtin::Table(&MZ_KAFKA_SINKS),

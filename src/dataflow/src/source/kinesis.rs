@@ -24,6 +24,7 @@ use timely::scheduling::SyncActivator;
 use dataflow_types::{DataEncoding, ExternalSourceConnector, KinesisSourceConnector, MzOffset};
 use expr::{PartitionId, SourceInstanceId};
 
+use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 lazy_static! {
@@ -101,6 +102,7 @@ impl SourceReader<Vec<u8>> for KinesisSourceReader {
         _consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         _encoding: DataEncoding,
+        _: Option<Logger>,
     ) -> Result<(Self, Option<PartitionId>), anyhow::Error> {
         let kc = match connector {
             ExternalSourceConnector::Kinesis(kc) => kc,

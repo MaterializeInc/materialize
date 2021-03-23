@@ -301,6 +301,7 @@ mz_arrangement_sizes
 mz_dataflow_channels
 mz_dataflow_operator_addresses
 mz_dataflow_operators
+mz_kafka_consumer_statistics
 mz_materialization_dependencies
 mz_materializations
 mz_message_counts
@@ -320,6 +321,7 @@ mz_arrangement_sizes                 system true
 mz_dataflow_channels                 system true
 mz_dataflow_operator_addresses       system true
 mz_dataflow_operators                system true
+mz_kafka_consumer_statistics         system true
 mz_materialization_dependencies      system true
 mz_materializations                  system true
 mz_message_counts                    system true
@@ -388,7 +390,7 @@ SHOW EXTENDED TABLES not yet supported
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-36
+37
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

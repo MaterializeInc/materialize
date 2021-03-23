@@ -35,6 +35,7 @@ use aws_util::aws;
 use dataflow_types::{Compression, DataEncoding, ExternalSourceConnector, MzOffset, S3KeySource};
 use expr::{PartitionId, SourceInstanceId};
 
+use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 use self::metrics::ScanBucketMetrics;
@@ -600,6 +601,7 @@ impl SourceReader<Vec<u8>> for S3SourceReader {
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         _encoding: DataEncoding,
+        _: Option<Logger>,
     ) -> Result<(S3SourceReader, Option<PartitionId>), anyhow::Error> {
         let s3_conn = match connector {
             ExternalSourceConnector::S3(s3_conn) => s3_conn,
