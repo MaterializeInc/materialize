@@ -43,7 +43,7 @@ struct Config {
     name: &'static str,
     val_type: ValType,
     transform: fn(String) -> String,
-    default: fn() -> Option<String>,
+    default: Option<String>,
 }
 
 impl Config {
@@ -52,7 +52,7 @@ impl Config {
             name,
             val_type,
             transform: convert::identity,
-            default: || -> Option<String> { None },
+            default: None,
         }
     }
 
@@ -74,8 +74,8 @@ impl Config {
     }
 
     // Allows for returning a default value for this configuration option
-    fn default(mut self, f: fn() -> Option<String>) -> Self {
-        self.default = f;
+    fn set_default(mut self, d: Option<String>) -> Self {
+        self.default = d;
         self
     }
 
@@ -115,8 +115,8 @@ fn extract(
                 Ok(v) => v,
                 Err(e) => bail!("Invalid WITH option {}={}: {}", config.name, v, e),
             },
-            None => match (config.default)() {
-                Some(v) => v,
+            None => match &config.default {
+                Some(v) => v.to_string(),
                 None => {
                     continue;
                 }
@@ -150,7 +150,9 @@ pub fn extract_config(
                 // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 ValType::Number(0, 86_400_000),
             )
-            .default(|| Some(chrono::Duration::seconds(1).num_milliseconds().to_string())),
+            .set_default(Some(
+                chrono::Duration::seconds(1).num_milliseconds().to_string(),
+            )),
             Config::new(
                 "topic_metadata_refresh_interval_ms",
                 // The range of values comes from `topic.metadata.refresh.interval.ms` in
