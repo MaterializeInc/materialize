@@ -315,7 +315,7 @@ pub fn construct<A: Allocate>(
             move |((consumer_name, source_id, partition_id), diff_vector)| {
                 row_packer.pack(&[
                     Datum::String(&consumer_name),
-                    Datum::String(&source_id.to_string()),
+                    Datum::String(&source_id.source_id.to_string()),
                     Datum::String(&partition_id),
                     Datum::Int64(diff_vector[0]),
                     Datum::Int64(diff_vector[1]),
