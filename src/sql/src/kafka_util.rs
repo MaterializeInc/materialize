@@ -38,7 +38,7 @@ enum ValType {
 
 // Describes Kafka cluster configurations users can suppply using `CREATE
 // SOURCE...WITH (option_list)`.
-// TODO(sploiselle): Support overriding keys, default values.
+// TODO(sploiselle): Support overriding keys.
 struct Config {
     name: &'static str,
     val_type: ValType,
