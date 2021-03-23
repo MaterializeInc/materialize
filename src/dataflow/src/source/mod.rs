@@ -28,7 +28,7 @@ use timely::dataflow::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError};
-use expr::{GlobalId, PartitionId, SourceInstanceId};
+use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
 use log::{debug, error, trace};
 use prometheus::core::{AtomicI64, AtomicU64};
@@ -438,15 +438,49 @@ impl<Out> fmt::Debug for SourceMessage<Out> {
     }
 }
 
-/// Consistency information. Each partition contains information about
-/// 1) the last closed timestamp for this partition
-/// 2) the last processed offset
+/// Per-partition consistency information.
 #[derive(Copy, Clone)]
-pub struct ConsInfo {
-    /// the last closed timestamp for this partition
-    pub ts: Timestamp,
+struct ConsInfo {
+    /// The timestamp we are currently aware of. This timestamp is open iff
+    /// offset < current_upper_bound and closed otherwise.
+    current_ts: Timestamp,
+    /// Current upper bound for the current timestamp. All offsets <= upper_bound
+    /// are assigned to current_ts.
+    current_upper_bound: MzOffset,
     /// the last processed offset
-    pub offset: MzOffset,
+    offset: MzOffset,
+}
+
+impl ConsInfo {
+    fn new(timestamp: Timestamp) -> Self {
+        Self {
+            current_ts: timestamp,
+            current_upper_bound: MzOffset { offset: 0 },
+            offset: MzOffset { offset: 0 },
+        }
+    }
+
+    fn update_timestamp(&mut self, timestamp: Timestamp, upper: MzOffset) {
+        assert!(timestamp >= self.current_ts);
+        assert!(upper >= self.current_upper_bound);
+
+        self.current_upper_bound = upper;
+        self.current_ts = timestamp;
+    }
+
+    fn update_offset(&mut self, offset: MzOffset) {
+        assert!(offset >= self.offset);
+        assert!(offset <= self.current_upper_bound);
+        self.offset = offset;
+    }
+
+    fn get_closed_timestamp(&self) -> Timestamp {
+        if self.current_ts == 0 || self.current_upper_bound == self.offset {
+            return self.current_ts;
+        }
+
+        self.current_ts - 1
+    }
 }
 
 /// Contains all necessary information that relates to consistency and timestamping.
@@ -463,13 +497,13 @@ pub struct ConsistencyInfo {
     /// and the last closed timestamp.
     /// Note that we only keep track of partitions this worker is responsible for in this
     /// hashmap.
-    pub partition_metadata: HashMap<PartitionId, ConsInfo>,
+    partition_metadata: HashMap<PartitionId, ConsInfo>,
     /// Source Type (Real-time or BYO)
     source_type: Consistency,
     /// Per-source Prometheus metrics.
     source_metrics: SourceMetrics,
     /// source global id
-    source_global_id: GlobalId,
+    source_id: SourceInstanceId,
     /// True if this worker is the active reader
     active: bool,
     /// id of worker
@@ -503,7 +537,7 @@ impl ConsistencyInfo {
             ),
             // we have never downgraded, so make sure the initial value is outside of our frequency
             time_since_downgrade: Instant::now() - timestamp_frequency - Duration::from_secs(1),
-            source_global_id: source_id.source_id,
+            source_id,
             active,
             worker_id,
             worker_count,
@@ -525,7 +559,7 @@ impl ConsistencyInfo {
 
                 // We keep only 32 bits of randomness from `hashed` to prevent 64 bit
                 // overflow.
-                let hash = (self.source_global_id.hashed() >> 32) + *p as u64;
+                let hash = (self.source_id.source_id.hashed() >> 32) + *p as u64;
                 (hash % self.worker_count as u64) == self.worker_id as u64
             }
         }
@@ -533,20 +567,27 @@ impl ConsistencyInfo {
 
     /// Returns true if we currently know of particular partition. We know (and have updated the
     /// metadata for this partition) if there is an entry for it
-    pub fn knows_of(&self, pid: &PartitionId) -> bool {
+    fn knows_of(&self, pid: &PartitionId) -> bool {
         self.partition_metadata.contains_key(pid)
     }
 
-    /// Updates the underlying partition metadata structure to include the current partition.
-    /// New partitions must always be added with a minimum closed offset of (last_closed_ts)
-    /// They are guaranteed to only receive timestamp update greater than last_closed_ts (this
-    /// is enforced in `coord::timestamp::is_ts_valid`.
-    pub fn update_partition_metadata(&mut self, pid: &PartitionId) {
-        let cons_info = ConsInfo {
-            offset: MzOffset { offset: 0 },
-            ts: self.last_closed_ts,
-        };
-        self.partition_metadata.insert(pid.clone(), cons_info);
+    /// Start tracking consistency information and metrics for `pid`.
+    ///
+    /// Need to call this together with `SourceReader::add_partition` before we
+    /// ingest from `pid`.
+    fn add_partition(&mut self, pid: &PartitionId) {
+        if self.partition_metadata.contains_key(pid) {
+            error!("Incorrectly attempting to add a partition twice for source: {} partion: {}. Ignoring",
+                   self.source_id,
+                   pid
+            );
+
+            return;
+        }
+
+        self.partition_metadata
+            .insert(pid.clone(), ConsInfo::new(self.last_closed_ts));
+        self.source_metrics.add_partition(pid);
     }
 
     /// Generates a timestamp that is guaranteed to be monotonically increasing.
@@ -603,7 +644,7 @@ impl ConsistencyInfo {
         source: &mut dyn SourceReader<Out>,
         timestamp_histories: &TimestampDataUpdates,
     ) {
-        let mut min_closed_timestamp_unowned_partitions: Option<Timestamp> = None;
+        let mut min: Option<Timestamp> = None;
 
         if let Consistency::BringYourOwn(_) = self.source_type {
             // Determine which timestamps have been closed. A timestamp is closed once we have processed
@@ -620,56 +661,40 @@ impl ConsistencyInfo {
                         for (pid, entries) in entries {
                             if !self.knows_of(pid) && self.responsible_for(pid) {
                                 source.add_partition(pid.clone());
-                                self.update_partition_metadata(pid);
-                                self.source_metrics.add_partition(pid);
+                                self.add_partition(pid);
                             }
 
-                            if !self.partition_metadata.contains_key(pid) {
+                            //  We need to determine the maximum timestamp that is fully closed. This corresponds to the minimum of
+                            //  * closed timestamps across all partitions we own
+                            //  * maximum bound timestamps across all partitions we don't own.
+                            if !self.knows_of(pid) {
                                 // We need to grab the min closed (max) timestamp from partitions we
                                 // don't own.
 
                                 if let Some((timestamp, _)) = entries.back() {
-                                    min_closed_timestamp_unowned_partitions =
-                                        match min_closed_timestamp_unowned_partitions.as_mut() {
-                                            Some(min) => Some(std::cmp::min(*timestamp, *min)),
-                                            None => Some(*timestamp),
-                                        };
+                                    min = match min.as_mut() {
+                                        Some(min) => Some(std::cmp::min(*timestamp, *min)),
+                                        None => Some(*timestamp),
+                                    };
                                 }
+                            } else {
+                                let closed_ts = self
+                                    .partition_metadata
+                                    .get(pid)
+                                    .expect("partition known to exist")
+                                    .get_closed_timestamp();
+                                let metrics = self
+                                    .source_metrics
+                                    .partition_metrics
+                                    .get_mut(pid)
+                                    .expect("partition known to exist");
 
-                                continue;
-                            }
+                                metrics.closed_ts.set(closed_ts);
 
-                            let existing_ts = self.partition_metadata.get(pid).unwrap().ts;
-                            // Check whether timestamps can be closed on this partition
-
-                            // TODO(rkhaitan): this code performs a linear scan through the full
-                            // set of timestamp bindings to find a match every time. This is
-                            // clearly suboptimal and can be improved upon with a better
-                            // API for sources to interact with timestamp binding information.
-                            for (ts, offset) in entries {
-                                if existing_ts >= *ts {
-                                    //skip old records
-                                    continue;
-                                }
-                                assert!(
-                                    *ts > 0,
-                                    "Internal error! Received a zero-timestamp. Materialize will crash now."
-                                );
-
-                                if let Some(pmetrics) =
-                                    self.source_metrics.partition_metrics.get_mut(pid)
-                                {
-                                    pmetrics
-                                        .closed_ts
-                                        .set(self.partition_metadata.get(pid).unwrap().ts);
-                                }
-
-                                let cons_info = self.partition_metadata.get_mut(pid).unwrap();
-                                if cons_info.offset >= *offset {
-                                    cons_info.ts = *ts;
-                                } else {
-                                    break;
-                                }
+                                min = match min.as_mut() {
+                                    Some(min) => Some(std::cmp::min(closed_ts, *min)),
+                                    None => Some(closed_ts),
+                                };
                             }
                         }
                     }
@@ -677,24 +702,7 @@ impl ConsistencyInfo {
                 }
             }
 
-            //  Next, we determine the maximum timestamp that is fully closed. This corresponds to the minimum of
-            //  * closed timestamps across all partitions we own
-            //  * maximum bound timestamps across all partitions we don't own.
-            let min_closed_timestamp_owned_partitions = self
-                .partition_metadata
-                .iter()
-                .map(|(_, cons_info)| cons_info.ts)
-                .min();
-
-            let min = match (
-                min_closed_timestamp_owned_partitions,
-                min_closed_timestamp_unowned_partitions,
-            ) {
-                (None, None) => 0,
-                (Some(owned), None) => owned,
-                (None, Some(unowned)) => unowned,
-                (Some(owned), Some(unowned)) => std::cmp::min(owned, unowned),
-            };
+            let min = min.unwrap_or(0);
 
             // Downgrade capability to new minimum open timestamp (which corresponds to min + 1).
             if min > self.last_closed_ts {
@@ -711,8 +719,7 @@ impl ConsistencyInfo {
                         for pid in partitions {
                             if !self.knows_of(pid) && self.responsible_for(pid) {
                                 source.add_partition(pid.clone());
-                                self.update_partition_metadata(pid);
-                                self.source_metrics.add_partition(pid);
+                                self.add_partition(pid);
                             }
                         }
                     }
@@ -740,8 +747,7 @@ impl ConsistencyInfo {
     /// (partition_count, timestamp, offset) tuples. A message with offset x will be assigned the first timestamp
     /// for which offset>=x.
     fn find_matching_timestamp(
-        &self,
-        id: &SourceInstanceId,
+        &mut self,
         partition: &PartitionId,
         offset: MzOffset,
         timestamp_histories: &TimestampDataUpdates,
@@ -750,21 +756,49 @@ impl ConsistencyInfo {
             // Simply assign to this message the next timestamp that is not closed
             Some(self.find_matching_rt_timestamp())
         } else {
-            // The source is a BYO source. Must check the list of timestamp updates for the given partition
-            match timestamp_histories.borrow().get(&id.source_id) {
-                None => None,
-                Some(TimestampDataUpdate::BringYourOwn(entries)) => match entries.get(partition) {
-                    Some(entries) => {
+            // The source is a BYO source. We either can take a fast path, where we simply re-use the currently
+            // available timestamp binding, or if one isn't available for `offset` in `partition`, we have to
+            // look it up from the set of timestamp histories
+
+            // This is the slow path code - we either don't have a timestamp binding
+            // available or have moved past the one we previously had. In either case,
+            // we need to search through the available timestamp bindings to find the
+            // earliest one that can apply to offset.
+
+            let source_global_id = self.source_id.source_id;
+            let update_cons_info = |cons_info: &mut ConsInfo| {
+                if let Some(TimestampDataUpdate::BringYourOwn(entries)) =
+                    timestamp_histories.borrow().get(&source_global_id)
+                {
+                    if let Some(entries) = entries.get(partition) {
                         for (ts, max_offset) in entries {
                             if offset <= *max_offset {
-                                return Some(ts.clone());
+                                cons_info.update_timestamp(*ts, *max_offset);
+                                cons_info.update_offset(offset);
+
+                                return Some(*ts);
                             }
                         }
-                        None
                     }
-                    None => None,
-                },
-                _ => panic!("Unexpected entry format in TimestampDataUpdates for BYO source"),
+                }
+
+                return None;
+            };
+
+            // We know we will only read from partitions already assigned to this
+            // worker.
+            let cons_info = self
+                .partition_metadata
+                .get_mut(partition)
+                .expect("known to exist");
+
+            if cons_info.current_upper_bound >= offset {
+                // This is the fast path - we can reuse a timestamp binding
+                // we already know about.
+                cons_info.update_offset(offset);
+                Some(cons_info.current_ts)
+            } else {
+                update_cons_info(cons_info)
             }
         }
     }
@@ -1272,8 +1306,7 @@ where
             ) {
                 Ok((source_reader, partition)) => {
                     if let Some(pid) = partition {
-                        consistency_info.source_metrics.add_partition(&pid);
-                        consistency_info.update_partition_metadata(&pid);
+                        consistency_info.add_partition(&pid);
                     }
 
                     Some(source_reader)
@@ -1487,8 +1520,7 @@ where
         .set(offset.offset);
 
     // Determine the timestamp to which we need to assign this message
-    let ts =
-        consistency_info.find_matching_timestamp(&id, &partition, offset, &timestamp_histories);
+    let ts = consistency_info.find_matching_timestamp(&partition, offset, &timestamp_histories);
     match ts {
         None => {
             // We have not yet decided on a timestamp for this message,
@@ -1505,11 +1537,6 @@ where
             // Entry for partition_metadata is guaranteed to exist as messages
             // are only processed after we have updated the partition_metadata for a
             // partition and created a partition queue for it.
-            consistency_info
-                .partition_metadata
-                .get_mut(&partition)
-                .unwrap()
-                .offset = offset;
             *bytes_read += key.len();
             *bytes_read += out.len().unwrap_or(0);
             let ts_cap = cap.delayed(&ts);
