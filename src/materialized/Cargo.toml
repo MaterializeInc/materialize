@@ -27,7 +27,7 @@ conflicts = "materialized"
 name = "materialized-unstable"
 
 [dependencies]
-anyhow = "1.0.38"
+anyhow = "1.0.39"
 askama = { version = "0.10.5", features = ["serde-json"] }
 async-trait = "0.1.48"
 atty = "0.2.14"
@@ -54,7 +54,7 @@ log = "0.4.13"
 mz-process-collector = { path = "../mz-process-collector" }
 nix = "0.19.1"
 num_cpus = "1.0.0"
-openssl = { version = "0.10.32", features = ["vendored"] }
+openssl = { version = "0.10.33", features = ["vendored"] }
 openssl-sys = { version = "0.9.61", features = ["vendored"] }
 ore = { path = "../ore" }
 os_info = "3.0.1"
@@ -64,7 +64,7 @@ prof = { path = "../prof", features = ["auto-jemalloc"] }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rdkafka-sys = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 repr = { path = "../repr" }
-reqwest = { version = "0.11.1", features = ["json"] }
+reqwest = { version = "0.11.2", features = ["json"] }
 rlimit = "0.5.4"
 semver = "0.11.0"
 serde = { version = "1.0.124", features = ["derive"] }
@@ -78,7 +78,7 @@ tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.4.0", features = ["sync"] }
 tokio-openssl = "0.6.1"
-tokio-stream = { version = "0.1.4", features = ["net"] }
+tokio-stream = { version = "0.1.5", features = ["net"] }
 tracing = "0.1.25"
 # TODO(benesch): we can use the default features here once tracing-subscriber
 # does not enable chrono's "oldtime" feature.
@@ -110,16 +110,16 @@ postgres-protocol = "0.6.0"
 postgres_array = "0.11.0"
 predicates = "1.0.7"
 repr = { path = "../repr" }
-reqwest = { version = "0.11.1", features = ["blocking"] }
+reqwest = { version = "0.11.2", features = ["blocking"] }
 serde_json = "1.0.64"
 tokio-postgres = { version = "0.7.0", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.38"
+anyhow = "1.0.39"
 flate2 = "1.0.20"
 hex = "0.4.3"
 hex-literal = "0.3.1"
-reqwest = { version = "0.11.1", features = ["blocking"] }
+reqwest = { version = "0.11.2", features = ["blocking"] }
 sha2 = "0.9.3"
 tar = "0.4.33"
 walkdir = "2.3.1"

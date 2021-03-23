@@ -39,6 +39,9 @@ pub struct PreviousStats {
     rxbytes: i64,
     txmsgs: i64,
     txbytes: i64,
+    lo_offset: i64,
+    hi_offset: i64,
+    ls_offset: i64,
     app_offset: i64,
     consumer_lag: i64,
 }
@@ -158,6 +161,9 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
                         rxbytes: partition_stats.rxbytes - part.previous_stats.rxbytes,
                         txmsgs: partition_stats.txmsgs - part.previous_stats.txmsgs,
                         txbytes: partition_stats.txbytes - part.previous_stats.txbytes,
+                        lo_offset: partition_stats.lo_offset - part.previous_stats.lo_offset,
+                        hi_offset: partition_stats.hi_offset - part.previous_stats.hi_offset,
+                        ls_offset: partition_stats.ls_offset - part.previous_stats.ls_offset,
                         app_offset: partition_stats.app_offset - part.previous_stats.app_offset,
                         consumer_lag: partition_stats.consumer_lag
                             - part.previous_stats.consumer_lag,
@@ -167,6 +173,9 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
                     part.previous_stats.rxbytes = partition_stats.rxbytes;
                     part.previous_stats.txmsgs = partition_stats.txmsgs;
                     part.previous_stats.txbytes = partition_stats.txbytes;
+                    part.previous_stats.lo_offset = partition_stats.lo_offset;
+                    part.previous_stats.hi_offset = partition_stats.hi_offset;
+                    part.previous_stats.ls_offset = partition_stats.ls_offset;
                     part.previous_stats.app_offset = partition_stats.app_offset;
                     part.previous_stats.consumer_lag = partition_stats.consumer_lag;
                 }
@@ -421,6 +430,9 @@ impl Drop for KafkaSourceReader {
                         rxbytes: -part.previous_stats.rxbytes,
                         txmsgs: -part.previous_stats.txmsgs,
                         txbytes: -part.previous_stats.txbytes,
+                        lo_offset: -part.previous_stats.lo_offset,
+                        hi_offset: -part.previous_stats.hi_offset,
+                        ls_offset: -part.previous_stats.ls_offset,
                         app_offset: -part.previous_stats.app_offset,
                         consumer_lag: -part.previous_stats.consumer_lag,
                     });

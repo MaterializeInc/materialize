@@ -63,6 +63,18 @@ b  sum
 > SELECT count(*) FROM mz_kafka_consumer_statistics where tx_bytes = 0
 1
 
+# Lo Offset should not exceed Hi offset
+> SELECT count(*) FROM mz_kafka_consumer_statistics where lo_offset > hi_offset
+0
+
+# Lo Offset should not exceed Ls offset
+> SELECT count(*) FROM mz_kafka_consumer_statistics where lo_offset > ls_offset
+0
+
+# Ls Offset should not exceed Hi Offset
+> SELECT count(*) FROM mz_kafka_consumer_statistics where ls_offset > hi_offset
+0
+
 # We should have read 4 records
 > SELECT count(*) FROM mz_kafka_consumer_statistics where app_offset = 4
 1
@@ -70,6 +82,18 @@ b  sum
 # And we should not be lagging
 > SELECT count(*) FROM mz_kafka_consumer_statistics where consumer_lag = 0
 1
+
+# If we change the message encoding and/or the broker version, these results may change
+> SELECT partition_id, rx_msgs, rx_bytes, tx_msgs, tx_bytes, lo_offset, hi_offset, ls_offset, app_offset, consumer_lag FROM mz_kafka_consumer_statistics;
+partition_id  rx_msgs  rx_bytes  tx_msgs  tx_bytes  lo_offset  hi_offset  ls_offset  app_offset  consumer_lag
+-------------------------------------------------------------------------------------------------------------
+0  4  28  0  0  0  4  4  4 0
+
+# Verify that we can join against mz_source_info
+> SELECT mz_kafka_consumer_statistics.rx_msgs FROM mz_kafka_consumer_statistics INNER JOIN mz_source_info USING (source_id, dataflow_id, partition_id) WHERE mz_source_info.source_name like 'kafka-%%';
+rx_msgs
+-------
+4
 
 # Drop the sources and verify that metrics have been removed
 > DROP VIEW test1
