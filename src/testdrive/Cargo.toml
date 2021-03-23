@@ -10,7 +10,7 @@ async-compression = { version = "0.3.7", features = [ "tokio", "gzip" ] }
 async-trait = "0.1.48"
 atty = "0.2.0"
 aws-util = { path = "../aws-util" }
-byteorder = "1.4.2"
+byteorder = "1.4.3"
 bytes = "1.0.1"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }

@@ -14,7 +14,7 @@ harness = false
 anyhow = "1.0.38"
 avro-derive = { path = "../avro-derive" }
 base64 = "0.13.0"
-byteorder = "1.4.2"
+byteorder = "1.4.3"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 dec = "0.3.3"
