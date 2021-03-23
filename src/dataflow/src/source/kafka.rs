@@ -572,7 +572,6 @@ impl ClientContext for GlueConsumerContext {
             .send(statistics)
             .expect("timely operator hung up while Kafka source active");
         self.activate();
-        // info!("Client stats: {:#?}", statistics);
     }
 }
 
