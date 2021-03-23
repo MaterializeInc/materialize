@@ -63,6 +63,18 @@ b  sum
 > SELECT count(*) FROM mz_kafka_consumer_statistics where tx_bytes = 0
 1
 
+# Lo Offset should not exceed Hi offset
+> SELECT count(*) FROM mz_kafka_consumer_statistics where lo_offset > hi_offset
+0
+
+# Lo Offset should not exceed Ls offset
+> SELECT count(*) FROM mz_kafka_consumer_statistics where lo_offset > ls_offset
+0
+
+# Ls Offset should not exceed Hi Offset
+> SELECT count(*) FROM mz_kafka_consumer_statistics where ls_offset > hi_offset
+0
+
 # We should have read 4 records
 > SELECT count(*) FROM mz_kafka_consumer_statistics where app_offset = 4
 1

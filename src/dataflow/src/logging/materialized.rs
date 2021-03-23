@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use differential_dataflow::difference::DiffPair;
+use differential_dataflow::difference::{DiffPair, DiffVector};
 use differential_dataflow::operators::count::CountTotal;
 use log::error;
 use timely::communication::Allocate;
@@ -56,6 +56,12 @@ pub enum MaterializedEvent {
         txmsgs: i64,
         /// Number of bytes transmitted to Brokers
         txbytes: i64,
+        /// Partition's low watermark offset on the broker
+        lo_offset: i64,
+        /// Partition's high watermark offset on the broker
+        hi_offset: i64,
+        /// Last stable offset on the broker
+        ls_offset: i64,
         /// How far into the topic our consumer has read
         app_offset: i64,
         /// How many messages remain until our consumer reaches the (hi|lo) watermark
@@ -221,19 +227,26 @@ pub fn construct<A: Allocate>(
                                 rxbytes,
                                 txmsgs,
                                 txbytes,
+                                lo_offset,
+                                hi_offset,
+                                ls_offset,
                                 app_offset,
                                 consumer_lag,
                             } => {
                                 kafka_consumer_info_session.give((
                                     (consumer_name, source_id, partition_id),
                                     time_ms,
-                                    DiffPair::new(
-                                        DiffPair::new(
-                                            DiffPair::new(rxmsgs, rxbytes),
-                                            DiffPair::new(txmsgs, txbytes),
-                                        ),
-                                        DiffPair::new(app_offset, consumer_lag),
-                                    ),
+                                    DiffVector::new(vec![
+                                        rxmsgs,
+                                        rxbytes,
+                                        txmsgs,
+                                        txbytes,
+                                        lo_offset,
+                                        hi_offset,
+                                        ls_offset,
+                                        app_offset,
+                                        consumer_lag,
+                                    ]),
                                 ));
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
@@ -299,17 +312,20 @@ pub fn construct<A: Allocate>(
         use differential_dataflow::operators::Count;
         let kafka_consumer_info_current = kafka_consumer_info.as_collection().count().map({
             let mut row_packer = repr::RowPacker::new();
-            move |((consumer_name, source_id, partition_id), pairs)| {
+            move |((consumer_name, source_id, partition_id), diff_vector)| {
                 row_packer.pack(&[
                     Datum::String(&consumer_name),
                     Datum::String(&source_id.to_string()),
                     Datum::String(&partition_id),
-                    Datum::Int64(pairs.element1.element1.element1),
-                    Datum::Int64(pairs.element1.element1.element2),
-                    Datum::Int64(pairs.element1.element2.element1),
-                    Datum::Int64(pairs.element1.element2.element2),
-                    Datum::Int64(pairs.element2.element1),
-                    Datum::Int64(pairs.element2.element2),
+                    Datum::Int64(diff_vector[0]),
+                    Datum::Int64(diff_vector[1]),
+                    Datum::Int64(diff_vector[2]),
+                    Datum::Int64(diff_vector[3]),
+                    Datum::Int64(diff_vector[4]),
+                    Datum::Int64(diff_vector[5]),
+                    Datum::Int64(diff_vector[6]),
+                    Datum::Int64(diff_vector[7]),
+                    Datum::Int64(diff_vector[8]),
                 ])
             }
         });

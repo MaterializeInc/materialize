@@ -171,6 +171,9 @@ impl LogVariant {
                 .with_column("rx_bytes", ScalarType::Int64.nullable(false))
                 .with_column("tx_msgs", ScalarType::Int64.nullable(false))
                 .with_column("tx_bytes", ScalarType::Int64.nullable(false))
+                .with_column("lo_offset", ScalarType::Int64.nullable(false))
+                .with_column("hi_offset", ScalarType::Int64.nullable(false))
+                .with_column("ls_offset", ScalarType::Int64.nullable(false))
                 .with_column("app_offset", ScalarType::Int64.nullable(false))
                 .with_column("consumer_lag", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
