@@ -279,6 +279,7 @@ pub(crate) trait SourceReader<Out> {
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         encoding: DataEncoding,
+        logger: Option<Logger>,
     ) -> Result<(Self, Option<PartitionId>), anyhow::Error>
     where
         Self: Sized;
@@ -1267,6 +1268,7 @@ where
                 scope.sync_activator_for(&info.address[..]),
                 source_connector.clone(),
                 encoding,
+                logger,
             ) {
                 Ok((source_reader, partition)) => {
                     if let Some(pid) = partition {

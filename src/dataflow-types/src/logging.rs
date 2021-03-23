@@ -52,6 +52,7 @@ pub enum MaterializedLog {
     DataflowCurrent,
     DataflowDependency,
     FrontierCurrent,
+    KafkaConsumerInfo,
     PeekCurrent,
     PeekDuration,
     SourceInfo,
@@ -162,6 +163,22 @@ impl LogVariant {
                 .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false)),
 
+            LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo) => RelationDesc::empty()
+                .with_column("consumer_name", ScalarType::String.nullable(false))
+                .with_column("source_id", ScalarType::String.nullable(false))
+                .with_column("dataflow_id", ScalarType::Int64.nullable(false))
+                .with_column("partition_id", ScalarType::String.nullable(false))
+                .with_column("rx_msgs", ScalarType::Int64.nullable(false))
+                .with_column("rx_bytes", ScalarType::Int64.nullable(false))
+                .with_column("tx_msgs", ScalarType::Int64.nullable(false))
+                .with_column("tx_bytes", ScalarType::Int64.nullable(false))
+                .with_column("lo_offset", ScalarType::Int64.nullable(false))
+                .with_column("hi_offset", ScalarType::Int64.nullable(false))
+                .with_column("ls_offset", ScalarType::Int64.nullable(false))
+                .with_column("app_offset", ScalarType::Int64.nullable(false))
+                .with_column("consumer_lag", ScalarType::Int64.nullable(false))
+                .with_key(vec![0, 1, 2]),
+
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
                 .with_column("uuid", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false))
@@ -219,6 +236,10 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => vec![],
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => vec![],
+            LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo) => vec![(
+                LogVariant::Materialized(MaterializedLog::SourceInfo),
+                vec![(1, 1), (2, 2), (3, 3)],
+            )],
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::SourceInfo) => vec![],
             LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],

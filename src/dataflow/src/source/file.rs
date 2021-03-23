@@ -26,6 +26,7 @@ use expr::{PartitionId, SourceInstanceId};
 use mz_avro::types::Value;
 use mz_avro::{AvroRead, Schema, Skip};
 
+use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 /// Contains all information necessary to ingest data from file sources (either
@@ -63,6 +64,7 @@ impl SourceReader<Value> for FileSourceReader<Value> {
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         encoding: DataEncoding,
+        _: Option<Logger>,
     ) -> Result<(FileSourceReader<Value>, Option<PartitionId>), anyhow::Error> {
         let receiver = match connector {
             ExternalSourceConnector::AvroOcf(oc) => {
@@ -139,6 +141,7 @@ impl SourceReader<Vec<u8>> for FileSourceReader<Vec<u8>> {
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
         _: DataEncoding,
+        _: Option<Logger>,
     ) -> Result<(FileSourceReader<Vec<u8>>, Option<PartitionId>), anyhow::Error> {
         let receiver = match connector {
             ExternalSourceConnector::File(fc) => {
