@@ -6,6 +6,8 @@ skip = [
 
     # Waiting for clap to upgrade to v0.12.
     { name = "ansi_term", version = "0.11.0" },
+    # Waiting for clap to upgrade to v0.10.
+    { name = "strsim", version = "0.8.0" },
 
     # Waiting on:
     #   - Upgrade to rand v0.8.
@@ -47,6 +49,7 @@ private = { ignore = true }
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
+    "https://github.com/MaterializeInc/pubnub-rust.git",
     "https://github.com/MaterializeInc/rust-prometheus.git",
     "https://github.com/MaterializeInc/serde-protobuf.git",
     "https://github.com/TimelyDataflow/timely-dataflow",

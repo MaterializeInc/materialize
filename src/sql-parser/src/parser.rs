@@ -1698,7 +1698,18 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_connector(&mut self) -> Result<Connector<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES])? {
+        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
+            PUBNUB => {
+                self.expect_keywords(&[SUBSCRIBE, KEY])?;
+                let subscribe_key = self.parse_literal_string()?;
+                self.expect_keyword(CHANNEL)?;
+                let channel = self.parse_literal_string()?;
+
+                Ok(Connector::PubNub {
+                    subscribe_key,
+                    channel,
+                })
+            }
             POSTGRES => {
                 self.expect_keyword(HOST)?;
                 let conn = self.parse_literal_string()?;
