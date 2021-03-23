@@ -133,7 +133,7 @@ mod tests {
 
     use anyhow::{anyhow, bail, Error};
 
-    use expr::explain::Explanation;
+    use expr::explain::ViewExplanation;
     use expr::{
         DummyHumanizer, ExprHumanizer, GlobalId, Id, JoinImplementation, LocalId, MirRelationExpr,
         MirScalarExpr,
@@ -502,7 +502,7 @@ mod tests {
         cat: &TestCatalog,
         format: Option<&Vec<String>>,
     ) -> String {
-        let mut explanation = Explanation::new(rel, cat);
+        let mut explanation = ViewExplanation::new(rel, cat);
         if let Some(format) = format {
             if format.contains(&"types".to_string()) {
                 explanation.explain_types();

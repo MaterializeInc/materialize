@@ -16,7 +16,9 @@
 pub mod logging;
 
 mod errors;
+mod explain;
 mod types;
 
 pub use errors::*;
+pub use explain::Explanation;
 pub use types::*;

@@ -2727,7 +2727,8 @@ impl Coordinator {
             }
             ExplainStage::DecorrelatedPlan => {
                 let catalog = self.catalog.for_session(session);
-                let mut explanation = expr::explain::Explanation::new(&decorrelated_plan, &catalog);
+                let mut explanation =
+                    dataflow_types::Explanation::new(&decorrelated_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2741,7 +2742,7 @@ impl Coordinator {
                     .prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?
                     .into_inner();
                 let catalog = self.catalog.for_session(session);
-                let mut explanation = expr::explain::Explanation::new(&optimized_plan, &catalog);
+                let mut explanation = dataflow_types::Explanation::new(&optimized_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2762,23 +2763,8 @@ impl Coordinator {
                 );
                 transform::optimize_dataflow(&mut dataflow);
                 let catalog = self.catalog.for_session(session);
-                let mut explanation = expr::explain::Explanation::new_from_dataflow(
-                    dataflow
-                        .source_imports
-                        .iter()
-                        .filter_map(|(id, source_desc)| {
-                            if let Some(operator) = &source_desc.0.operators {
-                                Some((*id, &operator.predicates, &operator.projection))
-                            } else {
-                                None
-                            }
-                        }),
-                    dataflow
-                        .objects_to_build
-                        .iter()
-                        .map(|build_desc| (build_desc.id, build_desc.relation_expr.as_ref())),
-                    &catalog,
-                );
+                let mut explanation =
+                    dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
