@@ -29,6 +29,7 @@ lazy_static! {
     static ref SOURCE_COUNT_FILE: UIntGauge = SOURCES.with_label_values(&["file"]);
     static ref SOURCE_COUNT_KAFKA: UIntGauge = SOURCES.with_label_values(&["kafka"]);
     static ref SOURCE_COUNT_KINESIS: UIntGauge = SOURCES.with_label_values(&["kinesis"]);
+    static ref SOURCE_COUNT_PUBNUB: UIntGauge = SOURCES.with_label_values(&["pubnub"]);
     static ref SOURCE_COUNT_POSTGRES: UIntGauge = SOURCES.with_label_values(&["postgres"]);
     static ref SOURCE_COUNT_S3: UIntGauge = SOURCES.with_label_values(&["s3"]);
     static ref SOURCE_COUNT_TABLE: UIntGauge = SOURCES.with_label_values(&["table"]);
@@ -61,6 +62,7 @@ pub(super) fn item_created(id: GlobalId, item: &CatalogItem) {
                 ExternalSourceConnector::Kafka(_) => SOURCE_COUNT_KAFKA.inc(),
                 ExternalSourceConnector::Kinesis(_) => SOURCE_COUNT_KINESIS.inc(),
                 ExternalSourceConnector::Postgres(_) => SOURCE_COUNT_POSTGRES.inc(),
+                ExternalSourceConnector::PubNub(_) => SOURCE_COUNT_PUBNUB.inc(),
                 ExternalSourceConnector::S3(_) => SOURCE_COUNT_S3.inc(),
             },
             SourceConnector::Local => {} // nothing interesting to users here
@@ -91,6 +93,7 @@ pub(super) fn item_dropped(id: GlobalId, item: &CatalogItem) {
                 ExternalSourceConnector::Kafka(_) => SOURCE_COUNT_KAFKA.dec(),
                 ExternalSourceConnector::Kinesis(_) => SOURCE_COUNT_KINESIS.dec(),
                 ExternalSourceConnector::Postgres(_) => SOURCE_COUNT_POSTGRES.dec(),
+                ExternalSourceConnector::PubNub(_) => SOURCE_COUNT_PUBNUB.dec(),
                 ExternalSourceConnector::S3(_) => SOURCE_COUNT_S3.dec(),
             },
             SourceConnector::Local => {} // nothing interesting to users here

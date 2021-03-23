@@ -102,6 +102,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
             }
             Connector::Postgres { .. } => (),
+            Connector::PubNub { .. } => (),
         }
 
         purify_format(format, connector, col_names, file, &config_options).await?;
