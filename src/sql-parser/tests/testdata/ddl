@@ -504,6 +504,13 @@ CREATE SOURCE psychic FROM POSTGRES HOST 'host=kanto user=ash password=teamrocke
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connector: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", namespace: "generation1", table: "psychic", columns: [ColumnDef { name: Ident("pokedex_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("evolution"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }] }, with_options: [], format: None, envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
+CREATE SOURCE psychic FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel';
+----
+CREATE SOURCE psychic FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel'
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connector: PubNub { subscribe_key: "subscribe_key", channel: "channel" }, with_options: [], format: None, envelope: None, if_not_exists: false, materialized: false })
+
+parse-statement
 CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' FORMAT BYTES
 ----
 CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' FORMAT BYTES
