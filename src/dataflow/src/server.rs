@@ -710,6 +710,12 @@ where
                             );
                             None
                         }
+                        (ExternalSourceConnector::Pubnub(_), _) => {
+                            log::debug!(
+                                "Pubnub sources do not communicate with the timestamper thread"
+                            );
+                            None
+                        }
                     }
                 } else {
                     log::debug!(

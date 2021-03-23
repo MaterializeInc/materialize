@@ -39,8 +39,8 @@ use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
     DataEncoding, ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder,
     KafkaSourceConnector, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
-    RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector,
-    SourceEnvelope,
+    PubnubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
+    SourceConnector, SourceEnvelope,
 };
 use expr::GlobalId;
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -746,6 +746,18 @@ pub fn plan_create_source(
 
             (connector, DataEncoding::Postgres(desc))
         }
+        Connector::Pubnub {
+            subscribe_key,
+            channel,
+        } => {
+            scx.require_experimental_mode("Pubnub Sources")?;
+            let connector = ExternalSourceConnector::Pubnub(PubnubSourceConnector {
+                subscribe_key: subscribe_key.clone(),
+                channel: channel.clone(),
+            });
+
+            (connector, DataEncoding::Text)
+        }
         Connector::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
                 None => false,
@@ -1280,6 +1292,7 @@ pub fn plan_create_sink(
         Connector::AvroOcf { .. } => None,
         Connector::S3 { .. } => None,
         Connector::Postgres { .. } => None,
+        Connector::Pubnub { .. } => None,
     };
 
     let key_desc_and_indices = key_indices.map(|key_indices| {
@@ -1323,6 +1336,7 @@ pub fn plan_create_sink(
         }
         Connector::S3 { .. } => unsupported!("S3 sinks"),
         Connector::Postgres { .. } => unsupported!("Postgres sinks"),
+        Connector::Pubnub { .. } => unsupported!("Pubnub sinks"),
     };
 
     if !with_options.is_empty() {
