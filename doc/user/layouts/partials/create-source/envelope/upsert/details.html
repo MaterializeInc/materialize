@@ -6,9 +6,10 @@ Materialize. The source is also compatible with Kafka's log-compaction feature,
 and can be useful for users who want to compact
 [CDC sources](https://materialize.com/docs/third-party/debezium/).
 
-While the upsert envelope format is more expressive, it comes with the tradeoffs
-of being slower and more memory intensive to ingest, because processing this format
-requires maintaining state proportional to the number of unique keys.
+While the upsert envelope format is more powerful than the default (append-only)
+envelope format, it makes data ingestion slower and more memory intensive, because
+processing this format requires maintaining state proportional to the number of unique
+keys.
 
 #### Inserts, updates, deletes
 
