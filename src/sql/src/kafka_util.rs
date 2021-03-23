@@ -17,6 +17,7 @@ use std::option::Option;
 use std::sync::Mutex;
 
 use anyhow::bail;
+use chrono;
 use log::{debug, error, info, warn};
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -149,7 +150,7 @@ pub fn extract_config(
                 // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 ValType::Number(0, 86_400_000),
             )
-            .default(|| Some("1000".to_string())),
+            .default(|| Some(chrono::Duration::seconds(1).num_milliseconds().to_string())),
             Config::new(
                 "topic_metadata_refresh_interval_ms",
                 // The range of values comes from `topic.metadata.refresh.interval.ms` in
