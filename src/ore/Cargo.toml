@@ -14,7 +14,7 @@ futures = "0.3.13"
 lazy_static = "1.4.0"
 libc = "0.2.90"
 log = "0.4.13"
-openssl = { version = "0.10.32", features = ["vendored"] }
+openssl = { version = "0.10.33", features = ["vendored"] }
 phf_shared = "0.8.0"
 smallvec = "1.5.0"
 structopt = "0.3.21"
