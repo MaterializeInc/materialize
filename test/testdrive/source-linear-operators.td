@@ -34,5 +34,5 @@ $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
 
 $ set-regex match=u\d+ replacement=UID
 
-> EXPLAIN DATAFLOW FOR SELECT * from data_view where a = 1
+> EXPLAIN PLAN FOR SELECT * from data_view where a = 1
 "Source materialize.public.data (UID):\n| Filter (#0 = 1)\n| Project (#0, #1)\n\nQuery:\n%0 =\n| Get materialize.public.data (UID)\n| Filter (#0 = 1)\n"
