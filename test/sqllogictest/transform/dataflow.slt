@@ -25,14 +25,6 @@ query T multiline
 EXPLAIN PLAN FOR SELECT * from foo3
 ----
 %0 =
-| Get materialize.public.foo3 (u4)
-
-EOF
-
-query T multiline
-EXPLAIN DATAFLOW FOR SELECT * from foo3
-----
-%0 =
 | Get materialize.public.foo (u1)
 | Filter (#0 = 5), (#1 = 6)
 | Project (#1)
@@ -41,15 +33,6 @@ EOF
 
 query T multiline
 EXPLAIN PLAN FOR VIEW foo3
-----
-%0 =
-| Get materialize.public.foo2 (u3)
-| Filter (#0 = 6)
-
-EOF
-
-query T multiline
-EXPLAIN DATAFLOW FOR VIEW foo3
 ----
 %0 =
 | Get materialize.public.foo (u1)
@@ -62,7 +45,7 @@ statement ok
 CREATE DEFAULT INDEX ON foo2
 
 query T multiline
-EXPLAIN DATAFLOW FOR VIEW foo3
+EXPLAIN PLAN FOR VIEW foo3
 ----
 %0 =
 | Get materialize.public.foo2 (u3)
@@ -71,7 +54,7 @@ EXPLAIN DATAFLOW FOR VIEW foo3
 EOF
 
 query T multiline
-EXPLAIN DATAFLOW FOR SELECT * from foo3
+EXPLAIN PLAN FOR SELECT * from foo3
 ----
 %0 =
 | Get materialize.public.foo2 (u3)

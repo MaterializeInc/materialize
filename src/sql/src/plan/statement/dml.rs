@@ -139,7 +139,6 @@ pub fn describe_explain(
             ExplainStage::RawPlan => "Raw Plan",
             ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
             ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
-            ExplainStage::DataflowPlan => "Dataflow",
         },
         ScalarType::String.nullable(false),
     )))

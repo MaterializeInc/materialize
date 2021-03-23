@@ -3699,34 +3699,27 @@ impl<'a> Parser<'a> {
             typed: self.parse_keyword(TYPED),
         };
 
-        // ((RAW | DECORRELATED | OPTIMIZED )? PLAN) | DATAFLOW PLAN?
-        let stage =
-            match self.parse_one_of_keywords(&[RAW, DECORRELATED, OPTIMIZED, DATAFLOW, PLAN]) {
-                Some(RAW) => {
-                    self.expect_keywords(&[PLAN, FOR])?;
-                    ExplainStage::RawPlan
-                }
-                Some(DECORRELATED) => {
-                    self.expect_keywords(&[PLAN, FOR])?;
-                    ExplainStage::DecorrelatedPlan
-                }
-                Some(OPTIMIZED) => {
-                    self.expect_keywords(&[PLAN, FOR])?;
-                    ExplainStage::OptimizedPlan
-                }
-                Some(PLAN) => {
-                    self.expect_keyword(FOR)?;
-                    ExplainStage::OptimizedPlan
-                }
-                Some(DATAFLOW) => {
-                    if self.expect_one_of_keywords(&[PLAN, FOR])? == PLAN {
-                        self.expect_keyword(FOR)?;
-                    }
-                    ExplainStage::DataflowPlan
-                }
-                None => ExplainStage::OptimizedPlan,
-                _ => unreachable!(),
-            };
+        // (RAW | DECORRELATED | OPTIMIZED)? PLAN
+        let stage = match self.parse_one_of_keywords(&[RAW, DECORRELATED, OPTIMIZED, PLAN]) {
+            Some(RAW) => {
+                self.expect_keywords(&[PLAN, FOR])?;
+                ExplainStage::RawPlan
+            }
+            Some(DECORRELATED) => {
+                self.expect_keywords(&[PLAN, FOR])?;
+                ExplainStage::DecorrelatedPlan
+            }
+            Some(OPTIMIZED) => {
+                self.expect_keywords(&[PLAN, FOR])?;
+                ExplainStage::OptimizedPlan
+            }
+            Some(PLAN) => {
+                self.expect_keyword(FOR)?;
+                ExplainStage::OptimizedPlan
+            }
+            None => ExplainStage::OptimizedPlan,
+            _ => unreachable!(),
+        };
 
         // VIEW view_name | query
         let explainee = if self.parse_keyword(VIEW) {

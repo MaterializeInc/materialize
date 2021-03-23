@@ -2738,20 +2738,6 @@ impl Coordinator {
                 explanation.to_string()
             }
             ExplainStage::OptimizedPlan => {
-                let optimized_plan = self
-                    .prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?
-                    .into_inner();
-                let catalog = self.catalog.for_session(session);
-                let mut explanation = dataflow_types::Explanation::new(&optimized_plan, &catalog);
-                if let Some(row_set_finishing) = row_set_finishing {
-                    explanation.explain_row_set_finishing(row_set_finishing);
-                }
-                if options.typed {
-                    explanation.explain_types();
-                }
-                explanation.to_string()
-            }
-            ExplainStage::DataflowPlan => {
                 let optimized_plan =
                     self.prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?;
                 let mut dataflow = DataflowDesc::new(format!("explanation"));
