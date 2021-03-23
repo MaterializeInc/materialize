@@ -166,6 +166,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo) => RelationDesc::empty()
                 .with_column("consumer_name", ScalarType::String.nullable(false))
                 .with_column("source_id", ScalarType::String.nullable(false))
+                .with_column("dataflow_id", ScalarType::Int64.nullable(false))
                 .with_column("partition_id", ScalarType::String.nullable(false))
                 .with_column("rx_msgs", ScalarType::Int64.nullable(false))
                 .with_column("rx_bytes", ScalarType::Int64.nullable(false))
@@ -237,7 +238,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo) => vec![(
                 LogVariant::Materialized(MaterializedLog::SourceInfo),
-                vec![(1, 1), (2, 3)],
+                vec![(1, 1), (2, 2), (3, 3)],
             )],
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::SourceInfo) => vec![],

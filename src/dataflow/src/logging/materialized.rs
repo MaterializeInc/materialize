@@ -316,6 +316,7 @@ pub fn construct<A: Allocate>(
                 row_packer.pack(&[
                     Datum::String(&consumer_name),
                     Datum::String(&source_id.source_id.to_string()),
+                    Datum::Int64(source_id.dataflow_id as i64),
                     Datum::String(&partition_id),
                     Datum::Int64(diff_vector[0]),
                     Datum::Int64(diff_vector[1]),
