@@ -142,6 +142,27 @@ Field            | Type        | Meaning
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
 
+### `mz_kafka_consumer_statistics`
+
+The `mz_kafka_consumer_statistics` table contains a row for each Kafka
+consumer in the system.
+
+Field           | Type       | Meaning
+----------------|------------|--------
+`consumer_name` | [`text`]   | The handle name for the consumer.
+`source_id`     | [`text`]   | The ID of the source that created this consumer object. Equivalent to `mz_source_info.source_id`.
+`dataflow_id`   | [`bigint`] | The ID of the dataflow reading from the consumer. Equivalent to `mz_source_info.dataflow_id`.
+`partition_id`  | [`text`]   | The ID of the topic partition the consumer is reading from.
+`rx_msgs`       | [`bigint`] | The number of messages read by this consumer since materialized startup.
+`rx_bytes`      | [`bigint`] | The number of bytes read by this consumer since materialized startup.
+`tx_msgs`       | [`bigint`] | The number of messages sent by this consumer since materialized startup.
+`tx_bytes`      | [`bigint`] | The number of bytes sent by this consumer since materialized startup.
+`lo_offset`     | [`bigint`] | The partition's low watermark offset on the broker.
+`hi_offset`     | [`bigint`] | The partition's high watermark offset on the broker.
+`ls_offset`     | [`bigint`] | The partition's last stable offset on the broker.
+`app_offset`    | [`bigint`] | The offset of the last message passed to materialized + 1.
+`consumer_lag`  | [`bigint`] | Difference between the `hi_offset` and `app_offset`.
+
 ### `mz_kafka_sinks`
 
 The `mz_kafka_sinks` table contains a row for each Kafka sink in the system.
