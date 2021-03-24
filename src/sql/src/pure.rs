@@ -22,11 +22,14 @@ use tokio::time::Duration;
 
 use repr::strconv;
 use sql_parser::ast::{
-    AvroSchema, Connector, CreateSourceStatement, CsrSeed, Format, Ident, Raw, Statement,
+    AvroSchema, ColumnOption, ColumnOptionDef, Connector, CreateSourceStatement, CsrSeed, Format,
+    Ident, Raw, Statement,
 };
+use sql_parser::parser::parse_columns;
 
 use crate::kafka_util;
 use crate::normalize;
+use crate::postgres_util;
 
 /// Purifies a statement, removing any dependencies on external state.
 ///
@@ -101,7 +104,61 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 let aws_info = normalize::aws_connect_info(&mut with_options_map, Some(region))?;
                 aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
             }
-            Connector::Postgres { .. } => (),
+            Connector::Postgres {
+                conn,
+                namespace,
+                table,
+                columns,
+                ..
+            } => {
+                let fetched_columns = postgres_util::fetch_columns(conn, namespace, table).await?;
+                let (upstream_columns, _constraints) =
+                    parse_columns(&postgres_util::format_columns(fetched_columns))?;
+                if columns.is_empty() {
+                    *columns = upstream_columns;
+                } else {
+                    if columns != &upstream_columns {
+                        if columns.len() != upstream_columns.len() {
+                            bail!(
+                                "incorrect column specification: {} columns were specified, upstream has {}: {}",
+                                columns.len(),
+                                upstream_columns.len(),
+                                upstream_columns
+                                    .iter()
+                                    .map(|u| u.name.to_string())
+                                    .collect::<Vec<String>>()
+                                    .join(", ")
+                            )
+                        }
+                        for (c, u) in columns.into_iter().zip(upstream_columns) {
+                            // By default, Postgres columns are nullable. This means that both
+                            // of the following column definitions are nullable:
+                            //     example_col bool
+                            //     example_col bool NULL
+                            // Fetched upstream column information, on the other hand, will always
+                            // include NULL if a column is nullable. In order to compare the user-provided
+                            // columns with the fetched columns, we need to append a NULL constraint
+                            // to any user-provided columns that are implicitly NULL.
+                            if !c.options.contains(&ColumnOptionDef {
+                                name: None,
+                                option: ColumnOption::NotNull,
+                            }) && !c.options.contains(&ColumnOptionDef {
+                                name: None,
+                                option: ColumnOption::Null,
+                            }) {
+                                c.options.push(ColumnOptionDef {
+                                    name: None,
+                                    option: ColumnOption::Null,
+                                });
+                            }
+                            if c != &u {
+                                bail!("incorrect column specification: specified column does not match upstream source, specified: {}, upstream: {}", c, u);
+                            }
+                        }
+                    }
+                }
+                ()
+            }
             Connector::PubNub { .. } => (),
         }
 
