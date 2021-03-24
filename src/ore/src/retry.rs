@@ -73,6 +73,7 @@ pub struct RetryState {
 #[derive(Debug)]
 pub struct Retry {
     initial_backoff: Duration,
+    factor: f64,
     clamp_backoff: Duration,
     limit: RetryLimit,
 }
@@ -95,6 +96,15 @@ impl Retry {
     /// The maximum backoff is the maximum amount of time to wait between tries.
     pub fn clamp_backoff(mut self, clamp_backoff: Duration) -> Self {
         self.clamp_backoff = clamp_backoff;
+        self
+    }
+
+    /// Sets the exponential backoff factor for the retry operation.
+    ///
+    /// The time to wait is multiplied by this factor after each failed try. The
+    /// default factor is two.
+    pub fn factor(mut self, factor: f64) -> Self {
+        self.factor = factor;
         self
     }
 
@@ -179,7 +189,8 @@ impl Retry {
                     None => return Err(e),
                     Some(next_backoff) => {
                         time::sleep(*next_backoff).await;
-                        *next_backoff = cmp::min(*next_backoff * 2, self.clamp_backoff);
+                        *next_backoff =
+                            cmp::min(next_backoff.mul_f64(self.factor), self.clamp_backoff);
                     }
                 },
             }
@@ -194,6 +205,7 @@ impl Default for Retry {
     fn default() -> Self {
         Retry {
             initial_backoff: Duration::from_millis(125),
+            factor: 2.0,
             clamp_backoff: MAX_DURATION,
             limit: RetryLimit::Duration(Duration::from_secs(30)),
         }

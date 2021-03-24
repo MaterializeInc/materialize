@@ -11,6 +11,7 @@ use std::ascii;
 use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::io::{self, Write};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use md5::{Digest, Md5};
@@ -103,6 +104,8 @@ impl Action for SqlAction {
 
         let pgclient = &state.pgclient;
         Retry::default()
+            .initial_backoff(Duration::from_millis(50))
+            .factor(1.5)
             .max_duration(self.sql_context.timeout)
             .retry(|retry_state| async move {
                 match self.try_redo(pgclient, &query).await {
@@ -118,7 +121,7 @@ impl Action for SqlAction {
                             print!("rows didn't match; sleeping to see if dataflow catches up");
                         }
                         if let Some(backoff) = retry_state.next_backoff {
-                            print!(" {:?}", backoff);
+                            print!(" {:.0?}", backoff);
                             io::stdout().flush().unwrap();
                         } else {
                             println!();
@@ -297,6 +300,8 @@ impl Action for FailSqlAction {
 
         let pgclient = &state.pgclient;
         Retry::default()
+            .initial_backoff(Duration::from_millis(50))
+            .factor(1.5)
             .max_duration(self.sql_context.timeout)
             .retry(|retry_state| async move {
             match self.try_redo(pgclient, &query).await {
@@ -312,7 +317,7 @@ impl Action for FailSqlAction {
                         print!("query error didn't match; sleeping to see if dataflow produces error shortly");
                     }
                     if let Some(backoff) = retry_state.next_backoff {
-                        print!(" {:?}", backoff);
+                        print!(" {:.0?}", backoff);
                         io::stdout().flush().unwrap();
                     } else {
                         println!();
