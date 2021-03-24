@@ -11,7 +11,6 @@
 
 use std::time::Duration;
 
-use differential_dataflow::difference::{DiffPair, DiffVector};
 use differential_dataflow::operators::count::CountTotal;
 use log::error;
 use timely::communication::Allocate;
@@ -236,7 +235,7 @@ pub fn construct<A: Allocate>(
                                 kafka_consumer_info_session.give((
                                     (consumer_name, source_id, partition_id),
                                     time_ms,
-                                    DiffVector::new(vec![
+                                    vec![
                                         rxmsgs,
                                         rxbytes,
                                         txmsgs,
@@ -246,7 +245,7 @@ pub fn construct<A: Allocate>(
                                         ls_offset,
                                         app_offset,
                                         consumer_lag,
-                                    ]),
+                                    ],
                                 ));
                             }
                             MaterializedEvent::Peek(peek, is_install) => {
@@ -262,7 +261,7 @@ pub fn construct<A: Allocate>(
                                 source_info_session.give((
                                     (source_name, source_id, partition_id),
                                     time_ms,
-                                    DiffPair::new(offset, timestamp),
+                                    (offset, timestamp),
                                 ));
                             }
                         }
@@ -353,9 +352,7 @@ pub fn construct<A: Allocate>(
 
         let source_info_current = source_info.as_collection().count().map({
             let mut row_packer = repr::RowPacker::new();
-            move |((name, id, pid), pair)| {
-                let offset = pair.element1;
-                let timestamp = pair.element2;
+            move |((name, id, pid), (offset, timestamp))| {
                 row_packer.pack(&[
                     Datum::String(&name),
                     Datum::String(&id.source_id.to_string()),
