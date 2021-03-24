@@ -65,6 +65,20 @@ pub fn parse_expr(sql: &str) -> Result<Expr<Raw>, ParserError> {
     }
 }
 
+/// Parses a SQL string containing zero or more SQL columns.
+pub fn parse_columns(
+    sql: &str,
+) -> Result<(Vec<ColumnDef<Raw>>, Vec<TableConstraint<Raw>>), ParserError> {
+    let tokens = lexer::lex(sql)?;
+    let mut parser = Parser::new(sql, tokens);
+    let columns = parser.parse_columns()?;
+    if parser.next_token().is_some() {
+        parser_err!(parser, parser.peek_prev_pos(), "extra token after columns")
+    } else {
+        Ok(columns)
+    }
+}
+
 macro_rules! maybe {
     ($e:expr) => {{
         if let Some(v) = $e {
@@ -1726,7 +1740,7 @@ impl<'a> Parser<'a> {
                     return parser_err!(
                         self,
                         self.peek_prev_pos(),
-                        "Cannot specify constraints in postgres table definition"
+                        "Cannot specify constraints in Postgres table definition"
                     );
                 }
 
