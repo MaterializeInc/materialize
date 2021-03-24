@@ -239,6 +239,7 @@ lazy_static! {
                 let s = to_type.unwrap_numeric_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(s)))
             }),
+            (String, APD) =>  Explicit: CastStringToAPD,
             (String, Date) => Explicit: CastStringToDate,
             (String, Time) => Explicit: CastStringToTime,
             (String, Timestamp) => Explicit: CastStringToTimestamp,
@@ -316,7 +317,10 @@ lazy_static! {
             (Uuid, String) => Assignment: CastUuidToString,
 
             // NUMERIC
-            (Numeric, String) => Assignment: CastNumericToString
+            (Numeric, String) => Assignment: CastNumericToString,
+
+            // APD
+            (APD, String) => Assignment: CastAPDToString
         }
     };
 }

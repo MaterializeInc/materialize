@@ -15,6 +15,7 @@ ccsr = { path = "../ccsr" }
 crossbeam-channel = "0.5.0"
 csv-core = "0.1.10"
 dataflow-types = { path = "../dataflow-types" }
+dec = { path = "../../../rust-dec/dec", features = ["arbitrary-precision"]}
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 dogsdogsdogs = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 expr = { path = "../expr" }

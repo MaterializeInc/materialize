@@ -15,7 +15,7 @@ use std::fmt;
 use std::mem::{size_of, transmute};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
-use dec::{Decimal128, OrderedDecimal};
+use dec::{Decimal as DecNum, Decimal128, OrderedDecimal};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -210,6 +210,7 @@ enum Tag {
     JsonNull,
     Dummy,
     Numeric,
+    APD,
 }
 
 // --------------------------------------------------------------------------------
@@ -374,6 +375,10 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let n = read_copy::<OrderedDecimal<Decimal128>>(data, offset);
             Datum::Numeric(n)
         }
+        Tag::APD => {
+            let n = read_copy::<OrderedDecimal<DecNum<13>>>(data, offset);
+            Datum::APD(n)
+        }
     }
 }
 
@@ -506,6 +511,10 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
             data.push(Tag::Numeric as u8);
             push_copy!(data, n, OrderedDecimal<Decimal128>);
         }
+        Datum::APD(n) => {
+            data.push(Tag::APD as u8);
+            push_copy!(data, n, OrderedDecimal<DecNum<13>>);
+        }
     }
 }
 
@@ -556,6 +565,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::JsonNull => 1,
         Datum::Dummy => 1,
         Datum::Numeric(_) => 1 + size_of::<OrderedDecimal<Decimal128>>(),
+        Datum::APD(_) => 1 + size_of::<OrderedDecimal<DecNum<13>>>(),
     }
 }
 

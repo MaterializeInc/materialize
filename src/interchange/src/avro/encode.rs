@@ -326,6 +326,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         scale: rdn::get_scale(&s),
                     })
                 }
+                ScalarType::APD => unreachable!(),
             };
             if typ.nullable {
                 val = Value::Union {
@@ -455,6 +456,12 @@ pub(super) fn build_row_schema_fields<F: FnMut() -> String>(
                 "logicalType": "decimal",
                 "precision": rdn::RDN_MAX_PRECISION,
                 "scale": scale.unwrap_or(8),
+            }),
+            ScalarType::APD => json!({
+                "type": "bytes",
+                "logicalType": "decimal",
+                "precision": 39,
+                "scale": 0,
             }),
         };
         if typ.nullable {
