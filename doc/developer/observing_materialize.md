@@ -63,9 +63,6 @@ guide](https://materialize.com/docs/ops/diagnosing-using-sql/).
 Our stdout logs don't currently emit any performance metrics, but they do emit events such as new
 sources being discovered, configuration of Kafka sources, timestamping method for sources.
 
-If, for example, one enables Kafka source metrics, via the `statistics_interval_ms` configuration
-option, the metrics will be written to the Materialize log file.
-
 Our Docker image is configured to dump log messages to stderr and not a file within the container.
 
 ### Host Level Metrics
