@@ -31,7 +31,7 @@ use std::num::FpCategory;
 
 use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
-use dec::{Context, Decimal128, OrderedDecimal};
+use dec::{Context, Decimal as DecNumber, Decimal128, OrderedDecimal};
 use fast_float::FastFloat;
 use lazy_static::lazy_static;
 use num_traits::Float as NumFloat;
@@ -466,6 +466,26 @@ where
     F: FormatBuffer,
 {
     write!(buf, "{}", n.0.to_standard_notation_string());
+    Nestable::Yes
+}
+
+pub fn parse_apd(s: &str) -> Result<OrderedDecimal<DecNumber<13>>, ParseError> {
+    let mut cx = Context::<DecNumber<13>>::default();
+    let n = match cx.parse(s) {
+        Ok(n) => n,
+        Err(e) => {
+            return Err(ParseError::invalid_input_syntax("apd", s).with_details(e));
+        }
+    };
+
+    Ok(OrderedDecimal(n))
+}
+
+pub fn format_apd<F>(buf: &mut F, n: &OrderedDecimal<DecNumber<13>>) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", n);
     Nestable::Yes
 }
 

@@ -3082,6 +3082,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
             custom_oid: None,
         }),
         pgrepr::Type::RDN => Ok(ScalarType::Numeric { scale: None }),
+        pgrepr::Type::APD => Ok(ScalarType::APD),
     }
 }
 

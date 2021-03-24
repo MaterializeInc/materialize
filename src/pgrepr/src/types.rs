@@ -59,6 +59,8 @@ pub enum Type {
     Uuid,
     /// Refactored numeric type using `rust-dec`
     RDN,
+    /// APD
+    APD,
 }
 
 lazy_static! {
@@ -90,14 +92,25 @@ lazy_static! {
         postgres_types::Kind::Simple,
         "mz_catalog".to_owned(),
     );
+
+    /// Placeholder for `rust-dec`-backed numeric implementation.
+    pub static ref APD: postgres_types::Type = postgres_types::Type::new(
+        "apd".to_owned(),
+        oid::TYPE_APD_OID,
+        postgres_types::Kind::Simple,
+        "mz_catalog".to_owned(),
+    );
 }
 
 impl Type {
     /// Returns the type corresponding to the provided OID, if the OID is known.
     pub fn from_oid(oid: u32) -> Option<Type> {
-        if oid == oid::TYPE_RDN_OID {
-            return Some(Type::RDN);
+        match oid {
+            oid::TYPE_RDN_OID => return Some(Type::RDN),
+            oid::TYPE_APD_OID => return Some(Type::APD),
+            _ => {}
         }
+
         let ty = postgres_types::Type::from_oid(oid)?;
         match ty {
             postgres_types::Type::BOOL => Some(Type::Bool),
@@ -146,7 +159,7 @@ impl Type {
                 Type::Timestamp => &postgres_types::Type::TIMESTAMP_ARRAY,
                 Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ_ARRAY,
                 Type::Uuid => &postgres_types::Type::UUID_ARRAY,
-                Type::RDN => unreachable!(),
+                Type::RDN | &Type::APD => unreachable!(),
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -168,6 +181,7 @@ impl Type {
             Type::TimestampTz => &postgres_types::Type::TIMESTAMPTZ,
             Type::Uuid => &postgres_types::Type::UUID,
             Type::RDN => &RDN,
+            Type::APD => &APD,
         }
     }
 
@@ -235,6 +249,7 @@ impl Type {
             Type::TimestampTz => 8,
             Type::Uuid => 16,
             Type::RDN => 16,
+            Type::APD => 16,
         }
     }
 
@@ -277,6 +292,7 @@ impl Type {
             Type::TimestampTz => ScalarType::TimestampTz,
             Type::Uuid => ScalarType::Uuid,
             Type::RDN => ScalarType::Numeric { scale: None },
+            Type::APD => ScalarType::APD,
         }
     }
 }
@@ -314,6 +330,7 @@ impl From<&ScalarType> for Type {
             ScalarType::TimestampTz => Type::TimestampTz,
             ScalarType::Uuid => Type::Uuid,
             ScalarType::Numeric { .. } => Type::RDN,
+            ScalarType::APD => Type::RDN,
         }
     }
 }
