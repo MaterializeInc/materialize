@@ -63,7 +63,6 @@
 use std::collections::BTreeMap;
 
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::difference::DiffVector;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
@@ -1039,7 +1038,7 @@ where
                 ));
             }
 
-            (key, time, DiffVector::new(output))
+            (key, time, output)
         })
         .as_collection();
     partial
@@ -1167,7 +1166,7 @@ where
                     diffs[3 * accumulable_index + 1] = agg1;
                     diffs[3 * accumulable_index + 2] = agg2;
                 }
-                Some((key, DiffVector::new(diffs)))
+                Some((key, diffs))
             }
         });
     to_aggregate.push(easy_cases);
@@ -1193,7 +1192,7 @@ where
                     diffs[3 * accumulable_index] = 1i128;
                     diffs[3 * accumulable_index + 1] = agg1;
                     diffs[3 * accumulable_index + 2] = agg2;
-                    Some((key, DiffVector::new(diffs)))
+                    Some((key, diffs))
                 }
             });
         to_aggregate.push(collection);
@@ -1362,8 +1361,6 @@ pub mod monoids {
     // will not have such elements in this case (they would correspond to positive and
     // negative infinity, which we do not represent).
 
-    use std::ops::AddAssign;
-
     use differential_dataflow::difference::Semigroup;
     use serde::{Deserialize, Serialize};
 
@@ -1377,8 +1374,8 @@ pub mod monoids {
         Max(Row),
     }
 
-    impl<'a> AddAssign<&'a Self> for ReductionMonoid {
-        fn add_assign(&mut self, rhs: &'a Self) {
+    impl Semigroup for ReductionMonoid {
+        fn plus_equals(&mut self, rhs: &Self) {
             match (self, rhs) {
                 (ReductionMonoid::Min(lhs), ReductionMonoid::Min(rhs)) => {
                     let swap = {
@@ -1417,9 +1414,7 @@ pub mod monoids {
                 ),
             }
         }
-    }
 
-    impl Semigroup for ReductionMonoid {
         fn is_zero(&self) -> bool {
             false
         }

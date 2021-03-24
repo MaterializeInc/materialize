@@ -46,10 +46,7 @@ pub fn construct<A: Allocate>(
                 let time_ms = ((ts.as_millis() as Timestamp / granularity_ms) + 1) * granularity_ms;
                 match event {
                     DifferentialEvent::Batch(event) => {
-                        let difference = differential_dataflow::difference::DiffVector::new(vec![
-                            event.length as isize,
-                            1,
-                        ]);
+                        let difference = (event.length as isize, 1);
                         Some(((event.operator, worker), time_ms, difference))
                     }
                     DifferentialEvent::Merge(event) => {
@@ -57,20 +54,17 @@ pub fn construct<A: Allocate>(
                             Some((
                                 (event.operator, worker),
                                 time_ms,
-                                differential_dataflow::difference::DiffVector::new(vec![
+                                (
                                     (done as isize) - ((event.length1 + event.length2) as isize),
                                     -1,
-                                ]),
+                                ),
                             ))
                         } else {
                             None
                         }
                     }
                     DifferentialEvent::Drop(event) => {
-                        let difference = differential_dataflow::difference::DiffVector::new(vec![
-                            -(event.length as isize),
-                            -1,
-                        ]);
+                        let difference = (-(event.length as isize), -1);
                         Some(((event.operator, worker), time_ms, difference))
                     }
                     DifferentialEvent::MergeShortfall(_) => None,
@@ -85,8 +79,8 @@ pub fn construct<A: Allocate>(
                     row_packer.pack(&[
                         Datum::Int64(op as i64),
                         Datum::Int64(worker as i64),
-                        Datum::Int64(count[0] as i64),
-                        Datum::Int64(count[1] as i64),
+                        Datum::Int64(count.0 as i64),
+                        Datum::Int64(count.1 as i64),
                     ])
                 }
             });
