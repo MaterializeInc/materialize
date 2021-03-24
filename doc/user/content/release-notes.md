@@ -49,8 +49,7 @@ Wrap your release notes at the 80 character mark.
 {{% version-header v0.7.2 %}}
 
 - Record Kafka Consumer metrics in the `mz_kafka_consumer_statistics` system
-  table, if the source has a non-zero value for the `statistics_interval_ms`
-  option.
+  table.
 
 - Add the [`jsonb_object_agg`](/sql/functions/jsonb_object_agg) function to
   aggregate rows into a JSON object.
