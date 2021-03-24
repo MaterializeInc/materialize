@@ -40,6 +40,8 @@ pub enum MaterializedEvent {
     },
     /// Tracks RTT statistics for a Kafka broker, by consumer
     /// Reference: https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md
+    /// This structure containe splatted metrics from the rdkafka::statistics::Window struct
+    /// Window cannot be used as it does not satisfy several of the traits required
     KafkaBrokerRTT {
         /// Kafka name for the consumer
         consumer_name: String,
@@ -47,8 +49,6 @@ pub enum MaterializedEvent {
         source_id: SourceInstanceId,
         /// The Kafka broker for these metrics (may be multiple per consumer)
         broker_name: String,
-        /// Splatted metrics from the rdkafka::statistics::Window struct
-        /// Window cannot be used as it does not satisfy several of the traits required
         /// Smallest value
         min: i64,
         /// Largest value
