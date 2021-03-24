@@ -16,6 +16,7 @@ instances.
 Field | Use
 ------|-----
 _schema&lowbar;name_ | The schema to show tables from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+`EXTENDED` | Returns system tables as well as user-created tables. By default, only user-created tables are returned.
 
 ## Details
 
