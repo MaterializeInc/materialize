@@ -13,11 +13,9 @@ use std::collections::BTreeMap;
 use std::convert;
 use std::fs::File;
 use std::io::Read;
-use std::option::Option;
 use std::sync::Mutex;
 
 use anyhow::bail;
-use chrono;
 use log::{debug, error, info, warn};
 use rdkafka::client::ClientContext;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
