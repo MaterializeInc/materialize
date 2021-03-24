@@ -520,7 +520,7 @@ pub fn plan_create_source(
     let mut with_options = normalize::options(with_options);
 
     let mut consistency = Consistency::RealTime;
-    let mut ts_frequency = Duration::from_secs(1);
+    let mut ts_frequency = scx.catalog.config().timestamp_frequency;
 
     let (external_connector, mut encoding) = match connector {
         Connector::Kafka { broker, topic, .. } => {
@@ -538,7 +538,10 @@ pub fn plan_create_source(
                 Some(_) => bail!("group_id_prefix must be a string"),
             };
 
-            ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
+            ts_frequency = extract_timestamp_frequency_option(
+                scx.catalog.config().timestamp_frequency,
+                &mut with_options,
+            )?;
 
             // THIS IS EXPERIMENTAL - DO NOT DOCUMENT IT
             // until we have had time to think about what the right UX/design is on a non-urgent timeline!
@@ -642,7 +645,10 @@ pub fn plan_create_source(
                 None => Consistency::RealTime,
                 Some(_) => bail!("BYO consistency not supported for file sources"),
             };
-            ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
+            ts_frequency = extract_timestamp_frequency_option(
+                scx.catalog.config().timestamp_frequency,
+                &mut with_options,
+            )?;
 
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
@@ -779,7 +785,10 @@ pub fn plan_create_source(
                 bail!("BYO consistency only supported for Debezium Avro OCF sources");
             }
 
-            ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
+            ts_frequency = extract_timestamp_frequency_option(
+                scx.catalog.config().timestamp_frequency,
+                &mut with_options,
+            )?;
 
             let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                 path: path.clone().into(),
@@ -1666,10 +1675,11 @@ pub fn plan_create_type(
 }
 
 fn extract_timestamp_frequency_option(
+    default: Duration,
     with_options: &mut BTreeMap<String, Value>,
 ) -> Result<Duration, anyhow::Error> {
     match with_options.remove("timestamp_frequency_ms") {
-        None => Ok(Duration::from_secs(1)),
+        None => Ok(default),
         Some(Value::Number(n)) => match n.parse::<u64>() {
             Ok(n) => Ok(Duration::from_millis(n)),
             _ => bail!("timestamp_frequency_ms must be an u64"),

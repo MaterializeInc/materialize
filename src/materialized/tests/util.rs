@@ -35,7 +35,7 @@ impl Default for Config {
     fn default() -> Config {
         Config {
             data_directory: None,
-            logging_granularity: Some(Duration::from_millis(10)),
+            logging_granularity: Some(Duration::from_secs(1)),
             tls: None,
             experimental_mode: false,
             workers: 1,
@@ -100,7 +100,7 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
                     granularity,
                     log_logging: false,
                 }),
-            timestamp_frequency: Duration::from_millis(10),
+            timestamp_frequency: Duration::from_secs(1),
             cache: None,
             persistence: None,
             logical_compaction_window: None,

@@ -13,7 +13,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{error::Error, unimplemented};
 
 use chrono::{DateTime, Utc, MIN_DATETIME};
@@ -164,6 +164,8 @@ pub struct CatalogConfig {
     pub build_info: &'static BuildInfo,
     /// The number of worker in use by the server.
     pub num_workers: usize,
+    /// Default timestamp frequency for CREATE SOURCE
+    pub timestamp_frequency: Duration,
 }
 
 /// A database in a [`Catalog`].
@@ -352,6 +354,7 @@ lazy_static! {
         cache_directory: None,
         build_info: &DUMMY_BUILD_INFO,
         num_workers: 0,
+        timestamp_frequency: Duration::from_secs(1)
     };
 }
 
