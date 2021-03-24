@@ -1114,11 +1114,17 @@ fn kafka_sink_builder(
     if include_consistency {
         for item in root_dependencies.iter() {
             if item.item_type() == CatalogItemType::Source
-                && item.source_connector()?.yields_stable_input()
+                && !item.source_connector()?.yields_stable_input()
             {
-                // it's all good
-            } else {
-                bail!("all transitive inputs of a consistent Kafka Sink must yield stable input, {} does not", item.name());
+                bail!(
+                    "all input sources of a consistent Kafka sink must be replayable, {} is not",
+                    item.name()
+                );
+            } else if item.item_type() != CatalogItemType::Source {
+                bail!(
+                    "all inputs of a consistent Kafka sink must be sources, {} is not",
+                    item.name()
+                );
             };
         }
     }

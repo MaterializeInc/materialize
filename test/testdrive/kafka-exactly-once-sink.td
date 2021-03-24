@@ -59,13 +59,13 @@ $ kafka-create-topic topic=input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-all transitive inputs of a consistent Kafka Sink must yield stable input, materialize.public.input_kafka_no_byo does not
+all input sources of a consistent Kafka sink must be replayable, materialize.public.input_kafka_no_byo is not
 
 ! CREATE SINK output3 FROM input_table
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-all transitive inputs of a consistent Kafka Sink must yield stable input, materialize.public.input_table does not
+all inputs of a consistent Kafka sink must be sources, materialize.public.input_table is not
 
 > CREATE SINK output4 FROM input_kafka_byo_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
@@ -76,10 +76,10 @@ all transitive inputs of a consistent Kafka Sink must yield stable input, materi
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-all transitive inputs of a consistent Kafka Sink must yield stable input, materialize.public.input_kafka_no_byo does not
+all input sources of a consistent Kafka sink must be replayable, materialize.public.input_kafka_no_byo is not
 
 ! CREATE SINK output6 FROM input_table_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency=true)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-all transitive inputs of a consistent Kafka Sink must yield stable input, materialize.public.input_table does not
+all inputs of a consistent Kafka sink must be sources, materialize.public.input_table is not
