@@ -10,6 +10,7 @@
 CREATE SOURCE source_upsertavrotest
 FROM KAFKA BROKER 'kafka:9092'
 TOPIC 'upsertavrotest'
+WITH (statistics_interval_ms = 1000)
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
 ENVELOPE UPSERT
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
