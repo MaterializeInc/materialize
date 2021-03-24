@@ -1028,7 +1028,6 @@ fn find_match<'a, R: std::fmt::Debug>(
 
     for (i, arg_type) in types.iter().enumerate() {
         let mut selected_category: Option<TypeCategory> = None;
-        let mut found_string_candidate = false;
         let mut categories_match = true;
 
         match arg_type {
@@ -1038,20 +1037,20 @@ fn find_match<'a, R: std::fmt::Debug>(
             None => {
                 for c in candidates.iter() {
                     let this_category = TypeCategory::from_param(&c.fimpl.params[i]);
+                    // 4.e. cont: Select the string category if any candidate
+                    // accepts that category. (This bias towards string is
+                    // appropriate since an unknown-type literal looks like a
+                    // string.)
+                    if this_category == TypeCategory::String {
+                        selected_category = Some(TypeCategory::String);
+                        break;
+                    }
                     match selected_category {
                         Some(ref mut selected_category) => {
-                            // 4.e. cont: ...if all the remaining candidates
+                            // 4.e. cont: [...otherwise,] if all the remaining candidates
                             // accept the same type category, select that category.
                             categories_match =
                                 selected_category == &this_category && categories_match;
-                            // 4.e. cont: [except for...] select the string
-                            // category if any candidate accepts that category.
-                            // (This bias towards string is appropriate since an
-                            // unknown-type literal looks like a string.)
-                            if this_category == TypeCategory::String {
-                                *selected_category = TypeCategory::String;
-                                found_string_candidate = true;
-                            }
                         }
                         None => selected_category = Some(this_category.clone()),
                     }
@@ -1060,7 +1059,7 @@ fn find_match<'a, R: std::fmt::Debug>(
                 // 4.e. cont: Otherwise fail because the correct choice cannot
                 // be deduced without more clues.
                 // (ed: this doesn't mean fail entirely, simply moving onto 4.f)
-                if !found_string_candidate && !categories_match {
+                if selected_category != Some(TypeCategory::String) && !categories_match {
                     break;
                 }
 
