@@ -46,6 +46,7 @@ Cascade
 Case
 Cast
 Chain
+Channel
 Char
 Character
 Check
@@ -185,6 +186,7 @@ Precision
 Primary
 Protobuf
 Publication
+Pubnub
 Range
 Raw
 Read
@@ -229,6 +231,7 @@ Start
 Stdin
 Stdout
 String
+Subscribe
 Superuser
 Table
 Tables

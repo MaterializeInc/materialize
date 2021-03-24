@@ -286,6 +286,12 @@ pub enum Connector<T: AstInfo> {
         /// The expected column schema of the synced table
         columns: Vec<ColumnDef<T>>,
     },
+    PubNub {
+        /// PubNub's subscribe key
+        subscribe_key: String,
+        /// The PubNub channel to subscribe to
+        channel: String,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for Connector<T> {
@@ -358,6 +364,16 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                 f.write_str("' (");
                 f.write_node(&display::comma_separated(columns));
                 f.write_str(")");
+            }
+            Connector::PubNub {
+                subscribe_key,
+                channel,
+            } => {
+                f.write_str("PUBNUB SUBSCRIBE KEY '");
+                f.write_str(&display::escape_single_quote_string(subscribe_key));
+                f.write_str("' CHANNEL '");
+                f.write_str(&display::escape_single_quote_string(channel));
+                f.write_str("'");
             }
         }
     }

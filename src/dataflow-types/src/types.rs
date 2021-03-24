@@ -566,6 +566,7 @@ pub enum ExternalSourceConnector {
     AvroOcf(FileSourceConnector),
     S3(S3SourceConnector),
     Postgres(PostgresSourceConnector),
+    PubNub(PubNubSourceConnector),
 }
 
 impl ExternalSourceConnector {
@@ -587,6 +588,7 @@ impl ExternalSourceConnector {
             // TODO: should we include object key and possibly object-internal offset here?
             Self::S3(_) => vec![("mz_record".into(), ScalarType::Int64.nullable(false))],
             Self::Postgres(_) => vec![],
+            Self::PubNub(_) => vec![],
         }
     }
 
@@ -599,6 +601,7 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
             ExternalSourceConnector::S3(_) => "s3",
             ExternalSourceConnector::Postgres(_) => "postgres",
+            ExternalSourceConnector::PubNub(_) => "pubnub",
         }
     }
 
@@ -706,6 +709,12 @@ pub struct PostgresSourceConnector {
     pub publication: String,
     pub namespace: String,
     pub table: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PubNubSourceConnector {
+    pub subscribe_key: String,
+    pub channel: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
