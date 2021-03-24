@@ -15,11 +15,13 @@ use std::str;
 
 use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use dec::OrderedDecimal;
 use postgres_types::{FromSql, IsNull, ToSql, Type as PgType};
 use repr::ColumnType;
 use uuid::Uuid;
 
 use ore::fmt::FormatBuffer;
+use repr::adt::apd::Apd;
 use repr::adt::array::ArrayDimension;
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::jsonb::JsonbRef;
@@ -83,6 +85,8 @@ pub enum Value {
     Uuid(Uuid),
     /// Refactored numeric using `rust-dec`.
     RDN(RDNValue),
+    /// Refactored numeric using `rust-dec`.
+    APD(OrderedDecimal<Apd>),
 }
 
 impl Value {
@@ -109,6 +113,7 @@ impl Value {
                 }
                 Some(Value::RDN(RDNValue(n)))
             }
+            (Datum::APD(d), ScalarType::APD) => Some(Value::APD(d)),
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
             (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
@@ -246,6 +251,7 @@ impl Value {
                     scale: Some(u8::try_from(adt_rdn::get_scale(&n.0)).unwrap()),
                 },
             ),
+            Value::APD(n) => (Datum::APD(n), ScalarType::APD),
         }
     }
 
@@ -301,6 +307,7 @@ impl Value {
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
             Value::Uuid(u) => strconv::format_uuid(buf, *u),
             Value::RDN(n) => strconv::format_numeric(buf, &n.0),
+            Value::APD(d) => strconv::format_apd(buf, d),
         }
     }
 
@@ -366,6 +373,11 @@ impl Value {
             Value::TimestampTz(ts) => ts.to_sql(&PgType::TIMESTAMPTZ, buf),
             Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
             Value::RDN(n) => n.to_sql(&types::RDN, buf),
+            Value::APD(_) => {
+                // for now just use text encoding
+                self.encode_text(buf);
+                Ok(postgres_types::IsNull::No)
+            }
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -426,6 +438,7 @@ impl Value {
                 let d = strconv::parse_numeric(raw)?;
                 Value::RDN(RDNValue(d))
             }
+            Type::APD => Value::APD(strconv::parse_apd(raw)?),
         })
     }
 
@@ -453,6 +466,7 @@ impl Value {
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
             Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),
             Type::RDN => RDNValue::from_sql(ty.inner(), raw).map(Value::RDN),
+            Type::APD => unreachable!(),
         }
     }
 }
@@ -505,6 +519,7 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
         }
         Type::Numeric => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
         Type::RDN => ScalarType::Numeric { scale: None },
+        Type::APD => ScalarType::APD,
         Type::Oid => ScalarType::Oid,
         Type::Text => ScalarType::String,
         Type::Time => ScalarType::Time,

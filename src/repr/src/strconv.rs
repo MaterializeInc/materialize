@@ -44,6 +44,7 @@ use ore::fmt::FormatBuffer;
 use ore::lex::LexBuf;
 use ore::str::StrExt;
 
+use crate::adt::apd::{self, Apd, APD_DATUM_MAX_PRECISION};
 use crate::adt::array::ArrayDimension;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::decimal::Decimal;
@@ -462,6 +463,37 @@ pub fn parse_numeric(s: &str) -> Result<OrderedDecimal<Decimal128>, ParseError> 
 }
 
 pub fn format_numeric<F>(buf: &mut F, n: &OrderedDecimal<Decimal128>) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", n.0.to_standard_notation_string());
+    Nestable::Yes
+}
+
+pub fn parse_apd(s: &str) -> Result<OrderedDecimal<Apd>, ParseError> {
+    let mut cx = apd::cx_datum();
+    let mut n = match cx.parse(s.trim()) {
+        Ok(n) => n,
+        Err(..) => {
+            return Err(ParseError::invalid_input_syntax("apd", s));
+        }
+    };
+
+    let rounding_failed = apd::rescale_within_max_precision(&mut n).is_err();
+    let cx_status = cx.status();
+    if cx_status.overflow() || cx_status.subnormal() || rounding_failed {
+        Err(ParseError::out_of_range("apd", s).with_details(format!(
+            "exceeds maximum precision {}",
+            APD_DATUM_MAX_PRECISION
+        )))
+    } else if n.is_infinite() || (n.is_nan() && n.is_negative()) {
+        Err(ParseError::invalid_input_syntax("apd", s))
+    } else {
+        Ok(OrderedDecimal(n))
+    }
+}
+
+pub fn format_apd<F>(buf: &mut F, n: &OrderedDecimal<Apd>) -> Nestable
 where
     F: FormatBuffer,
 {

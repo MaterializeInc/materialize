@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use uuid::Uuid;
 
+use crate::adt::apd::Apd;
 use crate::adt::array::{
     Array, ArrayDimension, ArrayDimensions, InvalidArrayError, MAX_ARRAY_DIMENSIONS,
 };
@@ -213,6 +214,7 @@ enum Tag {
     JsonNull,
     Dummy,
     Numeric,
+    APD,
 }
 
 // --------------------------------------------------------------------------------
@@ -377,6 +379,10 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
             let n = read_copy::<OrderedDecimal<Decimal128>>(data, offset);
             Datum::Numeric(n)
         }
+        Tag::APD => {
+            let n = read_copy::<OrderedDecimal<Apd>>(data, offset);
+            Datum::APD(n)
+        }
     }
 }
 
@@ -536,6 +542,10 @@ fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
             data.push(Tag::Numeric as u8);
             push_copy!(data, n, OrderedDecimal<Decimal128>);
         }
+        Datum::APD(n) => {
+            data.push(Tag::APD as u8);
+            push_copy!(data, n, OrderedDecimal<Apd>);
+        }
     }
 }
 
@@ -586,6 +596,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::JsonNull => 1,
         Datum::Dummy => 1,
         Datum::Numeric(_) => 1 + size_of::<OrderedDecimal<Decimal128>>(),
+        Datum::APD(_) => 1 + size_of::<OrderedDecimal<Apd>>(),
     }
 }
 

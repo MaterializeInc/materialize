@@ -417,6 +417,11 @@ pub const TYPE_INT2_ARRAY: BuiltinType = BuiltinType {
 };
 
 lazy_static! {
+    pub static ref TYPE_APD: BuiltinType = BuiltinType {
+        schema: PG_CATALOG_SCHEMA,
+        id: GlobalId::System(1996),
+        pgtype: &pgrepr::APDType,
+    };
     pub static ref TYPE_RDN: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
         id: GlobalId::System(1997),
@@ -1289,6 +1294,7 @@ lazy_static! {
             Builtin::Type(&TYPE_INTERVAL_ARRAY),
             Builtin::Type(&TYPE_JSONB),
             Builtin::Type(&TYPE_JSONB_ARRAY),
+            Builtin::Type(&TYPE_APD),
             Builtin::Type(&TYPE_RDN),
             Builtin::Type(&TYPE_LIST),
             Builtin::Type(&TYPE_MAP),

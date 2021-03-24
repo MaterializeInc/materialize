@@ -18,6 +18,7 @@ use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::adt::apd::Apd;
 use crate::adt::array::Array;
 use crate::adt::decimal::Significand;
 use crate::adt::interval::Interval;
@@ -71,6 +72,9 @@ pub enum Datum<'a> {
     /// A refactor of `Decimal` using `rust-dec`; allows up to 34 digits of
     /// precision.
     Numeric(OrderedDecimal<Decimal128>),
+    /// A refactor of `Decimal` using `rust-dec`; allows up to 39 digits of
+    /// precision.
+    APD(OrderedDecimal<Apd>),
     /// An unknown value within a JSON-typed `Datum`.
     ///
     /// This variant is distinct from [`Datum::Null`] as a null datum is
@@ -354,6 +358,19 @@ impl<'a> Datum<'a> {
         }
     }
 
+    /// Unwraps the numeric value within this datum.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the datum is not [`Datum::Numeric`].
+    #[track_caller]
+    pub fn unwrap_apd(&self) -> OrderedDecimal<Apd> {
+        match self {
+            Datum::APD(n) => *n,
+            _ => panic!("Datum::unwrap_numeric called on {:?}", self),
+        }
+    }
+
     /// Reports whether this datum is an instance of the specified column type.
     pub fn is_instance_of(self, column_type: &ColumnType) -> bool {
         fn is_instance_of_scalar(datum: Datum, scalar_type: &ScalarType) -> bool {
@@ -434,6 +451,8 @@ impl<'a> Datum<'a> {
                     (Datum::JsonNull, _) => false,
                     (Datum::Numeric(_), ScalarType::Numeric { .. }) => true,
                     (Datum::Numeric(_), _) => false,
+                    (Datum::APD(_), ScalarType::APD) => true,
+                    (Datum::APD(_), _) => false,
                 }
             }
         }
@@ -661,6 +680,7 @@ impl fmt::Display for Datum<'_> {
                 f.write_str("}")
             }
             Datum::Numeric(n) => write!(f, "{}", n.0.to_standard_notation_string()),
+            Datum::APD(n) => write!(f, "{}", n.0.to_standard_notation_string()),
             Datum::JsonNull => f.write_str("json_null"),
             Datum::Dummy => f.write_str("dummy"),
         }
@@ -758,6 +778,7 @@ pub enum ScalarType {
     Numeric {
         scale: Option<u8>,
     },
+    APD,
 }
 
 impl<'a> ScalarType {
@@ -895,7 +916,8 @@ impl PartialEq for ScalarType {
             | (Uuid, Uuid)
             | (Jsonb, Jsonb)
             | (Oid, Oid)
-            | (Numeric { .. }, Numeric { .. }) => true,
+            | (Numeric { .. }, Numeric { .. })
+            | (APD, APD) => true,
             (
                 List {
                     element_type: element_l,
@@ -951,7 +973,8 @@ impl PartialEq for ScalarType {
             | (Record { .. }, _)
             | (Oid, _)
             | (Map { .. }, _)
-            | (Numeric { .. }, _) => false,
+            | (Numeric { .. }, _)
+            | (APD, _) => false,
         }
     }
 }
@@ -1012,6 +1035,7 @@ impl Hash for ScalarType {
                 custom_oid.hash(state);
             }
             Numeric { .. } => state.write_u8(19),
+            APD => state.write_u8(20),
         }
     }
 }

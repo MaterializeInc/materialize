@@ -1,0 +1,162 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# apd is for refactoring decimal/numeric in parallel development to the main
+# branch
+
+mode cockroach
+
+query T
+SELECT pg_typeof('0.2'::apd)
+----
+apd
+
+query T
+SELECT ('0.2'::apd)::text
+----
+0.2
+
+query T
+SELECT ('-0.2'::apd)::text
+----
+-0.2
+
+query T
+SELECT ('2'::apd)::text
+----
+2
+
+query T
+SELECT ('-2'::apd)::text
+----
+-2
+
+query T
+SELECT ('20'::apd)::text
+----
+20
+
+query T
+SELECT ('-20'::apd)::text
+----
+-20
+
+query T
+SELECT ('-1.2e20'::apd)::text
+----
+-120000000000000000000
+
+query T
+SELECT ('1.2e-20'::apd)::text
+----
+0.000000000000000000012
+
+query T
+SELECT ('    1.2'::apd)::text
+----
+1.2
+
+query T
+SELECT ('1.2    '::apd)::text
+----
+1.2
+
+query error invalid input syntax for type apd: "1.   2"
+SELECT ('1.   2'::apd)::text
+
+query error invalid input syntax for type apd: "-123abc456"
+SELECT ('-123abc456'::apd)::text;
+
+# Max precision is 39
+query T
+SELECT ('-123456789012345678.901234567890123456789'::apd)::text
+----
+-123456789012345678.901234567890123456789
+
+query T
+SELECT ('-0.000000000000000000000000000000000000001'::apd)::text
+----
+-0.000000000000000000000000000000000000001
+
+# However, we'll round fractional component to not exceed 39 digits of precision
+query T
+SELECT ('-123456789012345678.9012345678901234567891'::apd)::text
+----
+-123456789012345678.901234567890123456789
+
+query error "-1.2e40" is out of range for type apd: exceeds maximum precision 39
+SELECT ('-1.2e40'::apd)::text
+
+query error "1.2e-40" is out of range for type apd: exceeds maximum precision 39
+SELECT ('1.2e-40'::apd)::text
+
+# Special values
+
+query T
+SELECT ('NaN'::apd)::text
+----
+NaN
+
+query error invalid input syntax for type apd: "-NaN"
+SELECT ('-NaN'::apd)::text
+
+query error invalid input syntax for type apd: "Infinity"
+SELECT ('Infinity'::apd)::text
+
+query error invalid input syntax for type apd: "-Infinity"
+SELECT ('-Infinity'::apd)::text
+
+# Addition
+query T
+SELECT ('1'::apd + '2'::apd)::text
+----
+3
+
+query T
+SELECT ('1.23'::apd + '2.34'::apd)::text
+----
+3.57
+
+query T
+SELECT ('3402823669209384634633746074317682'::apd + '3402823669209384634633746074317682'::apd)::text
+----
+6805647338418769269267492148635364
+
+query T
+SELECT ('3402823669209384.634633746074317682'::apd + '3402823669209384.634633746074317682'::apd)::text
+----
+6805647338418769.269267492148635364
+
+# Values rounded to fit precision
+query T
+SELECT ('1e38'::apd + '1e-39'::apd)::text
+----
+100000000000000000000000000000000000000
+
+# Limited precision means losing commutativity
+query T
+SELECT ('1e38'::apd + '1e-39'::apd + '-1e38'::apd)::text
+----
+0
+
+query T
+SELECT ('1e38'::apd + '-1e38'::apd + '1e-39'::apd)::text
+----
+0.000000000000000000000000000000000000001
+
+query error value out of range: overflow
+SELECT ('999999999999999999999999999999999999999'::apd + '1'::apd)::text
+
+query error value out of range: overflow
+SELECT ('790123449679012344967901234496790123392'::apd + '790123449679012344967901234496790123392'::apd)::text
+
+query T
+SELECT ('NaN'::apd + '2'::apd)::text
+----
+NaN

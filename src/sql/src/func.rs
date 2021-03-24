@@ -101,7 +101,8 @@ impl TypeCategory {
             | ScalarType::Int32
             | ScalarType::Int64
             | ScalarType::Numeric { .. }
-            | ScalarType::Oid => Self::Numeric,
+            | ScalarType::Oid
+            | ScalarType::APD => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
             ScalarType::String => Self::String,
@@ -2214,6 +2215,7 @@ lazy_static! {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
                 }, 1849;
                 params!(Numeric{scale: None}, Numeric{scale: None}) => AddNumeric, 17580;
+                params!(APD, APD) => AddAPD, 17581;
             },
             "-" => Scalar {
                 params!(Int32) => UnaryFunc::NegInt32, 558;
