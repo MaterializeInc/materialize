@@ -10,7 +10,6 @@
 //! An interactive dataflow server.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -27,7 +26,7 @@ use timely::dataflow::operators::unordered_input::UnorderedHandle;
 use timely::dataflow::operators::ActivateCapability;
 use timely::logging::Logger;
 use timely::order::PartialOrder;
-use timely::progress::frontier::Antichain;
+use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::ChangeBatch;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
@@ -225,12 +224,117 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
     )
 }
 
+pub struct TimestampBindingBox {
+    pub partitions: HashMap<PartitionId, Vec<(Timestamp, MzOffset)>>,
+    compaction_frontier: MutableAntichain<Timestamp>,
+}
+
+impl TimestampBindingBox {
+    fn new() -> Self {
+        Self {
+            partitions: HashMap::new(),
+            compaction_frontier: MutableAntichain::new(),
+        }
+    }
+
+    pub fn adjust_compaction_frontier(
+        &mut self,
+        remove: AntichainRef<Timestamp>,
+        add: AntichainRef<Timestamp>,
+    ) {
+        self.compaction_frontier
+            .update_iter(remove.iter().map(|t| (*t, -1)));
+        self.compaction_frontier
+            .update_iter(add.iter().map(|t| (*t, 1)));
+    }
+
+    pub fn compact(&mut self) {
+        let frontier = self.compaction_frontier.frontier();
+
+        for (_, entries) in self.partitions.iter_mut() {
+            entries.retain(|(time, _)| frontier.less_equal(time));
+        }
+    }
+
+    fn add_binding(&mut self, partition: PartitionId, timestamp: Timestamp, offset: MzOffset) {
+        let entry = self.partitions.entry(partition).or_insert_with(Vec::new);
+        let (last_ts, last_offset) = entry.last().unwrap_or(&(0, MzOffset { offset: 0 }));
+
+        // FIXME should we assert against the frontier as well?
+        assert!(
+            offset >= *last_offset,
+            "offset should not go backwards, but {} < {}",
+            offset,
+            last_offset
+        );
+        assert!(
+            timestamp > *last_ts,
+            "timestamp should move forwards, but {} <= {}",
+            timestamp,
+            last_ts
+        );
+        entry.push((timestamp, offset));
+    }
+}
+
+pub struct TimestampBindingRc {
+    pub wrapper: Rc<RefCell<TimestampBindingBox>>,
+    compaction_frontier: Antichain<Timestamp>,
+}
+
+impl TimestampBindingRc {
+    pub fn new() -> Self {
+        let wrapper = Rc::new(RefCell::new(TimestampBindingBox::new()));
+
+        let ret = Self {
+            wrapper: wrapper.clone(),
+            compaction_frontier: wrapper.borrow().compaction_frontier.frontier().to_owned(),
+        };
+
+        ret
+    }
+
+    pub fn set_compaction_frontier(&mut self, time: Timestamp) {
+        let new_frontier = Antichain::from_elem(time);
+
+        self.wrapper
+            .borrow_mut()
+            .adjust_compaction_frontier(self.compaction_frontier.borrow(), new_frontier.borrow());
+        self.compaction_frontier = new_frontier;
+    }
+
+    fn compact(&self) {
+        self.wrapper.borrow_mut().compact();
+    }
+
+    fn add_binding(&self, partition: PartitionId, timestamp: Timestamp, offset: MzOffset) {
+        self.wrapper
+            .borrow_mut()
+            .add_binding(partition, timestamp, offset);
+    }
+}
+
+impl Clone for TimestampBindingRc {
+    fn clone(&self) -> Self {
+        // Bump the reference count for the current frontier
+        self.wrapper.borrow_mut().adjust_compaction_frontier(
+            Antichain::new().borrow(),
+            self.compaction_frontier.borrow(),
+        );
+
+        Self {
+            wrapper: self.wrapper.clone(),
+            compaction_frontier: self.compaction_frontier.clone(),
+        }
+    }
+}
+
 /// A type wrapper for a timestamp update
 pub enum TimestampDataUpdate {
     /// RT sources see the current set of partitions known to the source.
     RealTime(HashSet<PartitionId>),
     /// BYO sources see a list of (Timestamp, MzOffset) timestamp updates
-    BringYourOwn(HashMap<PartitionId, VecDeque<(Timestamp, MzOffset)>>),
+    BringYourOwn(TimestampBindingRc),
 }
 /// Map of source ID to timestamp data updates (RT or BYO).
 pub type TimestampDataUpdates = Rc<RefCell<HashMap<GlobalId, TimestampDataUpdate>>>;
@@ -653,7 +757,7 @@ where
                 self.shutdown_logging();
             }
             SequencedCommand::AddSourceTimestamping { id, connector } => {
-                let byo_default = TimestampDataUpdate::BringYourOwn(HashMap::new());
+                let byo_default = TimestampDataUpdate::BringYourOwn(TimestampBindingRc::new());
 
                 let source_timestamp_data = if let SourceConnector::External {
                     connector,
@@ -728,28 +832,14 @@ where
                 let mut timestamps = self.render_state.ts_histories.borrow_mut();
                 if let Some(ts_entries) = timestamps.get_mut(&id) {
                     match ts_entries {
-                        TimestampDataUpdate::BringYourOwn(entries) => {
+                        TimestampDataUpdate::BringYourOwn(history) => {
                             if let TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) =
                                 update
                             {
-                                let partition_entries =
-                                    entries.entry(pid).or_insert_with(VecDeque::new);
-                                let (last_ts, last_offset) = partition_entries
-                                    .back()
-                                    .unwrap_or(&(0, MzOffset { offset: 0 }));
-                                assert!(
-                                    offset >= *last_offset,
-                                    "offset should not go backwards, but {} < {}",
-                                    offset,
-                                    last_offset
-                                );
-                                assert!(
-                                    timestamp > *last_ts,
-                                    "timestamp should move forwards, but {} <= {}",
-                                    timestamp,
-                                    last_ts
-                                );
-                                partition_entries.push_back((timestamp, offset));
+                                history.add_binding(pid, timestamp, offset);
+
+                                // FIXME move somewhere else
+                                history.compact();
                             } else {
                                 panic!("Unexpected message type. Expected BYO update.")
                             }
