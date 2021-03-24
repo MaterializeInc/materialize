@@ -503,7 +503,7 @@ impl Runner {
         let temp_dir = tempfile::tempdir()?;
         let mz_config = materialized::Config {
             logging: None,
-            timestamp_frequency: Duration::from_millis(10),
+            timestamp_frequency: Duration::from_secs(1),
             cache: None,
             persistence: None,
             logical_compaction_window: None,
