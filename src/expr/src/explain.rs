@@ -31,21 +31,19 @@ use std::iter;
 use ore::str::StrExt;
 use repr::RelationType;
 
-use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, MirRelationExpr, RowSetFinishing};
+use crate::{ExprHumanizer, Id, JoinImplementation, LocalId, MirRelationExpr};
 
-/// An `Explanation` facilitates pretty-printing of a [`MirRelationExpr`].
+/// An `ViewExplanation` facilitates pretty-printing of a [`MirRelationExpr`].
 ///
 /// By default, the [`fmt::Display`] implementation renders the expression as
 /// described in the module docs. Additional information may be attached to the
 /// explanation via the other public methods on the type.
 #[derive(Debug)]
-pub struct Explanation<'a> {
+pub struct ViewExplanation<'a> {
     expr_humanizer: &'a dyn ExprHumanizer,
     /// One `ExplanationNode` for each `MirRelationExpr` in the plan, in
     /// left-to-right post-order.
     nodes: Vec<ExplanationNode<'a>>,
-    /// An optional `RowSetFinishing` to mention at the end.
-    finishing: Option<RowSetFinishing>,
     /// Records the chain ID that was assigned to each expression.
     expr_chains: HashMap<*const MirRelationExpr, usize>,
     /// Records the chain ID that was assigned to each let.
@@ -67,7 +65,7 @@ pub struct ExplanationNode<'a> {
     pub chain: usize,
 }
 
-impl<'a> fmt::Display for Explanation<'a> {
+impl<'a> fmt::Display for ViewExplanation<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let mut prev_chain = usize::max_value();
         for node in &self.nodes {
@@ -85,38 +83,22 @@ impl<'a> fmt::Display for Explanation<'a> {
 
             self.fmt_node(f, node)?;
         }
-
-        if let Some(finishing) = &self.finishing {
-            writeln!(
-                f,
-                "\nFinish order_by={} limit={} offset={} project={}",
-                bracketed("(", ")", separated(", ", &finishing.order_by)),
-                match finishing.limit {
-                    Some(limit) => limit.to_string(),
-                    None => "none".to_owned(),
-                },
-                finishing.offset,
-                bracketed("(", ")", Indices(&finishing.project))
-            )?;
-        }
-
         Ok(())
     }
 }
 
-impl<'a> Explanation<'a> {
-    /// Creates an explanation for a [`MirRelationExpr`].
+impl<'a> ViewExplanation<'a> {
     pub fn new(
         expr: &'a MirRelationExpr,
         expr_humanizer: &'a dyn ExprHumanizer,
-    ) -> Explanation<'a> {
+    ) -> ViewExplanation<'a> {
         use MirRelationExpr::*;
 
         // Do a post-order traversal of the expression, grouping "chains" of
         // nodes together as we go. We have to break the chain whenever we
         // encounter a node with multiple inputs, like a join.
 
-        fn walk<'a>(expr: &'a MirRelationExpr, explanation: &mut Explanation<'a>) {
+        fn walk<'a>(expr: &'a MirRelationExpr, explanation: &mut ViewExplanation<'a>) {
             // First, walk the children, in order to perform a post-order
             // traversal.
             match expr {
@@ -165,7 +147,7 @@ impl<'a> Explanation<'a> {
                 .insert(expr as *const MirRelationExpr, explanation.chain);
         }
 
-        fn walk_many<'a, E>(exprs: E, explanation: &mut Explanation<'a>)
+        fn walk_many<'a, E>(exprs: E, explanation: &mut ViewExplanation<'a>)
         where
             E: IntoIterator<Item = &'a MirRelationExpr>,
         {
@@ -186,10 +168,9 @@ impl<'a> Explanation<'a> {
             }
         }
 
-        let mut explanation = Explanation {
+        let mut explanation = ViewExplanation {
             expr_humanizer,
             nodes: vec![],
-            finishing: None,
             expr_chains: HashMap::new(),
             local_id_chains: HashMap::new(),
             chain_local_ids: HashMap::new(),
@@ -205,11 +186,6 @@ impl<'a> Explanation<'a> {
             // TODO(jamii) `typ` is itself recursive, so this is quadratic :(
             node.typ = Some(node.expr.typ());
         }
-    }
-
-    /// Attach a `RowSetFinishing` to the explanation.
-    pub fn explain_row_set_finishing(&mut self, finishing: RowSetFinishing) {
-        self.finishing = Some(finishing);
     }
 
     fn fmt_node(&self, f: &mut fmt::Formatter, node: &ExplanationNode) -> fmt::Result {

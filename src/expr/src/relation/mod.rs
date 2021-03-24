@@ -19,7 +19,7 @@ use ore::collections::CollectionExt;
 use repr::{ColumnType, Datum, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
-use crate::explain::Explanation;
+use crate::explain::ViewExplanation;
 use crate::{DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr};
 
 pub mod canonicalize;
@@ -1057,12 +1057,12 @@ impl MirRelationExpr {
     /// This method allows an additional `ExprHumanizer` which can annotate
     /// identifiers with human-meaningful names for the identifiers.
     pub fn pretty_humanized(&self, id_humanizer: &impl ExprHumanizer) -> String {
-        Explanation::new(self, id_humanizer).to_string()
+        ViewExplanation::new(self, id_humanizer).to_string()
     }
 
     /// Pretty-print this MirRelationExpr to a string.
     pub fn pretty(&self) -> String {
-        Explanation::new(self, &DummyHumanizer).to_string()
+        ViewExplanation::new(self, &DummyHumanizer).to_string()
     }
 
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the correct type.
