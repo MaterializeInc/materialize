@@ -63,6 +63,8 @@ pub enum GlobalId {
     User(u64),
     /// Transient namespace.
     Transient(u64),
+    /// Dummy id for query being explained
+    Explain,
 }
 
 impl GlobalId {
@@ -105,6 +107,7 @@ impl fmt::Display for GlobalId {
             GlobalId::System(id) => write!(f, "s{}", id),
             GlobalId::User(id) => write!(f, "u{}", id),
             GlobalId::Transient(id) => write!(f, "t{}", id),
+            GlobalId::Explain => write!(f, "Explained Query"),
         }
     }
 }

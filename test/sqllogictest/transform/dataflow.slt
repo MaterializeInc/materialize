@@ -1,0 +1,63 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests of optimizing across views
+
+## Tests that not-materialized dependent views get inlined when planning to
+## materialize a view
+
+statement ok
+CREATE TABLE foo (a int, b int)
+
+statement ok
+CREATE VIEW foo2 as select b from foo where a = 5;
+
+statement ok
+CREATE VIEW foo3 as select b from foo2 where b = 6;
+
+query T multiline
+EXPLAIN PLAN FOR SELECT * from foo3
+----
+%0 =
+| Get materialize.public.foo (u1)
+| Filter (#0 = 5), (#1 = 6)
+| Project (#1)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR VIEW foo3
+----
+%0 =
+| Get materialize.public.foo (u1)
+| Filter (#0 = 5), (#1 = 6)
+| Project (#1)
+
+EOF
+
+statement ok
+CREATE DEFAULT INDEX ON foo2
+
+query T multiline
+EXPLAIN PLAN FOR VIEW foo3
+----
+%0 =
+| Get materialize.public.foo2 (u3)
+| Filter (#0 = 6)
+
+EOF
+
+query T multiline
+EXPLAIN PLAN FOR SELECT * from foo3
+----
+%0 =
+| Get materialize.public.foo2 (u3)
+| Filter (#0 = 6)
+
+EOF

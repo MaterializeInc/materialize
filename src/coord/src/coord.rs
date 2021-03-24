@@ -2727,7 +2727,8 @@ impl Coordinator {
             }
             ExplainStage::DecorrelatedPlan => {
                 let catalog = self.catalog.for_session(session);
-                let mut explanation = expr::explain::Explanation::new(&decorrelated_plan, &catalog);
+                let mut explanation =
+                    dataflow_types::Explanation::new(&decorrelated_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2737,11 +2738,19 @@ impl Coordinator {
                 explanation.to_string()
             }
             ExplainStage::OptimizedPlan => {
-                let optimized_plan = self
-                    .prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?
-                    .into_inner();
+                let optimized_plan =
+                    self.prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?;
+                let mut dataflow = DataflowDesc::new(format!("explanation"));
+                self.dataflow_builder().import_view_into_dataflow(
+                    // TODO: If explaining a view, pipe the actual id of the view.
+                    &GlobalId::Explain,
+                    &optimized_plan,
+                    &mut dataflow,
+                );
+                transform::optimize_dataflow(&mut dataflow);
                 let catalog = self.catalog.for_session(session);
-                let mut explanation = expr::explain::Explanation::new(&optimized_plan, &catalog);
+                let mut explanation =
+                    dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
