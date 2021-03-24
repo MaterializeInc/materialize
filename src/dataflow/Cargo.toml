@@ -35,6 +35,7 @@ prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prome
 rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
 regex = "1.4.5"
+reqwest = { version = "0.11", features = ["stream"] }
 repr = { path = "../repr" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }

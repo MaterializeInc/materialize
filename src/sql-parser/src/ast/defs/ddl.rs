@@ -292,6 +292,10 @@ pub enum Connector<T: AstInfo> {
         /// The PubNub channel to subscribe to
         channel: String,
     },
+    Sse {
+        /// Sse's url
+        url: String,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for Connector<T> {
@@ -373,6 +377,11 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                 f.write_str(&display::escape_single_quote_string(subscribe_key));
                 f.write_str("' CHANNEL '");
                 f.write_str(&display::escape_single_quote_string(channel));
+                f.write_str("'");
+            }
+            Connector::Sse { url } => {
+                f.write_str("SSE URL '");
+                f.write_str(&display::escape_single_quote_string(url));
                 f.write_str("'");
             }
         }

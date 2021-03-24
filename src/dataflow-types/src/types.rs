@@ -307,6 +307,7 @@ pub enum DataEncoding {
     Csv(CsvEncoding),
     Regex(RegexEncoding),
     Postgres(RelationDesc),
+    Sse,
     Bytes,
     Text,
 }
@@ -419,6 +420,10 @@ impl DataEncoding {
                     desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
                 })
             }
+            DataEncoding::Sse => key_desc
+                .with_column("id", ScalarType::String.nullable(false))
+                .with_column("type", ScalarType::String.nullable(false))
+                .with_column("data", ScalarType::String.nullable(false)),
             DataEncoding::Text => key_desc.with_column("text", ScalarType::String.nullable(false)),
             DataEncoding::Postgres(desc) => desc.clone(),
         })
@@ -432,6 +437,7 @@ impl DataEncoding {
             DataEncoding::Protobuf(_) => "Protobuf",
             DataEncoding::Regex { .. } => "Regex",
             DataEncoding::Csv(_) => "Csv",
+            DataEncoding::Sse => "Sse",
             DataEncoding::Text => "Text",
             DataEncoding::Postgres(_) => "Postgres",
         }
@@ -567,6 +573,7 @@ pub enum ExternalSourceConnector {
     S3(S3SourceConnector),
     Postgres(PostgresSourceConnector),
     PubNub(PubNubSourceConnector),
+    Sse(SseSourceConnector),
 }
 
 impl ExternalSourceConnector {
@@ -589,6 +596,7 @@ impl ExternalSourceConnector {
             Self::S3(_) => vec![("mz_record".into(), ScalarType::Int64.nullable(false))],
             Self::Postgres(_) => vec![],
             Self::PubNub(_) => vec![],
+            Self::Sse(_) => vec![],
         }
     }
 
@@ -602,6 +610,7 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::S3(_) => "s3",
             ExternalSourceConnector::Postgres(_) => "postgres",
             ExternalSourceConnector::PubNub(_) => "pubnub",
+            ExternalSourceConnector::Sse(_) => "sse",
         }
     }
 
@@ -715,6 +724,11 @@ pub struct PostgresSourceConnector {
 pub struct PubNubSourceConnector {
     pub subscribe_key: String,
     pub channel: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SseSourceConnector {
+    pub url: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

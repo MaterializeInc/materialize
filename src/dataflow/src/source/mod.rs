@@ -57,6 +57,7 @@ mod kafka;
 mod kinesis;
 mod pubnub;
 mod s3;
+mod sse;
 mod util;
 
 pub mod cache;
@@ -69,6 +70,7 @@ pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;
 pub use pubnub::PubNubSourceReader;
 pub use s3::S3SourceReader;
+pub use sse::SseSourceReader;
 
 // Interval after which the source operator will yield control.
 static YIELD_INTERVAL_MS: u128 = 10;

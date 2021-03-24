@@ -103,6 +103,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             }
             Connector::Postgres { .. } => (),
             Connector::PubNub { .. } => (),
+            Connector::Sse { .. } => (),
         }
 
         purify_format(format, connector, col_names, file, &config_options).await?;

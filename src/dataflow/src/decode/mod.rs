@@ -501,5 +501,8 @@ where
         (DataEncoding::Postgres(_), _) => {
             unreachable!("Internal error: postgres sources are never decoded");
         }
+        (DataEncoding::Sse, _) => {
+            unreachable!("Internal error: sse sources are never decoded");
+        }
     }
 }

@@ -35,7 +35,7 @@ use crate::server::LocalInput;
 use crate::source::SourceConfig;
 use crate::source::{
     self, FileSourceReader, KafkaSourceReader, KinesisSourceReader, PubNubSourceReader,
-    S3SourceReader,
+    S3SourceReader, SseSourceReader,
 };
 
 impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, Timestamp>
@@ -199,6 +199,20 @@ where
                     );
 
                     (ok_stream.as_collection(), capability)
+                } else if let ExternalSourceConnector::Sse(sse_connector) = connector {
+                    let source = SseSourceReader::new(sse_connector);
+
+                    let ((ok_stream, err_stream), capability) =
+                        source::create_source_simple(source_config, source);
+
+                    error_collections.push(
+                        err_stream
+                            .map(DataflowError::SourceError)
+                            .pass_through("source-errors")
+                            .as_collection(),
+                    );
+
+                    (ok_stream.as_collection(), capability)
                 } else {
                     let ((ok_source, err_source), capability) = match connector {
                         ExternalSourceConnector::Kafka(_) => {
@@ -225,6 +239,7 @@ where
                         ExternalSourceConnector::AvroOcf(_) => unreachable!(),
                         ExternalSourceConnector::Postgres(_) => unreachable!(),
                         ExternalSourceConnector::PubNub(_) => unreachable!(),
+                        ExternalSourceConnector::Sse(_) => unreachable!(),
                     };
 
                     // Include any source errors.
