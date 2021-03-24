@@ -184,7 +184,7 @@ where
 
                     (collection, capability)
                 } else if let ExternalSourceConnector::Postgres(_pg_connector) = connector {
-                    unimplemented!("Postgres sources are not supported yet");
+                    unreachable!("rendering Postgres source");
                 } else if let ExternalSourceConnector::PubNub(pubnub_connector) = connector {
                     let source = PubNubSourceReader::new(pubnub_connector);
 

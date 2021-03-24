@@ -48,7 +48,7 @@ CreateTable(CreateTableStatement { name: UnresolvedObjectName([Ident("t")]), col
 parse-statement
 CREATE TABLE t
 ----
-error: Expected left parenthesis, found EOF
+error: Expected a list of columns in parentheses, found EOF
 CREATE TABLE t
               ^
 
