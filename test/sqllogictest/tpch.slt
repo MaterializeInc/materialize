@@ -1128,23 +1128,29 @@ WHERE
 ORDER BY
     s_suppkey
 ----
-%0 =
+%0 = Let l0 =
+| Get materialize.public.lineitem (u21)
+| Filter (datetots(#10) < 1996-04-01 00:00:00), (#10 >= 1996-01-01)
+| Reduce group=(#2)
+| | agg sum((#5 * (100dec - #6)))
+
+%1 =
 | Get materialize.public.supplier (u8)
 | ArrangeBy (#0)
 
-%1 =
-| Get materialize.public.revenue (u27)
+%2 =
+| Get %0 (l0)
 | ArrangeBy (#0)
 
-%2 =
-| Get materialize.public.revenue (u27)
+%3 =
+| Get %0 (l0)
 | Reduce group=()
 | | agg max(#1)
 | ArrangeBy (#0)
 
-%3 =
-| Join %0 %1 %2 (= #0 #7) (= #8 #9)
-| | implementation = Differential %0.(#0) %1.(#0) %2.(#0)
+%4 =
+| Join %1 %2 %3 (= #0 #7) (= #8 #9)
+| | implementation = Differential %1.(#0) %2.(#0) %3.(#0)
 | | demand = (#0..#2, #4, #8)
 | Project (#0..#2, #4, #8)
 
