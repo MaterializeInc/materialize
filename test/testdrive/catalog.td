@@ -381,8 +381,61 @@ mz_view_foreign_keys  system
 mz_view_keys          system
 mz_views              system
 
-! SHOW EXTENDED TABLES
-SHOW EXTENDED TABLES not yet supported
+> CREATE SCHEMA tester
+
+> SHOW TABLES FROM tester
+
+> SHOW EXTENDED tables FROM tester
+mz_array_types
+mz_avro_ocf_sinks
+mz_base_types
+mz_columns
+mz_databases
+mz_functions
+mz_index_columns
+mz_indexes
+mz_kafka_sinks
+mz_list_types
+mz_map_types
+mz_pseudo_types
+mz_roles
+mz_schemas
+mz_sinks
+mz_sources
+mz_tables
+mz_types
+mz_view_foreign_keys
+mz_view_keys
+mz_views
+
+> CREATE TABLE tester.test_table (a int)
+
+> SHOW TABLES FROM tester
+test_table
+
+> SHOW EXTENDED tables FROM tester
+mz_array_types
+mz_avro_ocf_sinks
+mz_base_types
+mz_columns
+mz_databases
+mz_functions
+mz_index_columns
+mz_indexes
+mz_kafka_sinks
+mz_list_types
+mz_map_types
+mz_pseudo_types
+mz_roles
+mz_schemas
+mz_sinks
+mz_sources
+mz_tables
+mz_types
+mz_view_foreign_keys
+mz_view_keys
+mz_views
+test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
