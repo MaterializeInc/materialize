@@ -142,7 +142,6 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
         // Read any statistics objects generated via the GlueConsumerContext::stats callback
         while let Ok(statistics) = self.stats_rx.try_recv() {
             if let Some(logger) = self.logger.as_mut() {
-                info!("Client stats: {:#?}", statistics);
                 for mut part in self.partition_consumers.iter_mut() {
                     // If this is the first callback, initialize our consumer name
                     // so that we can later retract this when the source is dropped
@@ -150,12 +149,6 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
                         None => part.previous_stats.consumer_name = Some(statistics.name.clone()),
                         _ => (),
                     }
-
-                    info!(
-                        "Topic: {}, Partition: {}",
-                        self.topic_name.as_str(),
-                        part.pid.to_string()
-                    );
 
                     let topic_stats = match statistics.topics.get(self.topic_name.as_str()) {
                         Some(t) => t,
