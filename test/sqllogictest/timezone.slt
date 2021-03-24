@@ -25,7 +25,7 @@ statement error parameter "TimeZone" can only be set to "UTC"
 SET TIME ZONE bad
 
 query T
-SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE TEXT 'America/New_York'
+SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE 'America/New_York'
 ----
 2020-12-21 23:53:49+00
 
@@ -35,12 +35,12 @@ SELECT TIMESTAMPTZ '2020-12-21 18:53:49 America/New_York'
 2020-12-21 23:53:49+00
 
 query T
-SELECT timezone(TEXT 'America/New_York', TIMESTAMP '2020-12-21 18:53:49')
+SELECT timezone('America/New_York', TIMESTAMP '2020-12-21 18:53:49')
 ----
 2020-12-21 23:53:49+00
 
 query T
-SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE TEXT 'America/New_York'
+SELECT TIMESTAMP '2020-12-21 18:53:49' AT TIME ZONE 'America/New_York'
 ----
 2020-12-21 23:53:49+00
 
@@ -50,7 +50,7 @@ SELECT TIMESTAMPTZ '2020-12-21 18:53:49 America/New_York'
 2020-12-21 23:53:49+00
 
 query T
-SELECT timezone(TEXT 'America/New_York', TIMESTAMP '2020-12-21 18:53:49')
+SELECT timezone('America/New_York', TIMESTAMP '2020-12-21 18:53:49')
 ----
 2020-12-21 23:53:49+00
 
@@ -60,7 +60,7 @@ SELECT timezone(INTERVAL '+11'HOUR, TIME '18:53:49')::time
 05:53:49
 
 query T
-SELECT TIMESTAMPTZ '2020-12-21 18:53:49 Pacific/Auckland' AT TIME ZONE TEXT 'Turkey'
+SELECT TIMESTAMPTZ '2020-12-21 18:53:49 Pacific/Auckland' AT TIME ZONE 'Turkey'
 ----
 2020-12-21 08:53:49
 
