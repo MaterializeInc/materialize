@@ -253,14 +253,12 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
                                     .entry(broker.into())
                                     .or_insert_with(BrokerRTTWindow::default);
 
-                                let event = window.update(
+                                logger.log(window.update(
                                     statistics.name.to_string(),
                                     self.id,
                                     broker.to_string(),
                                     rtt,
-                                );
-
-                                logger.log(event);
+                                ));
                             }
                             None => (),
                         }
