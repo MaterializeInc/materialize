@@ -158,7 +158,7 @@ Field           | Type       | Meaning
 `tx_msgs`       | [`bigint`] | The number of messages sent by this consumer since materialized startup.
 `tx_bytes`      | [`bigint`] | The number of bytes sent by this consumer since materialized startup.
 `lo_offset`     | [`bigint`] | The partition's low watermark offset on the broker.
-`hi_offset`     | [`bigint`] | The partition's hi watermark offset on the broker.
+`hi_offset`     | [`bigint`] | The partition's high watermark offset on the broker.
 `ls_offset`     | [`bigint`] | The partition's last stable offset on the broker.
 `app_offset`    | [`bigint`] | The offset of the last message passed to materialized + 1.
 `consumer_lag`  | [`bigint`] | Difference between the `hi_offset` and `app_offset`.
