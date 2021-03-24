@@ -11,15 +11,20 @@ header {
   max-width: 1280px;
   margin: 0 auto;
   padding: 0 20px;
-  flex-wrap:wrap;
+  flex-wrap: wrap;
 
   * { box-sizing:border-box;}
+
+  a:hover {
+    color: #612dd3;
+    opacity: 1.0;
+  }
 
   .utility-bar {
     flex: 0 0 100%;
     height: 26px;
-    margin-top:4px;
-    padding-right:56px;
+    margin-top: 4px;
+    padding-right: 56px;
     text-align: right;
 
     a {
@@ -27,7 +32,7 @@ header {
       font-size: 14px;
       padding: 0 10px 6px;
       background: #e0e2e2;
-      border-radius:3px;
+      border-radius: 3px;
       &.primary {
           color: #FFF;
           background:#d12fa7;
