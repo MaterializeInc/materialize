@@ -280,19 +280,17 @@ fn show_tables<'a>(
     };
 
     let mut query = format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
-            FROM mz_catalog.mz_tables
-            WHERE schema_id = {}",
-            schema.id(),
+        "SELECT t.name, mz_internal.mz_classify_object_id(t.id) AS type
+        FROM mz_catalog.mz_tables t
+        JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
+        WHERE schema_id = {}",
+        schema.id(),
     );
     if extended {
         query += " OR s.database_id IS NULL";
-    } 
+    }
     if !full {
-        query = format!(
-            "SELECT name FROM mz_catalog.mz_tables WHERE schema_id = {}",
-            schema.id(),
-        );
+        query = format!("SELECT name FROM ({})", query);
     }
 
     Ok(ShowSelect::new(scx, query, filter))
