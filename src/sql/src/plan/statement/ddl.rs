@@ -1322,7 +1322,7 @@ pub fn plan_create_sink(
     let mut depends_on = vec![from.id()];
     depends_on.extend(from.uses());
 
-    let root_user_dependencies = get_root_user_dependencies(scx, &depends_on);
+    let root_user_dependencies = get_root_dependencies(scx, &depends_on);
 
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
@@ -1367,7 +1367,7 @@ pub fn plan_create_sink(
 
 /// Returns only those `CatalogItem`s that don't have any other user
 /// dependencies. Those are the root dependencies.
-fn get_root_user_dependencies<'a>(
+fn get_root_dependencies<'a>(
     scx: &'a StatementContext,
     depends_on: &[GlobalId],
 ) -> Vec<&'a dyn CatalogItem> {
