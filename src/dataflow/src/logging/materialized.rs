@@ -283,10 +283,10 @@ pub fn construct<A: Allocate>(
                                 kafka_broker_rtt_session.give((
                                     (consumer_name, source_id, broker_name),
                                     time_ms,
-                                    DiffVector::new(vec![
+                                    vec![
                                         min, max, avg, sum, cnt, stddev, hdrsize, p50, p75, p90,
                                         p95, p99, p99_99, outofrange,
-                                    ]),
+                                    ],
                                 ));
                             }
                             MaterializedEvent::KafkaConsumerInfo {
