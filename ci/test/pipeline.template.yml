@@ -215,6 +215,14 @@ steps:
           composition: persistent-tables
           run: persistent-tables
 
+  - id: pubnub
+    label: "pubnub source"
+    depends_on: build
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: pubnub
+          run: pubnub
+
   - id: kafka-exactly-once
     label: "Test for the Kafka exactly-once sink"
     depends_on: build
