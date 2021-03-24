@@ -4,7 +4,7 @@
 `security_protocol` | `text` | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberized-kafka-details), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
 `statistics_interval_ms` | `int` | `librdkafka` statistics emit interval in `ms`. Accepts values [0, 86400000]. The granularity is 1000ms. A value of 0 disables statistics.
 `ignore_source_keys` | `boolean` | Default: `false`. If `true`, do not perform optimizations assuming uniqueness of primary keys in schemas.
-`timestamp_frequency_ms`| `int` | Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently timestamps advance in the system. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
+`timestamp_frequency_ms`| `int` | Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently the source advances its timestamp. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
 `topic_metadata_refresh_interval_ms` | `int` | Default: `30000`. Sets the frequency in `ms` at which the system checks for new partitions. Accepts values [0,3600000].
 
 #### SSL `WITH` options
