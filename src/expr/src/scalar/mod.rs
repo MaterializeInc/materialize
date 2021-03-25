@@ -175,15 +175,6 @@ impl MirScalarExpr {
         }
     }
 
-    pub fn visit_mut_pre<F>(&mut self, f: &mut F)
-    where
-        F: FnMut(&mut Self) -> bool,
-    {
-        if !f(self) {
-            self.visit1_mut(|e| e.visit_mut_pre(f));
-        }
-    }
-
     pub fn visit_mut<F>(&mut self, f: &mut F)
     where
         F: FnMut(&mut Self),
