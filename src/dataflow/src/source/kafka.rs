@@ -150,8 +150,15 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
                         _ => (),
                     }
 
-                    let partition_stats =
-                        &statistics.topics[self.topic_name.as_str()].partitions[&part.pid];
+                    let topic_stats = match statistics.topics.get(self.topic_name.as_str()) {
+                        Some(t) => t,
+                        None => continue,
+                    };
+
+                    let partition_stats = match topic_stats.partitions.get(&part.pid) {
+                        Some(p) => p,
+                        None => continue,
+                    };
 
                     logger.log(MaterializedEvent::KafkaConsumerInfo {
                         consumer_name: statistics.name.to_string(),
