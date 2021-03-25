@@ -729,6 +729,7 @@ pub struct PubNubSourceConnector {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SseSourceConnector {
     pub url: String,
+    pub headers: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

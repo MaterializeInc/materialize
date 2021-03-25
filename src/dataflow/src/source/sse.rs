@@ -13,7 +13,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::{AsyncBufReadExt, StreamExt, TryStreamExt};
-use reqwest::Client;
+use reqwest::{
+    header::{self, HeaderMap},
+    Client,
+};
 
 use crate::source::{SimpleSource, SourceError, Timestamper};
 use dataflow_types::SseSourceConnector;
@@ -22,6 +25,7 @@ use repr::RowPacker;
 /// Information required to sync data from Sse
 pub struct SseSourceReader {
     connector: SseSourceConnector,
+    headers: HeaderMap,
     reconnection_time: Duration,
     last_event_id: String,
 }
@@ -29,8 +33,14 @@ pub struct SseSourceReader {
 impl SseSourceReader {
     /// Constructs a new instance
     pub fn new(connector: SseSourceConnector) -> Self {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::ACCEPT,
+            "text/event-stream".parse().expect("valid header"),
+        );
         Self {
             connector,
+            headers,
             reconnection_time: Duration::from_secs(5),
             last_event_id: String::new(),
         }
@@ -41,7 +51,9 @@ impl SseSourceReader {
 
         let client = Client::new();
 
-        let request = client.get(&self.connector.url);
+        let request = client
+            .get(&self.connector.url)
+            .headers(self.headers.clone());
         let request = if self.last_event_id.is_empty() {
             request
         } else {
@@ -127,6 +139,21 @@ impl SseSourceReader {
 #[async_trait]
 impl SimpleSource for SseSourceReader {
     async fn start(mut self, timestamper: &Timestamper) -> Result<(), SourceError> {
+        for (name, value) in &self.connector.headers {
+            let name: header::HeaderName = name.parse().or_else(|_| {
+                Err(SourceError::FileIO(format!(
+                    "Invalid header name: {}",
+                    name
+                )))
+            })?;
+            let value = value.parse().or_else(|_| {
+                Err(SourceError::FileIO(format!(
+                    "Invalid header value: {}",
+                    value
+                )))
+            })?;
+            self.headers.insert(name, value);
+        }
         loop {
             let _ = self.try_produce(timestamper).await;
             tokio::time::sleep(self.reconnection_time).await;

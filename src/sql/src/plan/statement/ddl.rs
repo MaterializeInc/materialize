@@ -758,9 +758,17 @@ pub fn plan_create_source(
 
             (connector, DataEncoding::Text)
         }
-        Connector::Sse { url } => {
+        Connector::Sse { url, headers } => {
             scx.require_experimental_mode("Sse Sources")?;
-            let connector = ExternalSourceConnector::Sse(SseSourceConnector { url: url.clone() });
+            let headers: HashMap<_, _> = headers
+                .clone()
+                .into_iter()
+                .map(|header| (header.name, header.value))
+                .collect();
+            let connector = ExternalSourceConnector::Sse(SseSourceConnector {
+                url: url.clone(),
+                headers,
+            });
 
             (connector, DataEncoding::Sse)
         }

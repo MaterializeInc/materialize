@@ -1716,7 +1716,21 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(URL)?;
                 let url = self.parse_literal_string()?;
 
-                Ok(Connector::Sse { url })
+                let mut headers = vec![];
+                if self.parse_keyword(HEADERS) {
+                    self.expect_token(&Token::LParen)?;
+                    headers = self
+                        .parse_comma_separated(Parser::parse_literal_key_value)?
+                        .into_iter()
+                        .map(|(key, val)| Header {
+                            name: key,
+                            value: val,
+                        })
+                        .collect_vec();
+                    self.expect_token(&Token::RParen)?;
+                }
+
+                Ok(Connector::Sse { url, headers })
             }
             POSTGRES => {
                 self.expect_keyword(HOST)?;
@@ -1944,6 +1958,13 @@ impl<'a> Parser<'a> {
             as_type,
             with_options,
         }))
+    }
+
+    fn parse_literal_key_value(&mut self) -> Result<(String, String), ParserError> {
+        let key = self.parse_literal_string()?;
+        self.expect_token(&Token::Eq)?;
+        let value = self.parse_literal_string()?;
+        Ok((key, value))
     }
 
     fn parse_data_type_option(&mut self) -> Result<SqlOption<Raw>, ParserError> {
