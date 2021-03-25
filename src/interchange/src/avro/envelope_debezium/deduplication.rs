@@ -52,6 +52,10 @@ use super::RowCoordinates;
 /// the highest-ever-seen message.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub enum DebeziumDeduplicationStrategy {
+    /// Do not perform any deduplication
+    ///
+    /// This should mostly be used with envelope upsert
+    None,
     /// We can trust high water mark
     Ordered,
     /// We need to store some piece of state for every message
@@ -231,9 +235,12 @@ impl DebeziumDeduplicationState {
     pub(crate) fn new(
         strat: DebeziumDeduplicationStrategy,
         key_indices: Option<Vec<usize>>,
-    ) -> Self {
+    ) -> Option<Self> {
+        if matches!(strat, DebeziumDeduplicationStrategy::None) {
+            return None;
+        }
         let full = match strat {
-            DebeziumDeduplicationStrategy::Ordered => None,
+            DebeziumDeduplicationStrategy::Ordered | DebeziumDeduplicationStrategy::None => None,
             DebeziumDeduplicationStrategy::Full => Some(TrackFull::from_keys(key_indices)),
             DebeziumDeduplicationStrategy::FullInRange {
                 start,
@@ -246,12 +253,12 @@ impl DebeziumDeduplicationState {
                 pad_start,
             )),
         };
-        DebeziumDeduplicationState {
+        Some(DebeziumDeduplicationState {
             binlog_offsets: Default::default(),
             full,
             warned_on_unknown: false,
             messages_processed: 0,
-        }
+        })
     }
 
     #[must_use]

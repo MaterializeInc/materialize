@@ -821,9 +821,13 @@ pub fn plan_create_source(
         sql_parser::ast::Envelope::None => SourceEnvelope::None,
         sql_parser::ast::Envelope::Debezium(mode) => {
             let dedup_strat = match with_options.remove("deduplication") {
-                None => DebeziumDeduplicationStrategy::Ordered,
+                None => match mode {
+                    sql_parser::ast::DbzMode::Plain => DebeziumDeduplicationStrategy::Ordered,
+                    sql_parser::ast::DbzMode::Upsert => DebeziumDeduplicationStrategy::None,
+                },
                 Some(Value::String(s)) => {
                     match s.as_str() {
+                        "none" => DebeziumDeduplicationStrategy::None,
                         "full" => DebeziumDeduplicationStrategy::Full,
                         "ordered" => DebeziumDeduplicationStrategy::Ordered,
                         "full_in_range" => {
