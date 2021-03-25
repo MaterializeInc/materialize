@@ -311,7 +311,7 @@ a  b
 $ kafka-add-partitions topic=non-dbz-data-varying-partition total-partitions=2
 
 # Reading data that's ingested to a new partition takes longer than the default timeout.
-$ set-sql-timeout duration=120s
+$ set-sql-timeout duration=60s
 
 $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz-schema} timestamp=1 partition=1
 {"a": 7, "b": 8}
