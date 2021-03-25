@@ -99,6 +99,9 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     // `true` (resp. `false`) every subexpression in
     // `(p1 & ... & p(i-1) & p(i+1) ... & pn)` that is equal to `pi`.
 
+    // Note that this also dedups predicates since if `p1 = p2` then this
+    // reduction process will replace `p1` with true.
+
     // Pop out a predicate `p` from `predicates_to_apply`. Check all the other
     // predicates (this is the union of `predicates_to_apply` and
     // `applied_predicates`), and if `p` is a subexpression of any of those
@@ -113,12 +116,12 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     std::mem::swap(&mut predicates_to_apply, predicates);
 
     while let Some(predicate_to_apply) = predicates_to_apply.pop() {
-        let mut reduce_other_instances_of_expr =
+        let mut replace_subexpr_other_predicates =
             |expr: &MirScalarExpr, constant_bool: &MirScalarExpr| {
                 // Do not replace subexpressions equal to `expr` if `expr` is a
                 // literal to avoid infinite looping.
                 if !expr.is_literal() && !expr.typ(input_type).nullable {
-                    for other_predicate in predicates_to_apply.iter_mut() {
+                    let replace_subexpr_other_predicate = |other_predicate: &mut MirScalarExpr| {
                         let mut changed = false;
                         other_predicate.visit_mut_pre(&mut |e: &mut MirScalarExpr| {
                             if e == expr {
@@ -132,22 +135,13 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
                         if changed {
                             other_predicate.reduce(input_type);
                         }
+                        changed
+                    };
+                    for other_predicate in predicates_to_apply.iter_mut() {
+                        replace_subexpr_other_predicate(other_predicate);
                     }
                     for other_idx in (0..applied_predicates.len()).rev() {
-                        let mut changed = false;
-                        applied_predicates[other_idx].visit_mut_pre(
-                            &mut |e: &mut MirScalarExpr| {
-                                if e == expr {
-                                    *e = constant_bool.clone();
-                                    changed = true;
-                                    true
-                                } else {
-                                    false
-                                }
-                            },
-                        );
-                        if changed {
-                            applied_predicates[other_idx].reduce(input_type);
+                        if replace_subexpr_other_predicate(&mut applied_predicates[other_idx]) {
                             predicates_to_apply.push(applied_predicates.remove(other_idx));
                         }
                     }
@@ -159,21 +153,22 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
             expr,
         } = &predicate_to_apply
         {
-            reduce_other_instances_of_expr(
+            replace_subexpr_other_predicates(
                 expr,
                 &MirScalarExpr::literal_ok(Datum::False, ScalarType::Bool),
             )
         } else {
-            reduce_other_instances_of_expr(
+            replace_subexpr_other_predicates(
                 &predicate_to_apply,
                 &MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool),
             );
         }
         applied_predicates.push(predicate_to_apply);
     }
+    // Remove any predicates that have been reduced to "true"
+    applied_predicates.retain(|p| !p.is_literal_true());
     *predicates = applied_predicates;
 
-    // 4) Sort and dedup predicates.
+    // 4) Sort predicates.
     predicates.sort();
-    predicates.dedup();
 }
