@@ -17,6 +17,7 @@ use std::rc::Rc;
 use anyhow::bail;
 use dec::{Context as DecimalCx, Decimal128, OrderedDecimal};
 use ordered_float::OrderedFloat;
+use uuid::Uuid;
 
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::schema::{SchemaNode, SchemaPiece};
@@ -30,7 +31,6 @@ use repr::adt::decimal::Significand;
 use repr::adt::jsonb::JsonbPacker;
 use repr::adt::rdn;
 use repr::{Datum, Row, RowPacker};
-use uuid::Uuid;
 
 use super::{
     is_null, AvroDebeziumDecoder, ConfluentAvroResolver, DebeziumDeduplicationState,
@@ -84,7 +84,7 @@ impl Decoder {
                 || (envelope != EnvelopeType::Debezium && debezium_dedup.is_none())
         );
         let debezium_dedup =
-            debezium_dedup.map(|strat| DebeziumDeduplicationState::new(strat, key_indices));
+            debezium_dedup.and_then(|strat| DebeziumDeduplicationState::new(strat, key_indices));
         let csr_avro =
             ConfluentAvroResolver::new(reader_schema, schema_registry, confluent_wire_format)?;
 
@@ -118,8 +118,6 @@ impl Decoder {
             let dsr = GeneralDeserializer {
                 schema: resolved_schema.top_node(),
             };
-            // Unwrap is OK: we assert in Decoder::new that this is non-none when envelope == dbz.
-            let dedup = self.debezium_dedup.as_mut().unwrap();
             let (row, coords) = dsr.deserialize(&mut bytes, dec)?;
             if self.reject_non_inserts {
                 if !matches!(row.iter().next(), None | Some(Datum::Null)) {
@@ -130,6 +128,7 @@ impl Decoder {
                     )
                 }
             }
+            let dedupe = self.debezium_dedup.as_mut();
             let should_use = if let Some(source) = coords {
                 let mssql_fsn_buf;
                 // This would have ideally been `Option<&[u8]>`,
@@ -144,16 +143,23 @@ impl Decoder {
                     RowCoordinates::Postgres { .. } => &b""[..],
                     RowCoordinates::Unknown { .. } => &b""[..],
                 };
-                dedup.should_use_record(
-                    file,
-                    source.row,
-                    coord,
-                    upstream_time_millis,
-                    &self.debug_name,
-                    self.worker_index,
-                    source.snapshot,
-                    &row,
-                )
+
+                let debug_name = &self.debug_name;
+                let worker_index = self.worker_index;
+                dedupe
+                    .map(|d| {
+                        d.should_use_record(
+                            file,
+                            source.row,
+                            coord,
+                            upstream_time_millis,
+                            debug_name,
+                            worker_index,
+                            source.snapshot,
+                            &row,
+                        )
+                    })
+                    .unwrap_or(true)
             } else {
                 true
             };

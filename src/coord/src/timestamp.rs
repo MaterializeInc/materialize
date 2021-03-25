@@ -35,9 +35,9 @@ use tokio::sync::mpsc;
 use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
-    AvroOcfEncoding, Consistency, DataEncoding, ExternalSourceConnector, FileSourceConnector,
-    KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector, SourceConnector,
-    SourceEnvelope, TimestampSourceUpdate,
+    AvroOcfEncoding, Consistency, DataEncoding, DebeziumMode, ExternalSourceConnector,
+    FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector,
+    SourceConnector, SourceEnvelope, TimestampSourceUpdate,
 };
 use expr::{GlobalId, PartitionId};
 use ore::collections::CollectionExt;
@@ -397,7 +397,7 @@ fn parse_debezium(record: Vec<(String, Value)>) -> Option<Vec<(String, i64)>> {
 /// 2) any other file source with a Debezium envelope will expect an Avro consistency source
 /// that follows the TRX_METADATA_SCHEMA Avro spec outlined above
 fn identify_consistency_format(enc: DataEncoding, env: SourceEnvelope) -> ConsistencyFormatting {
-    if let SourceEnvelope::Debezium(_) = env {
+    if let SourceEnvelope::Debezium(_, DebeziumMode::Plain) = env {
         if let DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema: _ }) = enc {
             ConsistencyFormatting::DebeziumOcf
         } else {

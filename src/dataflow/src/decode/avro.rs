@@ -11,9 +11,9 @@ use futures::executor::block_on;
 
 use dataflow_types::{DataflowError, DecodeError};
 use interchange::avro::{DebeziumDeduplicationStrategy, Decoder, EnvelopeType};
-use repr::{Diff, Row, Timestamp};
+use repr::Row;
 
-use super::{DecoderState, PushSession};
+use super::DecoderState;
 use crate::metrics::EVENTS_COUNTER;
 
 pub struct AvroDecoderState {
@@ -89,30 +89,24 @@ impl DecoderState for AvroDecoderState {
     }
 
     /// give a session a plain value
-    fn give_value<'a>(
+    fn get_value(
         &mut self,
         bytes: &[u8],
         coord: Option<i64>,
         upstream_time_millis: Option<i64>,
-        session: &mut PushSession<'a, (Result<Row, DataflowError>, Timestamp, Diff)>,
-        time: Timestamp,
-    ) {
+    ) -> Option<Result<Row, DataflowError>> {
         match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
             Ok(Some(row)) => {
                 self.events_success += 1;
-                session.give((Ok(row), time, 1));
+                Some(Ok(row))
             }
-            Ok(None) => {}
+            Ok(None) => None,
             Err(err) => {
                 self.events_error += 1;
-                session.give((
-                    Err(DataflowError::DecodeError(DecodeError::Text(format!(
-                        "avro deserialization error: {}",
-                        err
-                    )))),
-                    time,
-                    1,
-                ));
+                Some(Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                    "avro deserialization error: {}",
+                    err
+                )))))
             }
         }
     }
