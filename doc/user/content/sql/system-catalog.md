@@ -251,14 +251,15 @@ Field          | Type       | Meaning
 
 ### `mz_source_info`
 
-The `mz_source_info` table contains a row for each source in the system.
+The `mz_source_info` table contains a row for each partition of each source
+in the system.
 
 Field          | Type       | Meaning
 ---------------|------------|----------
 `source_name`  | [`text`]   | Materialize's internal name for the source.
 `source_id`    | [`text`]   | Materialize's unique ID for the source. Equivalent to `mz_sources.id`.
-`dataflow_id`  | [`bigint`] | The ID of the dataflow responsible for processing this source / partition.
-`partition_id` | [`text`]   | The ID of the partition assigned to this source / dataflow.
+`dataflow_id`  | [`bigint`] | The ID of the dataflow responsible for processing this source.
+`partition_id` | [`text`]   | The ID of the partition within the source. Partition assignments are defined in a source specific manner.
 `offset`       | [`bigint`] | The highest offset processed by this source.
 `timestamp`    | [`bigint`] | The largest `mz_timestamp` processed by this source.
 
