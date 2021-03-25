@@ -14,7 +14,7 @@ pip install dbt-materialize
 or locally from the Materialize Github repository:
 ```nofmt
 git clone https://github.com/MaterializeInc/materialize
-pip install materialize/dbt-materialize
+pip install materialize/misc/dbt-materialize
 ```
 
 ### Configuring your profile
