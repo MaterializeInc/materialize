@@ -66,6 +66,8 @@ pub struct Config {
     pub aws_account: String,
     /// The credentials for testdrive to use when connecting to AWS.
     pub aws_credentials: AwsCredentials,
+    /// The host of the Postgres database that testdrive will interact with.
+    pub postgres_host: String,
     /// The connection parameters for the materialized instance that testdrive
     /// will connect to.
     pub materialized_pgconfig: tokio_postgres::Config,
@@ -91,6 +93,7 @@ pub struct State {
     materialized_addr: String,
     materialized_user: String,
     pgclient: tokio_postgres::Client,
+    postgres_host: String,
     schema_registry_url: Url,
     ccsr_client: ccsr::Client,
     kafka_addr: String,
@@ -377,6 +380,10 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
     vars.insert(
         "testdrive.materialized-user".into(),
         state.materialized_user.clone(),
+    );
+    vars.insert(
+        "testdrive.postgres-host".into(),
+        state.postgres_host.clone(),
     );
 
     for cmd in cmds {
@@ -674,6 +681,7 @@ pub async fn create_state(
         materialized_addr,
         materialized_user,
         pgclient,
+        postgres_host: config.postgres_host.clone(),
         schema_registry_url,
         ccsr_client,
         kafka_addr,

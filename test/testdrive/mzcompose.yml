@@ -14,12 +14,15 @@ mzworkflows:
   testdrive:
     steps:
       - step: start-services
-        services: [localstack]
+        services: [localstack, postgres]
       - step: workflow
         workflow: start-deps
       - step: wait-for-tcp
         host: localstack
         port: 4566
+      - step: wait-for-tcp
+        host: postgres
+        port: 5432
       - step: run
         service: testdrive-svc
         command: --aws-endpoint=http://localstack:4566 ${TD_TEST:-*.td esoteric/*.td}
@@ -37,7 +40,7 @@ mzworkflows:
   start-deps:
     steps:
       - step: start-services
-        services: [kafka, schema-registry, materialized]
+        services: [kafka, schema-registry, materialized, postgres]
       - step: wait-for-tcp
         host: kafka
         port: 9092
@@ -45,6 +48,9 @@ mzworkflows:
       - step: wait-for-tcp
         host: schema-registry
         port: 8081
+      - step: wait-for-tcp
+        host: postgres
+        port: 5432
       - step: wait-for-mz
 
 services:
@@ -58,6 +64,7 @@ services:
         --kafka-addr=kafka:9092
         --schema-registry-url=http://schema-registry:8081
         --materialized-url=postgres://materialize@materialized:6875
+        --postgres-host=postgres
         --validate-catalog=/share/mzdata/catalog
         $$*
       - bash
@@ -118,7 +125,15 @@ services:
     - HOSTNAME_EXTERNAL=localstack
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-
+  postgres:
+    image: postgres:13
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+     - "5432:5432"
+    command: [ "postgres", "-c", "wal_level=logical" ]
 volumes:
   mzdata:
   tmp:

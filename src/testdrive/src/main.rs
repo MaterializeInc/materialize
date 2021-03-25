@@ -54,6 +54,11 @@ struct Args {
     #[structopt(long)]
     aws_endpoint: Option<String>,
 
+    // === PostgreSQL options. ===
+    /// Postgres host.
+    #[structopt(long, default_value = "localhost")]
+    postgres_host: String,
+
     // === Materialize options. ===
     /// materialized connection string.
     #[structopt(long, default_value = "postgres://materialize@localhost:6875")]
@@ -142,10 +147,12 @@ async fn run(args: Args) -> Result<(), Error> {
     AWS region: {:?}
     Kafka Address: {}
     Schema registry URL: {}
+    Postgres host: {},
     materialized host: {:?}",
         aws_region,
         args.kafka_addr,
         args.schema_registry_url,
+        args.postgres_host,
         args.materialized_url.get_hosts()[0],
     );
 
@@ -158,6 +165,7 @@ async fn run(args: Args) -> Result<(), Error> {
         aws_region,
         aws_account,
         aws_credentials,
+        postgres_host: args.postgres_host,
         materialized_pgconfig: args.materialized_url,
         materialized_catalog_path: args.validate_catalog,
         reset_materialized: !args.no_reset,
