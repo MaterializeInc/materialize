@@ -1,11 +1,20 @@
-use std::{thread, time::Duration};
+use std::{
+    convert::TryInto,
+    thread,
+    time::{Duration, UNIX_EPOCH},
+};
 
-use log::info;
+use dataflow::SequencedCommand;
 use prometheus::{
     proto::{Metric, MetricFamily, MetricType},
     Registry,
 };
+use repr::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
+
+use crate::catalog::builtin::MZ_PROMETHEUS_READINGS;
+
+use super::Message;
 
 /// Scrapes the prometheus registry in a regular interval and sends back a [`Batch`] of metric data
 /// that can be inserted into a table.
@@ -76,6 +85,12 @@ impl<'a> Scraper<'a> {
     pub fn run(&mut self) {
         loop {
             thread::sleep(self.interval);
+            let now: Timestamp = UNIX_EPOCH
+                .elapsed()
+                .expect("system clock before 1970")
+                .as_millis()
+                .try_into()
+                .expect("materialize has existed for >500M years");
             if let Ok(cmd) = self.command_rx.try_recv() {
                 match cmd {
                     ScraperMessage::Shutdown => return,
@@ -90,6 +105,12 @@ impl<'a> Scraper<'a> {
                     family.get_metric().into_iter(),
                 )
             });
+            self.internal_tx
+                .send(Message::Broadcast(SequencedCommand::Insert {
+                    id: MZ_PROMETHEUS_READINGS.id,
+                    updates: vec![],
+                }))
+                .expect("Couldn't send");
         }
     }
 }
