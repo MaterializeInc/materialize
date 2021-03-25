@@ -562,6 +562,14 @@ pub const MZ_KAFKA_CONSUMER_STATISTICS: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3031),
 };
 
+pub const MZ_PROMETHEUS_READINGS: BuiltinLog = BuiltinLog {
+    name: "mz_metrics",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Materialized(MaterializedLog::Metrics),
+    id: GlobalId::System(3032),
+    index_id: GlobalId::System(3033),
+};
+
 lazy_static! {
     pub static ref MZ_VIEW_KEYS: BuiltinTable = BuiltinTable {
         name: "mz_view_keys",
