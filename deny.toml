@@ -24,6 +24,9 @@ skip = [
 
     # Waiting on parse_duration.
     { name = "num-bigint", version = "0.2.6" },
+
+    # waiting on https://github.com/hyperium/headers/pull/83
+    { name = "time", version = "0.1.44" }
 ]
 deny = [
     # Strum has suspect code quality and includes many unneeded features. Use

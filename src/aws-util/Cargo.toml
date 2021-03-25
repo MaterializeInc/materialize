@@ -8,11 +8,12 @@ publish = false
 [dependencies]
 anyhow = "1.0.40"
 log = "0.4.13"
+ore = { path = "../ore" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
-rusoto_sts = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_sqs = { git = "https://github.com/rusoto/rusoto.git" }
+rusoto_sts = { git = "https://github.com/rusoto/rusoto.git" }
 serde = { version = "1.0.124", features = ["derive"] }
 tokio = "1.4.0"

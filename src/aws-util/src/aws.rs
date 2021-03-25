@@ -10,7 +10,7 @@
 //! Utility functions for AWS.
 
 use anyhow::{anyhow, Context};
-use rusoto_core::{HttpClient, Region};
+use rusoto_core::Region;
 use rusoto_credential::{
     AutoRefreshingProvider, AwsCredentials, ChainProvider, ProvideAwsCredentials, StaticProvider,
 };
@@ -81,7 +81,8 @@ pub async fn account(
     region: Region,
     timeout: Duration,
 ) -> Result<String, anyhow::Error> {
-    let dispatcher = HttpClient::new().context("creating HTTP for AWS STS Account verification")?;
+    let dispatcher =
+        crate::client::http().context("creating HTTP for AWS STS Account verification")?;
     let sts_client = StsClient::new_with(dispatcher, provider, region);
     let get_identity = sts_client.get_caller_identity(GetCallerIdentityRequest {});
     let account = time::timeout(timeout, get_identity)

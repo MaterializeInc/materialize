@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use log::warn;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -63,7 +64,13 @@ impl ClientConfig {
 
     /// Builds the [`Client`].
     pub fn build(self) -> Client {
-        let mut builder = reqwest::Client::builder();
+        let mut builder = match ore::http::reqwest_client_builder() {
+            Ok(builder) => builder,
+            Err(e) => {
+                warn!("Unable to construct a reqwest client that will obey the http_proxy settings: {}", e);
+                reqwest::Client::builder()
+            }
+        };
 
         for root_cert in self.root_certs {
             builder = builder.add_root_certificate(root_cert.into());

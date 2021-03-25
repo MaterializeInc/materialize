@@ -85,7 +85,7 @@ async fn fetch_latest_version(
                 status: telemetry_data(start_time, session_id),
             };
 
-            let resp = reqwest::Client::new()
+            let resp = ore::http::reqwest_client()?
                 .post(telemetry_url)
                 .timeout(Duration::from_secs(10))
                 .json(&version_request)
