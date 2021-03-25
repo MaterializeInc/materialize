@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use log::info;
 use rusoto_core::HttpClient;
 use rusoto_credential::{AutoRefreshingProvider, AwsCredentials, ChainProvider, StaticProvider};
@@ -23,6 +23,13 @@ use rusoto_s3::S3Client;
 use rusoto_sqs::SqsClient;
 
 use crate::aws::ConnectInfo;
+
+/// Get an [`HttpClient`]  that respects the `http_proxy` environment variables
+pub(crate) fn http() -> Result<HttpClient<http_util::ProxiedConnector>, anyhow::Error> {
+    Ok(HttpClient::from_connector(
+        http_util::connector().map_err(|e| anyhow!(e))?,
+    ))
+}
 
 /// Create a function that calls <Client>::new() with credentials sources
 ///
@@ -51,22 +58,24 @@ The [`AutoRefreshingProvider`] caches the underlying provider's AWS credentials,
 automatically fetching updated credentials if they've expired.
 "]
 pub async fn $name(conn_info: ConnectInfo) -> Result<$client, anyhow::Error> {
-    let request_dispatcher = HttpClient::new().context("creating HTTP client for S3 client")?;
+    let request_dispatcher = http().context(
+        concat!("creating HTTP client for ", $client_name))?;
     let the_client = if let Some(creds) = conn_info.credentials {
-        info!(concat!("Creating a new", stringify!(client), " from provided access_key and secret_access_key"));
+        info!(concat!("Creating a new", $client_name, " from provided access_key and secret_access_key"));
         let provider = StaticProvider::from(AwsCredentials::from(creds));
 
         $client::new_with(request_dispatcher, provider, conn_info.region)
     } else {
         info!(
             concat!("AWS access_key_id and secret_access_key not provided, \
-               creating a new ", stringify!($client), " using a chain provider.")
+               creating a new ", $client_name, " using a chain provider.")
         );
         let mut provider = ChainProvider::new();
 
         provider.set_timeout(Duration::from_secs(10));
         let provider =
-            AutoRefreshingProvider::new(provider).context(concat!("generating AWS credentials refreshing provider for ", stringify!($client)))?;
+            AutoRefreshingProvider::new(provider).context(
+                concat!("generating AWS credentials refreshing provider for ", $client_name))?;
 
         $client::new_with(request_dispatcher, provider, conn_info.region)
     };

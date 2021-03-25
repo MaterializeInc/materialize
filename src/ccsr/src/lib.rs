@@ -23,7 +23,7 @@
 //! use ccsr::ClientConfig;
 //!
 //! let url = "http://localhost:8080".parse()?;
-//! let client = ClientConfig::new(url).build();
+//! let client = ClientConfig::new(url).build()?;
 //! let subjects = client.list_subjects().await?;
 //! for subject in subjects {
 //!     let schema = client.get_schema_by_subject(&subject).await?;

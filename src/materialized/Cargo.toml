@@ -43,6 +43,7 @@ dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.13"
 hex = "0.4.3"
+http-util = { path = "../http-util" }
 hyper = { version = "0.14.0", features = ["http1", "server"] }
 hyper-openssl = "0.9.1"
 include_dir = "0.6.0"
