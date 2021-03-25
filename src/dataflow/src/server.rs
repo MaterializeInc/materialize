@@ -134,8 +134,6 @@ pub enum SequencedCommand {
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
-    /// Fetch all metrics from the Prometheus registry and update the corresponding logging table.
-    SyncPrometheus,
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
@@ -796,9 +794,6 @@ where
                 if prev.is_none() {
                     log::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }
-            }
-            SequencedCommand::SyncPrometheus => {
-                todo!("Kick off prometheus scraping here.");
             }
         }
     }
