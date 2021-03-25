@@ -48,3 +48,6 @@ cast_from!(i32, isize);
 cast_from!(i64, isize);
 
 cast_from!(isize, i64);
+
+#[cfg(any(target_pointer_width = "32", target_pointer_width = "64"))]
+cast_from!(isize, i128);
