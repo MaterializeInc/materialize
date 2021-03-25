@@ -19,3 +19,54 @@ INSERT INTO t1 VALUES (NULL)
 query I
 SELECT * FROM t1 WHERE NOT (f1 = f1)
 ----
+
+query I
+SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
+----
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter ((#0 = 0) || (#0 = 1)), (#0 = 0)
+
+EOF
+
+query I
+SELECT * FROM t1 WHERE NOT f1 is not null and (f1 is null or f1 = 1)
+----
+NULL
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE f1 is not null and (f1 is null or f1 = 1)
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0)), (#0 = 1)
+
+EOF
+
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR SELECT * FROM t1 WHERE (f1 is null)::int - 1 = 0 and ((f1 is null) or ((f1 is null)::int - 1 = 0))
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Filter (((booltoi32(isnull(#0)) - 1) = 0) && (isnull(#0) || ((booltoi32(isnull(#0)) - 1) = 0)))
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE ((f1 is null)::int - 1)::string LIKE '1' and ((f1 is null) or not (((f1 is null)::int - 1)::string LIKE '1'))
+----
+%0 =
+| Constant
+
+EOF
