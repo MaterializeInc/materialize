@@ -9,10 +9,12 @@ publish = false
 futures = "0.3.13"
 native-tls = "0.2.7"
 openssl = { version = "0.10.33", features = ["vendored"] }
+ore = { path = "../ore" }
 reqwest = { version = "0.11.2", features = ["blocking", "json", "native-tls-vendored"] }
 serde = { version = "1.0.124", features = ["derive"] }
 serde_json = "1.0.64"
 url = { version = "2.2.1", features = ["serde"] }
+log = "0.4.14"
 
 [dev-dependencies]
 anyhow = "1.0.39"
