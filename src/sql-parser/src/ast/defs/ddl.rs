@@ -250,6 +250,23 @@ impl AstDisplay for Compression {
 impl_display!(Compression);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Header {
+    pub name: String,
+    pub value: String,
+}
+
+impl AstDisplay for Header {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("'");
+        f.write_node(&display::escape_single_quote_string(&self.name));
+        f.write_str("' = '");
+        f.write_node(&display::escape_single_quote_string(&self.value));
+        f.write_str("'");
+    }
+}
+impl_display!(Header);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Connector<T: AstInfo> {
     File {
         path: String,
@@ -291,6 +308,12 @@ pub enum Connector<T: AstInfo> {
         subscribe_key: String,
         /// The PubNub channel to subscribe to
         channel: String,
+    },
+    Sse {
+        /// The url to connect to
+        url: String,
+        /// Additional headers to pass with the request
+        headers: Vec<Header>,
     },
 }
 
@@ -374,6 +397,16 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                 f.write_str("' CHANNEL '");
                 f.write_str(&display::escape_single_quote_string(channel));
                 f.write_str("'");
+            }
+            Connector::Sse { url, headers } => {
+                f.write_str("SSE URL '");
+                f.write_str(&display::escape_single_quote_string(url));
+                f.write_str("'");
+                if !headers.is_empty() {
+                    f.write_str("' (");
+                    f.write_node(&display::comma_separated(headers));
+                    f.write_str(")");
+                }
             }
         }
     }

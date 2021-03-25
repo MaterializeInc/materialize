@@ -40,7 +40,7 @@ use dataflow_types::{
     DataEncoding, ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder,
     KafkaSourceConnector, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
     PubNubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
-    SourceConnector, SourceEnvelope,
+    SourceConnector, SourceEnvelope, SseSourceConnector,
 };
 use expr::GlobalId;
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -758,6 +758,20 @@ pub fn plan_create_source(
 
             (connector, DataEncoding::Text)
         }
+        Connector::Sse { url, headers } => {
+            scx.require_experimental_mode("Sse Sources")?;
+            let headers: HashMap<_, _> = headers
+                .clone()
+                .into_iter()
+                .map(|header| (header.name, header.value))
+                .collect();
+            let connector = ExternalSourceConnector::Sse(SseSourceConnector {
+                url: url.clone(),
+                headers,
+            });
+
+            (connector, DataEncoding::Sse)
+        }
         Connector::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
                 None => false,
@@ -1312,6 +1326,7 @@ pub fn plan_create_sink(
         Connector::S3 { .. } => None,
         Connector::Postgres { .. } => None,
         Connector::PubNub { .. } => None,
+        Connector::Sse { .. } => None,
     };
 
     let key_desc_and_indices = key_indices.map(|key_indices| {
@@ -1362,6 +1377,7 @@ pub fn plan_create_sink(
         Connector::S3 { .. } => unsupported!("S3 sinks"),
         Connector::Postgres { .. } => unsupported!("Postgres sinks"),
         Connector::PubNub { .. } => unsupported!("PubNub sinks"),
+        Connector::Sse { .. } => unsupported!("Sse sinks"),
     };
 
     if !with_options.is_empty() {

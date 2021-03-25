@@ -511,6 +511,27 @@ CREATE SOURCE psychic FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connector: PubNub { subscribe_key: "subscribe_key", channel: "channel" }, with_options: [], format: None, envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
+CREATE SOURCE foobar FROM SSE URL 'http://example.com';
+----
+CREATE SOURCE foobar FROM SSE URL 'http://example.com'
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foobar")]), col_names: [], connector: Sse { url: "http://example.com", headers: [] }, with_options: [], format: None, envelope: None, if_not_exists: false, materialized: false })
+
+parse-statement
+CREATE SOURCE foobar FROM SSE URL 'http://example.com' HEADERS ();
+----
+error: Expected literal string, found right parenthesis
+CREATE SOURCE foobar FROM SSE URL 'http://example.com' HEADERS ();
+                                                                ^
+
+parse-statement
+CREATE SOURCE foobar FROM SSE URL 'http://example.com' HEADERS ('foo' = 'bar', 'test' = 'tost');
+----
+CREATE SOURCE foobar FROM SSE URL 'http://example.com'' ('foo' = 'bar', 'test' = 'tost')
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foobar")]), col_names: [], connector: Sse { url: "http://example.com", headers: [Header { name: "foo", value: "bar" }, Header { name: "test", value: "tost" }] }, with_options: [], format: None, envelope: None, if_not_exists: false, materialized: false })
+
+parse-statement
 CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' FORMAT BYTES
 ----
 CREATE SOURCE IF NOT EXISTS foo FROM FILE 'bar' FORMAT BYTES

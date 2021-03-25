@@ -716,6 +716,12 @@ where
                             );
                             None
                         }
+                        (ExternalSourceConnector::Sse(_), _) => {
+                            log::debug!(
+                                "Sse sources do not communicate with the timestamper thread"
+                            );
+                            None
+                        }
                     }
                 } else {
                     log::debug!(
