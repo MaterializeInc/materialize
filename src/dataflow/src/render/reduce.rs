@@ -63,6 +63,8 @@
 use std::collections::BTreeMap;
 
 use differential_dataflow::collection::AsCollection;
+use differential_dataflow::difference::Multiply;
+use differential_dataflow::difference::Semigroup;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
@@ -77,6 +79,7 @@ use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
 use expr::{AggregateExpr, AggregateFunc, MirRelationExpr};
+use ore::cast::CastFrom;
 use repr::{Datum, DatumList, Row, RowArena, RowPacker};
 
 use super::context::Context;
@@ -150,8 +153,6 @@ struct AccumulablePlan {
     simple_aggrs: Vec<(usize, usize, AggregateExpr)>,
     // Same as above but for all of the `DISTINCT` accumulable aggregations.
     distinct_aggrs: Vec<(usize, usize, AggregateExpr)>,
-    // Total number of accumulable aggregations.
-    num_accumulable: usize,
 }
 
 /// Plan for computing a set of hierarchical aggregations.
@@ -354,7 +355,6 @@ impl ReducePlan {
             ReductionType::Accumulable => {
                 let mut simple_aggrs = vec![];
                 let mut distinct_aggrs = vec![];
-                let num_accumulable = aggregates_list.len();
                 let full_aggrs: Vec<_> = aggregates_list
                     .iter()
                     .cloned()
@@ -376,7 +376,6 @@ impl ReducePlan {
                     full_aggrs,
                     simple_aggrs,
                     distinct_aggrs,
-                    num_accumulable,
                 })
             }
             ReductionType::Hierarchical => {
@@ -1063,6 +1062,115 @@ where
         })
 }
 
+/// Accumulates values for the various types of accumulable aggregations.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+enum Accumulator {
+    /// Accumulates boolean values.
+    Bool {
+        /// The number of `true` values observed.
+        trues: isize,
+        /// The number of `false` values observed.
+        falses: isize,
+        /// The total number of values observed.
+        total: isize,
+    },
+    /// Accumulates simple numeric values.
+    SimpleNumber {
+        /// The accumulation of all non-NULL values observed.
+        accum: i128,
+        /// The number of non-NULL values observed.
+        non_nulls: isize,
+        /// The total number of values observed.
+        total: isize,
+    },
+}
+
+impl Semigroup for Accumulator {
+    fn is_zero(&self) -> bool {
+        match self {
+            Accumulator::Bool {
+                trues,
+                falses,
+                total,
+            } => trues.is_zero() && falses.is_zero() && total.is_zero(),
+            Accumulator::SimpleNumber {
+                accum,
+                non_nulls,
+                total,
+            } => accum.is_zero() && non_nulls.is_zero() && total.is_zero(),
+        }
+    }
+
+    fn plus_equals(&mut self, other: &Accumulator) {
+        match (&mut *self, other) {
+            (
+                Accumulator::Bool {
+                    trues,
+                    falses,
+                    total,
+                },
+                Accumulator::Bool {
+                    trues: other_trues,
+                    falses: other_falses,
+                    total: other_total,
+                },
+            ) => {
+                *trues += other_trues;
+                *falses += other_falses;
+                *total += other_total;
+            }
+            (
+                Accumulator::SimpleNumber {
+                    accum,
+                    non_nulls,
+                    total,
+                },
+                Accumulator::SimpleNumber {
+                    accum: other_accum,
+                    non_nulls: other_non_nulls,
+                    total: other_total,
+                },
+            ) => {
+                *accum += other_accum;
+                *non_nulls += other_non_nulls;
+                *total += other_total;
+            }
+            (l, r) => unreachable!(
+                "Accumulator::plus_equals called with non-matching variants: {:?} vs {:?}",
+                l, r
+            ),
+        }
+    }
+}
+
+impl Multiply<isize> for Accumulator {
+    type Output = Accumulator;
+
+    fn multiply(self, factor: &isize) -> Accumulator {
+        let factor = *factor;
+        match self {
+            Accumulator::Bool {
+                trues,
+                falses,
+                total,
+            } => Accumulator::Bool {
+                trues: trues * factor,
+                falses: falses * factor,
+                total: total * factor,
+            },
+            Accumulator::SimpleNumber {
+                accum,
+                non_nulls,
+                total,
+            } => Accumulator::SimpleNumber {
+                accum: accum * i128::cast_from(factor),
+                non_nulls: non_nulls * factor,
+                total: total * factor,
+            },
+        }
+    }
+}
+
 /// Build the dataflow to compute and arrange multiple accumulable aggregations.
 ///
 /// The incoming values are moved to the update's "difference" field, at which point
@@ -1078,7 +1186,6 @@ fn build_accumulable<G>(
         full_aggrs,
         simple_aggrs,
         distinct_aggrs,
-        num_accumulable,
     }: AccumulablePlan,
     prepend_key: bool,
 ) -> Arrangement<G, Row>
@@ -1095,31 +1202,58 @@ where
     // generally the count, and then two aggregation-specific values. The size could be
     // reduced if we want to specialize for the aggregations.
 
-    use timely::dataflow::operators::map::Map;
-
     let float_scale = f64::from(1 << 24);
 
+    // Instantiate a default vector for diffs with the correct types at each
+    // position.
+    let zero_diffs: Vec<_> = full_aggrs
+        .iter()
+        .map(|f| match f.func {
+            AggregateFunc::Any | AggregateFunc::All => Accumulator::Bool {
+                trues: 0,
+                falses: 0,
+                total: 0,
+            },
+            _ => Accumulator::SimpleNumber {
+                accum: 0,
+                non_nulls: 0,
+                total: 0,
+            },
+        })
+        .collect();
+
     // Two aggregation-specific values for each aggregation.
-    let datum_aggr_values = move |datum: Datum, aggr: &AggregateFunc| {
+    let datum_to_accumulator = move |datum: Datum, aggr: &AggregateFunc| {
         match aggr {
-            AggregateFunc::Count => {
-                // Count needs to distinguish nulls from zero.
-                (1, if datum.is_null() { 0 } else { 1 })
-            }
-            AggregateFunc::Any => match datum {
-                Datum::True => (1, 0),
-                Datum::Null => (0, 0),
-                Datum::False => (0, 1),
+            AggregateFunc::Count => Accumulator::SimpleNumber {
+                accum: 0, // unused for AggregateFunc::Count
+                non_nulls: if datum.is_null() { 0 } else { 1 },
+                total: 1,
+            },
+            AggregateFunc::Any | AggregateFunc::All => match datum {
+                Datum::True => Accumulator::Bool {
+                    trues: 1,
+                    falses: 0,
+                    total: 1,
+                },
+                Datum::Null => Accumulator::Bool {
+                    trues: 0,
+                    falses: 0,
+                    total: 1,
+                },
+                Datum::False => Accumulator::Bool {
+                    trues: 0,
+                    falses: 1,
+                    total: 1,
+                },
                 x => panic!("Invalid argument to AggregateFunc::Any: {:?}", x),
             },
-            AggregateFunc::All => match datum {
-                Datum::True => (1, 0),
-                Datum::Null => (0, 0),
-                Datum::False => (0, 1),
-                x => panic!("Invalid argument to AggregateFunc::All: {:?}", x),
-            },
             AggregateFunc::Dummy => match datum {
-                Datum::Dummy => (0, 0),
+                Datum::Dummy => Accumulator::SimpleNumber {
+                    accum: 0,
+                    non_nulls: 0,
+                    total: 0,
+                },
                 x => panic!("Invalid argument to AggregateFunc::Dummy: {:?}", x),
             },
             _ => {
@@ -1127,12 +1261,36 @@ where
                 // value from its NULL-ness, which is not quite as easily
                 // accumulated.
                 match datum {
-                    Datum::Int32(i) => (i128::from(i), 1),
-                    Datum::Int64(i) => (i128::from(i), 1),
-                    Datum::Float32(f) => ((f64::from(*f) * float_scale) as i128, 1),
-                    Datum::Float64(f) => ((*f * float_scale) as i128, 1),
-                    Datum::Decimal(d) => (d.as_i128(), 1),
-                    Datum::Null => (0, 0),
+                    Datum::Int32(i) => Accumulator::SimpleNumber {
+                        accum: i128::from(i),
+                        non_nulls: 1,
+                        total: 1,
+                    },
+                    Datum::Int64(i) => Accumulator::SimpleNumber {
+                        accum: i128::from(i),
+                        non_nulls: 1,
+                        total: 1,
+                    },
+                    Datum::Float32(f) => Accumulator::SimpleNumber {
+                        accum: (f64::from(*f) * float_scale) as i128,
+                        non_nulls: 1,
+                        total: 1,
+                    },
+                    Datum::Float64(f) => Accumulator::SimpleNumber {
+                        accum: (*f * float_scale) as i128,
+                        non_nulls: 1,
+                        total: 1,
+                    },
+                    Datum::Decimal(d) => Accumulator::SimpleNumber {
+                        accum: d.as_i128(),
+                        non_nulls: 1,
+                        total: 1,
+                    },
+                    Datum::Null => Accumulator::SimpleNumber {
+                        accum: 0,
+                        non_nulls: 0,
+                        total: 1,
+                    },
                     x => panic!("Accumulating non-integer data: {:?}", x),
                 }
             }
@@ -1140,35 +1298,28 @@ where
     };
 
     let mut to_aggregate = Vec::new();
-    let diffs_len = num_accumulable * 3;
     // First, collect all non-distinct aggregations in one pass.
-    let easy_cases = collection
-        .inner
-        .map(|(d, t, r)| (d, t, r as i128))
-        .as_collection()
-        .explode({
-            move |(key, row)| {
-                let mut diffs = vec![0i128; diffs_len];
-                // Try to unpack only the datums we need. Unfortunately, since we
-                // can't random access into a Row, we have to iterate through one by one.
-                // TODO: Even though we don't have random access, we could still avoid unpacking
-                // everything that we don't care about, and it might be worth it to extend the
-                // Row API to do that.
-                let mut row_iter = row.iter().enumerate();
-                for (accumulable_index, datum_index, aggr) in simple_aggrs.iter() {
-                    let mut datum = row_iter.next().unwrap();
-                    while datum_index != &datum.0 {
-                        datum = row_iter.next().unwrap();
-                    }
-                    let datum = datum.1;
-                    let (agg1, agg2) = datum_aggr_values(datum, &aggr.func);
-                    diffs[3 * accumulable_index] = 1i128;
-                    diffs[3 * accumulable_index + 1] = agg1;
-                    diffs[3 * accumulable_index + 2] = agg2;
+    let easy_cases = collection.inner.as_collection().explode({
+        let zero_diffs = zero_diffs.clone();
+        move |(key, row)| {
+            let mut diffs = zero_diffs.clone();
+            // Try to unpack only the datums we need. Unfortunately, since we
+            // can't random access into a Row, we have to iterate through one by one.
+            // TODO: Even though we don't have random access, we could still avoid unpacking
+            // everything that we don't care about, and it might be worth it to extend the
+            // Row API to do that.
+            let mut row_iter = row.iter().enumerate();
+            for (accumulable_index, datum_index, aggr) in simple_aggrs.iter() {
+                let mut datum = row_iter.next().unwrap();
+                while datum_index != &datum.0 {
+                    datum = row_iter.next().unwrap();
                 }
-                Some((key, diffs))
+                let datum = datum.1;
+                diffs[*accumulable_index] = datum_to_accumulator(datum, &aggr.func);
             }
-        });
+            Some((key, diffs))
+        }
+    });
     to_aggregate.push(easy_cases);
 
     // Next, collect all aggregations that require distinctness.
@@ -1182,16 +1333,13 @@ where
             })
             .distinct()
             .inner
-            .map(|(d, t, r)| (d, t, r as i128))
             .as_collection()
             .explode({
+                let zero_diffs = zero_diffs.clone();
                 move |(key, row)| {
                     let datum = row.iter().next().unwrap();
-                    let mut diffs = vec![0i128; diffs_len];
-                    let (agg1, agg2) = datum_aggr_values(datum, &aggr.func);
-                    diffs[3 * accumulable_index] = 1i128;
-                    diffs[3 * accumulable_index + 1] = agg1;
-                    diffs[3 * accumulable_index + 2] = agg2;
+                    let mut diffs = zero_diffs.clone();
+                    diffs[accumulable_index] = datum_to_accumulator(datum, &aggr.func);
                     Some((key, diffs))
                 }
             });
@@ -1202,8 +1350,7 @@ where
 
     collection
         .arrange_by_self()
-        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>(
-            "ReduceAccumulable", {
+        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceAccumulable", {
             let mut row_packer = RowPacker::new();
             move |key, input, output| {
                 let accum = &input[0].1;
@@ -1212,40 +1359,75 @@ where
                     row_packer.extend(key.iter());
                 }
 
-                for (index, aggr) in full_aggrs.iter().enumerate() {
-                    // For most aggregations, the first aggregate is the "data" and the second is the number
-                    // of non-null elements (so that we can determine if we should produce 0 or a Null).
-                    // For Any and All, the two aggregates are the numbers of true and false records, resp.
-                    let tot = accum[3 * index];
-                    let agg1 = accum[3 * index + 1];
-                    let agg2 = accum[3 * index + 2];
-
-                    if tot == 0 && (agg1 != 0 || agg2 != 0) {
-                        // This should perhaps be un-recoverable, as we risk panicking in the ReduceCollation
-                        // operator, when this key is presented but matching aggregates are not found. We will
-                        // suppress the output for inputs without net-positive records, which *should* avoid
-                        // that panic.
-                        log::error!("[customer-data] ReduceAccumulable observed net-zero records with non-zero accumulation: {:?}: {:?}, {:?}", aggr, agg1, agg2);
+                for (aggr, accum) in full_aggrs.iter().zip(accum) {
+                    // This should perhaps be un-recoverable, as we risk panicking in the ReduceCollation
+                    // operator, when this key is presented but matching aggregates are not found. We will
+                    // suppress the output for inputs without net-positive records, which *should* avoid
+                    // that panic.
+                    match accum {
+                        Accumulator::Bool {
+                            trues,
+                            falses,
+                            total,
+                        } if *total == 0 && (*trues != 0 || *falses != 0) => {
+                            log::error!(
+                                "[customer-data] ReduceAccumulable observed net-zero records \
+                                with non-zero accumulation: {:?}: trues={:?}, falses={:?}",
+                                aggr,
+                                trues,
+                                falses
+                            );
+                        }
+                        Accumulator::SimpleNumber {
+                            accum,
+                            non_nulls,
+                            total,
+                        } if *total == 0 && (*accum != 0 || *non_nulls != 0) => {
+                            log::error!(
+                                "[customer-data] ReduceAccumulable observed net-zero records \
+                                with non-zero accumulation: {:?}: accum={:?} non_null={:?}",
+                                aggr,
+                                accum,
+                                non_nulls
+                            );
+                        }
+                        _ => (),
                     }
 
                     // The finished value depends on the aggregation function in a variety of ways.
-                    let value = match (&aggr.func, agg2) {
-                        (AggregateFunc::Count, _) => Datum::Int64(agg2 as i64),
-                        (AggregateFunc::All, _) => {
+                    let value = match (&aggr.func, accum) {
+                        (AggregateFunc::Count, Accumulator::SimpleNumber { non_nulls, .. }) => {
+                            Datum::Int64(i64::cast_from(*non_nulls))
+                        }
+                        (
+                            AggregateFunc::All,
+                            Accumulator::Bool {
+                                falses,
+                                trues,
+                                total,
+                            },
+                        ) => {
                             // If any false, else if all true, else must be no false and some nulls.
-                            if agg2 > 0 {
+                            if *falses > 0 {
                                 Datum::False
-                            } else if tot == agg1 {
+                            } else if trues == total {
                                 Datum::True
                             } else {
                                 Datum::Null
                             }
                         }
-                        (AggregateFunc::Any, _) => {
+                        (
+                            AggregateFunc::Any,
+                            Accumulator::Bool {
+                                falses,
+                                trues,
+                                total,
+                            },
+                        ) => {
                             // If any true, else if all false, else must be no true and some nulls.
-                            if agg1 > 0 {
+                            if *trues > 0 {
                                 Datum::True
-                            } else if tot == agg2 {
+                            } else if falses == total {
                                 Datum::False
                             } else {
                                 Datum::Null
@@ -1253,25 +1435,38 @@ where
                         }
                         (AggregateFunc::Dummy, _) => Datum::Dummy,
                         // Below this point, anything with only nulls should be null.
-                        (_, 0) => Datum::Null,
+                        (
+                            _,
+                            Accumulator::SimpleNumber {
+                                non_nulls: 0,
+                                total,
+                                ..
+                            },
+                        ) if *total > 0 => Datum::Null,
                         // If any non-nulls, just report the aggregate.
-                        (AggregateFunc::SumInt32, _) => Datum::Int64(agg1 as i64),
-                        (AggregateFunc::SumInt64, _) => Datum::from(agg1),
-                        (AggregateFunc::SumFloat32, _) => {
-                            Datum::Float32((((agg1 as f64) / float_scale) as f32).into())
+                        (AggregateFunc::SumInt32, Accumulator::SimpleNumber { accum, .. }) => {
+                            Datum::Int64(*accum as i64)
                         }
-                        (AggregateFunc::SumFloat64, _) => {
-                            Datum::Float64(((agg1 as f64) / float_scale).into())
+                        (AggregateFunc::SumInt64, Accumulator::SimpleNumber { accum, .. }) => {
+                            Datum::from(*accum)
                         }
-                        (AggregateFunc::SumDecimal, _) => Datum::from(agg1),
+                        (AggregateFunc::SumFloat32, Accumulator::SimpleNumber { accum, .. }) => {
+                            Datum::Float32((((*accum as f64) / float_scale) as f32).into())
+                        }
+                        (AggregateFunc::SumFloat64, Accumulator::SimpleNumber { accum, .. }) => {
+                            Datum::Float64(((*accum as f64) / float_scale).into())
+                        }
+                        (AggregateFunc::SumDecimal, Accumulator::SimpleNumber { accum, .. }) => {
+                            Datum::from(*accum)
+                        }
                         x => panic!("Unexpected accumulable aggregation: {:?}", x),
                     };
 
                     row_packer.push(value);
                 }
                 output.push((row_packer.finish_and_reuse(), 1));
-            }},
-        )
+            }
+        })
 }
 
 /// Transforms a vector containing indexes of needed columns into one containing
