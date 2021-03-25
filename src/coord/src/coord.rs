@@ -107,6 +107,7 @@ pub enum Message {
     AdvanceSourceTimestamp(AdvanceSourceTimestamp),
     StatementReady(StatementReady),
     SinkConnectorReady(SinkConnectorReady),
+    Broadcast(SequencedCommand),
     Shutdown,
 }
 
@@ -462,6 +463,7 @@ impl Coordinator {
                 Message::AdvanceSourceTimestamp(advance) => {
                     self.message_advance_source_timestamp(advance).await
                 }
+                Message::Broadcast(cmd) => self.broadcast(cmd),
                 Message::Shutdown => {
                     self.message_shutdown().await;
                     break;
