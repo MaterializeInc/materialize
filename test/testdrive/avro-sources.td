@@ -299,7 +299,7 @@ $ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz
 # Erroneously adds start_offsets for non-existent partitions.
 > CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition_2
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
-  WITH (start_offset=[0,1])
+  WITH (start_offset=[0,1], statistics_interval_ms = 1000)
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
@@ -333,9 +333,15 @@ a  b
 5  6
 9  10
 
+# There should be two partitions per consumer
+> SELECT count(*) FROM mz_kafka_consumer_statistics GROUP BY consumer_name;
+count
+-----
+2
+
 > CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
-  WITH (start_offset=[1,1])
+  WITH (start_offset=[1,1], statistics_interval_ms = 1000)
   FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
   ENVELOPE NONE
 
@@ -351,6 +357,13 @@ a  b
 -----
 9  10
 11 12
+
+# There should be metrics for 3 partitions per consumer
+> SELECT count(*) FROM mz_kafka_consumer_statistics GROUP BY consumer_name;
+count
+-----
+3
+3
 
 $ set-sql-timeout duration=12.7s
 
