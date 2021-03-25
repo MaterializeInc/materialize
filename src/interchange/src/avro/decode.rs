@@ -17,6 +17,7 @@ use std::rc::Rc;
 use anyhow::bail;
 use dec::{Context as DecimalCx, Decimal128, OrderedDecimal};
 use ordered_float::OrderedFloat;
+use uuid::Uuid;
 
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::schema::{SchemaNode, SchemaPiece};
@@ -30,7 +31,6 @@ use repr::adt::decimal::Significand;
 use repr::adt::jsonb::JsonbPacker;
 use repr::adt::rdn;
 use repr::{Datum, Row, RowPacker};
-use uuid::Uuid;
 
 use super::{
     is_null, AvroDebeziumDecoder, ConfluentAvroResolver, DebeziumDeduplicationState,

@@ -1584,7 +1584,12 @@ impl<'a> Parser<'a> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
-            Envelope::Debezium
+            let debezium_mode = if self.parse_keyword(UPSERT) {
+                DbzMode::Upsert
+            } else {
+                DbzMode::Plain
+            };
+            Envelope::Debezium(debezium_mode)
         } else if self.parse_keyword(UPSERT) {
             let format = if self.parse_keyword(FORMAT) {
                 Some(self.parse_format()?)

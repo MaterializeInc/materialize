@@ -9,9 +9,9 @@
 
 use dataflow_types::{DataflowError, DecodeError};
 use interchange::protobuf::{self, Decoder};
-use repr::{Diff, Row, Timestamp};
+use repr::Row;
 
-use super::{DecoderState, PushSession};
+use super::DecoderState;
 use crate::metrics::EVENTS_COUNTER;
 
 pub struct ProtobufDecoderState {
@@ -75,40 +75,30 @@ impl DecoderState for ProtobufDecoderState {
     }
 
     /// give a session a plain value
-    fn give_value<'a>(
+    fn get_value(
         &mut self,
         bytes: &[u8],
         position: Option<i64>,
         _: Option<i64>,
-        session: &mut PushSession<'a, (Result<Row, DataflowError>, Timestamp, Diff)>,
-        time: Timestamp,
-    ) {
+    ) -> Option<Result<Row, DataflowError>> {
         match self.decoder.decode(bytes, position) {
             Ok(row) => {
                 if let Some(row) = row {
                     self.events_success += 1;
-                    session.give((Ok(row), time, 1));
+                    Some(Ok(row))
                 } else {
                     self.events_error += 1;
-                    session.give((
-                        Err(DataflowError::DecodeError(DecodeError::Text(format!(
-                            "protobuf deserialization returned None"
-                        )))),
-                        time,
-                        1,
-                    ));
+                    Some(Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                        "protobuf deserialization returned None"
+                    )))))
                 }
             }
             Err(err) => {
                 self.events_error += 1;
-                session.give((
-                    Err(DataflowError::DecodeError(DecodeError::Text(format!(
-                        "protobuf deserialization error: {:#}",
-                        err
-                    )))),
-                    time,
-                    1,
-                ));
+                Some(Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                    "protobuf deserialization error: {:#}",
+                    err
+                )))))
             }
         }
     }

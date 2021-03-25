@@ -410,7 +410,7 @@ CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'h
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: Debezium, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [] })), envelope: Debezium(Plain), if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED VALUE SCHEMA 'blah'
@@ -431,7 +431,7 @@ CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'h
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') ENVELOPE DEBEZIUM
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] })), envelope: Debezium, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: None, with_options: [Value { name: Ident("a"), value: String("b") }] })), envelope: Debezium(Plain), if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081'

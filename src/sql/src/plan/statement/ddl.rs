@@ -37,10 +37,10 @@ use reqwest::Url;
 
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
-    DataEncoding, ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder,
-    KafkaSourceConnector, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
-    PubNubSourceConnector, RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope,
-    SourceConnector, SourceEnvelope,
+    DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
+    KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector,
+    PostgresSourceConnector, ProtobufEncoding, PubNubSourceConnector, RegexEncoding,
+    S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceEnvelope,
 };
 use expr::GlobalId;
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -332,14 +332,15 @@ fn plan_source_envelope(
         id: expr::Id::LocalBareSource,
         typ: bare_desc.typ().clone(),
     };
-    let (hir_expr, column_names) = if let SourceEnvelope::Debezium(_) = envelope {
+    let (hir_expr, column_names) = if let SourceEnvelope::Debezium(_, _) = envelope {
         // Debezium sources produce a diff in their last column.
         // Thus we need to select all rows but the last, which we repeat by.
         // I.e., for a source with four columns, we do
         // SELECT a.column1, a.column2, a.column3 FROM a, repeat(a.column4)
         //
-        // [btv] - Maybe it would be better to write these in actual SQL and call into the planner, rather than writing out the expr by hand?
-        // Then we would get some nice things; for example, automatic tracking of column names.
+        // [btv] - Maybe it would be better to write these in actual SQL and call into the planner,
+        // rather than writing out the expr by hand? Then we would get some nice things; for
+        // example, automatic tracking of column names.
         //
         // For this simple case, it probably doesn't matter
 
@@ -595,9 +596,11 @@ pub fn plan_create_source(
             let encoding = get_encoding(format)?;
 
             if consistency != Consistency::RealTime
-                && *envelope != sql_parser::ast::Envelope::Debezium
+                && *envelope != sql_parser::ast::Envelope::Debezium(sql_parser::ast::DbzMode::Plain)
             {
-                bail!("BYO consistency only supported for Debezium Kafka sources");
+                // TODO: does it make sense to support BYO with upsert? It doesn't seem obvious that
+                // the timestamp topic will support the upsert semantics of the value topic
+                bail!("BYO consistency only supported for plain Debezium Kafka sources");
             }
 
             (connector, encoding)
@@ -771,7 +774,7 @@ pub fn plan_create_source(
             };
 
             if consistency != Consistency::RealTime
-                && *envelope != sql_parser::ast::Envelope::Debezium
+                && *envelope != sql_parser::ast::Envelope::Debezium(sql_parser::ast::DbzMode::Plain)
             {
                 bail!("BYO consistency only supported for Debezium Avro OCF sources");
             }
@@ -816,7 +819,7 @@ pub fn plan_create_source(
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
         sql_parser::ast::Envelope::None => SourceEnvelope::None,
-        sql_parser::ast::Envelope::Debezium => {
+        sql_parser::ast::Envelope::Debezium(mode) => {
             let dedup_strat = match with_options.remove("deduplication") {
                 None => DebeziumDeduplicationStrategy::Ordered,
                 Some(Value::String(s)) => {
@@ -856,7 +859,11 @@ pub fn plan_create_source(
                 }
                 _ => bail!("deduplication must be one of 'ordered', 'full' or 'full_in_range'."),
             };
-            SourceEnvelope::Debezium(dedup_strat)
+            let mode = match mode {
+                sql_parser::ast::DbzMode::Plain => DebeziumMode::Plain,
+                sql_parser::ast::DbzMode::Upsert => DebeziumMode::Upsert,
+            };
+            SourceEnvelope::Debezium(dedup_strat, mode)
         }
         sql_parser::ast::Envelope::Upsert(key_format) => match connector {
             Connector::Kafka { .. } => {
@@ -921,7 +928,7 @@ pub fn plan_create_source(
         bare_desc = bare_desc.without_keys();
     }
 
-    let post_transform_key = if let SourceEnvelope::Debezium(_) = &envelope {
+    let post_transform_key = if let SourceEnvelope::Debezium(_, _) = &envelope {
         if let DataEncoding::Avro(AvroEncoding { key_schema, .. }) = &encoding {
             if ignore_source_keys {
                 None
@@ -962,7 +969,7 @@ pub fn plan_create_source(
     // TODO(brennan): They should not depend on the envelope either. Figure out a way to
     // make all of this more tasteful.
     match (&encoding, &envelope) {
-        (DataEncoding::Avro { .. }, _) | (_, SourceEnvelope::Debezium(_)) => (),
+        (DataEncoding::Avro { .. }, _) | (_, SourceEnvelope::Debezium(_, _)) => (),
         _ => {
             for (name, ty) in external_connector.metadata_columns() {
                 bare_desc = bare_desc.with_column(name, ty);
@@ -1258,9 +1265,12 @@ pub fn plan_create_sink(
     } = stmt;
 
     let envelope = match envelope {
-        None | Some(Envelope::Debezium) => SinkEnvelope::Debezium,
+        None | Some(Envelope::Debezium(sql_parser::ast::DbzMode::Plain)) => SinkEnvelope::Debezium,
         Some(Envelope::Upsert(None)) => SinkEnvelope::Upsert,
         Some(Envelope::CdcV2) => unsupported!("CDCv2 sinks"),
+        Some(Envelope::Debezium(sql_parser::ast::DbzMode::Upsert)) => {
+            unsupported!("UPSERT doesn't make sense for sinks")
+        }
         Some(Envelope::None) => unsupported!("\"ENVELOPE NONE\" sinks"),
         Some(Envelope::Upsert(Some(_))) => unsupported!("Upsert sinks with custom key encodings"),
     };
