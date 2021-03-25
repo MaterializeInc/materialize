@@ -89,9 +89,9 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     }
 
     // 3) Reduce across `predicates`.
-    // If a predicate `p` cannot be null, and `f` is a function from bool to
-    // bool, then the predicate `p & f(p)` is equal to `p & f(true)`, and
-    // `!p & f(p)` is equal to `!p & f(false)`.
+    // If a predicate `p` cannot be null, and `f(p)` is of type bool
+    // (`f(p)` is allowed to be nullable), then the predicate `p & f(p)` is
+    // equal to `p & f(true)`, and `!p & f(p)` is equal to `!p & f(false)`.
     // For any index i, the `Vec` of predicates `[p1, ... pi, ... pn]` is
     // equivalent to the single predicate `pi & (p1 & ... & p(i-1) & p(i+1)
     // ... & pn)`.
@@ -123,13 +123,10 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
                 if !expr.is_literal() && !expr.typ(input_type).nullable {
                     let replace_subexpr_other_predicate = |other_predicate: &mut MirScalarExpr| {
                         let mut changed = false;
-                        other_predicate.visit_mut_pre(&mut |e: &mut MirScalarExpr| {
+                        other_predicate.visit_mut(&mut |e: &mut MirScalarExpr| {
                             if e == expr {
                                 *e = constant_bool.clone();
                                 changed = true;
-                                true
-                            } else {
-                                false
                             }
                         });
                         if changed {
