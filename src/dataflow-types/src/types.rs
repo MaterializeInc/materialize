@@ -515,7 +515,7 @@ pub struct SinkAsOf {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SourceEnvelope {
     None,
-    Debezium(DebeziumDeduplicationStrategy),
+    Debezium(DebeziumDeduplicationStrategy, DebeziumMode),
     Upsert(DataEncoding),
     CdcV2,
 }
@@ -529,6 +529,13 @@ impl SourceEnvelope {
             SourceEnvelope::CdcV2 => avro::EnvelopeType::CdcV2,
         }
     }
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DebeziumMode {
+    Plain,
+    /// Keep track of keys from upstream and discard retractions for new keys
+    Upsert,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
