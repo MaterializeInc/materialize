@@ -9,6 +9,7 @@ menu:
 
 {{< cloud-notice >}}
 
-2FA
-Secured through tool
-Plans for VPC and encryption at rest (talk to us)
+# Upgrade Materialize Cloud
+
+
+# Delete your Materialize Cloud account

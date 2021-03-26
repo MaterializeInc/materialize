@@ -9,9 +9,6 @@ menu:
 
 {{< cloud-notice >}}
 
-2FA (talk to us for more)
-Secured through TLS
-Materialize provisions account (in our AWS account)
-Customers provide IAM credentials  (Managed Materialize product, talk to us for more)
-Plans for VPC soon (talk to us for more)
-Plans for encryption at rest (talk to us for more
+Currently, Materialize Cloud secures your connections through TLS. In the future, the managed Materialize Cloud product will support IAM identity management for single sign-on, VPC, two-factor authentication, and encryption at rest.
+
+<!-- Are all of these managed, or will some of them be available to the free product? -->

@@ -9,9 +9,7 @@ menu:
 
 {{< cloud-notice >}}
 
-## Connecting to sources from Materialize cloud
-
-## Connecting to sinks from Materialize Cloud
+## Connecting to sources from Materialize Cloud
 
 ## Connecting code to Materialize Cloud
 

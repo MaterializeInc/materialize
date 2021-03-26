@@ -9,4 +9,4 @@ menu:
 
 {{< cloud-notice >}}
 
-??
+If you experience any issues, <a href="mailto:support@materialize.com">let us know</a>.
