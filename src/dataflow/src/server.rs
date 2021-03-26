@@ -134,6 +134,8 @@ pub enum SequencedCommand {
     /// Request that the logging sources in the contained configuration are
     /// installed.
     EnableLogging(LoggingConfig),
+    /// Request that a worker inject a materialized logging statement.
+    ReportMaterializedLog(MaterializedEvent),
     /// Disconnect inputs, drain dataflows, and shut down timely workers.
     Shutdown,
 }
@@ -794,6 +796,11 @@ where
                 if prev.is_none() {
                     log::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }
+            }
+            SequencedCommand::ReportMaterializedLog(ev) => {
+                self.materialized_logger
+                    .as_ref()
+                    .map(|logger| logger.log(ev));
             }
         }
     }

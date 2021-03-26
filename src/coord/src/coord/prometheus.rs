@@ -4,7 +4,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-use dataflow::SequencedCommand;
+use dataflow::{logging::materialized::MaterializedEvent, SequencedCommand};
 use prometheus::{
     proto::{Metric, MetricFamily, MetricType},
     Registry,
@@ -106,10 +106,9 @@ impl<'a> Scraper<'a> {
                 )
             });
             self.internal_tx
-                .send(Message::Broadcast(SequencedCommand::Insert {
-                    id: MZ_PROMETHEUS_READINGS.id,
-                    updates: vec![],
-                }))
+                .send(Message::Broadcast(SequencedCommand::ReportMaterializedLog(
+                    MaterializedEvent::PrometheusMetrics,
+                )))
                 .expect("Couldn't send");
         }
     }

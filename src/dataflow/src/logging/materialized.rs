@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use differential_dataflow::operators::count::CountTotal;
-use log::error;
+use log::{error, info};
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::operator::Operator;
@@ -81,6 +81,8 @@ pub enum MaterializedEvent {
         /// Difference between the previous timestamp and current highest timestamp we've seen
         timestamp: i64,
     },
+    /// A batch of metrics scraped from prometheus
+    PrometheusMetrics, // TODO: data
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
 }
@@ -263,6 +265,9 @@ pub fn construct<A: Allocate>(
                                     time_ms,
                                     (offset, timestamp),
                                 ));
+                            }
+                            MaterializedEvent::PrometheusMetrics => {
+                                info!("Reported prometheus metrics!");
                             }
                         }
                     }

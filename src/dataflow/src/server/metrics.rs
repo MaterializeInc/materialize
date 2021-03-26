@@ -121,6 +121,8 @@ struct CommandsProcessedMetrics {
     shutdown: IntCounter,
     advance_all_local_inputs_int: i32,
     advance_all_local_inputs: IntCounter,
+    report_materialize_log_int: i32,
+    report_materialize_log: IntCounter,
 }
 
 impl CommandsProcessedMetrics {
@@ -169,6 +171,9 @@ impl CommandsProcessedMetrics {
             advance_all_local_inputs_int: 0,
             advance_all_local_inputs: COMMANDS_PROCESSED_RAW
                 .with_label_values(&[worker, "advance_all_local_inputs"]),
+            report_materialize_log_int: 0,
+            report_materialize_log: COMMANDS_PROCESSED_RAW
+                .with_label_values(&[worker, "report_materialize_log"]),
         }
     }
 
@@ -196,6 +201,7 @@ impl CommandsProcessedMetrics {
             SequencedCommand::AdvanceAllLocalInputs { .. } => {
                 self.advance_all_local_inputs_int += 1
             }
+            SequencedCommand::ReportMaterializedLog(_) => self.report_materialize_log_int += 1,
         }
     }
 
