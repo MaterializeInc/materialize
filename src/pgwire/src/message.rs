@@ -292,6 +292,13 @@ impl ErrorResponse {
         ErrorResponse::new(Severity::Notice, code, message)
     }
 
+    pub fn warning<S>(code: SqlState, message: S) -> ErrorResponse
+    where
+        S: Into<String>,
+    {
+        ErrorResponse::new(Severity::Warning, code, message)
+    }
+
     fn new<S>(severity: Severity, code: SqlState, message: S) -> ErrorResponse
     where
         S: Into<String>,

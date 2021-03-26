@@ -85,7 +85,7 @@ impl Session {
                 TransactionStatus::InTransaction(mem::replace(ops, TransactionOps::None))
             }
             TransactionStatus::Failed => unreachable!(),
-        }
+        };
     }
 
     /// Starts an implicit transaction.
