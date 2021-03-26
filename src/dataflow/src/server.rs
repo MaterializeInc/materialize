@@ -798,9 +798,11 @@ where
                 }
             }
             SequencedCommand::ReportMaterializedLog(ev) => {
-                self.materialized_logger
-                    .as_ref()
-                    .map(|logger| logger.log(ev));
+                if self.timely_worker.index() == 0 {
+                    self.materialized_logger
+                        .as_ref()
+                        .map(|logger| logger.log(ev));
+                }
             }
         }
     }
