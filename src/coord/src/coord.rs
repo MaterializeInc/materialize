@@ -1631,8 +1631,13 @@ impl Coordinator {
             ),
 
             Plan::StartTransaction => {
+                let duplicated =
+                    matches!(session.transaction(), TransactionStatus::InTransaction(_));
                 session.start_transaction();
-                tx.send(Ok(ExecuteResponse::StartedTransaction), session)
+                tx.send(
+                    Ok(ExecuteResponse::StartedTransaction { duplicated }),
+                    session,
+                )
             }
 
             Plan::CommitTransaction | Plan::AbortTransaction => {
