@@ -225,9 +225,9 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     }) {
         Ok(file) => file,
         Err(err) => {
-            if let Err(send_e) = tx.send(Err(err)) {
-                error!("Failed to send error when opening file: {:#}", send_e);
-            }
+            // If we fail to send an error, it's likely due to a race condition
+            // with the source being closed.
+            let _ = tx.send(Err(err));
             return;
         }
     };
@@ -235,9 +235,9 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     let file_stream = match open_file_stream(path.clone(), file, read_style) {
         Ok(f) => f,
         Err(err) => {
-            if let Err(send_e) = tx.send(Err(err)) {
-                error!("Failed to send file initialization error: {:#}", send_e);
-            }
+            // If we fail to send an error, it's likely due to a race condition
+            // with the source being closed.
+            let _ = tx.send(Err(err));
             return;
         }
     };
@@ -256,13 +256,10 @@ pub fn read_file_task<Ctor, I, Out, Err>(
         )
     }) {
         Ok(i) => send_records(i, tx, activator),
-        Err(err) => {
-            if let Err(send_e) = tx.send(Err(err)) {
-                error!(
-                    "Failed to send error when reading file records: {:#}",
-                    send_e
-                );
-            }
+        Err(e) => {
+            // If we fail to send an error, it's likely due to a race condition
+            // with the source being closed.
+            let _ = tx.send(Err(e));
         }
     };
 }
