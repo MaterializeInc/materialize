@@ -33,12 +33,17 @@ versions = [
 [[menu.main]]
 identifier = "overview"
 name = "Overview"
-weight = 5
+weight = 30
+
+[[menu.main]]
+identifier = "cloud"
+name="Cloud"
+weight = 60
 
 [[menu.main]]
 identifier = "connections"
 name = "Connect"
-weight = 40
+weight = 50
 
 [[menu.main]]
 name = "Sources"
@@ -49,7 +54,7 @@ weight= 2
 [[menu.main]]
 identifier = "sql"
 name = "SQL"
-weight = 60
+weight = 70
 
 [[menu.main]]
 identifier = "operations"
