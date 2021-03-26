@@ -216,8 +216,7 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
     Err: Into<anyhow::Error>,
 {
-    let path_display_name = path.display().to_string();
-    log::trace!("reading file {}", path_display_name);
+    log::trace!("reading file {}", path.display());
     let file = match std::fs::File::open(&path).with_context(|| {
         format!(
             "file source: unable to open file at path {}",
@@ -233,7 +232,7 @@ pub fn read_file_task<Ctor, I, Out, Err>(
         }
     };
 
-    let file_stream = match open_file_stream(path, file, read_style) {
+    let file_stream = match open_file_stream(path.clone(), file, read_style) {
         Ok(f) => f,
         Err(err) => {
             if let Err(send_e) = tx.send(Err(err)) {
@@ -253,7 +252,7 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     match iter.map_err(Into::into).with_context(|| {
         format!(
             "Failed to obtain records from file at path {}",
-            path_display_name,
+            path.to_string_lossy(),
         )
     }) {
         Ok(i) => send_records(i, tx, activator),
@@ -269,7 +268,7 @@ pub fn read_file_task<Ctor, I, Out, Err>(
 }
 
 fn open_file_stream(
-    path: PathBuf,
+    _path: PathBuf,
     file: std::fs::File,
     read_style: FileReadStyle,
 ) -> Result<Box<dyn AvroRead + Send>, anyhow::Error> {
@@ -303,9 +302,8 @@ fn open_file_stream(
                 let mut inotify = Inotify::init()
                     .with_context(|| format!("file source: failed to initialize inotify"))?;
                 inotify
-                    .add_watch(&path, WatchMask::ALL_EVENTS)
-                    .with_context(|| format!("failed to add watch for file {}", path.display()))?;
-                let path = path.clone();
+                    .add_watch(&_path, WatchMask::ALL_EVENTS)
+                    .with_context(|| format!("failed to add watch for file {}", _path.display()))?;
                 thread::spawn(move || {
                     // This buffer must be at least `sizeof(struct inotify_event) + NAME_MAX + 1`.
                     // The `inotify` crate documentation uses 1KB, so that's =
@@ -317,7 +315,7 @@ fn open_file_stream(
                                 .send(Err(format!(
                                     "file source: failed to get events for file: {:#} (path: {})",
                                     err,
-                                    path.display()
+                                    _path.display()
                                 )))
                                 .is_err()
                             {
@@ -330,7 +328,7 @@ fn open_file_stream(
                             // Close this thread and log an error message (which duplicates the err above)
                             error!(
                                 "file source: closing stream due to read errors (path: {})",
-                                path.display()
+                                _path.display()
                             );
                             return;
                         };
