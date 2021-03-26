@@ -128,6 +128,7 @@ pub fn extract_config(
     extract(
         with_options,
         &[
+            Config::string("acks"),
             Config::string("client_id"),
             Config::new(
                 "statistics_interval_ms",
