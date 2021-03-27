@@ -150,8 +150,8 @@ consumer in the system.
 Field           | Type       | Meaning
 ----------------|------------|--------
 `consumer_name` | [`text`]   | The handle name for the consumer.
-`source_id`     | [`text`]   | The ID of the source that created this consumer object. Equivalent to `mz_source_info.source_id`.
-`dataflow_id`   | [`bigint`] | The ID of the dataflow reading from the consumer. Equivalent to `mz_source_info.dataflow_id`.
+`source_id`     | [`text`]   | The ID of the source that created this consumer object. Corresponds to `mz_source_info.source_id`.
+`dataflow_id`   | [`bigint`] | The ID of the dataflow reading from the consumer. Corresponds to `mz_source_info.dataflow_id`.
 `partition_id`  | [`text`]   | The ID of the topic partition the consumer is reading from.
 `rx_msgs`       | [`bigint`] | The number of messages read by this consumer since materialized startup.
 `rx_bytes`      | [`bigint`] | The number of bytes read by this consumer since materialized startup.
@@ -257,9 +257,9 @@ in the system.
 Field          | Type       | Meaning
 ---------------|------------|----------
 `source_name`  | [`text`]   | Materialize's internal name for the source.
-`source_id`    | [`text`]   | Materialize's unique ID for the source. Equivalent to `mz_sources.id`.
+`source_id`    | [`text`]   | Materialize's unique ID for the source. Corresponds to `mz_sources.id`.
 `dataflow_id`  | [`bigint`] | The ID of the dataflow responsible for processing this source.
-`partition_id` | [`text`]   | The ID of the partition within the source. Partition assignments are defined in a source specific manner.
+`partition_id` | [`text`]   | The ID of the partition within the source. The concept of partition varies by source type. Not all sources types have multiple partitions, in which case there will be only one entry for partition ID `0`.
 `offset`       | [`bigint`] | The highest offset processed by this source.
 `timestamp`    | [`bigint`] | The largest `mz_timestamp` processed by this source.
 
