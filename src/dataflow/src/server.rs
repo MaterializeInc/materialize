@@ -251,8 +251,22 @@ impl TimestampBindingBox {
     pub fn compact(&mut self) {
         let frontier = self.compaction_frontier.frontier();
 
-        for (_, entries) in self.partitions.iter_mut() {
-            entries.retain(|(time, _)| frontier.less_equal(time));
+        if frontier.is_empty() {
+            // No one is using any of the bindings currently - lets just keep the largest timestamp
+            // we have.
+
+            for (_, entries) in self.partitions.iter_mut() {
+                if let Some(entry) = entries.pop() {
+                    entries.clear();
+                    entries.push(entry);
+                }
+            }
+        } else {
+            // Other folks are using these timestamp bindings. Lets keep everything
+            // >= what people are using
+            for (_, entries) in self.partitions.iter_mut() {
+                entries.retain(|(time, _)| frontier.less_equal(time));
+            }
         }
     }
 
@@ -520,6 +534,9 @@ where
         while !shutdown {
             // Enable trace compaction.
             self.render_state.traces.maintenance();
+
+            // Enable timestamp compaction
+            self.compact_timestamp_bindings();
 
             // Ask Timely to execute a unit of work. If Timely decides there's
             // nothing to do, it will park the thread. We rely on another thread
@@ -901,6 +918,16 @@ where
                     logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                 }
             }
+        }
+    }
+
+    /// Compact any timestamp bindings that we can
+    fn compact_timestamp_bindings(&mut self) {
+        for (_, entries) in self.render_state.ts_histories.borrow_mut().iter_mut() {
+            match entries {
+                TimestampDataUpdate::BringYourOwn(entries) => entries.compact(),
+                _ => (),
+            };
         }
     }
 }
