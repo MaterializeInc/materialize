@@ -225,13 +225,52 @@ pub fn read_file_task<Ctor, I, Out, Err>(
     }) {
         Ok(file) => file,
         Err(err) => {
+            // If we fail to send an error, it's likely due to a race condition
+            // with the source being closed.
             let _ = tx.send(Err(err));
             return;
         }
     };
 
-    let file: Box<dyn AvroRead + Send> = match read_style {
-        FileReadStyle::ReadOnce => Box::new(file),
+    let file_stream = match open_file_stream(path.clone(), file, read_style) {
+        Ok(f) => f,
+        Err(err) => {
+            // If we fail to send an error, it's likely due to a race condition
+            // with the source being closed.
+            let _ = tx.send(Err(err));
+            return;
+        }
+    };
+
+    let file_stream: Box<dyn AvroRead + Send> = match compression {
+        Compression::Gzip => Box::new(MultiGzDecoder::new(file_stream)),
+        Compression::None => Box::new(file_stream),
+    };
+
+    let iter = iter_ctor(file_stream);
+
+    match iter.map_err(Into::into).with_context(|| {
+        format!(
+            "Failed to obtain records from file at path {}",
+            path.to_string_lossy(),
+        )
+    }) {
+        Ok(i) => send_records(i, tx, activator),
+        Err(e) => {
+            // If we fail to send an error, it's likely due to a race condition
+            // with the source being closed.
+            let _ = tx.send(Err(e));
+        }
+    };
+}
+
+fn open_file_stream(
+    _path: PathBuf,
+    file: std::fs::File,
+    read_style: FileReadStyle,
+) -> Result<Box<dyn AvroRead + Send>, anyhow::Error> {
+    match read_style {
+        FileReadStyle::ReadOnce => Ok(Box::new(file)),
         FileReadStyle::TailFollowFd => {
             let (notice_tx, notice_rx) = mpsc::channel();
 
@@ -257,22 +296,11 @@ pub fn read_file_task<Ctor, I, Out, Err>(
 
             #[cfg(target_os = "linux")]
             {
-                let mut inotify = match Inotify::init() {
-                    Ok(w) => w,
-                    Err(err) => {
-                        error!("file source: failed to initialize inotify: {:#}", err,);
-                        return;
-                    }
-                };
-                if let Err(err) = inotify.add_watch(&path, WatchMask::ALL_EVENTS) {
-                    error!(
-                        "file source: failed to add watch for file: {:#} (path: {})",
-                        err,
-                        path.display()
-                    );
-                    return;
-                }
-                let path = path.clone();
+                let mut inotify = Inotify::init()
+                    .with_context(|| format!("file source: failed to initialize inotify"))?;
+                inotify
+                    .add_watch(&_path, WatchMask::ALL_EVENTS)
+                    .with_context(|| format!("failed to add watch for file {}", _path.display()))?;
                 thread::spawn(move || {
                     // This buffer must be at least `sizeof(struct inotify_event) + NAME_MAX + 1`.
                     // The `inotify` crate documentation uses 1KB, so that's =
@@ -280,14 +308,28 @@ pub fn read_file_task<Ctor, I, Out, Err>(
                     let mut buf = [0; 1024];
                     loop {
                         if let Err(err) = inotify.read_events_blocking(&mut buf) {
+                            if notice_tx
+                                .send(Err(format!(
+                                    "file source: failed to get events for file: {:#} (path: {})",
+                                    err,
+                                    _path.display()
+                                )))
+                                .is_err()
+                            {
+                                // If the notice_tx returns an error, it's because
+                                // the source has been dropped. Just exit the
+                                // thread.
+                                return;
+                            }
+                            // We have no method for recovering from this error
+                            // Close this thread and log an error message (which duplicates the err above)
                             error!(
-                                "file source: failed to get events for file: {:#} (path: {})",
-                                err,
-                                path.display()
+                                "file source: closing stream due to read errors (path: {})",
+                                _path.display()
                             );
                             return;
                         };
-                        if notice_tx.send(()).is_err() {
+                        if notice_tx.send(Ok(())).is_err() {
                             // If the notice_tx returns an error, it's because
                             // the source has been dropped. Just exit the
                             // thread.
@@ -297,31 +339,12 @@ pub fn read_file_task<Ctor, I, Out, Err>(
                 });
             };
 
-            Box::new(ForeverTailedFile {
+            Ok(Box::new(ForeverTailedFile {
                 rx: notice_rx,
                 inner: file,
-            })
+            }))
         }
-    };
-
-    let file: Box<dyn AvroRead + Send> = match compression {
-        Compression::Gzip => Box::new(MultiGzDecoder::new(file)),
-        Compression::None => Box::new(file),
-    };
-
-    let iter = iter_ctor(file);
-
-    match iter.map_err(Into::into).with_context(|| {
-        format!(
-            "Failed to obtain records from file at path {}",
-            path.to_string_lossy(),
-        )
-    }) {
-        Ok(i) => send_records(i, tx, activator),
-        Err(e) => {
-            let _ = tx.send(Err(e));
-        }
-    };
+    }
 }
 
 /// Strategies for streaming content from a file.
