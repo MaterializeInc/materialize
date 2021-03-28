@@ -27,7 +27,7 @@ lazy_static! {
 
 #[tokio::test]
 async fn test_client() -> Result<(), anyhow::Error> {
-    let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build();
+    let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
     let existing_subjects = client.list_subjects().await?;
     for s in existing_subjects {
@@ -104,7 +104,7 @@ async fn test_client() -> Result<(), anyhow::Error> {
 
 #[tokio::test]
 async fn test_client_errors() -> Result<(), anyhow::Error> {
-    let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build();
+    let client = ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
     // Get-by-id-specific errors.
     match client.get_schema_by_id(i32::max_value()).await {
@@ -142,7 +142,7 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
     let client_graceful = start_server(
         StatusCode::INTERNAL_SERVER_ERROR,
         r#"{ "error_code": 50001, "message": "overloaded; try again later" }"#,
-    );
+    )?;
 
     match client_graceful.publish_schema("foo", "bar").await {
         Err(PublishError::Server {
@@ -182,7 +182,7 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
     let client_crash = start_server(
         StatusCode::INTERNAL_SERVER_ERROR,
         r#"panic! an exception occured!"#,
-    );
+    )?;
 
     match client_crash.publish_schema("foo", "bar").await {
         Err(PublishError::Server {
@@ -219,7 +219,7 @@ async fn test_server_errors() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-fn start_server(status_code: StatusCode, body: &'static str) -> Client {
+fn start_server(status_code: StatusCode, body: &'static str) -> Result<Client, anyhow::Error> {
     let addr = {
         let incoming = AddrIncoming::bind(&([127, 0, 0, 1], 0).into()).unwrap();
         let addr = incoming.local_addr();
