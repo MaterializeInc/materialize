@@ -26,7 +26,9 @@ skip = [
     { name = "num-bigint", version = "0.2.6" },
 
     # waiting on https://github.com/hyperium/headers/pull/83
-    { name = "time", version = "0.1.44" }
+    { name = "time", version = "0.1.44" },
+    # this is already merged into tokio-postgres, just waiting for a release
+    { name = "socket2", version = "0.3.19" },
 ]
 deny = [
     # Strum has suspect code quality and includes many unneeded features. Use
