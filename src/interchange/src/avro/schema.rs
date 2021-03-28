@@ -333,8 +333,9 @@ impl ConfluentAvroResolver {
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
-        let writer_schemas =
-            config.map(|sr| SchemaCache::new(sr, reader_schema.fingerprint::<Sha256>()));
+        let writer_schemas = config
+            .map(|sr| SchemaCache::new(sr, reader_schema.fingerprint::<Sha256>()))
+            .transpose()?;
         Ok(Self {
             reader_schema,
             writer_schemas,
@@ -427,12 +428,12 @@ impl SchemaCache {
     fn new(
         schema_registry: ccsr::ClientConfig,
         reader_fingerprint: SchemaFingerprint,
-    ) -> SchemaCache {
-        SchemaCache {
+    ) -> Result<SchemaCache, anyhow::Error> {
+        Ok(SchemaCache {
             cache: HashMap::new(),
-            ccsr_client: schema_registry.build(),
+            ccsr_client: schema_registry.build()?,
             reader_fingerprint,
-        }
+        })
     }
 
     /// Looks up the writer schema for ID. If the schema is literally identical

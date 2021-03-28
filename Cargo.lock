@@ -398,7 +398,6 @@ dependencies = [
  "futures",
  "hyper",
  "lazy_static",
- "log",
  "native-tls",
  "openssl",
  "ore",

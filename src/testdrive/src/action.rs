@@ -596,7 +596,7 @@ pub async fn create_state(
             ccsr_config = ccsr_config.identity(ident);
         }
 
-        ccsr_config.build()
+        ccsr_config.build().err_ctx("Creating CCSR client")?
     };
 
     let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics, kafka_config) = {
