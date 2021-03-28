@@ -34,6 +34,25 @@ mzworkflows:
         service: testdrive-svc
         command: --aws-region=us-east-2 --ci-output ${TD_TEST:-*.td esoteric/*.td}
 
+  # Run a couple of tests that verify that our http* proxy configuration works
+  ci-proxy:
+    env:
+      ALL_PROXY: http://squid:3128
+      TD_TEST: 'avro-registry.td esoteric/s3.td'
+    steps:
+      - step: start-services
+        services: [squid]
+      - step: workflow
+        workflow: ci
+
+  ci-proxy-failure:
+    env:
+      ALL_PROXY: '#nonsense'
+      TD_TEST: 'proxy-failure.td'
+    steps:
+      - step: workflow
+        workflow: testdrive
+
   start-deps:
     steps:
       - step: start-services
@@ -87,11 +106,12 @@ services:
       - 6875
     environment:
     - MZ_DEV=1
-    - MZ_LOG=${MZ_LOG:-dataflow::source::s3=trace,info}
+    - MZ_LOG
     - AWS_ACCESS_KEY_ID
     - AWS_SECRET_ACCESS_KEY
     - AWS_SESSION_TOKEN
     - AWS_SECURITY_TOKEN
+    - ALL_PROXY
     volumes:
     - mzdata:/share/mzdata
     - tmp:/share/tmp
@@ -119,6 +139,14 @@ services:
     - HOSTNAME_EXTERNAL=localstack
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+
+  # A forwarding proxy
+  squid:
+    image: sameersbn/squid:3.5.27-2
+    ports:
+    - 3128
+    volumes:
+    - ./static/squid.conf:/etc/squid/squid.conf
 
 volumes:
   mzdata:

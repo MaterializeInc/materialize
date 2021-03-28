@@ -85,6 +85,26 @@ steps:
           composition: testdrive
           run: ci
 
+  - id: testdrive-proxy
+    label: ":squid: testdrive proxy"
+    depends_on: build
+    timeout_in_minutes: 30
+    inputs: [src/ore, src/aws-util]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          run: ci-proxy
+
+  - id: testdrive-proxy-failure
+    label: ":squid::boom: testdrive proxy failure"
+    depends_on: build
+    timeout_in_minutes: 30
+    inputs: [src/ore, src/aws-util]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          run: ci-proxy
+
   - id: kafka-ssl
     label: ":lock: Kafka SSL smoke test"
     depends_on: build
