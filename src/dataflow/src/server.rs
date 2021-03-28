@@ -463,7 +463,6 @@ where
                     for time in upper.elements().iter() {
                         changes.update(time.clone(), 1);
                     }
-                    let lower = self.reported_frontiers.get_mut(&id).unwrap();
                     changes.compact();
                     if !changes.is_empty() {
                         progress.push((*id, changes));
