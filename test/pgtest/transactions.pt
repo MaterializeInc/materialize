@@ -166,6 +166,32 @@ DataRow {"fields":["4"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
 
+send
+Query {"query": "BEGIN;"}
+Query {"query": "BEGIN;"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+NoticeResponse {"fields":[{"typ":"C","value":"25001"},{"typ":"M","value":"there is already a transaction in progress"}]}
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+
+send
+Query {"query": "COMMIT;"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+
+
 # Test a failure, rollback, failure, rollback chain to verify that we never process after the first failure.
 send
 Query {"query": "SELECT 1/(SELECT 0); ROLLBACK; SELECT 2; SELECT 1/(SELECT 0); ROLLBACK;"}

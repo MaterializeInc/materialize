@@ -227,7 +227,9 @@ pub enum ExecuteResponse {
         name: String,
     },
     /// A new transaction was started.
-    StartedTransaction,
+    StartedTransaction {
+        duplicated: bool, // true if a transaction is in progress
+    },
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
     Tailing {
