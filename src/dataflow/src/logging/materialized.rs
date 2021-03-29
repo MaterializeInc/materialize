@@ -394,8 +394,6 @@ pub fn construct<A: Allocate>(
                     Datum::Int64(diff_vector[9]),
                     Datum::Int64(diff_vector[10]),
                     Datum::Int64(diff_vector[11]),
-                    Datum::Int64(diff_vector[12]),
-                    Datum::Int64(diff_vector[13]),
                 ])
             }
         });
