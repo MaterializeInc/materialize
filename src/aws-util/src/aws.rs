@@ -82,7 +82,7 @@ pub async fn account(
     timeout: Duration,
 ) -> Result<String, anyhow::Error> {
     let dispatcher =
-        crate::client::http().context("creating HTTP for AWS STS Account verification")?;
+        crate::client::http().context("creating HTTP client for AWS STS Account verification")?;
     let sts_client = StsClient::new_with(dispatcher, provider, region);
     let get_identity = sts_client.get_caller_identity(GetCallerIdentityRequest {});
     let account = time::timeout(timeout, get_identity)
