@@ -20,6 +20,7 @@ pub struct PgColumn {
     scalar_type: PgType,
     nullable: bool,
     collation: Option<String>,
+    default_expr: Option<String>,
 }
 
 /// Fetches column information from an upstream Postgres source, given
@@ -56,10 +57,12 @@ pub async fn fetch_columns(
     // are present.
     Ok(client
         .query(
-            "SELECT a.attname, a.atttypid, a.attnotnull, b.collname
+            "SELECT a.attname, a.atttypid, a.attnotnull, b.collname, pg_get_expr(c.adbin, c.adrelid)
                 FROM pg_catalog.pg_attribute a
                 LEFT JOIN pg_catalog.pg_collation b
                      ON a.attcollation = b.oid
+                LEFT JOIN pg_catalog.pg_attrdef c
+                     ON a.attrelid = c.adrelid AND a.attnum = c.adnum
                 WHERE a.attnum > 0::pg_catalog.int2
                     AND NOT a.attisdropped
                     AND a.attrelid = $1
@@ -75,11 +78,13 @@ pub async fn fetch_columns(
                 PgType::from_oid(oid).ok_or_else(|| anyhow!("unknown type OID: {}", oid))?;
             let nullable = !row.get::<_, bool>(2);
             let collation: Option<String> = row.get(3);
+            let default_expr: Option<String> = row.get(4);
             Ok(PgColumn {
                 name,
                 scalar_type,
                 nullable,
                 collation,
+                default_expr,
             })
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?)
@@ -97,19 +102,27 @@ pub fn format_columns(columns: Vec<PgColumn>) -> String {
     let collate = |collation| {
         if let Some(collation) = collation {
             if &collation != "default" {
-                return format!(" COLLATE {}", collation)
+                return format!(" COLLATE {}", collation);
             }
         }
         "".to_owned()
+    };
+    let default = |default| {
+        if let Some(expr) = default {
+            return format!(" DEFAULT {}", expr);
+        } else {
+            "".to_owned()
+        }
     };
 
     let mut formatted_columns = Vec::with_capacity(columns.len());
     for c in columns {
         formatted_columns.push(format!(
-            "{} {}{} {}",
+            "{} {}{}{} {}",
             c.name,
             c.scalar_type,
             collate(c.collation),
+            default(c.default_expr),
             nullable(c.nullable)
         ));
     }

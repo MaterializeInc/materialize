@@ -15,6 +15,9 @@ CREATE COLLATION custom_collation_${testdrive.seed} FROM "C";
 CREATE TABLE custom_collate_${testdrive.seed} (sample text COLLATE "custom_collation_${testdrive.seed}");
 ALTER TABLE custom_collate_${testdrive.seed} REPLICA IDENTITY FULL;
 
+CREATE TABLE default_${testdrive.seed} (number int DEFAULT 1 NOT NULL, name text);
+ALTER TABLE default_${testdrive.seed} REPLICA IDENTITY FULL;
+
 CREATE PUBLICATION mz_source_${testdrive.seed} FOR ALL TABLES;
 INSERT INTO numbers_${testdrive.seed} VALUES (5, true, 'five');
 

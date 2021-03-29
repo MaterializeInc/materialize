@@ -511,6 +511,13 @@ CREATE SOURCE psychic FROM POSTGRES HOST 'host=kanto user=ash password=teamrocke
 CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connector: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", namespace: "generation1", table: "psychic", columns: [ColumnDef { name: Ident("trainer"), data_type: Other { name: Name(UnresolvedObjectName([Ident("text")])), typ_mod: [] }, collation: Some(Collate { collation: UnresolvedObjectName([Ident("fr_FR")]) }), options: [ColumnOptionDef { name: None, option: NotNull }] }] }, with_options: [], format: None, envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
+CREATE SOURCE psychic FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' NAMESPACE 'generation1' TABLE 'psychic' (pokedex_id int DEFAULT 1 NOT NULL);
+----
+CREATE SOURCE psychic FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' NAMESPACE 'generation1' TABLE 'psychic' (pokedex_id int4 DEFAULT 1 NOT NULL)
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("psychic")]), col_names: [], connector: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", namespace: "generation1", table: "psychic", columns: [ColumnDef { name: Ident("pokedex_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: Default(Value(Number("1"))) }, ColumnOptionDef { name: None, option: NotNull }] }] }, with_options: [], format: None, envelope: None, if_not_exists: false, materialized: false })
+
+parse-statement
 CREATE SOURCE psychic FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel';
 ----
 CREATE SOURCE psychic FROM PUBNUB SUBSCRIBE KEY 'subscribe_key' CHANNEL 'channel'
