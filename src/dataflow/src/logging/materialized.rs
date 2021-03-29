@@ -27,7 +27,7 @@ use repr::{Datum, Row, Timestamp};
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
 
 /// A logged materialized event.
-#[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub enum MaterializedEvent {
     /// Dataflow command, true for create and false for drop.
     Dataflow(GlobalId, bool),
