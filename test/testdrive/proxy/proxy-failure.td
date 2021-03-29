@@ -14,3 +14,15 @@
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM
 Creating HTTP client for schema registry: builder error: builder error: relative URL without a base
+
+! CREATE MATERIALIZED SOURCE s3_all
+  FROM S3 OBJECTS FROM SCAN BUCKET 'doesnt-matter'
+  WITH (
+    region = '${testdrive.aws-region}',
+    endpoint = '${testdrive.aws-endpoint}',
+    access_key_id = '${testdrive.aws-access-key-id}',
+    secret_access_key = '${testdrive.aws-secret-access-key}',
+    token = '${testdrive.aws-token}'
+  )
+  FORMAT TEXT;
+Using statically provided credentials: creating HTTP client for AWS STS Account verification: invalid format
