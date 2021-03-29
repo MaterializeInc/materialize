@@ -3084,6 +3084,7 @@ dependencies = [
  "jemalloc-ctl",
  "lazy_static",
  "pprof",
+ "serde",
  "tempfile",
  "tokio",
 ]
