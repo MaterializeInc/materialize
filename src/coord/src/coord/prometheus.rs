@@ -94,6 +94,7 @@ impl<'a> Scraper<'a> {
                     Metric::new(
                         family.get_name().to_string(),
                         family.get_field_type().into(),
+                        family.get_help().to_string(),
                         convert_metrics_to_rows(
                             family.get_field_type(),
                             family.get_metric().into_iter(),

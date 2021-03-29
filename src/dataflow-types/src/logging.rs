@@ -54,6 +54,7 @@ pub enum MaterializedLog {
     FrontierCurrent,
     KafkaConsumerInfo,
     Metrics,
+    MetricsMeta,
     PeekCurrent,
     PeekDuration,
     SourceInfo,
@@ -187,6 +188,12 @@ impl LogVariant {
                 .with_column("value", ScalarType::Float64.nullable(false))
                 .with_key(vec![0, 1, 2]),
 
+            LogVariant::Materialized(MaterializedLog::MetricsMeta) => RelationDesc::empty()
+                .with_column("metric", ScalarType::String.nullable(false))
+                .with_column("type", ScalarType::String.nullable(false))
+                .with_column("help", ScalarType::String.nullable(false))
+                .with_key(vec![0]),
+
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => RelationDesc::empty()
                 .with_column("uuid", ScalarType::String.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false))
@@ -248,9 +255,11 @@ impl LogVariant {
                 LogVariant::Materialized(MaterializedLog::SourceInfo),
                 vec![(1, 1), (2, 2), (3, 3)],
             )],
-            LogVariant::Materialized(MaterializedLog::Metrics) => vec![
-                // TODO: foreign key over to the Metrics types table
-            ],
+            LogVariant::Materialized(MaterializedLog::Metrics) => vec![(
+                LogVariant::Materialized(MaterializedLog::MetricsMeta),
+                vec![(0, 0)],
+            )],
+            LogVariant::Materialized(MaterializedLog::MetricsMeta) => vec![],
             LogVariant::Materialized(MaterializedLog::PeekCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::SourceInfo) => vec![],
             LogVariant::Materialized(MaterializedLog::PeekDuration) => vec![],
