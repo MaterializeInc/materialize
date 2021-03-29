@@ -99,7 +99,7 @@ steps:
     label: ":squid::boom: testdrive proxy failure"
     depends_on: build
     timeout_in_minutes: 30
-    inputs: [src/ore, src/aws-util]
+    inputs: [test/testdrive/proxy]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
