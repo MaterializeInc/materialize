@@ -140,7 +140,8 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
-  # A forwarding proxy
+  # An HTTP forward proxy, used in some workflows to test whether Materialize can correctly route
+  # traffic via the proxy.
   squid:
     image: sameersbn/squid:3.5.27-2
     ports:
