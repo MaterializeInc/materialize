@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.39"
+anyhow = "1.0.40"
 aws-arn = "0.1.1"
 aws-util = { path = "../aws-util" }
 build-info = { path = "../build-info" }
