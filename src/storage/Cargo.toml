@@ -6,14 +6,14 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.38"
-byteorder = "1.4.2"
+anyhow = "1.0.40"
+byteorder = "1.4.3"
 crossbeam-channel = "0.5.0"
 dataflow-types = { path = "../dataflow-types" }
 expr = { path = "../expr" }
 lazy_static = "1.4.0"
 log = "0.4.13"
-regex = "1.4.3"
+regex = "1.4.5"
 repr = { path = "../repr" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.2.0"
+tokio = "1.4.0"

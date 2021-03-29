@@ -144,7 +144,7 @@ pub enum Format<T: AstInfo> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Envelope<T: AstInfo> {
     None,
-    Debezium,
+    Debezium(DbzMode),
     Upsert(Option<Format<T>>),
     CdcV2,
 }
@@ -162,8 +162,9 @@ impl<T: AstInfo> AstDisplay for Envelope<T> {
                 // this is unreachable as long as the default is None, but include it in case we ever change that
                 f.write_str("NONE");
             }
-            Self::Debezium => {
+            Self::Debezium(mode) => {
                 f.write_str("DEBEZIUM");
+                f.write_node(mode);
             }
             Self::Upsert(format) => {
                 f.write_str("UPSERT");
@@ -250,6 +251,30 @@ impl AstDisplay for Compression {
 impl_display!(Compression);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DbzMode {
+    /// `ENVELOPE DEBEZIUM` with no suffix
+    Plain,
+    /// `ENVELOPE DEBEZIUM UPSERT`
+    Upsert,
+}
+
+impl Default for DbzMode {
+    fn default() -> Self {
+        Self::Plain
+    }
+}
+
+impl AstDisplay for DbzMode {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            Self::Plain => f.write_str(""),
+            Self::Upsert => f.write_str(" UPSERT"),
+        }
+    }
+}
+impl_display!(DbzMode);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Connector<T: AstInfo> {
     File {
         path: String,
@@ -285,6 +310,12 @@ pub enum Connector<T: AstInfo> {
         table: String,
         /// The expected column schema of the synced table
         columns: Vec<ColumnDef<T>>,
+    },
+    PubNub {
+        /// PubNub's subscribe key
+        subscribe_key: String,
+        /// The PubNub channel to subscribe to
+        channel: String,
     },
 }
 
@@ -358,6 +389,16 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                 f.write_str("' (");
                 f.write_node(&display::comma_separated(columns));
                 f.write_str(")");
+            }
+            Connector::PubNub {
+                subscribe_key,
+                channel,
+            } => {
+                f.write_str("PUBNUB SUBSCRIBE KEY '");
+                f.write_str(&display::escape_single_quote_string(subscribe_key));
+                f.write_str("' CHANNEL '");
+                f.write_str(&display::escape_single_quote_string(channel));
+                f.write_str("'");
             }
         }
     }

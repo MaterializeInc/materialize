@@ -102,6 +102,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
             }
             Connector::Postgres { .. } => (),
+            Connector::PubNub { .. } => (),
         }
 
         purify_format(format, connector, col_names, file, &config_options).await?;
@@ -212,7 +213,7 @@ async fn get_remote_avro_schema(
     schema_registry_config: ccsr::ClientConfig,
     topic: String,
 ) -> Result<Schema, anyhow::Error> {
-    let ccsr_client = schema_registry_config.clone().build();
+    let ccsr_client = schema_registry_config.clone().build()?;
 
     let value_schema_name = format!("{}-value", topic);
     let value_schema = ccsr_client

@@ -99,7 +99,7 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
         Ok((self.packer.finish_and_reuse(), coords))
     }
     define_unexpected! {
-        union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+        union_branch, array, map, enum_variant, scalar, decimal, numeric, bytes, string, json, uuid, fixed
     }
 }
 
@@ -208,7 +208,7 @@ impl AvroDecode for AvroDbzSnapshotDecoder {
         }))
     }
     define_unexpected! {
-        record, array, map, enum_variant, decimal, bytes, json, uuid, fixed
+        record, array, map, enum_variant, decimal, numeric, bytes, json, uuid, fixed
     }
 }
 
@@ -268,7 +268,7 @@ impl AvroDecode for DebeziumTransactionDecoder {
         }
     }
     define_unexpected! {
-        array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+        array, map, enum_variant, scalar, decimal, numeric, bytes, string, json, uuid, fixed
     }
 }
 
@@ -421,7 +421,7 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
         Ok(DebeziumSourceCoordinates { snapshot, row })
     }
     define_unexpected! {
-        union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+        union_branch, array, map, enum_variant, scalar, decimal, numeric, bytes, string, json, uuid, fixed
     }
 }
 
@@ -479,7 +479,7 @@ pub struct DebeziumDecodeState {
     before_idx: usize,
     /// Index of the "after" field in the payload schema
     after_idx: usize,
-    dedup: DebeziumDeduplicationState,
+    dedup: Option<DebeziumDeduplicationState>,
     binlog_schema_indices: Option<BinlogSchemaIndices>,
     /// Human-readable name used for printing debug information
     debug_name: String,
@@ -607,16 +607,25 @@ impl DebeziumDecodeState {
                         .ok_or_else(|| anyhow!("\"row\" is not an integer"))?;
                         let pos = usize::try_from(pos_val)?;
                         let row = usize::try_from(row_val)?;
-                        if !self.dedup.should_use_record(
-                            file_val.as_bytes(),
-                            RowCoordinates::MySql { pos, row },
-                            coord,
-                            upstream_time_millis,
-                            &self.debug_name,
-                            self.worker_idx,
-                            false,
-                            &Row::default(),
-                        ) {
+                        let debug_name = &self.debug_name;
+                        let worker_idx = self.worker_idx;
+                        if !self
+                            .dedup
+                            .as_mut()
+                            .map(|d| {
+                                d.should_use_record(
+                                    file_val.as_bytes(),
+                                    RowCoordinates::MySql { pos, row },
+                                    coord,
+                                    upstream_time_millis,
+                                    debug_name,
+                                    worker_idx,
+                                    false,
+                                    &Row::default(),
+                                )
+                            })
+                            .unwrap_or(true)
+                        {
                             return Ok(None);
                         }
                     }

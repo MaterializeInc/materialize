@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.38"
+anyhow = "1.0.40"
 bytes = "1.0.1"
 datadriven = "0.5.0"
 fallible-iterator = "0.2.0"

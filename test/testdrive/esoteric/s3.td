@@ -23,7 +23,7 @@ b3
 
 $ set queue-name=materialize-ci-notifications-${testdrive.seed}
 
-$ s3-add-notifications bucket=${bucket} queue=${queue-name}
+$ s3-add-notifications bucket=${bucket} queue=${queue-name} sqs-validation-timeout=5m
 
 > CREATE MATERIALIZED SOURCE s3_all
   FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
@@ -146,7 +146,7 @@ $ set otherbucket=materialize-ci-td-other-${testdrive.seed}
 $ set otherqueue=materialize-ci-other-${testdrive.seed}
 
 $ s3-create-bucket bucket=${otherbucket}
-$ s3-add-notifications bucket=${otherbucket} queue=${otherqueue} sqs-validation-timout=5m
+$ s3-add-notifications bucket=${otherbucket} queue=${otherqueue} sqs-validation-timeout=5m
 
 $ s3-put-object bucket=${otherbucket} key=short/c
 c1

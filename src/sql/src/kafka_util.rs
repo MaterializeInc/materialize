@@ -36,11 +36,12 @@ enum ValType {
 
 // Describes Kafka cluster configurations users can suppply using `CREATE
 // SOURCE...WITH (option_list)`.
-// TODO(sploiselle): Support overriding keys, default values.
+// TODO(sploiselle): Support overriding keys.
 struct Config {
     name: &'static str,
     val_type: ValType,
     transform: fn(String) -> String,
+    default: Option<String>,
 }
 
 impl Config {
@@ -49,6 +50,7 @@ impl Config {
             name,
             val_type,
             transform: convert::identity,
+            default: None,
         }
     }
 
@@ -66,6 +68,12 @@ impl Config {
     // it is validated.
     fn transform(mut self, f: fn(String) -> String) -> Self {
         self.transform = f;
+        self
+    }
+
+    // Allows for returning a default value for this configuration option
+    fn set_default(mut self, d: Option<String>) -> Self {
+        self.default = d;
         self
     }
 
@@ -105,7 +113,12 @@ fn extract(
                 Ok(v) => v,
                 Err(e) => bail!("Invalid WITH option {}={}: {}", config.name, v, e),
             },
-            None => continue,
+            None => match &config.default {
+                Some(v) => v.to_string(),
+                None => {
+                    continue;
+                }
+            },
         };
         out.insert(config.get_key(), value);
     }
@@ -128,13 +141,17 @@ pub fn extract_config(
     extract(
         with_options,
         &[
+            Config::string("acks"),
             Config::string("client_id"),
             Config::new(
                 "statistics_interval_ms",
                 // The range of values comes from `statistics.interval.ms` in
                 // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 ValType::Number(0, 86_400_000),
-            ),
+            )
+            .set_default(Some(
+                chrono::Duration::seconds(1).num_milliseconds().to_string(),
+            )),
             Config::new(
                 "topic_metadata_refresh_interval_ms",
                 // The range of values comes from `topic.metadata.refresh.interval.ms` in

@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::SystemTime;
+use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
@@ -39,6 +39,7 @@ use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::HirRelationExpr;
 use sql::plan::{Params, Plan, PlanContext};
 use transform::Optimizer;
+use uuid::Uuid;
 
 use crate::catalog::builtin::{
     Builtin, BUILTINS, BUILTIN_ROLES, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_TEMP_SCHEMA,
@@ -87,7 +88,7 @@ pub const FIRST_USER_OID: u32 = 20_000;
 /// The catalog also maintains special "ambient schemas": virtual schemas,
 /// implicitly present in all databases, that house various system views.
 /// The big examples of ambient schemas are `pg_catalog` and `mz_catalog`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Catalog {
     by_name: BTreeMap<String, Database>,
     by_id: BTreeMap<GlobalId, CatalogEntry>,
@@ -116,7 +117,7 @@ impl ConnCatalog<'_> {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Database {
     pub name: String,
     pub id: i64,
@@ -125,7 +126,7 @@ pub struct Database {
     pub schemas: BTreeMap<String, Schema>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Schema {
     pub name: SchemaName,
     pub id: i64,
@@ -135,7 +136,7 @@ pub struct Schema {
     pub functions: BTreeMap<String, GlobalId>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Role {
     pub name: String,
     pub id: i64,
@@ -296,6 +297,13 @@ impl CatalogItem {
         }
     }
 
+    pub fn source_connector(&self, name: &FullName) -> Result<&SourceConnector, SqlCatalogError> {
+        match &self {
+            CatalogItem::Source(source) => Ok(&source.connector),
+            _ => Err(SqlCatalogError::UnknownSource(name.to_string())),
+        }
+    }
+
     /// Collects the identifiers of the dataflows that this item depends
     /// upon.
     pub fn uses(&self) -> &[GlobalId] {
@@ -406,6 +414,12 @@ impl CatalogEntry {
         self.item.func(&self.name)
     }
 
+    /// Returns the [`dataflow_types::SourceConnector`] associated with
+    /// this `CatalogEntry`.
+    pub fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
+        self.item.source_connector(&self.name)
+    }
+
     /// Reports whether this catalog entry is a table.
     pub fn is_table(&self) -> bool {
         matches!(self.item(), CatalogItem::Table(_))
@@ -462,12 +476,16 @@ impl Catalog {
             storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
             config: sql::catalog::CatalogConfig {
-                startup_time: SystemTime::now(),
+                start_time: Utc::now(),
+                start_instant: Instant::now(),
                 nonce: rand::random(),
                 experimental_mode,
                 cluster_id,
+                session_id: Uuid::new_v4(),
                 cache_directory: config.cache_directory.clone(),
                 build_info: config.build_info,
+                num_workers: config.num_workers,
+                timestamp_frequency: config.timestamp_frequency,
             },
         };
         let mut events = vec![];
@@ -547,7 +565,7 @@ impl Catalog {
                     let index_name = format!("{}_primary_idx", log.name);
                     let oid = catalog.allocate_oid()?;
                     let expr = HirRelationExpr::Get {
-                        id: Id::BareSource(log.id),
+                        id: Id::LocalBareSource,
                         typ: log.variant.desc().typ().clone(),
                     }
                     .lower();
@@ -720,7 +738,19 @@ impl Catalog {
                 .set_catalog_content_version(catalog_content_version)?;
         }
 
-        let items = catalog.storage().load_items()?;
+        let (catalog, extra_events) = Self::load_catalog_items(catalog)?;
+        events.extend(extra_events.into_iter());
+
+        Ok((catalog, events))
+    }
+
+    // Takes a catalog which only has items in its on-disk storage ("unloaded")
+    // and cannot yet resolve names, and returns a catalog loaded with those
+    // items.
+    // TODO(justin): it might be nice if these were two different types.
+    pub fn load_catalog_items(mut c: Catalog) -> Result<(Catalog, Vec<Event>), Error> {
+        let mut events = Vec::new();
+        let items = c.storage().load_items()?;
         for (id, name, def) in items {
             // TODO(benesch): a better way of detecting when a view has depended
             // upon a non-existent logging view. This is fine for now because
@@ -730,7 +760,7 @@ impl Catalog {
                 static ref LOGGING_ERROR: Regex =
                     Regex::new("unknown catalog item 'mz_catalog.[^']*'").unwrap();
             }
-            let item = match catalog.deserialize_item(def) {
+            let item = match c.deserialize_item(def) {
                 Ok(item) => item,
                 Err(e) if LOGGING_ERROR.is_match(&e.to_string()) => {
                     return Err(Error::new(ErrorKind::UnsatisfiableLoggingDependency {
@@ -743,10 +773,10 @@ impl Catalog {
                     }))
                 }
             };
-            let oid = catalog.allocate_oid()?;
-            events.push(catalog.insert_item(id, oid, name, item));
+            let oid = c.allocate_oid()?;
+            events.push(c.insert_item(id, oid, name, item));
         }
-        Ok((catalog, events))
+        Ok((c, events))
     }
 
     /// Opens the catalog at `path` with parameters set appropriately for debug
@@ -762,6 +792,8 @@ impl Catalog {
             experimental_mode: None,
             cache_directory: None,
             build_info: &DUMMY_BUILD_INFO,
+            num_workers: 0,
+            timestamp_frequency: Duration::from_secs(1),
         })?;
         Ok(catalog)
     }
@@ -2330,6 +2362,10 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 
     fn func(&self) -> Result<&'static sql::func::Func, SqlCatalogError> {
         Ok(self.func()?)
+    }
+
+    fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
+        Ok(self.source_connector()?)
     }
 
     fn create_sql(&self) -> &str {

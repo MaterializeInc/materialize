@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{HashSet, VecDeque};
-use std::convert::TryInto;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -20,15 +19,13 @@ use log::error;
 use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
-use timely::scheduling::{Activator, SyncActivator};
+use timely::scheduling::SyncActivator;
 
 use dataflow_types::{DataEncoding, ExternalSourceConnector, KinesisSourceConnector, MzOffset};
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::logging::materialized::Logger;
-use crate::source::{
-    ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
-};
+use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 lazy_static! {
     static ref MILLIS_BEHIND_LATEST: IntGaugeVec = register_int_gauge_vec!(
@@ -47,17 +44,9 @@ lazy_static! {
 const KINESIS_SHARD_REFRESH_RATE: Duration = Duration::from_secs(60);
 
 /// Contains all information necessary to ingest data from Kinesis
-pub struct KinesisSourceInfo {
-    /// Source Name
-    name: String,
-    /// Unique Source Id
-    id: SourceInstanceId,
-    /// Field is set if this operator is responsible for ingesting data
-    is_activated_reader: bool,
+pub struct KinesisSourceReader {
     /// Kinesis client used to obtain records
     kinesis_client: KinesisClient,
-    /// Timely worker logger for source events
-    logger: Option<Logger>,
     /// The name of the stream
     stream_name: String,
     /// The set of active shards
@@ -74,55 +63,8 @@ pub struct KinesisSourceInfo {
     processed_message_count: i64,
 }
 
-impl SourceConstructor<Vec<u8>> for KinesisSourceInfo {
-    fn new(
-        source_name: String,
-        source_id: SourceInstanceId,
-        active: bool,
-        _worker_id: usize,
-        _worker_count: usize,
-        logger: Option<Logger>,
-        _consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
-        consistency_info: &mut ConsistencyInfo,
-        _encoding: DataEncoding,
-    ) -> Result<Self, anyhow::Error> {
-        let kc = match connector {
-            ExternalSourceConnector::Kinesis(kc) => kc,
-            _ => unreachable!(),
-        };
-
-        let state = block_on(create_state(
-            kc,
-            &source_name,
-            source_id,
-            consistency_info,
-            logger.clone(),
-        ));
-        match state {
-            Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok(KinesisSourceInfo {
-                name: source_name,
-                id: source_id,
-                is_activated_reader: active,
-                kinesis_client,
-                logger,
-                shard_queue,
-                last_checked_shards: Instant::now(),
-                buffered_messages: VecDeque::new(),
-                shard_set,
-                stream_name,
-                processed_message_count: 0,
-            }),
-            Err(e) => Err(anyhow!("{}", e)),
-        }
-    }
-}
-
-impl KinesisSourceInfo {
-    async fn update_shard_information(
-        &mut self,
-        consistency_info: &mut ConsistencyInfo,
-    ) -> Result<(), anyhow::Error> {
+impl KinesisSourceReader {
+    async fn update_shard_information(&mut self) -> Result<(), anyhow::Error> {
         let new_shards: HashSet<String> = get_shard_ids(&self.kinesis_client, &self.stream_name)
             .await?
             .difference(&self.shard_set)
@@ -134,17 +76,6 @@ impl KinesisSourceInfo {
                 shard_id.clone(),
                 get_shard_iterator(&self.kinesis_client, &self.stream_name, &shard_id).await?,
             ));
-            let kinesis_id = PartitionId::Kinesis(shard_id);
-            consistency_info.update_partition_metadata(kinesis_id.clone());
-            consistency_info.partition_metrics.insert(
-                kinesis_id.clone(),
-                PartitionMetrics::new(
-                    &self.name,
-                    self.id,
-                    &kinesis_id.to_string(),
-                    self.logger.clone(),
-                ),
-            );
         }
         Ok(())
     }
@@ -163,61 +94,44 @@ impl KinesisSourceInfo {
     }
 }
 
-impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
-    fn can_close_timestamp(
-        &self,
-        consistency_info: &ConsistencyInfo,
-        pid: &PartitionId,
-        offset: MzOffset,
-    ) -> bool {
-        if !self.is_activated_reader {
-            true
-        } else {
-            // Guaranteed to exist if we receive a message from this partition
-            let last_offset = consistency_info
-                .partition_metadata
-                .get(&pid)
-                .unwrap()
-                .offset;
-            last_offset >= offset
+impl SourceReader<Vec<u8>> for KinesisSourceReader {
+    fn new(
+        _source_name: String,
+        _source_id: SourceInstanceId,
+        _worker_id: usize,
+        _consumer_activator: SyncActivator,
+        connector: ExternalSourceConnector,
+        _encoding: DataEncoding,
+        _: Option<Logger>,
+    ) -> Result<(Self, Option<PartitionId>), anyhow::Error> {
+        let kc = match connector {
+            ExternalSourceConnector::Kinesis(kc) => kc,
+            _ => unreachable!(),
+        };
+
+        let state = block_on(create_state(kc));
+        match state {
+            Ok((kinesis_client, stream_name, shard_set, shard_queue)) => Ok((
+                KinesisSourceReader {
+                    kinesis_client,
+                    shard_queue,
+                    last_checked_shards: Instant::now(),
+                    buffered_messages: VecDeque::new(),
+                    shard_set,
+                    stream_name,
+                    processed_message_count: 0,
+                },
+                Some(PartitionId::Kinesis),
+            )),
+            Err(e) => Err(anyhow!("{}", e)),
         }
     }
-
-    fn get_worker_partition_count(&self) -> i32 {
-        if self.is_activated_reader {
-            // Kinesis does not support more than i32 partitions
-            self.shard_set.len().try_into().unwrap()
-        } else {
-            0
-        }
-    }
-
-    fn has_partition(&self, _partition_id: PartitionId) -> bool {
-        self.is_activated_reader
-    }
-
-    fn ensure_has_partition(&mut self, _consistency_info: &mut ConsistencyInfo, _pid: PartitionId) {
-        //TODO(natacha): do nothing for now, as do not currently use timestamper
-    }
-
-    fn update_partition_count(
-        &mut self,
-        _consistency_info: &mut ConsistencyInfo,
-        _partition_count: i32,
-    ) {
-        //TODO(natacha): do nothing for now as do not currently use timestamper
-    }
-
-    fn get_next_message(
-        &mut self,
-        consistency_info: &mut ConsistencyInfo,
-        activator: &Activator,
-    ) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
         assert_eq!(self.shard_queue.len(), self.shard_set.len());
 
         //TODO move to timestamper
         if self.last_checked_shards.elapsed() >= KINESIS_SHARD_REFRESH_RATE {
-            if let Err(e) = block_on(self.update_shard_information(consistency_info)) {
+            if let Err(e) = block_on(self.update_shard_information()) {
                 error!("{:#?}", e);
                 return Err(anyhow::Error::msg(e.to_string()));
             }
@@ -244,9 +158,8 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
                             // todo@jldlaughlin: Parse this to determine fatal/retriable?
                             error!("{}", e);
                             self.shard_queue.push_back((shard_id, shard_iterator));
-                            activator.activate();
                             // Do not send error message as this would cause source to terminate
-                            return Ok(NextMessage::Pending);
+                            return Ok(NextMessage::TransientDelay);
                         }
                         Err(RusotoError::Service(GetRecordsError::ExpiredIterator(e))) => {
                             // todo@jldlaughlin: Will need track source offsets to grab a new iterator.
@@ -257,7 +170,6 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
                             GetRecordsError::ProvisionedThroughputExceeded(_),
                         )) => {
                             self.shard_queue.push_back((shard_id, shard_iterator));
-                            activator.activate();
                             // Do not send error message as this would cause source to terminate
                             return Ok(NextMessage::Pending);
                         }
@@ -283,7 +195,7 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
                         let data = record.data.as_ref().to_vec();
                         self.processed_message_count += 1;
                         let source_message = SourceMessage {
-                            partition: PartitionId::Kinesis(shard_id.clone()),
+                            partition: PartitionId::Kinesis,
                             offset: MzOffset {
                                 //TODO: should MzOffset be modified to be a string?
                                 offset: self.processed_message_count,
@@ -309,10 +221,6 @@ impl SourceInfo<Vec<u8>> for KinesisSourceInfo {
 // todo: Better error handling here! Not all errors mean we're done/can't progress.
 async fn create_state(
     c: KinesisSourceConnector,
-    name: &str,
-    id: SourceInstanceId,
-    consistency_info: &mut ConsistencyInfo,
-    logger: Option<Logger>,
 ) -> Result<
     (
         KinesisClient,
@@ -327,16 +235,10 @@ async fn create_state(
     let shard_set: HashSet<String> = get_shard_ids(&kinesis_client, &c.stream_name).await?;
     let mut shard_queue: VecDeque<(String, Option<String>)> = VecDeque::new();
     for shard_id in &shard_set {
-        let kinesis_id = PartitionId::Kinesis(shard_id.clone());
         shard_queue.push_back((
             shard_id.clone(),
             get_shard_iterator(&kinesis_client, &c.stream_name, shard_id).await?,
         ));
-        consistency_info.update_partition_metadata(kinesis_id.clone());
-        consistency_info.partition_metrics.insert(
-            kinesis_id.clone(),
-            PartitionMetrics::new(name, id, &kinesis_id.to_string(), logger.clone()),
-        );
     }
 
     Ok((

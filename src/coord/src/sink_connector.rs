@@ -340,7 +340,7 @@ async fn build_kafka(
     let client = config
         .create::<AdminClient<_>>()
         .expect("creating admin client failed");
-    let ccsr = builder.ccsr_config.build();
+    let ccsr = builder.ccsr_config.build()?;
 
     let (key_schema_id, value_schema_id) = register_kafka_topic(
         &client,

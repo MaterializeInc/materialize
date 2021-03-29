@@ -503,7 +503,7 @@ impl Runner {
         let temp_dir = tempfile::tempdir()?;
         let mz_config = materialized::Config {
             logging: None,
-            timestamp_frequency: Duration::from_millis(10),
+            timestamp_frequency: Duration::from_secs(1),
             cache: None,
             persistence: None,
             logical_compaction_window: None,
@@ -636,13 +636,24 @@ impl Runner {
         // get statement
         let statements = match sql::parse::parse(sql) {
             Ok(statements) => statements,
-            Err(_) if output.is_err() => return Ok(Outcome::Success),
-            Err(e) => {
-                return Ok(Outcome::ParseFailure {
-                    error: e.into(),
-                    location,
-                })
-            }
+            Err(e) => match output {
+                Ok(_) => {
+                    return Ok(Outcome::ParseFailure {
+                        error: e.into(),
+                        location,
+                    });
+                }
+                Err(expected_error) => {
+                    if Regex::new(expected_error)?.is_match(&format!("{:#}", e)) {
+                        return Ok(Outcome::Success);
+                    } else {
+                        return Ok(Outcome::ParseFailure {
+                            error: e.into(),
+                            location,
+                        });
+                    }
+                }
+            },
         };
         let statement = match &*statements {
             [] => bail!("Got zero statements?"),

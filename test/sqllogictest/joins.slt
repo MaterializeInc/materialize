@@ -543,7 +543,7 @@ a 2
 mode standard
 
 # At the time of writing, for this test to properly validate inter-view
-# optimization correctness, exactly one of the `Get materialize.public.v4362`
+# optimization correctness, exactly one of the `Get materialize.public.t4362`
 # nodes must be followed a `Filter` node. If that is not the case in the plan
 # below, likely the test is no longer testing for the bug.
 
@@ -551,11 +551,11 @@ query T multiline
 EXPLAIN SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id = 1)
 ----
 %0 =
-| Get materialize.public.v4362 (u12)
+| Get materialize.public.t4362 (u10)
 | ArrangeBy (#0)
 
 %1 =
-| Get materialize.public.v4362 (u12)
+| Get materialize.public.t4362 (u10)
 | Filter (#1 = 1)
 
 %2 =

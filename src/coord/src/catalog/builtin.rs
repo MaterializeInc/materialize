@@ -417,6 +417,11 @@ pub const TYPE_INT2_ARRAY: BuiltinType = BuiltinType {
 };
 
 lazy_static! {
+    pub static ref TYPE_RDN: BuiltinType = BuiltinType {
+        schema: PG_CATALOG_SCHEMA,
+        id: GlobalId::System(1997),
+        pgtype: &pgrepr::RDNType,
+    };
     pub static ref TYPE_LIST: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
         id: GlobalId::System(1998),
@@ -547,6 +552,14 @@ pub const MZ_MESSAGE_COUNTS: BuiltinLog = BuiltinLog {
     variant: LogVariant::Timely(TimelyLog::Messages),
     id: GlobalId::System(3028),
     index_id: GlobalId::System(3029),
+};
+
+pub const MZ_KAFKA_CONSUMER_STATISTICS: BuiltinLog = BuiltinLog {
+    name: "mz_kafka_consumer_statistics",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo),
+    id: GlobalId::System(3030),
+    index_id: GlobalId::System(3031),
 };
 
 lazy_static! {
@@ -1229,6 +1242,7 @@ lazy_static! {
             Builtin::Type(&TYPE_INTERVAL_ARRAY),
             Builtin::Type(&TYPE_JSONB),
             Builtin::Type(&TYPE_JSONB_ARRAY),
+            Builtin::Type(&TYPE_RDN),
             Builtin::Type(&TYPE_LIST),
             Builtin::Type(&TYPE_MAP),
             Builtin::Type(&TYPE_NUMERIC),
@@ -1265,6 +1279,7 @@ lazy_static! {
             Builtin::Log(&MZ_PEEK_DURATIONS),
             Builtin::Log(&MZ_SOURCE_INFO),
             Builtin::Log(&MZ_MESSAGE_COUNTS),
+            Builtin::Log(&MZ_KAFKA_CONSUMER_STATISTICS),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
             Builtin::Table(&MZ_KAFKA_SINKS),

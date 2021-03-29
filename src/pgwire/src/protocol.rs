@@ -1024,7 +1024,16 @@ where
                 }
                 command_complete!("SET")
             }
-            ExecuteResponse::StartedTransaction => command_complete!("BEGIN"),
+            ExecuteResponse::StartedTransaction { duplicated } => {
+                if duplicated {
+                    let msg = ErrorResponse::warning(
+                        SqlState::ACTIVE_SQL_TRANSACTION,
+                        "there is already a transaction in progress",
+                    );
+                    self.conn.send(msg).await?;
+                }
+                command_complete!("BEGIN")
+            }
             ExecuteResponse::TransactionExited { tag, was_implicit } => {
                 // In Postgres, if a user sends a COMMIT or ROLLBACK in an implicit
                 // transaction, a notice is sent warning them. (The transaction is still closed

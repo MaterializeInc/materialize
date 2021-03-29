@@ -15,6 +15,7 @@ use std::fmt;
 use std::mem::{size_of, transmute};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use dec::{Decimal128, OrderedDecimal};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -75,7 +76,7 @@ use fmt::Debug;
 /// avoids the allocations involved in `RowPacker::new()`.
 #[derive(Clone, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
-    data: SmallVec<[u8; 23]>,
+    data: SmallVec<[u8; 24]>,
 }
 
 /// These implementations order first by length, and then by slice contents.
@@ -208,6 +209,7 @@ enum Tag {
     Dict,
     JsonNull,
     Dummy,
+    Numeric,
 }
 
 // --------------------------------------------------------------------------------
@@ -368,6 +370,10 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         }
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
+        Tag::Numeric => {
+            let n = read_copy::<OrderedDecimal<Decimal128>>(data, offset);
+            Datum::Numeric(n)
+        }
     }
 }
 
@@ -496,6 +502,10 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
         }
         Datum::JsonNull => data.push(Tag::JsonNull as u8),
         Datum::Dummy => data.push(Tag::Dummy as u8),
+        Datum::Numeric(n) => {
+            data.push(Tag::Numeric as u8);
+            push_copy!(data, n, OrderedDecimal<Decimal128>);
+        }
     }
 }
 
@@ -545,6 +555,7 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Map(dict) => 1 + size_of::<usize>() + dict.data.len(),
         Datum::JsonNull => 1,
         Datum::Dummy => 1,
+        Datum::Numeric(_) => 1 + size_of::<OrderedDecimal<Decimal128>>(),
     }
 }
 

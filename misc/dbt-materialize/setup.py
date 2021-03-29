@@ -23,7 +23,11 @@ with open(os.path.join(this_directory, "README.md")) as f:
     long_description = f.read()
 
 package_name = "dbt-materialize"
-package_version = "0.18.1"
+# This adapter's version, and its required dbt-postgres version, tracks the
+# target dbt version.
+target_package_version = "0.18.1"
+package_version_suffix = ".post1"
+package_version = "{}{}".format(target_package_version, package_version_suffix)
 description = """The Materialize adapter plugin for dbt (data build tool)"""
 
 setup(
@@ -43,5 +47,5 @@ setup(
             "include/materialize/macros/**/*.sql",
         ]
     },
-    install_requires=["dbt-postgres=={}".format(package_version)],
+    install_requires=["dbt-postgres=={}".format(target_package_version)],
 )

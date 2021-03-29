@@ -20,9 +20,11 @@ use chrono::{
     DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike,
     Utc,
 };
+use dec::{Context, Decimal128, OrderedDecimal};
 use hmac::{Hmac, Mac, NewMac};
 use itertools::Itertools;
 use md5::{Digest, Md5};
+use ordered_float::OrderedFloat;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
@@ -38,6 +40,7 @@ use repr::adt::datetime::{DateTimeUnits, Timezone};
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
+use repr::adt::rdn;
 use repr::adt::regex::Regex;
 use repr::{strconv, ColumnName, ColumnType, Datum, RowArena, RowPacker, ScalarType};
 
@@ -233,19 +236,16 @@ fn cast_float32_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
     Datum::from(f64::from(a.unwrap_float32()))
 }
 
-fn cast_float32_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+fn cast_float32_to_decimal<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
     let f = a.unwrap_float32();
-    let scale = b.unwrap_int32();
-
-    if f > 10_f32.powi(MAX_DECIMAL_PRECISION as i32 - scale) {
+    if f > 10_f32.powi(i32::from(MAX_DECIMAL_PRECISION - scale)) {
         // When we can return error detail:
         // format!("A field with precision {}, \
         //         scale {} must round to an absolute value less than 10^{}.",
         //         MAX_DECIMAL_PRECISION, scale, MAX_DECIMAL_PRECISION - scale)
         return Err(EvalError::NumericFieldOverflow);
     }
-
-    Ok(Datum::from((f * 10_f32.powi(scale)) as i128))
+    Ok(Datum::from((f * 10_f32.powi(i32::from(scale))) as i128))
 }
 
 fn cast_float32_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -292,19 +292,16 @@ fn cast_float64_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     }
 }
 
-fn cast_float64_to_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+fn cast_float64_to_decimal<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
     let f = a.unwrap_float64();
-    let scale = b.unwrap_int32();
-
-    if f > 10_f64.powi(MAX_DECIMAL_PRECISION as i32 - scale) {
+    if f > 10_f64.powi(i32::from(MAX_DECIMAL_PRECISION - scale)) {
         // When we can return error detail:
         // format!("A field with precision {}, \
         //         scale {} must round to an absolute value less than 10^{}.",
         //         MAX_DECIMAL_PRECISION, scale, MAX_DECIMAL_PRECISION - scale)
         return Err(EvalError::NumericFieldOverflow);
     }
-
-    Ok(Datum::from((f * 10_f64.powi(scale)) as i128))
+    Ok(Datum::from((f * 10_f64.powi(i32::from(scale))) as i128))
 }
 
 fn cast_float64_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -338,6 +335,12 @@ fn cast_significand_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
 fn cast_decimal_to_string<'a>(a: Datum<'a>, scale: u8, temp_storage: &'a RowArena) -> Datum<'a> {
     let mut buf = String::new();
     strconv::format_decimal(&mut buf, &a.unwrap_decimal().with_scale(scale));
+    Datum::String(temp_storage.push_string(buf))
+}
+
+fn cast_numeric_to_string<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+    let mut buf = String::new();
+    strconv::format_numeric(&mut buf, &a.unwrap_numeric());
     Datum::String(temp_storage.push_string(buf))
 }
 
@@ -390,6 +393,17 @@ fn cast_string_to_decimal<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, Eval
             })
         })
         .err_into()
+}
+
+fn cast_string_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+    let mut d = strconv::parse_numeric(a.unwrap_str())?;
+    if let Some(scale) = scale {
+        if rdn::rescale(&mut d, scale).is_err() {
+            return Err(EvalError::NumericFieldOverflow);
+        }
+    }
+
+    Ok(Datum::from(d))
 }
 
 fn cast_string_to_date<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -619,23 +633,87 @@ fn cast_jsonb_or_null_to_jsonb<'a>(a: Datum<'a>) -> Datum<'a> {
     }
 }
 
-fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Datum<'a> {
+fn cast_jsonb_to_int32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::Float64(_) => a,
-        Datum::String(s) => match s {
-            "NaN" => std::f64::NAN.into(),
-            "Infinity" => std::f64::INFINITY.into(),
-            "-Infinity" => std::f64::NEG_INFINITY.into(),
-            _ => Datum::Null,
-        },
-        _ => Datum::Null,
+        Datum::Int64(_) => cast_int64_to_int32(a),
+        Datum::Float64(_) => cast_float64_to_int32(a),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "integer".into(),
+        }),
     }
 }
 
-fn cast_jsonb_to_bool<'a>(a: Datum<'a>) -> Datum<'a> {
+fn cast_jsonb_to_int64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     match a {
-        Datum::True | Datum::False => a,
-        _ => Datum::Null,
+        Datum::Int64(_) => Ok(a),
+        Datum::Float64(_) => cast_float64_to_int64(a),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "bigint".into(),
+        }),
+    }
+}
+
+fn cast_jsonb_to_float32<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    match a {
+        Datum::Int64(_) => Ok(cast_int64_to_float32(a)),
+        Datum::Float64(_) => cast_float64_to_float32(a),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "real".into(),
+        }),
+    }
+}
+
+fn cast_jsonb_to_float64<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    match a {
+        Datum::Int64(_) => Ok(cast_int64_to_float64(a)),
+        Datum::Float64(_) => Ok(a),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "double precision".into(),
+        }),
+    }
+}
+
+fn cast_jsonb_to_decimal<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
+    match a {
+        Datum::Int64(_) => {
+            let a = cast_int64_to_decimal(a);
+            if scale > 0 {
+                Ok(mul_decimal(a, Datum::from(10_i128.pow(u32::from(scale)))))
+            } else {
+                Ok(a)
+            }
+        }
+        Datum::Float64(_) => cast_float64_to_decimal(a, scale),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "numeric".into(),
+        }),
+    }
+}
+
+fn cast_jsonb_to_bool<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    match a {
+        Datum::True | Datum::False => Ok(a),
+        _ => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_type(a).into(),
+            to: "boolean".into(),
+        }),
+    }
+}
+
+fn jsonb_type(d: Datum<'_>) -> &'static str {
+    match d {
+        Datum::JsonNull => "null",
+        Datum::False | Datum::True => "boolean",
+        Datum::String(_) => "string",
+        Datum::Int64(_) | Datum::Float64(_) => "numeric",
+        Datum::List(_) => "array",
+        Datum::Map(_) => "object",
+        _ => unreachable!("jsonb_type called on invalid datum {:?}", d),
     }
 }
 
@@ -945,6 +1023,16 @@ fn add_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() + b.unwrap_decimal())
 }
 
+fn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut cx = Context::<Decimal128>::default();
+    let d = OrderedDecimal(cx.add(a.unwrap_numeric().0, b.unwrap_numeric().0));
+    if rdn::check_max_precision_strict(&cx, &d).is_err() {
+        Err(EvalError::NumericFieldOverflow)
+    } else {
+        Ok(Datum::from(d))
+    }
+}
+
 fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_interval()
         .checked_add(&b.unwrap_interval())
@@ -1109,6 +1197,18 @@ fn div_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> 
     }
 }
 
+fn div_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut cx = Context::<Decimal128>::default();
+    let d = OrderedDecimal(cx.div(a.unwrap_numeric().0, b.unwrap_numeric().0));
+    if cx.status().division_by_zero() {
+        Err(EvalError::DivisionByZero)
+    } else if rdn::exceeds_max_precision(&d) {
+        Err(EvalError::NumericFieldOverflow)
+    } else {
+        Ok(Datum::from(d))
+    }
+}
+
 fn mod_int32<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let b = b.unwrap_int32();
     if b == 0 {
@@ -1194,7 +1294,7 @@ fn sqrt_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum, EvalError> {
     }
     let d_f64 = cast_significand_to_float64(a);
     let d_scaled = d_f64.unwrap_float64() / 10_f64.powi(i32::from(scale));
-    cast_float64_to_decimal(Datum::from(d_scaled.sqrt()), Datum::from(i32::from(scale)))
+    cast_float64_to_decimal(Datum::from(d_scaled.sqrt()), scale)
 }
 
 fn cbrt_float64<'a>(a: Datum<'a>) -> Datum {
@@ -1268,12 +1368,11 @@ fn log_dec<'a, 'b, F: Fn(f64) -> f64>(
     scale: u8,
 ) -> Result<Datum<'a>, EvalError> {
     let significand = cast_significand_to_float64(a);
-    let scale = i32::from(scale);
-    let a = log_guard(significand.unwrap_float64() / 10_f64.powi(scale), name)?;
-    Ok(cast_float64_to_decimal(
-        Datum::from(logic(a)),
-        Datum::from(scale),
-    )?)
+    let a = log_guard(
+        significand.unwrap_float64() / 10_f64.powi(i32::from(scale)),
+        name,
+    )?;
+    Ok(cast_float64_to_decimal(Datum::from(logic(a)), scale)?)
 }
 
 fn log<'a, 'b, F: Fn(f64) -> f64>(
@@ -1291,13 +1390,8 @@ fn exp<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 
 fn exp_dec<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
     let significand = cast_significand_to_float64(a);
-    let scale = i32::from(scale);
-    let a = significand.unwrap_float64() / 10_f64.powi(scale);
-
-    Ok(cast_float64_to_decimal(
-        Datum::from(a.exp()),
-        Datum::from(scale),
-    )?)
+    let a = significand.unwrap_float64() / 10_f64.powi(i32::from(scale));
+    Ok(cast_float64_to_decimal(Datum::from(a.exp()), scale)?)
 }
 
 fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -1307,10 +1401,9 @@ fn power<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 }
 
 fn power_dec<'a>(a: Datum<'a>, b: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
-    let scale = i32::from(scale);
-    let a = cast_significand_to_float64(a).unwrap_float64() / 10_f64.powi(scale);
-    let b = cast_significand_to_float64(b).unwrap_float64() / 10_f64.powi(scale);
-    cast_float64_to_decimal(Datum::from(a.powf(b)), Datum::from(scale))
+    let a = cast_significand_to_float64(a).unwrap_float64() / 10_f64.powi(i32::from(scale));
+    let b = cast_significand_to_float64(b).unwrap_float64() / 10_f64.powi(i32::from(scale));
+    cast_float64_to_decimal(Datum::from(a.powf(b)), scale)
 }
 
 fn sleep<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
@@ -1499,6 +1592,9 @@ fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
             (Datum::JsonNull, Datum::JsonNull) => true,
             (Datum::False, Datum::False) => true,
             (Datum::True, Datum::True) => true,
+            (Datum::Int64(a), Datum::Int64(b)) => (a == b),
+            (Datum::Int64(a), Datum::Float64(b)) => (OrderedFloat(a as f64) == b),
+            (Datum::Float64(a), Datum::Int64(b)) => (a == OrderedFloat(b as f64)),
             (Datum::Float64(a), Datum::Float64(b)) => (a == b),
             (Datum::String(a), Datum::String(b)) => (a == b),
             (Datum::List(a), Datum::List(b)) => b
@@ -2191,6 +2287,7 @@ pub enum BinaryFunc {
     AddDateTime,
     AddTimeInterval,
     AddDecimal,
+    AddNumeric,
     SubInt32,
     SubInt64,
     SubFloat32,
@@ -2217,6 +2314,7 @@ pub enum BinaryFunc {
     DivFloat64,
     DivDecimal,
     DivInterval,
+    DivNumeric,
     ModInt32,
     ModInt64,
     ModFloat32,
@@ -2244,8 +2342,6 @@ pub enum BinaryFunc {
     TimezoneIntervalTimestamp,
     TimezoneIntervalTimestampTz,
     TimezoneIntervalTime,
-    CastFloat32ToDecimal,
-    CastFloat64ToDecimal,
     TextConcat,
     JsonbGetInt64 { stringify: bool },
     JsonbGetString { stringify: bool },
@@ -2319,6 +2415,7 @@ impl BinaryFunc {
             BinaryFunc::AddDateInterval => Ok(eager!(add_date_interval)),
             BinaryFunc::AddTimeInterval => Ok(eager!(add_time_interval)),
             BinaryFunc::AddDecimal => Ok(eager!(add_decimal)),
+            BinaryFunc::AddNumeric => eager!(add_numeric),
             BinaryFunc::AddInterval => eager!(add_interval),
             BinaryFunc::SubInt32 => eager!(sub_int32),
             BinaryFunc::SubInt64 => eager!(sub_int64),
@@ -2346,6 +2443,7 @@ impl BinaryFunc {
             BinaryFunc::DivFloat64 => eager!(div_float64),
             BinaryFunc::DivDecimal => eager!(div_decimal),
             BinaryFunc::DivInterval => eager!(div_interval),
+            BinaryFunc::DivNumeric => eager!(div_numeric),
             BinaryFunc::ModInt32 => eager!(mod_int32),
             BinaryFunc::ModInt64 => eager!(mod_int64),
             BinaryFunc::ModFloat32 => eager!(mod_float32),
@@ -2393,8 +2491,6 @@ impl BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => eager!(timezone_interval_timestamp),
             BinaryFunc::TimezoneIntervalTimestampTz => eager!(timezone_interval_timestamptz),
             BinaryFunc::TimezoneIntervalTime => eager!(timezone_interval_time),
-            BinaryFunc::CastFloat32ToDecimal => eager!(cast_float32_to_decimal),
-            BinaryFunc::CastFloat64ToDecimal => eager!(cast_float64_to_decimal),
             BinaryFunc::TextConcat => Ok(eager!(text_concat_binary, temp_storage)),
             BinaryFunc::JsonbGetInt64 { stringify } => {
                 Ok(eager!(jsonb_get_int64, temp_storage, *stringify))
@@ -2490,6 +2586,8 @@ impl BinaryFunc {
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | SubDate | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
+            AddNumeric | DivNumeric => ScalarType::Numeric { scale: None }.nullable(in_nullable),
+
             // TODO(benesch): we correctly compute types for decimal scale, but
             // not decimal precision... because nothing actually cares about
             // decimal precision. Should either remove or fix.
@@ -2517,13 +2615,6 @@ impl BinaryFunc {
                 let s = s1 - s2;
                 ScalarType::Decimal(MAX_DECIMAL_PRECISION, s).nullable(true)
             }
-
-            CastFloat32ToDecimal | CastFloat64ToDecimal => match input2_type.scalar_type {
-                ScalarType::Decimal(_, s) => {
-                    ScalarType::Decimal(MAX_DECIMAL_PRECISION, s).nullable(true)
-                }
-                _ => unreachable!(),
-            },
 
             RoundDecimal(scale) => {
                 match input1_type.scalar_type {
@@ -2656,7 +2747,9 @@ impl BinaryFunc {
                 | SubInterval
                 | MulInterval
                 | DivInterval
+                | DivNumeric
                 | AddDecimal
+                | AddNumeric
                 | SubInt32
                 | SubInt64
                 | SubFloat32
@@ -2706,7 +2799,9 @@ impl BinaryFunc {
             | SubInterval
             | MulInterval
             | DivInterval
+            | DivNumeric
             | AddDecimal
+            | AddNumeric
             | SubInt32
             | SubInt64
             | SubFloat32
@@ -2779,8 +2874,6 @@ impl BinaryFunc {
             | TimezoneIntervalTimestamp
             | TimezoneIntervalTimestampTz
             | TimezoneIntervalTime
-            | CastFloat32ToDecimal
-            | CastFloat64ToDecimal
             | RoundDecimal(_)
             | ConvertFrom
             | Position
@@ -2825,6 +2918,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::AddFloat32 => f.write_str("+"),
             BinaryFunc::AddFloat64 => f.write_str("+"),
             BinaryFunc::AddDecimal => f.write_str("+"),
+            BinaryFunc::AddNumeric => f.write_str("+"),
             BinaryFunc::AddInterval => f.write_str("+"),
             BinaryFunc::AddTimestampInterval => f.write_str("+"),
             BinaryFunc::AddTimestampTzInterval => f.write_str("+"),
@@ -2857,6 +2951,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::DivFloat64 => f.write_str("/"),
             BinaryFunc::DivDecimal => f.write_str("/"),
             BinaryFunc::DivInterval => f.write_str("/"),
+            BinaryFunc::DivNumeric => f.write_str("/"),
             BinaryFunc::ModInt32 => f.write_str("%"),
             BinaryFunc::ModInt64 => f.write_str("%"),
             BinaryFunc::ModFloat32 => f.write_str("%"),
@@ -2893,8 +2988,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => f.write_str("timezoneits"),
             BinaryFunc::TimezoneIntervalTimestampTz => f.write_str("timezoneitstz"),
             BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
-            BinaryFunc::CastFloat32ToDecimal => f.write_str("f32todec"),
-            BinaryFunc::CastFloat64ToDecimal => f.write_str("f64todec"),
             BinaryFunc::TextConcat => f.write_str("||"),
             BinaryFunc::JsonbGetInt64 { .. } => f.write_str("->"),
             BinaryFunc::JsonbGetString { .. } => f.write_str("->"),
@@ -2978,6 +3071,8 @@ pub enum UnaryFunc {
     CastFloat32ToInt64,
     CastFloat32ToFloat64,
     CastFloat32ToString,
+    CastFloat32ToDecimal(u8),
+    CastFloat64ToDecimal(u8),
     CastFloat64ToInt32,
     CastFloat64ToInt64,
     CastFloat64ToFloat32,
@@ -2985,6 +3080,7 @@ pub enum UnaryFunc {
     CastDecimalToInt32(u8),
     CastDecimalToInt64(u8),
     CastDecimalToString(u8),
+    CastNumericToString,
     CastSignificandToFloat32,
     CastSignificandToFloat64,
     CastStringToBool,
@@ -3013,6 +3109,7 @@ pub enum UnaryFunc {
     CastStringToTimestampTz,
     CastStringToInterval,
     CastStringToDecimal(u8),
+    CastStringToNumeric(Option<u8>),
     CastStringToUuid,
     CastDateToTimestamp,
     CastDateToTimestampTz,
@@ -3031,7 +3128,11 @@ pub enum UnaryFunc {
     CastStringToJsonb,
     CastJsonbToString,
     CastJsonbOrNullToJsonb,
+    CastJsonbToInt32,
+    CastJsonbToInt64,
+    CastJsonbToFloat32,
     CastJsonbToFloat64,
+    CastJsonbToDecimal(u8),
     CastJsonbToBool,
     CastUuidToString,
     CastRecordToString {
@@ -3137,6 +3238,8 @@ impl UnaryFunc {
             UnaryFunc::CastBoolToString => Ok(cast_bool_to_string(a)),
             UnaryFunc::CastBoolToStringNonstandard => Ok(cast_bool_to_string_nonstandard(a)),
             UnaryFunc::CastBoolToInt32 => Ok(cast_bool_to_int32(a)),
+            UnaryFunc::CastFloat32ToDecimal(scale) => cast_float32_to_decimal(a, *scale),
+            UnaryFunc::CastFloat64ToDecimal(scale) => cast_float64_to_decimal(a, *scale),
             UnaryFunc::CastInt32ToBool => Ok(cast_int32_to_bool(a)),
             UnaryFunc::CastInt32ToFloat32 => Ok(cast_int32_to_float32(a)),
             UnaryFunc::CastInt32ToFloat64 => Ok(cast_int32_to_float64(a)),
@@ -3170,6 +3273,7 @@ impl UnaryFunc {
             UnaryFunc::CastStringToFloat32 => cast_string_to_float32(a),
             UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
             UnaryFunc::CastStringToDecimal(scale) => cast_string_to_decimal(a, *scale),
+            UnaryFunc::CastStringToNumeric(scale) => cast_string_to_numeric(a, *scale),
             UnaryFunc::CastStringToDate => cast_string_to_date(a),
             UnaryFunc::CastStringToList {
                 cast_expr,
@@ -3191,6 +3295,7 @@ impl UnaryFunc {
             UnaryFunc::CastDecimalToString(scale) => {
                 Ok(cast_decimal_to_string(a, *scale, temp_storage))
             }
+            UnaryFunc::CastNumericToString => Ok(cast_numeric_to_string(a, temp_storage)),
             UnaryFunc::CastTimeToInterval => cast_time_to_interval(a),
             UnaryFunc::CastTimeToString => Ok(cast_time_to_string(a, temp_storage)),
             UnaryFunc::CastTimestampToDate => Ok(cast_timestamp_to_date(a)),
@@ -3204,8 +3309,12 @@ impl UnaryFunc {
             UnaryFunc::CastBytesToString => Ok(cast_bytes_to_string(a, temp_storage)),
             UnaryFunc::CastJsonbOrNullToJsonb => Ok(cast_jsonb_or_null_to_jsonb(a)),
             UnaryFunc::CastJsonbToString => Ok(cast_jsonb_to_string(a, temp_storage)),
-            UnaryFunc::CastJsonbToFloat64 => Ok(cast_jsonb_to_float64(a)),
-            UnaryFunc::CastJsonbToBool => Ok(cast_jsonb_to_bool(a)),
+            UnaryFunc::CastJsonbToInt32 => cast_jsonb_to_int32(a),
+            UnaryFunc::CastJsonbToInt64 => cast_jsonb_to_int64(a),
+            UnaryFunc::CastJsonbToFloat32 => cast_jsonb_to_float32(a),
+            UnaryFunc::CastJsonbToFloat64 => cast_jsonb_to_float64(a),
+            UnaryFunc::CastJsonbToDecimal(scale) => cast_jsonb_to_decimal(a, *scale),
+            UnaryFunc::CastJsonbToBool => cast_jsonb_to_bool(a),
             UnaryFunc::CastUuidToString => Ok(cast_uuid_to_string(a, temp_storage)),
             UnaryFunc::CastRecordToString { ty }
             | UnaryFunc::CastArrayToString { ty }
@@ -3304,6 +3413,7 @@ impl UnaryFunc {
             CastStringToDecimal(scale) => {
                 ScalarType::Decimal(MAX_DECIMAL_PRECISION, *scale).nullable(true)
             }
+            CastStringToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(true),
             CastStringToDate => ScalarType::Date.nullable(true),
             CastStringToTime => ScalarType::Time.nullable(true),
             CastStringToTimestamp => ScalarType::Timestamp.nullable(true),
@@ -3320,6 +3430,7 @@ impl UnaryFunc {
             | CastFloat32ToString
             | CastFloat64ToString
             | CastDecimalToString(_)
+            | CastNumericToString
             | CastDateToString
             | CastTimeToString
             | CastTimestampToString
@@ -3345,6 +3456,10 @@ impl UnaryFunc {
             | CastInt64ToFloat64
             | CastFloat32ToFloat64
             | CastSignificandToFloat64 => ScalarType::Float64.nullable(in_nullable),
+
+            CastFloat32ToDecimal(s) | CastFloat64ToDecimal(s) => {
+                ScalarType::Decimal(MAX_DECIMAL_PRECISION, *s).nullable(in_nullable)
+            }
 
             CastInt64ToInt32 | CastDecimalToInt32(_) => ScalarType::Int32.nullable(in_nullable),
 
@@ -3380,7 +3495,13 @@ impl UnaryFunc {
 
             // can return null for other jsonb types
             CastJsonbToString => ScalarType::String.nullable(true),
-            CastJsonbToFloat64 => ScalarType::Float64.nullable(true),
+            CastJsonbToInt32 => ScalarType::Int32.nullable(false),
+            CastJsonbToInt64 => ScalarType::Int64.nullable(false),
+            CastJsonbToFloat32 => ScalarType::Float32.nullable(false),
+            CastJsonbToFloat64 => ScalarType::Float64.nullable(false),
+            CastJsonbToDecimal(scale) => {
+                ScalarType::Decimal(MAX_DECIMAL_PRECISION, *scale).nullable(false)
+            }
             CastJsonbToBool => ScalarType::Bool.nullable(true),
 
             CastUuidToString => ScalarType::String.nullable(true),
@@ -3516,13 +3637,16 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastFloat32ToFloat64 => f.write_str("f32tof64"),
             UnaryFunc::CastFloat32ToString => f.write_str("f32tostr"),
             UnaryFunc::CastFloat32ToInt32 => f.write_str("f32toi32"),
+            UnaryFunc::CastFloat32ToDecimal(_) => f.write_str("f32todec"),
             UnaryFunc::CastFloat64ToInt32 => f.write_str("f64toi32"),
             UnaryFunc::CastFloat64ToInt64 => f.write_str("f64toi64"),
             UnaryFunc::CastFloat64ToFloat32 => f.write_str("f64tof32"),
             UnaryFunc::CastFloat64ToString => f.write_str("f64tostr"),
+            UnaryFunc::CastFloat64ToDecimal(_) => f.write_str("f64todec"),
             UnaryFunc::CastDecimalToInt32(_) => f.write_str("dectoi32"),
             UnaryFunc::CastDecimalToInt64(_) => f.write_str("dectoi64"),
             UnaryFunc::CastDecimalToString(_) => f.write_str("dectostr"),
+            UnaryFunc::CastNumericToString => f.write_str("numerictostr"),
             UnaryFunc::CastSignificandToFloat32 => f.write_str("dectof32"),
             UnaryFunc::CastSignificandToFloat64 => f.write_str("dectof64"),
             UnaryFunc::CastStringToBool => f.write_str("strtobool"),
@@ -3532,6 +3656,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastStringToFloat32 => f.write_str("strtof32"),
             UnaryFunc::CastStringToFloat64 => f.write_str("strtof64"),
             UnaryFunc::CastStringToDecimal(_) => f.write_str("strtodec"),
+            UnaryFunc::CastStringToNumeric(_) => f.write_str("strtonumeric"),
             UnaryFunc::CastStringToDate => f.write_str("strtodate"),
             UnaryFunc::CastStringToList { .. } => f.write_str("strtolist"),
             UnaryFunc::CastStringToMap { .. } => f.write_str("strtomap"),
@@ -3557,8 +3682,12 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastStringToJsonb => f.write_str("strtojsonb"),
             UnaryFunc::CastJsonbOrNullToJsonb => f.write_str("jsonb?tojsonb"),
             UnaryFunc::CastJsonbToString => f.write_str("jsonbtostr"),
+            UnaryFunc::CastJsonbToInt32 => f.write_str("jsonbtoi32"),
+            UnaryFunc::CastJsonbToInt64 => f.write_str("jsonbtoi64"),
+            UnaryFunc::CastJsonbToFloat32 => f.write_str("jsonbtof32"),
             UnaryFunc::CastJsonbToFloat64 => f.write_str("jsonbtof64"),
             UnaryFunc::CastJsonbToBool => f.write_str("jsonbtobool"),
+            UnaryFunc::CastJsonbToDecimal(_) => f.write_str("jsonbtodec"),
             UnaryFunc::CastUuidToString => f.write_str("uuidtostr"),
             UnaryFunc::CastRecordToString { .. } => f.write_str("recordtostr"),
             UnaryFunc::CastArrayToString { .. } => f.write_str("arraytostr"),
@@ -4090,6 +4219,13 @@ where
         Float32 => strconv::format_float32(buf, d.unwrap_float32()),
         Float64 => strconv::format_float64(buf, d.unwrap_float64()),
         Decimal(_, s) => strconv::format_decimal(buf, &d.unwrap_decimal().with_scale(*s)),
+        Numeric { scale } => {
+            let mut s = d.unwrap_numeric();
+            if let Some(scale) = scale {
+                rdn::rescale(&mut s, *scale).unwrap();
+            }
+            strconv::format_numeric(buf, &s)
+        }
         Date => strconv::format_date(buf, d.unwrap_date()),
         Time => strconv::format_time(buf, d.unwrap_time()),
         Timestamp => strconv::format_timestamp(buf, d.unwrap_timestamp()),

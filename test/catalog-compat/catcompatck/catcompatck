@@ -126,6 +126,54 @@ EOF
 say "killing materialized-golden060"
 kill_materialized
 
+say "launching materialized-golden071"
+launch_materialized golden071
+
+say "adding golden071 features to golden060 catalog"
+testdrive --no-reset <<'EOF'
+# Checks a view with a CTE.
+> CREATE MATERIALIZED VIEW v AS WITH u AS (SELECT * FROM real_time_src) SELECT * from u;
+EOF
+
+say "creating Kafka source with metrics disabled"
+testdrive --no-reset <<'EOF'
+# Copy schema from above, golden010 catalog doesn't support statistics_interval_ms
+$ set schema={
+    "type": "record",
+    "name": "envelope",
+    "fields": [
+      {
+        "name": "before",
+        "type": [
+          {
+            "name": "row",
+            "type": "record",
+            "fields": [
+              {"name": "a", "type": "long"},
+              {"name": "b", "type": "long"}
+            ]
+          },
+          "null"
+        ]
+      },
+      { "name": "after", "type": ["row", "null"] }
+    ]
+  }
+
+> CREATE SOURCE real_time_src_no_stats
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-real-time-${testdrive.seed}'
+  WITH (statistics_interval_ms = 0)
+  FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM
+
+> CREATE MATERIALIZED VIEW real_time_no_stats AS
+  SELECT *, concat(a::text, CAST(b AS text)) AS c
+  FROM real_time_src_no_stats
+EOF
+
+say "killing materialized-golden071"
+kill_materialized
+
 say "launching materialized-edge with golden catalog"
 launch_materialized edge --log-file=stderr
 
@@ -144,4 +192,20 @@ a  b  c
 > INSERT INTO t (a) VALUES (42)
 > SELECT * FROM t
 42  def
+
+> SELECT * FROM v
+a  b
+----
+1  1
+2  1
+3  1
+1  2
+
+# Kafka metrics for the real_time_src should be enabled now
+# Count should be 2 because there are two materialized views on real_time_src
+# If real_time_src_no_stats were also emitting stats, there would be 3 rows
+> SELECT count(*) FROM mz_kafka_consumer_statistics;
+count
+-----
+2
 EOF

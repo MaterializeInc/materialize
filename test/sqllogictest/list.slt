@@ -1929,7 +1929,7 @@ SELECT '{{1,2}}'::int4_list_list_c::text;
 {{1,2}}
 
 query error unknown catalog item bool list
-CREATE TYPE nested_list AS LIST (element_type = 'bool list')
+CREATE TYPE nested_list AS LIST (element_type = "bool list")
 
 query error unknown catalog item list
 CREATE TYPE nested_list AS LIST (element_type = list)
@@ -2035,7 +2035,7 @@ CREATE TYPE jsonb_list_c AS LIST (element_type=jsonb);
 query T
 SELECT '{\{\"1\":2\}}'::jsonb_list_c::text;
 ----
-{"{\"1\":2.0}"}
+{"{\"1\":2}"}
 
 # 🔬🔬 Check custom type name resolution
 

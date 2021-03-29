@@ -100,6 +100,7 @@ impl TypeCategory {
             | ScalarType::Float64
             | ScalarType::Int32
             | ScalarType::Int64
+            | ScalarType::Numeric { .. }
             | ScalarType::Oid => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
@@ -1027,7 +1028,6 @@ fn find_match<'a, R: std::fmt::Debug>(
 
     for (i, arg_type) in types.iter().enumerate() {
         let mut selected_category: Option<TypeCategory> = None;
-        let mut found_string_candidate = false;
         let mut categories_match = true;
 
         match arg_type {
@@ -1037,20 +1037,20 @@ fn find_match<'a, R: std::fmt::Debug>(
             None => {
                 for c in candidates.iter() {
                     let this_category = TypeCategory::from_param(&c.fimpl.params[i]);
+                    // 4.e. cont: Select the string category if any candidate
+                    // accepts that category. (This bias towards string is
+                    // appropriate since an unknown-type literal looks like a
+                    // string.)
+                    if this_category == TypeCategory::String {
+                        selected_category = Some(TypeCategory::String);
+                        break;
+                    }
                     match selected_category {
                         Some(ref mut selected_category) => {
-                            // 4.e. cont: ...if all the remaining candidates
+                            // 4.e. cont: [...otherwise,] if all the remaining candidates
                             // accept the same type category, select that category.
                             categories_match =
                                 selected_category == &this_category && categories_match;
-                            // 4.e. cont: [except for...] select the string
-                            // category if any candidate accepts that category.
-                            // (This bias towards string is appropriate since an
-                            // unknown-type literal looks like a string.)
-                            if this_category == TypeCategory::String {
-                                *selected_category = TypeCategory::String;
-                                found_string_candidate = true;
-                            }
                         }
                         None => selected_category = Some(this_category.clone()),
                     }
@@ -1059,7 +1059,7 @@ fn find_match<'a, R: std::fmt::Debug>(
                 // 4.e. cont: Otherwise fail because the correct choice cannot
                 // be deduced without more clues.
                 // (ed: this doesn't mean fail entirely, simply moving onto 4.f)
-                if !found_string_candidate && !categories_match {
+                if selected_category != Some(TypeCategory::String) && !categories_match {
                     break;
                 }
 
@@ -1531,6 +1531,9 @@ lazy_static! {
             "pg_get_userbyid" => Scalar {
                 params!(Oid) => sql_op!("'unknown (OID=' || $1 || ')'"), 1642;
             },
+            "pg_postmaster_start_time" => Scalar {
+                params!() => Operation::nullary(pg_postmaster_start_time), 2560;
+            },
             "pg_table_is_visible" => Scalar {
                 params!(Oid) => sql_op!(
                     "(SELECT s.name = ANY(current_schemas(true))
@@ -1769,6 +1772,19 @@ lazy_static! {
                     Ok((e, AggregateFunc::JsonbAgg))
                 }), 3267;
             },
+            "jsonb_object_agg" => Aggregate {
+                params!(Any, Any) => Operation::binary(|ecx, key, val| {
+                    let key = typeconv::to_string(ecx, key);
+                    let val = typeconv::to_jsonb(ecx, val);
+                    let e = HirScalarExpr::CallVariadic {
+                        func: VariadicFunc::RecordCreate {
+                            field_names: vec![ColumnName::from("key"), ColumnName::from("val")],
+                        },
+                        exprs: vec![key, val],
+                    };
+                    Ok((e, AggregateFunc::JsonbObjectAgg))
+                }), 3267;
+            },
             "string_agg" => Aggregate {
                 params!(Any, String) => Operation::binary(|_ecx, _lhs, _rhs| unsupported!("string_agg")), 3538;
             },
@@ -1941,11 +1957,17 @@ lazy_static! {
             "mz_logical_timestamp" => Scalar {
                 params!() => NullaryFunc::MzLogicalTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
             },
+            "mz_uptime" => Scalar {
+                params!() => Operation::nullary(mz_uptime), oid::FUNC_MZ_UPTIME_OID;
+            },
             "mz_version" => Scalar {
                 params!() => Operation::nullary(|ecx| {
                     let version = ecx.catalog().config().build_info.human_version();
                     Ok(HirScalarExpr::literal(Datum::String(&version), ScalarType::String))
                 }), oid::FUNC_MZ_VERSION_OID;
+            },
+            "mz_workers" => Scalar {
+                params!() => Operation::nullary(mz_workers), oid::FUNC_MZ_WORKERS_OID;
             },
             "regexp_extract" => Table {
                 params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
@@ -2041,10 +2063,15 @@ lazy_static! {
             "mz_render_typemod" => Scalar {
                 params!(Oid, Int32) => BinaryFunc::MzRenderTypemod, oid::FUNC_MZ_RENDER_TYPEMOD_OID;
             },
+            // This ought to be exposed in `mz_catalog`, but its name is rather
+            // confusing. It does not identify the SQL session, but the
+            // invocation of this `materialized` process.
+            "mz_session_id" => Scalar {
+                params!() => Operation::nullary(mz_session_id), oid::FUNC_MZ_SESSION_ID_OID;
+            },
             "mz_sleep" => Scalar {
                 params!(Float64) => UnaryFunc::Sleep, oid::FUNC_MZ_SLEEP_OID;
             }
-
         }
     };
 }
@@ -2063,6 +2090,39 @@ fn mz_cluster_id(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
     Ok(HirScalarExpr::literal(
         Datum::from(ecx.catalog().config().cluster_id),
         ScalarType::Uuid,
+    ))
+}
+
+fn mz_session_id(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+    Ok(HirScalarExpr::literal(
+        Datum::from(ecx.catalog().config().session_id),
+        ScalarType::Uuid,
+    ))
+}
+
+fn mz_workers(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+    Ok(HirScalarExpr::literal(
+        Datum::from(i64::try_from(ecx.catalog().config().num_workers)?),
+        ScalarType::Int64,
+    ))
+}
+
+fn mz_uptime(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+    match ecx.qcx.lifetime {
+        QueryLifetime::OneShot => Ok(HirScalarExpr::literal(
+            Datum::from(chrono::Duration::from_std(
+                ecx.catalog().config().start_instant.elapsed(),
+            )?),
+            ScalarType::Interval,
+        )),
+        QueryLifetime::Static => bail!("mz_uptime cannot be used in static queries"),
+    }
+}
+
+fn pg_postmaster_start_time(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+    Ok(HirScalarExpr::literal(
+        Datum::from(ecx.catalog().config().start_time),
+        ScalarType::TimestampTz,
     ))
 }
 
@@ -2146,6 +2206,7 @@ lazy_static! {
                 params!(Interval, Time) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
                 }, 1849;
+                params!(Numeric{scale: None}, Numeric{scale: None}) => AddNumeric, 17580;
             },
             "-" => Scalar {
                 params!(Int32) => UnaryFunc::NegInt32, 558;
@@ -2214,6 +2275,7 @@ lazy_static! {
                     let expr = lhs.call_binary(rhs, DivDecimal);
                     Ok(rescale_decimal(expr, si - s2, s))
                 }), 1761;
+                params!(Numeric{scale: None}, Numeric{scale: None}) => DivNumeric, 17610;
             },
             "%" => Scalar {
                 params!(Int32, Int32) => ModInt32, 530;

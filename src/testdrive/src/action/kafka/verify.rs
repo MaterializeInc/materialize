@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -127,11 +128,11 @@ impl Action for VerifyAction {
             .map_err(|e| format!("creating kafka consumer: {}", e))?;
         consumer.subscribe(&[&topic]).map_err(|e| e.to_string())?;
 
-        // Wait up to 10 seconds for each message.
+        // Wait up to 15 seconds for each message.
         let message_stream = consumer
             .stream()
             .take(self.expected_messages.len())
-            .timeout(Duration::from_secs(15));
+            .timeout(cmp::max(state.default_timeout, Duration::from_secs(15)));
         pin!(message_stream);
 
         let mut actual_messages = vec![];

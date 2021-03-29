@@ -13,6 +13,7 @@ members = [
     "src/dataflow-types",
     "src/dataflow",
     "src/expr",
+    "src/http-util",
     "src/interchange",
     "src/kafka-util",
     "src/materialized",

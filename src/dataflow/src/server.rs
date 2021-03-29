@@ -10,8 +10,8 @@
 //! An interactive dataflow server.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::{Instant, UNIX_EPOCH};
@@ -225,18 +225,12 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
     )
 }
 
-/// A type wrapper for the number of partitions associated with a source.
-pub type PartitionCount = i32;
-
 /// A type wrapper for a timestamp update
-/// For real-time sources, it consists of a PartitionCount
-/// For BYO sources, it consists of a mapping from PartitionId to a vector of
-/// (PartitionCount, Timestamp, MzOffset) tuple.
 pub enum TimestampDataUpdate {
-    /// RT sources see a current estimate of the number of partitions for the soruce
-    RealTime(PartitionCount),
-    /// BYO sources see a list of (PartitionCount, Timestamp, MzOffset) timestamp updates
-    BringYourOwn(HashMap<PartitionId, VecDeque<(PartitionCount, Timestamp, MzOffset)>>),
+    /// RT sources see the current set of partitions known to the source.
+    RealTime(HashSet<PartitionId>),
+    /// BYO sources see a list of (Timestamp, MzOffset) timestamp updates
+    BringYourOwn(HashMap<PartitionId, VecDeque<(Timestamp, MzOffset)>>),
 }
 /// Map of source ID to timestamp data updates (RT or BYO).
 pub type TimestampDataUpdates = Rc<RefCell<HashMap<GlobalId, TimestampDataUpdate>>>;
@@ -469,7 +463,6 @@ where
                     for time in upper.elements().iter() {
                         changes.update(time.clone(), 1);
                     }
-                    let lower = self.reported_frontiers.get_mut(&id).unwrap();
                     changes.compact();
                     if !changes.is_empty() {
                         progress.push((*id, changes));
@@ -660,7 +653,6 @@ where
             }
             SequencedCommand::AddSourceTimestamping { id, connector } => {
                 let byo_default = TimestampDataUpdate::BringYourOwn(HashMap::new());
-                let rt_default = TimestampDataUpdate::RealTime(1);
 
                 let source_timestamp_data = if let SourceConnector::External {
                     connector,
@@ -673,24 +665,36 @@ where
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::Kafka(_), Consistency::RealTime) => {
-                            Some(rt_default)
+                            let mut partitions = HashSet::new();
+                            partitions.insert(PartitionId::Kafka(0));
+                            Some(TimestampDataUpdate::RealTime(partitions))
                         }
                         (ExternalSourceConnector::AvroOcf(_), Consistency::BringYourOwn(_)) => {
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::AvroOcf(_), Consistency::RealTime) => {
-                            Some(rt_default)
+                            let mut partitions = HashSet::new();
+                            partitions.insert(PartitionId::File);
+                            Some(TimestampDataUpdate::RealTime(partitions))
                         }
                         (ExternalSourceConnector::File(_), Consistency::BringYourOwn(_)) => {
                             Some(byo_default)
                         }
                         (ExternalSourceConnector::File(_), Consistency::RealTime) => {
-                            Some(rt_default)
+                            let mut partitions = HashSet::new();
+                            partitions.insert(PartitionId::File);
+                            Some(TimestampDataUpdate::RealTime(partitions))
                         }
                         (ExternalSourceConnector::Kinesis(_), Consistency::RealTime) => {
-                            Some(rt_default)
+                            let mut partitions = HashSet::new();
+                            partitions.insert(PartitionId::Kinesis);
+                            Some(TimestampDataUpdate::RealTime(partitions))
                         }
-                        (ExternalSourceConnector::S3(_), Consistency::RealTime) => Some(rt_default),
+                        (ExternalSourceConnector::S3(_), Consistency::RealTime) => {
+                            let mut partitions = HashSet::new();
+                            partitions.insert(PartitionId::S3);
+                            Some(TimestampDataUpdate::RealTime(partitions))
+                        }
                         (ExternalSourceConnector::Kinesis(_), Consistency::BringYourOwn(_)) => {
                             log::error!("BYO timestamping not supported for Kinesis sources");
                             None
@@ -700,7 +704,15 @@ where
                             None
                         }
                         (ExternalSourceConnector::Postgres(_), _) => {
-                            log::error!("Postgres sources not supported yet");
+                            log::debug!(
+                                "Postgres sources do not communicate with the timestamper thread"
+                            );
+                            None
+                        }
+                        (ExternalSourceConnector::PubNub(_), _) => {
+                            log::debug!(
+                                "PubNub sources do not communicate with the timestamper thread"
+                            );
                             None
                         }
                     }
@@ -722,18 +734,14 @@ where
                 if let Some(ts_entries) = timestamps.get_mut(&id) {
                     match ts_entries {
                         TimestampDataUpdate::BringYourOwn(entries) => {
-                            if let TimestampSourceUpdate::BringYourOwn(
-                                partition_count,
-                                pid,
-                                timestamp,
-                                offset,
-                            ) = update
+                            if let TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) =
+                                update
                             {
                                 let partition_entries =
                                     entries.entry(pid).or_insert_with(VecDeque::new);
-                                let (_, last_ts, last_offset) = partition_entries
+                                let (last_ts, last_offset) = partition_entries
                                     .back()
-                                    .unwrap_or(&(0, 0, MzOffset { offset: 0 }));
+                                    .unwrap_or(&(0, MzOffset { offset: 0 }));
                                 assert!(
                                     offset >= *last_offset,
                                     "offset should not go backwards, but {} < {}",
@@ -746,22 +754,14 @@ where
                                     timestamp,
                                     last_ts
                                 );
-                                partition_entries.push_back((partition_count, timestamp, offset));
+                                partition_entries.push_back((timestamp, offset));
                             } else {
                                 panic!("Unexpected message type. Expected BYO update.")
                             }
                         }
-                        TimestampDataUpdate::RealTime(current_partition_count) => {
-                            if let TimestampSourceUpdate::RealTime(partition_count) = update {
-                                assert!(
-                                    *current_partition_count <= partition_count,
-                                    "The number of partitions \
-                                     for source {} decreased from {} to {}",
-                                    id,
-                                    partition_count,
-                                    current_partition_count
-                                );
-                                *current_partition_count = partition_count;
+                        TimestampDataUpdate::RealTime(partitions) => {
+                            if let TimestampSourceUpdate::RealTime(new_partition) = update {
+                                partitions.insert(new_partition);
                             } else {
                                 panic!("Expected message type. Expected RT update.");
                             }

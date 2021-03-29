@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use derivative::Derivative;
+use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 
 use dataflow_types::PeekResponse;
@@ -84,7 +85,7 @@ pub struct Response<T> {
 
 pub type RowsFuture = Pin<Box<dyn Future<Output = PeekResponse> + Send>>;
 
-/// The response to [`ConnClient::startup`]().
+/// The response to [`ConnClient::startup`](crate::ConnClient::startup).
 #[derive(Debug)]
 pub struct StartupResponse {
     /// An opaque secret associated with this session.
@@ -226,7 +227,9 @@ pub enum ExecuteResponse {
         name: String,
     },
     /// A new transaction was started.
-    StartedTransaction,
+    StartedTransaction {
+        duplicated: bool, // true if a transaction is in progress
+    },
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
     Tailing {
@@ -234,6 +237,13 @@ pub enum ExecuteResponse {
     },
     /// The specified number of rows were updated in the requested table.
     Updated(usize),
+}
+
+/// The response to [`SessionClient::simple_execute`](crate::SessionClient::simple_execute).
+#[derive(Debug, Serialize)]
+pub struct SimpleExecuteResponse {
+    pub rows: Vec<Vec<serde_json::Value>>,
+    pub col_names: Vec<Option<String>>,
 }
 
 /// The state of a cancellation request.

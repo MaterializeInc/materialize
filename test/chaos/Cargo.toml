@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.38"
+anyhow = "1.0.40"
 env_logger = "0.8.3"
 futures = "0.3.13"
 log = "0.4.13"
@@ -15,4 +15,4 @@ ore = { path = "../../src/ore" }
 rand = "0.8.3"
 structopt = "0.3.21"
 test-util = { path = "../test-util" }
-tokio = "1.2.0"
+tokio = "1.4.0"

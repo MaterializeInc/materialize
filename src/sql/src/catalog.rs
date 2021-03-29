@@ -13,8 +13,12 @@
 
 use std::fmt;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, Instant};
 use std::{error::Error, unimplemented};
+
+use chrono::{DateTime, Utc, MIN_DATETIME};
+use dataflow_types::SourceConnector;
+use lazy_static::lazy_static;
 
 use build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use expr::{DummyHumanizer, ExprHumanizer, GlobalId, MirScalarExpr};
@@ -139,10 +143,9 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
 #[derive(Debug, Clone)]
 pub struct CatalogConfig {
     /// Returns the time at which the catalog booted.
-    ///
-    /// NOTE(benesch): this is only necessary for producing unique Kafka sink
-    /// topics. Perhaps we can remove this when #2915 is complete.
-    pub startup_time: SystemTime,
+    pub start_time: DateTime<Utc>,
+    /// Returns the instant at which the catalog booted.
+    pub start_instant: Instant,
     /// A random integer associated with this instance of the catalog.
     ///
     /// NOTE(benesch): this is only necessary for producing unique Kafka sink
@@ -150,6 +153,8 @@ pub struct CatalogConfig {
     pub nonce: u64,
     /// A persistent UUID associated with the catalog.
     pub cluster_id: Uuid,
+    /// A transient UUID associated with this process.
+    pub session_id: Uuid,
     /// Expresses whether or not the catalog allows experimental mode features.
     pub experimental_mode: bool,
     /// The path in which source caching data is stored, if source caching is
@@ -157,6 +162,10 @@ pub struct CatalogConfig {
     pub cache_directory: Option<PathBuf>,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
+    /// The number of worker in use by the server.
+    pub num_workers: usize,
+    /// Default timestamp frequency for CREATE SOURCE
+    pub timestamp_frequency: Duration,
 }
 
 /// A database in a [`Catalog`].
@@ -211,6 +220,12 @@ pub trait CatalogItem {
     /// If the catalog item is not of a type that produces functions (i.e.,
     /// anything other than a function), it returns an error.
     fn func(&self) -> Result<&'static Func, CatalogError>;
+
+    /// Returns the resolved source connector.
+    ///
+    /// If the catalog item is not of a type that contains a `SourceConnector`
+    /// (i.e., anything other than sources), it returns an error.
+    fn source_connector(&self) -> Result<&SourceConnector, CatalogError>;
 
     /// Returns the type of the catalog item.
     fn item_type(&self) -> CatalogItemType;
@@ -284,6 +299,8 @@ pub enum CatalogError {
     UnknownItem(String),
     /// Unknown function.
     UnknownFunction(String),
+    /// Unknown source.
+    UnknownSource(String),
     /// Invalid attempt to depend on a non-dependable item.
     InvalidDependency {
         /// The invalid item's name.
@@ -298,6 +315,7 @@ impl fmt::Display for CatalogError {
         match self {
             Self::UnknownDatabase(name) => write!(f, "unknown database '{}'", name),
             Self::UnknownFunction(name) => write!(f, "function \"{}\" does not exist", name),
+            Self::UnknownSource(name) => write!(f, "source \"{}\" does not exist", name),
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
@@ -325,14 +343,20 @@ impl Error for CatalogError {}
 #[derive(Debug)]
 pub struct DummyCatalog;
 
-const DUMMY_CONFIG: CatalogConfig = CatalogConfig {
-    startup_time: SystemTime::UNIX_EPOCH,
-    nonce: 0,
-    cluster_id: Uuid::from_u128(0),
-    experimental_mode: false,
-    cache_directory: None,
-    build_info: &DUMMY_BUILD_INFO,
-};
+lazy_static! {
+    static ref DUMMY_CONFIG: CatalogConfig = CatalogConfig {
+        start_time: MIN_DATETIME,
+        start_instant: Instant::now(),
+        nonce: 0,
+        cluster_id: Uuid::from_u128(0),
+        session_id: Uuid::from_u128(0),
+        experimental_mode: false,
+        cache_directory: None,
+        build_info: &DUMMY_BUILD_INFO,
+        num_workers: 0,
+        timestamp_frequency: Duration::from_secs(1)
+    };
+}
 
 impl Catalog for DummyCatalog {
     fn search_path(&self, _: bool) -> Vec<&str> {

@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.38"
+anyhow = "1.0.40"
 aws-util = { path = "../../../src/aws-util" }
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
@@ -21,5 +21,5 @@ rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
 structopt = "0.3.21"
 test-util = { path = "../../test-util" }
-tokio = "1.2.0"
+tokio = "1.4.0"
 tokio-postgres = "0.7.0"

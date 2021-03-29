@@ -27,6 +27,10 @@
     description: Aggregate values (including nulls) as a jsonb array.
     url: jsonb_agg
 
+  - signature: jsonb_object_agg(keys, values) -> jsonb
+    description: Aggregate keys and values (including nulls) as a jsonb object.
+    url: jsonb_object_agg
+
   - signature: 'max(x: T) -> T'
     description: Maximum value among `T`
 
@@ -467,8 +471,12 @@
 - type: System information
   description: Functions that return information about the system
   functions:
+  - signature: 'mz_uptime() -> interval'
+    description: Returns the length of time that the materialized process has been running.
   - signature: 'mz_version() -> text'
     description: Returns the server's version information as a human-readable string.
+  - signature: 'mz_workers() -> bigint'
+    description: Returns the number of workers in use by the server.
   - signature: 'format_type(oid: int, typemod: int) -> text'
     description: Returns the canonical SQL name for the type specified by `oid` with `typemod` applied.
   - signature: 'current_user() -> text'
@@ -496,5 +504,7 @@
     description: Returns the type of its input argument as a string.
   - signature: 'pg_encoding_to_char(encoding_id: integer) -> text'
     description: PostgreSQL compatibility shim. Not intended for direct use.
+  - signature: 'pg_postmaster_start_time() -> timestamptz'
+    description: Returns the time when the server started.
   - signature: 'version() -> text'
     description: Returns a PostgreSQL-compatible version string.

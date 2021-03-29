@@ -15,6 +15,14 @@
         composition: smith
         run: ci
 
+- id: pubnub
+  label: "pubnub source"
+  depends_on: build
+  plugins:
+    - ./ci/plugins/mzcompose:
+        composition: pubnub
+        run: pubnub
+
 - id: kafka-matrix
   label: Kafka smoke test against previous Kafka versions
   plugins:

@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.38"
+anyhow = "1.0.40"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 clap = "2.33.0"
@@ -18,5 +18,5 @@ rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["c
 serde = { version = "1.0.124", features = ["derive"] }
 serde_json = "1.0.64"
 structopt = "0.3.21"
-tokio = { version = "1.2.0", features = ["macros"] }
+tokio = { version = "1.4.0", features = ["macros"] }
 url = "2.2.1"

@@ -51,13 +51,13 @@ pub(crate) mod transform_ast;
 pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 
-pub use self::expr::HirRelationExpr;
+pub use self::expr::{HirRelationExpr, HirScalarExpr};
 pub use error::PlanError;
 pub use explain::Explanation;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
 pub use query::{
-    plan_default_expr, resolve_names, resolve_names_data_type, scalar_type_from_sql,
-    unwrap_numeric_typ_mod, Aug, QueryContext, QueryLifetime,
+    plan_default_expr, resolve_names, resolve_names_data_type, resolve_names_stmt,
+    scalar_type_from_sql, unwrap_numeric_typ_mod, Aug, QueryContext, QueryLifetime,
 };
 pub use statement::{describe, plan, StatementContext, StatementDesc};
 

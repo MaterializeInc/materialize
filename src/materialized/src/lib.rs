@@ -18,7 +18,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use compile_time_run::run_command_str;
 use futures::StreamExt;
@@ -160,7 +160,6 @@ pub async fn serve(
     // https://github.com/tokio-rs/tokio/pull/3097.
     runtime: Arc<Runtime>,
 ) -> Result<Server, anyhow::Error> {
-    let start_time = Instant::now();
     let workers = config.workers;
 
     // Validate TLS configuration, if present.
@@ -237,23 +236,26 @@ pub async fn serve(
     // should be rejected. Once all existing user connections have gracefully
     // terminated, this task exits.
     let (drain_trigger, drain_tripwire) = oneshot::channel();
-    tokio::spawn(async move {
-        // TODO(benesch): replace with `listener.incoming()` if that is
-        // restored when the `Stream` trait stabilizes.
-        let mut incoming = TcpListenerStream::new(listener);
+    tokio::spawn({
+        let start_time = coord_handle.start_instant();
+        async move {
+            // TODO(benesch): replace with `listener.incoming()` if that is
+            // restored when the `Stream` trait stabilizes.
+            let mut incoming = TcpListenerStream::new(listener);
 
-        let mut mux = Mux::new();
-        mux.add_handler(pgwire::Server::new(pgwire::Config {
-            tls: pgwire_tls,
-            coord_client: coord_client.clone(),
-        }));
-        mux.add_handler(http::Server::new(http::Config {
-            tls: http_tls,
-            coord_client,
-            start_time,
-        }));
-        mux.serve(incoming.by_ref().take_until(drain_tripwire))
-            .await;
+            let mut mux = Mux::new();
+            mux.add_handler(pgwire::Server::new(pgwire::Config {
+                tls: pgwire_tls,
+                coord_client: coord_client.clone(),
+            }));
+            mux.add_handler(http::Server::new(http::Config {
+                tls: http_tls,
+                coord_client,
+                start_time,
+            }));
+            mux.serve(incoming.by_ref().take_until(drain_tripwire))
+                .await;
+        }
     });
 
     // Start a task that checks for the latest version and prints a warning if
@@ -261,8 +263,9 @@ pub async fn serve(
     if let Some(telemetry_url) = config.telemetry_url {
         tokio::spawn(version_check::check_version_loop(
             telemetry_url,
-            coord_handle.cluster_id().to_string(),
-            start_time,
+            coord_handle.cluster_id(),
+            coord_handle.session_id(),
+            coord_handle.start_instant(),
         ));
     }
 

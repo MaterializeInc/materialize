@@ -142,7 +142,7 @@ a  b  json                     c            d             e                   f
 ------------------------------------------------------------------------------------
 1  1  null                     True         False         "(42,86.5,)"        <null>
 2  3  "{\"hello\":\"world\"}"  False        FileNotFound  "(43,,\"(44,-1)\")" (45,-2)
--1  7 "[1.0,2.0,3.0]"          FileNotFound True          <null>              <null>
+-1  7 "[1,2,3]"                FileNotFound True          <null>              <null>
 
 > CREATE MATERIALIZED SOURCE fast_forwarded
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -153,7 +153,7 @@ a  b  json                     c            d             e                   f
 > SELECT a, b, json, c, d FROM fast_forwarded
 a  b  json            c            d
 ---------------------------------------
--1  7 "[1.0,2.0,3.0]" FileNotFound True
+-1  7 "[1,2,3]"       FileNotFound True
 
 # Check that repeated Debezium messages are skipped.
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
@@ -165,8 +165,8 @@ a  b  json                     c            d             e                   f
 ------------------------------------------------------------------------------------
 1  1  null                     True         False         "(42,86.5,)"        <null>
 2  3  "{\"hello\":\"world\"}"  False        FileNotFound  "(43,,\"(44,-1)\")" (45,-2)
--1  7 "[1.0,2.0,3.0]"          FileNotFound True          <null>              <null>
-42 19 "[4.0,5.0,6.0]"          FileNotFound True          <null>              <null>
+-1  7 "[1,2,3]"                FileNotFound True          <null>              <null>
+42 19 "[4,5,6]"                FileNotFound True          <null>              <null>
 
 # Create a source using a file schema. This should fail if the named schema file
 # does not exist.
@@ -195,8 +195,8 @@ a  b  json                     c            d
 --------------------------------------------------------
 1  1  null                     True         False
 2  3  "{\"hello\":\"world\"}"  False        FileNotFound
--1  7 "[1.0,2.0,3.0]"          FileNotFound True
-42 19 "[4.0,5.0,6.0]"          FileNotFound True
+-1  7 "[1,2,3]"                FileNotFound True
+42 19 "[4,5,6]"                FileNotFound True
 
 # Test an Avro source without a Debezium envelope.
 
@@ -333,6 +333,21 @@ a  b
 5  6
 9  10
 
+# There should be two partitions for the last created source / consumer (non_dbz_data_varying_partition_2)
+> SELECT count(*) FROM mz_kafka_consumer_statistics GROUP BY consumer_name;
+count
+-----
+1
+1
+1
+1
+2
+2
+2
+2
+2
+2
+
 > CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
   WITH (start_offset=[1,1])
@@ -351,6 +366,22 @@ a  b
 -----
 9  10
 11 12
+
+# There should three partitions for the last three sources / consumers (non_dbz_data_varying_partition_[123])
+> SELECT count(*) FROM mz_kafka_consumer_statistics GROUP BY consumer_name;
+count
+-----
+1
+1
+1
+1
+2
+2
+2
+2
+3
+3
+3
 
 $ set-sql-timeout duration=12.7s
 

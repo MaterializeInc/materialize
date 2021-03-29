@@ -85,6 +85,26 @@ steps:
           composition: testdrive
           run: ci
 
+  - id: testdrive-proxy
+    label: ":squid: testdrive proxy"
+    depends_on: build
+    timeout_in_minutes: 30
+    inputs: [test/testdrive]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          run: ci-proxy
+
+  - id: testdrive-proxy-failure
+    label: ":squid::boom: testdrive proxy failure"
+    depends_on: build
+    timeout_in_minutes: 30
+    inputs: [test/testdrive/proxy]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: testdrive
+          run: ci-proxy
+
   - id: kafka-ssl
     label: ":lock: Kafka SSL smoke test"
     depends_on: build
@@ -214,6 +234,14 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: persistent-tables
           run: persistent-tables
+
+  - id: kafka-exactly-once
+    label: "Test for the Kafka exactly-once sink"
+    depends_on: build
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: kafka-exactly-once
+          run: kafka-exactly-once
 
   - id: mzcompose-self
     label: "mzcompose self test"

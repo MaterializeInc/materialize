@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 
 . misc/shlib/shlib.bash
 
-cargo doc "$@"
+RUSTDOCFLAGS="-D warnings" cargo doc "$@"
 
 crates=$(cargo metadata --format-version=1 \
   | jq -r -f misc/doc/crates.jq --arg pwd "$(pwd)")

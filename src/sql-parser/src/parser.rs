@@ -1584,7 +1584,12 @@ impl<'a> Parser<'a> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
-            Envelope::Debezium
+            let debezium_mode = if self.parse_keyword(UPSERT) {
+                DbzMode::Upsert
+            } else {
+                DbzMode::Plain
+            };
+            Envelope::Debezium(debezium_mode)
         } else if self.parse_keyword(UPSERT) {
             let format = if self.parse_keyword(FORMAT) {
                 Some(self.parse_format()?)
@@ -1698,7 +1703,18 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_connector(&mut self) -> Result<Connector<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES])? {
+        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
+            PUBNUB => {
+                self.expect_keywords(&[SUBSCRIBE, KEY])?;
+                let subscribe_key = self.parse_literal_string()?;
+                self.expect_keyword(CHANNEL)?;
+                let channel = self.parse_literal_string()?;
+
+                Ok(Connector::PubNub {
+                    subscribe_key,
+                    channel,
+                })
+            }
             POSTGRES => {
                 self.expect_keyword(HOST)?;
                 let conn = self.parse_literal_string()?;
@@ -3438,7 +3454,7 @@ impl<'a> Parser<'a> {
             self.expect_keyword(AS)?;
             let name = self.parse_object_name()?;
             // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
-            if name.0.len() != 3 {
+            if name.0.len() < 2 {
                 return parser_err!(
                     self,
                     self.peek_prev_pos(),

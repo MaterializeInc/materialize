@@ -399,7 +399,23 @@ publish: true
 * `pre-image` (map) specifies a plugin to run *before* invoking `docker build`.
   This is where the magic happens for Rust code.
 
-  At the moment `pre-image` only supports two plugins:
+  At the moment `pre-image` only supports three plugins:
+
+  * `type: copy` recursively copies the contents of a directory into the mzbuild
+     context.
+
+     The `source` field specifies the directory from which files should be
+     copied. It is relative to the root of the repository. The `destination`
+     field specifies the directory into which files should be copied. It is
+     relative to the mzbuild context. Both fields are required.
+
+     The name of the file in the `destination` directory will be the name of the
+     file in the `source` directory with the `source` prefix removed. So a file
+     named `/path/to/source/a/b/c.ext` will be copied into
+     `/path/to/destination/a/b/c.ext`.
+
+     The optional `matching` field specifies a glob that determines which
+     files in the `source` directory to copy.
 
   *  `type: cargo-bin` builds a Rust binary with Cargo. The `bin` field
      indicates the name of the binary target in the Cargo workspace to build.

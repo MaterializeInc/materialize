@@ -15,6 +15,7 @@ use std::iter;
 use std::path::PathBuf;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -379,10 +380,38 @@ fn jsonb_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let datum = temp_storage.make_datum(|packer| {
+    temp_storage.make_datum(|packer| {
         packer.push_list(datums.into_iter().filter(|d| !d.is_null()));
-    });
-    Datum::List(datum.unwrap_list())
+    })
+}
+
+fn jsonb_object_agg<'a, I>(datums: I, temp_storage: &'a RowArena) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    temp_storage.make_datum(|packer| {
+        packer.push_dict(
+            datums
+                .into_iter()
+                .filter_map(|d| {
+                    if d.is_null() {
+                        return None;
+                    }
+                    let mut list = d.unwrap_list().iter();
+                    let key = list.next().unwrap();
+                    let val = list.next().unwrap();
+                    if key.is_null() {
+                        // TODO(benesch): this should produce an error, but
+                        // aggregate functions cannot presently produce errors.
+                        None
+                    } else {
+                        Some((key.unwrap_str(), val))
+                    }
+                })
+                .sorted_by_key(|(k, _v)| *k)
+                .dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2),
+        );
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -421,6 +450,12 @@ pub enum AggregateFunc {
     /// layer, this function filters out `Datum::Null`, for consistency with
     /// the other aggregate functions.
     JsonbAgg,
+    /// Zips JSON-typed `Datum`s into a JSON map.
+    ///
+    /// WARNING: Unlike the `jsonb_object_agg` function that is exposed by the SQL
+    /// layer, this function filters out `Datum::Null`, for consistency with
+    /// the other aggregate functions.
+    JsonbObjectAgg,
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -463,6 +498,7 @@ impl AggregateFunc {
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
             AggregateFunc::JsonbAgg => jsonb_agg(datums, temp_storage),
+            AggregateFunc::JsonbObjectAgg => jsonb_object_agg(datums, temp_storage),
             AggregateFunc::Dummy => Datum::Dummy,
         }
     }
@@ -501,6 +537,7 @@ impl AggregateFunc {
             AggregateFunc::Any => ScalarType::Bool,
             AggregateFunc::All => ScalarType::Bool,
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
+            AggregateFunc::JsonbObjectAgg => ScalarType::Jsonb,
             AggregateFunc::SumInt32 => ScalarType::Int64,
             AggregateFunc::SumInt64 => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
             _ => input_type.scalar_type,
@@ -642,6 +679,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),
             AggregateFunc::JsonbAgg => f.write_str("jsonb_agg"),
+            AggregateFunc::JsonbObjectAgg => f.write_str("jsonb_object_agg"),
             AggregateFunc::Dummy => f.write_str("dummy"),
         }
     }

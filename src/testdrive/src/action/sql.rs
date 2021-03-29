@@ -11,6 +11,7 @@ use std::ascii;
 use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::io::{self, Write};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use md5::{Digest, Md5};
@@ -21,23 +22,23 @@ use tokio_postgres::types::{FromSql, Type};
 
 use coord::catalog::Catalog;
 use ore::collections::CollectionExt;
-use ore::retry;
+use ore::retry::Retry;
 use pgrepr::{Interval, Jsonb, Numeric};
 use sql_parser::ast::{
     CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement, CreateTableStatement,
     CreateViewStatement, Raw, Statement,
 };
 
-use crate::action::{Action, SQLContext, State};
+use crate::action::{Action, SqlContext, State};
 use crate::parser::{FailSqlCommand, SqlCommand, SqlOutput};
 
 pub struct SqlAction {
     cmd: SqlCommand,
     stmt: Statement<Raw>,
-    sql_context: SQLContext,
+    sql_context: SqlContext,
 }
 
-pub fn build_sql(mut cmd: SqlCommand, sql_context: SQLContext) -> Result<SqlAction, String> {
+pub fn build_sql(mut cmd: SqlCommand, sql_context: SqlContext) -> Result<SqlAction, String> {
     let stmts = sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e))?;
     if stmts.len() != 1 {
@@ -50,7 +51,7 @@ pub fn build_sql(mut cmd: SqlCommand, sql_context: SQLContext) -> Result<SqlActi
     Ok(SqlAction {
         cmd,
         stmt: stmts.into_element(),
-        sql_context: sql_context,
+        sql_context,
     })
 }
 
@@ -102,30 +103,34 @@ impl Action for SqlAction {
         print_query(&query);
 
         let pgclient = &state.pgclient;
-        retry::retry_for(self.sql_context.sql_timeout, |retry_state| async move {
-            match self.try_redo(pgclient, &query).await {
-                Ok(()) => {
-                    if retry_state.i != 0 {
-                        println!();
+        Retry::default()
+            .initial_backoff(Duration::from_millis(50))
+            .factor(1.5)
+            .max_duration(self.sql_context.timeout)
+            .retry(|retry_state| async move {
+                match self.try_redo(pgclient, &query).await {
+                    Ok(()) => {
+                        if retry_state.i != 0 {
+                            println!();
+                        }
+                        println!("rows match; continuing");
+                        Ok(())
                     }
-                    println!("rows match; continuing");
-                    Ok(())
+                    Err(e) => {
+                        if retry_state.i == 0 {
+                            print!("rows didn't match; sleeping to see if dataflow catches up");
+                        }
+                        if let Some(backoff) = retry_state.next_backoff {
+                            print!(" {:.0?}", backoff);
+                            io::stdout().flush().unwrap();
+                        } else {
+                            println!();
+                        }
+                        Err(e)
+                    }
                 }
-                Err(e) => {
-                    if retry_state.i == 0 {
-                        print!("rows didn't match; sleeping to see if dataflow catches up");
-                    }
-                    if let Some(backoff) = retry_state.next_backoff {
-                        print!(" {:?}", backoff);
-                        io::stdout().flush().unwrap();
-                    } else {
-                        println!();
-                    }
-                    Err(e)
-                }
-            }
-        })
-        .await?;
+            })
+            .await?;
 
         if let Some(path) = &state.materialized_catalog_path {
             match self.stmt {
@@ -270,12 +275,12 @@ impl SqlAction {
 
 pub struct FailSqlAction {
     cmd: FailSqlCommand,
-    sql_context: SQLContext,
+    sql_context: SqlContext,
 }
 
 pub fn build_fail_sql(
     cmd: FailSqlCommand,
-    sql_context: SQLContext,
+    sql_context: SqlContext,
 ) -> Result<FailSqlAction, String> {
     Ok(FailSqlAction {
         cmd,
@@ -294,7 +299,11 @@ impl Action for FailSqlAction {
         print_query(&query);
 
         let pgclient = &state.pgclient;
-        retry::retry_for(self.sql_context.sql_timeout, |retry_state| async move {
+        Retry::default()
+            .initial_backoff(Duration::from_millis(50))
+            .factor(1.5)
+            .max_duration(self.sql_context.timeout)
+            .retry(|retry_state| async move {
             match self.try_redo(pgclient, &query).await {
                 Ok(()) => {
                     if retry_state.i != 0 {
@@ -308,7 +317,7 @@ impl Action for FailSqlAction {
                         print!("query error didn't match; sleeping to see if dataflow produces error shortly");
                     }
                     if let Some(backoff) = retry_state.next_backoff {
-                        print!(" {:?}", backoff);
+                        print!(" {:.0?}", backoff);
                         io::stdout().flush().unwrap();
                     } else {
                         println!();
@@ -366,7 +375,7 @@ pub fn print_query(query: &str) {
     }
 }
 
-fn decode_row(row: Row, sql_context: SQLContext) -> Result<Vec<String>, String> {
+fn decode_row(row: Row, sql_context: SqlContext) -> Result<Vec<String>, String> {
     enum ArrayElement<T> {
         Null,
         NonNull(T),

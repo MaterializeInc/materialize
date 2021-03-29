@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Duration;
-
 use async_trait::async_trait;
 use bytes::Bytes;
 use rand::distributions::Alphanumeric;
@@ -16,7 +14,7 @@ use rand::{thread_rng, Rng};
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{Kinesis, PutRecordError, PutRecordInput};
 
-use ore::retry;
+use ore::retry::Retry;
 
 use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
@@ -68,17 +66,21 @@ impl Action for IngestAction {
 
             // The Kinesis stream might not be immediately available,
             // be prepared to back off.
-            retry::retry_for(Duration::from_secs(8), |_| async {
-                match state.kinesis_client.put_record(put_input.clone()).await {
-                    Ok(_output) => Ok(()),
-                    Err(RusotoError::Service(PutRecordError::ResourceNotFound(err))) => {
-                        Err(format!("resource not found: {}", err))
+            Retry::default()
+                .max_duration(state.default_timeout)
+                .retry(|_| async {
+                    match state.kinesis_client.put_record(put_input.clone()).await {
+                        Ok(_output) => Ok(()),
+                        Err(RusotoError::Service(PutRecordError::ResourceNotFound(err))) => {
+                            Err(format!("resource not found: {}", err))
+                        }
+                        Err(err) => {
+                            Err(format!("unable to put Kinesis record: {}", err.to_string()))
+                        }
                     }
-                    Err(err) => Err(format!("unable to put Kinesis record: {}", err.to_string())),
-                }
-            })
-            .await
-            .map_err(|e| format!("trying to put Kinesis record: {}", e))?;
+                })
+                .await
+                .map_err(|e| format!("trying to put Kinesis record: {}", e))?;
         }
         Ok(())
     }

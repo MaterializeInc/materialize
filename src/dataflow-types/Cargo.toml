@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.38"
+anyhow = "1.0.40"
 aws-util = { path = "../aws-util" }
 ccsr = { path = "../ccsr" }
 expr = { path = "../expr" }
@@ -14,13 +14,13 @@ globset = { version = "0.4.0", features = ["serde1"] }
 interchange = { path = "../interchange" }
 kafka-util = { path = "../kafka-util" }
 log = "0.4.13"
-regex = "1.4.3"
+regex = "1.4.5"
 repr = { path = "../repr" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 serde = { version = "1.0.124", features = ["derive"] }
 serde_regex = "1.1.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.1.0" }
+tokio = { version = "1.4.0" }
 url = { version = "2.2.1", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
 

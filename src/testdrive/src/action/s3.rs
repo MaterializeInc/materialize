@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::collections::HashMap;
 use std::default::Default;
 use std::io::Write;
@@ -36,9 +37,9 @@ pub struct CreateBucketAction {
 }
 
 pub fn build_create_bucket(mut cmd: BuiltinCommand) -> Result<CreateBucketAction, String> {
-    Ok(CreateBucketAction {
-        bucket: cmd.args.string("bucket")?,
-    })
+    let bucket = cmd.args.string("bucket")?;
+    cmd.args.done()?;
+    Ok(CreateBucketAction { bucket })
 }
 
 #[async_trait]
@@ -78,11 +79,16 @@ pub struct PutObjectAction {
 }
 
 pub fn build_put_object(mut cmd: BuiltinCommand) -> Result<PutObjectAction, String> {
+    let bucket = cmd.args.string("bucket")?;
+    let key = cmd.args.string("key")?;
+    let compression = build_compression(&mut cmd)?;
+    let contents = cmd.input.join("\n");
+    cmd.args.done()?;
     Ok(PutObjectAction {
-        bucket: cmd.args.string("bucket")?,
-        key: cmd.args.string("key")?,
-        compression: build_compression(&mut cmd)?,
-        contents: cmd.input.join("\n"),
+        bucket,
+        key,
+        compression,
+        contents,
     })
 }
 
@@ -137,7 +143,7 @@ pub struct AddBucketNotifications {
     bucket_prefix: String,
 
     sqs_test_prefix: String,
-    sqs_validation_timeout: Duration,
+    sqs_validation_timeout: Option<Duration>,
 }
 
 pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotifications, String> {
@@ -152,21 +158,29 @@ pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotif
         .opt_string("bucket_prefix")
         .unwrap_or_else(|| "materialize-ci-*".into());
 
+    let bucket = cmd.args.string("bucket")?;
+    let queue = cmd.args.string("queue")?;
+
+    let sqs_test_prefix = cmd
+        .args
+        .opt_string("sqs-test-prefix")
+        .unwrap_or_else(|| "sqs-test".into());
+
+    let sqs_validation_timeout = cmd
+        .args
+        .opt_string("sqs-validation-timeout")
+        .map(|t| parse_duration::parse(&t).map_err(|e| e.to_string()))
+        .transpose()?;
+
+    cmd.args.done()?;
+
     Ok(AddBucketNotifications {
-        bucket: cmd.args.string("bucket")?,
+        bucket,
         events,
-        queue: cmd.args.string("queue")?,
+        queue,
         bucket_prefix,
-        sqs_test_prefix: cmd
-            .args
-            .opt_string("sqs-test-prefix")
-            .unwrap_or_else(|| "sqs-test".into()),
-        sqs_validation_timeout: cmd
-            .args
-            .opt_string("sqs-validation-timeout")
-            .map(|t| parse_duration::parse(&t).map_err(|e| e.to_string()))
-            .transpose()?
-            .unwrap_or_else(|| Duration::from_secs(120)),
+        sqs_test_prefix,
+        sqs_validation_timeout,
     })
 }
 
@@ -276,6 +290,10 @@ impl Action for AddBucketNotifications {
                 )
             })?;
 
+        let sqs_validation_timeout = self
+            .sqs_validation_timeout
+            .unwrap_or_else(|| cmp::max(state.default_timeout, Duration::from_secs(120)));
+
         // Wait until we are sure that the configuration has taken effect
         //
         // AWS doesn't specify anywhere how long it should take for
@@ -286,11 +304,11 @@ impl Action for AddBucketNotifications {
         let mut attempts = 0;
         let mut success = false;
         print!(
-            "Verifying SQS notification configuration for up to {:?}",
-            self.sqs_validation_timeout
+            "Verifying SQS notification configuration for up to {:?} ",
+            sqs_validation_timeout
         );
         let start = Instant::now();
-        while start.elapsed() < self.sqs_validation_timeout {
+        while start.elapsed() < sqs_validation_timeout {
             state
                 .s3_client
                 .put_object(PutObjectRequest {

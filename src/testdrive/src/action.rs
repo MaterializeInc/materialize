@@ -27,6 +27,7 @@ use rusoto_sqs::{DeleteQueueRequest, Sqs, SqsClient};
 use url::Url;
 
 use aws_util::aws;
+use ore::retry::Retry;
 use repr::strconv;
 
 use crate::error::{DynError, Error, InputError, ResultExt};
@@ -42,7 +43,6 @@ mod s3;
 mod sleep;
 mod sql;
 
-const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_millis(12700);
 const DEFAULT_REGEX_REPLACEMENT: &str = "<regex_match>";
 
 /// User-settable configuration parameters.
@@ -77,6 +77,10 @@ pub struct Config {
     pub reset_materialized: bool,
     /// Emit Buildkite-specific markup.
     pub ci_output: bool,
+    /// Default timeout.
+    pub default_timeout: Duration,
+    /// A random number to distinguish each TestDrive run.
+    pub seed: Option<u32>,
 }
 
 pub struct State {
@@ -104,11 +108,12 @@ pub struct State {
     s3_buckets_created: BTreeSet<String>,
     sqs_client: SqsClient,
     sqs_queues_created: BTreeSet<String>,
+    default_timeout: Duration,
 }
 
 #[derive(Clone)]
-pub struct SQLContext {
-    sql_timeout: Duration,
+pub struct SqlContext {
+    timeout: Duration,
     regex: Option<Regex>,
     regex_replacement: String,
 }
@@ -209,58 +214,62 @@ impl State {
     }
 
     async fn delete_bucket_objects(&self, bucket: String) -> Result<(), Error> {
-        ore::retry::retry_for(Duration::from_secs(5), |_| async {
-            // loop until error or response has no continuation token
-            let mut continuation_token = None;
-            loop {
-                let response = self
-                    .s3_client
-                    .list_objects_v2(ListObjectsV2Request {
-                        bucket: bucket.clone(),
-                        continuation_token: continuation_token.take(),
-                        ..Default::default()
-                    })
-                    .await
-                    .with_err_ctx(|| format!("listing objects for bucket {}", bucket))?;
+        Retry::default()
+            .max_duration(self.default_timeout)
+            .retry(|_| async {
+                // loop until error or response has no continuation token
+                let mut continuation_token = None;
+                loop {
+                    let response = self
+                        .s3_client
+                        .list_objects_v2(ListObjectsV2Request {
+                            bucket: bucket.clone(),
+                            continuation_token: continuation_token.take(),
+                            ..Default::default()
+                        })
+                        .await
+                        .with_err_ctx(|| format!("listing objects for bucket {}", bucket))?;
 
-                if let Some(objects) = response.contents {
-                    for obj in objects {
-                        self.s3_client
-                            .delete_object(DeleteObjectRequest {
-                                bucket: bucket.clone(),
-                                key: obj.key.clone().unwrap(),
-                                ..Default::default()
-                            })
-                            .await
-                            .with_err_ctx(|| {
-                                format!("deleting object {}/{}", bucket, obj.key.unwrap())
-                            })?;
+                    if let Some(objects) = response.contents {
+                        for obj in objects {
+                            self.s3_client
+                                .delete_object(DeleteObjectRequest {
+                                    bucket: bucket.clone(),
+                                    key: obj.key.clone().unwrap(),
+                                    ..Default::default()
+                                })
+                                .await
+                                .with_err_ctx(|| {
+                                    format!("deleting object {}/{}", bucket, obj.key.unwrap())
+                                })?;
+                        }
                     }
-                }
 
-                if response.next_continuation_token.is_none() {
-                    return Ok(());
+                    if response.next_continuation_token.is_none() {
+                        return Ok(());
+                    }
+                    continuation_token = response.next_continuation_token;
                 }
-                continuation_token = response.next_continuation_token;
-            }
-        })
-        .await
+            })
+            .await
     }
 
     pub async fn reset_sqs(&self) -> Result<(), Error> {
-        ore::retry::retry_for(Duration::from_secs(5), |_| async {
-            for queue_url in &self.sqs_queues_created {
-                self.sqs_client
-                    .delete_queue(DeleteQueueRequest {
-                        queue_url: queue_url.clone(),
-                    })
-                    .await
-                    .with_err_ctx(|| format!("Deleting sqs queue: {}", queue_url))?
-            }
+        Retry::default()
+            .max_duration(self.default_timeout)
+            .retry(|_| async {
+                for queue_url in &self.sqs_queues_created {
+                    self.sqs_client
+                        .delete_queue(DeleteQueueRequest {
+                            queue_url: queue_url.clone(),
+                        })
+                        .await
+                        .with_err_ctx(|| format!("Deleting sqs queue: {}", queue_url))?
+                }
 
-            Ok(())
-        })
-        .await
+                Ok(())
+            })
+            .await
     }
 }
 
@@ -297,8 +306,9 @@ where
 pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Error> {
     let mut out = Vec::new();
     let mut vars = HashMap::new();
-    let mut sql_context = SQLContext {
-        sql_timeout: DEFAULT_SQL_TIMEOUT,
+
+    let mut sql_context = SqlContext {
+        timeout: state.default_timeout,
         regex: None,
         regex_replacement: DEFAULT_REGEX_REPLACEMENT.to_string(),
     };
@@ -368,6 +378,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
         "testdrive.materialized-user".into(),
         state.materialized_user.clone(),
     );
+
     for cmd in cmds {
         let pos = cmd.pos;
         let wrap_err = |e| InputError { msg: e, pos };
@@ -420,23 +431,20 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         Box::new(s3::build_add_notifications(builtin).map_err(wrap_err)?)
                     }
                     "set-regex" => {
-                        let regex_str = builtin.args.string("match").map_err(wrap_err)?;
-                        sql_context.regex = Some(Regex::new(&regex_str).unwrap());
-
-                        let regex_replacement_opt = builtin.args.opt_string("replacement");
-                        if let Some(regex_replacement) = &regex_replacement_opt {
-                            sql_context.regex_replacement = regex_replacement.to_string();
-                        } else {
-                            sql_context.regex_replacement = DEFAULT_REGEX_REPLACEMENT.to_string();
-                        }
+                        sql_context.regex = Some(builtin.args.parse("match").map_err(wrap_err)?);
+                        sql_context.regex_replacement = match builtin.args.opt_string("replacement")
+                        {
+                            None => DEFAULT_REGEX_REPLACEMENT.into(),
+                            Some(replacement) => replacement,
+                        };
                         continue;
                     }
                     "set-sql-timeout" => {
                         let duration = builtin.args.string("duration").map_err(wrap_err)?;
                         if duration.to_lowercase() == "default" {
-                            sql_context.sql_timeout = DEFAULT_SQL_TIMEOUT;
+                            sql_context.timeout = state.default_timeout;
                         } else {
-                            sql_context.sql_timeout = parse_duration::parse(&duration)
+                            sql_context.timeout = parse_duration::parse(&duration)
                                 .map_err(|e| wrap_err(e.to_string()))?;
                         }
                         continue;
@@ -517,7 +525,12 @@ fn substitute_vars(msg: &str, vars: &HashMap<String, String>) -> Result<String, 
 pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), Error>>), Error> {
-    let seed = rand::thread_rng().gen();
+    let seed = if let Some(s) = config.seed {
+        s
+    } else {
+        rand::thread_rng().gen()
+    };
+
     let temp_dir = tempfile::tempdir().err_ctx("creating temporary directory")?;
 
     let materialized_catalog_path = if let Some(path) = &config.materialized_catalog_path {
@@ -583,7 +596,7 @@ pub async fn create_state(
             ccsr_config = ccsr_config.identity(ident);
         }
 
-        ccsr_config.build()
+        ccsr_config.build().err_ctx("Creating CCSR client")?
     };
 
     let (kafka_addr, kafka_admin, kafka_admin_opts, kafka_producer, kafka_topics, kafka_config) = {
@@ -595,6 +608,7 @@ pub async fn create_state(
         kafka_config.set("bootstrap.servers", &config.kafka_addr);
         kafka_config.set("group.id", "materialize-testdrive");
         kafka_config.set("auto.offset.reset", "earliest");
+        kafka_config.set("isolation.level", "read_committed");
         if let Some(cert_path) = &config.cert_path {
             kafka_config.set("security.protocol", "ssl");
             kafka_config.set("ssl.keystore.location", cert_path);
@@ -611,7 +625,7 @@ pub async fn create_state(
             &[format!("connection string: {}", config.kafka_addr)],
         )?;
 
-        let admin_opts = AdminOptions::new().operation_timeout(Some(Duration::from_secs(5)));
+        let admin_opts = AdminOptions::new().operation_timeout(Some(config.default_timeout));
 
         let producer: FutureProducer = kafka_config.create().err_hint(
             "opening Kafka producer connection",
@@ -680,6 +694,7 @@ pub async fn create_state(
         s3_buckets_created: BTreeSet::new(),
         sqs_client,
         sqs_queues_created: BTreeSet::new(),
+        default_timeout: config.default_timeout,
     };
     Ok((state, pgconn_task))
 }

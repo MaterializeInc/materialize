@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::iter;
 use std::path::PathBuf;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use aws_arn::{Resource, ARN};
@@ -37,10 +37,10 @@ use reqwest::Url;
 
 use dataflow_types::{
     AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
-    DataEncoding, ExternalSourceConnector, FileSourceConnector, KafkaSinkConnectorBuilder,
-    KafkaSourceConnector, KinesisSourceConnector, PostgresSourceConnector, ProtobufEncoding,
-    RegexEncoding, S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector,
-    SourceEnvelope,
+    DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
+    KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector,
+    PostgresSourceConnector, ProtobufEncoding, PubNubSourceConnector, RegexEncoding,
+    S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceEnvelope,
 };
 use expr::GlobalId;
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
@@ -332,14 +332,15 @@ fn plan_source_envelope(
         id: expr::Id::LocalBareSource,
         typ: bare_desc.typ().clone(),
     };
-    let (hir_expr, column_names) = if let SourceEnvelope::Debezium(_) = envelope {
+    let (hir_expr, column_names) = if let SourceEnvelope::Debezium(_, _) = envelope {
         // Debezium sources produce a diff in their last column.
         // Thus we need to select all rows but the last, which we repeat by.
         // I.e., for a source with four columns, we do
         // SELECT a.column1, a.column2, a.column3 FROM a, repeat(a.column4)
         //
-        // [btv] - Maybe it would be better to write these in actual SQL and call into the planner, rather than writing out the expr by hand?
-        // Then we would get some nice things; for example, automatic tracking of column names.
+        // [btv] - Maybe it would be better to write these in actual SQL and call into the planner,
+        // rather than writing out the expr by hand? Then we would get some nice things; for
+        // example, automatic tracking of column names.
         //
         // For this simple case, it probably doesn't matter
 
@@ -519,7 +520,7 @@ pub fn plan_create_source(
     let mut with_options = normalize::options(with_options);
 
     let mut consistency = Consistency::RealTime;
-    let mut ts_frequency = Duration::from_secs(1);
+    let mut ts_frequency = scx.catalog.config().timestamp_frequency;
 
     let (external_connector, mut encoding) = match connector {
         Connector::Kafka { broker, topic, .. } => {
@@ -537,7 +538,10 @@ pub fn plan_create_source(
                 Some(_) => bail!("group_id_prefix must be a string"),
             };
 
-            ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
+            ts_frequency = extract_timestamp_frequency_option(
+                scx.catalog.config().timestamp_frequency,
+                &mut with_options,
+            )?;
 
             // THIS IS EXPERIMENTAL - DO NOT DOCUMENT IT
             // until we have had time to think about what the right UX/design is on a non-urgent timeline!
@@ -593,6 +597,15 @@ pub fn plan_create_source(
                 cached_files: None,
             });
             let encoding = get_encoding(format)?;
+
+            if consistency != Consistency::RealTime
+                && *envelope != sql_parser::ast::Envelope::Debezium(sql_parser::ast::DbzMode::Plain)
+            {
+                // TODO: does it make sense to support BYO with upsert? It doesn't seem obvious that
+                // the timestamp topic will support the upsert semantics of the value topic
+                bail!("BYO consistency only supported for plain Debezium Kafka sources");
+            }
+
             (connector, encoding)
         }
         Connector::Kinesis { arn, .. } => {
@@ -630,10 +643,12 @@ pub fn plan_create_source(
             };
             consistency = match with_options.remove("consistency") {
                 None => Consistency::RealTime,
-                Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
-                Some(_) => bail!("consistency must be a string"),
+                Some(_) => bail!("BYO consistency not supported for file sources"),
             };
-            ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
+            ts_frequency = extract_timestamp_frequency_option(
+                scx.catalog.config().timestamp_frequency,
+                &mut with_options,
+            )?;
 
             let connector = ExternalSourceConnector::File(FileSourceConnector {
                 path: path.clone().into(),
@@ -740,6 +755,18 @@ pub fn plan_create_source(
 
             (connector, DataEncoding::Postgres(desc))
         }
+        Connector::PubNub {
+            subscribe_key,
+            channel,
+        } => {
+            scx.require_experimental_mode("PubNub Sources")?;
+            let connector = ExternalSourceConnector::PubNub(PubNubSourceConnector {
+                subscribe_key: subscribe_key.clone(),
+                channel: channel.clone(),
+            });
+
+            (connector, DataEncoding::Text)
+        }
         Connector::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
                 None => false,
@@ -752,7 +779,16 @@ pub fn plan_create_source(
                 Some(_) => bail!("consistency must be a string"),
             };
 
-            ts_frequency = extract_timestamp_frequency_option(&mut with_options)?;
+            if consistency != Consistency::RealTime
+                && *envelope != sql_parser::ast::Envelope::Debezium(sql_parser::ast::DbzMode::Plain)
+            {
+                bail!("BYO consistency only supported for Debezium Avro OCF sources");
+            }
+
+            ts_frequency = extract_timestamp_frequency_option(
+                scx.catalog.config().timestamp_frequency,
+                &mut with_options,
+            )?;
 
             let connector = ExternalSourceConnector::AvroOcf(FileSourceConnector {
                 path: path.clone().into(),
@@ -792,11 +828,15 @@ pub fn plan_create_source(
     // TODO: remove bails as more support for upsert is added.
     let envelope = match &envelope {
         sql_parser::ast::Envelope::None => SourceEnvelope::None,
-        sql_parser::ast::Envelope::Debezium => {
+        sql_parser::ast::Envelope::Debezium(mode) => {
             let dedup_strat = match with_options.remove("deduplication") {
-                None => DebeziumDeduplicationStrategy::Ordered,
+                None => match mode {
+                    sql_parser::ast::DbzMode::Plain => DebeziumDeduplicationStrategy::Ordered,
+                    sql_parser::ast::DbzMode::Upsert => DebeziumDeduplicationStrategy::None,
+                },
                 Some(Value::String(s)) => {
                     match s.as_str() {
+                        "none" => DebeziumDeduplicationStrategy::None,
                         "full" => DebeziumDeduplicationStrategy::Full,
                         "ordered" => DebeziumDeduplicationStrategy::Ordered,
                         "full_in_range" => {
@@ -832,7 +872,11 @@ pub fn plan_create_source(
                 }
                 _ => bail!("deduplication must be one of 'ordered', 'full' or 'full_in_range'."),
             };
-            SourceEnvelope::Debezium(dedup_strat)
+            let mode = match mode {
+                sql_parser::ast::DbzMode::Plain => DebeziumMode::Plain,
+                sql_parser::ast::DbzMode::Upsert => DebeziumMode::Upsert,
+            };
+            SourceEnvelope::Debezium(dedup_strat, mode)
         }
         sql_parser::ast::Envelope::Upsert(key_format) => match connector {
             Connector::Kafka { .. } => {
@@ -878,7 +922,7 @@ pub fn plan_create_source(
             DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
                 *key_schema = None;
             }
-            DataEncoding::Bytes | DataEncoding::Text => {
+            DataEncoding::Bytes | DataEncoding::Text | DataEncoding::Protobuf(_) => {
                 if let DataEncoding::Avro(_) = &key_encoding {
                     unsupported!("Avro key for this format");
                 }
@@ -897,7 +941,7 @@ pub fn plan_create_source(
         bare_desc = bare_desc.without_keys();
     }
 
-    let post_transform_key = if let SourceEnvelope::Debezium(_) = &envelope {
+    let post_transform_key = if let SourceEnvelope::Debezium(_, _) = &envelope {
         if let DataEncoding::Avro(AvroEncoding { key_schema, .. }) = &encoding {
             if ignore_source_keys {
                 None
@@ -938,7 +982,7 @@ pub fn plan_create_source(
     // TODO(brennan): They should not depend on the envelope either. Figure out a way to
     // make all of this more tasteful.
     match (&encoding, &envelope) {
-        (DataEncoding::Avro { .. }, _) | (_, SourceEnvelope::Debezium(_)) => (),
+        (DataEncoding::Avro { .. }, _) | (_, SourceEnvelope::Debezium(_, _)) => (),
         _ => {
             for (name, ty) in external_connector.metadata_columns() {
                 bare_desc = bare_desc.with_column(name, ty);
@@ -1065,6 +1109,7 @@ fn kafka_sink_builder(
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     topic_suffix_nonce: String,
+    root_dependencies: &[&dyn CatalogItem],
 ) -> Result<SinkConnectorBuilder, anyhow::Error> {
     let (schema_registry_url, ccsr_with_options) = match format {
         Some(Format::Avro(AvroSchema::CsrUrl {
@@ -1087,6 +1132,34 @@ fn kafka_sink_builder(
         None => false,
         Some(_) => bail!("consistency must be a boolean"),
     };
+
+    let exactly_once = match with_options.remove("exactly_once") {
+        Some(Value::Boolean(b)) => b,
+        None => false,
+        Some(_) => bail!("exactly-once must be a boolean"),
+    };
+
+    if exactly_once && !include_consistency {
+        bail!("exactly-once requires a consistency topic");
+    }
+
+    if exactly_once {
+        for item in root_dependencies.iter() {
+            if item.item_type() == CatalogItemType::Source
+                && !item.source_connector()?.yields_stable_input()
+            {
+                bail!(
+                    "all input sources of an exactly-once Kafka sink must be replayable, {} is not",
+                    item.name()
+                );
+            } else if item.item_type() != CatalogItemType::Source {
+                bail!(
+                    "all inputs of an exactly-once Kafka sink must be sources, {} is not",
+                    item.name()
+                );
+            };
+        }
+    }
 
     let encoder = Encoder::new(
         key_desc_and_indices
@@ -1153,7 +1226,7 @@ fn kafka_sink_builder(
         key_schema,
         key_desc_and_indices,
         value_desc,
-        exactly_once: false,
+        exactly_once,
     }))
 }
 
@@ -1205,9 +1278,12 @@ pub fn plan_create_sink(
     } = stmt;
 
     let envelope = match envelope {
-        None | Some(Envelope::Debezium) => SinkEnvelope::Debezium,
+        None | Some(Envelope::Debezium(sql_parser::ast::DbzMode::Plain)) => SinkEnvelope::Debezium,
         Some(Envelope::Upsert(None)) => SinkEnvelope::Upsert,
         Some(Envelope::CdcV2) => unsupported!("CDCv2 sinks"),
+        Some(Envelope::Debezium(sql_parser::ast::DbzMode::Upsert)) => {
+            unsupported!("UPSERT doesn't make sense for sinks")
+        }
         Some(Envelope::None) => unsupported!("\"ENVELOPE NONE\" sinks"),
         Some(Envelope::Upsert(Some(_))) => unsupported!("Upsert sinks with custom key encodings"),
     };
@@ -1215,11 +1291,7 @@ pub fn plan_create_sink(
     let from = scx.resolve_item(from)?;
     let suffix_nonce = format!(
         "{}-{}",
-        scx.catalog
-            .config()
-            .startup_time
-            .duration_since(UNIX_EPOCH)?
-            .as_secs(),
+        scx.catalog.config().start_time.timestamp(),
         scx.catalog.config().nonce
     );
 
@@ -1262,6 +1334,7 @@ pub fn plan_create_sink(
         Connector::AvroOcf { .. } => None,
         Connector::S3 { .. } => None,
         Connector::Postgres { .. } => None,
+        Connector::PubNub { .. } => None,
     };
 
     let key_desc_and_indices = key_indices.map(|key_indices| {
@@ -1288,6 +1361,11 @@ pub fn plan_create_sink(
         bail!("CREATE SINK ... AS OF is no longer supported");
     }
 
+    let mut depends_on = vec![from.id()];
+    depends_on.extend(from.uses());
+
+    let root_user_dependencies = get_root_dependencies(scx, &depends_on);
+
     let connector_builder = match connector {
         Connector::File { .. } => unsupported!("file sinks"),
         Connector::Kafka { broker, topic, .. } => kafka_sink_builder(
@@ -1298,6 +1376,7 @@ pub fn plan_create_sink(
             key_desc_and_indices,
             value_desc,
             suffix_nonce,
+            &root_user_dependencies,
         )?,
         Connector::Kinesis { .. } => unsupported!("Kinesis sinks"),
         Connector::AvroOcf { path } => {
@@ -1305,6 +1384,7 @@ pub fn plan_create_sink(
         }
         Connector::S3 { .. } => unsupported!("S3 sinks"),
         Connector::Postgres { .. } => unsupported!("Postgres sinks"),
+        Connector::PubNub { .. } => unsupported!("PubNub sinks"),
     };
 
     if !with_options.is_empty() {
@@ -1313,8 +1393,6 @@ pub fn plan_create_sink(
             with_options.keys().join(",")
         )
     }
-    let mut depends_on = vec![from.id()];
-    depends_on.extend(from.uses());
 
     Ok(Plan::CreateSink {
         name,
@@ -1328,6 +1406,35 @@ pub fn plan_create_sink(
         if_not_exists,
         depends_on,
     })
+}
+
+/// Returns only those `CatalogItem`s that don't have any other user
+/// dependencies. Those are the root dependencies.
+fn get_root_dependencies<'a>(
+    scx: &'a StatementContext,
+    depends_on: &[GlobalId],
+) -> Vec<&'a dyn CatalogItem> {
+    let mut result = Vec::new();
+    let mut work_queue: Vec<&GlobalId> = Vec::new();
+    let mut visited = HashSet::new();
+    work_queue.extend(depends_on.iter().filter(|id| id.is_user()));
+
+    while let Some(dep) = work_queue.pop() {
+        let item = scx.get_item_by_id(&dep);
+        let transitive_uses = item.uses().iter().filter(|id| id.is_user());
+        let mut transitive_uses = transitive_uses.peekable();
+        if let Some(_) = transitive_uses.peek() {
+            for transitive_dep in transitive_uses {
+                if visited.insert(transitive_dep) {
+                    work_queue.push(transitive_dep);
+                }
+            }
+        } else {
+            // no transitive uses, so we must be a root dependency
+            result.push(item);
+        }
+    }
+    result
 }
 
 pub fn describe_create_index(
@@ -1568,10 +1675,11 @@ pub fn plan_create_type(
 }
 
 fn extract_timestamp_frequency_option(
+    default: Duration,
     with_options: &mut BTreeMap<String, Value>,
 ) -> Result<Duration, anyhow::Error> {
     match with_options.remove("timestamp_frequency_ms") {
-        None => Ok(Duration::from_secs(1)),
+        None => Ok(default),
         Some(Value::Number(n)) => match n.parse::<u64>() {
             Ok(n) => Ok(Duration::from_millis(n)),
             _ => bail!("timestamp_frequency_ms must be an u64"),

@@ -2,7 +2,15 @@
 
 Specifying `ENVELOPE UPSERT` creates a source that supports Kafka's standard
 key-value convention, and supports inserts, updates, and deletes within
-Materialize. The source is also compatible with Kafka's log-compaction feature.
+Materialize. The source is also compatible with Kafka's log-compaction feature,
+and can be useful for users who want to compact
+[CDC sources](https://materialize.com/docs/third-party/debezium/).
+
+The upsert envelope format has slower data ingestion and is more memory intensive
+than other formats. To correctly handle data sources that do not publish their own
+retractions the upsert format must maintain state proportional to the number of
+unique rows in the source, and it must perform extra work to generate the implied
+retractions based on that state.
 
 #### Inserts, updates, deletes
 

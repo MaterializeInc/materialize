@@ -204,13 +204,13 @@ fn optimize_dataflow_demand(dataflow: &mut DataflowDesc) {
     }
 
     // Push demand information into the SourceDesc.
-    for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
+    for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
         if let Some(columns) = demand.get(&Id::Global(*source_id)).clone() {
             // Install no-op demand information if none exists.
             if source_desc.operators.is_none() {
                 source_desc.operators = Some(LinearOperator {
                     predicates: Vec::new(),
-                    projection: (0..source_desc.arity()).collect(),
+                    projection: (0..source_desc.bare_desc.arity()).collect(),
                 })
             }
             // Restrict required columns by those identified as demanded.
@@ -243,13 +243,13 @@ fn optimize_dataflow_filters(dataflow: &mut DataflowDesc) {
     }
 
     // Push predicate information into the SourceDesc.
-    for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
+    for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
         if let Some(list) = predicates.get(&Id::Global(*source_id)).clone() {
             // Install no-op predicate information if none exists.
             if source_desc.operators.is_none() {
                 source_desc.operators = Some(LinearOperator {
                     predicates: Vec::new(),
-                    projection: (0..source_desc.arity()).collect(),
+                    projection: (0..source_desc.bare_desc.arity()).collect(),
                 })
             }
             // Add any predicates that can be pushed to the source.
@@ -344,7 +344,7 @@ pub mod monotonic {
     /// Propagates information about monotonic inputs through views.
     pub fn optimize_dataflow_monotonic(dataflow: &mut DataflowDesc) {
         let mut monotonic = std::collections::HashSet::new();
-        for (source_id, source_desc) in dataflow.source_imports.iter_mut() {
+        for (source_id, (source_desc, _)) in dataflow.source_imports.iter_mut() {
             if let SourceConnector::External {
                 envelope: SourceEnvelope::None,
                 ..

@@ -31,6 +31,7 @@ use std::num::FpCategory;
 
 use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use dec::{Context, Decimal128, OrderedDecimal};
 use fast_float::FastFloat;
 use lazy_static::lazy_static;
 use num_traits::Float as NumFloat;
@@ -48,6 +49,7 @@ use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::decimal::Decimal;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
+use crate::adt::rdn;
 
 macro_rules! bail {
     ($($arg:tt)*) => { return Err(format!($($arg)*)) };
@@ -345,7 +347,7 @@ where
     Nestable::MayNeedEscaping
 }
 
-/// Parses a `DateTime<Utc>` from `s`. See [expr::scalar::func::timezone_timestamp] for timezone anomaly considerations.
+/// Parses a `DateTime<Utc>` from `s`. See `expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
 pub fn parse_timestamptz(s: &str) -> Result<DateTime<Utc>, ParseError> {
     parse_timestamp_string(s)
         .and_then(|(date, time, timezone)| {
@@ -434,6 +436,36 @@ where
     F: FormatBuffer,
 {
     write!(buf, "{}", d);
+    Nestable::Yes
+}
+
+pub fn parse_numeric(s: &str) -> Result<OrderedDecimal<Decimal128>, ParseError> {
+    let mut cx = Context::<Decimal128>::default();
+    let n = match cx.parse(s) {
+        Ok(n) => OrderedDecimal(n),
+        Err(e) => {
+            return Err(ParseError::invalid_input_syntax("rdn", s).with_details(e));
+        }
+    };
+
+    if rdn::check_max_precision_strict(&cx, &n).is_err() {
+        return Err(ParseError::out_of_range("rdn", s).with_details(format!(
+            "exceeds maximum precision {}",
+            rdn::RDN_MAX_PRECISION
+        )));
+    }
+
+    // Inexact status is caught above
+    assert!(!cx.status().any());
+
+    Ok(n)
+}
+
+pub fn format_numeric<F>(buf: &mut F, n: &OrderedDecimal<Decimal128>) -> Nestable
+where
+    F: FormatBuffer,
+{
+    write!(buf, "{}", n.0.to_standard_notation_string());
     Nestable::Yes
 }
 
@@ -1251,7 +1283,7 @@ impl fmt::Display for ParseError {
                     self.type_name
                 )?;
                 if let Some(details) = &self.details {
-                    write!(f, "{}: ", details)?;
+                    write!(f, ": {}", details)?;
                 }
                 Ok(())
             }

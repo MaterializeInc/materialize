@@ -9,12 +9,15 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::convert::TryFrom;
 use std::fmt;
 use std::io::Read;
 use std::rc::Rc;
 
 use anyhow::bail;
+use dec::{Context as DecimalCx, Decimal128, OrderedDecimal};
 use ordered_float::OrderedFloat;
+use uuid::Uuid;
 
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::schema::{SchemaNode, SchemaPiece};
@@ -26,8 +29,8 @@ use mz_avro::{
 };
 use repr::adt::decimal::Significand;
 use repr::adt::jsonb::JsonbPacker;
+use repr::adt::rdn;
 use repr::{Datum, Row, RowPacker};
-use uuid::Uuid;
 
 use super::{
     is_null, AvroDebeziumDecoder, ConfluentAvroResolver, DebeziumDeduplicationState,
@@ -81,7 +84,7 @@ impl Decoder {
                 || (envelope != EnvelopeType::Debezium && debezium_dedup.is_none())
         );
         let debezium_dedup =
-            debezium_dedup.map(|strat| DebeziumDeduplicationState::new(strat, key_indices));
+            debezium_dedup.and_then(|strat| DebeziumDeduplicationState::new(strat, key_indices));
         let csr_avro =
             ConfluentAvroResolver::new(reader_schema, schema_registry, confluent_wire_format)?;
 
@@ -115,8 +118,6 @@ impl Decoder {
             let dsr = GeneralDeserializer {
                 schema: resolved_schema.top_node(),
             };
-            // Unwrap is OK: we assert in Decoder::new that this is non-none when envelope == dbz.
-            let dedup = self.debezium_dedup.as_mut().unwrap();
             let (row, coords) = dsr.deserialize(&mut bytes, dec)?;
             if self.reject_non_inserts {
                 if !matches!(row.iter().next(), None | Some(Datum::Null)) {
@@ -127,6 +128,7 @@ impl Decoder {
                     )
                 }
             }
+            let dedupe = self.debezium_dedup.as_mut();
             let should_use = if let Some(source) = coords {
                 let mssql_fsn_buf;
                 // This would have ideally been `Option<&[u8]>`,
@@ -141,16 +143,23 @@ impl Decoder {
                     RowCoordinates::Postgres { .. } => &b""[..],
                     RowCoordinates::Unknown { .. } => &b""[..],
                 };
-                dedup.should_use_record(
-                    file,
-                    source.row,
-                    coord,
-                    upstream_time_millis,
-                    &self.debug_name,
-                    self.worker_index,
-                    source.snapshot,
-                    &row,
-                )
+
+                let debug_name = &self.debug_name;
+                let worker_index = self.worker_index;
+                dedupe
+                    .map(|d| {
+                        d.should_use_record(
+                            file,
+                            source.row,
+                            coord,
+                            upstream_time_millis,
+                            debug_name,
+                            worker_index,
+                            source.snapshot,
+                            &row,
+                        )
+                    })
+                    .unwrap_or(true)
             } else {
                 true
             };
@@ -214,7 +223,7 @@ impl<'a> AvroDecode for AvroStringDecoder<'a> {
         Ok(())
     }
     define_unexpected! {
-        record, union_branch, array, map, enum_variant, scalar, decimal, bytes, json, uuid, fixed
+        record, union_branch, array, map, enum_variant, scalar, decimal, numeric, bytes, json, uuid, fixed
     }
 }
 
@@ -247,7 +256,7 @@ impl<'a> AvroDecode for OptionalRecordDecoder<'a> {
         }
     }
     define_unexpected! {
-        record, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+        record, array, map, enum_variant, scalar, decimal, numeric, bytes, string, json, uuid, fixed
     }
 }
 
@@ -273,7 +282,7 @@ impl AvroDecode for RowDecoder {
         Ok(RowWrapper(row))
     }
     define_unexpected! {
-        union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+        union_branch, array, map, enum_variant, scalar, decimal, numeric, bytes, string, json, uuid, fixed
     }
 }
 
@@ -438,6 +447,50 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         ));
         Ok(())
     }
+
+    #[inline]
+    fn numeric<'b, R: AvroRead>(
+        self,
+        _precision: usize,
+        scale: usize,
+        r: ValueOrReader<'b, &'b [u8], R>,
+    ) -> Result<Self::Out, AvroError> {
+        let buf = match r {
+            ValueOrReader::Value(val) => val,
+            ValueOrReader::Reader { len, r } => {
+                self.buf.resize_with(len, Default::default);
+                r.read_exact(self.buf)?;
+                &self.buf
+            }
+        };
+        let coefficient =
+            rdn::twos_complement_be_to_i128(buf).map_err(|e| DecodeError::Custom(e.to_string()))?;
+        let mut cx = DecimalCx::<Decimal128>::default();
+        let mut n = cx.from_i128(coefficient);
+        cx.set_exponent(&mut n, -i32::try_from(scale).unwrap());
+
+        let n = OrderedDecimal(n);
+
+        if rdn::check_max_precision_strict(&cx, &n).is_err() {
+            return Err(AvroError::Decode(DecodeError::Custom(format!(
+                "Error encoding numeric: exceeds maximum precision {}",
+                rdn::RDN_MAX_PRECISION
+            ))));
+        }
+
+        // Catchall for unexpected statuses.
+        if cx.status().any() {
+            return Err(AvroError::Decode(DecodeError::Custom(format!(
+                "Unexpected error encoding numeric: {:?}",
+                cx.status()
+            ))));
+        }
+
+        self.packer.push(Datum::from(n));
+
+        Ok(())
+    }
+
     #[inline]
     fn bytes<'b, R: AvroRead>(
         self,
@@ -581,6 +634,23 @@ fn pack_value(v: Value, mut row: RowPacker, n: SchemaNode) -> anyhow::Result<Row
         Value::Decimal(DecimalValue { unscaled, .. }) => row.push(Datum::Decimal(
             Significand::from_twos_complement_be(&unscaled)?,
         )),
+        Value::RDN(DecimalValue {
+            unscaled, scale, ..
+        }) => {
+            let coefficient = rdn::twos_complement_be_to_i128(&unscaled)?;
+            let mut cx = DecimalCx::<Decimal128>::default();
+            let mut n = cx.from_i128(coefficient);
+            cx.set_exponent(&mut n, -i32::try_from(scale).unwrap());
+            let n = OrderedDecimal(n);
+            rdn::check_max_precision_strict(&cx, &n)?;
+
+            // Catchall for unexpected statuses.
+            if cx.status().any() {
+                bail!("Unexpected error encoding numeric: {:?}", cx.status());
+            }
+
+            row.push(Datum::Numeric(n))
+        }
         Value::Bytes(b) => row.push(Datum::Bytes(&b)),
         Value::String(s) | Value::Enum(_ /* idx */, s) => row.push(Datum::String(&s)),
         Value::Union { index, inner, .. } => {

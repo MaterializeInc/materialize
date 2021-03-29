@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use serde::Serialize;
 use std::{collections::HashMap, ffi::c_void, time::Instant};
 
 #[cfg(feature = "jemalloc")]
@@ -34,6 +35,22 @@ pub struct StackProfile {
     stacks: Vec<(WeightedStack, Option<usize>)>,
 }
 
+pub struct StackProfileIter<'a> {
+    inner: &'a StackProfile,
+    idx: usize,
+}
+
+impl<'a> Iterator for StackProfileIter<'a> {
+    type Item = (&'a WeightedStack, Option<&'a str>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (stack, anno) = self.inner.stacks.get(self.idx)?;
+        self.idx += 1;
+        let anno = anno.map(|idx| self.inner.annotations.get(idx).unwrap().as_str());
+        Some((stack, anno))
+    }
+}
+
 impl StackProfile {
     pub fn push(&mut self, stack: WeightedStack, annotation: Option<&str>) {
         let anno_idx = if let Some(annotation) = annotation {
@@ -51,13 +68,21 @@ impl StackProfile {
         };
         self.stacks.push((stack, anno_idx))
     }
+    pub fn iter(&self) -> StackProfileIter<'_> {
+        StackProfileIter {
+            inner: self,
+            idx: 0,
+        }
+    }
 }
+#[derive(Serialize)]
 pub struct SymbolTrieNode {
     pub name: String,
     pub weight: f64,
     links: Vec<usize>,
 }
 
+#[derive(Serialize)]
 pub struct WeightedSymbolTrie {
     arena: Vec<SymbolTrieNode>,
 }
@@ -117,6 +142,38 @@ impl WeightedSymbolTrie {
         &mut self.arena[idx]
     }
 }
+
+/// Given some stack traces, generate a map of addresses to their
+/// corresponding symbols.
+///
+/// Each address could correspond to more than one symbol, becuase
+/// of inlining. (E.g. if 0x1234 comes from "g", which is inlined in "f", the corresponding vec of symbols will be ["f", "g"].)
+pub fn symbolicate(profile: &StackProfile) -> HashMap<usize, Vec<String>> {
+    let mut all_addrs = vec![];
+    for (stack, _annotation) in profile.stacks.iter() {
+        all_addrs.extend(stack.addrs.iter().cloned());
+    }
+    // Sort so addresses from the same images are together,
+    // to avoid thrashing `backtrace::resolve`'s cache of
+    // parsed images.
+    all_addrs.sort_unstable();
+    all_addrs.dedup();
+    all_addrs
+        .into_iter()
+        .map(|addr| {
+            let mut syms = vec![];
+            backtrace::resolve(addr as *mut c_void, |sym| {
+                let name = sym
+                    .name()
+                    .map(|sn| sn.to_string())
+                    .unwrap_or_else(|| "???".to_string());
+                syms.push(name);
+            });
+            syms.reverse();
+            (addr, syms)
+        })
+        .collect()
+}
 /// Given some stack traces along with their weights,
 /// collate them into a tree structure by function name.
 ///
@@ -132,37 +189,13 @@ impl WeightedSymbolTrie {
 ///  v
 /// "h" (50)
 pub fn collate_stacks(profile: StackProfile) -> WeightedSymbolTrie {
-    let mut all_addrs = vec![];
-    let mut any_annotation = false;
-    for (stack, annotation) in profile.stacks.iter() {
-        all_addrs.extend(stack.addrs.iter().cloned());
-        any_annotation |= annotation.is_some();
-    }
-    // Sort so addresses from the same images are together,
-    // to avoid thrashing `backtrace::resolve`'s cache of
-    // parsed images.
-    all_addrs.sort_unstable();
-    all_addrs.dedup();
-    let addr_to_symbols = all_addrs
-        .into_iter()
-        .map(|addr| {
-            let mut syms = vec![];
-            backtrace::resolve(addr as *mut c_void, |sym| {
-                let name = sym
-                    .name()
-                    .map(|sn| sn.to_string())
-                    .unwrap_or_else(|| "???".to_string());
-                syms.push(name);
-            });
-            syms.reverse();
-            (addr, syms)
-        })
-        .collect::<HashMap<_, _>>();
+    let addr_to_symbols = symbolicate(&profile);
     let mut trie = WeightedSymbolTrie::new();
     let StackProfile {
         annotations,
         stacks,
     } = profile;
+    let any_annotation = !annotations.is_empty();
     for (stack, annotation) in stacks {
         let mut cur = if any_annotation {
             let annotation = annotation

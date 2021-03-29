@@ -305,8 +305,8 @@ impl Coordinator {
                         self.indexes
                             .insert(*id, Frontiers::new(self.num_workers(), Some(1_000)));
                     } else {
-                        self.ship_dataflow(self.dataflow_builder().build_index_dataflow(*id))
-                            .await?;
+                        let df = self.dataflow_builder().build_index_dataflow(*id);
+                        self.ship_dataflow(df).await?;
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -1079,15 +1079,15 @@ impl Coordinator {
             frontier: self.determine_frontier(sink.from),
             strict: !sink.with_snapshot,
         };
-        self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
+        let df = self.dataflow_builder().build_sink_dataflow(
             name.to_string(),
             id,
             sink.from,
             connector,
             sink.envelope,
             as_of,
-        ))
-        .await
+        );
+        self.ship_dataflow(df).await
     }
 
     /// Insert a single row into a given catalog view.
@@ -1631,8 +1631,13 @@ impl Coordinator {
             ),
 
             Plan::StartTransaction => {
+                let duplicated =
+                    matches!(session.transaction(), TransactionStatus::InTransaction(_));
                 session.start_transaction();
-                tx.send(Ok(ExecuteResponse::StartedTransaction), session)
+                tx.send(
+                    Ok(ExecuteResponse::StartedTransaction { duplicated }),
+                    session,
+                )
             }
 
             Plan::CommitTransaction | Plan::AbortTransaction => {
@@ -1897,8 +1902,8 @@ impl Coordinator {
                 if let Some(tables) = &mut self.persisted_tables {
                     tables.create(table_id);
                 }
-                self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                    .await?;
+                let df = self.dataflow_builder().build_index_dataflow(index_id);
+                self.ship_dataflow(df).await?;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1961,8 +1966,8 @@ impl Coordinator {
             Ok(()) => {
                 self.update_timestamper(source_id, true).await;
                 if let Some(index_id) = index_id {
-                    self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                        .await?;
+                    let df = self.dataflow_builder().build_index_dataflow(index_id);
+                    self.ship_dataflow(df).await?;
                 }
 
                 self.maybe_begin_caching(source_id, &source.connector).await;
@@ -2111,8 +2116,8 @@ impl Coordinator {
         match self.catalog_transact(ops).await {
             Ok(()) => {
                 if let Some(index_id) = index_id {
-                    self.ship_dataflow(self.dataflow_builder().build_index_dataflow(index_id))
-                        .await?;
+                    let df = self.dataflow_builder().build_index_dataflow(index_id);
+                    self.ship_dataflow(df).await?;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -2151,8 +2156,8 @@ impl Coordinator {
         };
         match self.catalog_transact(vec![op]).await {
             Ok(()) => {
-                self.ship_dataflow(self.dataflow_builder().build_index_dataflow(id))
-                    .await?;
+                let df = self.dataflow_builder().build_index_dataflow(id);
+                self.ship_dataflow(df).await?;
                 self.set_index_options(id, options);
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
@@ -2227,27 +2232,9 @@ impl Coordinator {
         self.catalog_transact(ops).await?;
         Ok(match ty {
             ObjectType::Schema => unreachable!(),
-            ObjectType::Source => {
-                for id in items.iter() {
-                    self.update_timestamper(*id, false).await;
-                    if let Some(cache_tx) = &mut self.cache_tx {
-                        cache_tx
-                            .send(CacheMessage::DropSource(*id))
-                            .expect("cache receiver should not drop first");
-                    }
-                }
-                ExecuteResponse::DroppedSource
-            }
+            ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
-            ObjectType::Table => {
-                for id in items.iter() {
-                    if let Some(tables) = &mut self.persisted_tables {
-                        tables.destroy(*id);
-                    }
-                }
-
-                ExecuteResponse::DroppedTable
-            }
+            ObjectType::Table => ExecuteResponse::DroppedTable,
             ObjectType::Sink => ExecuteResponse::DroppedSink,
             ObjectType::Index => ExecuteResponse::DroppedIndex,
             ObjectType::Type => ExecuteResponse::DroppedType,
@@ -2545,7 +2532,7 @@ impl Coordinator {
         session.add_drop_sink(sink_id);
         let (tx, rx) = mpsc::unbounded_channel();
 
-        self.ship_dataflow(self.dataflow_builder().build_sink_dataflow(
+        let df = self.dataflow_builder().build_sink_dataflow(
             sink_name,
             sink_id,
             source_id,
@@ -2560,8 +2547,8 @@ impl Coordinator {
                 frontier,
                 strict: !with_snapshot,
             },
-        ))
-        .await?;
+        );
+        self.ship_dataflow(df).await?;
 
         let resp = ExecuteResponse::Tailing { rx };
 
@@ -2745,7 +2732,8 @@ impl Coordinator {
             }
             ExplainStage::DecorrelatedPlan => {
                 let catalog = self.catalog.for_session(session);
-                let mut explanation = expr::explain::Explanation::new(&decorrelated_plan, &catalog);
+                let mut explanation =
+                    dataflow_types::Explanation::new(&decorrelated_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -2755,11 +2743,19 @@ impl Coordinator {
                 explanation.to_string()
             }
             ExplainStage::OptimizedPlan => {
-                let optimized_plan = self
-                    .prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?
-                    .into_inner();
+                let optimized_plan =
+                    self.prep_relation_expr(decorrelated_plan, ExprPrepStyle::Explain)?;
+                let mut dataflow = DataflowDesc::new(format!("explanation"));
+                self.dataflow_builder().import_view_into_dataflow(
+                    // TODO: If explaining a view, pipe the actual id of the view.
+                    &GlobalId::Explain,
+                    &optimized_plan,
+                    &mut dataflow,
+                );
+                transform::optimize_dataflow(&mut dataflow);
                 let catalog = self.catalog.for_session(session);
-                let mut explanation = expr::explain::Explanation::new(&optimized_plan, &catalog);
+                let mut explanation =
+                    dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
                 }
@@ -3053,6 +3049,9 @@ impl Coordinator {
                                 -1,
                             )
                             .await;
+                            if let Some(tables) = &mut self.persisted_tables {
+                                tables.destroy(entry.id());
+                            }
                         }
                         CatalogItem::Source(_) => {
                             sources_to_drop.push(entry.id());
@@ -3064,6 +3063,12 @@ impl Coordinator {
                                 -1,
                             )
                             .await;
+                            self.update_timestamper(entry.id(), false).await;
+                            if let Some(cache_tx) = &mut self.cache_tx {
+                                cache_tx
+                                    .send(CacheMessage::DropSource(entry.id()))
+                                    .expect("cache receiver should not drop first");
+                            }
                         }
                         CatalogItem::View(_) => {
                             self.report_view_update(
@@ -3475,8 +3480,12 @@ pub async fn serve(
         enable_logging: logging.is_some(),
         cache_directory: cache_config.map(|c| c.path),
         build_info,
+        num_workers: workers,
+        timestamp_frequency,
     })?;
     let cluster_id = catalog.config().cluster_id;
+    let session_id = catalog.config().session_id;
+    let start_instant = catalog.config().start_instant;
 
     let (worker_txs, worker_rxs): (Vec<_>, Vec<_>) =
         (0..workers).map(|_| crossbeam_channel::unbounded()).unzip();
@@ -3489,7 +3498,8 @@ pub async fn serve(
     // Spawn timestamper after any fallible operations so that if bootstrap fails we still
     // tell it to shut down.
     let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-    let mut timestamper = Timestamper::new(timestamp_frequency, internal_cmd_tx.clone(), ts_rx);
+    let mut timestamper =
+        Timestamper::new(Duration::from_millis(10), internal_cmd_tx.clone(), ts_rx);
     let executor = TokioHandle::current();
     let timestamper_thread_handle = thread::spawn(move || {
         let _executor_guard = executor.enter();
@@ -3546,6 +3556,8 @@ pub async fn serve(
             });
             let handle = Handle {
                 cluster_id,
+                session_id,
+                start_instant,
                 _thread: thread.join_on_drop(),
             };
             let client = Client::new(cmd_tx);

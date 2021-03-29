@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
 use anyhow::anyhow;
@@ -17,20 +19,13 @@ use log::warn;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use repr::RelationDesc;
 use repr::ScalarType;
-use timely::{
-    dataflow::{
-        channels::pact::ParallelizationContract,
-        channels::pushers::buffer::Session,
-        channels::pushers::Counter as PushCounter,
-        channels::pushers::Tee,
-        operators::{map::Map, OkErr, Operator},
-        Scope, Stream,
-    },
-    scheduling::SyncActivator,
-};
+use timely::dataflow::channels::pact::ParallelizationContract;
+use timely::dataflow::operators::{map::Map, OkErr, Operator};
+use timely::dataflow::{Scope, Stream};
+use timely::scheduling::SyncActivator;
 
 use ::mz_avro::{types::Value, Schema};
-use dataflow_types::{DataEncoding, RegexEncoding, SourceEnvelope};
+use dataflow_types::{DataEncoding, DebeziumMode, RegexEncoding, SourceEnvelope};
 use dataflow_types::{DataflowError, LinearOperator};
 use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState};
 use log::error;
@@ -47,6 +42,7 @@ mod csv;
 mod protobuf;
 mod regex;
 
+/// Decode for the special case of Avro OCFs
 pub fn decode_avro_values<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Value>>,
     envelope: &SourceEnvelope,
@@ -64,15 +60,18 @@ where
     // so that we can spread the decoding among all the workers.
     // See #2133
     let envelope = envelope.clone();
-    let mut dbz_state = if let SourceEnvelope::Debezium(dedup_strat) = envelope {
-        DebeziumDecodeState::new(
+    let mut dbz_state = match envelope {
+        SourceEnvelope::Debezium(dedup_strat, DebeziumMode::Plain) => DebeziumDecodeState::new(
             &schema,
             debug_name.to_string(),
             stream.scope().index(),
             dedup_strat,
-        )
-    } else {
-        None
+        ),
+        SourceEnvelope::Debezium(_, DebeziumMode::Upsert) => {
+            error!("Upsert doesn't make sense for Avro OCFs because they don't have keys");
+            None
+        }
+        _ => None,
     };
 
     let stream = stream.pass_through("AvroValues").flat_map(
@@ -89,7 +88,7 @@ where
             let top_node = schema.top_node();
             let maybe_row = match envelope {
                 SourceEnvelope::None => extract_row(value, index.map(Datum::from), top_node),
-                SourceEnvelope::Debezium(_) => {
+                SourceEnvelope::Debezium(_, _) => {
                     if let Some(dbz_state) = dbz_state.as_mut() {
                         dbz_state.extract(value, index, upstream_time_millis)
                     } else {
@@ -115,9 +114,6 @@ where
     (stream.as_collection(), None)
 }
 
-pub type PushSession<'a, R> =
-    Session<'a, Timestamp, R, PushCounter<Timestamp, R, Tee<Timestamp, R>>>;
-
 pub trait DecoderState {
     fn decode_key(&mut self, bytes: &[u8]) -> Result<Option<Row>, String>;
     /// Decode the value in the upsert context, which means it might be a None.
@@ -128,14 +124,13 @@ pub trait DecoderState {
         upstream_time_millis: Option<i64>,
     ) -> Result<Option<Row>, String>;
     /// give a session a plain value
-    fn give_value<'a>(
+    fn get_value(
         &mut self,
         bytes: &[u8],
         aux_num: Option<i64>,
         upstream_time_millis: Option<i64>,
-        session: &mut PushSession<'a, (Result<Row, DataflowError>, Timestamp, Diff)>,
-        time: Timestamp,
-    );
+    ) -> Option<Result<Row, DataflowError>>;
+
     /// Register number of success and failures with decoding,
     /// and reset count of pending events if necessary
     fn log_error_count(&mut self);
@@ -189,19 +184,13 @@ where
     }
 
     /// give a session a plain value
-    fn give_value<'a>(
+    fn get_value(
         &mut self,
         bytes: &[u8],
         line_no: Option<i64>,
         _upstream_time_millis: Option<i64>,
-        session: &mut PushSession<'a, (Result<Row, DataflowError>, Timestamp, Diff)>,
-        time: Timestamp,
-    ) {
-        session.give((
-            Ok(pack_with_line_no((self.datum_func)(bytes), line_no)),
-            time,
-            1,
-        ));
+    ) -> Option<Result<Row, DataflowError>> {
+        Some(Ok(pack_with_line_no((self.datum_func)(bytes), line_no)))
     }
 
     fn log_error_count(&mut self) {}
@@ -220,6 +209,10 @@ pub(crate) fn get_decoder(
 ) -> Box<dyn DecoderState> {
     let avro_err = "Failed to create Avro decoder";
     match encoding {
+        DataEncoding::Protobuf(enc) => Box::new(protobuf::ProtobufDecoderState::new(
+            &enc.descriptors,
+            &enc.message_name,
+        )),
         DataEncoding::Avro(val_enc) => Box::new(
             avro::AvroDecoderState::new(
                 &val_enc.value_schema,
@@ -245,6 +238,7 @@ fn decode_values_inner<G, V, C>(
     mut value_decoder_state: V,
     op_name: &str,
     contract: C,
+    upsert_debezium: bool,
 ) -> (
     Collection<G, Row, Diff>,
     Option<Collection<G, dataflow_types::DataflowError, Diff>>,
@@ -255,24 +249,34 @@ where
     C: ParallelizationContract<Timestamp, SourceOutput<Vec<u8>, Vec<u8>>>,
 {
     let stream = stream.unary(contract, &op_name, move |_, _| {
+        let mut keys = if upsert_debezium {
+            Some(HashMap::new())
+        } else {
+            None
+        };
         move |input, output| {
             input.for_each(|cap, data| {
                 let mut session = output.session(&cap);
                 for SourceOutput {
-                    key: _,
+                    key,
                     value: payload,
                     position: aux_num,
                     upstream_time_millis,
                 } in data.iter()
                 {
                     if !payload.is_empty() {
-                        value_decoder_state.give_value(
-                            payload,
-                            *aux_num,
-                            *upstream_time_millis,
-                            &mut session,
-                            *cap.time(),
-                        );
+                        let val =
+                            value_decoder_state.get_value(payload, *aux_num, *upstream_time_millis);
+
+                        if let Some(val) = val {
+                            let val = if let Some(keys) = keys.as_mut() {
+                                rewrite_for_upsert(val, keys, key)
+                            } else {
+                                val
+                            };
+
+                            session.give((val, *cap.time(), 1))
+                        }
                     }
                 }
             });
@@ -286,6 +290,90 @@ where
     });
 
     (oks.as_collection(), Some(errs.as_collection()))
+}
+
+/// Update row to blank out retractions of rows that we have never seen
+fn rewrite_for_upsert(
+    val: Result<Row, DataflowError>,
+    keys: &mut HashMap<Box<[u8]>, Row>,
+    key: &[u8],
+) -> Result<Row, DataflowError> {
+    if let Ok(row) = val {
+        // TODO: handle parsed keys
+        let entry = keys.entry(key.into());
+
+        let mut rowiter = row.iter();
+        let before = rowiter.next().expect("must have a before list");
+        let after = rowiter.next().expect("must have an after list");
+
+        assert_eq!(
+            rowiter.next(),
+            None,
+            "[customer-data] Debezium data should only have retract/insert lists, got unexpected third: {:?}",
+            row
+        );
+        assert!(
+            matches!(before, Datum::List { .. } | Datum::Null),
+            "[customer-data] Debezium logic should be a List or absent, got {:?}",
+            before
+        );
+
+        match entry {
+            Entry::Vacant(vacant) => {
+                // if the key is new, then we know that we always need to ignore the "before" part,
+                // so zero it out
+                vacant.insert({
+                    let mut packer = RowPacker::new();
+                    packer.push(after);
+                    packer.finish()
+                });
+
+                if before.is_null() {
+                    Ok(row)
+                } else {
+                    let mut packer = RowPacker::new();
+                    packer.push(Datum::Null);
+                    packer.push(after);
+                    Ok(packer.finish())
+                }
+            }
+            Entry::Occupied(mut occupied) => {
+                if occupied.get().iter().next() == Some(before) {
+                    if after.is_null() {
+                        occupied.remove_entry();
+                    } else {
+                        occupied.insert({
+                            let mut packer = RowPacker::new();
+                            packer.push(after);
+                            packer.finish()
+                        });
+                    }
+                    // this matches the modifications we'd make in the next step
+                    Ok(row)
+                } else {
+                    let previous_insert = if after.is_null() {
+                        // We are trying to retract something that doesn't exist, so just assume
+                        // that the key is supposed to be empty at this point
+                        let (_k, v) = occupied.remove_entry();
+                        v
+                    } else {
+                        occupied.insert({
+                            let mut packer = RowPacker::new();
+                            packer.push(after);
+                            packer.finish()
+                        })
+                    };
+
+                    let mut packer = RowPacker::new();
+                    packer.push(previous_insert.iter().next().unwrap());
+                    packer.push(after);
+                    Ok(packer.finish())
+                }
+            }
+        }
+    } else {
+        val
+    }
 }
 
 fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
@@ -401,7 +489,7 @@ where
         (_, SourceEnvelope::CdcV2) => {
             unreachable!("Internal error: CDCv2 is not supported yet on non-Avro sources.")
         }
-        (DataEncoding::Avro(enc), SourceEnvelope::Debezium(ds)) => {
+        (DataEncoding::Avro(enc), SourceEnvelope::Debezium(ds, mode)) => {
             let dedup_strat = *ds;
             let fields = match &desc.typ().column_types[0].scalar_type {
                 ScalarType::Record { fields, .. } => fields.clone(),
@@ -434,6 +522,7 @@ where
                     .expect("Failed to create Avro decoder"),
                     &op_name,
                     SourceOutput::<Vec<u8>, Vec<u8>>::key_contract(),
+                    *mode == DebeziumMode::Upsert,
                 ),
                 None,
             )
@@ -455,13 +544,14 @@ where
                 .expect("Failed to create Avro decoder"),
                 &op_name,
                 SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+                false,
             ),
             None,
         ),
         (DataEncoding::AvroOcf { .. }, _) => {
             unreachable!("Internal error: Cannot decode Avro OCF separately from reading")
         }
-        (_, SourceEnvelope::Debezium(_)) => unreachable!(
+        (_, SourceEnvelope::Debezium(_, _)) => unreachable!(
             "Internal error: A non-Avro Debezium-envelope source should not have been created."
         ),
         (DataEncoding::Regex(RegexEncoding { regex }), SourceEnvelope::None) => {
@@ -473,6 +563,7 @@ where
                 protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),
                 &op_name,
                 SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+                false,
             ),
             None,
         ),
@@ -482,6 +573,7 @@ where
                 OffsetDecoderState::from(bytes_to_datum),
                 &op_name,
                 SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+                false,
             ),
             None,
         ),
@@ -491,6 +583,7 @@ where
                 OffsetDecoderState::from(text_to_datum),
                 &op_name,
                 SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+                false,
             ),
             None,
         ),
