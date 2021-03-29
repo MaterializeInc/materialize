@@ -175,14 +175,12 @@ impl LogVariant {
                 .with_column("sum", ScalarType::Int64.nullable(false))
                 .with_column("cnt", ScalarType::Int64.nullable(false))
                 .with_column("stddev", ScalarType::Int64.nullable(false))
-                .with_column("hdrsize", ScalarType::Int64.nullable(false))
                 .with_column("p50", ScalarType::Int64.nullable(false))
                 .with_column("p75", ScalarType::Int64.nullable(false))
                 .with_column("p90", ScalarType::Int64.nullable(false))
                 .with_column("p95", ScalarType::Int64.nullable(false))
                 .with_column("p99", ScalarType::Int64.nullable(false))
                 .with_column("p99_99", ScalarType::Int64.nullable(false))
-                .with_column("outofrange", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
 
             LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo) => RelationDesc::empty()
