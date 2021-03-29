@@ -16,7 +16,7 @@ futures-channel = "0.3.5"
 hex = "0.4.3"
 log = "0.4.13"
 ore = { path = "../../src/ore" }
-parse_duration = "2.1.0"
+parse_duration = "2.1.1"
 postgres-types = "0.2.0"
 protobuf = "2.17.0"
 rand = "0.8.3"
