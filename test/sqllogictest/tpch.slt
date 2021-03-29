@@ -244,73 +244,44 @@ ORDER BY
 | | demand = (#0, #2, #4, #5, #10, #11, #13..#15, #19, #22, #26)
 | Filter "^.*BRASS$" ~(#4), (#5 = 15), (#26 = "EUROPE")
 
-%6 = Let l1 =
+%6 =
 | Get %5 (l0)
 | Distinct group=(#0)
-
-%7 =
-| Get %6 (l1)
 | ArrangeBy (#0)
 
-%8 =
+%7 =
 | Get materialize.public.partsupp (u11)
 | ArrangeBy (#0) (#1)
 
-%9 =
+%8 =
 | Get materialize.public.supplier (u8)
 | ArrangeBy (#0) (#3)
 
-%10 =
+%9 =
 | Get materialize.public.nation (u1)
 | ArrangeBy (#0) (#2)
 
-%11 =
+%10 =
 | Get materialize.public.region (u4)
 | ArrangeBy (#0)
 
-%12 = Let l2 =
-| Join %7 %8 %9 %10 %11 (= #0 #1) (= #2 #6) (= #9 #13) (= #15 #17)
+%11 =
+| Join %6 %7 %8 %9 %10 (= #0 #1) (= #2 #6) (= #9 #13) (= #15 #17)
 | | implementation = DeltaQuery
-| |   delta %7 %8.(#0) %9.(#0) %10.(#0) %11.(#0)
-| |   delta %8 %7.(#0) %9.(#0) %10.(#0) %11.(#0)
-| |   delta %9 %10.(#0) %11.(#0) %8.(#1) %7.(#0)
-| |   delta %10 %11.(#0) %9.(#3) %8.(#1) %7.(#0)
-| |   delta %11 %10.(#2) %9.(#3) %8.(#1) %7.(#0)
+| |   delta %6 %7.(#0) %8.(#0) %9.(#0) %10.(#0)
+| |   delta %7 %6.(#0) %8.(#0) %9.(#0) %10.(#0)
+| |   delta %8 %9.(#0) %10.(#0) %7.(#1) %6.(#0)
+| |   delta %9 %10.(#0) %8.(#3) %7.(#1) %6.(#0)
+| |   delta %10 %9.(#2) %8.(#3) %7.(#1) %6.(#0)
 | | demand = (#0, #4, #18)
 | Filter (#18 = "EUROPE")
 | Reduce group=(#0)
 | | agg min(#4)
+| ArrangeBy (#0, #1)
 
-%13 =
-| Get %12 (l2)
-| Negate
-| Project (#0)
-
-%14 =
-| Union %13 %6
-| Map null
-
-%15 = Let l3 =
-| Union %12 %14
-
-%16 =
-| Get %5 (l0)
-| ArrangeBy (#0, #19)
-
-%17 =
-| Get %15 (l3)
-| Reduce group=(#0)
-| | agg count(true)
-| Filter (#1 > 1)
-| Map (err: more than one record produced in subquery)
-| Project (#0, #2)
-
-%18 =
-| Union %15 %17
-
-%19 =
-| Join %16 %18 (= #0 #28) (= #19 #29)
-| | implementation = Differential %18 %16.(#0, #19)
+%12 =
+| Join %5 %11 (= #0 #28) (= #19 #29)
+| | implementation = Differential %5 %11.(#0, #1)
 | | demand = (#0, #2, #10, #11, #13..#15, #22)
 | Project (#14, #10, #22, #0, #2, #11, #13, #15)
 
@@ -907,71 +878,41 @@ ORDER BY
 | |   delta %0 %1.(#0) %2.(#0)
 | |   delta %1 %2.(#0) %0.(#1)
 | |   delta %2 %1.(#3) %0.(#1)
-| | demand = (#2, #3, #13)
+| | demand = (#0, #2, #3, #13)
 | Filter (#13 = "GERMANY")
-| Reduce group=()
+| Reduce group=(#0)
 | | agg sum((#3 * i32todec(#2)))
 
 %4 =
-| Get %3 (l0)
-| Negate
-| Project ()
-
-%5 =
-| Constant ()
-
-%6 =
-| Union %4 %5
-| Map null
-
-%7 = Let l1 =
-| Union %3 %6
-| Map (#0 * 1dec)
-
-%8 =
 | Get materialize.public.partsupp (u11)
 | ArrangeBy (#1)
 
-%9 =
+%5 =
 | Get materialize.public.supplier (u8)
 | ArrangeBy (#0) (#3)
 
-%10 =
+%6 =
 | Get materialize.public.nation (u1)
 | ArrangeBy (#0)
 
 %7 =
 | Join %4 %5 %6 (= #1 #5) (= #8 #12)
 | | implementation = DeltaQuery
-| |   delta %8 %9.(#0) %10.(#0)
-| |   delta %9 %10.(#0) %8.(#1)
-| |   delta %10 %9.(#3) %8.(#1)
-| | demand = (#0, #2, #3, #13)
+| |   delta %4 %5.(#0) %6.(#0)
+| |   delta %5 %6.(#0) %4.(#1)
+| |   delta %6 %5.(#3) %4.(#1)
+| | demand = (#2, #3, #13)
 | Filter (#13 = "GERMANY")
-| Reduce group=(#0)
+| Reduce group=()
 | | agg sum((#3 * i32todec(#2)))
+| Map (#0 * 1dec)
 | ArrangeBy ()
 
-%12 =
-| Get %7 (l1)
-| Project (#1)
-
-%13 =
-| Get %7 (l1)
-| Reduce group=()
-| | agg count(true)
-| Filter (#0 > 1)
-| Map (err: more than one record produced in subquery)
-| Project (#1)
-
-%14 =
-| Union %12 %13
-
-%15 =
-| Join %11 %14
-| | implementation = Differential %14 %11.()
-| | demand = (#0..#2)
-| Filter ((#1 * 10000dec) > #2)
+%8 =
+| Join %3 %7
+| | implementation = Differential %3 %7.()
+| | demand = (#0, #1, #3)
+| Filter ((#1 * 10000dec) > #3)
 | Project (#0, #1)
 
 Finish order_by=(#1 desc) limit=none offset=0 project=(#0, #1)
@@ -1204,10 +1145,8 @@ ORDER BY
 %3 =
 | Get %0 (l0)
 | Reduce group=()
-| | agg count(true)
-| Filter (#0 > 1)
-| Map (err: more than one record produced in subquery)
-| Project (#1)
+| | agg max(#1)
+| ArrangeBy (#0)
 
 %4 =
 | Join %1 %2 %3 (= #0 #7) (= #8 #9)
@@ -1349,82 +1288,49 @@ WHERE
 | | demand = (#1, #4, #5, #19, #22)
 | Filter (#19 = "Brand#23"), (#22 = "MED BOX")
 
-%3 = Let l1 =
+%3 =
 | Get %2 (l0)
 | Distinct group=(#1)
-
-%4 =
-| Get %3 (l1)
 | ArrangeBy (#0)
 
-%5 =
+%4 =
 | Get materialize.public.lineitem (u21)
 | ArrangeBy (#1)
 
-%6 = Let l2 =
-| Join %4 %5 (= #0 #2)
+%5 =
+| Join %3 %4 (= #0 #2)
 | | implementation = DeltaQuery
-| |   delta %4 %5.(#1)
-| |   delta %5 %4.(#0)
+| |   delta %3 %4.(#1)
+| |   delta %4 %3.(#0)
 | | demand = (#0, #5)
 | Reduce group=(#0)
 | | agg sum(#5)
 | | agg count(true)
-
-%7 =
-| Get %6 (l2)
-| Negate
-| Project (#0)
-
-%8 =
-| Union %7 %3
-| Map null, 0
-
-%9 = Let l3 =
-| Union %6 %8
 | Map (2dec * (((#1 * 10000000dec) / i64todec(if (#2 = 0) then {null} else {#2})) / 10dec))
+| ArrangeBy (#0)
 
-%10 =
-| Get %2 (l0)
-| ArrangeBy (#1)
-
-%11 =
-| Get %9 (l3)
-| Project (#0, #3)
-
-%12 =
-| Get %9 (l3)
-| Reduce group=(#0)
-| | agg count(true)
-| Filter (#1 > 1)
-| Map (err: more than one record produced in subquery)
-| Project (#0, #2)
-
-%13 =
-| Union %11 %12
-
-%14 = Let l4 =
-| Join %10 %13 (= #1 #25)
-| | implementation = Differential %13 %10.(#1)
-| | demand = (#4, #5, #26)
-| Filter ((#4 * 10000000dec) < #26)
+%6 = Let l1 =
+| Join %2 %5 (= #1 #25)
+| | implementation = Differential %2 %5.(#0)
+| | demand = (#4, #5, #28)
+| Filter ((#4 * 10000000dec) < #28)
 | Reduce group=()
 | | agg sum(#5)
 
-%15 =
-| Get %14 (l4)
+%7 =
+| Get %6 (l1)
 | Negate
 | Project ()
 
-%16 =
+%8 =
 | Constant ()
 
-%17 =
-| Union %15 %16
+%9 =
+| Union %7 %8
 | Map null
 
-%18 =
-| Union %14 %17
+%10 =
+| Union %6 %9
 | Map ((#0 * 10000000dec) / 70dec)
 | Project (#1)
 
@@ -1666,12 +1572,13 @@ ORDER BY
 | | demand = (#0, #11..#13, #17)
 | Filter "^forest.*$" ~(#17)
 
-%7 = Let l2 =
+%7 =
 | Get %6 (l1)
-| Distinct group=(#11, #12)
+| Filter (#0 = #12)
 
 %8 =
-| Get %7 (l2)
+| Get %6 (l1)
+| Distinct group=(#11, #12)
 | ArrangeBy (#0, #1)
 
 %9 =
@@ -1698,9 +1605,9 @@ ORDER BY
 | Distinct group=(#0)
 | ArrangeBy (#0)
 
-%19 =
-| Join %2 %18 (= #0 #11)
-| | implementation = Differential %2 %18.(#0)
+%12 =
+| Join %2 %11 (= #0 #11)
+| | implementation = Differential %2 %11.(#0)
 | | demand = (#1, #2)
 | Project (#1, #2)
 
@@ -1893,80 +1800,46 @@ ORDER BY
 | Reduce group=()
 | | agg sum(#5)
 | | agg count(true)
-
-%1 =
-| Get %0 (l0)
-| Negate
-| Project ()
-
-%2 =
-| Constant ()
-
-%3 =
-| Union %1 %2
-| Map null, 0
-
-%4 = Let l1 =
-| Union %0 %3
 | Map (((#0 * 10000000dec) / i64todec(if (#1 = 0) then {null} else {#1})) / 10dec)
-
-%5 =
-| Get materialize.public.customer (u15)
-| Filter (((((((substr(#4, 1, 2) = "13") || (substr(#4, 1, 2) = "31")) || (substr(#4, 1, 2) = "23")) || (substr(#4, 1, 2) = "29")) || (substr(#4, 1, 2) = "30")) || (substr(#4, 1, 2) = "18")) || (substr(#4, 1, 2) = "17"))
 | ArrangeBy ()
 
-%6 =
-| Get %4 (l1)
-| Project (#2)
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %0 %1.()
+| | demand = (#0, #4, #5, #10)
+| Filter ((#5 * 1000000dec) > #10)
 
-%7 =
-| Get %4 (l1)
-| Reduce group=()
-| | agg count(true)
-| Filter (#0 > 1)
-| Map (err: more than one record produced in subquery)
-| Project (#1)
-
-%8 =
-| Union %6 %7
-
-%9 = Let l2 =
-| Join %5 %8
-| | implementation = Differential %8 %5.()
-| | demand = (#0, #4, #5, #8)
-| Filter ((#5 * 1000000dec) > #8)
-
-%10 = Let l3 =
-| Get %9 (l2)
-| Distinct group=(#0)
-
-%11 =
-| Get %9 (l2)
+%3 =
+| Get %2 (l0)
 | ArrangeBy (#0)
 
-%12 =
-| Get %10 (l3)
+%4 =
+| Get %2 (l0)
 | ArrangeBy (#0)
 
-%13 =
+%5 =
 | Get materialize.public.orders (u18)
 | ArrangeBy (#1)
 
-%14 =
-| Join %12 %13 (= #0 #2)
+%6 =
+| Join %4 %5 (= #0 #12)
 | | implementation = DeltaQuery
-| |   delta %12 %13.(#1)
-| |   delta %13 %12.(#0)
+| |   delta %4 %5.(#1)
+| |   delta %5 %4.(#0)
 | | demand = (#0)
 | Distinct group=(#0)
 | Negate
 
-%15 =
-| Union %14 %10
+%7 =
+| Get %2 (l0)
+| Project (#0)
 
-%16 =
-| Join %11 %15 (= #0 #9)
-| | implementation = Differential %15 %11.(#0)
+%8 =
+| Union %6 %7
+
+%9 =
+| Join %3 %8 (= #0 #11)
+| | implementation = Differential %8 %3.(#0)
 | | demand = (#4, #5)
 | Reduce group=(substr(#4, 1, 2))
 | | agg count(true)
