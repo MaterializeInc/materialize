@@ -89,7 +89,7 @@ steps:
     label: ":squid: testdrive proxy"
     depends_on: build
     timeout_in_minutes: 30
-    inputs: [src/ore, src/aws-util]
+    inputs: [test/testdrive]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: testdrive
