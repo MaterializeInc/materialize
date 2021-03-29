@@ -44,7 +44,8 @@ fn convert_metrics_to_rows<'a, M: IntoIterator<Item = &'a prometheus::proto::Met
                 .collect::<Vec<(String, String)>>();
             match kind {
                 COUNTER => Some(MetricReading::new(labels, m.get_counter().get_value())),
-                // TODO: gauges, histograms, summaries and more
+                GAUGE => Some(MetricReading::new(labels, m.get_gauge().get_value())),
+                // TODO: destructure histograms & summaries in a meaningful way.
                 _ => None,
             }
         })
