@@ -58,6 +58,23 @@ def main(args: argparse.Namespace) -> None:
 
     worker_counts = enumerate_cpu_counts()
 
+    if not args.no_cleanup:
+        cleanup = [
+            mzcompose_location(mz_root),
+            "--mz-find",
+            args.composition,
+            "down",
+            "-v",
+        ]
+        try:
+            subprocess.check_output(cleanup, stderr=subprocess.STDOUT)
+        except (subprocess.CalledProcessError,) as e:
+            print(
+                f"Failed to cleanup prior state! Output from failed command:\n{e.output.decode()}"
+            )
+            raise
+
+
     if args.no_benchmark_this_checkout:
         git_references = args.git_references
     else:
@@ -224,6 +241,14 @@ if __name__ == "__main__":
         default="medium",
         choices=["medium", "ci", "large"],
         help="Name of the mzcompose composition to run",
+    )
+
+    # Ideally we would make this an argparse.BooleanOptionalAction and invert the name to be
+    # "--cleanup" but that requires Python3.9
+    parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="Skip running `mzcompose down -v` and leave state from previous runs",
     )
 
     parser.add_argument(
