@@ -650,30 +650,18 @@ impl PredicatePushdown {
             expr2,
         } = s
         {
-            if expr2 < expr1 {
-                ::std::mem::swap(expr1, expr2);
-            }
-
             if let MirScalarExpr::CallBinary {
                 func: BinaryFunc::Eq,
                 expr1: eqinnerexpr1,
                 expr2: eqinnerexpr2,
             } = &mut **expr2
             {
-                if eqinnerexpr2 < eqinnerexpr1 {
-                    ::std::mem::swap(eqinnerexpr1, eqinnerexpr2);
-                }
-
                 if let MirScalarExpr::CallBinary {
                     func: BinaryFunc::And,
                     expr1: andinnerexpr1,
                     expr2: andinnerexpr2,
                 } = &mut **expr1
                 {
-                    if andinnerexpr2 < andinnerexpr1 {
-                        ::std::mem::swap(andinnerexpr1, andinnerexpr2);
-                    }
-
                     if let MirScalarExpr::CallUnary {
                         func: UnaryFunc::IsNull,
                         expr: nullexpr1,
