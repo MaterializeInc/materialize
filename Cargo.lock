@@ -789,6 +789,7 @@ dependencies = [
  "bincode",
  "byteorder",
  "ccsr",
+ "chrono",
  "crossbeam-channel",
  "csv-core",
  "dataflow-types",

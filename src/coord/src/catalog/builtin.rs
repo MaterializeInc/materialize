@@ -1288,6 +1288,7 @@ lazy_static! {
             Builtin::Log(&MZ_SOURCE_INFO),
             Builtin::Log(&MZ_MESSAGE_COUNTS),
             Builtin::Log(&MZ_KAFKA_CONSUMER_STATISTICS),
+            Builtin::Log(&MZ_PROMETHEUS_READINGS),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
             Builtin::Table(&MZ_KAFKA_SINKS),

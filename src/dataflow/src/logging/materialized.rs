@@ -83,7 +83,7 @@ pub enum MaterializedEvent {
     },
     /// A batch of metrics scraped from prometheus.
     PrometheusMetrics {
-        /// timestamp at which these metrics were scraped.
+        /// timestamp in millis from UNIX epoch at which these metrics were scraped.
         timestamp: u64,
         /// The metrics that were scraped from the registry.
         metrics: Vec<Metric>,
@@ -202,6 +202,7 @@ pub fn construct<A: Allocate>(
         let (mut dependency_out, dependency) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
         let (mut kafka_consumer_info_out, kafka_consumer_info) = demux.new_output();
+        let (mut metrics_out, metrics) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
         let (mut source_info_out, source_info) = demux.new_output();
 
@@ -214,6 +215,7 @@ pub fn construct<A: Allocate>(
                 let mut dependency = dependency_out.activate();
                 let mut frontier = frontier_out.activate();
                 let mut kafka_consumer_info = kafka_consumer_info_out.activate();
+                let mut metrics = metrics_out.activate();
                 let mut peek = peek_out.activate();
                 let mut source_info = source_info_out.activate();
 
@@ -224,6 +226,7 @@ pub fn construct<A: Allocate>(
                     let mut dependency_session = dependency.session(&time);
                     let mut frontier_session = frontier.session(&time);
                     let mut kafka_consumer_info_session = kafka_consumer_info.session(&time);
+                    let mut metrics_session = metrics.session(&time);
                     let mut peek_session = peek.session(&time);
                     let mut source_info_session = source_info.session(&time);
 
@@ -333,8 +336,26 @@ pub fn construct<A: Allocate>(
                                     (offset, timestamp),
                                 ));
                             }
-                            MaterializedEvent::PrometheusMetrics { metrics, .. } => {
-                                info!("Reported {:?} prometheus metrics!", metrics.len());
+                            MaterializedEvent::PrometheusMetrics { metrics, timestamp } => {
+                                let chrono_timestamp = chrono::NaiveDateTime::from_timestamp(0, 0)
+                                    + chrono::Duration::from_std(Duration::from_millis(timestamp))
+                                        .expect("Couldn't convert timestamps");
+                                for metric in metrics {
+                                    for reading in metric.readings {
+                                        row_packer.push(Datum::from(metric.name.as_str()));
+                                        row_packer.push(Datum::from(chrono_timestamp));
+                                        row_packer.push_dict(reading.labels.iter().map(
+                                            |(name, value)| {
+                                                (name.as_str(), Datum::from(value.as_str()))
+                                            },
+                                        ));
+                                        row_packer.push(Datum::from(reading.value));
+                                        let row = row_packer.finish_and_reuse();
+                                        metrics_session.give((row, time_ms, 1));
+                                        // TODO: expire after n minutes
+                                        // TODO: collect the names of "live" metrics for the second table.
+                                    }
+                                }
                             }
                         }
                     }
@@ -401,6 +422,8 @@ pub fn construct<A: Allocate>(
                 ])
             }
         });
+
+        let metrics_current = metrics.as_collection();
 
         let peek_current = peek
             .map(move |(name, worker, is_install, time_ns)| {
@@ -516,6 +539,10 @@ pub fn construct<A: Allocate>(
             (
                 LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo),
                 kafka_consumer_info_current,
+            ),
+            (
+                LogVariant::Materialized(MaterializedLog::Metrics),
+                metrics_current,
             ),
             (
                 LogVariant::Materialized(MaterializedLog::PeekCurrent),
