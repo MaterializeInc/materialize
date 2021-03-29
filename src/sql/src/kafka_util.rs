@@ -175,6 +175,7 @@ pub fn extract_config(
             Config::path("ssl_certificate_location"),
             Config::path("ssl_key_location"),
             Config::string("ssl_key_password"),
+            Config::new("transaction_timeout_ms", ValType::Number(0, i32::MAX)),
         ],
     )
 }
