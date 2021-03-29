@@ -23,7 +23,7 @@ To create a deployment, click **Create deployment**.
 
 The deployment is automatically created and assigned a name and a hostname. This should only take about a minute and a half.
 
-The free version of Materialize Cloud allows two deployments. If you need more, please <a href="mailto:support@materialize.com">contact us</a>.
+The free version of Materialize Cloud allows two deployments. If you need more, please [contact us](../support).
 
 # Destroy a deployment
 <!-- I would still like to replace "destroy" with "delete". -->
@@ -40,5 +40,5 @@ If the upgrade is unsuccessful, you will see a **Downgrade** button. Click this 
 
 ## Related topics
 
-* [Connect to Materialize](../connect-to-materialize)
+* [Connect to Materialize](../connect-to-materialize-cloud)
 * [Materialize Cloud Account Limits](../account-limits)
