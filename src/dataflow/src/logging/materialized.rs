@@ -81,8 +81,13 @@ pub enum MaterializedEvent {
         /// Difference between the previous timestamp and current highest timestamp we've seen
         timestamp: i64,
     },
-    /// A batch of metrics scraped from prometheus
-    PrometheusMetrics, // TODO: data
+    /// A batch of metrics scraped from prometheus.
+    PrometheusMetrics {
+        /// timestamp at which these metrics were scraped.
+        timestamp: u64,
+        /// The metrics that were scraped from the registry.
+        metrics: Vec<Metric>,
+    },
     /// Available frontier information for views.
     Frontier(GlobalId, Timestamp, i64),
 }
@@ -104,6 +109,68 @@ impl Peek {
     /// Create a new peek from its arguments.
     pub fn new(id: GlobalId, time: Timestamp, conn_id: u32) -> Self {
         Self { id, time, conn_id }
+    }
+}
+
+/// The kind of a prometheus metric in a batch of metrics
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub enum MetricType {
+    /// A prometheus counter
+    Counter,
+    /// A prometheus gauge
+    Gauge,
+    /// A prometheus summary
+    Summary,
+    /// A prometheus histogram
+    Histogram,
+    /// An untyped metric
+    Untyped,
+}
+
+impl From<prometheus::proto::MetricType> for MetricType {
+    fn from(f: prometheus::proto::MetricType) -> Self {
+        use prometheus::proto::MetricType::*;
+        match f {
+            COUNTER => MetricType::Counter,
+            GAUGE => MetricType::Gauge,
+            SUMMARY => MetricType::Summary,
+            HISTOGRAM => MetricType::Histogram,
+
+            UNTYPED => MetricType::Untyped,
+        }
+    }
+}
+
+/// A prometheus metric, identified by its name and its associated readings.
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct Metric {
+    name: String,
+    kind: MetricType,
+    readings: Vec<MetricReading>,
+}
+
+impl Metric {
+    /// Construct a new prometheus Metric.
+    pub fn new(name: String, kind: MetricType, readings: Vec<MetricReading>) -> Self {
+        Self {
+            name,
+            kind,
+            readings,
+        }
+    }
+}
+
+/// A metric reading at a time for a set of labels.
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub struct MetricReading {
+    labels: Vec<(String, String)>,
+    value: f64,
+}
+
+impl MetricReading {
+    /// Construct a new metric reading with the given labels and a value.
+    pub fn new(labels: Vec<(String, String)>, value: f64) -> Self {
+        Self { labels, value }
     }
 }
 
@@ -266,8 +333,8 @@ pub fn construct<A: Allocate>(
                                     (offset, timestamp),
                                 ));
                             }
-                            MaterializedEvent::PrometheusMetrics => {
-                                info!("Reported prometheus metrics!");
+                            MaterializedEvent::PrometheusMetrics { metrics, .. } => {
+                                info!("Reported {:?} prometheus metrics!", metrics.len());
                             }
                         }
                     }

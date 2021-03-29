@@ -4,15 +4,13 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-use dataflow::{logging::materialized::MaterializedEvent, SequencedCommand};
-use prometheus::{
-    proto::{Metric, MetricFamily, MetricType},
-    Registry,
+use dataflow::{
+    logging::materialized::{MaterializedEvent, Metric, MetricReading},
+    SequencedCommand,
 };
+use prometheus::{proto::MetricType, Registry};
 use repr::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
-
-use crate::catalog::builtin::MZ_PROMETHEUS_READINGS;
 
 use super::Message;
 
@@ -30,18 +28,10 @@ pub enum ScraperMessage {
     Shutdown,
 }
 
-struct Reading {
-    name: String,
-    kind: MetricType,
-    labels: Vec<(String, String)>,
-    value: f64,
-}
-
-fn convert_metrics_to_rows<'a, M: IntoIterator<Item = &'a Metric>>(
-    name: &str,
+fn convert_metrics_to_rows<'a, M: IntoIterator<Item = &'a prometheus::proto::Metric>>(
     kind: MetricType,
     metrics: M,
-) -> Vec<Reading> {
+) -> Vec<MetricReading> {
     metrics
         .into_iter()
         .flat_map(|m| {
@@ -52,14 +42,9 @@ fn convert_metrics_to_rows<'a, M: IntoIterator<Item = &'a Metric>>(
                 .map(|pair| (pair.get_name().to_owned(), pair.get_value().to_owned()))
                 .collect::<Vec<(String, String)>>();
             match kind {
-                COUNTER => vec![Reading {
-                    name: name.to_string(),
-                    kind,
-                    labels,
-                    value: m.get_counter().get_value(),
-                }],
+                COUNTER => Some(MetricReading::new(labels, m.get_counter().get_value())),
                 // TODO: gauges, histograms, summaries and more
-                _ => vec![],
+                _ => None,
             }
         })
         .collect()
@@ -98,16 +83,25 @@ impl<'a> Scraper<'a> {
             }
 
             let metric_fams = self.registry.gather();
-            let _rows = metric_fams.into_iter().flat_map(|family| {
-                convert_metrics_to_rows(
-                    family.get_name(),
-                    family.get_field_type(),
-                    family.get_metric().into_iter(),
-                )
-            });
+            let metrics = metric_fams
+                .into_iter()
+                .map(|family| {
+                    Metric::new(
+                        family.get_name().to_string(),
+                        family.get_field_type().into(),
+                        convert_metrics_to_rows(
+                            family.get_field_type(),
+                            family.get_metric().into_iter(),
+                        ),
+                    )
+                })
+                .collect();
             self.internal_tx
                 .send(Message::Broadcast(SequencedCommand::ReportMaterializedLog(
-                    MaterializedEvent::PrometheusMetrics,
+                    MaterializedEvent::PrometheusMetrics {
+                        timestamp: now,
+                        metrics,
+                    },
                 )))
                 .expect("Couldn't send");
         }
