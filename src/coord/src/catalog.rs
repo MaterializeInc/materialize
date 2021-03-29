@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
@@ -485,6 +485,7 @@ impl Catalog {
                 cache_directory: config.cache_directory.clone(),
                 build_info: config.build_info,
                 num_workers: config.num_workers,
+                timestamp_frequency: config.timestamp_frequency,
             },
         };
         let mut events = vec![];
@@ -792,6 +793,7 @@ impl Catalog {
             cache_directory: None,
             build_info: &DUMMY_BUILD_INFO,
             num_workers: 0,
+            timestamp_frequency: Duration::from_secs(1),
         })?;
         Ok(catalog)
     }

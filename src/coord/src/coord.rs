@@ -3481,6 +3481,7 @@ pub async fn serve(
         cache_directory: cache_config.map(|c| c.path),
         build_info,
         num_workers: workers,
+        timestamp_frequency,
     })?;
     let cluster_id = catalog.config().cluster_id;
     let session_id = catalog.config().session_id;
@@ -3497,7 +3498,8 @@ pub async fn serve(
     // Spawn timestamper after any fallible operations so that if bootstrap fails we still
     // tell it to shut down.
     let (ts_tx, ts_rx) = std::sync::mpsc::channel();
-    let mut timestamper = Timestamper::new(timestamp_frequency, internal_cmd_tx.clone(), ts_rx);
+    let mut timestamper =
+        Timestamper::new(Duration::from_millis(10), internal_cmd_tx.clone(), ts_rx);
     let executor = TokioHandle::current();
     let timestamper_thread_handle = thread::spawn(move || {
         let _executor_guard = executor.enter();

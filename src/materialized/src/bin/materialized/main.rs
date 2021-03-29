@@ -105,9 +105,10 @@ struct Args {
     /// Set to "off" to disable logical compaction.
     #[structopt(long, env = "MZ_LOGICAL_COMPACTION_WINDOW", parse(try_from_str = parse_optional_duration), value_name = "DURATION", default_value = "1ms")]
     logical_compaction_window: OptionalDuration,
-    /// [DEPRECATED] Frequency with which to advance timestamps.
-    #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str = parse_duration::parse), value_name = "DURATION", default_value = "10ms")]
+    /// Default frequency with which to advance timestamps
+    #[structopt(long, env = "MZ_TIMESTAMP_FREQUENCY", hidden = true, parse(try_from_str = parse_duration::parse), value_name = "DURATION", default_value = "1s")]
     timestamp_frequency: Duration,
+
     /// Maximum number of source records to buffer in memory before flushing to
     /// disk.
     #[structopt(
