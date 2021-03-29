@@ -11,7 +11,8 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use anyhow::bail;
-use log::{debug, log, Level};
+use log::{debug, info, log, Level};
+use reqwest::Client;
 use semver::{Identifier, Version};
 use serde::{Deserialize, Serialize};
 use tokio::time::{self, Duration};
@@ -41,8 +42,18 @@ pub async fn check_version_loop(
     let current_version =
         Version::parse(BUILD_INFO.version).expect("crate version is not valid semver");
 
+    let client = match ore::http::reqwest_client() {
+        Ok(c) => c,
+        Err(e) => {
+            info!(
+                "Unable to build http client to check if materialized is up to date: {}",
+                e
+            );
+            return;
+        }
+    };
     let version_url = format!("{}/api/v1/version/{}", telemetry_url, cluster_id);
-    let latest_version = fetch_latest_version(&version_url, start_time, session_id).await;
+    let latest_version = fetch_latest_version(&client, &version_url, start_time, session_id).await;
 
     match Version::parse(&latest_version) {
         Ok(latest_version) if latest_version > current_version => {
@@ -66,11 +77,12 @@ pub async fn check_version_loop(
     loop {
         time::sleep(TELEMETRY_FREQUENCY).await;
 
-        fetch_latest_version(&version_url, start_time, session_id).await;
+        fetch_latest_version(&client, &version_url, start_time, session_id).await;
     }
 }
 
 async fn fetch_latest_version(
+    client: &Client,
     telemetry_url: &str,
     start_time: Instant,
     session_id: Uuid,
