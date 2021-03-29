@@ -1,6 +1,6 @@
 ---
 title: "Materialize Cloud Quickstart"
-description: ""
+description: "Set up a Materialize Cloud account, create deployments, and connect to data sources."
 menu:
   main:
     parent: "cloud"
@@ -24,9 +24,9 @@ Sign up at [https://cloud.materialize.com](https://cloud.materialize.com#signup)
 
 ## Create and connect to a Materialize Cloud deployment
 
-Once you [sign up](https://cloud.materialize.com/signup) for Materialize Cloud and [log in](https://cloud.materialize.com), you use the main screen to create, upgrade, or delete deployments and to obtain the TLS CA you need to connect to the Cloud from a terminal.
+Once you [sign up](https://cloud.materialize.com/signup) for Materialize Cloud and [log in](https://cloud.materialize.com), you use the Cloud management screen to create, upgrade, or destroy deployments, and to obtain the TLS CA you need to install on your local machine.
 
-By default, you can create up to two deployments. If you're interested in more, [let us know](../get-help-for-materialize-cloud).
+By default, you can create up to two deployments. If you're interested in more, [let us know](../support).
 
 1. Click **Create deployment**. A deployment is created with an assigned name and hostname.
 2. Click **Connect**.
@@ -43,19 +43,17 @@ wait a minute or two before you'll be able to connect.
 
 ## Connect to a data source
 
-For this quickstart, we use the public Materialize Kafka stream topic user_behavior for a materialized source:
+<!-- I couldn't figure out this for PubNub, but may not have been looking in the right place/using the right search terms. Can you provide an example or a link to the right PubNub docs? -->
 
-```
-CREATE MATERIALIZED SOURCE "materialize"."public"."src_user_behavior" FROM KAFKA BROKER '192.168.1.254:9092' TOPIC 'user_behavior' FORMAT BYTES ;
-SHOW SOURCES;
-```
+If you have your own streaming data source set up, you can use that instead. See [`CREATE SOURCE`](../../sql/create-source) for details. Note that the `CREATE SOURCE` documentation for offline file sources does not apply to Materialize Cloud, which only supports streaming sources.
 
-If you have your streaming data source, you can use that instead. See [`CREATE SOURCE`](../../sql/create-source) for details.
+## Create a view and run a sample query
 
-## Run a sample query
+<!-- To be added once I can connect to PubNub-->
 
 ## Related topics
 
 * [Connect to Materialize Cloud](../connect-to-materialize-cloud)
-* [Materialize Cloud Account Limits](../materialize-cloud-account-limits)
+* [Materialize Cloud Account Limits](../account-limits)
+* [Materialize Overview](../../overview/architecture)
 * [`CREATE SOURCE`](../../sql/create-source)

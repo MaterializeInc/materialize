@@ -1,10 +1,10 @@
 ---
-title: "Get Help for Materialize Cloud"
+title: "Support"
 description: "Get help for Materialize Cloud"
 menu:
   main:
     parent: "cloud"
-    weight: 7
+    weight: 10
 ---
 
 Contact us at <a href="mailto:support@materialize.com">support@materialize.com</a> for help with any of the following:
