@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use differential_dataflow::operators::count::CountTotal;
-use log::{error, info};
+use log::error;
 use timely::communication::Allocate;
 use timely::dataflow::operators::capture::EventLink;
 use timely::dataflow::operators::generic::operator::Operator;
@@ -85,6 +85,8 @@ pub enum MaterializedEvent {
     PrometheusMetrics {
         /// timestamp in millis from UNIX epoch at which these metrics were scraped.
         timestamp: u64,
+        /// duration in millis when this batch of metrics gets invalidated.
+        retain_for: u64,
         /// The metrics that were scraped from the registry.
         metrics: Vec<Metric>,
     },
@@ -336,7 +338,11 @@ pub fn construct<A: Allocate>(
                                     (offset, timestamp),
                                 ));
                             }
-                            MaterializedEvent::PrometheusMetrics { metrics, timestamp } => {
+                            MaterializedEvent::PrometheusMetrics {
+                                metrics,
+                                timestamp,
+                                retain_for,
+                            } => {
                                 let chrono_timestamp = chrono::NaiveDateTime::from_timestamp(0, 0)
                                     + chrono::Duration::from_std(Duration::from_millis(timestamp))
                                         .expect("Couldn't convert timestamps");
@@ -351,8 +357,9 @@ pub fn construct<A: Allocate>(
                                         ));
                                         row_packer.push(Datum::from(reading.value));
                                         let row = row_packer.finish_and_reuse();
-                                        metrics_session.give((row, time_ms, 1));
-                                        // TODO: expire after n minutes
+
+                                        metrics_session.give((row.clone(), time_ms, 1));
+                                        metrics_session.give((row, time_ms + retain_for, -1));
                                         // TODO: collect the names of "live" metrics for the second table.
                                     }
                                 }

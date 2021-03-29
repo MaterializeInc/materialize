@@ -18,6 +18,7 @@ use super::Message;
 /// that can be inserted into a table.
 pub struct Scraper<'a> {
     interval: Duration,
+    retain_for: Duration,
     registry: &'a Registry,
     command_rx: std::sync::mpsc::Receiver<ScraperMessage>,
     internal_tx: UnboundedSender<super::Message>,
@@ -53,12 +54,14 @@ fn convert_metrics_to_rows<'a, M: IntoIterator<Item = &'a prometheus::proto::Met
 impl<'a> Scraper<'a> {
     pub fn new(
         interval: Duration,
+        retain_for: Duration,
         registry: &'a Registry,
         command_rx: std::sync::mpsc::Receiver<ScraperMessage>,
         internal_tx: UnboundedSender<super::Message>,
     ) -> Self {
         Scraper {
             interval,
+            retain_for,
             registry,
             command_rx,
             internal_tx,
@@ -68,6 +71,7 @@ impl<'a> Scraper<'a> {
     /// Run forever: Scrape the metrics registry once per interval, telling the coordinator to
     /// insert the values and meta-info in internal tables.
     pub fn run(&mut self) {
+        let retain_for = self.retain_for.as_millis() as u64;
         loop {
             thread::sleep(self.interval);
             let now: Timestamp = UNIX_EPOCH
@@ -100,6 +104,7 @@ impl<'a> Scraper<'a> {
                 .send(Message::Broadcast(SequencedCommand::ReportMaterializedLog(
                     MaterializedEvent::PrometheusMetrics {
                         timestamp: now,
+                        retain_for,
                         metrics,
                     },
                 )))

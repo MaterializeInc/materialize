@@ -143,6 +143,7 @@ pub struct SinkConnectorReady {
 pub struct LoggingConfig {
     pub granularity: Duration,
     pub log_logging: bool,
+    pub retain_readings_for: Duration,
 }
 
 /// Configures a coordinator.
@@ -3502,12 +3503,14 @@ pub async fn serve(
 
     let (metric_scraper_handle, metric_scraper_tx) = if let Some(LoggingConfig {
         granularity,
-        log_logging: _,
+        retain_readings_for,
+        ..
     }) = logging
     {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut scraper = Scraper::new(
             granularity,
+            retain_readings_for,
             ::prometheus::default_registry(),
             rx,
             internal_cmd_tx.clone(),

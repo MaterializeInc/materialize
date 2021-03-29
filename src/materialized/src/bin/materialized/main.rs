@@ -89,6 +89,9 @@ struct Args {
     /// Log Timely logging itself.
     #[structopt(long, hidden = true)]
     debug_introspection: bool,
+    /// Retain prometheus metrics for this amount of time.
+    #[structopt(short, long, hidden = true, parse(try_from_str = parse_duration::parse), default_value = "5min")]
+    retain_prometheus_metrics: Duration,
 
     // === Performance tuning parameters. ===
     /// The frequency at which to update introspection sources.
@@ -286,11 +289,13 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Configure Timely and Differential workers.
     let log_logging = args.debug_introspection;
+    let retain_readings_for = args.retain_prometheus_metrics;
     let logging = args
         .introspection_frequency
         .map(|granularity| coord::LoggingConfig {
             granularity,
             log_logging,
+            retain_readings_for,
         });
     if log_logging && logging.is_none() {
         bail!(
