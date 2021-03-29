@@ -58,7 +58,7 @@ openssl = { version = "0.10.33", features = ["vendored"] }
 openssl-sys = { version = "0.9.61", features = ["vendored"] }
 ore = { path = "../ore" }
 os_info = "3.0.1"
-parse_duration = "2.1.0"
+parse_duration = "2.1.1"
 pgwire = { path = "../pgwire" }
 prof = { path = "../prof", features = ["auto-jemalloc"] }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }

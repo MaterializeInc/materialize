@@ -25,7 +25,7 @@ lazy_static = "1.4.0"
 md-5 = "0.9.0"
 mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
-parse_duration = "2.1.0"
+parse_duration = "2.1.1"
 pgrepr = { path = "../pgrepr" }
 postgres_array = "0.11.0"
 protobuf = { version = "2.17.0", features = ["with-serde"] }
