@@ -23,7 +23,7 @@ b3
 
 $ set queue-name=materialize-ci-notifications-${testdrive.seed}
 
-$ s3-add-notifications bucket=${bucket} queue=${queue-name}
+$ s3-add-notifications bucket=${bucket} queue=${queue-name} sqs-validation-timeout=5m
 
 > CREATE MATERIALIZED SOURCE s3_all
   FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
