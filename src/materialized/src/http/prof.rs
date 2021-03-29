@@ -293,7 +293,7 @@ mod enabled {
                 Ok(Response::builder()
                     .header(
                         header::CONTENT_DISPOSITION,
-                        "attachement; filename=\"mz.fg\"",
+                        "attachment; filename=\"mz.fg\"",
                     )
                     .body(Body::from(s))
                     .unwrap())
