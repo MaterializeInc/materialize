@@ -27,7 +27,7 @@ conflicts = "materialized"
 name = "materialized-unstable"
 
 [dependencies]
-anyhow = "1.0.39"
+anyhow = "1.0.40"
 askama = { version = "0.10.5", features = ["serde-json"] }
 async-trait = "0.1.48"
 atty = "0.2.14"
@@ -43,13 +43,14 @@ dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
 futures = "0.3.13"
 hex = "0.4.3"
+http-util = { path = "../http-util" }
 hyper = { version = "0.14.0", features = ["http1", "server"] }
 hyper-openssl = "0.9.1"
 include_dir = "0.6.0"
 itertools = "0.9.0"
 krb5-src = { version = "0.2.3", features = ["binaries"] }
 lazy_static = "1.4.0"
-libc = "0.2.90"
+libc = "0.2.91"
 log = "0.4.13"
 mz-process-collector = { path = "../mz-process-collector" }
 nix = "0.19.1"
@@ -58,7 +59,7 @@ openssl = { version = "0.10.33", features = ["vendored"] }
 openssl-sys = { version = "0.9.61", features = ["vendored"] }
 ore = { path = "../ore" }
 os_info = "3.0.1"
-parse_duration = "2.1.0"
+parse_duration = "2.1.1"
 pgwire = { path = "../pgwire" }
 prof = { path = "../prof", features = ["auto-jemalloc"] }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
@@ -73,7 +74,7 @@ shell-words = "1.0.0"
 sql = { path = "../sql" }
 structopt = "0.3.21"
 sysctl = "0.4.0"
-sysinfo = "0.16.4"
+sysinfo = "0.16.5"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.4.0", features = ["sync"] }
@@ -82,7 +83,7 @@ tokio-stream = { version = "0.1.5", features = ["net"] }
 tracing = "0.1.25"
 # TODO(benesch): we can use the default features here once tracing-subscriber
 # does not enable chrono's "oldtime" feature.
-tracing-subscriber = { version = "0.2.16", default-features = false, features = ["ansi", "env-filter", "fmt", "tracing-log"] }
+tracing-subscriber = { version = "0.2.17", default-features = false, features = ["ansi", "env-filter", "fmt", "tracing-log"] }
 url = "2.2.1"
 uuid = "0.8.2"
 
@@ -115,14 +116,14 @@ serde_json = "1.0.64"
 tokio-postgres = { version = "0.7.0", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
-anyhow = "1.0.39"
+anyhow = "1.0.40"
 flate2 = "1.0.20"
 hex = "0.4.3"
 hex-literal = "0.3.1"
 reqwest = { version = "0.11.2", features = ["blocking"] }
 sha2 = "0.9.3"
 tar = "0.4.33"
-walkdir = "2.3.1"
+walkdir = "2.3.2"
 
 [features]
 # When enabled, static assets for the web UI are loaded from disk on every HTTP

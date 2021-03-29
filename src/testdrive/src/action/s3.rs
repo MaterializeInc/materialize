@@ -304,7 +304,7 @@ impl Action for AddBucketNotifications {
         let mut attempts = 0;
         let mut success = false;
         print!(
-            "Verifying SQS notification configuration for up to {:?}",
+            "Verifying SQS notification configuration for up to {:?} ",
             sqs_validation_timeout
         );
         let start = Instant::now();

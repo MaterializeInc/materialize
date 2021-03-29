@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.39"
+anyhow = "1.0.40"
 aws-arn = "0.1.1"
 aws-util = { path = "../aws-util" }
 build-info = { path = "../build-info" }
@@ -23,7 +23,7 @@ lazy_static = "1.4.0"
 log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
-parse_duration = "2.1.0"
+parse_duration = "2.1.1"
 pgrepr = { path = "../pgrepr" }
 postgres-types = { version = "0.2.0", features = ["with-chrono-0_4", "with-uuid-0_8"] }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }

@@ -515,7 +515,7 @@ pub struct SinkAsOf {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SourceEnvelope {
     None,
-    Debezium(DebeziumDeduplicationStrategy),
+    Debezium(DebeziumDeduplicationStrategy, DebeziumMode),
     Upsert(DataEncoding),
     CdcV2,
 }
@@ -529,6 +529,13 @@ impl SourceEnvelope {
             SourceEnvelope::CdcV2 => avro::EnvelopeType::CdcV2,
         }
     }
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DebeziumMode {
+    Plain,
+    /// Keep track of keys from upstream and discard retractions for new keys
+    Upsert,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -547,6 +554,25 @@ pub enum SourceConnector {
         ts_frequency: Duration,
     },
     Local,
+}
+
+impl SourceConnector {
+    /// Returns `true` if this connector yields input data (including
+    /// timestamps) that is stable across restarts. This is important for
+    /// exactly-once Sinks that need to ensure that the same data is written,
+    /// even when failures/restarts happen.
+    pub fn yields_stable_input(&self) -> bool {
+        if let SourceConnector::External {
+            connector: ExternalSourceConnector::Kafka(_),
+            consistency: Consistency::BringYourOwn(_),
+            ..
+        } = self
+        {
+            true
+        } else {
+            false
+        }
+    }
 }
 
 pub fn cached_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {

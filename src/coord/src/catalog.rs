@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
@@ -297,6 +297,13 @@ impl CatalogItem {
         }
     }
 
+    pub fn source_connector(&self, name: &FullName) -> Result<&SourceConnector, SqlCatalogError> {
+        match &self {
+            CatalogItem::Source(source) => Ok(&source.connector),
+            _ => Err(SqlCatalogError::UnknownSource(name.to_string())),
+        }
+    }
+
     /// Collects the identifiers of the dataflows that this item depends
     /// upon.
     pub fn uses(&self) -> &[GlobalId] {
@@ -407,6 +414,12 @@ impl CatalogEntry {
         self.item.func(&self.name)
     }
 
+    /// Returns the [`dataflow_types::SourceConnector`] associated with
+    /// this `CatalogEntry`.
+    pub fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
+        self.item.source_connector(&self.name)
+    }
+
     /// Reports whether this catalog entry is a table.
     pub fn is_table(&self) -> bool {
         matches!(self.item(), CatalogItem::Table(_))
@@ -472,6 +485,7 @@ impl Catalog {
                 cache_directory: config.cache_directory.clone(),
                 build_info: config.build_info,
                 num_workers: config.num_workers,
+                timestamp_frequency: config.timestamp_frequency,
             },
         };
         let mut events = vec![];
@@ -779,6 +793,7 @@ impl Catalog {
             cache_directory: None,
             build_info: &DUMMY_BUILD_INFO,
             num_workers: 0,
+            timestamp_frequency: Duration::from_secs(1),
         })?;
         Ok(catalog)
     }
@@ -2347,6 +2362,10 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 
     fn func(&self) -> Result<&'static sql::func::Func, SqlCatalogError> {
         Ok(self.func()?)
+    }
+
+    fn source_connector(&self) -> Result<&SourceConnector, SqlCatalogError> {
+        Ok(self.source_connector()?)
     }
 
     fn create_sql(&self) -> &str {

@@ -171,11 +171,14 @@ mod disabled {
 
 #[cfg(not(target_os = "macos"))]
 mod enabled {
+    use std::borrow::Cow;
     use std::collections::HashMap;
+    use std::fmt::Write;
     use std::io::{BufReader, Read};
     use std::sync::Arc;
 
     use hyper::{header, Body, Method, Request, Response, StatusCode};
+    use prof::symbolicate;
     use tokio::sync::Mutex;
     use url::form_urlencoded;
 
@@ -255,6 +258,42 @@ mod enabled {
                     .header(
                         header::CONTENT_DISPOSITION,
                         "attachment; filename=\"jeprof.heap\"",
+                    )
+                    .body(Body::from(s))
+                    .unwrap())
+            }
+            "dump_symbolicated_file" => {
+                let mut borrow = prof_ctl.lock().await;
+                let f = borrow.dump()?;
+                let r = BufReader::new(f);
+                let stacks = parse_jeheap(r)?;
+                let syms = symbolicate(&stacks);
+                let mut s = String::new();
+                // Emitting the format expected by Brendan Gregg's flamegraph tool.
+                //
+                // foo;bar;quux 30
+                // foo;bar;asdf 40
+                //
+                // etc.
+                for (stack, _anno) in stacks.iter() {
+                    for (i, addr) in stack.addrs.iter().enumerate() {
+                        let syms = match syms.get(addr) {
+                            Some(syms) => Cow::Borrowed(syms),
+                            None => Cow::Owned(vec!["???".to_string()]),
+                        };
+                        for (j, sym) in syms.iter().enumerate() {
+                            if j != 0 || i != 0 {
+                                s.push_str(";");
+                            }
+                            s.push_str(&*sym);
+                        }
+                    }
+                    writeln!(&mut s, " {}", stack.weight).unwrap();
+                }
+                Ok(Response::builder()
+                    .header(
+                        header::CONTENT_DISPOSITION,
+                        "attachment; filename=\"mz.fg\"",
                     )
                     .body(Body::from(s))
                     .unwrap())

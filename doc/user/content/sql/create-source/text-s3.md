@@ -8,8 +8,9 @@ menu:
 {{< experimental >}}The S3 source type{{< /experimental >}}
 
 {{% create-source/intro %}}
-This document details how to connect Materialize to an S3 Bucket that contains text- or
-byte-encoded objects.
+This document details how to connect Materialize to an S3 Bucket that contains
+multiple objects, and to listen for new object creation. Each S3 object can
+contain multiple byte- or text-encoded records, separated by newlines.
 {{% /create-source/intro %}}
 
 ## Syntax

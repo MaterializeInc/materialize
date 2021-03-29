@@ -6,7 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.39"
+anyhow = "1.0.40"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 expr = { path = "../expr" }
 fallible-iterator = "0.2.0"
@@ -27,4 +27,4 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = "1.4.0"
 tokio-postgres = { version = "0.7.0", features = ["with-chrono-0_4", "with-uuid-0_8", "with-serde_json-1"] }
 uuid = "0.8.2"
-walkdir = "2.0.0"
+walkdir = "2.3.2"

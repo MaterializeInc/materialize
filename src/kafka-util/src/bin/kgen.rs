@@ -571,7 +571,7 @@ async fn main() -> anyhow::Result<()> {
                 bail!("cannot specify --max-message-size without --values=bytes");
             }
             let value_schema = args.avro_value_schema.as_ref().unwrap();
-            let ccsr = ccsr::ClientConfig::new(args.schema_registry_url.clone()).build();
+            let ccsr = ccsr::ClientConfig::new(args.schema_registry_url.clone()).build()?;
             let schema_id = ccsr
                 .publish_schema(
                     &format!("{}-value", args.topic),
@@ -599,7 +599,7 @@ async fn main() -> anyhow::Result<()> {
                 bail!("cannot specify --key-max without --keys=bytes");
             }
             let key_schema = args.avro_key_schema.as_ref().unwrap();
-            let ccsr = ccsr::ClientConfig::new(args.schema_registry_url).build();
+            let ccsr = ccsr::ClientConfig::new(args.schema_registry_url).build()?;
             let key_schema_id = ccsr
                 .publish_schema(&format!("{}-key", args.topic), &key_schema.canonical_form())
                 .await?;

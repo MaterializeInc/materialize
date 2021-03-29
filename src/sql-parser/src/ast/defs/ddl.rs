@@ -144,7 +144,7 @@ pub enum Format<T: AstInfo> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Envelope<T: AstInfo> {
     None,
-    Debezium,
+    Debezium(DbzMode),
     Upsert(Option<Format<T>>),
     CdcV2,
 }
@@ -162,8 +162,9 @@ impl<T: AstInfo> AstDisplay for Envelope<T> {
                 // this is unreachable as long as the default is None, but include it in case we ever change that
                 f.write_str("NONE");
             }
-            Self::Debezium => {
+            Self::Debezium(mode) => {
                 f.write_str("DEBEZIUM");
+                f.write_node(mode);
             }
             Self::Upsert(format) => {
                 f.write_str("UPSERT");
@@ -248,6 +249,30 @@ impl AstDisplay for Compression {
     }
 }
 impl_display!(Compression);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum DbzMode {
+    /// `ENVELOPE DEBEZIUM` with no suffix
+    Plain,
+    /// `ENVELOPE DEBEZIUM UPSERT`
+    Upsert,
+}
+
+impl Default for DbzMode {
+    fn default() -> Self {
+        Self::Plain
+    }
+}
+
+impl AstDisplay for DbzMode {
+    fn fmt(&self, f: &mut AstFormatter) {
+        match self {
+            Self::Plain => f.write_str(""),
+            Self::Upsert => f.write_str(" UPSERT"),
+        }
+    }
+}
+impl_display!(DbzMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Connector<T: AstInfo> {

@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use build_info::BuildInfo;
 
@@ -28,4 +29,6 @@ pub struct Config<'a> {
     pub build_info: &'static BuildInfo,
     /// The number of workers in use by the server.
     pub num_workers: usize,
+    /// Timestamp frequency to use for CREATE SOURCE
+    pub timestamp_frequency: Duration,
 }

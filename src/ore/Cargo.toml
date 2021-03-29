@@ -12,7 +12,7 @@ bytes = "1.0.1"
 fallible-iterator = "0.2.0"
 futures = "0.3.13"
 lazy_static = "1.4.0"
-libc = "0.2.90"
+libc = "0.2.91"
 log = "0.4.13"
 openssl = { version = "0.10.33", features = ["vendored"] }
 phf_shared = "0.8.0"
@@ -20,7 +20,7 @@ smallvec = "1.5.0"
 structopt = "0.3.21"
 tokio = { version = "1.4.0", features = ["io-util", "net", "rt-multi-thread", "time"] }
 tokio-openssl = "0.6.1"
-tracing-subscriber = { version = "0.2.16", default-features = false, features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.2.17", default-features = false, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 crossbeam-utils = "0.8.3"
