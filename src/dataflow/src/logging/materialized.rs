@@ -61,8 +61,6 @@ pub enum MaterializedEvent {
         cnt: i64,
         /// Standard deviation of values (based on histogram)
         stddev: i64,
-        /// Memory size of the HDR histogram
-        hdrsize: i64,
         /// 50th percentile value
         p50: i64,
         /// 75th percentile value
@@ -75,8 +73,6 @@ pub enum MaterializedEvent {
         p99: i64,
         /// 99.99th percentile value
         p99_99: i64,
-        /// Number of values skipped due to histogram range
-        outofrange: i64,
     },
     /// Tracks statistics for a particular Kafka consumer / partition pair
     /// Reference: https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md
@@ -271,21 +267,19 @@ pub fn construct<A: Allocate>(
                                 sum,
                                 cnt,
                                 stddev,
-                                hdrsize,
                                 p50,
                                 p75,
                                 p90,
                                 p95,
                                 p99,
                                 p99_99,
-                                outofrange,
                             } => {
                                 kafka_broker_rtt_session.give((
                                     (consumer_name, source_id, broker_name),
                                     time_ms,
                                     vec![
-                                        min, max, avg, sum, cnt, stddev, hdrsize, p50, p75, p90,
-                                        p95, p99, p99_99, outofrange,
+                                        min, max, avg, sum, cnt, stddev, p50, p75, p90, p95, p99,
+                                        p99_99,
                                     ],
                                 ));
                             }

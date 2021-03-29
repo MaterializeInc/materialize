@@ -55,14 +55,12 @@ pub struct BrokerRTTWindow {
     sum: i64,
     cnt: i64,
     stddev: i64,
-    hdrsize: i64,
     p50: i64,
     p75: i64,
     p90: i64,
     p95: i64,
     p99: i64,
     p99_99: i64,
-    outofrange: i64,
 }
 
 impl BrokerRTTWindow {
@@ -83,14 +81,12 @@ impl BrokerRTTWindow {
             sum: -self.sum,
             cnt: -self.cnt,
             stddev: -self.stddev,
-            hdrsize: -self.hdrsize,
             p50: -self.p50,
             p75: -self.p75,
             p90: -self.p90,
             p95: -self.p95,
             p99: -self.p99,
             p99_99: -self.p99_99,
-            outofrange: -self.outofrange,
         }
     }
     /// Update the value for window, returning a MaterializedEvent that represents the
@@ -112,14 +108,12 @@ impl BrokerRTTWindow {
             sum: stats.sum - self.sum,
             cnt: stats.cnt - self.cnt,
             stddev: stats.stddev - self.stddev,
-            hdrsize: stats.hdrsize - self.hdrsize,
             p50: stats.p50 - self.p50,
             p75: stats.p75 - self.p75,
             p90: stats.p90 - self.p90,
             p95: stats.p95 - self.p95,
             p99: stats.p99 - self.p99,
             p99_99: stats.p99_99 - self.p99_99,
-            outofrange: stats.outofrange - self.outofrange,
         };
 
         self.min = stats.min;
@@ -128,14 +122,12 @@ impl BrokerRTTWindow {
         self.sum = stats.sum;
         self.cnt = stats.cnt;
         self.stddev = stats.stddev;
-        self.hdrsize = stats.hdrsize;
         self.p50 = stats.p50;
         self.p75 = stats.p75;
         self.p90 = stats.p90;
         self.p95 = stats.p95;
         self.p99 = stats.p99;
         self.p99_99 = stats.p99_99;
-        self.outofrange = stats.outofrange;
 
         event
     }
