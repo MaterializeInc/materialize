@@ -25,9 +25,9 @@ use rusoto_sqs::SqsClient;
 use crate::aws::ConnectInfo;
 
 /// Get an [`HttpClient`]  that respects the `http_proxy` environment variables
-pub(crate) fn http() -> Result<HttpClient<ore::http::ProxiedConnector>, anyhow::Error> {
+pub(crate) fn http() -> Result<HttpClient<http_util::ProxiedConnector>, anyhow::Error> {
     Ok(HttpClient::from_connector(
-        ore::http::connector().map_err(|e| anyhow!(e))?,
+        http_util::connector().map_err(|e| anyhow!(e))?,
     ))
 }
 

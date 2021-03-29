@@ -42,7 +42,7 @@ pub async fn check_version_loop(
     let current_version =
         Version::parse(BUILD_INFO.version).expect("crate version is not valid semver");
 
-    let client = match ore::http::reqwest_client() {
+    let client = match http_util::reqwest_client() {
         Ok(c) => c,
         Err(e) => {
             info!(

@@ -24,7 +24,6 @@ pub mod fmt;
 pub mod future;
 pub mod hash;
 pub mod hint;
-pub mod http;
 pub mod iter;
 pub mod lex;
 pub mod netio;

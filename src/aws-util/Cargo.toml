@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 anyhow = "1.0.40"
 log = "0.4.13"
-ore = { path = "../ore" }
+http-util = { path = "../http-util" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }

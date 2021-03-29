@@ -12,7 +12,7 @@
 use hyper::Uri;
 use hyper_proxy::{Intercept, Proxy, ProxyConnector};
 use hyper_tls::HttpsConnector;
-use log::info;
+use log::debug;
 
 /// A proxied HTTP Connector
 pub type ProxiedConnector = ProxyConnector<HttpsConnector<hyper::client::HttpConnector>>;
@@ -29,7 +29,7 @@ pub fn connector() -> Result<ProxiedConnector, Box<dyn std::error::Error + Send 
         if let Ok(proxy_url) = std::env::var(var) {
             let proxy = Proxy::new(Intercept::Http, proxy_url.parse::<Uri>()?);
             connector.add_proxy(proxy);
-            info!("Using HTTP proxy: {}", proxy_url);
+            debug!("Using HTTP proxy: {}", proxy_url);
             break;
         }
     }
@@ -38,7 +38,7 @@ pub fn connector() -> Result<ProxiedConnector, Box<dyn std::error::Error + Send 
         if let Ok(proxy_url) = std::env::var(var) {
             let proxy = Proxy::new(Intercept::Https, proxy_url.parse::<Uri>()?);
             connector.add_proxy(proxy);
-            info!("Using HTTPS proxy: {}", proxy_url);
+            debug!("Using HTTPS proxy: {}", proxy_url);
             break;
         }
     }
@@ -47,7 +47,7 @@ pub fn connector() -> Result<ProxiedConnector, Box<dyn std::error::Error + Send 
         if let Ok(proxy_url) = std::env::var(var) {
             let proxy = Proxy::new(Intercept::All, proxy_url.parse::<Uri>()?);
             connector.add_proxy(proxy);
-            info!("Using HTTP/HTTPS proxy: {}", proxy_url);
+            debug!("Using HTTP/HTTPS proxy: {}", proxy_url);
             break;
         }
     }
@@ -60,7 +60,7 @@ pub fn reqwest_client_builder() -> Result<reqwest::ClientBuilder, reqwest::Error
     let mut builder = reqwest::ClientBuilder::new();
     for var in &["http_proxy", "HTTP_PROXY"] {
         if let Ok(proxy_url) = std::env::var(var) {
-            info!("Using HTTP proxy for reqwest: {}", proxy_url);
+            debug!("Using HTTP proxy for reqwest: {}", proxy_url);
             builder = builder.proxy(reqwest::Proxy::http(proxy_url)?);
             break;
         }
@@ -68,7 +68,7 @@ pub fn reqwest_client_builder() -> Result<reqwest::ClientBuilder, reqwest::Error
 
     for var in &["https_proxy", "HTTPS_PROXY"] {
         if let Ok(proxy_url) = std::env::var(var) {
-            info!("Using HTTPS proxy for reqwest: {}", proxy_url);
+            debug!("Using HTTPS proxy for reqwest: {}", proxy_url);
             builder = builder.proxy(reqwest::Proxy::https(proxy_url)?);
             break;
         }
@@ -76,7 +76,7 @@ pub fn reqwest_client_builder() -> Result<reqwest::ClientBuilder, reqwest::Error
 
     for var in &["all_proxy", "ALL_PROXY"] {
         if let Ok(proxy_url) = std::env::var(var) {
-            info!("Using HTTP/HTTPS proxy for reqwest: {}", proxy_url);
+            debug!("Using HTTP/HTTPS proxy for reqwest: {}", proxy_url);
             builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
             break;
         }

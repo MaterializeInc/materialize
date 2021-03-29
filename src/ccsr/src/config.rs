@@ -64,7 +64,7 @@ impl ClientConfig {
 
     /// Builds the [`Client`].
     pub fn build(self) -> Result<Client, anyhow::Error> {
-        let mut builder = ore::http::reqwest_client_builder()
+        let mut builder = http_util::reqwest_client_builder()
             .context("Creating HTTP client for schema registry")?;
 
         for root_cert in self.root_certs {
