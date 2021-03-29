@@ -728,10 +728,12 @@ pub fn plan_create_source(
             let mut col_types = vec![];
             for c in columns {
                 if let Some(collation) = &c.collation {
-                    unsupported!(format!(
-                        "CREATE SOURCE FROM POSTGRES with column collation: {}",
-                        collation
-                    ));
+                    if &collation.to_string() != "default" {
+                        unsupported!(format!(
+                            "CREATE SOURCE FROM POSTGRES with non-default column collation: {}",
+                            collation.to_string()
+                        ))
+                    }
                 }
 
                 let (aug_data_type, _ids) = resolve_names_data_type(scx, c.data_type.clone())?;

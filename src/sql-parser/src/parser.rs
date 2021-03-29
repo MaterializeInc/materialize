@@ -2088,7 +2088,9 @@ impl<'a> Parser<'a> {
             } else if let Some(column_name) = self.consume_identifier() {
                 let data_type = self.parse_data_type()?;
                 let collation = if self.parse_keyword(COLLATE) {
-                    Some(self.parse_object_name()?)
+                    Some(ColumnOption::Collate {
+                        collation: self.parse_object_name()?,
+                    })
                 } else {
                     None
                 };

@@ -19,6 +19,7 @@ pub struct PgColumn {
     name: String,
     scalar_type: PgType,
     nullable: bool,
+    collation: Option<String>,
 }
 
 /// Fetches column information from an upstream Postgres source, given
@@ -55,8 +56,10 @@ pub async fn fetch_columns(
     // are present.
     Ok(client
         .query(
-            "SELECT a.attname, a.atttypid, a.attnotnull
+            "SELECT a.attname, a.atttypid, a.attnotnull, b.collname
                 FROM pg_catalog.pg_attribute a
+                LEFT JOIN pg_catalog.pg_collation b
+                     ON a.attcollation = b.oid
                 WHERE a.attnum > 0::pg_catalog.int2
                     AND NOT a.attisdropped
                     AND a.attrelid = $1
@@ -71,10 +74,12 @@ pub async fn fetch_columns(
             let scalar_type =
                 PgType::from_oid(oid).ok_or_else(|| anyhow!("unknown type OID: {}", oid))?;
             let nullable = !row.get::<_, bool>(2);
+            let collation: Option<String> = row.get(3);
             Ok(PgColumn {
                 name,
                 scalar_type,
                 nullable,
+                collation,
             })
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?)
@@ -89,13 +94,22 @@ pub fn format_columns(columns: Vec<PgColumn>) -> String {
             "NOT NULL"
         }
     };
+    let collate = |collation| {
+        if let Some(collation) = collation {
+            if &collation != "default" {
+                return format!(" COLLATE {}", collation)
+            }
+        }
+        "".to_owned()
+    };
 
     let mut formatted_columns = Vec::with_capacity(columns.len());
     for c in columns {
         formatted_columns.push(format!(
-            "{} {} {}",
+            "{} {}{} {}",
             c.name,
             c.scalar_type,
+            collate(c.collation),
             nullable(c.nullable)
         ));
     }

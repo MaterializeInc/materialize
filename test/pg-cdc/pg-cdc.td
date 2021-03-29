@@ -10,6 +10,11 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE numbers_${testdrive.seed} (number int PRIMARY KEY, is_prime bool, name text);
 ALTER TABLE numbers_${testdrive.seed} REPLICA IDENTITY FULL;
+
+CREATE COLLATION custom_collation_${testdrive.seed} FROM "C";
+CREATE TABLE custom_collate_${testdrive.seed} (sample text COLLATE "custom_collation_${testdrive.seed}");
+ALTER TABLE custom_collate_${testdrive.seed} REPLICA IDENTITY FULL;
+
 CREATE PUBLICATION mz_source_${testdrive.seed} FOR ALL TABLES;
 INSERT INTO numbers_${testdrive.seed} VALUES (5, true, 'five');
 
@@ -88,3 +93,15 @@ incorrect column specification: specified column does not match upstream source,
     NAMESPACE 'public'
     TABLE 'numbers_${testdrive.seed}' (number int NOT NULL, is_prime bool, name text NOT NULL)
 incorrect column specification: specified column does not match upstream source, specified: name text NOT NULL, upstream: name text NULL
+
+## Should not be able to create sources on top of tables with invalid column options
+
+### Postgres CDC sources do not support non-default collations
+
+! CREATE MATERIALIZED SOURCE "custom_collate"
+  FROM POSTGRES
+    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+    PUBLICATION 'mz_source_${testdrive.seed}'
+    NAMESPACE 'public'
+    TABLE 'custom_collate_${testdrive.seed}'
+CREATE SOURCE FROM POSTGRES with non-default column collation: COLLATE custom_collation_${testdrive.seed} not yet supported

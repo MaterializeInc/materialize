@@ -507,7 +507,7 @@ impl_display_t!(TableConstraint);
 pub struct ColumnDef<T: AstInfo> {
     pub name: Ident,
     pub data_type: DataType<T>,
-    pub collation: Option<UnresolvedObjectName>,
+    pub collation: Option<ColumnOption<T>>,
     pub options: Vec<ColumnOptionDef<T>>,
 }
 
@@ -516,6 +516,10 @@ impl<T: AstInfo> AstDisplay for ColumnDef<T> {
         f.write_node(&self.name);
         f.write_str(" ");
         f.write_node(&self.data_type);
+        if let Some(collation) = &self.collation {
+            f.write_str(" ");
+            f.write_node(collation);
+        }
         for option in &self.options {
             f.write_str(" ");
             f.write_node(option);
@@ -558,6 +562,10 @@ impl_display_t!(ColumnOptionDef);
 /// TABLE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ColumnOption<T: AstInfo> {
+    /// `COLLATE`
+    Collate {
+        collation: UnresolvedObjectName,
+    },
     /// `NULL`
     Null,
     /// `NOT NULL`
@@ -609,6 +617,10 @@ impl<T: AstInfo> AstDisplay for ColumnOption<T> {
                 f.write_str("CHECK (");
                 f.write_node(expr);
                 f.write_str(")");
+            }
+            Collate { collation } => {
+                f.write_str("COLLATE ");
+                f.write_node(collation);
             }
         }
     }
