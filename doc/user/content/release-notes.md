@@ -113,10 +113,6 @@ Wrap your release notes at the 80 character mark.
 
   The new behavior matches PostgreSQL.
 
-- Support [multi-partition](/sql/create-sink/#with-options) kafka sinks {{% gh 5537 %}}.
-
-- Support [gzip-compressed](/sql/create-source/text-file/#compression) file sources {{% gh 5392 %}}.
-
 - Restore the `-D` command-line option as the short form of the
   [`--data-directory`](/cli/#data-directory) option.
 
