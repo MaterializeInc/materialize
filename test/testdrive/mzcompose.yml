@@ -48,7 +48,7 @@ mzworkflows:
   ci-proxy-failure:
     env:
       ALL_PROXY: '#nonsense'
-      TD_TEST: 'proxy-failure.td'
+      TD_TEST: 'proxy/proxy-failure.td'
     steps:
       - step: workflow
         workflow: testdrive
