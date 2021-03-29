@@ -274,8 +274,15 @@ where
         config.set(k, v);
     }
 
-    // TODO(eli): replace with https://github.com/fede1024/rust-rdkafka/pull/333
-    let transactional = connector.config_options.contains_key("transactional.id");
+    let transactional = if connector.exactly_once {
+        // TODO(aljoscha): this only works for now, once there's an actual
+        // Kafka producer on each worker they would step on each others toes
+        let transactional_id = format!("mz-producer-{}", connector.topic);
+        config.set("transactional.id", transactional_id);
+        true
+    } else {
+        false
+    };
 
     let name = format!("kafka-{}", id);
     let shutdown_flag = Arc::new(AtomicBool::new(false));
