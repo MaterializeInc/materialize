@@ -94,3 +94,37 @@ EXPLAIN SELECT * FROM t1 WHERE ((f1 is null)::int - 1)::string LIKE '1' and ((f1
 | Constant
 
 EOF
+
+# Ensure that subexpression matching does not break predicate evaluation order
+# guarantees for `CASE`
+
+statement ok
+CREATE TABLE t2(f1 int not null, f2 int not null)
+
+statement ok
+INSERT INTO t2 VALUES (0, -1), (1, 5), (1, -2)
+
+query T multiline
+EXPLAIN SELECT * FROM t2 WHERE f1 + f2 > 0 and case when f1 + f2 > 0 then 1/f1 > 0 else false end;
+----
+%0 =
+| Get materialize.public.t2 (u3)
+| Filter ((#0 + #1) > 0), if ((#0 + #1) > 0) then {((1 / #0) > 0)} else {false}
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t2 WHERE case when f1 + f2 > 0 then 1/f1 > 0 else false end and f1 + f2 > 0;
+----
+%0 =
+| Get materialize.public.t2 (u3)
+| Filter ((#0 + #1) > 0), if ((#0 + #1) > 0) then {((1 / #0) > 0)} else {false}
+
+EOF
+
+query II
+SELECT * FROM t2 WHERE f1 + f2 > 0 and case when f1 + f2 > 0 then 1/f1 > 0 else false end;
+----
+1
+5
+

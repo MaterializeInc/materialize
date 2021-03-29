@@ -99,8 +99,8 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     // `true` (resp. `false`) every subexpression in
     // `(p1 & ... & p(i-1) & p(i+1) ... & pn)` that is equal to `pi`.
 
-    // Note that this also dedups predicates since if `p1 = p2` then this
-    // reduction process will replace `p1` with true.
+    // Note that this does some dedupping of predicates since if `p1 = p2`
+    // then this reduction process will replace `p1` with true.
 
     // Pop out a predicate `p` from `predicates_to_apply`. Check all the other
     // predicates (this is the union of `predicates_to_apply` and
@@ -123,12 +123,11 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
                 if !expr.is_literal() && !expr.typ(input_type).nullable {
                     let replace_subexpr_other_predicate = |other_predicate: &mut MirScalarExpr| {
                         let mut changed = false;
-                        other_predicate.visit_mut(&mut |e: &mut MirScalarExpr| {
-                            if e == expr {
-                                *e = constant_bool.clone();
-                                changed = true;
-                            }
-                        });
+                        visit_mut_replace_subexpr(
+                            other_predicate,
+                            &mut |e| replace(e, expr, constant_bool),
+                            &mut changed,
+                        );
                         if changed {
                             other_predicate.reduce(input_type);
                         }
@@ -166,6 +165,40 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     applied_predicates.retain(|p| !p.is_literal_true());
     *predicates = applied_predicates;
 
-    // 4) Sort predicates.
+    // 4) Sort and dedup predicates.
     predicates.sort();
+    predicates.dedup();
 }
+
+/* #region helper functions for substituting a bool literal for a matching subexpression */
+
+fn replace(
+    predicate: &mut MirScalarExpr,
+    to_replace: &MirScalarExpr,
+    replace_with: &MirScalarExpr,
+) -> bool {
+    if predicate == to_replace {
+        *predicate = replace_with.clone();
+        return true;
+    }
+    false
+}
+
+fn visit_mut_replace_subexpr<F>(e: &mut MirScalarExpr, f: &mut F, changed: &mut bool)
+where
+    F: FnMut(&mut MirScalarExpr) -> bool,
+{
+    if f(e) {
+        *changed = true;
+    } else if let MirScalarExpr::If { cond: _, then, els } = e {
+        // Do not replace any subexpression in `cond` because it may cause
+        // `then` or `els` to be evaluated before `cond`, resulting in a
+        // correctness error.
+        visit_mut_replace_subexpr(then, f, changed);
+        visit_mut_replace_subexpr(els, f, changed);
+    } else {
+        e.visit1_mut(|e2| visit_mut_replace_subexpr(e2, f, changed));
+    }
+}
+
+/* #endregion */
