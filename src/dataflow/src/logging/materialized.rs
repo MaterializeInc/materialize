@@ -391,22 +391,14 @@ pub fn construct<A: Allocate>(
 
                                         metrics_session.give((row.clone(), time_ms, 1));
                                         metrics_session.give((row, time_ms + retain_for, -1));
-                                        // TODO: collect the names of "live" metrics for the second table.
                                     }
+                                    // Expire the metadata of a metric reading when the reading
+                                    // would expire, but refresh its lifetime when we get another
+                                    // reading referencing that metadata:
                                     let meta = metric.meta;
-                                    if let Some(&meta_expiry) = active_metrics.get(&meta) {
-                                        if meta_expiry <= time_ms {
-                                            let row = meta.as_packed_row(&mut row_packer);
-                                            metrics_meta_session.give((row.clone(), time_ms, 1));
-                                            metrics_meta_session.give((
-                                                row,
-                                                time_ms + retain_for,
-                                                -1,
-                                            ));
-                                            active_metrics
-                                                .insert(meta, time_ms + retain_for as Timestamp);
-                                        }
-                                    } else {
+                                    let meta_expiry =
+                                        active_metrics.get(&meta).copied().unwrap_or(0);
+                                    if meta_expiry <= time_ms {
                                         let row = meta.as_packed_row(&mut row_packer);
                                         metrics_meta_session.give((row.clone(), time_ms, 1));
                                         metrics_meta_session.give((row, time_ms + retain_for, -1));
