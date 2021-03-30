@@ -74,7 +74,6 @@ def main(args: argparse.Namespace) -> None:
             )
             raise
 
-
     if args.no_benchmark_this_checkout:
         git_references = args.git_references
     else:
