@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{scalar::EvalError, MirRelationExpr, MirScalarExpr};
-use repr::{Datum, Row, RowArena, RowPacker};
+use repr::{Datum, Row, RowArena};
 
 /// A compound operator that can be applied row-by-row.
 ///
@@ -260,15 +260,15 @@ impl MapFilterProject {
         if exprs.is_empty() {
             return None;
         }
-        let mut row_packer = RowPacker::new();
+        let mut row = Row::default();
         for expr in exprs {
             if let Some(literal) = self.literal_constraint(expr) {
-                row_packer.push(literal);
+                row.push(literal);
             } else {
                 return None;
             }
         }
-        Some(row_packer.finish_and_reuse())
+        Some(row)
     }
 
     /// Extracts any MapFilterProject at the root of the expression.

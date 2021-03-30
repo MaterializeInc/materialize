@@ -23,9 +23,7 @@ use serde::{Deserialize, Serialize};
 use ore::cast::CastFrom;
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::adt::regex::Regex as ReprRegex;
-use repr::{
-    CachedRecordIter, ColumnType, Datum, Diff, RelationType, Row, RowArena, RowPacker, ScalarType,
-};
+use repr::{CachedRecordIter, ColumnType, Datum, Diff, RelationType, Row, RowArena, ScalarType};
 
 use crate::id::GlobalId;
 use crate::scalar::func::jsonb_stringify;
@@ -553,7 +551,6 @@ impl AggregateFunc {
 }
 
 fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> Vec<(Row, Diff)> {
-    let mut row_packer = RowPacker::new();
     match a {
         Datum::Map(dict) => dict
             .iter()
@@ -561,7 +558,7 @@ fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> 
                 if stringify {
                     v = jsonb_stringify(v, temp_storage);
                 }
-                (row_packer.pack(&[Datum::String(k), v]), 1)
+                (Row::pack_slice(&[Datum::String(k), v]), 1)
             })
             .collect(),
         _ => vec![],
@@ -569,11 +566,10 @@ fn jsonb_each<'a>(a: Datum<'a>, temp_storage: &'a RowArena, stringify: bool) -> 
 }
 
 fn jsonb_object_keys<'a>(a: Datum<'a>) -> Vec<(Row, Diff)> {
-    let mut row_packer = RowPacker::new();
     match a {
         Datum::Map(dict) => dict
             .iter()
-            .map(move |(k, _)| (row_packer.pack(&[Datum::String(k)]), 1))
+            .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), 1))
             .collect(),
         _ => vec![],
     }
@@ -584,7 +580,6 @@ fn jsonb_array_elements<'a>(
     temp_storage: &'a RowArena,
     stringify: bool,
 ) -> Vec<(Row, Diff)> {
-    let mut row_packer = RowPacker::new();
     match a {
         Datum::List(list) => list
             .iter()
@@ -592,7 +587,7 @@ fn jsonb_array_elements<'a>(
                 if stringify {
                     e = jsonb_stringify(e, temp_storage);
                 }
-                (row_packer.pack(&[e]), 1)
+                (Row::pack_slice(&[e]), 1)
             })
             .collect(),
         _ => vec![],
@@ -611,39 +606,33 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
 }
 
 fn generate_series_int32(start: Datum, stop: Datum) -> Vec<(Row, Diff)> {
-    let mut row_packer = RowPacker::new();
     let start = start.unwrap_int32();
     let stop = stop.unwrap_int32();
     (start..=stop)
-        .map(move |i| (row_packer.pack(&[Datum::Int32(i)]), 1))
+        .map(move |i| (Row::pack_slice(&[Datum::Int32(i)]), 1))
         .collect()
 }
 
 fn generate_series_int64(start: Datum, stop: Datum) -> Vec<(Row, Diff)> {
-    let mut row_packer = RowPacker::new();
     let start = start.unwrap_int64();
     let stop = stop.unwrap_int64();
     (start..=stop)
-        .map(move |i| (row_packer.pack(&[Datum::Int64(i)]), 1))
+        .map(move |i| (Row::pack_slice(&[Datum::Int64(i)]), 1))
         .collect()
 }
 
 fn unnest_array(a: Datum) -> Vec<(Row, Diff)> {
-    let mut row_packer = RowPacker::new();
-
     a.unwrap_array()
         .elements()
         .iter()
-        .map(move |e| (row_packer.pack(&[e]), 1))
+        .map(move |e| (Row::pack_slice(&[e]), 1))
         .collect()
 }
 
 fn unnest_list(a: Datum) -> Vec<(Row, Diff)> {
-    let mut row_packer = RowPacker::new();
-
     a.unwrap_list()
         .iter()
-        .map(move |e| (row_packer.pack(&[e]), 1))
+        .map(move |e| (Row::pack_slice(&[e]), 1))
         .collect()
 }
 
@@ -729,7 +718,7 @@ impl AnalyzedRegex {
 
 pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
     let bytes = a.unwrap_str().as_bytes();
-    let mut row_packer = RowPacker::new();
+    let mut row = Row::default();
     let mut csv_reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .from_reader(bytes);
@@ -737,7 +726,8 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
         .records()
         .filter_map(|res| match res {
             Ok(sr) if sr.len() == n_cols => {
-                Some((row_packer.pack(sr.iter().map(|s| Datum::String(s))), 1))
+                row.extend(sr.iter().map(|s| Datum::String(s)));
+                Some((row.finish_and_reuse(), 1))
             }
             _ => None,
         })
@@ -746,7 +736,7 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
 
 pub fn repeat(a: Datum) -> Vec<(Row, Diff)> {
     let n = Diff::cast_from(a.unwrap_int64());
-    vec![(repr::RowPacker::new().finish(), n)]
+    vec![(Row::default(), n)]
 }
 
 // TODO(justin): this should return an error.
@@ -814,26 +804,23 @@ impl TableFunc {
             TableFunc::ReadCachedData {
                 source,
                 cache_directory,
-            } => {
-                let mut row_packer = RowPacker::new();
-                files_for_source(*source, cache_directory)
-                    .iter()
-                    .flat_map(|e| {
-                        CachedRecordIter::new(fs::read(e).unwrap()).map(move |r| (e.clone(), r))
-                    })
-                    .map(|(e, r)| {
-                        (
-                            row_packer.pack(&[
-                                Datum::String(e.to_str().unwrap()),
-                                Datum::Int64(r.offset),
-                                Datum::Bytes(&r.key),
-                                Datum::Bytes(&r.value),
-                            ]),
-                            1,
-                        )
-                    })
-                    .collect::<Vec<(Row, Diff)>>()
-            }
+            } => files_for_source(*source, cache_directory)
+                .iter()
+                .flat_map(|e| {
+                    CachedRecordIter::new(fs::read(e).unwrap()).map(move |r| (e.clone(), r))
+                })
+                .map(|(e, r)| {
+                    (
+                        Row::pack_slice(&[
+                            Datum::String(e.to_str().unwrap()),
+                            Datum::Int64(r.offset),
+                            Datum::Bytes(&r.key),
+                            Datum::Bytes(&r.value),
+                        ]),
+                        1,
+                    )
+                })
+                .collect::<Vec<(Row, Diff)>>(),
             TableFunc::UnnestArray { .. } => unnest_array(datums[0]),
             TableFunc::UnnestList { .. } => unnest_list(datums[0]),
         }

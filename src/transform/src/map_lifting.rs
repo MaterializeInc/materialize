@@ -22,9 +22,11 @@
 
 use std::collections::HashMap;
 
-use crate::TransformArgs;
-use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 use itertools::Itertools;
+
+use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
+
+use crate::TransformArgs;
 
 /// Hoist literal values from maps wherever possible.
 #[derive(Debug)]
@@ -97,10 +99,9 @@ impl LiteralLifting {
                         typ.keys.sort();
                         typ.keys.dedup();
 
-                        let mut row_packer = repr::RowPacker::new();
-                        *row = row_packer.pack(row.iter().take(typ.arity()));
+                        row.truncate_datums(typ.arity());
                         for (row, _cnt) in rows.iter_mut() {
-                            *row = row_packer.pack(row.iter().take(typ.arity()));
+                            row.truncate_datums(typ.arity());
                         }
                     }
                     literals

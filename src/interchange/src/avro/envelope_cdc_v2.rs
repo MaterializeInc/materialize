@@ -10,7 +10,7 @@
 //! Logic for the Avro representation of the CDCv2 protocol.
 
 use mz_avro::schema::{FullName, SchemaNode};
-use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, RowPacker, Timestamp};
+use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, Timestamp};
 use serde_json::json;
 
 use anyhow::anyhow;
@@ -108,7 +108,7 @@ impl Encoder {
 }
 
 #[derive(AvroDecodable)]
-#[state_type(Rc<RefCell<RowPacker>>, Rc<RefCell<Vec<u8>>>)]
+#[state_type(Rc<RefCell<Row>>, Rc<RefCell<Vec<u8>>>)]
 struct MyUpdate {
     #[state_expr(self._STATE.0.clone(), self._STATE.1.clone())]
     data: RowWrapper,
@@ -148,7 +148,7 @@ impl AvroDecode for Decoder {
     ) -> Result<Self::Out, AvroError> {
         match idx {
             0 => {
-                let packer = Rc::new(RefCell::new(RowPacker::new()));
+                let packer = Rc::new(RefCell::new(Row::default()));
                 let buf = Rc::new(RefCell::new(vec![]));
                 let d = ArrayAsVecDecoder::new(|| {
                     <MyUpdate as StatefulAvroDecodable>::new_decoder((packer.clone(), buf.clone()))

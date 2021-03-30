@@ -1016,10 +1016,9 @@ impl HirRelationExpr {
 
     /// Constructs a constant collection from specific rows and schema.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
-        let mut row_packer = repr::RowPacker::new();
         let rows = rows
             .into_iter()
-            .map(move |datums| row_packer.pack(datums))
+            .map(move |datums| Row::pack_slice(&datums))
             .collect();
         HirRelationExpr::Constant { rows, typ }
     }
@@ -1136,15 +1135,14 @@ impl HirScalarExpr {
             typ => ScalarType::Array(Box::new(typ)).nullable(false),
         };
 
-        let mut packer = RowPacker::new();
-        packer.push_array(
+        let mut row = Row::default();
+        row.push_array(
             &[ArrayDimension {
                 lower_bound: 1,
                 length: datums.len(),
             }],
             datums,
         )?;
-        let row = packer.finish();
 
         Ok(HirScalarExpr::Literal(row, scalar_type))
     }

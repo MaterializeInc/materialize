@@ -318,7 +318,6 @@ mod tests {
             // (constant [<rows>] [<types>])
             "constant" => {
                 // TODO(justin): ...fix this.
-                let mut row_packer = repr::RowPacker::new();
                 let rows: Vec<(Row, isize)> = try_list(nth(&s, 1)?)?
                     .into_iter()
                     .map(try_list)
@@ -332,8 +331,8 @@ mod tests {
                     .collect::<Result<Vec<Vec<MirScalarExpr>>, Error>>()?
                     .iter()
                     .map(move |exprs| {
-                        Ok(row_packer.pack(
-                            exprs
+                        Ok(Row::pack_slice(
+                            &exprs
                                 .iter()
                                 .map(|e| match e {
                                     MirScalarExpr::Literal(r, _) => {

@@ -19,7 +19,7 @@ use timely::logging::WorkerIdentifier;
 
 use super::{DifferentialLog, LogVariant};
 use crate::arrangement::KeysValsHandle;
-use repr::{Datum, RowPacker, Timestamp};
+use repr::{Datum, Row, Timestamp};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(
@@ -74,9 +74,8 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count_total()
             .map({
-                let mut row_packer = RowPacker::new();
                 move |((op, worker), count)| {
-                    row_packer.pack(&[
+                    Row::pack_slice(&[
                         Datum::Int64(op as i64),
                         Datum::Int64(worker as i64),
                         Datum::Int64(count.0 as i64),
@@ -98,9 +97,8 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count_total()
             .map({
-                let mut row_packer = RowPacker::new();
                 move |((op, worker), count)| {
-                    row_packer.pack(&[
+                    Row::pack_slice(&[
                         Datum::Int64(op as i64),
                         Datum::Int64(worker as i64),
                         Datum::Int64(count as i64),
@@ -124,11 +122,11 @@ pub fn construct<A: Allocate>(
                 let key_clone = key.clone();
                 let trace = collection
                     .map({
-                        let mut row_packer = RowPacker::new();
+                        let mut row_packer = Row::default();
                         move |row| {
                             let datums = row.unpack();
-                            let key_row = row_packer.pack(key.iter().map(|k| datums[*k]));
-                            (key_row, row)
+                            row_packer.extend(key.iter().map(|k| datums[*k]));
+                            (row_packer.finish_and_reuse(), row)
                         }
                     })
                     .arrange_by_key()

@@ -19,7 +19,7 @@ use timely::dataflow::{Scope, Stream};
 use dataflow_types::{SinkAsOf, TailSinkConnector};
 use expr::GlobalId;
 use repr::adt::decimal::Significand;
-use repr::{Datum, Diff, Row, RowPacker, Timestamp};
+use repr::{Datum, Diff, Row, Timestamp};
 
 pub fn tail<G>(
     stream: Stream<G, Rc<OrdValBatch<GlobalId, Row, Timestamp, Diff>>>,
@@ -30,7 +30,7 @@ pub fn tail<G>(
     G: Scope<Timestamp = Timestamp>,
 {
     let mut errored = false;
-    let mut packer = RowPacker::new();
+    let mut packer = Row::default();
     stream.sink(Pipeline, &format!("tail-{}", id), move |input| {
         input.for_each(|_, batches| {
             if errored {

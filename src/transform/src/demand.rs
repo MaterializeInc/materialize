@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 
 use expr::{AggregateExpr, AggregateFunc, Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
-use repr::Datum;
+use repr::{Datum, Row};
 
 use crate::TransformArgs;
 
@@ -100,16 +100,13 @@ impl Demand {
                 }
 
                 // Replace un-read expressions with literals to prevent evaluation.
-                let mut row_packer = repr::RowPacker::new();
                 for (index, scalar) in scalars.iter_mut().enumerate() {
                     if !columns.contains(&(arity + index)) {
                         // Leave literals as they are, to benefit explain.
                         if !scalar.is_literal() {
                             let typ = relation_type.column_types[arity + index].clone();
-                            *scalar = MirScalarExpr::Literal(
-                                Ok(row_packer.pack(Some(Datum::Dummy))),
-                                typ,
-                            );
+                            *scalar =
+                                MirScalarExpr::Literal(Ok(Row::pack_slice(&[Datum::Dummy])), typ);
                         }
                     }
                 }
