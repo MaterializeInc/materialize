@@ -183,10 +183,11 @@ impl LogVariant {
 
             LogVariant::Materialized(MaterializedLog::Metrics) => RelationDesc::empty()
                 .with_column("metric", ScalarType::String.nullable(false))
-                .with_column("ts", ScalarType::Timestamp.nullable(false))
+                .with_column("value_kind", ScalarType::String.nullable(false))
+                .with_column("time", ScalarType::Timestamp.nullable(false))
                 .with_column("labels", ScalarType::Jsonb.nullable(false))
                 .with_column("value", ScalarType::Float64.nullable(false))
-                .with_key(vec![0, 1, 2]),
+                .with_key(vec![0, 1, 2, 3]),
 
             LogVariant::Materialized(MaterializedLog::MetricsMeta) => RelationDesc::empty()
                 .with_column("metric", ScalarType::String.nullable(false))

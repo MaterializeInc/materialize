@@ -114,6 +114,28 @@ impl Peek {
     }
 }
 
+/// A prometheus value's meaning.
+///
+/// This is straightforward for gauges and counters (which have only one meaning), but histograms
+/// and summaries can require multiple values to express their meanings correctly.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
+pub enum MetricValueKind {
+    /// A prometheus counter's current value
+    CounterValue,
+    /// A prometheus gauge's current value
+    GaugeValue,
+}
+
+impl MetricValueKind {
+    fn as_str(&self) -> &'static str {
+        use MetricValueKind::*;
+        match self {
+            CounterValue => "counter_value",
+            GaugeValue => "gauge_value",
+        }
+    }
+}
+
 /// The kind of a prometheus metric in a batch of metrics
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub enum MetricType {
@@ -192,14 +214,19 @@ impl Metric {
 /// A metric reading at a time for a set of labels.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct MetricReading {
+    value_kind: MetricValueKind,
     labels: Vec<(String, String)>,
     value: f64,
 }
 
 impl MetricReading {
     /// Construct a new metric reading with the given labels and a value.
-    pub fn new(labels: Vec<(String, String)>, value: f64) -> Self {
-        Self { labels, value }
+    pub fn new(labels: Vec<(String, String)>, value_kind: MetricValueKind, value: f64) -> Self {
+        Self {
+            labels,
+            value_kind,
+            value,
+        }
     }
 }
 
@@ -380,6 +407,7 @@ pub fn construct<A: Allocate>(
                                 for metric in metrics {
                                     for reading in metric.readings {
                                         row_packer.push(Datum::from(metric.meta.name.as_str()));
+                                        row_packer.push(Datum::from(reading.value_kind.as_str()));
                                         row_packer.push(Datum::from(chrono_timestamp));
                                         row_packer.push_dict(reading.labels.iter().map(
                                             |(name, value)| {

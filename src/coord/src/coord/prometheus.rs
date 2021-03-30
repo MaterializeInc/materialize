@@ -5,7 +5,7 @@ use std::{
 };
 
 use dataflow::{
-    logging::materialized::{MaterializedEvent, Metric, MetricReading},
+    logging::materialized::{MaterializedEvent, Metric, MetricReading, MetricValueKind},
     SequencedCommand,
 };
 use prometheus::{proto::MetricType, Registry};
@@ -43,8 +43,16 @@ fn convert_metrics_to_rows<'a, M: IntoIterator<Item = &'a prometheus::proto::Met
                 .map(|pair| (pair.get_name().to_owned(), pair.get_value().to_owned()))
                 .collect::<Vec<(String, String)>>();
             match kind {
-                COUNTER => Some(MetricReading::new(labels, m.get_counter().get_value())),
-                GAUGE => Some(MetricReading::new(labels, m.get_gauge().get_value())),
+                COUNTER => Some(MetricReading::new(
+                    labels,
+                    MetricValueKind::CounterValue,
+                    m.get_counter().get_value(),
+                )),
+                GAUGE => Some(MetricReading::new(
+                    labels,
+                    MetricValueKind::GaugeValue,
+                    m.get_gauge().get_value(),
+                )),
                 // TODO: destructure histograms & summaries in a meaningful way.
                 _ => None,
             }
