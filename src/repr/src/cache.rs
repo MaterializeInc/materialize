@@ -71,7 +71,7 @@ impl CachedRecord {
         let (_, rest) = data.split_at(4);
         let row = rest[..len].to_vec();
 
-        let rec = unsafe { Row::new(row) };
+        let rec = unsafe { Row::from_bytes_unchecked(row) };
         let row = rec.unpack();
 
         let source_offset = row[0].unwrap_int64();
