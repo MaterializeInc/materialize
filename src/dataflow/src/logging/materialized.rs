@@ -616,7 +616,7 @@ pub fn construct<A: Allocate>(
                 kafka_consumer_info_current,
             ),
             (
-                LogVariant::Materialized(MaterializedLog::Metrics),
+                LogVariant::Materialized(MaterializedLog::MetricValues),
                 metrics_current,
             ),
             (

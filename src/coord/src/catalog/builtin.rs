@@ -565,7 +565,7 @@ pub const MZ_KAFKA_CONSUMER_STATISTICS: BuiltinLog = BuiltinLog {
 pub const MZ_PROMETHEUS_READINGS: BuiltinLog = BuiltinLog {
     name: "mz_metrics",
     schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::Metrics),
+    variant: LogVariant::Materialized(MaterializedLog::MetricValues),
     id: GlobalId::System(3032),
     index_id: GlobalId::System(3033),
 };

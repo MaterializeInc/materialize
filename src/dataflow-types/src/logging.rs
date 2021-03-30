@@ -53,7 +53,7 @@ pub enum MaterializedLog {
     DataflowDependency,
     FrontierCurrent,
     KafkaConsumerInfo,
-    Metrics,
+    MetricValues,
     MetricsMeta,
     PeekCurrent,
     PeekDuration,
@@ -181,7 +181,7 @@ impl LogVariant {
                 .with_column("consumer_lag", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
 
-            LogVariant::Materialized(MaterializedLog::Metrics) => RelationDesc::empty()
+            LogVariant::Materialized(MaterializedLog::MetricValues) => RelationDesc::empty()
                 .with_column("metric", ScalarType::String.nullable(false))
                 .with_column("time", ScalarType::Timestamp.nullable(false))
                 .with_column("labels", ScalarType::Jsonb.nullable(false))
@@ -255,7 +255,7 @@ impl LogVariant {
                 LogVariant::Materialized(MaterializedLog::SourceInfo),
                 vec![(1, 1), (2, 2), (3, 3)],
             )],
-            LogVariant::Materialized(MaterializedLog::Metrics) => vec![(
+            LogVariant::Materialized(MaterializedLog::MetricValues) => vec![(
                 LogVariant::Materialized(MaterializedLog::MetricsMeta),
                 vec![(0, 0)],
             )],
