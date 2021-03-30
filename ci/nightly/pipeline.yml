@@ -28,3 +28,10 @@
     - ./ci/plugins/mzcompose:
         composition: kafka-matrix
         run: kafka-matrix
+
+- id: kafka-multi-broker
+  label: Kafka multi-broker test
+  plugins:
+    - ./ci/plugins/mzcompose:
+        composition: kafka-multi-broker
+        run: kafka-multi-broker
