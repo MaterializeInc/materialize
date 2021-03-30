@@ -712,14 +712,14 @@ pub fn plan_create_source(
             columns,
         } => {
             scx.require_experimental_mode("Postgres Sources")?;
-            let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
+            let _connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
                 conn: conn.clone(),
                 publication: publication.clone(),
                 namespace: namespace.clone(),
                 table: table.clone(),
             });
 
-            // Build the expecte relation description
+            // Build the expected relation description
             let col_names: Vec<_> = columns
                 .iter()
                 .map(|c| Some(normalize::column_name(c.name.clone())))
@@ -740,6 +740,7 @@ pub fn plan_create_source(
                 let mut nullable = true;
                 for option in &c.options {
                     match &option.option {
+                        ColumnOption::Null => (),
                         ColumnOption::NotNull => nullable = false,
                         other => unsupported!(format!(
                             "CREATE SOURCE FROM POSTGRES with column constraint: {}",
@@ -751,9 +752,10 @@ pub fn plan_create_source(
                 col_types.push(scalar_ty.nullable(nullable));
             }
 
-            let desc = RelationDesc::new(RelationType::new(col_types), col_names);
+            let _desc = RelationDesc::new(RelationType::new(col_types), col_names);
 
-            (connector, DataEncoding::Postgres(desc))
+            // (connector, DataEncoding::Postgres(desc))
+            unsupported!("Postgres sources");
         }
         Connector::PubNub {
             subscribe_key,
