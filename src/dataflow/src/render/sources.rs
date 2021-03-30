@@ -50,8 +50,9 @@ where
         materialized_logging: Option<Logger>,
         src_id: GlobalId,
         mut src: SourceDesc,
-        // The original ID of the source, before it was decomposed into a bare source (which might have its own transient ID)
-        // and a relational transformation (which has the original source ID).
+        // The original ID of the source, before it was decomposed into a bare source (which might
+        // have its own transient ID) and a relational transformation (which has the original source
+        // ID).
         orig_id: GlobalId,
     ) {
         // Extract the linear operators, as we will need to manipulate them.
@@ -248,8 +249,9 @@ where
                             src.bare_desc.typ().arity(),
                         )
                     } else {
-                        // TODO(brennan) -- this should just be a MirRelationExpr::FlatMap using regexp_extract, csv_extract,
-                        // a hypothetical future avro_extract, protobuf_extract, etc.
+                        // TODO(brennan) -- this should just be a MirRelationExpr::FlatMap using
+                        // regexp_extract, csv_extract, a hypothetical future avro_extract,
+                        // protobuf_extract, etc.
                         let ((stream, errors), extra_token) = decode_values(
                             &ok_source,
                             encoding,
