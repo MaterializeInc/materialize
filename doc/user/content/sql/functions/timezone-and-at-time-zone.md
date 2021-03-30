@@ -18,15 +18,16 @@ menu:
 
 Parameter | Type | Description
 ----------|------|------------
-_zone_ | [`text`](../../types/text) | The target time zone.
-_timestamp_ | [`timestamp`](../../types/timestamp/#timestamp-info) | The timestamp without time zone.
+zone | [`text`](../../types/text) | The target time zone.
+type  |[`text`](../../types/text) or [`numeric`](../../types/numeric) |  The datatype in which the time zone is expressed
+_timestamp_ | [`timestamp`](../../types/timestamp/#timestamp-info) | The timestamp without time zone.  |   |
 _timestamptz_ | [`timestamptz`](../../types/timestamp/#timestamp-with-time-zone-info) | The timestamp with time zone.
 
 ## Return values
 
 `TIMEZONE` and  `AT TIME ZONE` return [`timestamp`](../../types/timestamp/#timestamp-info) if the input is [`timestamptz`](../../types/timestamp/#timestamp-with-time-zone-info), and [`timestamptz`](../../types/timestamp/#timestamp-with-time-zone-info) if the input is [`timestamp`](../../types/timestamp/#timestamp-info).
 
-**Note:** `timestamp` and `timestamp with time zone` always store data in UTC, even if the date is returned as the local time.
+**Note:** `timestamp` and `timestamptz` always store data in UTC, even if the date is returned as the local time.
 
 ## Examples
 
