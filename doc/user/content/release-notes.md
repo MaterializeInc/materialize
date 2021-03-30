@@ -99,6 +99,8 @@ Wrap your release notes at the 80 character mark.
 
   Thanks again to external contributor [@andrioni](https://github.com/andrioni).
 
+- Add [`DROP TYPE`](/sql/drop-type) and [`SHOW TYPES`](/sql/show-types) commands.
+
 - Multipartition Kafka sinks with consistency enabled will create single-partition
   consistency topics.
 

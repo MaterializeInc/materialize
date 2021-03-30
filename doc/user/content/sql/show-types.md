@@ -22,22 +22,17 @@ Field | Use
 ### Show custom data types
 
 ```sql
-CREATE TYPE int4_list AS LIST (element_type = int4);
-
 SHOW TYPES;
 ```
 ```
       name
 ----------------
   int4_list
-(1 rows)
 ```
 
 ### Show all data types
 
 ```sql
-CREATE TYPE int4_list AS LIST (element_type = int4);
-
 SHOW EXTENDED FULL TYPES;
 ```
 ```
