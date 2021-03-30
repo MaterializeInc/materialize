@@ -284,16 +284,22 @@ where
         //
         // TODO: Improve collection and arrangement re-use.
         self.collections.retain(|e, _| {
-            matches!(e, MirRelationExpr::Get {
-                id: Id::Global(_),
-                typ: _,
-            })
+            matches!(
+                e,
+                MirRelationExpr::Get {
+                    id: Id::Global(_),
+                    typ: _,
+                }
+            )
         });
         self.local.retain(|e, _| {
-            matches!(e, MirRelationExpr::Get {
-                id: Id::Global(_),
-                typ: _,
-            })
+            matches!(
+                e,
+                MirRelationExpr::Get {
+                    id: Id::Global(_),
+                    typ: _,
+                }
+            )
         });
         // We do not install in `context.trace`, and can skip deleting things from it.
     }

@@ -1157,7 +1157,7 @@ where
                 _ = canceled => FetchResult::Cancelled,
                 batch = rows.next() => FetchResult::Rows(batch),
             }
-        };
+        }
 
         let canceled = self.coord_client.canceled();
         let mut batch = fetch_batch(deadline, &mut rows, canceled).await;

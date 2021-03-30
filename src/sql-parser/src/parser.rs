@@ -761,22 +761,15 @@ impl<'a> Parser<'a> {
     // Parse calls to position(), which has the special form position('string' in 'string').
     fn parse_position_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
-
-        let mut exprs = Vec::new();
-
         // we must be greater-equal the precedence of IN, which is Like to avoid
         // parsing away the IN as part of the sub expression
-        exprs.push(self.parse_subexpr(Precedence::Like)?);
-
+        let needle = self.parse_subexpr(Precedence::Like)?;
         self.expect_token(&Token::Keyword(IN))?;
-
-        exprs.push(self.parse_expr()?);
-
+        let haystack = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
-
         Ok(Expr::Function(Function {
             name: UnresolvedObjectName::unqualified("position"),
-            args: FunctionArgs::Args(exprs),
+            args: FunctionArgs::Args(vec![needle, haystack]),
             filter: None,
             over: None,
             distinct: false,

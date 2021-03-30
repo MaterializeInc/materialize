@@ -279,15 +279,17 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
                 //    (<expr> OP <expr>)::<type>
                 // unless the inner expression is of a type that we know is
                 // safe to follow with a `::` to without wrapping.
-                let needs_wrap = !matches!(**expr,
+                let needs_wrap = !matches!(
+                    **expr,
                     Expr::Nested(_)
-                    | Expr::Value(_)
-                    | Expr::Cast { .. }
-                    | Expr::Function { .. }
-                    | Expr::Identifier { .. }
-                    | Expr::Collate { .. }
-                    | Expr::Coalesce { .. }
-                    | Expr::NullIf{ .. });
+                        | Expr::Value(_)
+                        | Expr::Cast { .. }
+                        | Expr::Function { .. }
+                        | Expr::Identifier { .. }
+                        | Expr::Collate { .. }
+                        | Expr::Coalesce { .. }
+                        | Expr::NullIf { .. }
+                );
                 if needs_wrap {
                     f.write_str('(');
                 }
