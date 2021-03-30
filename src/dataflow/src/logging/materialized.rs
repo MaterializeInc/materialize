@@ -118,22 +118,21 @@ impl Peek {
 ///
 /// This is straightforward for gauges and counters (which have only one meaning), but histograms
 /// and summaries can require multiple values to express their meanings correctly.
-#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub enum MetricValueKind {
-    /// A prometheus counter's current value
-    CounterValue,
-    /// A prometheus gauge's current value
-    GaugeValue,
-}
-
-impl MetricValueKind {
-    fn as_str(&self) -> &'static str {
-        use MetricValueKind::*;
-        match self {
-            CounterValue => "counter_value",
-            GaugeValue => "gauge_value",
-        }
-    }
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub enum MetricValue {
+    /// A prometheus counter or gauge's current value
+    Value(f64),
+    /// A prometheus histogram as a set of values
+    Histogram {
+        /// The total sum of observed values.
+        sum: f64,
+        /// The total count of observed events.
+        total_count: usize,
+        /// The upper bounds of the histogram buckets (cumulative).
+        bounds: Vec<f64>,
+        /// The count of events in each histogram bucket.
+        counts: Vec<f64>,
+    },
 }
 
 /// The kind of a prometheus metric in a batch of metrics
@@ -185,6 +184,14 @@ pub struct Metric {
     readings: Vec<MetricReading>,
 }
 
+impl Metric {
+    /// Construct a new prometheus Metric.
+    pub fn new(name: String, kind: MetricType, help: String, readings: Vec<MetricReading>) -> Self {
+        let meta = MetricMeta { name, kind, help };
+        Self { meta, readings }
+    }
+}
+
 /// Information about the prometheus metric.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct MetricMeta {
@@ -203,30 +210,17 @@ impl MetricMeta {
     }
 }
 
-impl Metric {
-    /// Construct a new prometheus Metric.
-    pub fn new(name: String, kind: MetricType, help: String, readings: Vec<MetricReading>) -> Self {
-        let meta = MetricMeta { name, kind, help };
-        Self { meta, readings }
-    }
-}
-
 /// A metric reading at a time for a set of labels.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct MetricReading {
-    value_kind: MetricValueKind,
     labels: Vec<(String, String)>,
-    value: f64,
+    value: MetricValue,
 }
 
 impl MetricReading {
     /// Construct a new metric reading with the given labels and a value.
-    pub fn new(labels: Vec<(String, String)>, value_kind: MetricValueKind, value: f64) -> Self {
-        Self {
-            labels,
-            value_kind,
-            value,
-        }
+    pub fn new(labels: Vec<(String, String)>, value: MetricValue) -> Self {
+        Self { labels, value }
     }
 }
 
@@ -406,19 +400,21 @@ pub fn construct<A: Allocate>(
                                         .expect("Couldn't convert timestamps");
                                 for metric in metrics {
                                     for reading in metric.readings {
-                                        row_packer.push(Datum::from(metric.meta.name.as_str()));
-                                        row_packer.push(Datum::from(reading.value_kind.as_str()));
-                                        row_packer.push(Datum::from(chrono_timestamp));
-                                        row_packer.push_dict(reading.labels.iter().map(
-                                            |(name, value)| {
-                                                (name.as_str(), Datum::from(value.as_str()))
-                                            },
-                                        ));
-                                        row_packer.push(Datum::from(reading.value));
-                                        let row = row_packer.finish_and_reuse();
+                                        if let MetricValue::Value(v) = reading.value {
+                                            row_packer.push(Datum::from(metric.meta.name.as_str()));
+                                            row_packer.push(Datum::from(chrono_timestamp));
+                                            row_packer.push_dict(reading.labels.iter().map(
+                                                |(name, value)| {
+                                                    (name.as_str(), Datum::from(value.as_str()))
+                                                },
+                                            ));
+                                            row_packer.push(Datum::from(v));
+                                            let row = row_packer.finish_and_reuse();
 
-                                        metrics_session.give((row.clone(), time_ms, 1));
-                                        metrics_session.give((row, time_ms + retain_for, -1));
+                                            metrics_session.give((row.clone(), time_ms, 1));
+                                            metrics_session.give((row, time_ms + retain_for, -1));
+                                        }
+                                        // TODO: histograms go into a different session
                                     }
                                     // Expire the metadata of a metric reading when the reading
                                     // would expire, but refresh its lifetime when we get another
