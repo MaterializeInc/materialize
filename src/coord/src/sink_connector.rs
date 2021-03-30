@@ -118,7 +118,7 @@ async fn get_latest_ts(
     // Seek to end-1 offset
     let mut tps = TopicPartitionList::new();
     tps.add_partition(consistency_topic, partition);
-    tps.set_partition_offset(consistency_topic, partition, Offset::OffsetTail(1))?;
+    tps.set_partition_offset(consistency_topic, partition, Offset::Beginning)?;
 
     consumer.assign(&tps).with_context(|| {
         format!(
@@ -127,34 +127,46 @@ async fn get_latest_ts(
         )
     })?;
 
-    // Read the end-1 offset message
-    let message_bytes = match get_next_message(consumer, timeout)? {
-        None => {
-            // fetch watermarks to distinguish between a timeout reading end-1 and an empty topic
-            match consumer.fetch_watermarks(consistency_topic, 0, timeout) {
-                Ok((lo, hi)) => {
-                    if hi == 0 {
-                        return Ok(None);
-                    } else {
-                        bail!(
-                            "uninitialized consistency topic {}:{}, lo/hi: {}/{}",
-                            consistency_topic,
-                            partition,
-                            lo,
-                            hi
-                        );
-                    }
-                }
-                Err(e) => {
-                    bail!("Failed to fetch metadata while reading from consistency topic, will retry. Error was {}", e);
+    // We scan from the beginning and see if we can find an END record. We have
+    // to do it like this because Kafka Control Batches mess with offsets. We
+    // therefore cannot simply take the last offset from the back and expect an
+    // END message there. With a transactional producer, the OffsetTail(1) will
+    // not point to an END message but a control message. With aborted
+    // transactions, there might even be a lot of garbage at the end of the
+    // topic or in between.
+
+    let mut latest_message = None;
+    while let Some(message) = get_next_message(consumer, timeout)? {
+        latest_message = Some(message);
+    }
+
+    if latest_message.is_none() {
+        // fetch watermarks to distinguish between a timeout reading end-1 and an empty topic
+        match consumer.fetch_watermarks(consistency_topic, 0, timeout) {
+            Ok((lo, hi)) => {
+                if hi == 0 {
+                    return Ok(None);
+                } else {
+                    bail!(
+                        "uninitialized consistency topic {}:{}, lo/hi: {}/{}",
+                        consistency_topic,
+                        partition,
+                        lo,
+                        hi
+                    );
                 }
             }
+            Err(e) => {
+                bail!("Failed to fetch metadata while reading from consistency topic, will retry. Error was {}", e);
+            }
         }
-        Some(m) => m,
-    };
+    }
 
-    // decode the timestamp from the end-1 message
-    let timestamp = decode_consistency_end_record(&message_bytes, consistency_topic)?;
+    let latest_message = latest_message.expect("known to exist");
+
+    // the latest valid message should be an END message. If not, things have
+    // gone wrong!
+    let timestamp = decode_consistency_end_record(&latest_message, consistency_topic)?;
 
     Ok(Some(timestamp))
 }
