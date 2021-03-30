@@ -185,20 +185,6 @@ where
                     (collection, capability)
                 } else if let ExternalSourceConnector::Postgres(_pg_connector) = connector {
                     unimplemented!("Postgres sources are not supported yet");
-                } else if let ExternalSourceConnector::PubNub(pubnub_connector) = connector {
-                    let source = PubNubSourceReader::new(pubnub_connector);
-
-                    let ((ok_stream, err_stream), capability) =
-                        source::create_source_simple(source_config, source);
-
-                    error_collections.push(
-                        err_stream
-                            .map(DataflowError::SourceError)
-                            .pass_through("source-errors")
-                            .as_collection(),
-                    );
-
-                    (ok_stream.as_collection(), capability)
                 } else {
                     let ((ok_source, err_source), capability) = match connector {
                         ExternalSourceConnector::Kafka(_) => {
@@ -209,6 +195,12 @@ where
                         }
                         ExternalSourceConnector::Kinesis(_) => {
                             source::create_source::<_, KinesisSourceReader, _>(
+                                source_config,
+                                connector,
+                            )
+                        }
+                        ExternalSourceConnector::PubNub(_) => {
+                            source::create_source::<_, PubNubSourceReader, _>(
                                 source_config,
                                 connector,
                             )
@@ -224,7 +216,6 @@ where
                         }
                         ExternalSourceConnector::AvroOcf(_) => unreachable!(),
                         ExternalSourceConnector::Postgres(_) => unreachable!(),
-                        ExternalSourceConnector::PubNub(_) => unreachable!(),
                     };
 
                     // Include any source errors.

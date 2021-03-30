@@ -36,8 +36,9 @@ use dataflow::source::read_file_task;
 use dataflow::source::FileReadStyle;
 use dataflow_types::{
     AvroOcfEncoding, Consistency, DataEncoding, DebeziumMode, ExternalSourceConnector,
-    FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector,
-    SourceConnector, SourceEnvelope, TimestampSourceUpdate,
+    FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset,
+    PubNubSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope,
+    TimestampSourceUpdate,
 };
 use expr::{GlobalId, PartitionId};
 use ore::collections::CollectionExt;
@@ -113,6 +114,7 @@ enum RtTimestampConnector {
     File(RtFileConnector),
     Ocf(RtFileConnector),
     Kinesis(RtKinesisConnector),
+    PubNub(RtPubNubConnector),
     S3(RtS3Connector),
 }
 
@@ -190,6 +192,9 @@ struct RtKinesisConnector {}
 
 /// Data consumer stub for File source with RT consistency
 struct RtFileConnector {}
+
+/// Data consumer stub for PubNub source with RT consistency
+struct RtPubNubConnector {}
 
 /// Data consumer stub for S3 source with RT consistency
 struct RtS3Connector {}
@@ -613,8 +618,12 @@ impl Timestamper {
                         connector: RtTimestampConnector::S3(connector),
                     })
             }
+            ExternalSourceConnector::PubNub(pubnubc) => self
+                .create_rt_pubnub_connector(id, pubnubc)
+                .map(|connector| RtTimestampConsumer {
+                    connector: RtTimestampConnector::PubNub(connector),
+                }),
             ExternalSourceConnector::Postgres(_) => None,
-            ExternalSourceConnector::PubNub(_) => None,
         }
     }
 
@@ -693,6 +702,14 @@ impl Timestamper {
         _fc: FileSourceConnector,
     ) -> Option<RtFileConnector> {
         Some(RtFileConnector {})
+    }
+
+    fn create_rt_pubnub_connector(
+        &self,
+        _id: GlobalId,
+        _pubnubc: PubNubSourceConnector,
+    ) -> Option<RtPubNubConnector> {
+        Some(RtPubNubConnector {})
     }
 
     fn create_rt_s3_connector(

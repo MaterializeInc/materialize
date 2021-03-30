@@ -695,6 +695,11 @@ where
                             partitions.insert(PartitionId::S3);
                             Some(TimestampDataUpdate::RealTime(partitions))
                         }
+                        (ExternalSourceConnector::PubNub(_), Consistency::RealTime) => {
+                            let mut partitions = HashSet::new();
+                            partitions.insert(PartitionId::File);
+                            Some(TimestampDataUpdate::RealTime(partitions))
+                        }
                         (ExternalSourceConnector::Kinesis(_), Consistency::BringYourOwn(_)) => {
                             log::error!("BYO timestamping not supported for Kinesis sources");
                             None
@@ -703,15 +708,13 @@ where
                             log::error!("BYO timestamping not supported for S3 sources");
                             None
                         }
+                        (ExternalSourceConnector::PubNub(_), Consistency::BringYourOwn(_)) => {
+                            log::error!("BYO timestamping not supported for PubNub sources");
+                            None
+                        }
                         (ExternalSourceConnector::Postgres(_), _) => {
                             log::debug!(
                                 "Postgres sources do not communicate with the timestamper thread"
-                            );
-                            None
-                        }
-                        (ExternalSourceConnector::PubNub(_), _) => {
-                            log::debug!(
-                                "PubNub sources do not communicate with the timestamper thread"
                             );
                             None
                         }
