@@ -280,6 +280,8 @@ Wrap your release notes at the 80 character mark.
   - Handle parsing [`timestamp`](/sql/types/timestamp) and [`timestamptz`](/sql/types/timestamptz)
     from additional compact formats like `700203` {{% gh 4889 %}}.
 
+  - Support conversion of [`timestamp`](/sql/types/timestamp) and [`timestamptz`](/sql/types/timestamptz) to other time zones with [`AT TIME ZONE`](/sql/functions/#date-and-time-func) and [`timezone`](/sql/functions/#date-and-time-func) functions.
+
 - Add the `upper` and `lower` [string functions](/sql/functions#string-func),
   which convert any alphabetic characters in a string to uppercase and
   lowercase, respectively.
@@ -312,10 +314,6 @@ Wrap your release notes at the 80 character mark.
   certain type appeared in the same `SELECT` query {{% gh 5304 %}}.
 
 - Add the advanced [`--timely-progress-mode` and `--differential-idle-merge-effort` command-line arguments](/cli/#dataflow-tuning) to tune dataflow performance. These arguments replace existing undocumented environment variables.
-
-{{< comment >}}
-Document new timezone stuff and add a release note about it.
-{{< /comment >}}
 
 {{% version-header v0.6.0 %}}
 
