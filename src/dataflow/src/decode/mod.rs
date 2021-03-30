@@ -14,9 +14,11 @@ use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration
 use anyhow::anyhow;
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::{AsCollection, Collection};
+use expr::SourceInstanceId;
 use futures::executor::block_on;
 use log::warn;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
+use prometheus::UIntGauge;
 use repr::RelationDesc;
 use repr::ScalarType;
 use timely::dataflow::channels::pact::ParallelizationContract;
@@ -39,6 +41,7 @@ use crate::source::SourceOutput;
 
 mod avro;
 mod csv;
+mod metrics;
 mod protobuf;
 mod regex;
 
@@ -237,6 +240,7 @@ fn decode_values_inner<G, V, C>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     mut value_decoder_state: V,
     op_name: &str,
+    source_id: SourceInstanceId,
     contract: C,
     upsert_debezium: bool,
 ) -> (
@@ -249,8 +253,14 @@ where
     C: ParallelizationContract<Timestamp, SourceOutput<Vec<u8>, Vec<u8>>>,
 {
     let stream = stream.unary(contract, &op_name, move |_, _| {
-        let mut keys = if upsert_debezium {
-            Some(HashMap::new())
+        let mut trackstate = if upsert_debezium {
+            Some((
+                HashMap::new(),
+                metrics::DEBEZIUM_UPSERT_COUNT.with_label_values(&[
+                    &source_id.source_id.to_string(),
+                    &source_id.dataflow_id.to_string(),
+                ]),
+            ))
         } else {
             None
         };
@@ -269,8 +279,8 @@ where
                             value_decoder_state.get_value(payload, *aux_num, *upstream_time_millis);
 
                         if let Some(val) = val {
-                            let val = if let Some(keys) = keys.as_mut() {
-                                rewrite_for_upsert(val, keys, key)
+                            let val = if let Some((keys, metrics)) = trackstate.as_mut() {
+                                rewrite_for_upsert(val, keys, key, metrics)
                             } else {
                                 val
                             };
@@ -297,8 +307,12 @@ fn rewrite_for_upsert(
     val: Result<Row, DataflowError>,
     keys: &mut HashMap<Box<[u8]>, Row>,
     key: &[u8],
+    metrics: &mut UIntGauge,
 ) -> Result<Row, DataflowError> {
     if let Ok(row) = val {
+        // often off by one, but is only tracked every N seconds so it will always be off
+        metrics.set(keys.len() as u64);
+
         // TODO: handle parsed keys
         let entry = keys.entry(key.into());
 
@@ -460,6 +474,7 @@ pub fn decode_values<G>(
     operators: &mut Option<LinearOperator>,
     fast_forwarded: bool,
     desc: RelationDesc,
+    source_id: SourceInstanceId,
 ) -> (
     (
         Collection<G, Row, Diff>,
@@ -521,6 +536,7 @@ where
                     )
                     .expect("Failed to create Avro decoder"),
                     &op_name,
+                    source_id,
                     SourceOutput::<Vec<u8>, Vec<u8>>::key_contract(),
                     *mode == DebeziumMode::Upsert,
                 ),
@@ -543,6 +559,7 @@ where
                 )
                 .expect("Failed to create Avro decoder"),
                 &op_name,
+                source_id,
                 SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
                 false,
             ),
@@ -562,6 +579,7 @@ where
                 stream,
                 protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),
                 &op_name,
+                source_id,
                 SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
                 false,
             ),
@@ -572,6 +590,7 @@ where
                 stream,
                 OffsetDecoderState::from(bytes_to_datum),
                 &op_name,
+                source_id,
                 SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
                 false,
             ),
@@ -582,6 +601,7 @@ where
                 stream,
                 OffsetDecoderState::from(text_to_datum),
                 &op_name,
+                source_id,
                 SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
                 false,
             ),

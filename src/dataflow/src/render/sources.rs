@@ -258,6 +258,7 @@ where
                             &mut linear_operators,
                             fast_forwarded,
                             src.bare_desc.clone(),
+                            uid,
                         );
                         if let Some(tok) = extra_token {
                             self.additional_tokens
