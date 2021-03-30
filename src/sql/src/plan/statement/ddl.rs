@@ -883,6 +883,9 @@ pub fn plan_create_source(
                 sql_parser::ast::DbzMode::Plain => DebeziumMode::Plain,
                 sql_parser::ast::DbzMode::Upsert => DebeziumMode::Upsert,
             };
+            if mode == DebeziumMode::Upsert && dedup_strat != DebeziumDeduplicationStrategy::None {
+                bail!("Debezium deduplication does not make sense with upsert sources");
+            }
             SourceEnvelope::Debezium(dedup_strat, mode)
         }
         sql_parser::ast::Envelope::Upsert(key_format) => match connector {

@@ -11,7 +11,7 @@ use anyhow::Context;
 use futures::executor::block_on;
 
 use dataflow_types::{DataflowError, DecodeError};
-use interchange::avro::{DebeziumDeduplicationStrategy, Decoder, EnvelopeType};
+use interchange::avro::{Decoder, EnvelopeType};
 use repr::Row;
 
 use super::DecoderState;
@@ -33,9 +33,6 @@ impl AvroDecoderState {
         envelope: EnvelopeType,
         reject_non_inserts: bool,
         debug_name: String,
-        worker_index: usize,
-        dedup_strat: Option<DebeziumDeduplicationStrategy>,
-        dbz_key_indices: Option<Vec<usize>>,
         confluent_wire_format: bool,
     ) -> Result<Self, anyhow::Error> {
         let key_decoder = key_schema
@@ -45,9 +42,6 @@ impl AvroDecoderState {
                     schema_registry_config.clone(),
                     EnvelopeType::None,
                     debug_name.clone(),
-                    worker_index,
-                    None,
-                    dbz_key_indices.clone(),
                     confluent_wire_format,
                     reject_non_inserts,
                 )
@@ -60,9 +54,6 @@ impl AvroDecoderState {
                 schema_registry_config,
                 envelope,
                 debug_name,
-                worker_index,
-                dedup_strat,
-                dbz_key_indices,
                 confluent_wire_format,
                 reject_non_inserts,
             )?,
@@ -77,11 +68,10 @@ impl DecoderState for AvroDecoderState {
     fn decode_key(&mut self, bytes: &[u8]) -> Result<Option<Row>, String> {
         match self.key_decoder.as_mut() {
             Some(key_decoder) => match block_on(key_decoder.decode(bytes, None, None)) {
-                Ok(Some(row)) => {
+                Ok(row) => {
                     self.events_success += 1;
                     Ok(Some(row))
                 }
-                Ok(None) => Ok(None),
                 Err(err) => {
                     self.events_error += 1;
                     Err(format!("avro deserialization error: {}", err))
@@ -99,11 +89,10 @@ impl DecoderState for AvroDecoderState {
         upstream_time_millis: Option<i64>,
     ) -> Result<Option<Row>, String> {
         match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
-            Ok(Some(row)) => {
+            Ok(row) => {
                 self.events_success += 1;
                 Ok(Some(row))
             }
-            Ok(None) => Ok(None),
             Err(err) => {
                 self.events_error += 1;
                 Err(format!("avro deserialization error: {}", err))
@@ -119,11 +108,10 @@ impl DecoderState for AvroDecoderState {
         upstream_time_millis: Option<i64>,
     ) -> Option<Result<Row, DataflowError>> {
         match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
-            Ok(Some(row)) => {
+            Ok(row) => {
                 self.events_success += 1;
                 Some(Ok(row))
             }
-            Ok(None) => None,
             Err(err) => {
                 self.events_error += 1;
                 Some(Err(DataflowError::DecodeError(DecodeError::Text(format!(

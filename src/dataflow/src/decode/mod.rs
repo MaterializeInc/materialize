@@ -16,11 +16,8 @@ use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::{AsCollection, Collection};
 use expr::SourceInstanceId;
 use futures::executor::block_on;
-use log::warn;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use prometheus::UIntGauge;
-use repr::RelationDesc;
-use repr::ScalarType;
 use timely::dataflow::channels::pact::ParallelizationContract;
 use timely::dataflow::operators::{map::Map, OkErr, Operator};
 use timely::dataflow::{Scope, Stream};
@@ -93,7 +90,7 @@ where
                 SourceEnvelope::None => extract_row(value, index.map(Datum::from), top_node),
                 SourceEnvelope::Debezium(_, _) => {
                     if let Some(dbz_state) = dbz_state.as_mut() {
-                        dbz_state.extract(value, index, upstream_time_millis)
+                        dbz_state.extract(value, upstream_time_millis)
                     } else {
                         Err(anyhow!(
                             "No debezium schema information -- could not decode row"
@@ -203,11 +200,7 @@ where
 /// observed to noticeably impact upsert performance at the time of this writing.
 /// TODO (wangandi): reimplement in terms of generics. DataEncoding could be a
 /// trait that returns a corresponding DecoderState.
-pub(crate) fn get_decoder(
-    encoding: DataEncoding,
-    debug_name: &str,
-    worker_index: usize,
-) -> Box<dyn DecoderState> {
+pub(crate) fn get_decoder(encoding: DataEncoding, debug_name: &str) -> Box<dyn DecoderState> {
     let avro_err = "Failed to create Avro decoder";
     match encoding {
         DataEncoding::Protobuf(enc) => Box::new(protobuf::ProtobufDecoderState::new(
@@ -222,9 +215,6 @@ pub(crate) fn get_decoder(
                 interchange::avro::EnvelopeType::Upsert,
                 false,
                 format!("{}-values", debug_name),
-                worker_index,
-                None,
-                None,
                 enc.confluent_wire_format,
             )
             .expect(avro_err),
@@ -315,7 +305,7 @@ where
 }
 
 /// Update row to blank out retractions of rows that we have never seen
-fn rewrite_for_upsert(
+pub fn rewrite_for_upsert(
     val: Result<Row, DataflowError>,
     keys: &mut HashMap<Row, Row>,
     key: Row,
@@ -331,12 +321,6 @@ fn rewrite_for_upsert(
         let before = rowiter.next().expect("must have a before list");
         let after = rowiter.next().expect("must have an after list");
 
-        assert_eq!(
-            rowiter.next(),
-            None,
-            "[customer-data] Debezium data should only have retract/insert lists, got unexpected third: {:?}",
-            row
-        );
         assert!(
             matches!(before, Datum::List { .. } | Datum::Null),
             "[customer-data] Debezium logic should be a List or absent, got {:?}",
@@ -466,7 +450,6 @@ pub fn decode_values<G>(
     // `None`.
     operators: &mut Option<LinearOperator>,
     fast_forwarded: bool,
-    desc: RelationDesc,
     source_id: SourceInstanceId,
 ) -> (
     (
@@ -479,7 +462,6 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     let op_name = format!("{}Decode", encoding.op_name());
-    let worker_index = stream.scope().index();
     match (encoding, envelope) {
         (_, SourceEnvelope::Upsert(_)) => {
             unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
@@ -497,46 +479,26 @@ where
         (_, SourceEnvelope::CdcV2) => {
             unreachable!("Internal error: CDCv2 is not supported yet on non-Avro sources.")
         }
-        (DataEncoding::Avro(enc), SourceEnvelope::Debezium(ds, mode)) => {
-            let dedup_strat = *ds;
-            let fields = match &desc.typ().column_types[0].scalar_type {
-                ScalarType::Record { fields, .. } => fields.clone(),
-                _ => unreachable!(),
-            };
-            let row_desc =
-                RelationDesc::from_names_and_types(fields.into_iter().map(|(n, t)| (Some(n), t)));
-            let dbz_key_indices = enc.key_schema.as_ref().and_then(|key_schema| {
-                interchange::avro::validate_key_schema(key_schema, &row_desc)
-                    .map(Some)
-                    .unwrap_or_else(|e| {
-                        warn!("Not using key due to error: {}", e);
-                        None
-                    })
-            });
-            (
-                decode_values_inner(
-                    stream,
-                    avro::AvroDecoderState::new(
-                        enc.key_schema.as_deref(),
-                        &enc.value_schema,
-                        enc.schema_registry_config,
-                        envelope.get_avro_envelope_type(),
-                        fast_forwarded,
-                        debug_name.to_string(),
-                        worker_index,
-                        Some(dedup_strat),
-                        dbz_key_indices,
-                        enc.confluent_wire_format,
-                    )
-                    .expect("Failed to create Avro decoder"),
-                    &op_name,
-                    source_id,
-                    SourceOutput::<Vec<u8>, Vec<u8>>::key_contract(),
-                    *mode == DebeziumMode::Upsert,
-                ),
-                None,
-            )
-        }
+        (DataEncoding::Avro(enc), SourceEnvelope::Debezium(_ds, mode)) => (
+            decode_values_inner(
+                stream,
+                avro::AvroDecoderState::new(
+                    enc.key_schema.as_deref(),
+                    &enc.value_schema,
+                    enc.schema_registry_config,
+                    envelope.get_avro_envelope_type(),
+                    fast_forwarded,
+                    debug_name.to_string(),
+                    enc.confluent_wire_format,
+                )
+                .expect("Failed to create Avro decoder"),
+                &op_name,
+                source_id,
+                SourceOutput::<Vec<u8>, Vec<u8>>::key_contract(),
+                *mode == DebeziumMode::Upsert,
+            ),
+            None,
+        ),
         (DataEncoding::Avro(enc), envelope) => (
             decode_values_inner(
                 stream,
@@ -547,9 +509,6 @@ where
                     envelope.get_avro_envelope_type(),
                     fast_forwarded,
                     debug_name.to_string(),
-                    worker_index,
-                    None,
-                    None,
                     enc.confluent_wire_format,
                 )
                 .expect("Failed to create Avro decoder"),
