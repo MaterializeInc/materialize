@@ -15,6 +15,7 @@ use std::iter;
 use std::path::PathBuf;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use dec::OrderedDecimal;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use regex::Regex;
@@ -340,6 +341,19 @@ where
     }
 }
 
+fn sum_apd<'a, I>(datums: I) -> Datum<'a>
+where
+    I: IntoIterator<Item = Datum<'a>>,
+{
+    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
+    if datums.peek().is_none() {
+        Datum::Null
+    } else {
+        let sum: dec::Decimal<13> = datums.map(|d| d.unwrap_apd().0).sum();
+        Datum::APD(OrderedDecimal(sum))
+    }
+}
+
 fn count<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
@@ -439,6 +453,7 @@ pub enum AggregateFunc {
     SumFloat32,
     SumFloat64,
     SumDecimal,
+    SumAPD,
     Count,
     Any,
     All,
@@ -492,6 +507,7 @@ impl AggregateFunc {
             AggregateFunc::SumFloat32 => sum_float32(datums),
             AggregateFunc::SumFloat64 => sum_float64(datums),
             AggregateFunc::SumDecimal => sum_decimal(datums),
+            AggregateFunc::SumAPD => sum_apd(datums),
             AggregateFunc::Count => count(datums),
             AggregateFunc::Any => any(datums),
             AggregateFunc::All => all(datums),
@@ -664,6 +680,7 @@ impl fmt::Display for AggregateFunc {
             AggregateFunc::SumFloat32 => f.write_str("sum"),
             AggregateFunc::SumFloat64 => f.write_str("sum"),
             AggregateFunc::SumDecimal => f.write_str("sum"),
+            AggregateFunc::SumAPD => f.write_str("sum"),
             AggregateFunc::Count => f.write_str("count"),
             AggregateFunc::Any => f.write_str("any"),
             AggregateFunc::All => f.write_str("all"),

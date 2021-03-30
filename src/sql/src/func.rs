@@ -1802,6 +1802,7 @@ lazy_static! {
                 params!(Float32) => AggregateFunc::SumFloat32, 2110;
                 params!(Float64) => AggregateFunc::SumFloat64, 2111;
                 params!(DecimalAny) => AggregateFunc::SumDecimal, 2114;
+                params!(APD) => AggregateFunc::SumAPD, 21140;
                 params!(Interval) => Operation::unary(|_ecx, _e| {
                     // Explicitly providing this unsupported overload
                     // prevents `sum(NULL)` from choosing the `Float64`
