@@ -11,6 +11,8 @@
 
 use anyhow::anyhow;
 
+use sql_parser::ast::display::{AstDisplay, AstFormatter};
+use sql_parser::impl_display;
 use tokio_postgres::types::Type as PgType;
 use tokio_postgres::NoTls;
 
@@ -20,6 +22,21 @@ pub struct PgColumn {
     scalar_type: PgType,
     nullable: bool,
 }
+
+impl AstDisplay for PgColumn {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str(&self.name);
+        f.write_str(" ");
+        f.write_str(&self.scalar_type);
+        f.write_str(" ");
+        if self.nullable {
+            f.write_str("NULL");
+        } else {
+            f.write_str("NOT NULL");
+        }
+    }
+}
+impl_display!(PgColumn);
 
 /// Fetches column information from an upstream Postgres source, given
 /// a connection string, a namespace, and a target table.
@@ -51,8 +68,6 @@ pub async fn fetch_columns(
         .ok_or_else(|| anyhow!("table not found in the upstream catalog"))?
         .get(0);
 
-    // todo@jldlaughlin: fetch all constraints, so we correctly error in `plan_create_source` if they
-    // are present.
     Ok(client
         .query(
             "SELECT a.attname, a.atttypid, a.attnotnull
@@ -78,26 +93,4 @@ pub async fn fetch_columns(
             })
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?)
-}
-
-/// Stringifies `PgColumn` information to appear as they would have been written in text.
-pub fn format_columns(columns: Vec<PgColumn>) -> String {
-    let nullable = |nullable| {
-        if nullable {
-            "NULL"
-        } else {
-            "NOT NULL"
-        }
-    };
-
-    let mut formatted_columns = Vec::with_capacity(columns.len());
-    for c in columns {
-        formatted_columns.push(format!(
-            "{} {} {}",
-            c.name,
-            c.scalar_type,
-            nullable(c.nullable)
-        ));
-    }
-    format!("({})", formatted_columns.join(","))
 }
