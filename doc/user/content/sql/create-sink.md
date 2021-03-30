@@ -40,7 +40,7 @@ The `AS OF` option was removed.
 
 Field | Use
 ------|-----
-**KAFKA BROKER** _host_ | The Kafka broker's host name.
+**KAFKA BROKER** _host_ | The Kafka broker's host name without the security protocol, which is specified by the [`WITH` options](#with-options).) If you wish to specify multiple brokers (bootstrap servers) as an additional safeguard, use a comma-separated list. For example: `localhost:9092, localhost:9093`.
 **TOPIC** _topic&lowbar;prefix_ | The prefix used to generate the Kafka topic name to create and write to.
 **WITH OPTIONS (** _option&lowbar;_ **)** | Options affecting sink creation. For more details see [`WITH` options](#with-options).
 **CONFLUENT SCHEMA REGISTRY** _url_ | The URL of the Confluent schema registry to get schema information from.
