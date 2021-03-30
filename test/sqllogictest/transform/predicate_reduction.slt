@@ -127,4 +127,3 @@ SELECT * FROM t2 WHERE f1 + f2 > 0 and case when f1 + f2 > 0 then 1/f1 > 0 else 
 ----
 1
 5
-
