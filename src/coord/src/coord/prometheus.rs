@@ -51,7 +51,27 @@ fn convert_metrics_to_rows<'a, M: IntoIterator<Item = &'a prometheus::proto::Met
                     labels,
                     MetricValue::Value(m.get_gauge().get_value()),
                 )),
-                // TODO: destructure histograms & summaries in a meaningful way.
+                HISTOGRAM => {
+                    let histo = m.get_histogram();
+                    Some(MetricReading::new(
+                        labels,
+                        MetricValue::Histogram {
+                            sum: histo.get_sample_sum(),
+                            total_count: histo.get_sample_count() as i64,
+                            counts: histo
+                                .get_bucket()
+                                .iter()
+                                .map(|b| b.get_cumulative_count() as i64)
+                                .collect(),
+                            bounds: histo
+                                .get_bucket()
+                                .iter()
+                                .map(|b| b.get_upper_bound())
+                                .collect(),
+                        },
+                    ))
+                }
+                // TODO: destructure summaries once we have any.
                 _ => None,
             }
         })
