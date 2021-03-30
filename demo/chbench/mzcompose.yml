@@ -414,7 +414,7 @@ mzworkflows:
     - step: wait-for-tcp
       host: schema-registry
       port: 8081
-      depencies:
+      dependencies:
         # sometimes kafka comes up for awhile and then crashes, which will always cause
         # schema-registry to fail because there is no kafka cluster
         - host: kafka
