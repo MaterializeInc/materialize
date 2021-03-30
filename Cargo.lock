@@ -877,6 +877,7 @@ version = "0.3.3"
 dependencies = [
  "decnumber-sys",
  "libc",
+ "serde",
  "static_assertions",
 ]
 
@@ -886,6 +887,7 @@ version = "0.1.5"
 dependencies = [
  "cc",
  "libc",
+ "serde",
 ]
 
 [[package]]
