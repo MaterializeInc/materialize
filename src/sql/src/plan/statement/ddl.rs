@@ -759,7 +759,6 @@ pub fn plan_create_source(
             subscribe_key,
             channel,
         } => {
-            scx.require_experimental_mode("PubNub Sources")?;
             let connector = ExternalSourceConnector::PubNub(PubNubSourceConnector {
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
