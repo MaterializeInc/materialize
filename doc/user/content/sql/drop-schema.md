@@ -14,10 +14,10 @@ menu:
 
 Field | Use
 ------|-----
-`IF EXISTS` | Do not return an error if the named schema does not exist.
+**IF EXISTS** | Do not return an error if the named schema does not exist.
 _schema&lowbar;name_ | The schema you want to remove. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-`CASCADE` | Remove the schema and its dependent objects.
-`RESTRICT` | Do not remove this schema if it contains any sources or views. _(Default)_
+**CASCADE** | Remove the schema and its dependent objects.
+**RESTRICT** | Do not remove this schema if it contains any sources or views. _(Default)_
 
 ## Details
 
@@ -49,6 +49,8 @@ DROP SCHEMA my_schema CASCADE;
 ```
 
 ### Remove a schema only if it has no dependent objects
+
+You can use either of the following commands:
 
 ```sql
 DROP SCHEMA my_schema;

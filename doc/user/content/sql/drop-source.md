@@ -23,10 +23,10 @@ explicitly](../drop-view) or use the **CASCADE** option.
 
 Field | Use
 ------|-----
-`IF EXISTS` | Do not return an error if the named source does not exist.
+**IF EXISTS** | Do not return an error if the named source does not exist.
 _source&lowbar;name_ | The name of the source you want to remove.
-`CASCADE` | Remove the source and its dependent views.
-`RESTRICT` | Do not remove this source if any views depend on it. _(Default.)_
+**CASCADE** | Remove the source and its dependent views.
+**RESTRICT** | Do not remove this source if any views depend on it. _(Default.)_
 
 ## Examples
 
@@ -56,7 +56,9 @@ my_source
 DROP SOURCE my_source CASCADE;
 ```
 
-### Remove a table only if it has no dependent views
+### Remove a source only if it has no dependent views
+
+You can use either of the following commands:
 
 ```sql
 DROP SOURCE my_source;
@@ -66,7 +68,7 @@ DROP SOURCE my_source;
 DROP SOURCE my_source RESTRICT;
 ```
 
-### Do not issue an error if attempting to remove a nonexistent table
+### Do not issue an error if attempting to remove a nonexistent source
 
 ```sql
 DROP SOURCE IF EXISTS my_source;

@@ -14,12 +14,12 @@ menu:
 
 Field | Use
 ------|-----
-`IF EXISTS` | Do not return an error if the named index doesn't exist.
+**IF EXISTS** | Do not return an error if the named index doesn't exist.
 _index&lowbar;name_ | The name of the index you want to remove.
-`CASCADE` | Remove the index and its dependent objects. (The syntax is valid, but is purely theoretical, since no other object in Materialize depends on indexes.)
-`RESTRICT` |  Remove the index. _(Default.)_
+**CASCADE** | Remove the index and its dependent objects.
+**RESTRICT** |  Remove the index. _(Default.)_
 
-**Note:** Since indexes do not have dependent objects, `DROP INDEX`, `DROP INDEX RESTRICT`, and `DROP INDEX CASCADE` all do the same thing.
+**Note:** Since indexes cannot currently have dependent objects, `DROP INDEX`, `DROP INDEX RESTRICT`, and `DROP INDEX CASCADE` all do the same thing.
 
 ## Details
 
@@ -76,12 +76,13 @@ SHOW INDEXES FROM q01;
 
 You can use the unqualified index name (`q01_geo_idx`) rather the fully qualified name (`materialize.public.q01_geo_idx`).
 
+You can remove an index with any of the following commands:
 
 ```sql
 DROP INDEX q01_geo_idx;
 ```
 
-```sql
+  ```sql
 DROP INDEX q01_geo_idx RESTRICT;
 ```
 
