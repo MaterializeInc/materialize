@@ -565,17 +565,25 @@ pub const MZ_KAFKA_CONSUMER_STATISTICS: BuiltinLog = BuiltinLog {
 pub const MZ_PROMETHEUS_READINGS: BuiltinLog = BuiltinLog {
     name: "mz_metrics",
     schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::Metrics),
+    variant: LogVariant::Materialized(MaterializedLog::MetricValues),
     id: GlobalId::System(3032),
     index_id: GlobalId::System(3033),
+};
+
+pub const MZ_PROMETHEUS_HISTOGRAMS: BuiltinLog = BuiltinLog {
+    name: "mz_metric_histograms",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Materialized(MaterializedLog::MetricHistograms),
+    id: GlobalId::System(3034),
+    index_id: GlobalId::System(3035),
 };
 
 pub const MZ_PROMETHEUS_METRICS: BuiltinLog = BuiltinLog {
     name: "mz_metrics_meta",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::MetricsMeta),
-    id: GlobalId::System(3034),
-    index_id: GlobalId::System(3035),
+    id: GlobalId::System(3036),
+    index_id: GlobalId::System(3037),
 };
 
 lazy_static! {
@@ -1297,6 +1305,7 @@ lazy_static! {
             Builtin::Log(&MZ_MESSAGE_COUNTS),
             Builtin::Log(&MZ_KAFKA_CONSUMER_STATISTICS),
             Builtin::Log(&MZ_PROMETHEUS_READINGS),
+            Builtin::Log(&MZ_PROMETHEUS_HISTOGRAMS),
             Builtin::Log(&MZ_PROMETHEUS_METRICS),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),

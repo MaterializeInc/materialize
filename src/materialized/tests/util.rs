@@ -99,6 +99,7 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
                 .map(|granularity| coord::LoggingConfig {
                     granularity,
                     log_logging: false,
+                    retain_readings_for: granularity,
                 }),
             timestamp_frequency: Duration::from_secs(1),
             cache: None,

@@ -305,6 +305,9 @@ mz_kafka_consumer_statistics
 mz_materialization_dependencies
 mz_materializations
 mz_message_counts
+mz_metric_histograms
+mz_metrics
+mz_metrics_meta
 mz_peek_active
 mz_peek_durations
 mz_scheduling_elapsed
@@ -325,6 +328,9 @@ mz_kafka_consumer_statistics         system true
 mz_materialization_dependencies      system true
 mz_materializations                  system true
 mz_message_counts                    system true
+mz_metric_histograms                 system true
+mz_metrics                           system true
+mz_metrics_meta                      system true
 mz_peek_active                       system true
 mz_peek_durations                    system true
 mz_scheduling_elapsed                system true
@@ -443,7 +449,7 @@ test_table
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-37
+40
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length

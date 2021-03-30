@@ -180,6 +180,7 @@ pub struct Coordinator {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     // Channel to communicate source status updates to the timestamper thread.
     ts_tx: std::sync::mpsc::Sender<TimestampMessage>,
+    metric_scraper_tx: Option<std::sync::mpsc::Sender<ScraperMessage>>,
     // Channel to communicate source status updates and shutdown notifications to the cacher
     // thread.
     cache_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
@@ -580,6 +581,9 @@ impl Coordinator {
     }
 
     async fn message_shutdown(&mut self) {
+        self.metric_scraper_tx
+            .as_ref()
+            .map(|tx| tx.send(ScraperMessage::Shutdown).unwrap());
         self.ts_tx.send(TimestampMessage::Shutdown).unwrap();
         self.broadcast(SequencedCommand::Shutdown);
     }
@@ -3549,6 +3553,7 @@ pub async fn serve(
         logical_compaction_window_ms: logical_compaction_window.map(duration_to_timestamp_millis),
         internal_cmd_tx,
         ts_tx: ts_tx.clone(),
+        metric_scraper_tx: metric_scraper_tx.clone(),
         cache_tx,
         closed_up_to: 1,
         read_lower_bound: 1,

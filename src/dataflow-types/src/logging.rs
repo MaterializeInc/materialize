@@ -53,7 +53,8 @@ pub enum MaterializedLog {
     DataflowDependency,
     FrontierCurrent,
     KafkaConsumerInfo,
-    Metrics,
+    MetricHistograms,
+    MetricValues,
     MetricsMeta,
     PeekCurrent,
     PeekDuration,
@@ -181,9 +182,25 @@ impl LogVariant {
                 .with_column("consumer_lag", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
 
-            LogVariant::Materialized(MaterializedLog::Metrics) => RelationDesc::empty()
+            LogVariant::Materialized(MaterializedLog::MetricHistograms) => RelationDesc::empty()
                 .with_column("metric", ScalarType::String.nullable(false))
-                .with_column("ts", ScalarType::Timestamp.nullable(false))
+                .with_column("time", ScalarType::Timestamp.nullable(false))
+                .with_column("labels", ScalarType::Jsonb.nullable(false))
+                .with_column("sum", ScalarType::Jsonb.nullable(false))
+                .with_column("count", ScalarType::Jsonb.nullable(false))
+                .with_column(
+                    "bounds",
+                    ScalarType::Array(Box::new(ScalarType::Float64)).nullable(false),
+                )
+                .with_column(
+                    "counts",
+                    ScalarType::Array(Box::new(ScalarType::Int64)).nullable(false),
+                )
+                .with_key(vec![0, 1, 2]),
+
+            LogVariant::Materialized(MaterializedLog::MetricValues) => RelationDesc::empty()
+                .with_column("metric", ScalarType::String.nullable(false))
+                .with_column("time", ScalarType::Timestamp.nullable(false))
                 .with_column("labels", ScalarType::Jsonb.nullable(false))
                 .with_column("value", ScalarType::Float64.nullable(false))
                 .with_key(vec![0, 1, 2]),
@@ -255,7 +272,11 @@ impl LogVariant {
                 LogVariant::Materialized(MaterializedLog::SourceInfo),
                 vec![(1, 1), (2, 2), (3, 3)],
             )],
-            LogVariant::Materialized(MaterializedLog::Metrics) => vec![(
+            LogVariant::Materialized(MaterializedLog::MetricHistograms) => vec![(
+                LogVariant::Materialized(MaterializedLog::MetricsMeta),
+                vec![(0, 0)],
+            )],
+            LogVariant::Materialized(MaterializedLog::MetricValues) => vec![(
                 LogVariant::Materialized(MaterializedLog::MetricsMeta),
                 vec![(0, 0)],
             )],

@@ -14,7 +14,7 @@ use std::{
 };
 
 use dataflow::{
-    logging::materialized::{MaterializedEvent, Metric, MetricReading},
+    logging::materialized::{MaterializedEvent, Metric, MetricReading, MetricValue},
     SequencedCommand,
 };
 use prometheus::{proto::MetricType, Registry};
@@ -23,8 +23,8 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::Message;
 
-/// Scrapes the prometheus registry in a regular interval and sends back a [`Batch`] of metric data
-/// that can be inserted into a table.
+/// Scrapes the prometheus registry in a regular interval and submits a batch of metric data to a
+/// logging worker, to be inserted into a table.
 pub struct Scraper<'a> {
     interval: Duration,
     retain_for: Duration,
@@ -52,9 +52,35 @@ fn convert_metrics_to_rows<'a, M: IntoIterator<Item = &'a prometheus::proto::Met
                 .map(|pair| (pair.get_name().to_owned(), pair.get_value().to_owned()))
                 .collect::<Vec<(String, String)>>();
             match kind {
-                COUNTER => Some(MetricReading::new(labels, m.get_counter().get_value())),
-                GAUGE => Some(MetricReading::new(labels, m.get_gauge().get_value())),
-                // TODO: destructure histograms & summaries in a meaningful way.
+                COUNTER => Some(MetricReading::new(
+                    labels,
+                    MetricValue::Value(m.get_counter().get_value()),
+                )),
+                GAUGE => Some(MetricReading::new(
+                    labels,
+                    MetricValue::Value(m.get_gauge().get_value()),
+                )),
+                HISTOGRAM => {
+                    let histo = m.get_histogram();
+                    Some(MetricReading::new(
+                        labels,
+                        MetricValue::Histogram {
+                            sum: histo.get_sample_sum(),
+                            total_count: histo.get_sample_count() as i64,
+                            counts: histo
+                                .get_bucket()
+                                .iter()
+                                .map(|b| b.get_cumulative_count() as i64)
+                                .collect(),
+                            bounds: histo
+                                .get_bucket()
+                                .iter()
+                                .map(|b| b.get_upper_bound())
+                                .collect(),
+                        },
+                    ))
+                }
+                // TODO: destructure summaries once we have any.
                 _ => None,
             }
         })
@@ -84,7 +110,7 @@ impl<'a> Scraper<'a> {
         let retain_for = self.retain_for.as_millis() as u64;
         loop {
             thread::sleep(self.interval);
-            let now: Timestamp = UNIX_EPOCH
+            let timestamp: Timestamp = UNIX_EPOCH
                 .elapsed()
                 .expect("system clock before 1970")
                 .as_millis()
@@ -114,7 +140,7 @@ impl<'a> Scraper<'a> {
             self.internal_tx
                 .send(Message::Broadcast(SequencedCommand::ReportMaterializedLog(
                     MaterializedEvent::PrometheusMetrics {
-                        timestamp: now,
+                        timestamp,
                         retain_for,
                         metrics,
                     },

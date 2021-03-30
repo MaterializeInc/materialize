@@ -21,7 +21,7 @@ use timely::logging::WorkerIdentifier;
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use expr::{GlobalId, SourceInstanceId};
-use repr::{Datum, Row, Timestamp};
+use repr::{adt::array::ArrayDimension, Datum, Row, Timestamp};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -114,6 +114,27 @@ impl Peek {
     }
 }
 
+/// A prometheus value's meaning.
+///
+/// This is straightforward for gauges and counters (which have only one meaning), but histograms
+/// and summaries can require multiple values to express their meanings correctly.
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+pub enum MetricValue {
+    /// A prometheus counter or gauge's current value
+    Value(f64),
+    /// A prometheus histogram as a set of values
+    Histogram {
+        /// The total sum of observed values.
+        sum: f64,
+        /// The total count of observed events.
+        total_count: i64,
+        /// The upper bounds of the histogram buckets (cumulative).
+        bounds: Vec<f64>,
+        /// The count of events in each histogram bucket.
+        counts: Vec<i64>,
+    },
+}
+
 /// The kind of a prometheus metric in a batch of metrics
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub enum MetricType {
@@ -163,6 +184,14 @@ pub struct Metric {
     readings: Vec<MetricReading>,
 }
 
+impl Metric {
+    /// Construct a new prometheus Metric.
+    pub fn new(name: String, kind: MetricType, help: String, readings: Vec<MetricReading>) -> Self {
+        let meta = MetricMeta { name, kind, help };
+        Self { meta, readings }
+    }
+}
+
 /// Information about the prometheus metric.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
 pub struct MetricMeta {
@@ -172,8 +201,8 @@ pub struct MetricMeta {
 }
 
 impl MetricMeta {
-    fn as_packed_row(&self, packer: &mut repr::RowPacker) -> repr::Row {
-        packer.pack(&[
+    fn as_packed_row(&self) -> repr::Row {
+        Row::pack_slice(&[
             Datum::from(self.name.as_str()),
             Datum::from(self.kind.as_str()),
             Datum::from(self.help.as_str()),
@@ -181,24 +210,16 @@ impl MetricMeta {
     }
 }
 
-impl Metric {
-    /// Construct a new prometheus Metric.
-    pub fn new(name: String, kind: MetricType, help: String, readings: Vec<MetricReading>) -> Self {
-        let meta = MetricMeta { name, kind, help };
-        Self { meta, readings }
-    }
-}
-
 /// A metric reading at a time for a set of labels.
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 pub struct MetricReading {
     labels: Vec<(String, String)>,
-    value: f64,
+    value: MetricValue,
 }
 
 impl MetricReading {
     /// Construct a new metric reading with the given labels and a value.
-    pub fn new(labels: Vec<(String, String)>, value: f64) -> Self {
+    pub fn new(labels: Vec<(String, String)>, value: MetricValue) -> Self {
         Self { labels, value }
     }
 }
@@ -232,6 +253,7 @@ pub fn construct<A: Allocate>(
         let (mut frontier_out, frontier) = demux.new_output();
         let (mut kafka_consumer_info_out, kafka_consumer_info) = demux.new_output();
         let (mut metrics_out, metrics) = demux.new_output();
+        let (mut metrics_histos_out, metrics_histos) = demux.new_output();
         let (mut metrics_meta_out, metrics_meta) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
         let (mut source_info_out, source_info) = demux.new_output();
@@ -246,6 +268,7 @@ pub fn construct<A: Allocate>(
                 let mut frontier = frontier_out.activate();
                 let mut kafka_consumer_info = kafka_consumer_info_out.activate();
                 let mut metrics = metrics_out.activate();
+                let mut metrics_histos = metrics_histos_out.activate();
                 let mut metrics_meta = metrics_meta_out.activate();
                 let mut peek = peek_out.activate();
                 let mut source_info = source_info_out.activate();
@@ -258,6 +281,7 @@ pub fn construct<A: Allocate>(
                     let mut frontier_session = frontier.session(&time);
                     let mut kafka_consumer_info_session = kafka_consumer_info.session(&time);
                     let mut metrics_session = metrics.session(&time);
+                    let mut metrics_histos_session = metrics_histos.session(&time);
                     let mut metrics_meta_session = metrics_meta.session(&time);
                     let mut peek_session = peek.session(&time);
                     let mut source_info_session = source_info.session(&time);
@@ -376,20 +400,56 @@ pub fn construct<A: Allocate>(
                                 let chrono_timestamp = chrono::NaiveDateTime::from_timestamp(0, 0)
                                     + chrono::Duration::from_std(Duration::from_millis(timestamp))
                                         .expect("Couldn't convert timestamps");
+                                let mut row_packer = Row::default();
                                 for metric in metrics {
                                     for reading in metric.readings {
-                                        row_packer.push(Datum::from(metric.meta.name.as_str()));
-                                        row_packer.push(Datum::from(chrono_timestamp));
-                                        row_packer.push_dict(reading.labels.iter().map(
-                                            |(name, value)| {
-                                                (name.as_str(), Datum::from(value.as_str()))
-                                            },
-                                        ));
-                                        row_packer.push(Datum::from(reading.value));
-                                        let row = row_packer.finish_and_reuse();
-
-                                        metrics_session.give((row.clone(), time_ms, 1));
-                                        metrics_session.give((row, time_ms + retain_for, -1));
+                                        let labels = reading.labels.iter().map(|(name, value)| {
+                                            (name.as_str(), Datum::from(value.as_str()))
+                                        });
+                                        let (row, session) = match reading.value {
+                                            MetricValue::Value(v) => {
+                                                row_packer
+                                                    .push(Datum::from(metric.meta.name.as_str()));
+                                                row_packer.push(Datum::from(chrono_timestamp));
+                                                row_packer.push_dict(labels);
+                                                row_packer.push(Datum::from(v));
+                                                (
+                                                    row_packer.finish_and_reuse(),
+                                                    &mut metrics_session,
+                                                )
+                                            }
+                                            MetricValue::Histogram {
+                                                sum,
+                                                total_count,
+                                                bounds,
+                                                counts,
+                                            } => {
+                                                let dims = &[ArrayDimension {
+                                                    lower_bound: 0,
+                                                    length: bounds.len(),
+                                                }];
+                                                row_packer
+                                                    .push(Datum::from(metric.meta.name.as_str()));
+                                                row_packer.push(Datum::from(chrono_timestamp));
+                                                row_packer.push_dict(labels);
+                                                row_packer.push(Datum::from(sum));
+                                                row_packer.push(Datum::from(total_count));
+                                                let bounds = bounds.into_iter().map(Datum::from);
+                                                row_packer.push_array(dims, bounds).expect(
+                                                    "Mismatch in histogram array dimensions",
+                                                );
+                                                let counts = counts.into_iter().map(Datum::Int64);
+                                                row_packer.push_array(dims, counts).expect(
+                                                    "Mismatch in histogram array dimensions",
+                                                );
+                                                (
+                                                    row_packer.finish_and_reuse(),
+                                                    &mut metrics_histos_session,
+                                                )
+                                            }
+                                        };
+                                        session.give((row.clone(), time_ms, 1));
+                                        session.give((row, time_ms + retain_for, -1));
                                     }
                                     // Expire the metadata of a metric reading when the reading
                                     // would expire, but refresh its lifetime when we get another
@@ -398,7 +458,7 @@ pub fn construct<A: Allocate>(
                                     let meta_expiry =
                                         active_metrics.get(&meta).copied().unwrap_or(0);
                                     if meta_expiry <= time_ms {
-                                        let row = meta.as_packed_row(&mut row_packer);
+                                        let row = meta.as_packed_row();
                                         metrics_meta_session.give((row.clone(), time_ms, 1));
                                         metrics_meta_session.give((row, time_ms + retain_for, -1));
                                         active_metrics
@@ -470,6 +530,7 @@ pub fn construct<A: Allocate>(
         });
 
         let metrics_current = metrics.as_collection();
+        let metrics_histos_current = metrics_histos.as_collection();
         let metrics_meta_current = metrics_meta.as_collection();
 
         let peek_current = peek
@@ -585,8 +646,12 @@ pub fn construct<A: Allocate>(
                 kafka_consumer_info_current,
             ),
             (
-                LogVariant::Materialized(MaterializedLog::Metrics),
+                LogVariant::Materialized(MaterializedLog::MetricValues),
                 metrics_current,
+            ),
+            (
+                LogVariant::Materialized(MaterializedLog::MetricHistograms),
+                metrics_histos_current,
             ),
             (
                 LogVariant::Materialized(MaterializedLog::MetricsMeta),
