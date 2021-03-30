@@ -752,7 +752,7 @@ impl ParamType {
 
         match self {
             ArrayAny => matches!(t, Array(..)),
-            ListAny => matches!(t, List{..}),
+            ListAny => matches!(t, List { .. }),
             Any | ListElementAny => true,
             NonVecAny => !t.is_vec(),
             MapAny => matches!(t, Map { .. }),

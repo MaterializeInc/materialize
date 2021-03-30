@@ -72,7 +72,10 @@ pub enum Statement<T: AstInfo> {
 impl<T: AstInfo> Statement<T> {
     /// Reports whether the statement is cursor-related.
     pub fn is_cursor(&self) -> bool {
-        matches!(self, Statement::Declare(_) | Statement::Fetch(_) | Statement::Close(_))
+        matches!(
+            self,
+            Statement::Declare(_) | Statement::Fetch(_) | Statement::Close(_)
+        )
     }
 }
 

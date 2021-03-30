@@ -63,11 +63,11 @@ impl Encoder {
             let enc_data = super::encode_datums_as_avro(data, &self.columns);
             let enc_time = Value::Long(time.clone());
             let enc_diff = Value::Long(diff.clone());
-            let mut enc_update = Vec::new();
-            enc_update.push(("data".to_string(), enc_data));
-            enc_update.push(("time".to_string(), enc_time));
-            enc_update.push(("diff".to_string(), enc_diff));
-            enc_updates.push(Value::Record(enc_update));
+            enc_updates.push(Value::Record(vec![
+                ("data".to_string(), enc_data),
+                ("time".to_string(), enc_time),
+                ("diff".to_string(), enc_diff),
+            ]));
         }
         Value::Union {
             index: 0,
@@ -278,7 +278,7 @@ mod tests {
             encoder.encode_progress(&[0], &[3], &[]),
             encoder.encode_progress(&[3], &[], &[]),
         ];
-        use mz_avro::encode::encode_to_vec;;
+        use mz_avro::encode::encode_to_vec;
         let mut values: Vec<_> = values
             .into_iter()
             .map(|v| encode_to_vec(&v, &schema))

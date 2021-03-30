@@ -59,10 +59,8 @@ impl CachedRecord {
         let len = NetworkEndian::read_u32(&data) as usize;
         assert!(
             len >= 16,
-            format!(
-                "expected to see at least 16 bytes in record, but saw {}",
-                len
-            )
+            "expected to see at least 16 bytes in record, but saw {}",
+            len
         );
 
         // Grab the next len bytes after the 4 byte length header, and turn
