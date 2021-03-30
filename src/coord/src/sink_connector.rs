@@ -118,7 +118,10 @@ async fn get_latest_ts(
     // Seek to end-1 offset
     let mut tps = TopicPartitionList::new();
     tps.add_partition(consistency_topic, partition);
-    tps.set_partition_offset(consistency_topic, partition, Offset::OffsetTail(1))?;
+    // TODO(aljoscha): this works for the transactional case, where the last
+    // record is *usually* a control batch and the END record we want is the
+    // second-to-last record. Need a better solution for this.
+    tps.set_partition_offset(consistency_topic, partition, Offset::OffsetTail(2))?;
 
     consumer.assign(&tps).with_context(|| {
         format!(
