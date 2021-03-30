@@ -32,7 +32,7 @@ pub mod strconv;
 
 pub use cache::{CachedRecord, CachedRecordIter};
 pub use relation::{ColumnName, ColumnType, RelationDesc, RelationType};
-pub use row::{datum_size, DatumList, DatumMap, Row, RowArena, RowPacker, RowRef};
+pub use row::{datum_size, datums_size, DatumList, DatumMap, Row, RowArena, RowPacker, RowRef};
 pub use scalar::{Datum, ScalarBaseType, ScalarType};
 
 // Concrete types used throughout Materialize for the generic parameters in Timely/Differential Dataflow.

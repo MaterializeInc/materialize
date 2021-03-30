@@ -913,7 +913,6 @@ impl PendingPeek {
         let (mut cursor, storage) = self.trace_bundle.oks_mut().cursor();
         // Accumulated `Vec<Datum>` results that we are likely to return.
         let mut results = Vec::new();
-        let mut row_packer = repr::RowPacker::new();
 
         // When set, a bound on the number of records we need to return.
         // The requirements on the records are driven by the finishing's
@@ -941,7 +940,7 @@ impl PendingPeek {
                 let mut datums = row.unpack();
                 if let Some(result) = self
                     .map_filter_project
-                    .evaluate(&mut datums, &arena, &mut row_packer)
+                    .evaluate(&mut datums, &arena)
                     .map_err(|e| e.to_string())?
                 {
                     let mut copies = 0;
