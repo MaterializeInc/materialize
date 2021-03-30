@@ -751,7 +751,7 @@ impl<'a> RowRef<'a> {
     /// This method is unsafe because if the byte slice is not a valid
     /// row encoding, then unpacking its contents can cause undefined
     /// behavior.
-    pub unsafe fn from_slice(data: &'a [u8]) -> Self {
+    pub unsafe fn from_bytes_unchecked(data: &'a [u8]) -> Self {
         Self { data }
     }
 
