@@ -21,8 +21,11 @@ use lazy_static::lazy_static;
 /// The maximum number of digits expressable in an APD.
 pub const APD_DATUM_WIDTH: usize = 13;
 pub const APD_DATUM_MAX_PRECISION: usize = APD_DATUM_WIDTH * 3;
+pub const APD_AGG_WIDTH: usize = 27;
+pub const APD_AGG_MAX_PRECISION: usize = APD_AGG_WIDTH * 3;
 
 pub type Apd = Decimal<APD_DATUM_WIDTH>;
+pub type ApdAgg = Decimal<APD_AGG_WIDTH>;
 
 lazy_static! {
     static ref CX_DATUM: Context<Apd> = {
@@ -33,11 +36,24 @@ lazy_static! {
             .unwrap();
         cx
     };
+    static ref CX_AGG: Context<ApdAgg> = {
+        let mut cx = Context::<ApdAgg>::default();
+        cx.set_max_exponent(isize::try_from(APD_AGG_MAX_PRECISION - 1).unwrap())
+            .unwrap();
+        cx.set_min_exponent(-(isize::try_from(APD_AGG_MAX_PRECISION).unwrap()))
+            .unwrap();
+        cx
+    };
 }
 
 /// Returns a new context appropriate for operating on APD datums.
 pub fn cx_datum() -> Context<Apd> {
     CX_DATUM.clone()
+}
+
+/// Returns a new context appropriate for operating on APD aggregates.
+pub fn cx_agg() -> Context<ApdAgg> {
+    CX_AGG.clone()
 }
 
 /// Parses am `i128` from a buffer storing the two's complement representation
