@@ -13,6 +13,7 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
 use std::str;
+use std::thread;
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
@@ -1408,8 +1409,8 @@ fn power_dec<'a>(a: Datum<'a>, b: Datum<'a>, scale: u8) -> Result<Datum<'a>, Eva
 
 fn sleep<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let duration = std::time::Duration::from_secs_f64(a.unwrap_float64());
-    std::thread::sleep(duration);
-    Ok(Datum::from(Utc::now()))
+    thread::sleep(duration);
+    Ok(Datum::Null)
 }
 
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -3560,7 +3561,7 @@ impl UnaryFunc {
             Cot => ScalarType::Float64.nullable(in_nullable),
             Log10 | Ln | Exp => ScalarType::Float64.nullable(in_nullable),
             Log10Decimal(_) | LnDecimal(_) | ExpDecimal(_) => input_type,
-            Sleep => ScalarType::TimestampTz.nullable(false),
+            Sleep => ScalarType::TimestampTz.nullable(true),
         }
     }
 
