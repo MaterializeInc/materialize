@@ -11,6 +11,8 @@
 
 use anyhow::anyhow;
 
+use sql_parser::ast::display::{AstDisplay, AstFormatter};
+use sql_parser::impl_display;
 use tokio_postgres::types::Type as PgType;
 use tokio_postgres::NoTls;
 
@@ -22,6 +24,30 @@ pub struct PgColumn {
     collation: Option<String>,
     default_expr: Option<String>,
 }
+
+impl AstDisplay for PgColumn {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str(&self.name);
+        f.write_str(" ");
+        f.write_str(&self.scalar_type);
+        if let Some(collation) = &self.collation {
+            if collation != "default" {
+                f.write_str(" COLLATE ");
+                f.write_str(collation);
+            }
+        }
+        if let Some(default) = &self.default_expr {
+            f.write_str(" DEFAULT ");
+            f.write_str(default);
+        }
+        if self.nullable {
+            f.write_str(" NULL");
+        } else {
+            f.write_str(" NOT NULL");
+        }
+    }
+}
+impl_display!(PgColumn);
 
 /// Fetches column information from an upstream Postgres source, given
 /// a connection string, a namespace, and a target table.
@@ -88,43 +114,4 @@ pub async fn fetch_columns(
             })
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?)
-}
-
-/// Stringifies `PgColumn` information to appear as they would have been written in text.
-pub fn format_columns(columns: Vec<PgColumn>) -> String {
-    let nullable = |nullable| {
-        if nullable {
-            "NULL"
-        } else {
-            "NOT NULL"
-        }
-    };
-    let collate = |collation| {
-        if let Some(collation) = collation {
-            if &collation != "default" {
-                return format!(" COLLATE {}", collation);
-            }
-        }
-        "".to_owned()
-    };
-    let default = |default| {
-        if let Some(expr) = default {
-            return format!(" DEFAULT {}", expr);
-        } else {
-            "".to_owned()
-        }
-    };
-
-    let mut formatted_columns = Vec::with_capacity(columns.len());
-    for c in columns {
-        formatted_columns.push(format!(
-            "{} {}{}{} {}",
-            c.name,
-            c.scalar_type,
-            collate(c.collation),
-            default(c.default_expr),
-            nullable(c.nullable)
-        ));
-    }
-    format!("({})", formatted_columns.join(","))
 }
