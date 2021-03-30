@@ -1150,10 +1150,10 @@ fn kafka_sink_builder(
             if item.item_type() == CatalogItemType::Source
                 && !item.source_connector()?.yields_stable_input()
             {
-                bail!(
-                    "all input sources of an exactly-once Kafka sink must be replayable, {} is not",
-                    item.name()
-                );
+                // bail!(
+                //     "all input sources of an exactly-once Kafka sink must be replayable, {} is not",
+                //     item.name()
+                // );
             } else if item.item_type() != CatalogItemType::Source {
                 bail!(
                     "all inputs of an exactly-once Kafka sink must be sources, {} is not",
