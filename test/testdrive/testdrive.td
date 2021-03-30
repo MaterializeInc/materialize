@@ -48,3 +48,16 @@ $ set-regex match=u\d+ replacement=UID
 
 ! SELECT * FROM u1234;
 unknown catalog item 'UID'
+
+# kafka-verify sort-messages
+
+> CREATE VIEW sort_messages (a) AS VALUES (2),(1),(3);
+
+> CREATE SINK sort_messages_sink FROM sort_messages
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'sort-messages-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.sort_messages_sink sort-messages=true
+{"before": null, "after": {"row": {"a": 1}}}
+{"before": null, "after": {"row": {"a": 2}}}
+{"before": null, "after": {"row": {"a": 3}}}

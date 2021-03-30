@@ -604,16 +604,25 @@ class KillServicesStep(WorkflowStep):
     """
     Params:
       services: List of service names
+      signal: signal to send to the container (e.g. SIGINT)
     """
 
-    def __init__(self, *, services: Optional[List[str]] = None) -> None:
+    def __init__(
+        self, *, services: Optional[List[str]] = None, signal: Optional[str] = None
+    ) -> None:
         self._services = services if services is not None else []
         if not isinstance(self._services, list):
             raise errors.BadSpec(f"services should be a list, got: {self._services}")
+        self._signal = signal
 
     def run(self, workflow: Workflow) -> None:
+        compose_cmd = ["kill"]
+        if self._signal:
+            compose_cmd.extend(["-s", self._signal])
+        compose_cmd.extend(self._services)
+
         try:
-            workflow.run_compose(["kill", *self._services])
+            workflow.run_compose(compose_cmd)
         except subprocess.CalledProcessError:
             services = ", ".join(self._services)
             raise errors.Failed(f"ERROR: services didn't die cleanly: {services}")
