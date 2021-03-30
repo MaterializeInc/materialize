@@ -29,9 +29,9 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null = 1 AND (col_not_null = 1 AND col_null = 5);
 "%0 =| Get t1| Filter (#0 = 5), (#1 = 1)"
 
-# NULL-able expressions are not optimized
+# NULL-able expressions are dedupped
 > EXPLAIN SELECT * FROM t1 WHERE col_null = 1 AND (col_null = 1 AND col_not_null = 5);
-"%0 =| Get t1| Filter (#0 = 1), (#0 = 1), (#1 = 5)"
+"%0 =| Get t1| Filter (#0 = 1), (#1 = 5)"
 
 # OR/disjunction at the top level
 
@@ -57,7 +57,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # A more complex expression
 
 > EXPLAIN SELECT * FROM t1 WHERE (col_not_null + 1 / col_not_null) = 5 AND ((col_not_null + 1 / col_not_null) = 5 AND col_null = 6);
-"%0 =| Get t1| Filter (#0 = 6), (5 = (#1 + (1 / #1))), (5 = (#1 + (1 / #1)))"
+"%0 =| Get t1| Filter (#0 = 6), (5 = (#1 + (1 / #1)))"
 
 # More nesting
 
