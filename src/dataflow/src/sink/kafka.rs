@@ -9,6 +9,7 @@
 
 use std::any::Any;
 use std::collections::{HashMap, VecDeque};
+use std::convert::TryInto;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,6 +45,9 @@ pub struct SinkMetrics {
     message_delivery_errors_counter: IntCounter,
     rows_queued: UIntGauge,
     messages_in_flight: UIntGauge,
+    pending_timestamps: UIntGauge,
+    closed_timestamps: UIntGauge,
+    input_frontier: UIntGauge,
 }
 
 impl SinkMetrics {
@@ -79,6 +83,24 @@ impl SinkMetrics {
                 &["topic", "sink_id", "worker_id"]
             )
             .unwrap();
+            static ref PENDING_TIMESTAMPS: UIntGaugeVec = register_uint_gauge_vec!(
+                "mz_kafka_sink_pending_timestamps",
+                "The current number of pending timestamps (these are timestamps that are still beyond the consistency frontier",
+                &["topic", "sink_id", "worker_id"]
+            )
+            .unwrap();
+            static ref CLOSED_TIMESTAMPS: UIntGaugeVec = register_uint_gauge_vec!(
+                "mz_kafka_sink_closed_timestamps",
+                "The current number ready timestamps (these are timestamps that beyond the consistency frontier",
+                &["topic", "sink_id", "worker_id"]
+            )
+            .unwrap();
+            static ref INPUT_FRONTIER: UIntGaugeVec = register_uint_gauge_vec!(
+                "mz_kafka_sink_frontier",
+                "The frontier",
+                &["topic", "sink_id", "worker_id"]
+            )
+            .unwrap();
         }
         let labels = &[topic_name, sink_id, worker_id];
         SinkMetrics {
@@ -88,6 +110,9 @@ impl SinkMetrics {
                 .with_label_values(labels),
             rows_queued: ROWS_QUEUED.with_label_values(labels),
             messages_in_flight: MESSAGES_IN_FLIGHT.with_label_values(labels),
+            pending_timestamps: PENDING_TIMESTAMPS.with_label_values(labels),
+            closed_timestamps: CLOSED_TIMESTAMPS.with_label_values(labels),
+            input_frontier: INPUT_FRONTIER.with_label_values(labels),
         }
     }
 }
@@ -334,6 +359,10 @@ where
             return false;
         }
 
+        s.metrics
+            .input_frontier
+            .set(input.frontier.frontier().first().unwrap_or(&0).clone());
+
         // Encode and queue all pending rows waiting to be sent to kafka
         input.for_each(|_, rows| {
             rows.swap(&mut vector);
@@ -389,11 +418,20 @@ where
             .filter(|(ts, _)| !input.frontier.less_equal(*ts))
             .map(|(&ts, _)| ts)
             .collect();
+        s.metrics
+            .closed_timestamps
+            .add(closed_ts.len().try_into().unwrap_or(0));
         closed_ts.sort_unstable();
         closed_ts.into_iter().for_each(|ts| {
             let rows = pending_rows.remove(&ts).unwrap();
             ready_rows.push_back((ts, rows));
         });
+
+        let num_pending_timestamps: usize = pending_rows.iter().map(|(&ts, _)| ts).count();
+
+        s.metrics
+            .pending_timestamps
+            .set(num_pending_timestamps.try_into().unwrap_or(0));
 
         // Send a bounded number of records to Kafka from the ready queue.
         // This loop has explicitly been designed so that each iteration sends
