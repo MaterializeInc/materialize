@@ -244,7 +244,8 @@ fn test_unparseable_schemas() {
     for raw_schema in UNPARSEABLE_SCHEMAS.iter() {
         assert!(
             Schema::from_str(raw_schema).is_err(),
-            format!("expected Avro schema not to parse: {}", raw_schema)
+            "expected Avro schema not to parse: {}",
+            raw_schema
         );
     }
 }
@@ -254,7 +255,8 @@ fn test_unparseable_logical_types() {
     for raw_schema in UNPARSEABLE_LOGICAL_TYPES.iter() {
         assert!(
             Schema::from_str(raw_schema).is_err(),
-            format!("expected Avro schema not to parse: {}", raw_schema)
+            "expected Avro schema not to parse: {}",
+            raw_schema
         );
     }
 }
@@ -265,7 +267,9 @@ fn test_valid_schemas() {
         let schema = Schema::from_str(raw_schema).unwrap();
         assert!(
             value.validate(schema.top_node()),
-            format!("value {:?} does not validate schema: {}", value, raw_schema)
+            "value {:?} does not validate schema: {}",
+            value,
+            raw_schema
         );
     }
 }
@@ -276,7 +280,9 @@ fn test_valid_logical_types() {
         let schema = Schema::from_str(raw_schema).unwrap();
         assert!(
             value.validate(schema.top_node()),
-            format!("value {:?} does not validate schema: {}", value, raw_schema)
+            "value {:?} does not validate schema: {}",
+            value,
+            raw_schema
         );
     }
 }
@@ -287,7 +293,9 @@ fn test_ignored_logical_types() {
         let schema = Schema::from_str(raw_schema).unwrap();
         assert!(
             value.validate(schema.top_node()),
-            format!("value {:?} does not validate schema: {}", value, raw_schema)
+            "value {:?} does not validate schema: {}",
+            value,
+            raw_schema
         );
     }
 }

@@ -140,7 +140,7 @@ pub fn create_statement(
         let full_name = scx.resolve_function(name.clone())?;
         *name = unresolve(full_name.name().clone());
         Ok(())
-    };
+    }
 
     struct QueryNormalizer<'a> {
         scx: &'a StatementContext<'a>,

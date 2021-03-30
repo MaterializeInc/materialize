@@ -1850,7 +1850,10 @@ impl Catalog {
     /// unmaterialized source.
     pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, bool) {
         fn has_indexes(catalog: &Catalog, id: GlobalId) -> bool {
-            matches!(catalog.get_by_id(&id).item(), CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_))
+            matches!(
+                catalog.get_by_id(&id).item(),
+                CatalogItem::Table(_) | CatalogItem::Source(_) | CatalogItem::View(_)
+            )
         }
 
         fn inner(
