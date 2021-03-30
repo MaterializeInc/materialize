@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
+use self::prometheus::{Scraper, ScraperMessage};
 use anyhow::{anyhow, Context};
 use derivative::Derivative;
 use differential_dataflow::lattice::Lattice;
@@ -87,6 +88,7 @@ use crate::util::ClientTransmitter;
 
 mod arrangement_state;
 mod dataflow_builder;
+mod prometheus;
 
 #[derive(Debug)]
 pub enum Message {
@@ -95,6 +97,7 @@ pub enum Message {
     AdvanceSourceTimestamp(AdvanceSourceTimestamp),
     StatementReady(StatementReady),
     SinkConnectorReady(SinkConnectorReady),
+    InsertBuiltinTableUpdates(TimestampedUpdate),
     Shutdown,
 }
 
@@ -125,11 +128,18 @@ pub struct SinkConnectorReady {
     pub result: Result<SinkConnector, CoordError>,
 }
 
+#[derive(Debug)]
+pub struct TimestampedUpdate {
+    pub updates: Vec<BuiltinTableUpdate>,
+    pub timestamp_offset: u64,
+}
+
 /// Configures dataflow worker logging.
 #[derive(Clone, Debug)]
 pub struct LoggingConfig {
     pub granularity: Duration,
     pub log_logging: bool,
+    pub retain_readings_for: Duration,
 }
 
 /// Configures a coordinator.
@@ -169,6 +179,7 @@ pub struct Coordinator {
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     // Channel to communicate source status updates to the timestamper thread.
     ts_tx: std::sync::mpsc::Sender<TimestampMessage>,
+    metric_scraper_tx: Option<std::sync::mpsc::Sender<ScraperMessage>>,
     // Channel to communicate source status updates and shutdown notifications to the cacher
     // thread.
     cache_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
@@ -434,6 +445,7 @@ impl Coordinator {
         cmd_rx: mpsc::UnboundedReceiver<Command>,
         feedback_rx: mpsc::UnboundedReceiver<WorkerFeedbackWithMeta>,
         _timestamper_thread_handle: JoinOnDropHandle<()>,
+        _metric_thread_handle: Option<JoinOnDropHandle<()>>,
     ) {
         let cmd_stream = UnboundedReceiverStream::new(cmd_rx)
             .map(Message::Command)
@@ -460,6 +472,13 @@ impl Coordinator {
                 }
                 Message::AdvanceSourceTimestamp(advance) => {
                     self.message_advance_source_timestamp(advance).await
+                }
+                Message::InsertBuiltinTableUpdates(update) => {
+                    self.send_builtin_table_updates_at_offset(
+                        update.timestamp_offset,
+                        update.updates,
+                    )
+                    .await
                 }
                 Message::Shutdown => {
                     self.message_shutdown().await;
@@ -576,6 +595,9 @@ impl Coordinator {
     }
 
     async fn message_shutdown(&mut self) {
+        self.metric_scraper_tx
+            .as_ref()
+            .map(|tx| tx.send(ScraperMessage::Shutdown).unwrap());
         self.ts_tx.send(TimestampMessage::Shutdown).unwrap();
         self.broadcast(SequencedCommand::Shutdown);
     }
@@ -2553,8 +2575,12 @@ impl Coordinator {
         Ok(())
     }
 
-    async fn send_builtin_table_updates(&mut self, mut updates: Vec<BuiltinTableUpdate>) {
-        let timestamp = self.get_write_ts();
+    async fn send_builtin_table_updates_at_offset(
+        &mut self,
+        timestamp_offset: u64,
+        mut updates: Vec<BuiltinTableUpdate>,
+    ) {
+        let timestamp = self.get_write_ts() + timestamp_offset;
         updates.sort_by_key(|u| u.id);
         for (id, updates) in &updates.into_iter().group_by(|u| u.id) {
             self.broadcast(SequencedCommand::Insert {
@@ -2569,6 +2595,10 @@ impl Coordinator {
                     .collect(),
             })
         }
+    }
+
+    async fn send_builtin_table_updates(&mut self, updates: Vec<BuiltinTableUpdate>) {
+        self.send_builtin_table_updates_at_offset(0, updates).await
     }
 
     async fn drop_sinks(&mut self, dataflow_names: Vec<GlobalId>) {
@@ -2883,6 +2913,31 @@ pub async fn serve(
     })
     .map_err(|s| CoordError::Unstructured(anyhow!("{}", s)))?;
 
+    let (metric_scraper_handle, metric_scraper_tx) = if let Some(LoggingConfig {
+        granularity,
+        retain_readings_for,
+        ..
+    }) = logging
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut scraper = Scraper::new(
+            granularity,
+            retain_readings_for,
+            ::prometheus::default_registry(),
+            rx,
+            internal_cmd_tx.clone(),
+        );
+        let executor = TokioHandle::current();
+        let scraper_thread_handle = thread::spawn(move || {
+            let _executor_guard = executor.enter();
+            scraper.run();
+        })
+        .join_on_drop();
+        (Some(scraper_thread_handle), Some(tx))
+    } else {
+        (None, None)
+    };
+
     // Spawn timestamper after any fallible operations so that if bootstrap fails we still
     // tell it to shut down.
     let (ts_tx, ts_rx) = std::sync::mpsc::channel();
@@ -2910,6 +2965,7 @@ pub async fn serve(
         logical_compaction_window_ms: logical_compaction_window.map(duration_to_timestamp_millis),
         internal_cmd_tx,
         ts_tx: ts_tx.clone(),
+        metric_scraper_tx: metric_scraper_tx.clone(),
         cache_tx,
         closed_up_to: 1,
         read_lower_bound: 1,
@@ -2941,6 +2997,7 @@ pub async fn serve(
                     cmd_rx,
                     feedback_rx,
                     timestamper_thread_handle,
+                    metric_scraper_handle,
                 ))
             });
             let handle = Handle {
@@ -2953,6 +3010,7 @@ pub async fn serve(
             Ok((handle, client))
         }
         Err(e) => {
+            metric_scraper_tx.map(|tx| tx.send(ScraperMessage::Shutdown).unwrap());
             // Tell the timestamper thread to shut down.
             ts_tx.send(TimestampMessage::Shutdown).unwrap();
             // Explicitly drop the timestamper handle here so we can wait for

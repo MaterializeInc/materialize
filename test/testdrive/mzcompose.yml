@@ -102,6 +102,7 @@ services:
       --cache-max-pending-records 1
       --timestamp-frequency 100ms
       --disable-telemetry
+      --retain-prometheus-metrics 1s
     ports:
       - 6875
     environment:
