@@ -814,7 +814,7 @@ impl Timestamper {
                 match get_kafka_partitions(
                     &consumer.consumer,
                     &timestamp_topic,
-                    Duration::from_secs(1),
+                    Duration::from_secs(5),
                 )
                 .as_ref()
                 .map(Deref::deref)
