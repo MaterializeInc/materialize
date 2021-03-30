@@ -726,7 +726,7 @@ impl Row {
     ///
     /// Panics if the `Row` is empty.
     pub fn unpack_first(&self) -> Datum {
-        unsafe { read_datum(&self.data, &mut 0) }
+        self.iter().next().unwrap()
     }
 
     /// Iterate the `Datum` elements of the `Row`.
@@ -768,7 +768,7 @@ impl<'a> RowRef<'a> {
     ///
     /// Panics if the `Row` is empty.
     pub fn unpack_first(&self) -> Datum {
-        unsafe { read_datum(&self.data, &mut 0) }
+        self.iter().next().unwrap()
     }
 
     /// Iterate the `Datum` elements of the `Row`.
