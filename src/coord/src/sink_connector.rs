@@ -120,20 +120,29 @@ async fn get_latest_ts(
     tps.add_partition(consistency_topic, partition);
     tps.set_partition_offset(consistency_topic, partition, Offset::OffsetTail(1))?;
 
-    consumer
-        .assign(&tps)
-        .with_context(|| format!("Error seeking in consistency topic {}", consistency_topic))?;
+    consumer.assign(&tps).with_context(|| {
+        format!(
+            "Error seeking in consistency topic {}:{}",
+            consistency_topic, partition
+        )
+    })?;
 
     // Read the end-1 offset message
     let m = match get_next_message(consumer, timeout)? {
         None => {
             // fetch watermarks to distinguish between a timeout reading end-1 and an empty topic
             match consumer.fetch_watermarks(consistency_topic, 0, timeout) {
-                Ok((_, hi)) => {
+                Ok((lo, hi)) => {
                     if hi == 0 {
                         return Ok(None);
                     } else {
-                        bail!("uninitializedlkajsdlkfjs");
+                        bail!(
+                            "uninitialized consistency topic {}:{}, lo/hi: {}/{}",
+                            consistency_topic,
+                            partition,
+                            lo,
+                            hi
+                        );
                     }
                 }
                 Err(e) => {
