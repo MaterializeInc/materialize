@@ -18,8 +18,8 @@ menu:
 
 Parameter | Type | Description
 ----------|------|------------
-zone | [`text`](../../types/text) | The target time zone.
-type  |[`text`](../../types/text) or [`numeric`](../../types/numeric) |  The datatype in which the time zone is expressed
+_zone_ | [`text`](../../types/text) | The target time zone.
+_type_  |[`text`](../../types/text) or [`numeric`](../../types/numeric) |  The datatype in which the time zone is expressed
 _timestamp_ | [`timestamp`](../../types/timestamp/#timestamp-info) | The timestamp without time zone.  |   |
 _timestamptz_ | [`timestamptz`](../../types/timestamp/#timestamp-with-time-zone-info) | The timestamp with time zone.
 
