@@ -169,7 +169,7 @@ WHERE l1.la IN (
 
 %4 =
 | Get %2 (l0)
-| Filter !(isnull(#0)), ((#0 = (#1 + 1)) || (isnull(#0) && isnull(#1)))
+| Filter !(isnull(#0)), ((isnull(#0) && isnull(#1)) || (#0 = (#1 + 1)))
 
 %5 =
 | Get %2 (l0)

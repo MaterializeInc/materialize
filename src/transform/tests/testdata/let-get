@@ -38,6 +38,6 @@ build apply=PredicatePushdown
 
 %1 =
 | Get %0 (l0)
-| Filter #0
+| Filter 
 ----
 ----
