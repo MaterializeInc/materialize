@@ -118,10 +118,7 @@ async fn get_latest_ts(
     // Seek to end-1 offset
     let mut tps = TopicPartitionList::new();
     tps.add_partition(consistency_topic, partition);
-    // TODO(aljoscha): this works for the transactional case, where the last
-    // record is *usually* a control batch and the END record we want is the
-    // second-to-last record. Need a better solution for this.
-    tps.set_partition_offset(consistency_topic, partition, Offset::OffsetTail(2))?;
+    tps.set_partition_offset(consistency_topic, partition, Offset::OffsetTail(20))?;
 
     consumer.assign(&tps).with_context(|| {
         format!(
@@ -130,42 +127,56 @@ async fn get_latest_ts(
         )
     })?;
 
-    // Read the end-1 offset message
-    let message_bytes = match get_next_message(consumer, timeout)? {
-        None => {
-            // fetch watermarks to distinguish between a timeout reading end-1 and an empty topic
-            match consumer.fetch_watermarks(consistency_topic, 0, timeout) {
-                Ok((lo, hi)) => {
-                    if hi == 0 {
-                        return Ok(None);
-                    } else {
-                        bail!(
-                            "uninitialized consistency topic {}:{}, lo/hi: {}/{}",
-                            consistency_topic,
-                            partition,
-                            lo,
-                            hi
-                        );
-                    }
-                }
-                Err(e) => {
-                    bail!("Failed to fetch metadata while reading from consistency topic, will retry. Error was {}", e);
+    let mut timestamp = None;
+
+    // We read the last 20 records and see if we can find an END record. We
+    // have to do it like this because Kafka Control Batches mess with offsets.
+    // With a transactional producer, the OffsetTail(1) will not point to an
+    // END message but a control message.
+    //
+    // Similarly, if we're writing to the consistency topic without transactions
+    // there might be garbage at the end and the last valid END record is
+    // somewhere before the end.
+
+    while let Some(message) = get_next_message(consumer, timeout)? {
+        match decode_consistency_end_record(&message, consistency_topic)? {
+            Some(ts) => {
+                timestamp = Some(ts);
+                ()
+            }
+            None => (), // not an END record
+        }
+    }
+
+    if timestamp.is_none() {
+        // fetch watermarks to distinguish between a timeout reading end-1 and an empty topic
+        match consumer.fetch_watermarks(consistency_topic, 0, timeout) {
+            Ok((lo, hi)) => {
+                if hi == 0 {
+                    return Ok(None);
+                } else {
+                    bail!(
+                        "uninitialized consistency topic {}:{}, lo/hi: {}/{}",
+                        consistency_topic,
+                        partition,
+                        lo,
+                        hi
+                    );
                 }
             }
+            Err(e) => {
+                bail!("Failed to fetch metadata while reading from consistency topic, will retry. Error was {}", e);
+            }
         }
-        Some(m) => m,
-    };
+    }
 
-    // decode the timestamp from the end-1 message
-    let timestamp = decode_consistency_end_record(&message_bytes, consistency_topic)?;
-
-    Ok(Some(timestamp))
+    Ok(timestamp)
 }
 
 fn decode_consistency_end_record(
     bytes: &[u8],
     consistency_topic: &str,
-) -> Result<Timestamp, anyhow::Error> {
+) -> Result<Option<Timestamp>, anyhow::Error> {
     let mut bytes = &bytes[5..];
     let record = mz_avro::from_avro_datum(get_debezium_transaction_schema(), &mut bytes)
         .context("Failed to decode consistency topic message")?;
@@ -177,7 +188,7 @@ fn decode_consistency_end_record(
         match (status, id) {
             (Some(Value::String(status)), Some(Value::String(id))) if status == "END" => {
                 if let Ok(ts) = id.parse::<u64>() {
-                    Ok(Timestamp::from(ts))
+                    Ok(Some(Timestamp::from(ts)))
                 } else {
                     bail!(
                         "Malformed consistency record, failed to parse timestamp {} in topic {}",
@@ -186,11 +197,7 @@ fn decode_consistency_end_record(
                     );
                 }
             }
-            _ => {
-                bail!(
-                    "Malformed consistency record in topic {}, expected END with a timestamp but record was {:?}, tried matching {:?} {:?}",
-                    consistency_topic, m, status, id);
-            }
+            _ => Ok(None),
         }
     } else {
         bail!("Failed to decode consistency topic message, was not a parseable record");
