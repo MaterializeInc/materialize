@@ -115,7 +115,7 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
+fn test_time() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let server = util::start_server(util::Config::default())?;
@@ -123,13 +123,13 @@ fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
 
     // Confirm that `now()` and `current_timestamp()` both return a
     // DateTime<Utc>, but don't assert specific times.
-    let row = &client.query_one("SELECT now(), current_timestamp()", &[])?;
+    let row = client.query_one("SELECT now(), current_timestamp()", &[])?;
     let _ = row.get::<_, DateTime<Utc>>(0);
     let _ = row.get::<_, DateTime<Utc>>(1);
 
     // Confirm calls to now() return the same DateTime<Utc> both inside and
     // outside of subqueries.
-    let row = &client.query_one("SELECT now(), (SELECT now())", &[])?;
+    let row = client.query_one("SELECT now(), (SELECT now())", &[])?;
     assert_eq!(
         row.get::<_, DateTime<Utc>>(0),
         row.get::<_, DateTime<Utc>>(1)
@@ -137,8 +137,18 @@ fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
 
     // Ensure that EXPLAIN selects a timestamp for `now()` and
     // `current_timestamp()`, though we don't care what the timestamp is.
-    let rows = &client.query("EXPLAIN PLAN FOR SELECT now(), current_timestamp()", &[])?;
+    let rows = client.query("EXPLAIN PLAN FOR SELECT now(), current_timestamp()", &[])?;
     assert_eq!(1, rows.len());
+
+    // Test that `mz_sleep` causes a delay of at least the appropriate time.
+    let start = Instant::now();
+    client.batch_execute("SELECT mz_internal.mz_sleep(0.3)")?;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(300),
+        "start.elapsed() = {:?}",
+        elapsed
+    );
 
     Ok(())
 }

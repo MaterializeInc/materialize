@@ -1084,8 +1084,3 @@ SELECT '"2020!03-17 #?~T~02:36:56#"'::timestamp;
 
 query error invalid input syntax for type timestamp: have unprocessed tokens 56
 select TIMESTAMP '"2020-03-17 ~02:36:~56~"';
-
-query T
-SELECT mz_internal.mz_sleep(0.1) - now() >= '0.1'::interval;
-----
-true
