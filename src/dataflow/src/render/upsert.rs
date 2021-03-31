@@ -119,7 +119,7 @@ where
             .collect::<Vec<_>>();
     }
     let temporal_plan = if !temporal.is_empty() {
-        Some(crate::FilterPlan::create_from(temporal).unwrap_or_else(|e| panic!(e)))
+        Some(crate::FilterPlan::create_from(temporal).unwrap_or_else(|e| panic!("{}", e)))
     } else {
         None
     };

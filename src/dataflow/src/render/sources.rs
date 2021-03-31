@@ -50,8 +50,9 @@ where
         materialized_logging: Option<Logger>,
         src_id: GlobalId,
         mut src: SourceDesc,
-        // The original ID of the source, before it was decomposed into a bare source (which might have its own transient ID)
-        // and a relational transformation (which has the original source ID).
+        // The original ID of the source, before it was decomposed into a bare source (which might
+        // have its own transient ID) and a relational transformation (which has the original source
+        // ID).
         orig_id: GlobalId,
     ) {
         // Extract the linear operators, as we will need to manipulate them.
@@ -184,7 +185,7 @@ where
 
                     (collection, capability)
                 } else if let ExternalSourceConnector::Postgres(_pg_connector) = connector {
-                    unimplemented!("Postgres sources are not supported yet");
+                    unreachable!("rendering Postgres source");
                 } else if let ExternalSourceConnector::PubNub(pubnub_connector) = connector {
                     let source = PubNubSourceReader::new(pubnub_connector);
 
@@ -248,8 +249,9 @@ where
                             src.bare_desc.typ().arity(),
                         )
                     } else {
-                        // TODO(brennan) -- this should just be a MirRelationExpr::FlatMap using regexp_extract, csv_extract,
-                        // a hypothetical future avro_extract, protobuf_extract, etc.
+                        // TODO(brennan) -- this should just be a MirRelationExpr::FlatMap using
+                        // regexp_extract, csv_extract, a hypothetical future avro_extract,
+                        // protobuf_extract, etc.
                         let ((stream, errors), extra_token) = decode_values(
                             &ok_source,
                             encoding,
@@ -258,6 +260,7 @@ where
                             &mut linear_operators,
                             fast_forwarded,
                             src.bare_desc.clone(),
+                            uid,
                         );
                         if let Some(tok) = extra_token {
                             self.additional_tokens
@@ -299,7 +302,7 @@ where
                         // The predicates may be temporal, which requires the nuance
                         // of an explicit plan capable of evaluating the predicates.
                         let filter_plan = crate::FilterPlan::create_from(predicates)
-                            .unwrap_or_else(|e| panic!(e));
+                            .unwrap_or_else(|e| panic!("{}", e));
                         move |(input_row, time, diff)| {
                             let mut datums_local = datums.borrow_with(&input_row);
                             let times_diffs = filter_plan.evaluate(&mut datums_local, time, diff);

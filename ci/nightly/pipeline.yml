@@ -17,7 +17,6 @@
 
 - id: pubnub
   label: "pubnub source"
-  depends_on: build
   plugins:
     - ./ci/plugins/mzcompose:
         composition: pubnub

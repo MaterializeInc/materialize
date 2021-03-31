@@ -101,6 +101,17 @@ impl Ord for Row {
     }
 }
 
+/// A wrapper around a byte slice that guarantees the data are row-formatted.
+///
+/// This type exists to allow row-formatted data to be stored in types that
+/// need not contain a `Row`, for example large contiguous `[u8]` allocations.
+/// It is not expected that most users will use this type, especially as its
+/// only constructor is unsafe.
+#[derive(Debug)]
+pub struct RowRef<'a> {
+    data: &'a [u8],
+}
+
 #[derive(Debug)]
 pub struct DatumListIter<'a> {
     data: &'a [u8],
@@ -382,6 +393,33 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
 
 fn assert_is_copy<T: Copy>() {}
 
+/// A trait that abstracts over ways to push bytes into a buffer.
+///
+/// This trait exists to allow us to write the `push` logic once for
+/// multiple recipients of the pushed data.
+trait Bytes {
+    fn extend_from_slice(&mut self, slice: &[u8]);
+    fn push(&mut self, byte: u8);
+}
+
+impl Bytes for Vec<u8> {
+    fn extend_from_slice(&mut self, slice: &[u8]) {
+        self.extend_from_slice(slice);
+    }
+    fn push(&mut self, byte: u8) {
+        self.push(byte);
+    }
+}
+
+impl Bytes for Row {
+    fn extend_from_slice(&mut self, slice: &[u8]) {
+        self.data.extend_from_slice(slice);
+    }
+    fn push(&mut self, byte: u8) {
+        self.data.push(byte);
+    }
+}
+
 // See https://github.com/rust-lang/rust/issues/43408 for why this can't be a function
 macro_rules! push_copy {
     ($data:expr, $t:expr, $T:ty) => {
@@ -390,12 +428,12 @@ macro_rules! push_copy {
     };
 }
 
-fn push_untagged_bytes(data: &mut Vec<u8>, bytes: &[u8]) {
+fn push_untagged_bytes<T: Bytes>(data: &mut T, bytes: &[u8]) {
     push_copy!(data, bytes.len(), usize);
     data.extend_from_slice(bytes);
 }
 
-fn push_lengthed_bytes(data: &mut Vec<u8>, bytes: &[u8], tag: Tag) {
+fn push_lengthed_bytes<T: Bytes>(data: &mut T, bytes: &[u8], tag: Tag) {
     match tag {
         Tag::BytesTiny | Tag::StringTiny => {
             push_copy!(data, bytes.len() as u8, u8);
@@ -414,7 +452,7 @@ fn push_lengthed_bytes(data: &mut Vec<u8>, bytes: &[u8], tag: Tag) {
     data.extend_from_slice(bytes);
 }
 
-fn push_datum(data: &mut Vec<u8>, datum: Datum) {
+fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
     match datum {
         Datum::Null => data.push(Tag::Null as u8),
         Datum::False => data.push(Tag::False as u8),
@@ -559,21 +597,37 @@ pub fn datum_size(datum: &Datum) -> usize {
     }
 }
 
+/// Number of bytes required by a sequence of datums.
+///
+/// This method can be used to right-size the allocation for a `Row`
+/// before calling [`Row::extend`].
+pub fn datums_size<'a, I, D>(iter: I) -> usize
+where
+    I: IntoIterator<Item = D>,
+    D: Borrow<Datum<'a>>,
+{
+    iter.into_iter().map(|d| datum_size(d.borrow())).sum()
+}
+
 // --------------------------------------------------------------------------------
 // public api
 
 impl Row {
     /// Take some `Datum`s and pack them into a `Row`.
+    ///
+    /// This method builds a `Row` by repeatedly increasing the backing
+    /// allocation. If the contents of the iterator are known ahead of
+    /// time, consider [`Row::with_capacity`] to right-size the allocation
+    /// first, and then [`Row::extend`] to populate it with `Datum`s.
+    /// This avoids the repeated allocation resizing and copying.
     pub fn pack<'a, I, D>(iter: I) -> Row
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        // make a big buffer up front to avoid resizing
-        let mut packer = RowPacker::new();
-        packer.extend(iter);
-        // drop the excess capacity
-        packer.finish()
+        let mut row = Row::default();
+        row.extend(iter);
+        row
     }
 
     /// Like [`Row::pack`], but the provided iterator is allowed to produce an
@@ -591,13 +645,59 @@ impl Row {
         Ok(packer.finish())
     }
 
+    /// Allocate an empty `Row` with a pre-allocated capacity.
+    #[inline]
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            data: SmallVec::with_capacity(cap),
+        }
+    }
+
+    /// Extend an existing `Row` with a `Datum`.
+    #[inline]
+    pub fn push<'a, D>(&mut self, datum: D)
+    where
+        D: Borrow<Datum<'a>>,
+    {
+        push_datum(self, *datum.borrow())
+    }
+
+    /// Extend an existing `Row` with additional `Datum`s.
+    #[inline]
+    pub fn extend<'a, I, D>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        for datum in iter {
+            push_datum(self, *datum.borrow())
+        }
+    }
+
+    /// Extend an existing `Row` with additional `Datum`s.
+    ///
+    /// In the case the iterator produces an error, the pushing of
+    /// datums in terminated and the error returned. The `Row` will
+    /// be incomplete, but it will be safe to read datums from it.
+    #[inline]
+    pub fn try_extend<'a, I, E, D>(&mut self, iter: I) -> Result<(), E>
+    where
+        I: IntoIterator<Item = Result<D, E>>,
+        D: Borrow<Datum<'a>>,
+    {
+        for datum in iter {
+            self.push(*datum?.borrow());
+        }
+        Ok(())
+    }
+
     /// Creates a new row from supplied bytes.
     ///
     /// # Safety
     ///
     /// This method relies on `data` being an appropriate row encoding, and can
     /// result in unsafety if this is not the case.
-    pub unsafe fn new(data: Vec<u8>) -> Self {
+    pub unsafe fn from_bytes_unchecked(data: Vec<u8>) -> Self {
         Row { data: data.into() }
     }
 
@@ -607,14 +707,10 @@ impl Row {
     /// allocation before packing the elements, ensuring only one allocation and no
     /// redundant copies required.
     pub fn pack_slice<'a>(slice: &[Datum<'a>]) -> Row {
-        let needed = slice.iter().map(|d| datum_size(d)).sum();
-        let mut bytes = Vec::with_capacity(needed);
-        for datum in slice.iter() {
-            push_datum(&mut bytes, *datum);
-        }
-        // Unsafety justified in that `push_datum` to initially empty `Vec` is the
-        // same machinery we use internally, and should produce well-formed bytes.
-        unsafe { Row::new(bytes) }
+        // Pre-allocate the needed number of bytes.
+        let mut row = Row::with_capacity(datums_size(slice.iter()));
+        row.extend(slice.iter());
+        row
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
@@ -630,9 +726,10 @@ impl Row {
     ///
     /// Panics if the `Row` is empty.
     pub fn unpack_first(&self) -> Datum {
-        unsafe { read_datum(&self.data, &mut 0) }
+        self.iter().next().unwrap()
     }
 
+    /// Iterate the `Datum` elements of the `Row`.
     pub fn iter(&self) -> DatumListIter {
         DatumListIter {
             data: &self.data,
@@ -643,6 +740,43 @@ impl Row {
     /// For debugging only
     pub fn data(&self) -> &[u8] {
         &self.data
+    }
+}
+
+impl<'a> RowRef<'a> {
+    /// Construct a `RowRef` from a byte slice.
+    ///
+    /// # Safety
+    ///
+    /// This method is unsafe because if the byte slice is not a valid
+    /// row encoding, then unpacking its contents can cause undefined
+    /// behavior.
+    pub unsafe fn from_bytes_unchecked(data: &'a [u8]) -> Self {
+        Self { data }
+    }
+
+    /// Unpack `self` into a `Vec<Datum>` for efficient random access.
+    pub fn unpack(&self) -> Vec<Datum> {
+        // It's usually cheaper to unpack twice to figure out the right length than it is to grow the vec as we go
+        let len = self.iter().count();
+        let mut vec = Vec::with_capacity(len);
+        vec.extend(self.iter());
+        vec
+    }
+
+    /// Return the first `Datum` in `self`
+    ///
+    /// Panics if the `Row` is empty.
+    pub fn unpack_first(&self) -> Datum {
+        self.iter().next().unwrap()
+    }
+
+    /// Iterate the `Datum` elements of the `Row`.
+    pub fn iter(&self) -> DatumListIter {
+        DatumListIter {
+            data: &self.data,
+            offset: 0,
+        }
     }
 }
 

@@ -65,6 +65,20 @@ pub fn parse_expr(sql: &str) -> Result<Expr<Raw>, ParserError> {
     }
 }
 
+/// Parses a SQL string containing zero or more SQL columns.
+pub fn parse_columns(
+    sql: &str,
+) -> Result<(Vec<ColumnDef<Raw>>, Vec<TableConstraint<Raw>>), ParserError> {
+    let tokens = lexer::lex(sql)?;
+    let mut parser = Parser::new(sql, tokens);
+    let columns = parser.parse_columns(Optional)?;
+    if parser.next_token().is_some() {
+        parser_err!(parser, parser.peek_prev_pos(), "extra token after columns")
+    } else {
+        Ok(columns)
+    }
+}
+
 macro_rules! maybe {
     ($e:expr) => {{
         if let Some(v) = $e {
@@ -747,22 +761,15 @@ impl<'a> Parser<'a> {
     // Parse calls to position(), which has the special form position('string' in 'string').
     fn parse_position_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
-
-        let mut exprs = Vec::new();
-
         // we must be greater-equal the precedence of IN, which is Like to avoid
         // parsing away the IN as part of the sub expression
-        exprs.push(self.parse_subexpr(Precedence::Like)?);
-
+        let needle = self.parse_subexpr(Precedence::Like)?;
         self.expect_token(&Token::Keyword(IN))?;
-
-        exprs.push(self.parse_expr()?);
-
+        let haystack = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
-
         Ok(Expr::Function(Function {
             name: UnresolvedObjectName::unqualified("position"),
-            args: FunctionArgs::Args(exprs),
+            args: FunctionArgs::Args(vec![needle, haystack]),
             filter: None,
             over: None,
             distinct: false,
@@ -1725,13 +1732,13 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(TABLE)?;
                 let table = self.parse_literal_string()?;
 
-                let (columns, constraints) = self.parse_columns()?;
+                let (columns, constraints) = self.parse_columns(Optional)?;
 
                 if !constraints.is_empty() {
                     return parser_err!(
                         self,
                         self.peek_prev_pos(),
-                        "Cannot specify constraints in postgres table definition"
+                        "Cannot specify constraints in Postgres table definition"
                     );
                 }
 
@@ -2032,7 +2039,7 @@ impl<'a> Parser<'a> {
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
-        let (columns, constraints) = self.parse_columns()?;
+        let (columns, constraints) = self.parse_columns(Mandatory)?;
         let with_options = self.parse_opt_with_sql_options()?;
 
         Ok(Statement::CreateTable(CreateTableStatement {
@@ -2047,10 +2054,22 @@ impl<'a> Parser<'a> {
 
     fn parse_columns(
         &mut self,
+        optional: IsOptional,
     ) -> Result<(Vec<ColumnDef<Raw>>, Vec<TableConstraint<Raw>>), ParserError> {
         let mut columns = vec![];
         let mut constraints = vec![];
-        self.expect_token(&Token::LParen)?;
+
+        if !self.consume_token(&Token::LParen) {
+            if optional == Optional {
+                return Ok((columns, constraints));
+            } else {
+                return self.expected(
+                    self.peek_pos(),
+                    "a list of columns in parentheses",
+                    self.peek_token(),
+                );
+            }
+        }
         if self.consume_token(&Token::RParen) {
             // Tables with zero columns are a PostgreSQL extension.
             return Ok((columns, constraints));

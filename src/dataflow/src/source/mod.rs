@@ -625,7 +625,7 @@ impl ConsistencyInfo {
     }
 
     /// Timestamp history map is of format [pid1: (p_ct, ts1, offset1), (p_ct, ts2, offset2), pid2: (p_ct, ts1, offset)...].
-    /// For a given partition pid, messages in interval [0,offset1] get assigned ts1, all messages in interval [offset1+1,offset2]
+    /// For a given partition pid, messages in interval \[0,offset1\] get assigned ts1, all messages in interval \[offset1+1,offset2\]
     /// get assigned ts2, etc.
     /// When receive message with offset1, it is safe to downgrade the capability to the next
     /// timestamp, which is either

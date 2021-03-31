@@ -102,7 +102,9 @@ fn test_validate() {
         let schema = Schema::from_str(raw_schema).unwrap();
         assert!(
             value.validate(schema.top_node()),
-            format!("value {:?} does not validate schema: {}", value, raw_schema)
+            "value {:?} does not validate schema: {}",
+            value,
+            raw_schema,
         );
     }
 }

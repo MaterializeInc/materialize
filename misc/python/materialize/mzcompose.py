@@ -32,7 +32,7 @@ from typing import (
     Iterable,
     cast,
 )
-from typing_extensions import Literal
+from typing_extensions import Literal, TypedDict
 import functools
 import os
 import pathlib
@@ -863,6 +863,14 @@ class RunMysql(WorkflowStep):
             cur.execute(self._query)
 
 
+class WaitDependency(TypedDict):
+    """For wait-for-tcp, specify additional items to check"""
+
+    host: str
+    port: int
+    hint: Optional[str]
+
+
 @Steps.register("wait-for-tcp")
 class WaitForTcpStep(WorkflowStep):
     """Wait for a tcp port to be open inside a container
@@ -871,47 +879,77 @@ class WaitForTcpStep(WorkflowStep):
         host: The host that is available inside the docker network
         port: the port to connect to
         timeout_secs: How long to wait (default: 30)
+
+        dependencies: A list of {host, port, hint} objects that must
+            continue to be up while checking this one. Immediately fail
+            the wait if these go down.
     """
 
     def __init__(
-        self, *, host: str = "localhost", port: int, timeout_secs: int = 30
+        self,
+        *,
+        host: str = "localhost",
+        port: int,
+        timeout_secs: int = 30,
+        dependencies: Optional[List[WaitDependency]] = None,
     ) -> None:
-
         self._host = host
         self._port = port
         self._timeout_secs = timeout_secs
+        self._dependencies = dependencies or []
 
     def run(self, workflow: Workflow) -> None:
         ui.progress(f"waiting for {self._host}:{self._port}", "C")
         for remaining in ui.timeout_loop(self._timeout_secs):
             cmd = f"docker run --rm -t --network {workflow.composition.name}_default ubuntu:bionic-20200403".split()
-            cmd.extend(
-                [
-                    "timeout",
-                    str(self._timeout_secs),
-                    "bash",
-                    "-c",
-                    f"cat < /dev/null > /dev/tcp/{self._host}/{self._port}",
-                ]
-            )
+
             try:
-                spawn.capture(cmd, unicode=True, stderr_too=True)
-            except subprocess.CalledProcessError as e:
-                ui.log_in_automation(
-                    "wait-for-tcp ({}:{}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
-                        self._host,
-                        self._port,
-                        ui.shell_quote(cmd),
-                        e,
-                        e.stdout,
-                        e.stderr,
-                    )
+                executed = _check_tcp(
+                    cmd[:], self._host, self._port, self._timeout_secs
                 )
+            except subprocess.CalledProcessError as e:
                 ui.progress(" {}".format(int(remaining)))
             else:
                 ui.progress(" success!", finish=True)
                 return
+
+            for dep in self._dependencies:
+                host, port = dep["host"], dep["port"]
+                try:
+                    _check_tcp(
+                        cmd[:], host, port, self._timeout_secs, kind="dependency "
+                    )
+                except subprocess.CalledProcessError as e:
+                    message = f"Dependency is down {host}:{port}"
+                    if "hint" in dep:
+                        message += f"\n    hint: {dep['hint']}"
+                    raise errors.Failed(message)
+
         raise errors.Failed(f"Unable to connect to {self._host}:{self._port}")
+
+
+def _check_tcp(
+    cmd: List[str], host: str, port: int, timeout_secs: int, kind: str = ""
+) -> List[str]:
+    cmd.extend(
+        [
+            "timeout",
+            str(timeout_secs),
+            "bash",
+            "-c",
+            f"cat < /dev/null > /dev/tcp/{host}/{port}",
+        ]
+    )
+    try:
+        spawn.capture(cmd, unicode=True, stderr_too=True)
+    except subprocess.CalledProcessError as e:
+        ui.log_in_automation(
+            "wait-for-tcp ({}{}:{}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
+                kind, host, port, ui.shell_quote(cmd), e, e.stdout, e.stderr
+            )
+        )
+        raise
+    return cmd
 
 
 @Steps.register("drop-kafka-topics")

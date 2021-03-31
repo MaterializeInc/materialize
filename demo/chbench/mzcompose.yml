@@ -409,11 +409,19 @@ mzworkflows:
     - step: start-services
       services: [kafka, schema-registry]
     - step: wait-for-tcp
-      host: schema-registry
-      port: 8081
-    - step: wait-for-tcp
       host: kafka
       port: 9092
+    - step: wait-for-tcp
+      host: schema-registry
+      port: 8081
+      dependencies:
+        # sometimes kafka comes up for awhile and then crashes, which will always cause
+        # schema-registry to fail because there is no kafka cluster
+        - host: kafka
+          port: 9092
+          hint: >-
+            If kafka logs that it has an invalid cluster id ensure that all volumes are
+            destroyed via 'mzcompose down -v'
     - step: start-services
       services: [materialized]
     - step: run
@@ -627,11 +635,20 @@ mzworkflows:
       port: 8083
       timeout_secs: 120
     - step: wait-for-tcp
-      host: schema-registry
-      port: 8081
-    - step: wait-for-tcp
       host: kafka
       port: 9092
+    - step: wait-for-tcp
+      host: schema-registry
+      port: 8081
+      dependencies:
+        # sometimes kafka comes up for awhile and then crashes, which will always cause
+        # schema-registry to fail because there is no kafka cluster
+        - host: kafka
+          port: 9092
+          hint: >-
+            If kafka logs that it has an invalid cluster id ensure that all volumes are
+            destroyed via 'mzcompose down -v'
+
 
   # Brings up everything to run chbench unisolated, i.e. local tests.
   bring-up-source-data-mysql:
@@ -678,11 +695,19 @@ mzworkflows:
       port: 8083
       timeout_secs: 120
     - step: wait-for-tcp
-      host: schema-registry
-      port: 8081
-    - step: wait-for-tcp
       host: kafka
       port: 9092
+    - step: wait-for-tcp
+      host: schema-registry
+      port: 8081
+      dependencies:
+        # sometimes kafka comes up for awhile and then crashes, which will always cause
+        # schema-registry to fail because there is no kafka cluster
+        - host: kafka
+          port: 9092
+          hint: >-
+            If kafka logs that it has an invalid cluster id ensure that all volumes are
+            destroyed via 'mzcompose down -v'
 
   # Brings up everything to run chbench unisolated, i.e. local tests.
   bring-up-source-data-postgres:

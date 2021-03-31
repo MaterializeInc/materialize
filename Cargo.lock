@@ -4127,6 +4127,7 @@ dependencies = [
  "serde_json",
  "sql-parser",
  "tokio",
+ "tokio-postgres",
  "unicase",
  "url",
  "uuid",

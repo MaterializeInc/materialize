@@ -218,21 +218,21 @@ discard ::=
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name
 drop_index ::=
-    'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')
+    'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')?
 drop_role ::=
     'DROP' 'ROLE' ('IF EXISTS')? role_name
 drop_schema ::=
-    'DROP' 'SCHEMA' ('IF EXISTS')? schema_name ('CASCADE' | 'RESTRICT')
+    'DROP' 'SCHEMA' ('IF EXISTS')? schema_name ('CASCADE' | 'RESTRICT')?
 drop_sink ::=
   'DROP' 'SINK' ('IF' 'EXISTS')? sink_name
 drop_source ::=
   'DROP' 'SOURCE' ('IF' 'EXISTS')? source_name ('RESTRICT' | 'CASCADE')?
+  drop_table ::=
+    'DROP' 'TABLE' ('IF' 'EXISTS')? table_name ('RESTRICT' | 'CASCADE')?
 drop_type ::=
   'DROP' 'TYPE' ('IF' 'EXISTS')? data_type_name ('RESTRICT' | 'CASCADE')?
 drop_view ::=
   'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
-drop_table ::=
-  'DROP' 'TABLE' ('IF' 'EXISTS')? table_name
 drop_user ::=
     'DROP' 'USER' ('IF EXISTS')? role_name
 explain ::=
@@ -264,6 +264,8 @@ format_spec ::=
   'CSV WITH' n 'COLUMNS' ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
+func_at_time_zone ::=
+    'SELECT' ( 'TIMESTAMP' | 'TIMESTAMPTZ' ) ('timestamp' | 'timestamptz') 'AT TIME ZONE' 'zone::type'
 func_cast ::=
   'CAST' '(' val 'AS' type ')'
 func_coalesce ::=
@@ -276,6 +278,8 @@ func_length ::=
   'length' '(' str (',' encoding_name)? ')'
 func_substring ::=
   'substring' '(' str ',' start_pos (',' len)? ')'
+func_timezone ::=
+    'TIMEZONE' '(' zone'::'type ',' ( 'timestamp' | 'timestamptz' ) ')'
 join_expr ::=
     select_pred ('CROSS' | 'NATURAL' join_type?) 'JOIN' table_ref select_post
 	| select_pred join_type 'JOIN' table_ref ( 'USING' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')' | 'ON' expression ) select_post

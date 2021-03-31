@@ -115,10 +115,10 @@ impl fmt::Display for GlobalId {
 /// Unique identifier for an instantiation of a source.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct SourceInstanceId {
-    // The ID of the source.
+    /// The ID of the source, shared across all instances.
     pub source_id: GlobalId,
-    // The ID of the timely dataflow containing this instantiation of this
-    // source.
+    /// The ID of the timely dataflow containing this instantiation of this
+    /// source.
     pub dataflow_id: usize,
 }
 

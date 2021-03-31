@@ -366,6 +366,22 @@
     description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
       Users cannot define views with queries containing `now()`.'
 
+  - signature: timestamp AT TIME ZONE zone -> timestamptz
+    description: 'Converts `timestamp` to the specified time zone, expressed as an offset from UTC. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
+    url: timezone-and-at-time-zone
+
+  - signature: timestamptz AT TIME ZONE zone -> timestamp
+    description: 'Converts `timestamp with time zone` from UTC to the specified time zone, expressed as the local time. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
+    url: timezone-and-at-time-zone
+
+  - signature: timezone(zone, timestamp) -> timestamptz
+    description: 'Converts `timestamp` to specified time zone, expressed as an offset from UTC. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
+    url: timezone-and-at-time-zone
+
+  - signature: timezone(zone, timestamptz) -> timestamp
+    description: 'Converts `timestamp with time zone` from UTC to specified time zone, expressed as the local time. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
+    url: timezone-and-at-time-zone
+
   - signature: 'to_timestamp(val: double precision) -> timestamptz'
     description: Converts Unix epoch (seconds since 00:00:00 UTC on January 1, 1970)
       to timestamp

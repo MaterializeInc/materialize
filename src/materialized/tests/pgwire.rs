@@ -174,7 +174,7 @@ fn test_conn_startup() -> Result<(), Box<dyn Error>> {
             while let Some(msg) = future::poll_fn(|cx| conn.poll_message(cx)).await {
                 match msg {
                     Ok(msg) => notice_tx.send(msg).unwrap(),
-                    Err(e) => panic!(e),
+                    Err(e) => panic!("{}", e),
                 }
             }
         });
