@@ -67,11 +67,13 @@ where
             {
                 let group_clone = group_key.to_vec();
                 let mut collection = collection.map({
-                    let mut row_packer = repr::RowPacker::new();
                     move |row| {
                         let row_hash = row.hashed();
                         let datums = row.unpack();
-                        let group_row = row_packer.pack(group_clone.iter().map(|i| datums[*i]));
+                        let iterator = group_clone.iter().map(|i| datums[*i]);
+                        let total_size = repr::datums_size(group_clone.iter().map(|i| datums[*i]));
+                        let mut group_row = Row::with_capacity(total_size);
+                        group_row.extend(iterator);
                         ((group_row, row_hash), row)
                     }
                 });

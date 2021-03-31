@@ -686,6 +686,11 @@ impl Row {
         self.data.extend(row.data.iter().copied());
     }
 
+    /// Clears the contents of the row without de-allocating its backing memory.
+    pub fn clear(&mut self) {
+        self.data.clear();
+    }
+
     /// Creates a new row from supplied bytes.
     ///
     /// # Safety

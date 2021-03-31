@@ -370,7 +370,7 @@ where
                 self.ensure_rendered(&input, scope, worker_index);
                 let (ok_collection, mut err_collection) = self
                     .flat_map_ref(&input, move |exprs| mfp2.literal_constraints(exprs), {
-                        let mut row_packer = repr::RowPacker::new();
+                        let mut row_packer = repr::Row::default();
                         let mut datums = vec![];
                         move |row| {
                             let pack_result = {
@@ -400,7 +400,9 @@ where
                                         row_packer.finish_and_reuse()
                                     }
                                     timely::communication::message::RefOrMut::Mut(r) => {
-                                        row_packer.finish_into(r);
+                                        // Copy the contents into `r` and clear `row_packer`.
+                                        r.clone_from(&row_packer);
+                                        row_packer.clear();
                                         std::mem::take(r)
                                     }
                                 })
@@ -543,10 +545,13 @@ where
                         let outputs = outputs.clone();
                         let (ok_collection, err_collection) = self.collection(input).unwrap();
                         let ok_collection = ok_collection.map({
-                            let mut row_packer = repr::RowPacker::new();
                             move |row| {
                                 let datums = row.unpack();
-                                row_packer.pack(outputs.iter().map(|i| datums[*i]))
+                                let total_size =
+                                    repr::datums_size(outputs.iter().map(|i| datums[*i]));
+                                let mut row = Row::with_capacity(total_size);
+                                row.extend(outputs.iter().map(|i| datums[*i]));
+                                row
                             }
                         });
 
@@ -561,7 +566,6 @@ where
                         let scalars = scalars.clone();
                         let (ok_collection, err_collection) = self.collection(input).unwrap();
                         let (ok_collection, new_err_collection) = ok_collection.map_fallible({
-                            let mut row_packer = repr::RowPacker::new();
                             move |input_row| {
                                 let mut datums = input_row.unpack();
                                 let temp_storage = RowArena::new();
@@ -572,7 +576,7 @@ where
                                     // Note that this doesn't mutate input_row.
                                     datums.push(datum);
                                 }
-                                Ok::<_, DataflowError>(row_packer.pack(&*datums))
+                                Ok::<_, DataflowError>(Row::pack_slice(&datums))
                             }
                         });
                         let err_collection = err_collection.concat(&new_err_collection);

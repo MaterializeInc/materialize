@@ -56,7 +56,7 @@ where
             let (ok_collection, new_err_collection) =
                 ok_collection.explode_fallible({
                     let mut datums = DatumVec::new();
-                    let mut row_packer = repr::RowPacker::new();
+                    let mut row_packer = repr::Row::default();
                     move |input_row| {
                         let temp_storage = RowArena::new();
                         // Unpack datums and capture its length (to rewind MFP eval).
@@ -101,8 +101,8 @@ where
                                         .map(|x| (x.map_err(DataflowError::from), *r))
                                 } else {
                                     Some((
-                                        Ok::<_, DataflowError>(
-                                            row_packer.pack(
+                                        Ok::<_, DataflowError>({
+                                            row_packer.extend(
                                                 datums_local
                                                     .iter()
                                                     .cloned()
@@ -115,8 +115,9 @@ where
                                                             datum
                                                         }
                                                     }),
-                                            ),
-                                        ),
+                                            );
+                                            row_packer.finish_and_reuse()
+                                        }),
                                         *r,
                                     ))
                                 }

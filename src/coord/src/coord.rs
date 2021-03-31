@@ -55,7 +55,7 @@ use ore::collections::CollectionExt;
 use ore::str::StrExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::adt::array::ArrayDimension;
-use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timestamp};
+use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
@@ -1447,17 +1447,15 @@ impl Coordinator {
                 .iter()
                 .map(|oid| self.catalog.get_by_oid(oid).id().to_string())
                 .collect::<Vec<_>>();
-            let mut packer = RowPacker::new();
-            packer
-                .push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: arg_ids.len(),
-                    }],
-                    arg_ids.iter().map(|id| Datum::String(&id)),
-                )
-                .unwrap();
-            let row = packer.finish();
+            let mut row = Row::default();
+            row.push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: arg_ids.len(),
+                }],
+                arg_ids.iter().map(|id| Datum::String(&id)),
+            )
+            .unwrap();
             let arg_ids = row.unpack_first();
 
             let variadic_id = match func_impl_details.variadic_oid {
@@ -2247,13 +2245,12 @@ impl Coordinator {
         &mut self,
         session: &Session,
     ) -> Result<ExecuteResponse, CoordError> {
-        let mut row_packer = RowPacker::new();
         Ok(send_immediate_rows(
             session
                 .vars()
                 .iter()
                 .map(|v| {
-                    row_packer.pack(&[
+                    Row::pack_slice(&[
                         Datum::String(v.name()),
                         Datum::String(&v.value()),
                         Datum::String(v.description()),

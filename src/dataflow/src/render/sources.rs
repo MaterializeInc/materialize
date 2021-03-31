@@ -297,7 +297,6 @@ where
                     // Apply predicates and insert dummy values into undemanded columns.
                     let (collection2, errors) = collection.inner.flat_map_fallible({
                         let mut datums = crate::render::datum_vec::DatumVec::new();
-                        let mut row_packer = repr::RowPacker::new();
                         let predicates = std::mem::take(&mut operators.predicates);
                         // The predicates may be temporal, which requires the nuance
                         // of an explicit plan capable of evaluating the predicates.
@@ -306,12 +305,14 @@ where
                         move |(input_row, time, diff)| {
                             let mut datums_local = datums.borrow_with(&input_row);
                             let times_diffs = filter_plan.evaluate(&mut datums_local, time, diff);
-                            // The output row may need to have `Datum::Dummy` values stitched in.
-                            let output_row =
-                                row_packer.pack(position_or.iter().map(|pos_or| match pos_or {
-                                    Some(index) => datums_local[*index],
-                                    None => Datum::Dummy,
-                                }));
+                            // Name the iterator, to capture total size and datums.
+                            let iterator = position_or.iter().map(|pos_or| match pos_or {
+                                Some(index) => datums_local[*index],
+                                None => Datum::Dummy,
+                            });
+                            let total_size = repr::datums_size(iterator.clone());
+                            let mut output_row = Row::with_capacity(total_size);
+                            output_row.extend(iterator);
                             // Each produced (time, diff) results in a copy of `output_row` in the output.
                             // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
                             times_diffs.map(move |time_diff| {

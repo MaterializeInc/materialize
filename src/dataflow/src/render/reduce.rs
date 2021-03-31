@@ -80,7 +80,7 @@ use timely::progress::{timestamp::Refines, Timestamp};
 use dataflow_types::DataflowError;
 use expr::{AggregateExpr, AggregateFunc, MirRelationExpr};
 use ore::cast::CastFrom;
-use repr::{Datum, DatumList, Row, RowArena, RowPacker};
+use repr::{Datum, DatumList, Row, RowArena};
 
 use super::context::Context;
 use crate::render::context::Arrangement;
@@ -566,7 +566,7 @@ where
 
             let skips = convert_indexes_to_skips(demand);
 
-            let mut row_packer = RowPacker::new();
+            let mut row_packer = Row::default();
             let mut datums = DatumVec::new();
             let (key_val_input, mut err_input): (
                 Collection<_, Result<(Row, Row), DataflowError>, _>,
@@ -608,7 +608,8 @@ where
                         let row = match row {
                             RefOrMut::Ref(_) => row_packer.finish_and_reuse(),
                             RefOrMut::Mut(row) => {
-                                row_packer.finish_into(row);
+                                row.clone_from(&row_packer);
+                                row_packer.clear();
                                 std::mem::take(row)
                             }
                         };
@@ -669,7 +670,7 @@ where
     use differential_dataflow::collection::concatenate;
     concatenate(scope, to_concat)
         .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
-            let mut row_packer = RowPacker::new();
+            let mut row_packer = Row::default();
             move |key, input, output| {
                 // The inputs are pairs of a reduction type, and a row consisting of densely packed fused
                 // aggregate values.
@@ -768,7 +769,7 @@ where
     }
     differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
         .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceFuseBasic", {
-            let mut row_packer = RowPacker::new();
+            let mut row_packer = Row::default();
             move |key, input, output| {
                 // First, fill our output row with key information if requested.
                 if prepend_key {
@@ -806,7 +807,7 @@ where
 
     // Extract the value we were asked to aggregate over.
     let mut partial = if !prepend_key {
-        let mut packer = RowPacker::new();
+        let mut packer = Row::default();
         input.map(move |(key, row)| {
             let value = row.iter().nth(index).unwrap();
             packer.push(value);
@@ -829,7 +830,7 @@ where
     }
 
     partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceInaccumulable", {
-        let mut row_packer = RowPacker::new();
+        let mut row_packer = Row::default();
         move |key, source, target| {
             // Negative counts would be surprising, but until we are 100% certain we wont
             // see them, we should report when we do. We may want to bake even more info
@@ -884,7 +885,7 @@ where
     G::Timestamp: Lattice,
 {
     // Gather the relevant values into a vec of rows ordered by aggregation_index
-    let mut packer = RowPacker::new();
+    let mut packer = Row::default();
     let input = input.map(move |(key, row)| {
         let mut values = Vec::with_capacity(skips.len());
         let mut row_iter = row.iter();
@@ -908,7 +909,7 @@ where
     // Build a series of stages for the reduction
     // Arrange the final result into (key, Row)
     partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceMinsMaxes", {
-        let mut row_packer = RowPacker::new();
+        let mut row_packer = Row::default();
         move |key, source, target| {
             // Negative counts would be surprising, but until we are 100% certain we wont
             // see them, we should report when we do. We may want to bake even more info
@@ -956,7 +957,6 @@ where
 
     let negated_output = input
         .reduce_named("MinsMaxesHierarchical", {
-            let mut row_packer = repr::RowPacker::new();
             move |key, source, target| {
                 // Should negative accumulations reach us, we should loudly complain.
                 if source.iter().any(|(_val, cnt)| cnt <= &0) {
@@ -970,7 +970,7 @@ where
                     let mut output = Vec::with_capacity(aggrs.len());
                     for (aggr_index, func) in aggrs.iter().enumerate() {
                         let iter = source.iter().map(|(values, _cnt)| values[aggr_index].iter().next().unwrap());
-                        output.push(row_packer.pack(Some(func.eval(iter, &RowArena::new()))));
+                        output.push(Row::pack_slice(&[func.eval(iter, &RowArena::new())]));
                     }
                     // We only want to arrange the parts of the input that are not part of the output.
                     // More specifically, we want to arrange it so that `input.concat(&output.negate())`
@@ -1002,7 +1002,7 @@ where
     G::Timestamp: Lattice,
 {
     // Gather the relevant values into a vec of rows ordered by aggregation_index
-    let mut packer = RowPacker::new();
+    let mut packer = Row::default();
     let collection = collection.map(move |(key, row)| {
         let mut values = Vec::with_capacity(skips.len());
         let mut row_iter = row.iter();
@@ -1039,7 +1039,7 @@ where
     partial
         .arrange_by_self()
         .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceMonotonic", {
-            let mut row_packer = RowPacker::new();
+            let mut row_packer = Row::default();
             move |key, input, output| {
                 let accum = &input[0].1;
                 // Pack the value with the key as the result.
@@ -1312,7 +1312,7 @@ where
 
     // Next, collect all aggregations that require distinctness.
     for (accumulable_index, datum_index, aggr) in distinct_aggrs.into_iter() {
-        let mut packer = RowPacker::new();
+        let mut packer = Row::default();
         let collection = collection
             .map(move |(key, row)| {
                 let value = row.iter().nth(datum_index).unwrap();
@@ -1339,7 +1339,7 @@ where
     collection
         .arrange_by_self()
         .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceAccumulable", {
-            let mut row_packer = RowPacker::new();
+            let mut row_packer = Row::default();
             move |key, input, output| {
                 let accum = &input[0].1;
                 // Pack the value with the key as the result.
