@@ -99,6 +99,11 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     // `true` (resp. `false`) every subexpression in
     // `(p1 & ... & p(i-1) & p(i+1) ... & pn)` that is equal to `pi`.
 
+    // (As for the reduction does not work if `p` can be null: if `p` is null,
+    // then p & f(p) becomes `null & f(null)`. `null & f(null)` is not
+    // necessarily equal to `null & f(true)` because `null & true = null`
+    // and `null & false = false`.)
+
     // Note that this does some dedupping of predicates since if `p1 = p2`
     // then this reduction process will replace `p1` with true.
 
