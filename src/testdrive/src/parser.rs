@@ -68,15 +68,21 @@ pub fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, InputError
         let command = match line.chars().next() {
             Some('$') => Command::Builtin(parse_builtin(line_reader)?),
             Some('>') => Command::Sql(parse_sql(line_reader)?),
+            Some('E') => Command::Sql(parse_unsplit_sql(line_reader)?),
             Some('!') => Command::FailSql(parse_fail_sql(line_reader)?),
             Some('#') => {
                 // Comment line.
                 line_reader.next();
                 continue;
             }
-            _ => {
+            None => {
+                // Empty line
+                line_reader.next();
+                continue;
+            }
+            Some(char) => {
                 return Err(InputError {
-                    msg: "unexpected input line at beginning of file".into(),
+                    msg: format!("unexpected input line '{}' at beginning of file", char),
                     pos,
                 });
             }
@@ -180,11 +186,35 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
     while let Some((pos, line)) = slurp_one(line_reader) {
         expected_rows.push(split_line(pos, &line)?)
     }
+
+    // Remove empty lines
+    expected_rows = expected_rows.into_iter().filter(|r| r.len() > 0).collect();
+
     Ok(SqlCommand {
         query,
         expected_output: SqlOutput::Full {
             column_names,
             expected_rows,
+        },
+    })
+}
+
+fn parse_unsplit_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
+    // Slurp an entire block and convert it to a single-row, single-col Result
+
+    let (_, line1) = line_reader.next().unwrap();
+    let query = line1[1..].trim().to_owned();
+    let mut expected_rows = Vec::new();
+
+    while let Some((_pos, line)) = slurp_one(line_reader) {
+        expected_rows.push(line.to_string());
+    }
+
+    Ok(SqlCommand {
+        query,
+        expected_output: SqlOutput::Full {
+            column_names: None,
+            expected_rows: vec![vec![expected_rows.join("\n")]],
         },
     })
 }
@@ -268,7 +298,7 @@ fn slurp_one(line_reader: &mut LineReader) -> Option<(usize, String)> {
                 // Comment line. Skip.
                 let _ = line_reader.next();
             }
-            Some('$') | Some('>') | Some('!') => return None,
+            Some('$') | Some('>') | Some('!') | Some('E') => return None,
             Some('\\') => {
                 return line_reader.next().map(|(pos, mut line)| {
                     line.remove(0);
@@ -329,7 +359,7 @@ impl<'a> Iterator for LineReader<'a> {
         if self.inner.is_empty() {
             return None;
         }
-        let mut fold_newlines = should_fold(self.inner.chars().next());
+        let fold_newlines = should_fold(self.inner.chars().next());
         let mut line = String::new();
         let mut chars = self.inner.char_indices().fuse().peekable();
         while let Some((i, c)) = chars.next() {
@@ -348,10 +378,9 @@ impl<'a> Iterator for LineReader<'a> {
                     continue;
                 } else if line.chars().all(char::is_whitespace) {
                     line.clear();
-                    fold_newlines = should_fold(chars.peek().map(|c| c.1));
                     self.pos_map.insert(self.pos, (self.src_line, 1));
-                    continue;
                 }
+
                 let pos = self.pos;
                 self.pos += i;
                 self.pos_map.insert(self.pos, (self.src_line, 1));
@@ -370,7 +399,10 @@ impl<'a> Iterator for LineReader<'a> {
 }
 
 fn should_fold(c: Option<char>) -> bool {
-    matches!(c, Some('$') | Some('>') | Some('!'))
+    matches!(
+        c,
+        Some('$') | Some('>') | Some('!') | Some('E')
+    )
 }
 
 struct BuiltinReader<'a> {
