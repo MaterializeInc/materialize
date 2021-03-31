@@ -166,6 +166,8 @@ pub struct Coordinator {
     symbiosis: Option<symbiosis::Postgres>,
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
+    /// Map of frontier information for sources
+    sources: ArrangementFrontiers<Timestamp>,
     since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
@@ -290,6 +292,13 @@ impl Coordinator {
                     // Inform the timestamper about this source.
                     self.update_timestamper(*id, true).await;
                     self.maybe_begin_caching(*id, &source.connector).await;
+                    // FIXME: I don't think making this start with num_workers copies of min is
+                    // valid because unlike for indexes I don't think sources are guaranteed to
+                    // receive updates from all workers. I think it could be from as few as 1 and
+                    // as many as all depending on the partitions and how they are distributed.
+                    let frontiers =
+                        Frontiers::new(self.num_workers(), self.logical_compaction_window_ms);
+                    self.sources.insert(*id, frontiers);
                 }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == *id) {
@@ -881,6 +890,33 @@ impl Coordinator {
                             index_state.advance_since(&compaction_frontier);
                             self.since_updates
                                 .push((name.clone(), index_state.since.clone()));
+                        }
+                    }
+                }
+            }
+            // FIXME lazy for now / refactor
+        } else if let Some(source_state) = self.sources.get_mut(name) {
+            let changes: Vec<_> = source_state.upper.update_iter(changes.drain()).collect();
+            if !changes.is_empty() {
+                if let Some(compaction_window_ms) = source_state.compaction_window_ms {
+                    // Decline to compact complete collections. This would have the
+                    // effect of making the collection unusable. Instead, we would
+                    // prefer to compact collections only when we believe it would
+                    // reduce the volume of the collection, but we don't have that
+                    // information here.
+                    if !source_state.upper.frontier().is_empty() {
+                        let mut compaction_frontier = Antichain::new();
+                        for time in source_state.upper.frontier().iter() {
+                            compaction_frontier.insert(
+                                compaction_window_ms
+                                    * (time.saturating_sub(compaction_window_ms)
+                                        / compaction_window_ms),
+                            );
+                        }
+                        if source_state.since != compaction_frontier {
+                            source_state.advance_since(&compaction_frontier);
+                            self.since_updates
+                                .push((name.clone(), source_state.since.clone()));
                         }
                     }
                 }
@@ -3069,6 +3105,8 @@ impl Coordinator {
                                     .send(CacheMessage::DropSource(entry.id()))
                                     .expect("cache receiver should not drop first");
                             }
+
+                            self.sources.remove(&entry.id());
                         }
                         CatalogItem::View(_) => {
                             self.report_view_update(
@@ -3514,6 +3552,7 @@ pub async fn serve(
         catalog,
         symbiosis,
         indexes: ArrangementFrontiers::default(),
+        sources: ArrangementFrontiers::default(),
         since_updates: Vec::new(),
         logging_granularity: logging
             .as_ref()
