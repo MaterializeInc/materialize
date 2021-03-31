@@ -480,6 +480,9 @@ impl MirScalarExpr {
                         *e = expr2.take();
                     } else if expr1 == expr2 {
                         *e = expr1.take();
+                    } else if expr2 < expr1 {
+                        // Canonically order elements so that deduplication works better.
+                        ::std::mem::swap(expr1, expr2);
                     }
                 } else if *func == BinaryFunc::Or {
                     // If we are here, not both inputs are literals.
@@ -489,6 +492,9 @@ impl MirScalarExpr {
                         *e = expr2.take();
                     } else if expr1 == expr2 {
                         *e = expr1.take();
+                    } else if expr2 < expr1 {
+                        // Canonically order elements so that deduplication works better.
+                        ::std::mem::swap(expr1, expr2);
                     }
                 } else if *func == BinaryFunc::Eq {
                     // Canonically order elements so that deduplication works better.

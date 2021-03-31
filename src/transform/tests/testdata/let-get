@@ -22,3 +22,22 @@ build
 | Get %0 (l0)
 ----
 ----
+
+# test that predicates in the body of a let get pushed down to values
+build apply=PredicatePushdown
+(let x (constant
+      [[1 2 3]
+       [4 5 6]]
+      [int64 int64 int64])
+   (filter (get x) [#0]))
+----
+----
+%0 = Let l0 =
+| Constant (1, 2, 3) (4, 5, 6)
+| Filter #0
+
+%1 =
+| Get %0 (l0)
+| Filter
+----
+----
