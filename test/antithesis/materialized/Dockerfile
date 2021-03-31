@@ -7,11 +7,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: atp-testdrive
-publish: false
+FROM ubuntu:bionic-20200403
 
-pre-image:
-  type: copy
-  source: test/testdrive
-  destination: tests
-  matching: "*.td"
+RUN apt-get update && apt-get -qy install ca-certificates
+
+ENTRYPOINT ["materialized", "--log-file=stderr"]

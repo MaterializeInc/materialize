@@ -9,4 +9,4 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-exec "$(dirname "$0")"/../../bin/pyactivate -m materialize.cli.deploy_atp "$@"
+exec "$(dirname "$0")"/../../bin/pyactivate -m materialize.cli.deploy_antithesis "$@"
