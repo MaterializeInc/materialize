@@ -24,7 +24,7 @@ use std::error::Error;
 use std::fmt;
 
 use itertools::Itertools;
-use log::debug;
+use log::{debug, warn};
 
 use ore::collections::CollectionExt;
 use repr::adt::datetime::DateTimeField;
@@ -1523,18 +1523,7 @@ impl<'a> Parser<'a> {
             let url = self.parse_literal_string()?;
 
             let seed = if self.parse_keyword(SEED) {
-                let key_schema = if self.parse_keyword(KEY) {
-                    self.expect_keyword(SCHEMA)?;
-                    Some(self.parse_literal_string()?)
-                } else {
-                    None
-                };
-                self.expect_keywords(&[VALUE, SCHEMA])?;
-                let value_schema = self.parse_literal_string()?;
-                Some(CsrSeed {
-                    key_schema,
-                    value_schema,
-                })
+                Some(self.parse_schema_pair()?)
             } else {
                 None
             };
@@ -1552,9 +1541,10 @@ impl<'a> Parser<'a> {
                 seed,
                 with_options,
             }
-        } else if self.parse_keyword(SCHEMA) {
+        } else if self.parse_one_of_keywords(&[KEY, VALUE, SCHEMA]).is_some() {
+            // allow bare "SCHEMA" instead of requiring "VALUE SCHEMA" until we decide to remove it
             self.prev_token();
-            let schema = self.parse_schema()?;
+            let schemas = self.parse_schema_pair()?;
             // Look ahead to avoid erroring on `WITH SNAPSHOT`; we only want to
             // accept `WITH (...)` here.
             let with_options = if self.peek_nth_token(1) == Some(Token::LParen) {
@@ -1564,17 +1554,33 @@ impl<'a> Parser<'a> {
                 vec![]
             };
             AvroSchema::Schema {
-                schema,
+                schemas,
                 with_options,
             }
         } else {
             return self.expected(
                 self.peek_pos(),
-                "CONFLUENT SCHEMA REGISTRY or SCHEMA",
+                "'CONFLUENT SCHEMA REGISTRY', 'KEY SCHEMA', or 'VALUE SCHEMA'",
                 self.peek_token(),
             );
         };
         Ok(avro_schema)
+    }
+
+    fn parse_schema_pair(&mut self) -> Result<SchemaPair, ParserError> {
+        let key_schema = if self.parse_keyword(KEY) {
+            Some(self.parse_schema()?)
+        } else {
+            None
+        };
+        if !self.parse_keyword(VALUE) {
+            warn!("Avro schemas will require the syntax 'VALUE SCHEMA' in a future release");
+        };
+        let value_schema = self.parse_schema()?;
+        Ok(SchemaPair {
+            key_schema,
+            value_schema,
+        })
     }
 
     fn parse_schema(&mut self) -> Result<Schema, ParserError> {
@@ -1598,6 +1604,8 @@ impl<'a> Parser<'a> {
             };
             Envelope::Debezium(debezium_mode)
         } else if self.parse_keyword(UPSERT) {
+            // TODO(bwm): use the key schema from `SchemaPair` instead of inlining the key schema
+            // as a value schema here
             let format = if self.parse_keyword(FORMAT) {
                 Some(self.parse_format()?)
             } else {

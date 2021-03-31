@@ -328,9 +328,9 @@ CreateView(CreateViewStatement { name: UnresolvedObjectName([Ident("myschema"), 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING SCHEMA 'baz'
 ----
-CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING SCHEMA 'baz'
+CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING VALUE SCHEMA 'baz'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(Schema { schema: Inline("baz"), with_options: [] })), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(Schema { schemas: SchemaPair { key_schema: None, value_schema: Inline("baz") }, with_options: [] })), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo
@@ -417,14 +417,14 @@ CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'h
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED VALUE SCHEMA 'blah'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: Some(CsrSeed { key_schema: None, value_schema: "blah" }), with_options: [] })), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: Some(SchemaPair { key_schema: None, value_schema: Inline("blah") }), with_options: [] })), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED KEY SCHEMA 'a' VALUE SCHEMA 'b'
 ----
-CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED KEY SCHEMA 'a' VALUE SCHEMA 'b'
+CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' SEED KEY SCHEMA 'a'VALUE SCHEMA 'b'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: Some(CsrSeed { key_schema: Some("a"), value_schema: "b" }), with_options: [] })), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]), col_names: [], connector: File { path: "bar", compression: None }, with_options: [], format: Some(Avro(CsrUrl { url: "http://localhost:8081", seed: Some(SchemaPair { key_schema: Some(Inline("a")), value_schema: Inline("b") }), with_options: [] })), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://localhost:8081' WITH (a = 'b') ENVELOPE DEBEZIUM
@@ -450,51 +450,51 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' ENVELOPE UPSERT FORMAT AVRO USING SCHEMA 'long'
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING VALUE SCHEMA 'string' ENVELOPE UPSERT FORMAT AVRO USING VALUE SCHEMA 'long'
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Some(Avro(Schema { schema: Inline("string"), with_options: [] })), envelope: Upsert(Some(Avro(Schema { schema: Inline("long"), with_options: [] }))), if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Some(Avro(Schema { schemas: SchemaPair { key_schema: None, value_schema: Inline("string") }, with_options: [] })), envelope: Upsert(Some(Avro(Schema { schemas: SchemaPair { key_schema: None, value_schema: Inline("long") }, with_options: [] }))), if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (confluent_wire_format = false) ENVELOPE NONE
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA 'string' WITH (confluent_wire_format = false)
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING VALUE SCHEMA 'string' WITH (confluent_wire_format = false)
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Some(Avro(Schema { schema: Inline("string"), with_options: [WithOption { key: Ident("confluent_wire_format"), value: Some(Value(Boolean(false))) }] })), envelope: None, if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Some(Avro(Schema { schemas: SchemaPair { key_schema: None, value_schema: Inline("string") }, with_options: [WithOption { key: Ident("confluent_wire_format"), value: Some(Value(Boolean(false))) }] })), envelope: None, if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
-CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+CREATE SOURCE crobat FROM KAFKA BROKER 'zubat' TOPIC 'hoothoot' FORMAT AVRO USING VALUE SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Some(Avro(Schema { schema: File("path"), with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("crobat")]), col_names: [], connector: Kafka { broker: "zubat", topic: "hoothoot", key: None }, with_options: [], format: Some(Avro(Schema { schemas: SchemaPair { key_schema: None, value_schema: File("path") }, with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=2) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = 2) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = 2) FORMAT AVRO USING VALUE SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Number("2") }], format: Some(Avro(Schema { schema: File("path"), with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Number("2") }], format: Some(Avro(Schema { schemas: SchemaPair { key_schema: None, value_schema: File("path") }, with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = []) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = []) FORMAT AVRO USING VALUE SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Array([]) }], format: Some(Avro(Schema { schema: File("path"), with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Array([]) }], format: Some(Avro(Schema { schemas: SchemaPair { key_schema: None, value_schema: File("path") }, with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2]) FORMAT AVRO USING VALUE SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Array([Number("2")]) }], format: Some(Avro(Schema { schema: File("path"), with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Array([Number("2")]) }], format: Some(Avro(Schema { schemas: SchemaPair { key_schema: None, value_schema: File("path") }, with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset=[2, 40000000]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 ----
-CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2, 40000000]) FORMAT AVRO USING SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
+CREATE SOURCE source FROM KAFKA BROKER 'broker' TOPIC 'topic' WITH (start_offset = [2, 40000000]) FORMAT AVRO USING VALUE SCHEMA FILE 'path' ENVELOPE UPSERT FORMAT TEXT
 =>
-CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Array([Number("2"), Number("40000000")]) }], format: Some(Avro(Schema { schema: File("path"), with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
+CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("source")]), col_names: [], connector: Kafka { broker: "broker", topic: "topic", key: None }, with_options: [Value { name: Ident("start_offset"), value: Array([Number("2"), Number("40000000")]) }], format: Some(Avro(Schema { schemas: SchemaPair { key_schema: None, value_schema: File("path") }, with_options: [] })), envelope: Upsert(Some(Text)), if_not_exists: false, materialized: false })
 
 parse-statement
 CREATE SOURCE psychic FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' NAMESPACE 'generation1' TABLE 'psychic' (pokedex_id int NOT NULL, evolution int);

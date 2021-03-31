@@ -22,8 +22,8 @@ use tokio::time::Duration;
 
 use repr::strconv;
 use sql_parser::ast::{
-    AvroSchema, ColumnOption, ColumnOptionDef, Connector, CreateSourceStatement, CsrSeed, Format,
-    Ident, Raw, Statement,
+    AvroSchema, ColumnOption, ColumnOptionDef, Connector, CreateSourceStatement, Format, Ident,
+    Raw, SchemaPair, Statement,
 };
 use sql_parser::parser::parse_columns;
 
@@ -205,23 +205,23 @@ async fn purify_format(
                         value_schema,
                         ..
                     } = get_remote_avro_schema(ccsr_config, topic.clone()).await?;
-                    *seed = Some(CsrSeed {
-                        key_schema,
-                        value_schema,
+                    *seed = Some(SchemaPair {
+                        key_schema: key_schema.map(|ks| sql_parser::ast::Schema::Inline(ks)),
+                        value_schema: sql_parser::ast::Schema::Inline(value_schema),
                     });
                 }
             }
-            AvroSchema::Schema {
-                schema: sql_parser::ast::Schema::File(path),
-                with_options,
-            } => {
-                let value_schema = tokio::fs::read_to_string(path).await?;
-                *schema = AvroSchema::Schema {
-                    schema: sql_parser::ast::Schema::Inline(value_schema),
-                    with_options: with_options.clone(),
+            AvroSchema::Schema { schemas, .. } => {
+                if let Some(sql_parser::ast::Schema::File(path)) = &schemas.key_schema {
+                    let schema = tokio::fs::read_to_string(path).await?;
+                    schemas.key_schema = Some(sql_parser::ast::Schema::Inline(schema));
+                };
+
+                if let sql_parser::ast::Schema::File(path) = &schemas.value_schema {
+                    let value_schema = tokio::fs::read_to_string(path).await?;
+                    schemas.value_schema = sql_parser::ast::Schema::Inline(value_schema);
                 };
             }
-            _ => {}
         },
         Some(Format::Protobuf { schema, .. }) => {
             if let sql_parser::ast::Schema::File(path) = schema {
@@ -282,6 +282,8 @@ async fn get_remote_avro_schema(
                 value_schema_name
             )
         })?;
+
+    // Possible that keys don't have schemas, so we can't always error if this doesn't exist?
     let subject = format!("{}-key", topic);
     let key_schema = ccsr_client.get_schema_by_subject(&subject).await.ok();
     Ok(Schema {

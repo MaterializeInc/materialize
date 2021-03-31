@@ -409,7 +409,7 @@ pub fn plan_create_source(
                     // TODO(jldlaughlin): we need a way to pass in primary key information
                     // when building a source from a string or file.
                     AvroSchema::Schema {
-                        schema: sql_parser::ast::Schema::Inline(schema),
+                        schemas,
                         with_options,
                     } => {
                         with_options! {
@@ -417,21 +417,16 @@ pub fn plan_create_source(
                                 confluent_wire_format: bool,
                             }
                         }
+                        let (key_schema, value_schema) = extract_inline_schemas(schemas.clone());
 
                         Schema {
-                            key_schema: None,
-                            value_schema: schema.clone(),
+                            key_schema,
+                            value_schema,
                             schema_registry_config: None,
                             confluent_wire_format: ConfluentMagic::try_from(with_options.clone())?
                                 .confluent_wire_format
                                 .unwrap_or(true),
                         }
-                    }
-                    AvroSchema::Schema {
-                        schema: sql_parser::ast::Schema::File(_),
-                        ..
-                    } => {
-                        unreachable!("File schema should already have been inlined")
                     }
                     AvroSchema::CsrUrl {
                         url,
@@ -448,9 +443,10 @@ pub fn plan_create_source(
                         )?;
 
                         if let Some(seed) = seed {
+                            let (key_schema, value_schema) = extract_inline_schemas(seed.clone());
                             Schema {
-                                key_schema: seed.key_schema.clone(),
-                                value_schema: seed.value_schema.clone(),
+                                key_schema,
+                                value_schema,
                                 schema_registry_config: Some(ccsr_config),
                                 confluent_wire_format: true,
                             }
@@ -1025,6 +1021,22 @@ pub fn plan_create_source(
         if_not_exists,
         materialized,
     })
+}
+
+/// Take the inline schemas that have been purified out
+///
+/// Panics if purify doesn't correclty inline schemas
+fn extract_inline_schemas(schemas: sql_parser::ast::SchemaPair) -> (Option<String>, String) {
+    let key_schema = match schemas.key_schema {
+        Some(sql_parser::ast::Schema::Inline(schema)) => Some(schema),
+        None => None,
+        _ => unreachable!("key schema should have been inlined"),
+    };
+    let value_schema = match schemas.value_schema {
+        sql_parser::ast::Schema::Inline(schema) => schema,
+        _ => unreachable!("value schema should have been inlined"),
+    };
+    (key_schema, value_schema)
 }
 
 pub fn describe_create_view(

@@ -56,11 +56,11 @@ impl_display!(Schema);
 pub enum AvroSchema<T: AstInfo> {
     CsrUrl {
         url: String,
-        seed: Option<CsrSeed>,
+        seed: Option<SchemaPair>,
         with_options: Vec<SqlOption<T>>,
     },
     Schema {
-        schema: Schema,
+        schemas: SchemaPair,
         with_options: Vec<WithOption>,
     },
 }
@@ -77,7 +77,7 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
                 f.write_node(&display::escape_single_quote_string(url));
                 f.write_str("'");
                 if let Some(seed) = seed {
-                    f.write_str(" ");
+                    f.write_str(" SEED ");
                     f.write_node(seed);
                 }
                 if !with_options.is_empty() {
@@ -87,10 +87,10 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
                 }
             }
             Self::Schema {
-                schema,
+                schemas,
                 with_options,
             } => {
-                schema.fmt(f);
+                f.write_node(schemas);
                 if !with_options.is_empty() {
                     f.write_str(" WITH (");
                     f.write_node(&display::comma_separated(with_options));
@@ -102,26 +102,24 @@ impl<T: AstInfo> AstDisplay for AvroSchema<T> {
 }
 impl_display_t!(AvroSchema);
 
+/// The result of parsing `[KEY SCHEMA '..'] [VALUE] SCHEMA '..'`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CsrSeed {
-    pub key_schema: Option<String>,
-    pub value_schema: String,
+pub struct SchemaPair {
+    pub key_schema: Option<Schema>,
+    pub value_schema: Schema,
 }
 
-impl AstDisplay for CsrSeed {
+impl AstDisplay for SchemaPair {
     fn fmt(&self, f: &mut AstFormatter) {
-        f.write_str("SEED");
         if let Some(key_schema) = &self.key_schema {
-            f.write_str(" KEY SCHEMA '");
-            f.write_node(&display::escape_single_quote_string(key_schema));
-            f.write_str("'");
+            f.write_str("KEY ");
+            f.write_node(key_schema);
         }
-        f.write_str(" VALUE SCHEMA '");
-        f.write_node(&display::escape_single_quote_string(&self.value_schema));
-        f.write_str("'");
+        f.write_str("VALUE ");
+        f.write_node(&self.value_schema);
     }
 }
-impl_display!(CsrSeed);
+impl_display!(SchemaPair);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Format<T: AstInfo> {
