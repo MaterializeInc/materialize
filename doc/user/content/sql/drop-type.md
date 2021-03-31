@@ -88,13 +88,12 @@ ERROR:  unknown catalog item 't'
 
 You can use either of the following commands:
 
-```sql
-DROP TYPE int4_list;
-```
-
-```sql
-DROP TYPE int4_list RESTRICT;
-```
+- ```sql
+  DROP TYPE int4_list;
+  ```
+- ```sql
+  DROP TYPE int4_list RESTRICT;
+  ```
 
 ### Do not issue an error if attempting to remove a nonexistent type
 
