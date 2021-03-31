@@ -458,8 +458,6 @@ cannot drop materialize.public.test1: still depended upon by catalog item 'mater
 > CREATE MATERIALIZED VIEW IF NOT EXISTS test1 AS SELECT 2 as b;
 
 > SELECT * FROM test1;
-?column?
------------
 1
 
 > DROP VIEW test2;
