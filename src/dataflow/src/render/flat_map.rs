@@ -96,7 +96,7 @@ where
                                             datums_local[index] = Datum::Dummy;
                                         }
                                     }
-                                    mfp.evaluate(&mut datums_local, temp_storage, row_packer)
+                                    mfp.evaluate(&mut datums_local, temp_storage)
                                         .transpose()
                                         .map(|x| (x.map_err(DataflowError::from), *r))
                                 } else {
