@@ -302,7 +302,7 @@ where
                         // The predicates may be temporal, which requires the nuance
                         // of an explicit plan capable of evaluating the predicates.
                         let filter_plan = crate::FilterPlan::create_from(predicates)
-                            .unwrap_or_else(|e| panic!(e));
+                            .unwrap_or_else(|e| panic!("{}", e));
                         move |(input_row, time, diff)| {
                             let mut datums_local = datums.borrow_with(&input_row);
                             let times_diffs = filter_plan.evaluate(&mut datums_local, time, diff);

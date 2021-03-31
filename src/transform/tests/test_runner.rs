@@ -646,7 +646,12 @@ mod tests {
                         }
                     }
                     "build" => match run_testcase(&s.input, &catalog, &s.args, TestType::Build) {
-                        Ok(msg) => msg,
+                        // Generally, explanations for fully optimized queries
+                        // are not allowed to have whitespace at the end;
+                        // however, a partially optimized query can.
+                        // Since clippy rejects test results with trailing
+                        // whitespace, remove whitespace before comparing results.
+                        Ok(msg) => format!("{}\n", msg.trim_end().to_string()),
                         Err(err) => format!("error: {}\n", err),
                     },
                     "opt" => match run_testcase(&s.input, &catalog, &s.args, TestType::Opt) {

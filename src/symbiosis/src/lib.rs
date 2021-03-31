@@ -109,12 +109,14 @@ END $$;
     }
 
     pub fn can_handle(&self, stmt: &Statement<Raw>) -> bool {
-        matches!(stmt,
+        matches!(
+            stmt,
             Statement::CreateTable { .. }
-            | Statement::DropObjects { .. }
-            | Statement::Delete { .. }
-            | Statement::Insert { .. }
-            | Statement::Update { .. })
+                | Statement::DropObjects { .. }
+                | Statement::Delete { .. }
+                | Statement::Insert { .. }
+                | Statement::Update { .. }
+        )
     }
 
     pub async fn execute(

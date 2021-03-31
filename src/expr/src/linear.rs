@@ -84,14 +84,18 @@ impl MapFilterProject {
         &'a self,
         datums: &mut Vec<Datum<'a>>,
         arena: &'a RowArena,
-        row_packer: &mut RowPacker,
     ) -> Result<Option<Row>, EvalError> {
-        self.evaluate_iter(datums, arena).map(|result| {
-            result.map(|result| {
-                row_packer.extend(result);
-                row_packer.finish_and_reuse()
-            })
-        })
+        let passed_predicates = self.evaluate_inner(datums, arena)?;
+        if !passed_predicates {
+            Ok(None)
+        } else {
+            // We determine the capacity first, to ensure that we right-size
+            // the row allocation and need not re-allocate once it is formed.
+            let capacity = repr::datums_size(self.projection.iter().map(|c| datums[*c]));
+            let mut row = Row::with_capacity(capacity);
+            row.extend(self.projection.iter().map(|c| datums[*c]));
+            Ok(Some(row))
+        }
     }
 
     /// A version of `evaluate` which produces an iterator over `Datum`
@@ -106,6 +110,22 @@ impl MapFilterProject {
         datums: &'b mut Vec<Datum<'a>>,
         arena: &'a RowArena,
     ) -> Result<Option<impl Iterator<Item = Datum<'a>> + 'b>, EvalError> {
+        let passed_predicates = self.evaluate_inner(datums, arena)?;
+        if !passed_predicates {
+            Ok(None)
+        } else {
+            Ok(Some(self.projection.iter().map(move |i| datums[*i])))
+        }
+    }
+
+    /// Populates `datums` with `self.expressions` and tests `self.predicates`.
+    ///
+    /// This does not apply `self.projection`, which is up to the calling method.
+    fn evaluate_inner<'b, 'a: 'b>(
+        &'a self,
+        datums: &'b mut Vec<Datum<'a>>,
+        arena: &'a RowArena,
+    ) -> Result<bool, EvalError> {
         let mut expression = 0;
         for (support, predicate) in self.predicates.iter() {
             while self.input_arity + expression < *support {
@@ -113,14 +133,14 @@ impl MapFilterProject {
                 expression += 1;
             }
             if predicate.eval(&datums[..], &arena)? != Datum::True {
-                return Ok(None);
+                return Ok(false);
             }
         }
         while expression < self.expressions.len() {
             datums.push(self.expressions[expression].eval(&datums[..], &arena)?);
             expression += 1;
         }
-        Ok(Some(self.projection.iter().map(move |i| datums[*i])))
+        Ok(true)
     }
 
     /// Retain only the indicated columns in the presented order.

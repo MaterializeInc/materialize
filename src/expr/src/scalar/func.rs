@@ -13,6 +13,7 @@ use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::iter;
 use std::str;
+use std::thread;
 
 use ::encoding::label::encoding_from_whatwg_label;
 use ::encoding::DecoderTrap;
@@ -420,7 +421,7 @@ fn cast_string_to_list<'a>(
 ) -> Result<Datum<'a>, EvalError> {
     let parsed_datums = strconv::parse_list(
         a.unwrap_str(),
-        matches!(list_typ.unwrap_list_element_type(), ScalarType::List{..}),
+        matches!(list_typ.unwrap_list_element_type(), ScalarType::List { .. }),
         || Datum::Null,
         |elem_text| {
             let elem_text = match elem_text {
@@ -1408,8 +1409,8 @@ fn power_dec<'a>(a: Datum<'a>, b: Datum<'a>, scale: u8) -> Result<Datum<'a>, Eva
 
 fn sleep<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let duration = std::time::Duration::from_secs_f64(a.unwrap_float64());
-    std::thread::sleep(duration);
-    Ok(Datum::from(Utc::now()))
+    thread::sleep(duration);
+    Ok(Datum::Null)
 }
 
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -3560,7 +3561,7 @@ impl UnaryFunc {
             Cot => ScalarType::Float64.nullable(in_nullable),
             Log10 | Ln | Exp => ScalarType::Float64.nullable(in_nullable),
             Log10Decimal(_) | LnDecimal(_) | ExpDecimal(_) => input_type,
-            Sleep => ScalarType::TimestampTz.nullable(false),
+            Sleep => ScalarType::TimestampTz.nullable(true),
         }
     }
 
@@ -4812,14 +4813,17 @@ impl VariadicFunc {
 
     /// Whether the function output is NULL if any of its inputs are NULL.
     pub fn propagates_nulls(&self) -> bool {
-        !matches!(self, VariadicFunc::Coalesce
-            | VariadicFunc::Concat
-            | VariadicFunc::JsonbBuildArray
-            | VariadicFunc::JsonbBuildObject
-            | VariadicFunc::ListCreate { .. }
-            | VariadicFunc::RecordCreate { .. }
-            | VariadicFunc::ArrayCreate { .. }
-            | VariadicFunc::ArrayToString { .. })
+        !matches!(
+            self,
+            VariadicFunc::Coalesce
+                | VariadicFunc::Concat
+                | VariadicFunc::JsonbBuildArray
+                | VariadicFunc::JsonbBuildObject
+                | VariadicFunc::ListCreate { .. }
+                | VariadicFunc::RecordCreate { .. }
+                | VariadicFunc::ArrayCreate { .. }
+                | VariadicFunc::ArrayToString { .. }
+        )
     }
 }
 

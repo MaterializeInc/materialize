@@ -587,11 +587,7 @@ where
 
                         // Evaluate the key expressions.
                         row_packer.clear();
-                        let key = match key_mfp.evaluate(
-                            &mut datums_local,
-                            &temp_storage,
-                            &mut row_packer,
-                        ) {
+                        let key = match key_mfp.evaluate(&mut datums_local, &temp_storage) {
                             Err(e) => return Some(Err(DataflowError::from(e))),
                             Ok(key) => key.expect("Row expected as no predicate was used"),
                         };
