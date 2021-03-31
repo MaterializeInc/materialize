@@ -123,7 +123,8 @@ use repr::{RelationType, Row, RowArena, Timestamp};
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::server::{CacheMessage, LocalInput, TimestampDataUpdates};
+use crate::server::{CacheMessage, LocalInput};
+use crate::source::timestamp::TimestampDataUpdates;
 use crate::source::SourceToken;
 
 mod arrange_by;
