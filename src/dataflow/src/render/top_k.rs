@@ -71,7 +71,7 @@ where
                         let row_hash = row.hashed();
                         let datums = row.unpack();
                         let iterator = group_clone.iter().map(|i| datums[*i]);
-                        let total_size = repr::datums_size(group_clone.iter().map(|i| datums[*i]));
+                        let total_size = repr::datums_size(iterator.clone());
                         let mut group_row = Row::with_capacity(total_size);
                         group_row.extend(iterator);
                         ((group_row, row_hash), row)

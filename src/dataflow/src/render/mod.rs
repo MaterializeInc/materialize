@@ -547,10 +547,10 @@ where
                         let ok_collection = ok_collection.map({
                             move |row| {
                                 let datums = row.unpack();
-                                let total_size =
-                                    repr::datums_size(outputs.iter().map(|i| datums[*i]));
+                                let iterator = outputs.iter().map(|i| datums[*i]);
+                                let total_size = repr::datums_size(iterator.clone());
                                 let mut row = Row::with_capacity(total_size);
-                                row.extend(outputs.iter().map(|i| datums[*i]));
+                                row.extend(iterator);
                                 row
                             }
                         });

@@ -41,7 +41,7 @@ where
                         move |row| {
                             let datums = row.unpack();
                             let iterator = keys2.iter().map(|i| datums[*i]);
-                            let total_size = repr::datums_size(keys2.iter().map(|i| datums[*i]));
+                            let total_size = repr::datums_size(iterator.clone());
                             let mut key_row = Row::with_capacity(total_size);
                             key_row.extend(iterator);
                             (key_row, row)
