@@ -217,6 +217,7 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
                 pending_peeks: Vec::new(),
                 feedback_tx: None,
                 reported_frontiers: HashMap::new(),
+                reported_source_frontiers: HashMap::new(),
                 metrics: Metrics::for_worker_id(worker_idx),
             }
             .run()
@@ -371,16 +372,13 @@ impl TimestampBindingRc {
         ret
     }
 
-    pub fn set_compaction_frontier(&mut self, time: Timestamp) {
-        let new_frontier = Antichain::from_elem(time);
-
+    pub fn set_compaction_frontier(&mut self, new_frontier: AntichainRef<Timestamp>) {
         self.wrapper
             .borrow_mut()
-            .adjust_compaction_frontier(self.compaction_frontier.borrow(), new_frontier.borrow());
-        self.compaction_frontier = new_frontier;
+            .adjust_compaction_frontier(self.compaction_frontier.borrow(), new_frontier);
+        self.compaction_frontier = new_frontier.to_owned();
     }
 
-    #[allow(dead_code)]
     fn compact(&self) {
         self.wrapper.borrow_mut().compact();
     }
@@ -455,6 +453,8 @@ where
     feedback_tx: Option<mpsc::UnboundedSender<WorkerFeedbackWithMeta>>,
     /// Tracks the frontier information that has been sent over `feedback_tx`.
     reported_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
+    /// Tracks source timestamp frontier information that has been sent over `feedback_tx`.
+    reported_source_frontiers: HashMap<GlobalId, Antichain<Timestamp>>,
     /// Metrics bundle.
     metrics: Metrics,
 }
@@ -614,6 +614,8 @@ where
         while !shutdown {
             // Enable trace compaction.
             self.render_state.traces.maintenance();
+            // Compact timestamp bindings
+            self.compact_timestamp_bindings();
 
             // Ask Timely to execute a unit of work. If Timely decides there's
             // nothing to do, it will park the thread. We rely on another thread
@@ -666,6 +668,33 @@ where
                         progress.push((*id, changes));
                     }
                     lower.clone_from(&upper);
+                }
+            }
+
+            for (id, source_ts_history) in self.render_state.ts_histories.borrow().iter() {
+                match source_ts_history {
+                    TimestampDataUpdate::RealTime(_) => continue,
+                    TimestampDataUpdate::BringYourOwn(history) => {
+                        let upper = history.get_upper();
+                        let lower = self
+                            .reported_source_frontiers
+                            .get_mut(&id)
+                            .expect("Frontier missing!");
+                        if lower != &upper {
+                            let mut changes = ChangeBatch::new();
+                            for time in lower.elements().iter() {
+                                changes.update(time.clone(), -1);
+                            }
+                            for time in upper.elements().iter() {
+                                changes.update(time.clone(), 1);
+                            }
+                            changes.compact();
+                            if !changes.is_empty() {
+                                progress.push((*id, changes));
+                            }
+                            lower.clone_from(&upper);
+                        }
+                    }
                 }
             }
             if let Some(logger) = self.materialized_logger.as_mut() {
@@ -832,6 +861,16 @@ where
                     self.render_state
                         .traces
                         .allow_compaction(id, frontier.borrow());
+                    if let Some(ts_history) =
+                        self.render_state.ts_histories.borrow_mut().get_mut(&id)
+                    {
+                        match ts_history {
+                            TimestampDataUpdate::BringYourOwn(history) => {
+                                history.set_compaction_frontier(frontier.borrow());
+                            }
+                            _ => (),
+                        }
+                    }
                 }
             }
 
@@ -925,6 +964,8 @@ where
                 if let Some(data) = source_timestamp_data {
                     let prev = self.render_state.ts_histories.borrow_mut().insert(id, data);
                     assert!(prev.is_none());
+                    self.reported_source_frontiers
+                        .insert(id, Antichain::from_elem(0));
                 }
             }
             SequencedCommand::AdvanceSourceTimestamp { id, update } => {
@@ -975,6 +1016,8 @@ where
                 if prev.is_none() {
                     log::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }
+
+                self.reported_source_frontiers.remove(&id);
             }
         }
     }
@@ -996,6 +1039,15 @@ where
                 if let Some(logger) = self.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                 }
+            }
+        }
+    }
+
+    /// Attempt to compact source timestamp bindings
+    fn compact_timestamp_bindings(&self) {
+        for (_, ts_history) in self.render_state.ts_histories.borrow().iter() {
+            if let TimestampDataUpdate::BringYourOwn(history) = ts_history {
+                history.compact();
             }
         }
     }

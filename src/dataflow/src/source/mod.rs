@@ -41,6 +41,7 @@ use repr::{CachedRecord, CachedRecordIter, Diff, Row, Timestamp};
 use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::generic::OutputHandle;
 use timely::dataflow::Scope;
+use timely::progress::Antichain;
 use timely::scheduling::activate::{Activator, SyncActivator};
 use timely::Data;
 use tokio::sync::{mpsc, RwLock, RwLockReadGuard};
@@ -700,7 +701,8 @@ impl ConsistencyInfo {
                 cap.downgrade(&(&min + 1));
                 self.last_closed_ts = min;
 
-                timestamp_bindings.set_compaction_frontier(min);
+                let new_compaction_frontier = Antichain::from_elem(min);
+                timestamp_bindings.set_compaction_frontier(new_compaction_frontier.borrow());
             }
         } else {
             // This a RT source. It is always possible to close the timestamp and downgrade the
