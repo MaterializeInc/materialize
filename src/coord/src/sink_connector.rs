@@ -128,7 +128,7 @@ async fn get_latest_ts(
     })?;
 
     // Read the end-1 offset message
-    let m = match get_next_message(consumer, timeout)? {
+    let message_bytes = match get_next_message(consumer, timeout)? {
         None => {
             // fetch watermarks to distinguish between a timeout reading end-1 and an empty topic
             match consumer.fetch_watermarks(consistency_topic, 0, timeout) {
@@ -154,7 +154,17 @@ async fn get_latest_ts(
     };
 
     // decode the timestamp from the end-1 message
-    let mut bytes = &m[5..];
+    let timestamp = decode_consistency_end_record(&message_bytes, consistency_topic)?;
+
+    Ok(Some(timestamp))
+}
+
+fn decode_consistency_end_record(
+    bytes: &[u8],
+    consistency_topic: &str,
+) -> Result<Timestamp, anyhow::Error> {
+    // The first 5 bytes are reserved for the schema id/schema registry information
+    let mut bytes = &bytes[5..];
     let record = mz_avro::from_avro_datum(get_debezium_transaction_schema(), &mut bytes)
         .context("Failed to decode consistency topic message")?;
 
@@ -165,7 +175,7 @@ async fn get_latest_ts(
         match (status, id) {
             (Some(Value::String(status)), Some(Value::String(id))) if status == "END" => {
                 if let Ok(ts) = id.parse::<u64>() {
-                    Ok(Some(Timestamp::from(ts)))
+                    Ok(Timestamp::from(ts))
                 } else {
                     bail!(
                         "Malformed consistency record, failed to parse timestamp {} in topic {}",
