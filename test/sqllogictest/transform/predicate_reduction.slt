@@ -15,8 +15,7 @@ CREATE TABLE t1(f1 int, f2 int)
 statement ok
 INSERT INTO t1 VALUES (null, null), (0, null), (1, null), (1, 0), (null, 0)
 
-# Currently, we can simplify predicates with overlapping predicate
-# subexpressions only if the subexpression cannot be null.
+# We can simplify predicates with overlapping predicate subexpressions.
 query II
 SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
 ----
@@ -28,7 +27,7 @@ EXPLAIN SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
 ----
 %0 =
 | Get materialize.public.t1 (u1)
-| Filter ((#0 = 0) || (#0 = 1)), (#0 = 0)
+| Filter (#0 = 0)
 
 EOF
 

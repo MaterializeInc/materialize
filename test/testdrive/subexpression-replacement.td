@@ -81,20 +81,18 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 
 # This is not optimized
 > EXPLAIN SELECT * FROM t1 WHERE (col_not_null % 2) = 1 AND (((col_not_null % 2) = 1) = TRUE);
-"%0 =| Get t1| Filter (true = (1 = (#1 % 2))), (1 = (#1 % 2))"
+"%0 =| Get t1| Filter (1 = (#1 % 2))"
 
 # Column used on both sides of the expression
 > EXPLAIN SELECT * FROM t1 WHERE (col_not_null = col_not_null + 1) AND (col_not_null = col_not_null + 1);
 "%0 =| Get t1| Filter (#1 = (#1 + 1))"
 
-# Replacement does not happen with `mz_sleep` because `mz_sleep` returns null.
-# If the return value of `mz_sleep` changes, check that replacement continues to
-# not happen.
+# TODO (materialize#6043):  Avoid simplifying mz_sleep.
 
 > EXPLAIN SELECT * FROM t1
   WHERE mz_internal.mz_sleep(col_not_null) > mz_internal.mz_sleep(col_not_null)
   AND (mz_internal.mz_sleep(col_not_null) > mz_internal.mz_sleep(col_not_null) = true);
-"%0 =| Get t1| Filter (true = (mz_sleep(i32tof64(#1)) > mz_sleep(i32tof64(#1)))), (mz_sleep(i32tof64(#1)) > mz_sleep(i32tof64(#1)))"
+"%0 =| Get t1| Filter (mz_sleep(i32tof64(#1)) > mz_sleep(i32tof64(#1)))"
 
 # IN list inside the expression
 

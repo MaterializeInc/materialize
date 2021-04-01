@@ -89,20 +89,20 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     }
 
     // 3) Reduce across `predicates`.
-    // If a predicate `p` cannot be null, and `f(p)` is of type bool
-    // (`f(p)` is allowed to be nullable), then the predicate `p & f(p)` is
-    // equal to `p & f(true)`, and `!p & f(p)` is equal to `!p & f(false)`.
-    // For any index i, the `Vec` of predicates `[p1, ... pi, ... pn]` is
-    // equivalent to the single predicate `pi & (p1 & ... & p(i-1) & p(i+1)
-    // ... & pn)`.
-    // Thus, if `pi` (resp. `!pi`) cannot be null, it is valid to replace with
-    // `true` (resp. `false`) every subexpression in
-    // `(p1 & ... & p(i-1) & p(i+1) ... & pn)` that is equal to `pi`.
+    // If a predicate `p` cannot be null, and `f(p)` is a nullable bool
+    // then the predicate `p & f(p)` is equal to `p & f(true)`, and
+    // `!p & f(p)` is equal to `!p & f(false)`. For any index i, the `Vec` of
+    // predicates `[p1, ... pi, ... pn]` is equivalent to the single predicate
+    // `pi & (p1 & ... & p(i-1) & p(i+1) ... & pn)`. Thus, if `pi`
+    // (resp. `!pi`) cannot be null, it is valid to replace with `true` (resp.
+    // `false`) every subexpression in `(p1 & ... & p(i-1) & p(i+1) ... & pn)`
+    // that is equal to `pi`.
 
-    // (As for the reduction does not work if `p` can be null: if `p` is null,
-    // then p & f(p) becomes `null & f(null)`. `null & f(null)` is not
-    // necessarily equal to `null & f(true)` because `null & true = null`
-    // and `null & false = false`.)
+    // If `p` is null and `q` is a nullable bool, then `p & q` can be either
+    // `null` or `false` depending on what `q`. Our rendering pipeline treats
+    // both as "remove this row." Thus, in the specific context of filter
+    // predicates, it is acceptable to make the aforementioned substitution
+    // even if `pi` can be null.
 
     // Note that this does some dedupping of predicates since if `p1 = p2`
     // then this reduction process will replace `p1` with true.
@@ -127,7 +127,7 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
             |expr: &MirScalarExpr, constant_bool: &MirScalarExpr| {
                 // Do not replace subexpressions equal to `expr` if `expr` is a
                 // literal to avoid infinite looping.
-                if !expr.is_literal() && !expr.typ(input_type).nullable {
+                if !expr.is_literal() {
                     for other_predicate in todo.iter_mut() {
                         replace_subexpr_and_reduce(
                             other_predicate,
