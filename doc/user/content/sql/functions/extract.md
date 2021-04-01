@@ -18,7 +18,7 @@ _val_ | [`date`](../../types/date), [`timestamp`](../../types/timestamp), [`time
 
 ### Arguments
 
-`EXTRACT` supports multiple synonyms for most of time periods.
+`EXTRACT` supports multiple synonyms for most time periods.
 
 Time period | Synonyms
 ------------|---------
