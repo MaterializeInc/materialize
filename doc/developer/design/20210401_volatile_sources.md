@@ -243,6 +243,21 @@ dimensions. This is another good reason to punt on
 changing our notion of volatility, until such time as we allow specifying
 volatility information in `CREATE SOURCE` statements.
 
+### Automated volatility violation detection
+
+Relying on users to properly declare their sources as volatile or nonvolatile
+is always going to be error prone. Unfortunately this problem is inherent to
+interfacing with external systems; we just can't make guarantees that those
+systems will uphold the properties they claim to support, or that users claim
+they will support.
+
+Still, in many cases, we might be able to assist in detecting volatility
+violations. We could spot-check the data across instances of the same source
+occasionally, for example, and report any errors that we notice. We could
+periodically query the Kafka broker for its retention settings and surface any
+misconfigurations. We could remember a file's inode and size, and complain if
+either has changed after Materialize restarts.
+
 ## Alternatives
 
 ### Forced materialization
