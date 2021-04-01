@@ -107,48 +107,53 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     // Note that this does some dedupping of predicates since if `p1 = p2`
     // then this reduction process will replace `p1` with true.
 
-    // Pop out a predicate `p` from `predicates_to_apply`. Check all the other
-    // predicates (this is the union of `predicates_to_apply` and
-    // `applied_predicates`), and if `p` is a subexpression of any of those
-    // predicates, replace the subexpression with `true`. Then stick `p` into
-    // `applied_predicates`. If a predicate `q` in `applied_predicates` was
-    // altered in the aforementioned process, remove `q` from
-    // `applied_predicates` and put it in `predicates_to_apply` so we can reduce
-    // the predicates even further.
-    let mut predicates_to_apply = Vec::new();
-    let mut applied_predicates = Vec::<MirScalarExpr>::new();
-    // Seed `predicates_to_apply` with the `Vec` of all predicates.
-    std::mem::swap(&mut predicates_to_apply, predicates);
+    // Maintain respectively:
+    // 1) A list of predicates for which we have checked for matching
+    // subexpressions
+    // 2) A list of predicates for which we have yet to do so.
+    let mut completed = Vec::new();
+    let mut todo = Vec::new();
+    // Seed `todo` with all predicates.
+    std::mem::swap(&mut todo, predicates);
 
-    while let Some(predicate_to_apply) = predicates_to_apply.pop() {
+    while let Some(predicate_to_apply) = todo.pop() {
+        // Helper method: for each predicate `p`, see if all other predicates
+        // (a.k.a. the union of todo & completed) contains `p` as a
+        // subexpression, and replace the subexpression accordingly.
+        // This method lives inside the loop because in order to comply with
+        // Rust rules that only one mutable reference to `todo` can be held at a
+        // time.
         let mut replace_subexpr_other_predicates =
             |expr: &MirScalarExpr, constant_bool: &MirScalarExpr| {
                 // Do not replace subexpressions equal to `expr` if `expr` is a
                 // literal to avoid infinite looping.
                 if !expr.is_literal() && !expr.typ(input_type).nullable {
-                    let replace_subexpr_other_predicate = |other_predicate: &mut MirScalarExpr| {
-                        let mut changed = false;
-                        visit_mut_replace_subexpr(
+                    for other_predicate in todo.iter_mut() {
+                        replace_subexpr_and_reduce(
                             other_predicate,
-                            &mut |e| replace(e, expr, constant_bool),
-                            &mut changed,
+                            expr,
+                            constant_bool,
+                            input_type,
                         );
-                        if changed {
-                            other_predicate.reduce(input_type);
-                        }
-                        changed
-                    };
-                    for other_predicate in predicates_to_apply.iter_mut() {
-                        replace_subexpr_other_predicate(other_predicate);
                     }
-                    for other_idx in (0..applied_predicates.len()).rev() {
-                        if replace_subexpr_other_predicate(&mut applied_predicates[other_idx]) {
-                            predicates_to_apply.push(applied_predicates.remove(other_idx));
+                    for other_idx in (0..completed.len()).rev() {
+                        if replace_subexpr_and_reduce(
+                            &mut completed[other_idx],
+                            expr,
+                            constant_bool,
+                            input_type,
+                        ) {
+                            // If a predicate in the `completed` list has
+                            // been simplified, stick it back into the `todo` list.
+                            todo.push(completed.remove(other_idx));
                         }
                     }
                 }
             };
-
+        // Meat of loop starts here. If a predicate p is of the form `!q`, replace
+        // every instance of `q` in every other predicate with `false.`
+        // Otherwise, replace every instance of `p` in every other predicate
+        // with `true`.
         if let MirScalarExpr::CallUnary {
             func: UnaryFunc::Not,
             expr,
@@ -164,11 +169,11 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
                 &MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool),
             );
         }
-        applied_predicates.push(predicate_to_apply);
+        completed.push(predicate_to_apply);
     }
     // Remove any predicates that have been reduced to "true"
-    applied_predicates.retain(|p| !p.is_literal_true());
-    *predicates = applied_predicates;
+    completed.retain(|p| !p.is_literal_true());
+    *predicates = completed;
 
     // 4) Sort and dedup predicates.
     predicates.sort();
@@ -177,33 +182,53 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
 
 /* #region helper functions for substituting a bool literal for a matching subexpression */
 
+/// Replaces a subexpression if it matches `replace_if_equal_to`, and record that
+/// the expression has changed.
 fn replace(
-    predicate: &mut MirScalarExpr,
-    to_replace: &MirScalarExpr,
+    subexpr: &mut MirScalarExpr,
+    replace_if_equal_to: &MirScalarExpr,
     replace_with: &MirScalarExpr,
-) -> bool {
-    if predicate == to_replace {
-        *predicate = replace_with.clone();
-        return true;
+    changed: &mut bool,
+) {
+    if subexpr == replace_if_equal_to {
+        *subexpr = replace_with.clone();
+        *changed = true;
     }
-    false
 }
 
-fn visit_mut_replace_subexpr<F>(e: &mut MirScalarExpr, f: &mut F, changed: &mut bool)
+// TODO: Have a common method in `MirScalarExpr` for this and similar logic.
+/// Similar to what `MirScalarExpr::visit_mut_pre` would be like, but the
+/// `cond` of an if statement is not visited to avoid `then` or `els` to be
+/// evaluated before `cond`, resulting in a correctness error.
+fn visit_mut_pre_skip_cond<F>(e: &mut MirScalarExpr, f: &mut F)
 where
-    F: FnMut(&mut MirScalarExpr) -> bool,
+    F: FnMut(&mut MirScalarExpr),
 {
-    if f(e) {
-        *changed = true;
-    } else if let MirScalarExpr::If { cond: _, then, els } = e {
-        // Do not replace any subexpression in `cond` because it may cause
-        // `then` or `els` to be evaluated before `cond`, resulting in a
-        // correctness error.
-        visit_mut_replace_subexpr(then, f, changed);
-        visit_mut_replace_subexpr(els, f, changed);
+    f(e);
+    if let MirScalarExpr::If { cond: _, then, els } = e {
+        visit_mut_pre_skip_cond(then, f);
+        visit_mut_pre_skip_cond(els, f);
     } else {
-        e.visit1_mut(|e2| visit_mut_replace_subexpr(e2, f, changed));
+        e.visit1_mut(|e2| visit_mut_pre_skip_cond(e2, f));
     }
+}
+
+/// Replace any matching subexpressions in a predicate, and if the predicate has
+/// changed, reduce it.
+fn replace_subexpr_and_reduce(
+    predicate: &mut MirScalarExpr,
+    replace_if_equal_to: &MirScalarExpr,
+    replace_with: &MirScalarExpr,
+    input_type: &RelationType,
+) -> bool {
+    let mut changed = false;
+    visit_mut_pre_skip_cond(predicate, &mut |e| {
+        replace(e, replace_if_equal_to, replace_with, &mut changed)
+    });
+    if changed {
+        predicate.reduce(input_type);
+    }
+    changed
 }
 
 /* #endregion */
