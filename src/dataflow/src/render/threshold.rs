@@ -38,10 +38,12 @@ where
                 let keys2 = keys.clone();
                 let ok_keyed = ok_built
                     .map({
-                        let mut row_packer = repr::RowPacker::new();
                         move |row| {
                             let datums = row.unpack();
-                            let key_row = row_packer.pack(keys2.iter().map(|i| datums[*i]));
+                            let iterator = keys2.iter().map(|i| datums[*i]);
+                            let total_size = repr::datums_size(iterator.clone());
+                            let mut key_row = Row::with_capacity(total_size);
+                            key_row.extend(iterator);
                             (key_row, row)
                         }
                     })

@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use itertools::Itertools;
 
 use expr::{EvalError, MirRelationExpr, MirScalarExpr, UnaryFunc};
-use repr::Datum;
 use repr::{ColumnType, RelationType, ScalarType};
+use repr::{Datum, Row};
 
 use crate::TransformArgs;
 
@@ -53,11 +53,10 @@ impl ColumnKnowledge {
                 .unwrap_or_else(|| typ.column_types.iter().map(DatumKnowledge::from).collect()),
             MirRelationExpr::Constant { rows, typ } => {
                 if let Ok([(row, _diff)]) = rows.as_deref() {
-                    let mut row_packer = repr::RowPacker::new();
                     row.iter()
                         .zip(typ.column_types.iter())
                         .map(|(datum, typ)| DatumKnowledge {
-                            value: Some((Ok(row_packer.pack(Some(datum.clone()))), typ.clone())),
+                            value: Some((Ok(Row::pack_slice(&[datum.clone()])), typ.clone())),
                             nullable: datum == Datum::Null,
                         })
                         .collect()

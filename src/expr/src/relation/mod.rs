@@ -491,10 +491,9 @@ impl MirRelationExpr {
                 );
             }
         }
-        let mut row_packer = repr::RowPacker::new();
         let rows = Ok(rows
             .into_iter()
-            .map(move |(row, diff)| (row_packer.pack(row), diff))
+            .map(move |(row, diff)| (Row::pack_slice(&row), diff))
             .collect());
         MirRelationExpr::Constant { rows, typ }
     }
@@ -1340,11 +1339,11 @@ impl RowSetFinishing {
                 rows.drain(..offset);
             }
             rows.sort_by(&mut sort_by);
-            let mut row_packer = repr::RowPacker::new();
+            let mut row_packer = Row::default();
             for row in rows {
                 let datums = row.unpack();
-                let new_row = row_packer.pack(self.project.iter().map(|i| &datums[*i]));
-                *row = new_row;
+                row_packer.extend(self.project.iter().map(|i| &datums[*i]));
+                *row = row_packer.finish_and_reuse();
             }
         }
     }

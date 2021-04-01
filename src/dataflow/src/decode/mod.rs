@@ -32,7 +32,7 @@ use dataflow_types::{DataflowError, LinearOperator};
 use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState};
 use log::error;
 use repr::Datum;
-use repr::{Diff, Row, RowPacker, Timestamp};
+use repr::{Diff, Row, Timestamp};
 
 use self::csv::csv;
 use self::regex::regex as regex_fn;
@@ -157,15 +157,11 @@ fn text_to_datum(bytes: &[u8]) -> Datum {
 
 struct OffsetDecoderState<F: Fn(&[u8]) -> Datum> {
     datum_func: F,
-    row_packer: RowPacker,
 }
 
 impl<F: Fn(&[u8]) -> Datum> From<F> for OffsetDecoderState<F> {
     fn from(datum_func: F) -> Self {
-        Self {
-            datum_func,
-            row_packer: RowPacker::new(),
-        }
+        Self { datum_func }
     }
 }
 
@@ -174,7 +170,9 @@ where
     F: Fn(&[u8]) -> Datum + Send,
 {
     fn decode_key(&mut self, bytes: &[u8]) -> Result<Option<Row>, String> {
-        Ok(Some(self.row_packer.pack(&[(self.datum_func)(bytes)])))
+        let datum = (self.datum_func)(bytes);
+        let row = Row::pack_slice(&[datum]);
+        Ok(Some(row))
     }
 
     fn decode_upsert_value<'a>(
@@ -336,19 +334,12 @@ fn rewrite_for_upsert(
             Entry::Vacant(vacant) => {
                 // if the key is new, then we know that we always need to ignore the "before" part,
                 // so zero it out
-                vacant.insert({
-                    let mut packer = RowPacker::new();
-                    packer.push(after);
-                    packer.finish()
-                });
+                vacant.insert(Row::pack_slice(&[after]));
 
                 if before.is_null() {
                     Ok(row)
                 } else {
-                    let mut packer = RowPacker::new();
-                    packer.push(Datum::Null);
-                    packer.push(after);
-                    Ok(packer.finish())
+                    Ok(Row::pack_slice(&[Datum::Null, after]))
                 }
             }
             Entry::Occupied(mut occupied) => {
@@ -356,11 +347,7 @@ fn rewrite_for_upsert(
                     if after.is_null() {
                         occupied.remove_entry();
                     } else {
-                        occupied.insert({
-                            let mut packer = RowPacker::new();
-                            packer.push(after);
-                            packer.finish()
-                        });
+                        occupied.insert(Row::pack_slice(&[after]));
                     }
                     // this matches the modifications we'd make in the next step
                     Ok(row)
@@ -371,17 +358,10 @@ fn rewrite_for_upsert(
                         let (_k, v) = occupied.remove_entry();
                         v
                     } else {
-                        occupied.insert({
-                            let mut packer = RowPacker::new();
-                            packer.push(after);
-                            packer.finish()
-                        })
+                        occupied.insert(Row::pack_slice(&[after]))
                     };
 
-                    let mut packer = RowPacker::new();
-                    packer.push(previous_insert.iter().next().unwrap());
-                    packer.push(after);
-                    Ok(packer.finish())
+                    Ok(Row::pack_slice(&[previous_insert.unpack_first(), after]))
                 }
             }
         }

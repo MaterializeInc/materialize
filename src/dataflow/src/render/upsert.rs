@@ -139,7 +139,7 @@ where
             let mut current_values = HashMap::new();
 
             let mut vector = Vec::new();
-            let mut row_packer = repr::RowPacker::new();
+            let mut row_packer = repr::Row::default();
 
             move |input, output| {
                 // Digest each input, reduce by presented timestamp.
@@ -319,7 +319,7 @@ fn evaluate(
     datums: &[Datum],
     predicates: &[MirScalarExpr],
     position_or: &[Option<usize>],
-    row_packer: &mut repr::RowPacker,
+    row_packer: &mut repr::Row,
 ) -> Result<Option<Row>, EvalError> {
     let arena = RowArena::new();
     // Each predicate is tested in order.
