@@ -25,6 +25,10 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
 
 - `ANY` and `ALL` queries generate suboptimal plans {{% gh 744 %}}
 
+### Functions
+
+- Materialize does not support window functions. In some cases, you may be able to achieve the desired results with [temporal filters](https://materialize.com/temporal-filters/) or the [TOP K by group](../../sql/idioms/#top-k-by-group) idiom instead. {{% gh 213 %}}
+
 ### Common table expressions (CTEs)
 
 - CTEs only support `SELECT` queries. {{% gh 4867 %}}
