@@ -22,8 +22,8 @@ use tokio::time::Duration;
 
 use repr::strconv;
 use sql_parser::ast::{
-    AvroSchema, ColumnOption, ColumnOptionDef, Connector, CreateSourceStatement, CsrSeed, Format,
-    Ident, Raw, Statement,
+    AvroSchema, ColumnOption, ColumnOptionDef, Connector, CreateSourceStatement, CsrSeed, DbzMode,
+    Envelope, Format, Ident, Raw, Statement,
 };
 use sql_parser::parser::parse_columns;
 
@@ -162,9 +162,29 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             Connector::PubNub { .. } => (),
         }
 
-        purify_format(format, connector, col_names, file, &config_options).await?;
-        if let sql_parser::ast::Envelope::Upsert(format) = envelope {
-            purify_format(format, connector, col_names, None, &config_options).await?;
+        purify_format(
+            format,
+            connector,
+            &envelope,
+            col_names,
+            file,
+            &config_options,
+        )
+        .await?;
+        if let sql_parser::ast::Envelope::Upsert(_) = envelope {
+            // TODO(bwm): this will be removed with the upcoming upsert rationalization
+            let envelope_dupe = envelope.clone();
+            if let sql_parser::ast::Envelope::Upsert(format) = envelope {
+                purify_format(
+                    format,
+                    connector,
+                    &envelope_dupe,
+                    col_names,
+                    None,
+                    &config_options,
+                )
+                .await?;
+            }
         }
     }
     Ok(stmt)
@@ -173,6 +193,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 async fn purify_format(
     format: &mut Option<Format<Raw>>,
     connector: &mut Connector<Raw>,
+    envelope: &Envelope<Raw>,
     col_names: &mut Vec<Ident>,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
@@ -205,6 +226,11 @@ async fn purify_format(
                         value_schema,
                         ..
                     } = get_remote_avro_schema(ccsr_config, topic.clone()).await?;
+                    if matches!(envelope, Envelope::Debezium(DbzMode::Upsert))
+                        && key_schema.is_none()
+                    {
+                        bail!("Key schema is required for ENVELOPE DEBEZIUM UPSERT");
+                    }
                     *seed = Some(CsrSeed {
                         key_schema,
                         value_schema,
@@ -215,13 +241,30 @@ async fn purify_format(
                 schema: sql_parser::ast::Schema::File(path),
                 with_options,
             } => {
+                if matches!(envelope, Envelope::Debezium(DbzMode::Upsert)) {
+                    // TODO(bwm): Support key schemas everywhere, something like
+                    // https://github.com/MaterializeInc/materialize/pull/6286
+                    bail!(
+                        "ENVELOPE DEBEZIUM UPSERT can only be used with schemas from \
+                           the confluent schema registry, and requires a key schema"
+                    );
+                }
                 let value_schema = tokio::fs::read_to_string(path).await?;
                 *schema = AvroSchema::Schema {
                     schema: sql_parser::ast::Schema::Inline(value_schema),
                     with_options: with_options.clone(),
                 };
             }
-            _ => {}
+            _ => {
+                if matches!(envelope, Envelope::Debezium(DbzMode::Upsert)) {
+                    // TODO(bwm): Support key schemas everywhere, something like
+                    // https://github.com/MaterializeInc/materialize/pull/6286
+                    bail!(
+                        "ENVELOPE DEBEZIUM UPSERT can only be used with schemas from \
+                           the confluent schema registry, and requires a key schema"
+                    );
+                }
+            }
         },
         Some(Format::Protobuf { schema, .. }) => {
             if let sql_parser::ast::Schema::File(path) = schema {

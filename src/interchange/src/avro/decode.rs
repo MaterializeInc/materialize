@@ -81,7 +81,8 @@ impl Decoder {
     ) -> anyhow::Result<Decoder> {
         assert!(
             (envelope == EnvelopeType::Debezium && debezium_dedup.is_some())
-                || (envelope != EnvelopeType::Debezium && debezium_dedup.is_none())
+                || (envelope != EnvelopeType::Debezium && debezium_dedup.is_none()),
+            "Debezium deduplication strategy must be specified iff envelope type is debezium"
         );
         let debezium_dedup =
             debezium_dedup.and_then(|strat| DebeziumDeduplicationState::new(strat, key_indices));
