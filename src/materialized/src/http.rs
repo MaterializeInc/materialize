@@ -16,7 +16,6 @@
 use std::pin::Pin;
 use std::time::Instant;
 
-use coord::session::Session;
 use futures::future::TryFutureExt;
 use hyper::{service, Method, StatusCode};
 use hyper_openssl::MaybeHttpsStream;
@@ -25,6 +24,8 @@ use openssl::ssl::{Ssl, SslContext};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_openssl::SslStream;
 
+use coord::session::Session;
+use ore::future::OreFutureExt;
 use ore::netio::SniffedStream;
 
 mod catalog;
@@ -142,7 +143,7 @@ impl Server {
             let user = user.clone();
             let coord_client = self.coord_client.clone();
             let start_time = self.start_time;
-            async move {
+            let future = async move {
                 let user = match user {
                     Ok(user) => user,
                     Err(e) => return Ok(util::error_response(StatusCode::UNAUTHORIZED, e)),
@@ -181,7 +182,27 @@ impl Server {
                 };
                 coord_client.terminate().await;
                 res
-            }
+            };
+            // Hyper will drop the future if the client goes away, in an effort
+            // to eagerly cancel work. But the design of the coordinator
+            // requires that the future be polled to completion in order for
+            // cleanup to occur. Specifically:
+            //
+            //   * The `SessionClient` *must* call `terminate` before it is
+            //     dropped.
+            //   * A peek receiver must not be dropped before it receives a
+            //     message.
+            //
+            // Not observing this rule leads to invariant violations that panic;
+            // see #6278 for an example.
+            //
+            // The fix here is to wrap the future in a combinator that will call
+            // `tokio::spawn` to poll it to completion if Hyper gives up on it.
+            // A bit weird, but it works, and hides this messiness from the code
+            // in the future itself. If Rust ever supports asynchronous
+            // destructors ("AsyncDrop"), those will admit a more natural
+            // solution to the problem.
+            future.spawn_if_canceled()
         });
         let http = hyper::server::conn::Http::new();
         http.serve_connection(conn, svc).err_into().await
