@@ -9,7 +9,7 @@ the goal of providing a deterministic, replayable system.
 This design doc proposes to:
 
   * Introduce "volatile source" as a term of art that describes a source that
-    does not have upstream durability.
+    does not meet a specific standard of reliability.
 
   * Use the terminology consistently in the docs site and error messages to
     educate our users about volatile sources.
@@ -35,23 +35,35 @@ Materialize Cloud.
 A "volatile source" is any source that cannot reliabily present the same data
 with the same timestamps across different instantiations.
 
+A "instantiation" of a source occurs whenever:
+
+  * A new index is created on the source or on an unmaterialized view that
+    references the source.
+  * An ad-hoc query or `TAIL` references the source directly.
+
+Restarting Materialize will cause all sources to be reinstantiated. Referencing
+a materialized view that in turn depends on a source does not create a new
+instantiation of a source.
+
 Examples of volatile sources:
 
   * Any Kinesis source. Since Kinesis streams have mandatory retention periods
     (by default 24 hours), a new instantiation of the source will not see
     any data that has expired.
-  * A PubNub source, since new instantiations always start from the tail of the
-    stream, at least in the current implementation.
+  * A PubNub demo source, since new instantiations always start from the tail
+    of the stream.
   * A Kafka source with a non-infinite retention policy.
+  * A file source, where the file is periodically overwritten.
 
 Examples of nonvolatile sources:
 
-  * A file source, when the file is treated as append only.
-  * An S3 source, when the bucket is treated as append only.
+  * A PubNub source with [retention](https://www.pubnub.com/docs/messages/storage),
+    though we don't presently support this.
   * An non-upsert Kafka source, when the topic has infinite retention and no
     compaction policy.
   * An upsert Kafka source, when the topic has infinite retention but *may*
     have a key compaction policy.
+  * A file source, when the file is treated as append only.
 
 It's important to note that volatility is a property of how a source is *used*,
 rather than fundamental to a source type. Kinesis is the rare exception. All
@@ -219,6 +231,18 @@ Source persistence may one day permit the conversion of a volatile source
 into a nonvolatile one. If we can write down the data we see as it flows into
 Materialize, then it doesn't matter if the upstream source garbage collects it.
 
+### Expanded volatility bits
+
+We might discover that a single volatility bit is too coarse a tool. For
+example, exactly-once sinks could learn to support volatile sources that provide
+the guarantee that you will never see a message more than once.
+
+This proposal leaves the door open for slicing "volatility" into multiple
+dimensions. This is another good reason to punt on
+[toggleable volatility](#toggleable-volatility). We have a lot of latitude in
+changing our notion of volatility, until such time as we allow specifying
+volatility information in `CREATE SOURCE` statements.
+
 ## Alternatives
 
 ### Forced materialization
@@ -252,7 +276,7 @@ CREATE MATERIALIZED VIEW market_orders AS
 ### One-shot sources
 
 One other discussed alternative was to introduce a "one-shot" source, which
-could be _used_ in exactly one materialized view:
+could be used in exactly one materialized view:
 
 ```
 CREATE MATERIALIZED VIEW market_orders AS
