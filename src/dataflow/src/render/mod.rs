@@ -106,11 +106,14 @@ use std::iter;
 use std::rc::Rc;
 use std::rc::Weak;
 
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::AsCollection;
 use timely::communication::Allocate;
 use timely::dataflow::operators::to_stream::ToStream;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
+use timely::progress::timestamp::Refines;
+use timely::progress::Timestamp;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 
@@ -118,7 +121,7 @@ use dataflow_types::*;
 use expr::{GlobalId, Id, MapFilterProject, MirRelationExpr};
 use ore::collections::CollectionExt as _;
 use ore::iter::IteratorExt;
-use repr::{RelationType, Row, RowArena, Timestamp};
+use repr::{RelationType, Row, RowArena};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::operator::CollectionExt;
@@ -219,9 +222,9 @@ pub fn build_dataflow<A: Allocate>(
     })
 }
 
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, Timestamp>
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, G::Timestamp>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope<Timestamp = repr::Timestamp>,
 {
     fn import_index(
         &mut self,
@@ -345,9 +348,11 @@ where
     }
 }
 
-impl<G> Context<G, MirRelationExpr, Row, Timestamp>
+impl<G, T> Context<G, MirRelationExpr, Row, T>
 where
-    G: Scope<Timestamp = Timestamp>,
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T> + SystemEventTime,
+    T: Timestamp + Lattice,
 {
     /// Attempt to render a chain of map/filter/project operators on top of another operator.
     ///
@@ -443,10 +448,7 @@ where
                         self.collections.insert(relation_expr.clone(), collection);
                     }
                     expr::JoinImplementation::DeltaQuery(_orders) => {
-                        let collection =
-                            self.render_delta_join(input, mfp, scope, worker_index, |t| {
-                                t.saturating_sub(1)
-                            });
+                        let collection = self.render_delta_join(input, mfp, scope);
                         self.collections.insert(relation_expr.clone(), collection);
                     }
                     expr::JoinImplementation::Unimplemented => {
@@ -615,13 +617,7 @@ where
                             self.collections.insert(relation_expr.clone(), collection);
                         }
                         expr::JoinImplementation::DeltaQuery(_orders) => {
-                            let collection = self.render_delta_join(
-                                relation_expr,
-                                mfp,
-                                scope,
-                                worker_index,
-                                |t| t.saturating_sub(1),
-                            );
+                            let collection = self.render_delta_join(relation_expr, mfp, scope);
                             self.collections.insert(relation_expr.clone(), collection);
                         }
                         expr::JoinImplementation::Unimplemented => {
@@ -689,6 +685,38 @@ where
                 }
             };
         }
+    }
+}
+
+/// A trait meant to capture requisite functionality for use as a timestamp.
+pub trait SystemEventTime: Timestamp {
+    /// A reference to the system time component of the timestamp.
+    fn system_time(&mut self) -> &mut repr::Timestamp;
+    /// An additive delay to system time.
+    fn system_delay(delay: repr::Timestamp) -> <Self as Timestamp>::Summary;
+    /// A reference to the event time component of the timestamp.
+    fn event_time(&mut self) -> &mut repr::Timestamp;
+    /// An additive delay to event time.
+    fn event_delay(delay: repr::Timestamp) -> <Self as Timestamp>::Summary;
+    /// Move the timestamp backwards.
+    fn retreat(&self) -> Self;
+}
+
+impl SystemEventTime for repr::Timestamp {
+    fn system_time(&mut self) -> &mut repr::Timestamp {
+        self
+    }
+    fn system_delay(delay: repr::Timestamp) -> <Self as Timestamp>::Summary {
+        delay
+    }
+    fn event_time(&mut self) -> &mut repr::Timestamp {
+        self
+    }
+    fn event_delay(delay: repr::Timestamp) -> <Self as Timestamp>::Summary {
+        delay
+    }
+    fn retreat(&self) -> Self {
+        self.saturating_sub(1)
     }
 }
 

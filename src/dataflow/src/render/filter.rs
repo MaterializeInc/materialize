@@ -33,6 +33,7 @@ use repr::{adt::decimal::Significand, Datum, Row, RowArena, ScalarType};
 use crate::operator::StreamExt;
 use crate::render::context::Context;
 use crate::render::datum_vec::DatumVec;
+use crate::render::SystemEventTime;
 
 /// Predicates partitioned into temporal and non-temporal.
 ///
@@ -289,8 +290,8 @@ impl FilterPlan {
 
 impl<G, T> Context<G, MirRelationExpr, Row, T>
 where
-    G: Scope<Timestamp = repr::Timestamp>,
-    G::Timestamp: Lattice + Refines<T>,
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T> + crate::render::SystemEventTime,
     T: Timestamp + Lattice,
 {
     /// Renders a filter expression that may reference `mz_logical_timestamp`.
@@ -318,14 +319,27 @@ where
 
             let (oks, errs) = ok_collection.inner.flat_map_fallible({
                 let mut datums = DatumVec::new();
-                move |(data, time, diff)| {
+                move |(data, mut time, diff)| {
                     let mut datums_local = datums.borrow_with(&data);
-                    let times_diffs = filter_plan.evaluate(&mut datums_local, time, diff);
+                    let times_diffs =
+                        filter_plan.evaluate(&mut datums_local, *time.event_time(), diff);
                     // Drop to release borrow on `data` and allow it to move into the closure.
                     drop(datums_local);
                     // Each produced (time, diff) results in a copy of `data` in the output.
                     // TODO: It would be nice to avoid the `data.clone` for the last output.
-                    times_diffs.map(move |time_diff| time_diff.map(|(t, d)| (data.clone(), t, d)))
+                    times_diffs.map(move |time_diff| {
+                        time_diff
+                            .map(|(t, d)| {
+                                let mut time_clone = time.clone();
+                                *time_clone.event_time() = t;
+                                (data.clone(), time_clone, d)
+                            })
+                            .map_err(|(e, t, d)| {
+                                let mut time_clone = time.clone();
+                                *time_clone.event_time() = t;
+                                (e, time_clone, d)
+                            })
+                    })
                 }
             });
 

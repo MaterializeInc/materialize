@@ -12,16 +12,21 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::Consolidate;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
+use timely::progress::timestamp::Refines;
+use timely::progress::Timestamp;
 
 use expr::MirRelationExpr;
 use repr::{Diff, Row};
 
 use crate::render::context::Context;
+use crate::render::SystemEventTime;
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<G> Context<G, MirRelationExpr, Row, repr::Timestamp>
+impl<G, T> Context<G, MirRelationExpr, Row, T>
 where
-    G: Scope<Timestamp = repr::Timestamp>,
+    G: Scope,
+    G::Timestamp: Lattice + Refines<T> + SystemEventTime,
+    T: Timestamp + Lattice,
 {
     pub fn render_topk(&mut self, relation_expr: &MirRelationExpr) {
         if let MirRelationExpr::TopK {
@@ -40,7 +45,10 @@ where
             if *monotonic {
                 use differential_dataflow::operators::iterate::Variable;
                 let delay = std::time::Duration::from_nanos(10_000_000_000);
-                let retractions = Variable::new(&mut ok_input.scope(), delay.as_millis() as u64);
+                let retractions = Variable::new(
+                    &mut ok_input.scope(),
+                    <G::Timestamp as SystemEventTime>::system_delay(delay.as_millis() as u64),
+                );
                 let thinned = ok_input.concat(&retractions.negate());
                 let result = build_topk(thinned, group_key, order_key, *offset, *limit, arity);
                 retractions.set(&ok_input.concat(&result.negate()));
