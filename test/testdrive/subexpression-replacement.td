@@ -72,7 +72,7 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # The common expression contains an OR/disjunction
 
 > EXPLAIN SELECT * FROM t1 WHERE ((col_not_null > 3) OR (col_not_null < 5)) OR ((col_not_null > 3) OR (col_not_null < 5));
-"%0 =| Get t1| Filter ((#1 > 3) || (#1 < 5))"
+"%0 =| Get t1| Filter ((#1 < 5) || (#1 > 3))"
 
 # Use of a deterministic function
 
@@ -87,12 +87,14 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 > EXPLAIN SELECT * FROM t1 WHERE (col_not_null = col_not_null + 1) AND (col_not_null = col_not_null + 1);
 "%0 =| Get t1| Filter (#1 = (#1 + 1))"
 
-# Use of a non-deterministic function - replacement happens
+# Replacement does not happen with `mz_sleep` because `mz_sleep` returns null.
+# If the return value of `mz_sleep` changes, check that replacement continues to
+# not happen.
 
 > EXPLAIN SELECT * FROM t1
   WHERE mz_internal.mz_sleep(col_not_null) > mz_internal.mz_sleep(col_not_null)
   AND (mz_internal.mz_sleep(col_not_null) > mz_internal.mz_sleep(col_not_null) = true);
-"%0 =| Get t1| Filter (mz_sleep(i32tof64(#1)) > mz_sleep(i32tof64(#1)))"
+"%0 =| Get t1| Filter (true = (mz_sleep(i32tof64(#1)) > mz_sleep(i32tof64(#1)))), (mz_sleep(i32tof64(#1)) > mz_sleep(i32tof64(#1)))"
 
 # IN list inside the expression
 
@@ -117,4 +119,4 @@ $ set-regex match=(\s\(u\d+\)|\n|materialize\.public\.) replacement=
 # Not optimized in OR/disjunctions
 
 > EXPLAIN SELECT * FROM t1 WHERE col_not_null = 1 OR TRUE IN (col_not_null = 1, col_not_null = 2)
-"%0 =| Get t1| Filter ((#1 = 1) || ((true = (#1 = 1)) || (true = (#1 = 2))))"
+"%0 =| Get t1| Filter (((true = (#1 = 1)) || (true = (#1 = 2))) || (#1 = 1))"
