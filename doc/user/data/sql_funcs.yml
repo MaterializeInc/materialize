@@ -260,6 +260,9 @@
       `needle`, in order. If `flags` is set to the string `i` matches
       case-insensitively.
 
+  - signature: 'repeat(s: str, n: int) -> str'
+    description: Replicate the string `n` times.
+
   - signature: 'replace(s: str, f: str, r: str) -> str'
     description: "`s` with all instances of `f` replaced with `r`"
 

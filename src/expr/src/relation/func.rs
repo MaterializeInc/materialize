@@ -931,7 +931,7 @@ impl fmt::Display for TableFunc {
             TableFunc::CsvExtract(n_cols) => write!(f, "csv_extract({}, _)", n_cols),
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
             TableFunc::GenerateSeriesInt64 => f.write_str("generate_series"),
-            TableFunc::Repeat => f.write_str("repeat"),
+            TableFunc::Repeat => f.write_str("repeat_row"),
             TableFunc::ReadCachedData { source, .. } => {
                 write!(f, "internal_read_cached_data({})", source)
             }

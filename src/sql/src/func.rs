@@ -1571,6 +1571,9 @@ lazy_static! {
                     Ok(lhs.call_binary(rhs, BinaryFunc::PowerDecimal(s)))
                 }), 2169;
             },
+            "repeat" => Scalar {
+                params!(String, Int32) => BinaryFunc::RepeatString, 1622;
+            },
             "regexp_match" => Scalar {
                 params!(String, String) => VariadicFunc::RegexpMatch, 3396;
                 params!(String, String, String) => VariadicFunc::RegexpMatch, 3397;
@@ -1989,9 +1992,9 @@ lazy_static! {
                     })
                 }), oid::FUNC_REGEXP_EXTRACT_OID;
             },
-            "repeat" => Table {
+            "repeat_row" => Table {
                 params!(Int64) => Operation::unary(move |ecx, n| {
-                    ecx.require_experimental_mode("repeat")?;
+                    ecx.require_experimental_mode("repeat_row")?;
                     Ok(TableFuncPlan {
                         func: TableFunc::Repeat,
                         exprs: vec![n],
