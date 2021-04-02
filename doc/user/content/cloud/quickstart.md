@@ -61,7 +61,6 @@ For this example, we'll walk you through connecting to a [PubNub stream](https:/
       GROUP BY symbol;
     SELECT * FROM avg_bid;
     ```
-
     ```
       symbol    |        avg
     ------------+--------------------
@@ -70,7 +69,6 @@ For this example, we'll walk you through connecting to a [PubNub stream](https:/
     Elerium     | 155.04668809209852
     Bespin Gas  |  202.0260593073953
     Linen Cloth | 254.34273792647863
-
     ```
     Wait a few moments and issue `SELECT * FROM avg_bid;` again to get an updated result based on the latest data streamed in.
 
