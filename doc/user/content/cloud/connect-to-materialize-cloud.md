@@ -16,4 +16,4 @@ Once you've created a deployment, you'll need to install TLS certificates on you
 ## Related topics
 
 * [Create deployments](../create-deployments)
-* [`CREATE SOURCE`](../sql/create-source/)
+* [`CREATE SOURCE`](../../sql/create-source/)
