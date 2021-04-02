@@ -148,10 +148,11 @@ pub fn extract_config(
                 // The range of values comes from `statistics.interval.ms` in
                 // https://github.com/edenhill/librdkafka/blob/master/CONFIGURATION.md
                 ValType::Number(0, 86_400_000),
-            )
-            .set_default(Some(
-                chrono::Duration::seconds(1).num_milliseconds().to_string(),
-            )),
+            ),
+            // TODO - stats can be reenabled by default when we figure out why it's leaking memory.
+            // .set_default(Some(
+            //     chrono::Duration::seconds(1).num_milliseconds().to_string(),
+            // )),
             Config::new(
                 "topic_metadata_refresh_interval_ms",
                 // The range of values comes from `topic.metadata.refresh.interval.ms` in
