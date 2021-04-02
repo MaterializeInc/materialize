@@ -222,15 +222,18 @@ pub fn build_dataflow<A: Allocate>(
     })
 }
 
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, G::Timestamp>
+// This implementation block allows child timestamps to vary from parent timestamps,
+// but requires the parent timestamp to be `repr::Timestamp`.
+impl<'g, G, T> Context<Child<'g, G, T>, MirRelationExpr, Row, G::Timestamp>
 where
     G: Scope<Timestamp = repr::Timestamp>,
+    T: Refines<G::Timestamp> + Lattice + SystemEventTime,
 {
     fn import_index(
         &mut self,
         render_state: &mut RenderState,
         scope: &mut G,
-        region: &mut Child<'g, G, G::Timestamp>,
+        region: &mut Child<'g, G, T>,
         idx_id: GlobalId,
         (idx, typ): &(IndexDesc, RelationType),
     ) {
@@ -265,8 +268,16 @@ where
             );
         }
     }
+}
 
-    fn build_object(&mut self, scope: &mut Child<'g, G, G::Timestamp>, object: &BuildDesc) {
+// This implementation block allows child timestamps to vary from parent timestamps.
+impl<'g, G, T> Context<Child<'g, G, T>, MirRelationExpr, Row, G::Timestamp>
+where
+    G: Scope,
+    G::Timestamp: Lattice,
+    T: Refines<G::Timestamp> + Lattice + SystemEventTime,
+{
+    fn build_object(&mut self, scope: &mut Child<'g, G, T>, object: &BuildDesc) {
         self.ensure_rendered(object.relation_expr.as_ref(), scope, scope.index());
         if let Some(typ) = &object.typ {
             self.clone_from_to(
@@ -306,7 +317,14 @@ where
         });
         // We do not install in `context.trace`, and can skip deleting things from it.
     }
+}
 
+// This implementation block requires the scopes have the same timestamp as the trace manager.
+// That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
+impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, G::Timestamp>
+where
+    G: Scope<Timestamp = repr::Timestamp>,
+{
     fn export_index(
         &mut self,
         render_state: &mut RenderState,
@@ -470,7 +488,7 @@ where
     ///
     /// The rough structure of the logic for each expression is to ensure that any input
     /// collections are rendered,
-    pub fn ensure_rendered(
+    fn ensure_rendered(
         &mut self,
         relation_expr: &MirRelationExpr,
         scope: &mut G,
