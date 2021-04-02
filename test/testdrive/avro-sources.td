@@ -333,20 +333,21 @@ a  b
 5  6
 9  10
 
+# TODO: Uncomment out test once kafka stats are enabled by default once again
 # There should be two partitions for the last created source / consumer (non_dbz_data_varying_partition_2)
-> SELECT count(*) FROM mz_kafka_consumer_statistics GROUP BY consumer_name;
-count
------
-1
-1
-1
-1
-2
-2
-2
-2
-2
-2
+# > SELECT count(*) FROM mz_kafka_consumer_statistics GROUP BY consumer_name;
+# count
+# -----
+# 1
+# 1
+# 1
+# 1
+# 2
+# 2
+# 2
+# 2
+# 2
+# 2
 
 > CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition_3
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
@@ -367,21 +368,22 @@ a  b
 9  10
 11 12
 
+# TODO: Uncomment out test once kafka stats are enabled by default once again
 # There should three partitions for the last three sources / consumers (non_dbz_data_varying_partition_[123])
-> SELECT count(*) FROM mz_kafka_consumer_statistics GROUP BY consumer_name;
-count
------
-1
-1
-1
-1
-2
-2
-2
-2
-3
-3
-3
+# > SELECT count(*) FROM mz_kafka_consumer_statistics GROUP BY consumer_name;
+# count
+# -----
+# 1
+# 1
+# 1
+# 1
+# 2
+# 2
+# 2
+# 2
+# 3
+# 3
+# 3
 
 $ set-sql-timeout duration=12.7s
 
