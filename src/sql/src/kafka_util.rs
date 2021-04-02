@@ -72,10 +72,10 @@ impl Config {
     }
 
     // Allows for returning a default value for this configuration option
-    fn set_default(mut self, d: Option<String>) -> Self {
-        self.default = d;
-        self
-    }
+    // fn set_default(mut self, d: Option<String>) -> Self {
+    //     self.default = d;
+    //     self
+    // }
 
     // Get the appropriate String to use as the Kafka config key.
     fn get_key(&self) -> String {
