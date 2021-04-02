@@ -88,3 +88,13 @@ incorrect column specification: specified column does not match upstream source,
     NAMESPACE 'public'
     TABLE 'numbers_${testdrive.seed}' (number int NOT NULL, is_prime bool, name text NOT NULL)
 incorrect column specification: specified column does not match upstream source, specified: name text NOT NULL, upstream: name text NULL
+
+## CREATE SOURCES
+
+! CREATE SOURCES
+  FROM POSTGRES
+    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+    PUBLICATION 'mz_source_${testdrive.seed}'
+    NAMESPACE 'public'
+    TABLES ('numbers_${testdrive.seed}' AS "numbers", 'numbers_${testdrive.seed}' AS "second_numbers" (number int NOT NULL, is_prime bool NULL, name text NULL))
+CREATE SOURCES not yet supported

@@ -36,6 +36,7 @@ pub enum Statement<T: AstInfo> {
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
     CreateSource(CreateSourceStatement<T>),
+    CreateSources(CreateSourcesStatement<T>),
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateTable(CreateTableStatement<T>),
@@ -90,6 +91,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateDatabase(stmt) => f.write_node(stmt),
             Statement::CreateSchema(stmt) => f.write_node(stmt),
             Statement::CreateSource(stmt) => f.write_node(stmt),
+            Statement::CreateSources(stmt) => f.write_node(stmt),
             Statement::CreateSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
@@ -396,6 +398,20 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
     }
 }
 impl_display_t!(CreateSourceStatement);
+
+/// `CREATE SOURCES`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSourcesStatement<T: AstInfo> {
+    pub connector: Connector<T>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateSourcesStatement<T> {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE SOURCES FROM ");
+        f.write_node(&self.connector);
+    }
+}
+impl_display_t!(CreateSourcesStatement);
 
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

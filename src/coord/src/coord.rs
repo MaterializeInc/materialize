@@ -755,6 +755,7 @@ impl Coordinator {
                                 | Statement::CreateSchema(_)
                                 | Statement::CreateSink(_)
                                 | Statement::CreateSource(_)
+                                | Statement::CreateSources(_)
                                 | Statement::CreateTable(_)
                                 | Statement::CreateType(_)
                                 | Statement::CreateView(_)
