@@ -22,7 +22,7 @@ $ kafka-create-topic topic=data
 
 > CREATE SOURCE data
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
-  WITH (statistics_interval_ms = 0)
+  WITH (statistics_interval_ms = 1000)
   FORMAT AVRO USING SCHEMA '${schema}'
 
 > CREATE MATERIALIZED VIEW test1 AS
