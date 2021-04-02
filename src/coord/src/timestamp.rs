@@ -936,6 +936,9 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
             }
         }
 
+        // Poll once to clear any extraneous messages on this queue.
+        consumer.poll(Duration::from_secs(0));
+
         if current_partition_count > 0 {
             thread::sleep(wait);
         } else {
