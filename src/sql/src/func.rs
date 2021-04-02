@@ -1989,9 +1989,9 @@ lazy_static! {
                     })
                 }), oid::FUNC_REGEXP_EXTRACT_OID;
             },
-            "repeat" => Table {
+            "repeat_row" => Table {
                 params!(Int64) => Operation::unary(move |ecx, n| {
-                    ecx.require_experimental_mode("repeat")?;
+                    ecx.require_experimental_mode("repeat_row")?;
                     Ok(TableFuncPlan {
                         func: TableFunc::Repeat,
                         exprs: vec![n],
