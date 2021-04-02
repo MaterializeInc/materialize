@@ -48,3 +48,16 @@ $ set-regex match=u\d+ replacement=UID
 
 ! SELECT * FROM u1234;
 unknown catalog item 'UID'
+
+# Exclude FETCH from the retry logic
+
+> CREATE MATERIALIZED VIEW v1 AS VALUES (1),(2),(3);
+
+> BEGIN
+
+> DECLARE c CURSOR FOR TAIL v1 AS OF 18446744073709551615;
+
+> FETCH 4 c WITH (timeout='10s');
+18446744073709551615 1 1
+18446744073709551615 1 2
+18446744073709551615 1 3

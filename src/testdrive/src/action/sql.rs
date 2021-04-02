@@ -26,7 +26,7 @@ use ore::retry::Retry;
 use pgrepr::{Interval, Jsonb, Numeric};
 use sql_parser::ast::{
     CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, Raw, Statement,
+    CreateViewStatement, FetchStatement, Raw, Statement,
 };
 
 use crate::action::{Action, SqlContext, State};
@@ -102,35 +102,46 @@ impl Action for SqlAction {
         let query = &self.cmd.query;
         print_query(&query);
 
+        // Do not retry FETCH statements as subsequent executions are likely
+        // to return an empty result. The original result would thus be lost.
+        let should_retry = match &self.stmt {
+            Statement::Fetch(FetchStatement { .. }) => false,
+            _ => true,
+        };
+
         let pgclient = &state.pgclient;
-        Retry::default()
-            .initial_backoff(Duration::from_millis(50))
-            .factor(1.5)
-            .max_duration(self.sql_context.timeout)
-            .retry(|retry_state| async move {
-                match self.try_redo(pgclient, &query).await {
-                    Ok(()) => {
-                        if retry_state.i != 0 {
-                            println!();
-                        }
-                        println!("rows match; continuing");
-                        Ok(())
+
+        match should_retry {
+            true => Retry::default()
+                .initial_backoff(Duration::from_millis(50))
+                .factor(1.5)
+                .max_duration(self.sql_context.timeout),
+            false => Retry::default().max_tries(1),
+        }
+        .retry(|retry_state| async move {
+            match self.try_redo(pgclient, &query).await {
+                Ok(()) => {
+                    if retry_state.i != 0 {
+                        println!();
                     }
-                    Err(e) => {
-                        if retry_state.i == 0 {
-                            print!("rows didn't match; sleeping to see if dataflow catches up");
-                        }
-                        if let Some(backoff) = retry_state.next_backoff {
-                            print!(" {:.0?}", backoff);
-                            io::stdout().flush().unwrap();
-                        } else {
-                            println!();
-                        }
-                        Err(e)
-                    }
+                    println!("rows match; continuing");
+                    Ok(())
                 }
-            })
-            .await?;
+                Err(e) => {
+                    if retry_state.i == 0 && should_retry {
+                        print!("rows didn't match; sleeping to see if dataflow catches up");
+                    }
+                    if let Some(backoff) = retry_state.next_backoff {
+                        print!(" {:.0?}", backoff);
+                        io::stdout().flush().unwrap();
+                    } else {
+                        println!();
+                    }
+                    Err(e)
+                }
+            }
+        })
+        .await?;
 
         if let Some(path) = &state.materialized_catalog_path {
             match self.stmt {
@@ -195,6 +206,7 @@ impl SqlAction {
             .map(|row| decode_row(row, self.sql_context.clone()))
             .collect::<Result<_, _>>()?;
         actual.sort();
+
         match &self.cmd.expected_output {
             SqlOutput::Full {
                 expected_rows,
