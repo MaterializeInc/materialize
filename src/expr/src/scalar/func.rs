@@ -4066,6 +4066,17 @@ pub fn hmac_inner<'a>(
     Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
 }
 
+fn repeat_string<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    Ok(Datum::String(temp_storage.push_string(
+        datums[0].unwrap_str().repeat(
+            usize::try_from(datums[1].unwrap_int32()).map_err(|_| EvalError::Int32OutOfRange)?,
+        ),
+    )))
+}
+
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     Datum::String(
         temp_storage.push_string(
@@ -4704,6 +4715,7 @@ pub enum VariadicFunc {
     RegexpMatch,
     HmacString,
     HmacBytes,
+    RepeatString,
 }
 
 impl VariadicFunc {
@@ -4749,6 +4761,7 @@ impl VariadicFunc {
             VariadicFunc::RegexpMatch => eager!(regexp_match_dynamic, temp_storage),
             VariadicFunc::HmacString => eager!(hmac_string, temp_storage),
             VariadicFunc::HmacBytes => eager!(hmac_bytes, temp_storage),
+            VariadicFunc::RepeatString => eager!(repeat_string, temp_storage),
         }
     }
 
@@ -4808,6 +4821,7 @@ impl VariadicFunc {
             SplitPart => ScalarType::String.nullable(true),
             RegexpMatch => ScalarType::Array(Box::new(ScalarType::String)).nullable(true),
             HmacString | HmacBytes => ScalarType::Bytes.nullable(true),
+            RepeatString => ScalarType::String.nullable(true),
         }
     }
 
@@ -4846,6 +4860,7 @@ impl fmt::Display for VariadicFunc {
             VariadicFunc::SplitPart => f.write_str("split_string"),
             VariadicFunc::RegexpMatch => f.write_str("regexp_match"),
             VariadicFunc::HmacString | VariadicFunc::HmacBytes => f.write_str("hmac"),
+            VariadicFunc::RepeatString => f.write_str("repeat"),
         }
     }
 }

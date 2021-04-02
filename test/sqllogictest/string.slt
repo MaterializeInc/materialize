@@ -1060,3 +1060,13 @@ SELECT right('hello', -2147483647)
 # i64
 query error arguments cannot be implicitly cast to any implementation's parameters
 SELECT right('hello', 2147483648)
+
+query T
+SELECT repeat('hi', 5)
+----
+hihihihihi
+
+query T
+SELECT repeat('a', 0)
+----
+(empty)
