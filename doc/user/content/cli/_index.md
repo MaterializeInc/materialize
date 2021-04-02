@@ -20,7 +20,8 @@ Flag | Default | Modifies
 [`--introspection-frequency`](#introspection-sources) | 1s | The frequency at which to update [introspection sources](#introspection-sources).
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements
-[`--log-filter`](#logging) | `info` | Which log messages to emit.
+[`--log-file`](#log-file) | [`mzdata`](#data-directory)`/materialized.log` | Where to emit log messages
+[`--log-filter`](#log-filter) | `info` | Which log messages to emit
 [`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
 [`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA) {{< version-added v0.7.1 />}}
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
@@ -128,11 +129,26 @@ the compaction window.
 
 ### Logging
 
-{{< version-added 0.7.2 />}}
+#### Log file
 
-The `--log-filter` option specifies which log messages Materialize will emit.
-Its value is a comma-separated list of filter directives. Each filter directive
-has the following format:
+The `--log-file` option specifies the path to a file in which Materialize will
+write its [log messages](/ops/monitoring#logging). The value `stderr` is treated
+specially and specifies the standard error stream.
+
+If the option is unspecified, Materialize writes log messages to the
+`materialized.log` file in the [data directory](#data-directory) and
+additionally forwards any log messages at the `WARN` or `ERROR` levels to the
+standard error stream. Forwarding does not occur if you explicitly specify a log
+file.
+
+#### Log filter
+
+{{< version-added v0.7.2 />}}
+
+The `--log-filter` option specifies which [log
+messages](/ops/monitoring#logging) Materialize will emit. Its value is a
+comma-separated list of filter directives. Each filter directive has the
+following format:
 
 ```
 [module::path=]level
@@ -144,15 +160,21 @@ module, then it implicitly applies to all modules. When directives conflict, the
 last directive wins. Materialize will only emit log messages that match at least
 one filter directive.
 
-The module path of a log message reflects its location in Materialize's source
-code. Specifying module paths in filter directives requires familiarity with
-Materialize's codebase and is intended for advanced users. Note that module
-paths change frequency from release to release and are not considered part of
-Materialize's stable interface.
+Specifying module paths in filter directives requires familiarity with
+Materialize's codebase and is intended for advanced users.
 
-The valid levels for a log message are, in increasing order of severity:
-`trace`, `debug`, `info`, `warn`, and `error`. The special level `off` may be
-used in a directive to suppress all log messages, even errors.
+The valid levels for a log message are documented in the [logging
+section](/ops/monitoring/#levels) of the monitoring documentation and are not
+case sensitive. The special level `off` may be used in a directive to suppress
+all log messages, even those at the `error` level.
+
+As an example, the following filter specifies the `TRACE` level for the `pgwire`
+module, which handles SQL network connections, and the `INFO` level for all
+other modules.
+
+```
+pgwire=trace,info
+```
 
 ### Introspection sources
 
