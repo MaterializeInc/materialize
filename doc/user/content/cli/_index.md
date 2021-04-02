@@ -19,6 +19,7 @@ Flag | Default | Modifies
 [`--experimental`](#experimental-mode) | Disabled | *Dangerous.* Enable experimental features.
 [`--introspection-frequency`](#introspection-sources) | 1s | The frequency at which to update [introspection sources](#introspection-sources).
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
+[`--log-file`](#log-file) | [`mzdata`](#data-directory)`/materialized.log` | Where materialized will emit log messages
 [`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements
 [`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
 [`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA) {{< version-added v0.7.1 />}}
@@ -123,6 +124,13 @@ time for the configured duration. The default window is 1 millisecond.
 
 See the [Deployment section](/ops/deployment#compaction) for guidance on tuning
 the compaction window.
+
+### Log file
+
+The file on disk that materialized will emit log messages to. The special value
+`stderr` causes logs to go to the standard error stream instead of to a log
+file. See the [system logs](/ops/monitoring#system-logs) documentation for
+details on how to interpret log events.
 
 ### Introspection sources
 

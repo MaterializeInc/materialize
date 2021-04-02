@@ -175,3 +175,37 @@ Configuration parameter | Value
 `prometheus_url`        | `http://<materialized host>/metrics`
 `namespace`             | Your choice
 `metrics`               | `[mz*]` to select all metrics, or a list of specific metrics
+
+## System Logs
+
+Materialize emits logs to the stream specified by the `--log-file` invocation
+parameter, documented at [cli](/cli).
+
+Materialize strives to make it easy to monitor logs, and so we have clear
+standards for each of our log levels. The high-level goal is that materialize
+running well should *never* emit `WARN` or `ERROR` level logs, every log at that
+level should be resolved.
+
+Our standards are:
+
+* **ERROR**: Likely data loss or misconfiguration leading to corrupt results.
+  Logs at this level are worth paging on-call staff immediately.
+* **WARN**: Likely misconfiguration. Something which may lead to data loss down
+  the road, but is not yet missing data. It is reasonable to check for and
+  handle warn-level logs once per day, during normal business hours.
+* **INFO**: Normal operation, system status changes. You should be able to use
+  these logs and understand the current state of your materialized system.
+* **DEBUG**: Data that may help troubleshoot, but is not so verbose as to be
+  likely to generate gigabytes of data per hour.
+* **TRACE**: May generate multiple messages per record flowing through the
+  system. Should only be enabled in development environments or very briefly in
+  production.
+
+In addition, we sometimes specify tags that you can use to filter or understand
+log events. Tags always begin each log event, and are surrounded by square
+brackets. Currently used tags are:
+
+* `[customer-data]`: Used to signify that this log message may include
+  clear-text contents of database tables.
+* `[deprecation]`: Updates to syntax or defaults that will require a change for
+  a future release.
