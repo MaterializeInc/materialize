@@ -23,6 +23,7 @@ use aws_util::aws;
 use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
+use sql_parser::ast::PgTable;
 use sql_parser::ast::{
     AstInfo, Connector, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
@@ -266,10 +267,22 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
             *materialized = false;
-            if let Connector::Postgres { columns, .. } = connector {
+            if let Connector::Postgres { table, tables, .. } = connector {
+                let visit_table_columns =
+                    |normalizer: &mut QueryNormalizer, table: &mut PgTable<Aug>| {
+                        for column in table.columns.iter_mut() {
+                            normalizer.visit_column_def_mut(column)
+                        }
+                    };
+
                 let mut normalizer = QueryNormalizer::new(scx);
-                for c in columns {
-                    normalizer.visit_column_def_mut(c);
+                if let Some(table) = table {
+                    visit_table_columns(&mut normalizer, table)
+                }
+                if let Some(tables) = tables {
+                    for table in tables {
+                        visit_table_columns(&mut normalizer, table)
+                    }
                 }
             }
         }
