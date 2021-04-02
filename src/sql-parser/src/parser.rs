@@ -100,6 +100,11 @@ enum IsLateral {
 }
 use IsLateral::*;
 
+enum PostgresSourceTables {
+    Single,
+    Multiple,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParserError {
     /// The error message.
@@ -1420,6 +1425,8 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(SOURCE) {
             self.prev_token();
             self.parse_create_source()
+        } else if self.parse_keyword(SOURCES) {
+            self.parse_create_sources()
         } else if self.parse_keyword(SINK) {
             self.parse_create_sink()
         } else if self.parse_keyword(DEFAULT) {
@@ -1659,6 +1666,16 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_create_sources(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(FROM)?;
+        self.expect_keyword(POSTGRES)?;
+        let connector = self.parse_postgres_connector(PostgresSourceTables::Multiple)?;
+
+        Ok(Statement::CreateSources(CreateSourcesStatement {
+            connector,
+        }))
+    }
+
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
@@ -1722,34 +1739,7 @@ impl<'a> Parser<'a> {
                     channel,
                 })
             }
-            POSTGRES => {
-                self.expect_keyword(HOST)?;
-                let conn = self.parse_literal_string()?;
-                self.expect_keyword(PUBLICATION)?;
-                let publication = self.parse_literal_string()?;
-                self.expect_keyword(NAMESPACE)?;
-                let namespace = self.parse_literal_string()?;
-                self.expect_keyword(TABLE)?;
-                let table = self.parse_literal_string()?;
-
-                let (columns, constraints) = self.parse_columns(Optional)?;
-
-                if !constraints.is_empty() {
-                    return parser_err!(
-                        self,
-                        self.peek_prev_pos(),
-                        "Cannot specify constraints in Postgres table definition"
-                    );
-                }
-
-                Ok(Connector::Postgres {
-                    conn,
-                    publication,
-                    namespace,
-                    table,
-                    columns,
-                })
-            }
+            POSTGRES => self.parse_postgres_connector(PostgresSourceTables::Single),
             FILE => {
                 let path = self.parse_literal_string()?;
                 let compression = if self.parse_keyword(COMPRESSION) {
@@ -1823,6 +1813,72 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn parse_postgres_connector(
+        &mut self,
+        typ: PostgresSourceTables,
+    ) -> Result<Connector<Raw>, ParserError> {
+        self.expect_keyword(HOST)?;
+        let conn = self.parse_literal_string()?;
+        self.expect_keyword(PUBLICATION)?;
+        let publication = self.parse_literal_string()?;
+        self.expect_keyword(NAMESPACE)?;
+        let namespace = self.parse_literal_string()?;
+        let (table, tables) = match typ {
+            PostgresSourceTables::Single => {
+                self.expect_keyword(TABLE)?;
+                (
+                    Some(self.parse_postgres_table(PostgresSourceTables::Single)?),
+                    None,
+                )
+            }
+            PostgresSourceTables::Multiple => {
+                self.expect_keyword(TABLES)?;
+                self.expect_token(&Token::LParen)?;
+                let tables = self.parse_comma_separated(|parser| {
+                    parser.parse_postgres_table(PostgresSourceTables::Multiple)
+                })?;
+                self.expect_token(&Token::RParen)?;
+                (None, Some(tables))
+            }
+        };
+        Ok(Connector::Postgres {
+            conn,
+            publication,
+            namespace,
+            table,
+            tables,
+        })
+    }
+
+    fn parse_postgres_table(
+        &mut self,
+        typ: PostgresSourceTables,
+    ) -> Result<PgTable<Raw>, ParserError> {
+        let name = self.parse_object_name()?;
+        let alias = match typ {
+            PostgresSourceTables::Single => None,
+            PostgresSourceTables::Multiple => {
+                self.expect_keyword(AS)?;
+                Some(RawName::Name(self.parse_object_name()?))
+            }
+        };
+        let (columns, constraints) = self.parse_columns(Optional)?;
+
+        if !constraints.is_empty() {
+            return parser_err!(
+                self,
+                self.peek_prev_pos(),
+                "Cannot specify constraints in Postgres table definition"
+            );
+        }
+
+        Ok(PgTable {
+            name,
+            alias,
+            columns,
+        })
     }
 
     fn parse_create_view(&mut self) -> Result<Statement<Raw>, ParserError> {

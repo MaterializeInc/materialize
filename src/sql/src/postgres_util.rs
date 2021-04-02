@@ -28,31 +28,26 @@ pub struct PgColumn {
 ///
 /// - Invalid connection string, user information, or user permissions.
 /// - Upstream table does not exist or contains invalid values.
-pub async fn fetch_columns(
-    conn: &str,
-    namespace: &str,
-    table: &str,
-) -> Result<Vec<PgColumn>, anyhow::Error> {
+pub async fn fetch_columns(conn: &str, table: &str) -> Result<Vec<PgColumn>, anyhow::Error> {
     let (client, connection) = tokio_postgres::connect(&conn, NoTls).await?;
     tokio::spawn(connection);
 
+    // Strip table name of quotation marks, if they exist.
+    let query = format!(
+        "SELECT '{}'::regclass::oid",
+        table
+            .strip_prefix("\"")
+            .unwrap_or_else(|| &table)
+            .strip_suffix("\"")
+            .unwrap_or_else(|| &table)
+    );
     let rel_id: u32 = client
-        .query(
-            "SELECT c.oid
-                FROM pg_catalog.pg_class c
-                INNER JOIN pg_catalog.pg_namespace n
-                    ON (c.relnamespace = n.oid)
-                WHERE n.nspname = $1
-                    AND c.relname = $2;",
-            &[&namespace, &table],
-        )
+        .query(query.as_str(), &[])
         .await?
         .get(0)
         .ok_or_else(|| anyhow!("table not found in the upstream catalog"))?
         .get(0);
 
-    // todo@jldlaughlin: fetch all constraints, so we correctly error in `plan_create_source` if they
-    // are present.
     Ok(client
         .query(
             "SELECT a.attname, a.atttypid, a.attnotnull

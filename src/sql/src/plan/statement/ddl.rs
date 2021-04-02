@@ -55,10 +55,10 @@ use crate::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
     ColumnOption, Compression, Connector, CreateDatabaseStatement, CreateIndexStatement,
     CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, DataType, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr,
-    Format, Ident, IfExistsBehavior, ObjectType, Raw, SqlOption, Statement, UnresolvedObjectName,
-    Value, WithOption,
+    CreateSourceStatement, CreateSourcesStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, DataType, DropDatabaseStatement,
+    DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, ObjectType, Raw,
+    SqlOption, Statement, UnresolvedObjectName, Value, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -223,6 +223,13 @@ pub fn plan_create_table(
 pub fn describe_create_source(
     _: &StatementContext,
     _: CreateSourceStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn describe_create_sources(
+    _: &StatementContext,
+    _: CreateSourcesStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -709,24 +716,28 @@ pub fn plan_create_source(
             publication,
             namespace,
             table,
-            columns,
+            ..
         } => {
             scx.require_experimental_mode("Postgres Sources")?;
+            let table = table
+                .clone()
+                .expect("invalid Postgres connector for CREATE SOURCE");
             let _connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
                 conn: conn.clone(),
                 publication: publication.clone(),
                 namespace: namespace.clone(),
-                table: table.clone(),
+                table: table.name.to_ast_string(),
             });
 
             // Build the expected relation description
-            let col_names: Vec<_> = columns
+            let col_names: Vec<_> = table
+                .columns
                 .iter()
                 .map(|c| Some(normalize::column_name(c.name.clone())))
                 .collect();
 
             let mut col_types = vec![];
-            for c in columns {
+            for c in table.columns {
                 if let Some(collation) = &c.collation {
                     unsupported!(format!(
                         "CREATE SOURCE FROM POSTGRES with column collation: {}",
@@ -1025,6 +1036,13 @@ pub fn plan_create_source(
         if_not_exists,
         materialized,
     })
+}
+
+pub fn plan_create_sources(
+    _scx: &StatementContext,
+    _stmt: CreateSourcesStatement<Raw>,
+) -> Result<Plan, anyhow::Error> {
+    unsupported!("CREATE SOURCES");
 }
 
 pub fn describe_create_view(

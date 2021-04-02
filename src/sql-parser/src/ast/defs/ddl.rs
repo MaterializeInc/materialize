@@ -306,10 +306,12 @@ pub enum Connector<T: AstInfo> {
         publication: String,
         /// The namespace the synced table belongs to
         namespace: String,
-        /// The name of the table to sync
-        table: String,
-        /// The expected column schema of the synced table
-        columns: Vec<ColumnDef<T>>,
+        /// The table to sync, if only a single table
+        /// Will be set for `CREATE SOURCE`, but not `CREATE SOURCES`
+        table: Option<PgTable<T>>,
+        /// The tables to sync, if multiple tables
+        /// Will be set for `CREATE SOURCES`, but not `CREATE SOURCE`
+        tables: Option<Vec<PgTable<T>>>,
     },
     PubNub {
         /// PubNub's subscribe key
@@ -376,7 +378,7 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                 publication,
                 namespace,
                 table,
-                columns,
+                tables,
             } => {
                 f.write_str("POSTGRES HOST '");
                 f.write_str(&display::escape_single_quote_string(conn));
@@ -384,11 +386,15 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                 f.write_str(&display::escape_single_quote_string(publication));
                 f.write_str("' NAMESPACE '");
                 f.write_str(&display::escape_single_quote_string(namespace));
-                f.write_str("' TABLE '");
-                f.write_str(&display::escape_single_quote_string(table));
-                f.write_str("' (");
-                f.write_node(&display::comma_separated(columns));
-                f.write_str(")");
+                if let Some(table) = table {
+                    f.write_str("' TABLE ");
+                    f.write_str(&table.to_ast_string());
+                }
+                if let Some(tables) = tables {
+                    f.write_str("' TABLES (");
+                    f.write_node(&display::comma_separated(tables));
+                    f.write_str(")");
+                }
             }
             Connector::PubNub {
                 subscribe_key,
@@ -404,6 +410,34 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
     }
 }
 impl_display_t!(Connector);
+
+/// Information about upstream Postgres tables used for replication sources
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PgTable<T: AstInfo> {
+    /// The name of the table to sync
+    pub name: UnresolvedObjectName,
+    /// The name for the table in Materialize. This field will
+    /// be set for `CREATE SOURCES`, but for `CREATE SOURCE`.
+    pub alias: Option<T::ObjectName>,
+    /// The expected column schema of the synced table
+    pub columns: Vec<ColumnDef<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for PgTable<T> {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_node(&self.name);
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_str(&alias.to_ast_string());
+        }
+        if !self.columns.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.columns));
+            f.write_str(")");
+        }
+    }
+}
+impl_display_t!(PgTable);
 
 /// The key sources specified in the S3 source's `OBJECTS FROM` clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
