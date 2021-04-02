@@ -52,30 +52,30 @@ Examples of volatile sources:
     any data that has expired.
   * A PubNub demo source, since new instantiations always start from the tail
     of the stream.
-  * A Kafka source with a non-infinite retention policy.
+  * An append-only Kafka source with a non-infinite retention policy.
   * A file source, where the file is periodically overwritten.
 
 Examples of nonvolatile sources:
 
   * A PubNub source with [retention](https://www.pubnub.com/docs/messages/storage),
     though we don't presently support this.
-  * An non-upsert Kafka source, when the topic has infinite retention and no
+  * An append-only Kafka source, when the topic has infinite retention and no
     compaction policy.
   * An upsert Kafka source, when the topic has infinite retention but *may*
     have a key compaction policy.
   * A file source, when the file is treated as append only.
 
-It's important to note that volatility is a property of how a source is *used*,
-rather than fundamental to a source type. Kinesis is the rare exception. All
-other sources can be either volatile and non-volatile modes, depending on
-how the source is used.
+It's important to note that volatility is a property of how a source is
+*configured*, rather than fundamental to a source type. Kinesis is the rare
+exception. All other sources can be either volatile and non-volatile modes,
+depending on how the source is configured.
 
 ### Discussion
 
 Volatile sources impede Materialize's goal of providing users with correct,
 deterministic results. If you restart Materialize, we want to guarantee that you
 will see exactly the same data at exactly the same timestamps, and there is
-ongoing work to facilitate that. If you've used a volatile source, there is
+ongoing work to facilitate that. If you've created a volatile source, there is
 simply no possibility that we'll be able to provide that guarantee, because
 the upstream source may have garabage collected the data that you saw last time
 you ran Materialize.
@@ -90,7 +90,7 @@ Several forthcoming initiatives depend on this determinism guarantee, however:
 My contention is that it is wholly unrealistic to expect our users to only use
 nonvolatile sources with Materialize. The streaming world runs on inconsistency
 and nondurability. To play in this space, we need to interoperate seamlessly
-with volatile sources, and then offer a large, inviting off-ramp into the
+with volatile sources, and then offer a large, inviting off ramp into the
 Materialize world of determinism and consistency.
 
 The proposal here, then, is to bake the notion of volatility into the system. We
@@ -108,9 +108,9 @@ To start, I propose that we observe a simple rule:
   * All PubNub, SSE, and Kinesis sources are marked as volatile.
   * All other sources are not marked as volatile.
 
-In the future, I think we'll want to allow users to mark Kafka, S3, and file
-sources as volatile at their option, to capture when their *usage* of the source
-is volatile. See [Future work](#future-work) below.
+In the future, we'll want to allow users to mark Kafka, S3, and file sources as
+volatile at their option, to capture when their *configuration* of the source is
+volatile. See [Future work](#future-work) below.
 
 The only user-visible change at the moment will be an additional column in
 `SHOW SOURCES` that indicates whether a source is volatile
@@ -143,7 +143,9 @@ different data within the same `materialized` process. Consider a sequence like
 the following:
 
 ```sql
-CREATE SOURCE market_orders_raw FROM PUBNUB SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe' CHANNEL 'pubnub-market-orders';
+CREATE SOURCE market_orders_raw FROM PUBNUB
+SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
+CHANNEL 'pubnub-market-orders';
 
 CREATE MATERIALIZED VIEW market_orders_1 AS
   SELECT text::jsonb AS val FROM market_orders_raw;
@@ -220,10 +222,10 @@ though, so I'd like to hold off on this discussion for now. The proposal above
 of treating all Kafka, S3, and file sources as nonvolatile is equivalent to the
 system's current behavior.
 
-Another benefit of deferring this toggleability is that the `volatility` bit
-does not require storing any additional state, as it is a pure function of the
-source type. If we decide we don't like the concept of volatility, we can excise
-it without breaking backwards compatibility.
+Another benefit of deferring this toggleability is that computing the
+`volatility` bit does not require storing any additional state, as it is a pure
+function of the source type. If we decide we don't like the concept of
+volatility, we can excise it without breaking backwards compatibility.
 
 ### Volatility removal
 
@@ -233,25 +235,27 @@ Materialize, then it doesn't matter if the upstream source garbage collects it.
 
 ### Expanded volatility bits
 
-We might discover that a single volatility bit is too coarse a tool. For
-example, exactly-once sinks could learn to support volatile sources that provide
-the guarantee that you will never see a message more than once.
+We might discover that a single volatility bit is too coarse. For example,
+exactly-once sinks could learn to support volatile sources that provide the
+guarantee that you will never see a message more than once.
 
 This proposal leaves the door open for slicing "volatility" into multiple
 dimensions. This is another good reason to punt on
-[toggleable volatility](#toggleable-volatility). We have a lot of latitude in
-changing our notion of volatility, until such time as we allow specifying
-volatility information in `CREATE SOURCE` statements.
+[toggleable volatility](#toggleable-volatility). Once volatility specifications
+are part of `CREATE SOURCE`, we'll have to worry about backwards compatibility;
+until then, we have a lot of latitude to refine our notion of volatility.
 
 ### Automated volatility violation detection
 
-Relying on users to properly declare their sources as volatile or nonvolatile
-is always going to be error prone. Unfortunately this problem is inherent to
-interfacing with external systems; we just can't make guarantees that those
-systems will uphold the properties they claim to support, or that users claim
-they will support.
+Relying on users to properly declare their sources as volatile or nonvolatile is
+error prone. Unfortunately this problem is inherent to interfacing with external
+systems; our users are responsibile for configuring and operating those systems
+according to some specification, and then telling us what that specification is.
+Given a nonvolatile Kafka source, for example, there is simply no way for
+Materialize to prevent a user from adding a short retention policy to the
+underlying Kafka topic that will make the source volatile.
 
-Still, in many cases, we might be able to assist in detecting volatility
+Still, in many cases, Materialize could assist in detecting volatility
 violations. We could spot-check the data across instances of the same source
 occasionally, for example, and report any errors that we notice. We could
 periodically query the Kafka broker for its retention settings and surface any
@@ -317,8 +321,8 @@ different views that use that source. But this design does not fit well into the
 existing catalog infrastructure, which maintains a very clear separation between
 sources and views. And even with this design, I _still_ think we'd want to
 introduce the notion of volatility, because we'll want to exactly-once sinks and
-active-active replication to know that `market_orders` is not a well-behaved
-view.
+active-active replication to know that `market_orders` does not uphold the
+usual consistency properties.
 
 ### Wait for volatility removal
 
