@@ -18,5 +18,5 @@ For the most part, Materialize Cloud offers the same functionality as the instal
 
 ## Related topics
 
-* [What Is Materialize Cloud?](../../what-is-materialize)
+* [What Is Materialize?](../overview/what-is-materialize-cloud)
 * [Connect to Materialize Cloud](../connect-to-materialize-cloud)
