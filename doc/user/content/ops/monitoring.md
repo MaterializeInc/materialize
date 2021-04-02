@@ -186,20 +186,59 @@ standards for each of our log levels. The high-level goal is that materialize
 running well should *never* emit `WARN` or `ERROR` level logs, every log at that
 level should be resolved.
 
+By default materialized logs only `INFO`, `WARN` and `ERROR` logs, but it is
+possible to enable more-verbose logs by setting the `MZ_LOG` environment
+variable.
+
 Our standards are:
 
 * **ERROR**: Likely data loss or misconfiguration leading to corrupt results.
-  Logs at this level are worth paging on-call staff immediately.
+  Logs at this level are worth paging on-call staff immediately. Many of these
+  errors will also result in SQL clients receiving error messages if they
+  attempt to query a related view.
+
+  Examples:
+
+  * Network requests that have already failed N times, whether or not they may
+    still be retried.
+  * Authentication errors with external systems
+
 * **WARN**: Likely misconfiguration. Something which may lead to data loss down
   the road, but is not yet missing data. It is reasonable to check for and
   handle warn-level logs once per day, during normal business hours.
+
+  Examples:
+
+  * Network attempts that have failed a small number of times, currently still
+    retrying.
+  * Metadata that must be transformed to become valid, because of confusing or
+    reserved punction. Such as Avro schemas that contain records with dots
+    inside of their names, which must become nested records.
+
 * **INFO**: Normal operation, system status changes. You should be able to use
   these logs and understand the current state of your materialized system.
+
+  Examples:
+
+  * Tables, sinks, etc created or destroyed
+
 * **DEBUG**: Data that may help troubleshoot, but is not so verbose as to be
   likely to generate gigabytes of data per hour.
+
+  Examples:
+
+  * Parameters used to create sources
+  * Surprising results from external systems that force materialized to make
+    (probably-correct) assumptions
+
 * **TRACE**: May generate multiple messages per record flowing through the
   system. Should only be enabled in development environments or very briefly in
   production.
+
+  Examples:
+
+  * Logging that a message was received from Kafka
+  * Logs throughout query parsing and processing
 
 In addition, we sometimes specify tags that you can use to filter or understand
 log events. Tags always begin each log event, and are surrounded by square
