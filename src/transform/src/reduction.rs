@@ -187,6 +187,8 @@ impl FoldConstants {
                 {
                     relation.take_safely();
                 } else if let MirRelationExpr::Constant { rows, .. } = &**input {
+                    // Evaluate errors last, to reduce risk of spurious errors.
+                    predicates.sort_by_key(|p| p.is_literal_err());
                     let new_rows = match rows {
                         Ok(rows) => Self::fold_filter_constant(predicates, rows),
                         Err(e) => Err(e.clone()),

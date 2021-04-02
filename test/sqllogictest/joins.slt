@@ -550,17 +550,32 @@ mode standard
 query T multiline
 EXPLAIN SELECT name, id FROM v4362 WHERE name = (SELECT name FROM v4362 WHERE id = 1)
 ----
-%0 =
-| Get materialize.public.t4362 (u10)
-| ArrangeBy (#0)
-
-%1 =
+%0 = Let l0 =
 | Get materialize.public.t4362 (u10)
 | Filter (#1 = 1)
 
+%1 =
+| Get materialize.public.t4362 (u10)
+| ArrangeBy (#0)
+
 %2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Differential %1 %0.(#0)
+| Get %0 (l0)
+| Project (#0)
+
+%3 =
+| Get %0 (l0)
+| Reduce group=()
+| | agg count(true)
+| Filter (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%4 =
+| Union %2 %3
+
+%5 =
+| Join %1 %4 (= #0 #2)
+| | implementation = Differential %4 %1.(#0)
 | | demand = (#0, #1)
 | Project (#0, #1)
 

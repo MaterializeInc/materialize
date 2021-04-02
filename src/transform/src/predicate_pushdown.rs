@@ -12,10 +12,16 @@
 //! This action generally improves the quality of the query, in that selective per-record
 //! filters reduce the volume of data before they arrive at more expensive operators.
 //!
+//!
 //! The one time when this action might not improve the quality of a query is
 //! if a filter gets pushed down on an arrangement because that blocks arrangement
 //! reuse. It assumed that actions that need an arrangement are responsible for
 //! lifting filters out of the way.
+//!
+//! Predicate pushdown will not push down literal errors, unless it is certain that
+//! the literal errors will be unconditionally evaluated. For example, the pushdown
+//! will not happen if not all predicates can be pushed down (e.g. reduce and map),
+//! or if we are not certain that the input is non-empty (e.g. join).
 //!
 //! ```rust
 //! use expr::{BinaryFunc, IdGen, MirRelationExpr, MirScalarExpr};
@@ -158,6 +164,16 @@ impl PredicatePushdown {
         // otherwise we should recursively descend.
         match relation {
             MirRelationExpr::Filter { input, predicates } => {
+                // Reduce the predicates to determine as best as possible
+                // whether they are literal errors before working with them.
+                let input_type = input.typ();
+                for predicate in predicates.iter_mut() {
+                    predicate.reduce(&input_type);
+                }
+
+                // It can be helpful to know if there are any non-literal errors,
+                // as this is justification for not pushing down literal errors.
+                let all_errors = predicates.iter().all(|p| p.is_literal_err());
                 // Depending on the type of `input` we have different
                 // logic to apply to consider pushing `predicates` down.
                 match &mut **input {
@@ -261,7 +277,10 @@ impl PredicatePushdown {
                             // equivalences allow the predicate to be rewritten
                             // in terms of only columns from that input.
                             for (index, push_down) in push_downs.iter_mut().enumerate() {
-                                if let Some(localized) = input_mapper
+                                if predicate.is_literal_err() {
+                                    // Do nothing. We don't push down literal errors,
+                                    // as we can't know the join will be non-empty.
+                                } else if let Some(localized) = input_mapper
                                     .try_map_to_input_with_bound_expr(
                                         predicate.clone(),
                                         index,
@@ -312,30 +331,37 @@ impl PredicatePushdown {
                         let mut retain = Vec::new();
                         let mut push_down = Vec::new();
                         for predicate in predicates.drain(..) {
-                            let mut supported = true;
-                            let mut new_predicate = predicate.clone();
-                            new_predicate.visit_mut(&mut |e| {
-                                if let MirScalarExpr::Column(c) = e {
-                                    if *c >= group_key.len() {
-                                        supported = false;
-                                    }
-                                }
-                            });
-                            if supported {
+                            // Do not push down literal errors unless it is only errors.
+                            if !predicate.is_literal_err() || all_errors {
+                                let mut supported = true;
+                                let mut new_predicate = predicate.clone();
                                 new_predicate.visit_mut(&mut |e| {
-                                    if let MirScalarExpr::Column(i) = e {
-                                        *e = group_key[*i].clone();
+                                    if let MirScalarExpr::Column(c) = e {
+                                        if *c >= group_key.len() {
+                                            supported = false;
+                                        }
                                     }
                                 });
-                                push_down.push(new_predicate);
-                            } else if let MirScalarExpr::Column(col) = &predicate {
-                                if *col == group_key.len()
-                                    && aggregates.len() == 1
-                                    && aggregates[0].func == AggregateFunc::Any
-                                {
-                                    push_down.push(aggregates[0].expr.clone());
-                                    aggregates[0].expr =
-                                        MirScalarExpr::literal_ok(Datum::True, ScalarType::Bool);
+                                if supported {
+                                    new_predicate.visit_mut(&mut |e| {
+                                        if let MirScalarExpr::Column(i) = e {
+                                            *e = group_key[*i].clone();
+                                        }
+                                    });
+                                    push_down.push(new_predicate);
+                                } else if let MirScalarExpr::Column(col) = &predicate {
+                                    if *col == group_key.len()
+                                        && aggregates.len() == 1
+                                        && aggregates[0].func == AggregateFunc::Any
+                                    {
+                                        push_down.push(aggregates[0].expr.clone());
+                                        aggregates[0].expr = MirScalarExpr::literal_ok(
+                                            Datum::True,
+                                            ScalarType::Bool,
+                                        );
+                                    } else {
+                                        retain.push(predicate);
+                                    }
                                 } else {
                                     retain.push(predicate);
                                 }
@@ -398,13 +424,16 @@ impl PredicatePushdown {
                             // First, check if we can push this predicate down. We can do so if each
                             // column it references is either from the input or is generated by an
                             // expression that can be inlined.
-                            if predicate.support().iter().all(|c| {
-                                *c < input_arity
-                                    || PredicatePushdown::can_inline(
-                                        &scalars[*c - input_arity],
-                                        input_arity,
-                                    )
-                            }) {
+                            // We also will not push down literal errors, unless all predicates are.
+                            if (!predicate.is_literal_err() || all_errors)
+                                && predicate.support().iter().all(|c| {
+                                    *c < input_arity
+                                        || PredicatePushdown::can_inline(
+                                            &scalars[*c - input_arity],
+                                            input_arity,
+                                        )
+                                })
+                            {
                                 predicate.visit_mut(&mut |e| {
                                     if let MirScalarExpr::Column(c) = e {
                                         // NB: this inlining would be invalid if can_inline did not
