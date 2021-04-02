@@ -1571,6 +1571,9 @@ lazy_static! {
                     Ok(lhs.call_binary(rhs, BinaryFunc::PowerDecimal(s)))
                 }), 2169;
             },
+            "repeat" => Scalar {
+                params!(String, Int32) => BinaryFunc::RepeatString, 1622;
+            },
             "regexp_match" => Scalar {
                 params!(String, String) => VariadicFunc::RegexpMatch, 3396;
                 params!(String, String, String) => VariadicFunc::RegexpMatch, 3397;

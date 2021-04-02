@@ -2360,6 +2360,7 @@ pub enum BinaryFunc {
     ConvertFrom,
     Position,
     Right,
+    RepeatString,
     Trim,
     TrimLeading,
     TrimTrailing,
@@ -2536,6 +2537,7 @@ impl BinaryFunc {
             BinaryFunc::LogDecimal(scale) => eager!(log_base, *scale),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerDecimal(scale) => eager!(power_dec, *scale),
+            BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
         }
     }
 
@@ -2704,6 +2706,7 @@ impl BinaryFunc {
             LogDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
             Power => ScalarType::Float64.nullable(in_nullable),
             PowerDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
+            RepeatString => input1_type.scalar_type.nullable(in_nullable),
         }
     }
 
@@ -2891,7 +2894,8 @@ impl BinaryFunc {
             | Decode
             | LogDecimal(_)
             | Power
-            | PowerDecimal(_) => false,
+            | PowerDecimal(_)
+            | RepeatString => false,
         }
     }
 
@@ -3025,6 +3029,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::LogDecimal(_) => f.write_str("log"),
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerDecimal(_) => f.write_str("power_decimal"),
+            BinaryFunc::RepeatString => f.write_str("repeat"),
         }
     }
 }
@@ -4064,6 +4069,20 @@ pub fn hmac_inner<'a>(
         other => return Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
     };
     Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
+}
+
+fn repeat_string<'a>(
+    string: Datum<'a>,
+    count: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    Ok(Datum::String(
+        temp_storage.push_string(
+            string
+                .unwrap_str()
+                .repeat(usize::try_from(count.unwrap_int32()).unwrap_or(0)),
+        ),
+    ))
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
