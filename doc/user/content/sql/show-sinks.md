@@ -16,13 +16,34 @@ aliases:
 
 ## Details
 
+Field | Use
+------|-----
+_schema&lowbar;name_ | The schema to show sinks from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+**FULL** | Return details about your sinks.
+
 ### Output format
 
-`SHOW SINKS`'s output is a table with one column, `name`.
+`SHOW FULL SINKS`'s output is a table, with this structure:
+
+```nofmt
+ name  | type | volatile
+-------+------+---------
+ ...   | ...  | ...
+```
+
+Field | Meaning
+------|--------
+**name** | The name of the sink
+**type** | Whether the sink was created by the `user` or the `system`
+**volatile** | Does the sink depend on any [volatile sources](/overview/api-components/#volatility)?
 
 {{< version-changed v0.5.0 >}}
 The output column is renamed from `SINKS` to `name`.
 {{< /version-changed >}}
+
+{{< version-added v0.7.2 >}}
+The `volatile` column.
+{{< /version-added >}}
 
 ## Examples
 

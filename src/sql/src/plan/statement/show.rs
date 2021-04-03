@@ -319,7 +319,8 @@ fn show_sources<'a>(
             "SELECT
                 name,
                 mz_internal.mz_classify_object_id(id) AS type,
-                mz_internal.mz_is_materialized(id) AS materialized
+                mz_internal.mz_is_materialized(id) AS materialized,
+                volatile
             FROM mz_catalog.mz_sources
             WHERE schema_id = {}",
             schema.id(),
@@ -333,7 +334,7 @@ fn show_sources<'a>(
         )
     } else {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type, volatile
             FROM mz_catalog.mz_sources
             WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
             schema.id(),
@@ -365,7 +366,8 @@ fn show_views<'a>(
             "SELECT
                 name,
                 mz_internal.mz_classify_object_id(id) AS type,
-                mz_internal.mz_is_materialized(id) AS materialized
+                mz_internal.mz_is_materialized(id) AS materialized,
+                volatile
              FROM mz_catalog.mz_views
              WHERE schema_id = {}",
             schema.id(),
@@ -379,7 +381,7 @@ fn show_views<'a>(
         )
     } else {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type, volatile
              FROM mz_catalog.mz_views
              WHERE schema_id = {} AND mz_internal.mz_is_materialized(id)",
             schema.id(),
@@ -402,7 +404,7 @@ fn show_sinks<'a>(
 
     let query = if full {
         format!(
-            "SELECT name, mz_internal.mz_classify_object_id(id) AS type
+            "SELECT name, mz_internal.mz_classify_object_id(id) AS type, volatile
             FROM mz_catalog.mz_sinks
             WHERE schema_id = {}",
             schema.id(),
@@ -460,7 +462,7 @@ fn show_all_objects<'a>(
     };
 
     let mut query = format!(
-        "SELECT o.name, mz_internal.mz_classify_object_id(o.id) AS type
+        "SELECT o.name, mz_internal.mz_classify_object_id(o.id) AS type, volatile
         FROM mz_catalog.mz_objects o
         JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
         WHERE o.schema_id = {}",

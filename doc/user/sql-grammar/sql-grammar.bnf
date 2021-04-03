@@ -109,6 +109,12 @@ create_source_protobuf_kinesis ::=
   'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'PROTOBUF MESSAGE' message_name
   'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
+create_source_pubnub_text ::=
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )* ')')?
+  'FROM' 'PUBNUB' 'SUBSCRIBE KEY' key 'CHANNEL' channel
+  'FORMAT' 'TEXT'
+  ('ENVELOPE' 'NONE')?
 create_source_s3_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   'FROM S3 OBJECTS FROM ' (
@@ -332,7 +338,7 @@ show_index ::=
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=
-   'SHOW' 'SINKS'
+   'SHOW' 'FULL'? 'SINKS' ('FROM' schema_name)?
 show_sources ::=
   'SHOW' 'FULL'? 'MATERIALIZED'? 'SOURCES' ('FROM' schema_name)?
 show_tables ::=

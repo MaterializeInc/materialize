@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
-use dataflow_types::SinkEnvelope;
+use dataflow_types::{ExternalSourceConnector, SinkEnvelope};
 use expr::Id;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -1900,6 +1900,27 @@ impl Catalog {
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_) => false,
+        }
+    }
+
+    /// Reports whether the item identified by `id` is considered volatile.
+    pub fn is_volatile(&self, id: GlobalId) -> bool {
+        let item = self.get_by_id(&id).item();
+        match item {
+            CatalogItem::Source(source) => match &source.connector {
+                SourceConnector::External { connector, .. } => match &connector {
+                    ExternalSourceConnector::PubNub(_) => true,
+                    ExternalSourceConnector::Kinesis(_) => true,
+                    _ => false,
+                },
+                SourceConnector::Local => true,
+            },
+            CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
+                item.uses().iter().any(|id| self.is_volatile(*id))
+            }
+            CatalogItem::Table(_) => true,
+            CatalogItem::Type(_) => false,
+            CatalogItem::Func(_) => false,
         }
     }
 

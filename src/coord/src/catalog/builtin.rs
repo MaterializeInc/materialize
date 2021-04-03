@@ -646,7 +646,8 @@ lazy_static! {
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("on_id", ScalarType::String.nullable(false)),
+            .with_column("on_id", ScalarType::String.nullable(false))
+            .with_column("volatile", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4015),
         index_id: GlobalId::System(4016),
     };
@@ -680,7 +681,8 @@ lazy_static! {
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("volatile", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4021),
         index_id: GlobalId::System(4022),
     };
@@ -691,7 +693,8 @@ lazy_static! {
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("volatile", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4023),
         index_id: GlobalId::System(4024),
     };
@@ -702,7 +705,8 @@ lazy_static! {
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("volatile", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4025),
         index_id: GlobalId::System(4026),
     };

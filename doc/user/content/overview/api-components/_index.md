@@ -81,6 +81,47 @@ Envelope | Action
 **Debezium** | Treats data as wrapped in a "diff envelope" which indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [`CREATE SOURCE`: Avro over Kafka&mdash;Debezium envelope details](/sql/create-source/avro-kafka/#debezium-envelope-details).
 **Upsert** | Treats data as having a key and a value. New records with non-null value that have the same key as a preexisting record in the dataflow will replace the preexisting record. New records with null value that have the same key as preexisting record will cause the preexisting record to be deleted. <br/><br/>For more information, see [`CREATE SOURCE`: Avro over Kafka&mdash;Upsert envelope details](/sql/create-source/avro-kafka/#upsert-envelope-details)
 
+### Volatility
+
+Materialize strives to be a correct, deterministic system. But because
+Materialize does not itself store data, it can only provide correctness and
+determinism if the sources it connects to provide the same guarantee. In
+particular, a given source must be capable of producing the same data
+repeatedly. In other words, if Materialize restarts, it must be able to replay
+the source from the beginning of time and receive exactly the same data.
+
+We call a source that cannot uphold this guarantee a *volatile* source. Many
+common sources of streaming data are volatile. For example, [Amazon
+Kinesis](https://aws.amazon.com/kinesis/) streams are volatile, because (by
+default) data is only retained for 24 hours. If Materialize restarts after
+reading a Kinesis stream for 25 hours, it will be unable to recover the first
+hour of data.
+
+While it is possible to connect to volatile sources in Materialize, the system
+internally tracks the volatility. Forthcoming features that rely on
+deterministic replay, like [exactly-once
+sinks](https://github.com/MaterializeInc/materialize/issues/2915), will not
+support construction atop volatile sources.
+
+At present, the following source types are always considered volatile
+
+  * [Kinesis sources](/sql/create-source/text-kinesis/)
+  * [PubNub sources](/sql/create-source/text-pubnub/)
+
+while the following source types are always considered nonvolatile:
+
+  * [Kafka sources](/sql/create-source/avro-kafka/)
+  * [S3 sources](/sql/create-source/text-s3/)
+  * [File sources](/sql/create-source/text-file/)
+
+It is therefore your responsibility to ensure your Kafka, S3, and file sources
+are operated in a nonvolatile manner. Common violations include configuring a
+retention policy on a Kafka topic used in a Kafka source, deleting an object
+from an S3 bucket used in an S3 source, or editing a file used in a file source.
+
+In the future, Materialize will allow you to configure whether a given
+Kafka, S3, or file source is considered volatile or nonvolatile.
+
 ## Views
 
 In SQL, views represent a query that you save with some given name. These are
