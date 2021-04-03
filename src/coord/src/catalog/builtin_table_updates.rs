@@ -95,8 +95,9 @@ impl Catalog {
         let entry = self.get_by_id(&id);
         let id = entry.id();
         let oid = entry.oid();
+        let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
         let schema_id = self
-            .get_schema(&entry.name().database, &entry.name().schema, SYSTEM_CONN_ID)
+            .get_schema(&entry.name().database, &entry.name().schema, conn_id)
             .unwrap()
             .id;
         let name = &entry.name().item;
@@ -168,6 +169,7 @@ impl Catalog {
                 Datum::Int32(oid as i32),
                 Datum::Int64(schema_id),
                 Datum::String(name),
+                Datum::String(self.is_volatile(id).as_str()),
             ]),
             diff,
         }]
@@ -188,6 +190,7 @@ impl Catalog {
                 Datum::Int32(oid as i32),
                 Datum::Int64(schema_id),
                 Datum::String(name),
+                Datum::String(self.is_volatile(id).as_str()),
             ]),
             diff,
         }]
@@ -238,6 +241,7 @@ impl Catalog {
                     Datum::Int32(oid as i32),
                     Datum::Int64(schema_id),
                     Datum::String(name),
+                    Datum::String(self.is_volatile(id).as_str()),
                 ]),
                 diff,
             });
@@ -269,6 +273,7 @@ impl Catalog {
                 Datum::Int32(oid as i32),
                 Datum::String(name),
                 Datum::String(&index.on.to_string()),
+                Datum::String(self.is_volatile(id).as_str()),
             ]),
             diff,
         });

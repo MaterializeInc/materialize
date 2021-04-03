@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
-use dataflow_types::SinkEnvelope;
+use dataflow_types::{ExternalSourceConnector, SinkEnvelope};
 use expr::Id;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -49,18 +49,18 @@ use crate::catalog::error::ErrorKind;
 use crate::catalog::migrate::CONTENT_MIGRATIONS;
 use crate::session::Session;
 
+mod builtin_table_updates;
 mod config;
 mod error;
 mod metrics;
 mod migrate;
-mod table_updates;
 
 pub mod builtin;
 pub mod storage;
 
+pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::config::Config;
 pub use crate::catalog::error::Error;
-pub use crate::catalog::table_updates::BuiltinTableUpdate;
 
 const SYSTEM_CONN_ID: u32 = 0;
 const SYSTEM_USER: &str = "mz_system";
@@ -257,11 +257,29 @@ impl From<sql::plan::TypeInner> for TypeInner {
         }
     }
 }
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Func {
     pub plan_cx: PlanContext,
     #[serde(skip)]
     pub inner: &'static sql::func::Func,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum Volatility {
+    Volatile,
+    Nonvolatile,
+    Unknown,
+}
+
+impl Volatility {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Volatility::Volatile => "volatile",
+            Volatility::Nonvolatile => "nonvolatile",
+            Volatility::Unknown => "unknown",
+        }
+    }
 }
 
 impl CatalogItem {
@@ -1863,6 +1881,43 @@ impl Catalog {
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Type(_) => false,
+        }
+    }
+
+    /// Reports whether the item identified by `id` is considered volatile.
+    ///
+    /// `None` indicates that the volatility of `id` is unknown.
+    pub fn is_volatile(&self, id: GlobalId) -> Volatility {
+        use Volatility::*;
+
+        let item = self.get_by_id(&id).item();
+        match item {
+            CatalogItem::Source(source) => match &source.connector {
+                SourceConnector::External { connector, .. } => match &connector {
+                    ExternalSourceConnector::PubNub(_) => Volatile,
+                    ExternalSourceConnector::Kinesis(_) => Volatile,
+                    _ => Unknown,
+                },
+                SourceConnector::Local => Volatile,
+            },
+            CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
+                // Volatility follows trinary logic like SQL. If even one
+                // volatile dependency exists, then this item is volatile.
+                // Otherwise, if a single dependency with unknown volatility
+                // exists, then this item is also of unknown volatility. Only if
+                // all dependencies are nonvolatile (including the trivial case
+                // of no dependencies) is this item nonvolatile.
+                item.uses().iter().fold(Nonvolatile, |memo, id| {
+                    match (memo, self.is_volatile(*id)) {
+                        (Volatile, _) | (_, Volatile) => Volatile,
+                        (Unknown, _) | (_, Unknown) => Unknown,
+                        (Nonvolatile, Nonvolatile) => Nonvolatile,
+                    }
+                })
+            }
+            CatalogItem::Table(_) => Volatile,
+            CatalogItem::Type(_) => Unknown,
+            CatalogItem::Func(_) => Unknown,
         }
     }
 

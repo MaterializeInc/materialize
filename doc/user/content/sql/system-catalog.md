@@ -118,12 +118,13 @@ Field         | Type           | Meaning
 
 The `mz_indexes` table contains a row for each index in the system.
 
-Field   | Type     | Meaning
---------|----------|--------
-`id`    | [`text`] | Materialize's unique ID for the index.
-`oid`   | [`oid`]  | A [PostgreSQL-compatible OID][oid] for the index.
-`name`  | [`text`] | The name of the index.
-`on_id` | [`text`] | The ID of the relation on which the index is built.
+Field        | Type        | Meaning
+-------------|-------------|--------
+`id`         | [`text`]    | Materialize's unique ID for the index.
+`oid`        | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the index.
+`name`       | [`text`]    | The name of the index.
+`on_id`      | [`text`]    | The ID of the relation on which the index is built.
+`volatility` | [`text`]    | Whether the the index is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_index_columns`
 
@@ -242,12 +243,13 @@ Field         | Type       | Meaning
 
 The `mz_sinks` table contains a row for each sink in the system.
 
-Field          | Type       | Meaning
----------------|------------|--------
-`id`           | [`text`]   | Materialize's unique ID for the sink.
-`oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the sink.
-`schema_id`    | [`bigint`] | The ID of the schema to which the sink belongs.
-`name`         | [`text`]   | The name of the sink.
+Field          | Type        | Meaning
+---------------|-------------|--------
+`id`           | [`text`]    | Materialize's unique ID for the sink.
+`oid`          | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the sink.
+`schema_id`    | [`bigint`]  | The ID of the schema to which the sink belongs.
+`name`         | [`text`]    | The name of the sink.
+`volatility`   | [`text`]    | Whether the sink is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_source_info`
 
@@ -273,6 +275,7 @@ Field          | Type       | Meaning
 `oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the source.
 `schema_id`    | [`bigint`] | The ID of the schema to which the source belongs.
 `name`         | [`text`]   | The name of the source.
+`volatility`   | [`text`]   | Whether the source is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ### `mz_tables`
 
@@ -300,12 +303,13 @@ Field          | Type       | Meaning
 
 The `mz_views` table contains a row for each view in the system.
 
-Field          | Type       | Meaning
----------------|------------|----------
-`id`           | [`text`]   | Materialize's unique ID for the view.
-`oid`          | [`oid`]    | A [PostgreSQL-compatible OID][oid] for the view.
-`schema_id`    | [`bigint`] | The ID of the schema to which the view belongs.
-`name`         | [`text`]   | The name of the view.
+Field          | Type        | Meaning
+---------------|-------------|----------
+`id`           | [`text`]    | Materialize's unique ID for the view.
+`oid`          | [`oid`]     | A [PostgreSQL-compatible OID][oid] for the view.
+`schema_id`    | [`bigint`]  | The ID of the schema to which the view belongs.
+`name`         | [`text`]    | The name of the view.
+`volatility`   | [`text`]    | Whether the view is [volatile](/overview/volatility). Either `volatile`, `nonvolatile`, or `unknown`.
 
 ## `pg_catalog`
 

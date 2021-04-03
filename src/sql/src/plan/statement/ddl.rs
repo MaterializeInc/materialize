@@ -767,12 +767,14 @@ pub fn plan_create_source(
             subscribe_key,
             channel,
         } => {
-            scx.require_experimental_mode("PubNub Sources")?;
+            match format {
+                None | Some(Format::Text) => (),
+                _ => bail!("CREATE SOURCE ... PUBNUB must specify FORMAT TEXT"),
+            }
             let connector = ExternalSourceConnector::PubNub(PubNubSourceConnector {
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
             });
-
             (connector, DataEncoding::Text)
         }
         Connector::AvroOcf { path, .. } => {
