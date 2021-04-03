@@ -263,24 +263,18 @@ impl Coordinator {
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
     async fn bootstrap(&mut self, events: Vec<catalog::Event>) -> Result<(), CoordError> {
-        let items: Vec<_> = events
+        let entries: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
-                catalog::Event::CreatedItem {
-                    id,
-                    oid,
-                    name,
-                    item,
-                    ..
-                } => Some((id, oid, name, item)),
+                catalog::Event::CreatedItem { entry, .. } => Some(entry),
                 _ => None,
             })
             .collect();
 
         // Sources and indexes may be depended upon by other catalog items,
         // insert them first.
-        for &(id, _, _, item) in &items {
-            match item {
+        for entry in &entries {
+            match entry.item() {
                 //currently catalog item rebuild assumes that sinks and
                 //indexes are always built individually and does not store information
                 //about how it was built. If we start building multiple sinks and/or indexes
@@ -288,11 +282,12 @@ impl Coordinator {
                 //the same multiple-build dataflow.
                 CatalogItem::Source(source) => {
                     // Inform the timestamper about this source.
-                    self.update_timestamper(*id, true).await;
-                    self.maybe_begin_caching(*id, &source.connector).await;
+                    self.update_timestamper(entry.id(), true).await;
+                    self.maybe_begin_caching(entry.id(), &source.connector)
+                        .await;
                 }
                 CatalogItem::Index(_) => {
-                    if BUILTINS.logs().any(|log| log.index_id == *id) {
+                    if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
                         // Indexes on logging views are special, as they are
                         // already installed in the dataflow plane via
                         // `SequencedCommand::EnableLogging`. Just teach the
@@ -303,9 +298,9 @@ impl Coordinator {
                         // Should it not be the same logical compaction window
                         // that everything else uses?
                         self.indexes
-                            .insert(*id, Frontiers::new(self.num_workers(), Some(1_000)));
+                            .insert(entry.id(), Frontiers::new(self.num_workers(), Some(1_000)));
                     } else {
-                        let df = self.dataflow_builder().build_index_dataflow(*id);
+                        let df = self.dataflow_builder().build_index_dataflow(entry.id());
                         self.ship_dataflow(df).await?;
                     }
                 }
@@ -313,14 +308,14 @@ impl Coordinator {
             }
         }
 
-        for &(id, oid, name, item) in &items {
-            match item {
+        for entry in entries {
+            match entry.item() {
                 CatalogItem::View(_) => (),
                 CatalogItem::Table(_) => {
                     // TODO gross hack for now
-                    if !id.is_system() {
+                    if !entry.id().is_system() {
                         if let Some(tables) = &mut self.persisted_tables {
-                            if let Some(messages) = tables.resume(*id) {
+                            if let Some(messages) = tables.resume(entry.id()) {
                                 let mut updates = vec![];
                                 for persisted_message in messages.into_iter() {
                                     match persisted_message {
@@ -333,7 +328,7 @@ impl Coordinator {
                                             let updates = std::mem::replace(&mut updates, vec![]);
                                             if !updates.is_empty() {
                                                 self.broadcast(SequencedCommand::Insert {
-                                                    id: *id,
+                                                    id: entry.id(),
                                                     updates,
                                                 });
                                                 self.broadcast(
@@ -359,10 +354,10 @@ impl Coordinator {
                             panic!("sink already initialized during catalog boot")
                         }
                     };
-                    let connector = sink_connector::build(builder.clone(), *id)
+                    let connector = sink_connector::build(builder.clone(), entry.id())
                         .await
-                        .with_context(|| format!("recreating sink {}", name))?;
-                    self.handle_sink_connector_ready(*id, *oid, connector)
+                        .with_context(|| format!("recreating sink {}", entry.name()))?;
+                    self.handle_sink_connector_ready(entry.id(), entry.oid(), connector)
                         .await?;
                 }
                 _ => (), // Handled in prior loop.
@@ -2887,33 +2882,51 @@ impl Coordinator {
                 catalog::Event::CreatedRole { id, oid, name } => {
                     self.report_role_update(*id, *oid, name, 1).await;
                 }
-                catalog::Event::CreatedItem {
-                    schema_id,
-                    id,
-                    oid,
-                    name,
-                    item,
-                } => {
-                    if let Ok(desc) = item.desc(&name) {
-                        self.report_column_updates(desc, *id, 1).await;
+                catalog::Event::CreatedItem { schema_id, entry } => {
+                    if let Ok(desc) = entry.item().desc(entry.name()) {
+                        self.report_column_updates(desc, entry.id(), 1).await;
                     }
-                    metrics::item_created(*id, &item);
-                    match item {
+                    metrics::item_created(entry.id(), entry.item());
+                    match entry.item() {
                         CatalogItem::Index(index) => {
-                            self.report_index_update(*id, *oid, &index, &name.item, 1)
-                                .await
+                            self.report_index_update(
+                                entry.id(),
+                                entry.oid(),
+                                &index,
+                                &entry.name().item,
+                                1,
+                            )
+                            .await
                         }
                         CatalogItem::Table(_) => {
-                            self.report_table_update(*id, *oid, *schema_id, &name.item, 1)
-                                .await
+                            self.report_table_update(
+                                entry.id(),
+                                entry.oid(),
+                                *schema_id,
+                                &entry.name().item,
+                                1,
+                            )
+                            .await
                         }
                         CatalogItem::Source(_) => {
-                            self.report_source_update(*id, *oid, *schema_id, &name.item, 1)
-                                .await;
+                            self.report_source_update(
+                                entry.id(),
+                                entry.oid(),
+                                *schema_id,
+                                &entry.name().item,
+                                1,
+                            )
+                            .await;
                         }
                         CatalogItem::View(_) => {
-                            self.report_view_update(*id, *oid, *schema_id, &name.item, 1)
-                                .await;
+                            self.report_view_update(
+                                entry.id(),
+                                entry.oid(),
+                                *schema_id,
+                                &entry.name().item,
+                                1,
+                            )
+                            .await;
                         }
                         CatalogItem::Sink(sink) => {
                             if let catalog::Sink {
@@ -2921,80 +2934,166 @@ impl Coordinator {
                                 ..
                             } = sink
                             {
-                                self.report_sink_update(*id, *oid, *schema_id, &name.item, 1)
-                                    .await;
+                                self.report_sink_update(
+                                    entry.id(),
+                                    entry.oid(),
+                                    *schema_id,
+                                    &entry.name().item,
+                                    1,
+                                )
+                                .await;
                             }
                         }
                         CatalogItem::Type(ty) => {
-                            self.report_type_update(*id, *oid, *schema_id, &name.item, ty, 1)
-                                .await;
+                            self.report_type_update(
+                                entry.id(),
+                                entry.oid(),
+                                *schema_id,
+                                &entry.name().item,
+                                ty,
+                                1,
+                            )
+                            .await;
                         }
                         CatalogItem::Func(func) => {
-                            self.report_func_update(*id, *schema_id, &name.item, func, 1)
-                                .await;
+                            self.report_func_update(
+                                entry.id(),
+                                *schema_id,
+                                &entry.name().item,
+                                func,
+                                1,
+                            )
+                            .await;
                         }
                     }
                 }
                 catalog::Event::UpdatedItem {
                     schema_id,
-                    id,
-                    oid,
-                    from_name,
-                    to_name,
-                    item,
+                    old_entry,
+                    new_entry,
                 } => {
                     // Remove old name and add new name to relevant mz system tables.
-                    match item {
-                        CatalogItem::Source(_) => {
-                            self.report_source_update(*id, *oid, *schema_id, &from_name.item, -1)
-                                .await;
-                            self.report_source_update(*id, *oid, *schema_id, &to_name.item, 1)
-                                .await;
+                    match (old_entry.item(), new_entry.item()) {
+                        (CatalogItem::Source(_), CatalogItem::Source(_)) => {
+                            self.report_source_update(
+                                old_entry.id(),
+                                old_entry.oid(),
+                                *schema_id,
+                                &old_entry.name().item,
+                                -1,
+                            )
+                            .await;
+                            self.report_source_update(
+                                new_entry.id(),
+                                new_entry.oid(),
+                                *schema_id,
+                                &new_entry.name().item,
+                                1,
+                            )
+                            .await;
                         }
-                        CatalogItem::View(_) => {
-                            self.report_view_update(*id, *oid, *schema_id, &from_name.item, -1)
-                                .await;
-                            self.report_view_update(*id, *oid, *schema_id, &to_name.item, 1)
-                                .await;
+                        (CatalogItem::View(_), CatalogItem::View(_)) => {
+                            self.report_view_update(
+                                old_entry.id(),
+                                old_entry.oid(),
+                                *schema_id,
+                                &old_entry.name().item,
+                                -1,
+                            )
+                            .await;
+                            self.report_view_update(
+                                new_entry.id(),
+                                new_entry.oid(),
+                                *schema_id,
+                                &new_entry.name().item,
+                                1,
+                            )
+                            .await;
                         }
-                        CatalogItem::Sink(sink) => {
+                        (CatalogItem::Sink(sink), CatalogItem::Sink(_)) => {
                             if let catalog::Sink {
                                 connector: SinkConnectorState::Ready(_),
                                 ..
                             } = sink
                             {
-                                self.report_sink_update(*id, *oid, *schema_id, &from_name.item, -1)
-                                    .await;
-                                self.report_sink_update(*id, *oid, *schema_id, &to_name.item, 1)
-                                    .await;
+                                self.report_sink_update(
+                                    old_entry.id(),
+                                    old_entry.oid(),
+                                    *schema_id,
+                                    &old_entry.name().item,
+                                    -1,
+                                )
+                                .await;
+                                self.report_sink_update(
+                                    new_entry.id(),
+                                    new_entry.oid(),
+                                    *schema_id,
+                                    &new_entry.name().item,
+                                    1,
+                                )
+                                .await;
                             }
                         }
-                        CatalogItem::Table(_) => {
-                            self.report_table_update(*id, *oid, *schema_id, &from_name.item, -1)
-                                .await;
-                            self.report_table_update(*id, *oid, *schema_id, &to_name.item, 1)
-                                .await;
-                        }
-                        CatalogItem::Index(index) => {
-                            self.report_index_update(*id, *oid, &index, &from_name.item, -1)
-                                .await;
-                            self.report_index_update(*id, *oid, &index, &to_name.item, 1)
-                                .await;
-                        }
-                        CatalogItem::Type(typ) => {
-                            self.report_type_update(
-                                *id,
-                                *oid,
+                        (CatalogItem::Table(_), CatalogItem::Table(_)) => {
+                            self.report_table_update(
+                                old_entry.id(),
+                                old_entry.oid(),
                                 *schema_id,
-                                &from_name.item,
-                                &typ,
+                                &old_entry.name().item,
                                 -1,
                             )
                             .await;
-                            self.report_type_update(*id, *oid, *schema_id, &to_name.item, &typ, 1)
-                                .await;
+                            self.report_table_update(
+                                new_entry.id(),
+                                new_entry.oid(),
+                                *schema_id,
+                                &new_entry.name().item,
+                                1,
+                            )
+                            .await;
                         }
-                        CatalogItem::Func(_) => unreachable!("functions cannot be updated"),
+                        (CatalogItem::Index(old_index), CatalogItem::Index(new_index)) => {
+                            self.report_index_update(
+                                old_entry.id(),
+                                old_entry.oid(),
+                                &old_index,
+                                &old_entry.name().item,
+                                -1,
+                            )
+                            .await;
+                            self.report_index_update(
+                                new_entry.id(),
+                                new_entry.oid(),
+                                &new_index,
+                                &new_entry.name().item,
+                                1,
+                            )
+                            .await;
+                        }
+                        (CatalogItem::Type(old_typ), CatalogItem::Type(new_typ)) => {
+                            self.report_type_update(
+                                old_entry.id(),
+                                old_entry.oid(),
+                                *schema_id,
+                                &old_entry.name().item,
+                                &old_typ,
+                                -1,
+                            )
+                            .await;
+                            self.report_type_update(
+                                new_entry.id(),
+                                new_entry.oid(),
+                                *schema_id,
+                                &new_entry.name().item,
+                                &new_typ,
+                                1,
+                            )
+                            .await;
+                        }
+                        (CatalogItem::Func(_), CatalogItem::Func(_)) => {
+                            unreachable!("functions cannot be updated")
+                        }
+                        (_, _) => unreachable!("catalog items cannot change type"),
                     }
                 }
                 catalog::Event::DroppedDatabase { id, oid, name } => {
