@@ -76,9 +76,9 @@ Volatile sources impede Materialize's goal of providing users with correct,
 deterministic results. If you restart Materialize, we want to guarantee that you
 will see exactly the same data at exactly the same timestamps, and there is
 ongoing work to facilitate that. If you've created a volatile source, there is
-simply no possibility that we'll be able to provide that guarantee, because
-the upstream source may have garabage collected the data that you saw last time
-you ran Materialize.
+simply no possibility that we'll be able to provide that guarantee, because the
+upstream source may have garbage collected the data that you saw last time you
+ran Materialize.
 
 Several forthcoming initiatives depend on this determinism guarantee, however:
 
@@ -204,6 +204,22 @@ fn are_objects_equivalent(metadata: &Metadata, id1: GlobalId, id2: GlobalId) -> 
     id1 == id2 && !metadata.is_volatile(id1)
 }
 ```
+
+#### Other to-be-developed features
+
+There is no obligation for new features to play well with volatile sources. In
+other words, it is acceptable for engineers to treat volatile sources as
+second-class citizens in Materialize.
+
+For example, if you add a new sink type, there is no obligation to make it work
+with volatile sources if doing so would be difficult. If you add a new
+optimization that would be substantially complicated by volatile sources, there
+is no obligation to do that hard work; you can just disable the optimization for
+volatile sources instead.
+
+That said, our backwards compatibility still applies to volatile sources. It is
+not okay to break existing, working features involving volatile sources (modulo
+extenuating circumstances).
 
 ## Future work
 
