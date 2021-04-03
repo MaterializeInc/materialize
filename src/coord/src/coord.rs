@@ -2943,7 +2943,7 @@ impl Coordinator {
                         }
                         CatalogItem::Sink(sink) => {
                             if let catalog::Sink {
-                                connector: SinkConnectorState::Ready(_),
+                                connector: SinkConnectorState::Ready(connector),
                                 ..
                             } = sink
                             {
@@ -2955,6 +2955,33 @@ impl Coordinator {
                                     1,
                                 )
                                 .await;
+                                match connector {
+                                    SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
+                                        let row = Row::pack_slice(&[
+                                            Datum::String(&entry.id().to_string()),
+                                            Datum::String(topic.as_str()),
+                                        ]);
+                                        self.update_catalog_view(
+                                            MZ_KAFKA_SINKS.id,
+                                            iter::once((row, 1)),
+                                        )
+                                        .await;
+                                    }
+                                    SinkConnector::AvroOcf(AvroOcfSinkConnector {
+                                        path, ..
+                                    }) => {
+                                        let row = Row::pack_slice(&[
+                                            Datum::String(&entry.id().to_string()),
+                                            Datum::Bytes(&path.clone().into_os_string().into_vec()),
+                                        ]);
+                                        self.update_catalog_view(
+                                            MZ_AVRO_OCF_SINKS.id,
+                                            iter::once((row, 1)),
+                                        )
+                                        .await;
+                                    }
+                                    _ => (),
+                                }
                             }
                         }
                         CatalogItem::Type(ty) => {
@@ -3410,28 +3437,6 @@ impl Coordinator {
                 Frontiers::new(self.num_workers(), self.logical_compaction_window_ms);
             frontiers.advance_since(&since);
             self.indexes.insert(*global_id, frontiers);
-        }
-
-        for (id, sink) in &dataflow.sink_exports {
-            match &sink.connector {
-                SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
-                    let row = Row::pack_slice(&[
-                        Datum::String(&id.to_string()),
-                        Datum::String(topic.as_str()),
-                    ]);
-                    self.update_catalog_view(MZ_KAFKA_SINKS.id, iter::once((row, 1)))
-                        .await;
-                }
-                SinkConnector::AvroOcf(AvroOcfSinkConnector { path, .. }) => {
-                    let row = Row::pack_slice(&[
-                        Datum::String(&id.to_string()),
-                        Datum::Bytes(&path.clone().into_os_string().into_vec()),
-                    ]);
-                    self.update_catalog_view(MZ_AVRO_OCF_SINKS.id, iter::once((row, 1)))
-                        .await;
-                }
-                _ => (),
-            }
         }
 
         // TODO: Produce "valid from" information for each sink.
