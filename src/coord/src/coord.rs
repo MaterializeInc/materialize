@@ -79,7 +79,7 @@ use crate::catalog::builtin::{
     MZ_VIEW_FOREIGN_KEYS, MZ_VIEW_KEYS,
 };
 use crate::catalog::{
-    self, Catalog, CatalogItem, Func, Index, SinkConnectorState, Type, TypeInner,
+    self, Catalog, CatalogItem, Func, Index, IndexField, SinkConnectorState, Type, TypeInner,
 };
 use crate::client::{Client, Handle};
 use crate::command::{
@@ -1203,41 +1203,11 @@ impl Coordinator {
         name: &str,
         diff: isize,
     ) {
-        self.report_index_update_inner(
-            global_id,
-            oid,
-            index,
-            name,
-            index
-                .keys
-                .iter()
-                .map(|key| {
-                    key.typ(self.catalog.get_by_id(&index.on).desc().unwrap().typ())
-                        .nullable
-                })
-                .collect(),
-            diff,
-        )
-        .await
-    }
-
-    // When updating the mz_indexes system table after dropping an index, it may no longer be possible
-    // to generate the 'nullable' information for that index. This function allows callers to bypass
-    // that computation and provide their own value, instead.
-    async fn report_index_update_inner(
-        &mut self,
-        global_id: GlobalId,
-        oid: u32,
-        index: &Index,
-        name: &str,
-        nullable: Vec<bool>,
-        diff: isize,
-    ) {
-        let key_sqls = match sql::parse::parse(&index.create_sql)
+        let field_sqls = match sql::parse::parse(&index.create_sql)
             .expect("create_sql cannot be invalid")
             .into_element()
         {
-            Statement::CreateIndex(CreateIndexStatement { key_parts, .. }) => key_parts.unwrap(),
+            Statement::CreateIndex(CreateIndexStatement { fields, .. }) => fields.unwrap(),
             _ => unreachable!(),
         };
         self.update_catalog_view(
@@ -1254,21 +1224,18 @@ impl Coordinator {
         )
         .await;
 
-        for (i, key) in index.keys.iter().enumerate() {
-            let nullable = *nullable
-                .get(i)
-                .expect("missing nullability information for index key");
+        for (i, field) in index.fields.iter().enumerate() {
             let seq_in_index = i64::try_from(i + 1).expect("invalid index sequence number");
-            let key_sql = key_sqls
+            let field_sql = field_sqls
                 .get(i)
                 .expect("missing sql information for index key")
                 .to_string();
-            let (field_number, expression) = match key {
+            let (field_number, expression) = match &field.expr {
                 MirScalarExpr::Column(col) => (
                     Datum::Int64(i64::try_from(*col + 1).expect("invalid index column number")),
                     Datum::Null,
                 ),
-                _ => (Datum::Null, Datum::String(&key_sql)),
+                _ => (Datum::Null, Datum::String(&field_sql)),
             };
             self.update_catalog_view(
                 MZ_INDEX_COLUMNS.id,
@@ -1278,7 +1245,7 @@ impl Coordinator {
                         Datum::Int64(seq_in_index),
                         field_number,
                         expression,
-                        Datum::from(nullable),
+                        Datum::from(field.nullable),
                     ]),
                     diff,
                 )),
@@ -2123,18 +2090,27 @@ impl Coordinator {
         &mut self,
         pcx: PlanContext,
         name: FullName,
-        mut index: sql::plan::Index,
+        index: sql::plan::Index,
         options: Vec<IndexOption>,
         if_not_exists: bool,
         depends_on: Vec<GlobalId>,
     ) -> Result<ExecuteResponse, CoordError> {
-        for key in &mut index.keys {
-            Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
-        }
+        let on_typ = self.catalog.get_by_id(&index.on).desc()?.typ();
+        let fields = index
+            .fields
+            .into_iter()
+            .map(|mut expr| {
+                Self::prep_scalar_expr(&mut expr, ExprPrepStyle::Static)?;
+                Ok::<_, CoordError>(IndexField {
+                    nullable: expr.typ(on_typ).nullable,
+                    expr,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let index = catalog::Index {
             create_sql: index.create_sql,
             plan_cx: pcx,
-            keys: index.keys,
+            fields,
             on: index.on,
             conn_id: None,
             depends_on,
@@ -3144,21 +3120,6 @@ impl Coordinator {
                 catalog::Event::DroppedRole { id, oid, name } => {
                     self.report_role_update(*id, *oid, name, -1).await;
                 }
-                catalog::Event::DroppedIndex { entry, nullable } => match entry.item() {
-                    CatalogItem::Index(index) => {
-                        indexes_to_drop.push(entry.id());
-                        self.report_index_update_inner(
-                            entry.id(),
-                            entry.oid(),
-                            index,
-                            &entry.name().item,
-                            nullable.to_owned(),
-                            -1,
-                        )
-                        .await
-                    }
-                    _ => unreachable!("DroppedIndex for non-index item"),
-                },
                 catalog::Event::DroppedItem { schema_id, entry } => {
                     metrics::item_dropped(entry.id(), entry.item());
                     match entry.item() {
@@ -3260,8 +3221,16 @@ impl Coordinator {
                             )
                             .await;
                         }
-                        CatalogItem::Index(_) => {
-                            unreachable!("dropped indexes should be handled by DroppedIndex");
+                        CatalogItem::Index(index) => {
+                            indexes_to_drop.push(entry.id());
+                            self.report_index_update(
+                                entry.id(),
+                                entry.oid(),
+                                index,
+                                &entry.name().item,
+                                -1,
+                            )
+                            .await
                         }
                         CatalogItem::Func(_) => {
                             unreachable!("functions cannot be dropped")
@@ -3711,9 +3680,12 @@ fn auto_generate_primary_idx(
         create_sql: index_sql(index_name, on_name, &on_desc, &default_key),
         plan_cx: PlanContext::default(),
         on: on_id,
-        keys: default_key
+        fields: default_key
             .iter()
-            .map(|k| MirScalarExpr::Column(*k))
+            .map(|i| IndexField {
+                expr: MirScalarExpr::Column(*i),
+                nullable: on_desc.typ().column_types[*i].nullable,
+            })
             .collect(),
         conn_id,
         depends_on,
@@ -3726,15 +3698,16 @@ pub fn index_sql(
     index_name: String,
     view_name: FullName,
     view_desc: &RelationDesc,
-    keys: &[usize],
+    fields: &[usize],
 ) -> String {
     use sql::ast::{Expr, Value};
 
     CreateIndexStatement::<Raw> {
         name: Some(Ident::new(index_name)),
         on_name: sql::normalize::unresolve(view_name),
-        key_parts: Some(
-            keys.iter()
+        fields: Some(
+            fields
+                .iter()
                 .map(|i| match view_desc.get_unambiguous_name(*i) {
                     Some(n) => Expr::Identifier(vec![Ident::new(n.to_string())]),
                     _ => Expr::Value(Value::Number((i + 1).to_string())),

@@ -1876,20 +1876,20 @@ impl<'a> Parser<'a> {
         };
         let on_name = self.parse_object_name()?;
 
-        let key_parts = if default_index {
+        let fields = if default_index {
             None
         } else {
             self.expect_token(&Token::LParen)?;
             if self.consume_token(&Token::RParen) {
                 Some(vec![])
             } else {
-                let key_parts = self
+                let fields = self
                     .parse_comma_separated(Parser::parse_order_by_expr)?
                     .into_iter()
                     .map(|x| x.expr)
                     .collect::<Vec<_>>();
                 self.expect_token(&Token::RParen)?;
-                Some(key_parts)
+                Some(fields)
             }
         };
 
@@ -1898,7 +1898,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::CreateIndex(CreateIndexStatement {
             name,
             on_name,
-            key_parts,
+            fields,
             with_options,
             if_not_exists,
         }))

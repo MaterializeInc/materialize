@@ -191,7 +191,7 @@ impl<'a> DataflowBuilder<'a> {
         let on_type = on_entry.desc().unwrap().typ().clone();
         let mut dataflow = DataflowDesc::new(index_entry.name().to_string());
         let on_id = index.on;
-        let keys = index.keys.clone();
+        let keys: Vec<_> = index.fields.iter().map(|f| f.expr.clone()).collect();
         self.import_into_dataflow(&on_id, &mut dataflow);
         dataflow.add_index_to_build(id, on_id.clone(), on_type.clone(), keys.clone());
         dataflow.add_index_export(id, on_id, on_type, keys);

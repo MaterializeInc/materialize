@@ -243,7 +243,7 @@ pub struct View {
 pub struct Index {
     pub create_sql: String,
     pub on: GlobalId,
-    pub keys: Vec<::expr::MirScalarExpr>,
+    pub fields: Vec<::expr::MirScalarExpr>,
 }
 
 #[derive(Clone, Debug)]

@@ -93,13 +93,13 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                 Statement::CreateIndex(CreateIndexStatement {
                     name: _,
                     on_name: _,
-                    key_parts,
+                    fields,
                     with_options,
                     if_not_exists: _,
                 }) => {
-                    if let Some(key_parts) = key_parts {
-                        for key_part in key_parts {
-                            TypeNormalizer.visit_expr_mut(key_part);
+                    if let Some(fields) = fields {
+                        for field in fields {
+                            TypeNormalizer.visit_expr_mut(field);
                         }
                     }
                     for with_option in with_options {
@@ -211,13 +211,13 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                 Statement::CreateIndex(CreateIndexStatement {
                     name: _,
                     on_name: _,
-                    key_parts,
+                    fields,
                     with_options: _,
                     if_not_exists: _,
                 }) => {
-                    if let Some(key_parts) = key_parts {
-                        for key_part in key_parts {
-                            FuncNormalizer.visit_expr_mut(key_part);
+                    if let Some(fields) = fields {
+                        for field in fields {
+                            FuncNormalizer.visit_expr_mut(field);
                         }
                     }
                 }

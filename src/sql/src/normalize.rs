@@ -341,15 +341,15 @@ pub fn create_statement(
         Statement::CreateIndex(CreateIndexStatement {
             name: _,
             on_name,
-            key_parts,
+            fields,
             with_options: _,
             if_not_exists,
         }) => {
             *on_name = resolve_item(on_name)?;
             let mut normalizer = QueryNormalizer::new(scx);
-            if let Some(key_parts) = key_parts {
-                for key_part in key_parts {
-                    normalizer.visit_expr_mut(key_part);
+            if let Some(fields) = fields {
+                for field in fields {
+                    normalizer.visit_expr_mut(field);
                     if let Some(err) = normalizer.err {
                         return Err(err.into());
                     }

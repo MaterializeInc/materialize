@@ -1453,7 +1453,7 @@ pub fn plan_create_index(
     let CreateIndexStatement {
         name,
         on_name,
-        key_parts,
+        fields,
         with_options,
         if_not_exists,
     } = &mut stmt;
@@ -1472,7 +1472,7 @@ pub fn plan_create_index(
 
     let on_desc = on.desc()?;
 
-    let filled_key_parts = match key_parts {
+    let filled_fields = match fields {
         Some(kp) => kp.to_vec(),
         None => {
             // `key_parts` is None if we're creating a "default" index, i.e.
@@ -1489,7 +1489,8 @@ pub fn plan_create_index(
                 .collect()
         }
     };
-    let (keys, exprs_depend_on) = query::plan_index_exprs(scx, on_desc, filled_key_parts.clone())?;
+    let (planned_fields, exprs_depend_on) =
+        query::plan_index_exprs(scx, on_desc, filled_fields.clone())?;
 
     let index_name = if let Some(name) = name {
         FullName {
@@ -1499,15 +1500,15 @@ pub fn plan_create_index(
         }
     } else {
         let mut idx_name_base = on.name().clone();
-        if key_parts.is_none() {
+        if fields.is_none() {
             // We're trying to create the "default" index.
             idx_name_base.item += "_primary_idx";
         } else {
             // Use PG schema for automatically naming indexes:
             // `<table>_<_-separated indexed expressions>_idx`
-            let index_name_col_suffix = keys
+            let index_name_col_suffix = planned_fields
                 .iter()
-                .map(|k| match k {
+                .map(|f| match f {
                     expr::MirScalarExpr::Column(i) => match on_desc.get_unambiguous_name(*i) {
                         Some(col_name) => col_name.to_string(),
                         None => format!("{}", i + 1),
@@ -1543,7 +1544,7 @@ pub fn plan_create_index(
 
     // Normalize `stmt`.
     *name = Some(Ident::new(index_name.item.clone()));
-    *key_parts = Some(filled_key_parts);
+    *fields = Some(filled_fields);
     let if_not_exists = *if_not_exists;
     let create_sql = normalize::create_statement(scx, Statement::CreateIndex(stmt))?;
     let mut depends_on = vec![on.id()];
@@ -1554,7 +1555,7 @@ pub fn plan_create_index(
         index: Index {
             create_sql,
             on: on.id(),
-            keys,
+            fields: planned_fields,
         },
         options,
         if_not_exists,

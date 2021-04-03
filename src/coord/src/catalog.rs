@@ -217,9 +217,15 @@ pub struct Index {
     pub create_sql: String,
     pub plan_cx: PlanContext,
     pub on: GlobalId,
-    pub keys: Vec<MirScalarExpr>,
+    pub fields: Vec<IndexField>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IndexField {
+    pub expr: MirScalarExpr,
+    pub nullable: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -595,11 +601,14 @@ impl Catalog {
                             },
                             CatalogItem::Index(Index {
                                 on: log.id,
-                                keys: log
+                                fields: log
                                     .variant
                                     .index_by()
                                     .into_iter()
-                                    .map(MirScalarExpr::Column)
+                                    .map(|i| IndexField {
+                                        expr: MirScalarExpr::Column(i),
+                                        nullable: log.variant.desc().typ().column_types[i].nullable,
+                                    })
                                     .collect(),
                                 create_sql: super::coord::index_sql(
                                     index_name,
@@ -650,9 +659,12 @@ impl Catalog {
                             },
                             CatalogItem::Index(Index {
                                 on: table.id,
-                                keys: index_columns
+                                fields: index_columns
                                     .iter()
-                                    .map(|i| MirScalarExpr::Column(*i))
+                                    .map(|i| IndexField {
+                                        expr: MirScalarExpr::Column(*i),
+                                        nullable: table.desc.typ().column_types[*i].nullable,
+                                    })
                                     .collect(),
                                 create_sql: index_sql,
                                 plan_cx: PlanContext::default(),
@@ -1104,7 +1116,7 @@ impl Catalog {
                 self.indexes
                     .get_mut(&index.on)
                     .unwrap()
-                    .push((id, index.keys.clone()));
+                    .push((id, index.fields.iter().map(|f| f.expr.clone()).collect()));
             }
             CatalogItem::Func(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
         }
@@ -1629,24 +1641,11 @@ impl Catalog {
                             .position(|(idx_id, _keys)| *idx_id == id)
                             .expect("catalog out of sync");
                         indexes.remove(i);
-                        let nullable: Vec<bool> = index
-                            .keys
-                            .iter()
-                            .map(|key| {
-                                key.typ(self.get_by_id(&index.on).desc().unwrap().typ())
-                                    .nullable
-                            })
-                            .collect();
-                        Event::DroppedIndex {
-                            entry: metadata,
-                            nullable,
-                        }
-                    } else {
-                        self.indexes.remove(&id);
-                        Event::DroppedItem {
-                            schema_id,
-                            entry: metadata,
-                        }
+                    }
+                    self.indexes.remove(&id);
+                    Event::DroppedItem {
+                        schema_id,
+                        entry: metadata,
                     }
                 }
 
@@ -1775,14 +1774,24 @@ impl Catalog {
             }
             Plan::CreateIndex {
                 index, depends_on, ..
-            } => CatalogItem::Index(Index {
-                create_sql: index.create_sql,
-                plan_cx: pcx,
-                on: index.on,
-                keys: index.keys,
-                conn_id: None,
-                depends_on,
-            }),
+            } => {
+                let on_typ = self.get_by_id(&index.on).desc().unwrap().typ();
+                CatalogItem::Index(Index {
+                    create_sql: index.create_sql,
+                    plan_cx: pcx,
+                    on: index.on,
+                    fields: index
+                        .fields
+                        .into_iter()
+                        .map(|expr| IndexField {
+                            nullable: expr.typ(&on_typ).nullable,
+                            expr,
+                        })
+                        .collect(),
+                    conn_id: None,
+                    depends_on,
+                })
+            }
             Plan::CreateSink {
                 sink,
                 with_snapshot,
@@ -1990,10 +1999,6 @@ pub enum Event {
         name: String,
         id: i64,
         oid: u32,
-    },
-    DroppedIndex {
-        entry: CatalogEntry,
-        nullable: Vec<bool>,
     },
     DroppedItem {
         schema_id: i64,
@@ -2375,14 +2380,6 @@ impl sql::catalog::CatalogItem for CatalogEntry {
 
     fn item_type(&self) -> SqlCatalogItemType {
         self.item().typ()
-    }
-
-    fn index_details(&self) -> Option<(&[MirScalarExpr], GlobalId)> {
-        if let CatalogItem::Index(Index { keys, on, .. }) = self.item() {
-            Some((keys, *on))
-        } else {
-            None
-        }
     }
 
     fn table_details(&self) -> Option<&[Expr<Raw>]> {

@@ -552,7 +552,7 @@ pub struct CreateIndexStatement<T: AstInfo> {
     pub on_name: UnresolvedObjectName,
     /// Expressions that form part of the index key. If not included, the
     /// key_parts will be inferred from the named object.
-    pub key_parts: Option<Vec<Expr<T>>>,
+    pub fields: Option<Vec<Expr<T>>>,
     pub with_options: Vec<WithOption>,
     pub if_not_exists: bool,
 }
@@ -560,7 +560,7 @@ pub struct CreateIndexStatement<T: AstInfo> {
 impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
         f.write_str("CREATE ");
-        if self.key_parts.is_none() {
+        if self.fields.is_none() {
             f.write_str("DEFAULT ");
         }
         f.write_str("INDEX ");
@@ -573,9 +573,9 @@ impl<T: AstInfo> AstDisplay for CreateIndexStatement<T> {
         }
         f.write_str("ON ");
         f.write_node(&self.on_name);
-        if let Some(key_parts) = &self.key_parts {
+        if let Some(fields) = &self.fields {
             f.write_str(" (");
-            f.write_node(&display::comma_separated(key_parts));
+            f.write_node(&display::comma_separated(fields));
             f.write_str(")");
         }
         if !self.with_options.is_empty() {
