@@ -1082,8 +1082,8 @@ impl Catalog {
         }
 
         let entry = CatalogEntry {
-            item: item.clone(),
-            name: name.clone(),
+            item,
+            name,
             id,
             oid,
             used_by: Vec::new(),
@@ -1123,15 +1123,9 @@ impl Catalog {
         }
 
         self.by_oid.insert(oid, entry.id);
-        self.by_id.insert(entry.id, entry);
+        self.by_id.insert(entry.id, entry.clone());
 
-        Event::CreatedItem {
-            schema_id,
-            id,
-            oid,
-            name,
-            item,
-        }
+        Event::CreatedItem { schema_id, entry }
     }
 
     pub fn drop_database_ops(&mut self, name: String) -> Vec<Op> {
@@ -1276,7 +1270,6 @@ impl Catalog {
             DropItem(GlobalId),
             UpdateItem {
                 id: GlobalId,
-                from_name: Option<FullName>,
                 to_name: FullName,
                 item: CatalogItem,
             },
@@ -1486,7 +1479,6 @@ impl Catalog {
 
                         actions.push(Action::UpdateItem {
                             id: id.clone(),
-                            from_name: None,
                             to_name: dependent_item.name.clone(),
                             item: updated_item,
                         });
@@ -1496,7 +1488,6 @@ impl Catalog {
                     }
                     actions.push(Action::UpdateItem {
                         id,
-                        from_name: Some(entry.name.clone()),
                         to_name: to_full_name,
                         item,
                     });
@@ -1661,37 +1652,30 @@ impl Catalog {
                     }
                 }
 
-                Action::UpdateItem {
-                    id,
-                    from_name,
-                    to_name,
-                    item,
-                } => {
-                    let mut entry = self.by_id.remove(&id).unwrap();
-                    info!("update {} {} ({})", entry.item_type(), entry.name, id);
-                    assert_eq!(entry.uses(), item.uses());
-                    let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
+                Action::UpdateItem { id, to_name, item } => {
+                    let old_entry = self.by_id.remove(&id).unwrap();
+                    info!(
+                        "update {} {} ({})",
+                        old_entry.item_type(),
+                        old_entry.name,
+                        id
+                    );
+                    assert_eq!(old_entry.uses(), item.uses());
+                    let conn_id = old_entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
                     let schema = &mut self
-                        .get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
+                        .get_schema_mut(&old_entry.name.database, &old_entry.name.schema, conn_id)
                         .expect("catalog out of sync");
                     let schema_id = schema.id;
-                    schema.items.remove(&entry.name.item);
-                    entry.name = to_name.clone();
-                    entry.item = item.clone();
-                    schema.items.insert(entry.name.item.clone(), id);
-                    let oid = entry.oid();
-                    self.by_id.insert(id, entry);
-
-                    match from_name {
-                        Some(from_name) => Event::UpdatedItem {
-                            schema_id,
-                            id,
-                            oid,
-                            from_name,
-                            to_name,
-                            item,
-                        },
-                        None => Event::NoOp, // If name didn't change, don't update system tables.
+                    schema.items.remove(&old_entry.name.item);
+                    let mut new_entry = old_entry.clone();
+                    new_entry.name = to_name;
+                    new_entry.item = item;
+                    schema.items.insert(new_entry.name.item.clone(), id);
+                    self.by_id.insert(id, new_entry.clone());
+                    Event::UpdatedItem {
+                        schema_id,
+                        old_entry,
+                        new_entry,
                     }
                 }
             })
@@ -1991,10 +1975,7 @@ pub enum Event {
     },
     CreatedItem {
         schema_id: i64,
-        id: GlobalId,
-        oid: u32,
-        name: FullName,
-        item: CatalogItem,
+        entry: CatalogEntry,
     },
     DroppedDatabase {
         name: String,
@@ -2022,11 +2003,8 @@ pub enum Event {
     },
     UpdatedItem {
         schema_id: i64,
-        id: GlobalId,
-        oid: u32,
-        from_name: FullName,
-        to_name: FullName,
-        item: CatalogItem,
+        old_entry: CatalogEntry,
+        new_entry: CatalogEntry,
     },
     NoOp,
 }
