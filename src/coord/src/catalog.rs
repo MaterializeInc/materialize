@@ -51,13 +51,16 @@ use crate::session::Session;
 
 mod config;
 mod error;
+mod metrics;
 mod migrate;
+mod table_updates;
 
 pub mod builtin;
 pub mod storage;
 
 pub use crate::catalog::config::Config;
 pub use crate::catalog::error::Error;
+pub use crate::catalog::table_updates::BuiltinTableUpdate;
 
 const SYSTEM_CONN_ID: u32 = 0;
 const SYSTEM_USER: &str = "mz_system";
@@ -460,9 +463,9 @@ impl CatalogEntry {
 impl Catalog {
     /// Opens or creates a catalog that stores data at `path`.
     ///
-    /// Returns the catalog and a list of events that describe the initial state
-    /// of the catalog.
-    pub fn open(config: &Config) -> Result<(Catalog, Vec<Event>), Error> {
+    /// Returns the catalog and a list of updates to builtin tables that
+    /// describe the initial state of the catalog.
+    pub fn open(config: &Config) -> Result<(Catalog, Vec<BuiltinTableUpdate>), Error> {
         let (storage, experimental_mode, cluster_id) = storage::Connection::open(&config)?;
 
         let mut catalog = Catalog {
@@ -489,7 +492,6 @@ impl Catalog {
                 timestamp_frequency: config.timestamp_frequency,
             },
         };
-        let mut events = vec![];
 
         catalog.create_temporary_schema(SYSTEM_CONN_ID)?;
 
@@ -505,19 +507,18 @@ impl Catalog {
                     schemas: BTreeMap::new(),
                 },
             );
-            events.push(Event::CreatedDatabase { name, id, oid });
         }
 
         let schemas = catalog.storage().load_schemas()?;
         for (id, database_name, schema_name) in schemas {
             let oid = catalog.allocate_oid()?;
-            let (database_id, schemas) = match &database_name {
+            let schemas = match &database_name {
                 Some(database_name) => catalog
                     .by_name
                     .get_mut(database_name)
-                    .map(|db| (Some(db.id), &mut db.schemas))
+                    .map(|db| &mut db.schemas)
                     .expect("catalog out of sync"),
-                None => (None, &mut catalog.ambient_schemas),
+                None => &mut catalog.ambient_schemas,
             };
             schemas.insert(
                 schema_name.clone(),
@@ -532,12 +533,6 @@ impl Catalog {
                     functions: BTreeMap::new(),
                 },
             );
-            events.push(Event::CreatedSchema {
-                database_id,
-                schema_id: id,
-                schema_name,
-                oid,
-            })
         }
 
         let roles = catalog.storage().load_roles()?;
@@ -552,7 +547,6 @@ impl Catalog {
                     oid,
                 },
             );
-            events.push(Event::CreatedRole { name, id, oid });
         }
 
         for builtin in BUILTINS.values() {
@@ -571,7 +565,7 @@ impl Catalog {
                     }
                     .lower();
                     let optimized_expr = OptimizedMirRelationExpr::declare_optimized(expr);
-                    events.push(catalog.insert_item(
+                    catalog.insert_item(
                         log.id,
                         oid,
                         name.clone(),
@@ -583,36 +577,34 @@ impl Catalog {
                             bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
                         }),
-                    ));
+                    );
                     let oid = catalog.allocate_oid()?;
-                    events.push(
-                        catalog.insert_item(
-                            log.index_id,
-                            oid,
-                            FullName {
-                                database: DatabaseSpecifier::Ambient,
-                                schema: MZ_CATALOG_SCHEMA.into(),
-                                item: index_name.clone(),
-                            },
-                            CatalogItem::Index(Index {
-                                on: log.id,
-                                keys: log
-                                    .variant
-                                    .index_by()
-                                    .into_iter()
-                                    .map(MirScalarExpr::Column)
-                                    .collect(),
-                                create_sql: super::coord::index_sql(
-                                    index_name,
-                                    name,
-                                    &log.variant.desc(),
-                                    &log.variant.index_by(),
-                                ),
-                                plan_cx: PlanContext::default(),
-                                conn_id: None,
-                                depends_on: vec![log.id],
-                            }),
-                        ),
+                    catalog.insert_item(
+                        log.index_id,
+                        oid,
+                        FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: MZ_CATALOG_SCHEMA.into(),
+                            item: index_name.clone(),
+                        },
+                        CatalogItem::Index(Index {
+                            on: log.id,
+                            keys: log
+                                .variant
+                                .index_by()
+                                .into_iter()
+                                .map(MirScalarExpr::Column)
+                                .collect(),
+                            create_sql: super::coord::index_sql(
+                                index_name,
+                                name,
+                                &log.variant.desc(),
+                                &log.variant.index_by(),
+                            ),
+                            plan_cx: PlanContext::default(),
+                            conn_id: None,
+                            depends_on: vec![log.id],
+                        }),
                     );
                 }
 
@@ -626,7 +618,7 @@ impl Catalog {
                         &index_columns,
                     );
                     let oid = catalog.allocate_oid()?;
-                    events.push(catalog.insert_item(
+                    catalog.insert_item(
                         table.id,
                         oid,
                         name.clone(),
@@ -638,29 +630,27 @@ impl Catalog {
                             conn_id: None,
                             depends_on: vec![],
                         }),
-                    ));
+                    );
                     let oid = catalog.allocate_oid()?;
-                    events.push(
-                        catalog.insert_item(
-                            table.index_id,
-                            oid,
-                            FullName {
-                                database: DatabaseSpecifier::Ambient,
-                                schema: MZ_CATALOG_SCHEMA.into(),
-                                item: index_name,
-                            },
-                            CatalogItem::Index(Index {
-                                on: table.id,
-                                keys: index_columns
-                                    .iter()
-                                    .map(|i| MirScalarExpr::Column(*i))
-                                    .collect(),
-                                create_sql: index_sql,
-                                plan_cx: PlanContext::default(),
-                                conn_id: None,
-                                depends_on: vec![table.id],
-                            }),
-                        ),
+                    catalog.insert_item(
+                        table.index_id,
+                        oid,
+                        FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: MZ_CATALOG_SCHEMA.into(),
+                            item: index_name,
+                        },
+                        CatalogItem::Index(Index {
+                            on: table.id,
+                            keys: index_columns
+                                .iter()
+                                .map(|i| MirScalarExpr::Column(*i))
+                                .collect(),
+                            create_sql: index_sql,
+                            plan_cx: PlanContext::default(),
+                            conn_id: None,
+                            depends_on: vec![table.id],
+                        }),
                     );
                 }
 
@@ -677,11 +667,11 @@ impl Catalog {
                             )
                         });
                     let oid = catalog.allocate_oid()?;
-                    events.push(catalog.insert_item(view.id, oid, name, item));
+                    catalog.insert_item(view.id, oid, name, item);
                 }
 
                 Builtin::Type(typ) => {
-                    events.push(catalog.insert_item(
+                    catalog.insert_item(
                         typ.id,
                         typ.oid(),
                         FullName {
@@ -704,12 +694,12 @@ impl Catalog {
                             },
                             depends_on: vec![],
                         }),
-                    ));
+                    );
                 }
 
                 Builtin::Func(func) => {
                     let oid = catalog.allocate_oid()?;
-                    events.push(catalog.insert_item(
+                    catalog.insert_item(
                         func.id,
                         oid,
                         name.clone(),
@@ -717,7 +707,7 @@ impl Catalog {
                             plan_cx: PlanContext::default(),
                             inner: func.inner,
                         }),
-                    ));
+                    );
                 }
 
                 _ => (),
@@ -739,18 +729,38 @@ impl Catalog {
                 .set_catalog_content_version(catalog_content_version)?;
         }
 
-        let (catalog, extra_events) = Self::load_catalog_items(catalog)?;
-        events.extend(extra_events.into_iter());
+        let catalog = Self::load_catalog_items(catalog)?;
 
-        Ok((catalog, events))
+        let mut builtin_table_updates = vec![];
+        for (schema_name, schema) in &catalog.ambient_schemas {
+            let db_spec = DatabaseSpecifier::Ambient;
+            builtin_table_updates.push(catalog.pack_schema_update(&db_spec, schema_name, 1));
+            for (_item_name, item_id) in &schema.items {
+                builtin_table_updates.extend(catalog.pack_item_update(*item_id, 1));
+            }
+        }
+        for (db_name, db) in &catalog.by_name {
+            builtin_table_updates.push(catalog.pack_database_update(db_name, 1));
+            let db_spec = DatabaseSpecifier::Name(db_name.clone());
+            for (schema_name, schema) in &db.schemas {
+                builtin_table_updates.push(catalog.pack_schema_update(&db_spec, schema_name, 1));
+                for (_item_name, item_id) in &schema.items {
+                    builtin_table_updates.extend(catalog.pack_item_update(*item_id, 1));
+                }
+            }
+        }
+        for (role_name, _role) in &catalog.roles {
+            builtin_table_updates.push(catalog.pack_role_update(role_name, 1));
+        }
+
+        Ok((catalog, builtin_table_updates))
     }
 
     // Takes a catalog which only has items in its on-disk storage ("unloaded")
     // and cannot yet resolve names, and returns a catalog loaded with those
     // items.
     // TODO(justin): it might be nice if these were two different types.
-    pub fn load_catalog_items(mut c: Catalog) -> Result<(Catalog, Vec<Event>), Error> {
-        let mut events = Vec::new();
+    pub fn load_catalog_items(mut c: Catalog) -> Result<Catalog, Error> {
         let items = c.storage().load_items()?;
         for (id, name, def) in items {
             // TODO(benesch): a better way of detecting when a view has depended
@@ -775,9 +785,9 @@ impl Catalog {
                 }
             };
             let oid = c.allocate_oid()?;
-            events.push(c.insert_item(id, oid, name, item));
+            c.insert_item(id, oid, name, item);
         }
-        Ok((c, events))
+        Ok(c)
     }
 
     /// Opens the catalog at `path` with parameters set appropriately for debug
@@ -1069,14 +1079,7 @@ impl Catalog {
         }
     }
 
-    #[must_use]
-    pub fn insert_item(
-        &mut self,
-        id: GlobalId,
-        oid: u32,
-        name: FullName,
-        item: CatalogItem,
-    ) -> Event {
+    pub fn insert_item(&mut self, id: GlobalId, oid: u32, name: FullName, item: CatalogItem) {
         if !id.is_system() && !item.is_placeholder() {
             info!("create {} {} ({})", item.typ(), name, id);
         }
@@ -1115,7 +1118,6 @@ impl Catalog {
         let schema = self
             .get_schema_mut(&entry.name.database, &entry.name.schema, conn_id)
             .expect("catalog out of sync");
-        let schema_id = schema.id;
         if let CatalogItem::Func(_) = entry.item() {
             schema.functions.insert(entry.name.item.clone(), entry.id);
         } else {
@@ -1124,8 +1126,6 @@ impl Catalog {
 
         self.by_oid.insert(oid, entry.id);
         self.by_id.insert(entry.id, entry.clone());
-
-        Event::CreatedItem { schema_id, entry }
     }
 
     pub fn drop_database_ops(&mut self, name: String) -> Vec<Op> {
@@ -1229,7 +1229,7 @@ impl Catalog {
         Ok(temporary_ids)
     }
 
-    pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<Event>, Error> {
+    pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<BuiltinTableUpdate>, Error> {
         trace!("transact: {:?}", ops);
 
         #[derive(Debug, Clone)]
@@ -1293,6 +1293,7 @@ impl Catalog {
             })
             .collect();
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
+        let mut builtin_table_updates = vec![];
         let mut actions = Vec::with_capacity(ops.len());
         let mut storage = self.storage();
         let mut tx = storage.transaction()?;
@@ -1390,6 +1391,7 @@ impl Catalog {
                 }
                 Op::DropDatabase { name } => {
                     tx.remove_database(&name)?;
+                    builtin_table_updates.push(self.pack_database_update(&name, -1));
                     vec![Action::DropDatabase { name }]
                 }
                 Op::DropSchema {
@@ -1403,6 +1405,11 @@ impl Catalog {
                         }
                     };
                     tx.remove_schema(database_id, &schema_name)?;
+                    builtin_table_updates.push(self.pack_schema_update(
+                        &DatabaseSpecifier::Name(database_name.clone()),
+                        &schema_name,
+                        -1,
+                    ));
                     vec![Action::DropSchema {
                         database_name,
                         schema_name,
@@ -1410,6 +1417,7 @@ impl Catalog {
                 }
                 Op::DropRole { name } => {
                     tx.remove_role(&name)?;
+                    builtin_table_updates.push(self.pack_role_update(&name, -1));
                     vec![Action::DropRole { name }]
                 }
                 Op::DropItem(id) => {
@@ -1428,6 +1436,7 @@ impl Catalog {
                     }
                     if !entry.item().is_temporary() {
                         tx.remove_item(id)?;
+                        builtin_table_updates.extend(self.pack_item_update(id, -1));
                     }
                     vec![Action::DropItem(id)]
                 }
@@ -1485,6 +1494,7 @@ impl Catalog {
                     }
                     if !item.is_temporary() {
                         tx.update_item(id.clone(), &to_full_name.item, &serialized_item)?;
+                        builtin_table_updates.extend(self.pack_item_update(id, -1));
                     }
                     actions.push(Action::UpdateItem {
                         id,
@@ -1498,9 +1508,8 @@ impl Catalog {
         tx.commit()?;
         drop(storage); // release immutable borrow on `self` so we can borrow mutably below
 
-        Ok(actions
-            .into_iter()
-            .map(|action| match action {
+        for action in actions {
+            match action {
                 Action::CreateDatabase { id, oid, name } => {
                     info!("create database {}", name);
                     self.by_name.insert(
@@ -1512,7 +1521,7 @@ impl Catalog {
                             schemas: BTreeMap::new(),
                         },
                     );
-                    Event::CreatedDatabase { name, id, oid }
+                    builtin_table_updates.push(self.pack_database_update(&name, 1));
                 }
 
                 Action::CreateSchema {
@@ -1527,7 +1536,7 @@ impl Catalog {
                         schema_name.clone(),
                         Schema {
                             name: SchemaName {
-                                database: DatabaseSpecifier::Name(database_name),
+                                database: DatabaseSpecifier::Name(database_name.clone()),
                                 schema: schema_name.clone(),
                             },
                             id,
@@ -1536,12 +1545,11 @@ impl Catalog {
                             functions: BTreeMap::new(),
                         },
                     );
-                    Event::CreatedSchema {
-                        database_id: Some(db.id),
-                        schema_id: id,
-                        schema_name,
-                        oid,
-                    }
+                    builtin_table_updates.push(self.pack_schema_update(
+                        &DatabaseSpecifier::Name(database_name.clone()),
+                        &schema_name,
+                        1,
+                    ));
                 }
 
                 Action::CreateRole { id, oid, name } => {
@@ -1554,7 +1562,7 @@ impl Catalog {
                             oid,
                         },
                     );
-                    Event::CreatedRole { name, id, oid }
+                    builtin_table_updates.push(self.pack_role_update(&name, 1));
                 }
 
                 Action::CreateItem {
@@ -1562,50 +1570,39 @@ impl Catalog {
                     oid,
                     name,
                     item,
-                } => self.insert_item(id, oid, name, item),
+                } => {
+                    metrics::item_created(id, &item);
+                    let is_temporary = item.is_temporary();
+                    self.insert_item(id, oid, name, item);
+                    if !is_temporary {
+                        builtin_table_updates.extend(self.pack_item_update(id, 1));
+                    }
+                }
 
-                Action::DropDatabase { name } => match self.by_name.remove(&name) {
-                    Some(db) => Event::DroppedDatabase {
-                        name,
-                        id: db.id,
-                        oid: db.oid,
-                    },
-                    None => Event::NoOp,
-                },
+                Action::DropDatabase { name } => {
+                    self.by_name.remove(&name);
+                }
 
                 Action::DropSchema {
                     database_name,
                     schema_name,
                 } => {
                     let db = self.by_name.get_mut(&database_name).unwrap();
-                    match db.schemas.remove(&schema_name) {
-                        Some(schema) => Event::DroppedSchema {
-                            database_id: db.id,
-                            schema_id: schema.id,
-                            schema_name,
-                            oid: schema.oid,
-                        },
-                        None => Event::NoOp,
-                    }
+                    db.schemas.remove(&schema_name);
                 }
 
-                Action::DropRole { name } => match self.roles.remove(&name) {
-                    Some(role) => {
+                Action::DropRole { name } => {
+                    if self.roles.remove(&name).is_some() {
                         info!("drop role {}", name);
-                        Event::DroppedRole {
-                            name,
-                            id: role.id,
-                            oid: role.oid,
-                        }
                     }
-                    None => Event::NoOp,
-                },
+                }
 
                 Action::DropItem(id) => {
                     let metadata = self.by_id.remove(&id).unwrap();
                     if !metadata.item.is_placeholder() {
                         info!("drop {} {} ({})", metadata.item_type(), metadata.name, id);
                     }
+                    metrics::item_dropped(id, &metadata.item);
                     for u in metadata.uses() {
                         if let Some(dep_metadata) = self.by_id.get_mut(&u) {
                             dep_metadata.used_by.retain(|u| *u != metadata.id)
@@ -1616,7 +1613,6 @@ impl Catalog {
                     let schema = self
                         .get_schema_mut(&metadata.name.database, &metadata.name.schema, conn_id)
                         .expect("catalog out of sync");
-                    let schema_id = schema.id;
                     schema
                         .items
                         .remove(&metadata.name.item)
@@ -1631,25 +1627,8 @@ impl Catalog {
                             .position(|(idx_id, _keys)| *idx_id == id)
                             .expect("catalog out of sync");
                         indexes.remove(i);
-                        let nullable: Vec<bool> = index
-                            .keys
-                            .iter()
-                            .map(|key| {
-                                key.typ(self.get_by_id(&index.on).desc().unwrap().typ())
-                                    .nullable
-                            })
-                            .collect();
-                        Event::DroppedIndex {
-                            entry: metadata,
-                            nullable,
-                        }
-                    } else {
-                        self.indexes.remove(&id);
-                        Event::DroppedItem {
-                            schema_id,
-                            entry: metadata,
-                        }
                     }
+                    self.indexes.remove(&id);
                 }
 
                 Action::UpdateItem { id, to_name, item } => {
@@ -1665,21 +1644,18 @@ impl Catalog {
                     let schema = &mut self
                         .get_schema_mut(&old_entry.name.database, &old_entry.name.schema, conn_id)
                         .expect("catalog out of sync");
-                    let schema_id = schema.id;
                     schema.items.remove(&old_entry.name.item);
                     let mut new_entry = old_entry.clone();
                     new_entry.name = to_name;
                     new_entry.item = item;
                     schema.items.insert(new_entry.name.item.clone(), id);
                     self.by_id.insert(id, new_entry.clone());
-                    Event::UpdatedItem {
-                        schema_id,
-                        old_entry,
-                        new_entry,
-                    }
+                    builtin_table_updates.extend(self.pack_item_update(id, 1));
                 }
-            })
-            .collect())
+            }
+        }
+
+        Ok(builtin_table_updates)
     }
 
     fn serialize_item(&self, item: &CatalogItem) -> Vec<u8> {
@@ -1908,6 +1884,10 @@ impl Catalog {
     pub fn config(&self) -> &sql::catalog::CatalogConfig {
         &self.config
     }
+
+    pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.by_id.values()
+    }
 }
 
 fn is_reserved_name(name: &str) -> bool {
@@ -1953,60 +1933,6 @@ pub enum Op {
         id: GlobalId,
         to_name: String,
     },
-}
-
-#[derive(Debug, Clone)]
-pub enum Event {
-    CreatedDatabase {
-        name: String,
-        id: i64,
-        oid: u32,
-    },
-    CreatedSchema {
-        database_id: Option<i64>,
-        schema_id: i64,
-        schema_name: String,
-        oid: u32,
-    },
-    CreatedRole {
-        name: String,
-        id: i64,
-        oid: u32,
-    },
-    CreatedItem {
-        schema_id: i64,
-        entry: CatalogEntry,
-    },
-    DroppedDatabase {
-        name: String,
-        id: i64,
-        oid: u32,
-    },
-    DroppedSchema {
-        database_id: i64,
-        schema_id: i64,
-        schema_name: String,
-        oid: u32,
-    },
-    DroppedRole {
-        name: String,
-        id: i64,
-        oid: u32,
-    },
-    DroppedIndex {
-        entry: CatalogEntry,
-        nullable: Vec<bool>,
-    },
-    DroppedItem {
-        schema_id: i64,
-        entry: CatalogEntry,
-    },
-    UpdatedItem {
-        schema_id: i64,
-        old_entry: CatalogEntry,
-        new_entry: CatalogEntry,
-    },
-    NoOp,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

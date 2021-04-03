@@ -326,7 +326,7 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
     //
     // Introduced for v0.7.1
     |catalog: &mut Catalog| {
-        let (cat, _) = Catalog::load_catalog_items(catalog.clone())?;
+        let cat = Catalog::load_catalog_items(catalog.clone())?;
         let cat = cat.for_system_session();
 
         let items = catalog.storage().load_items()?;
