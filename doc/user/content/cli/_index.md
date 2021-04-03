@@ -20,6 +20,7 @@ Flag | Default | Modifies
 [`--introspection-frequency`](#introspection-sources) | 1s | The frequency at which to update [introspection sources](#introspection-sources).
 [`--listen-addr`](#listen-address) | `0.0.0.0:6875` | Materialize node's host and port
 [`-l`](#compaction-window) / [`--logical-compaction-window`](#compaction-window) | 1ms | The amount of historical detail to retain in arrangements
+[`--log-filter`](#logging) | `info` | Which log messages to emit.
 [`--timely-progress-mode`](#dataflow-tuning) | demand | *Advanced.* Timely progress tracking mode.
 [`--tls-ca`](#tls-encryption) | N/A | Path to TLS certificate authority (CA) {{< version-added v0.7.1 />}}
 [`--tls-cert`](#tls-encryption) | N/A | Path to TLS certificate file
@@ -123,6 +124,34 @@ time for the configured duration. The default window is 1 millisecond.
 
 See the [Deployment section](/ops/deployment#compaction) for guidance on tuning
 the compaction window.
+
+### Logging
+
+{{< version-added 0.7.2 />}}
+
+The `--log-filter` option specifies which log messages Materialize will emit.
+Its value is a comma-separated list of filter directives. Each filter directive
+has the following format:
+
+```
+[module::path=]level
+```
+
+A filter directive registers interest in log messages from the specified module
+that are at least as severe as the specified level. If a directive omits the
+module, then it implicitly applies to all modules. When directives conflict, the
+last directive wins. Materialize will only emit log messages that match at least
+one filter directive.
+
+The module path of a log message reflects its location in Materialize's source
+code. Specifying module paths in filter directives requires familiarity with
+Materialize's codebase and is intended for advanced users. Note that module
+paths change frequency from release to release and are not considered part of
+Materialize's stable interface.
+
+The valid levels for a log message are, in increasing order of severity:
+`trace`, `debug`, `info`, `warn`, and `error`. The special level `off` may be
+used in a directive to suppress all log messages, even errors.
 
 ### Introspection sources
 
