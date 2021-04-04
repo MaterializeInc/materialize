@@ -1075,7 +1075,7 @@ impl Catalog {
         name: FullName,
         item: CatalogItem,
     ) -> Event {
-        if !item.is_placeholder() {
+        if !id.is_system() && !item.is_placeholder() {
             info!("create {} {} ({})", item.typ(), name, id);
         }
 
