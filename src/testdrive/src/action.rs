@@ -70,6 +70,7 @@ pub struct Config {
     /// will connect to.
     pub materialized_pgconfig: tokio_postgres::Config,
     /// An optional path to the catalog file for the materialized instance.
+    ///
     /// If present, testdrive will periodically verify that the on-disk catalog
     /// matches its expectations.
     pub materialized_catalog_path: Option<PathBuf>,
@@ -77,14 +78,13 @@ pub struct Config {
     pub reset_materialized: bool,
     /// Emit Buildkite-specific markup.
     pub ci_output: bool,
-    /// Default timeout.
+    /// The default timeout to use for any operation that is retried.
     pub default_timeout: Duration,
-    /// A random number to distinguish each TestDrive run.
+    /// A random number to distinguish each run of a testdrive script.
     pub seed: Option<u32>,
 }
 
 pub struct State {
-    /// A random number to distinguish each TestDrive run
     seed: u32,
     temp_dir: tempfile::TempDir,
     materialized_catalog_path: Option<PathBuf>,
@@ -525,11 +525,7 @@ fn substitute_vars(msg: &str, vars: &HashMap<String, String>) -> Result<String, 
 pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), Error>>), Error> {
-    let seed = if let Some(s) = config.seed {
-        s
-    } else {
-        rand::thread_rng().gen()
-    };
+    let seed = config.seed.unwrap_or_else(|| rand::thread_rng().gen());
 
     let temp_dir = tempfile::tempdir().err_ctx("creating temporary directory")?;
 

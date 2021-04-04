@@ -98,44 +98,40 @@ async fn main() {
 async fn run(args: Args) -> Result<(), Error> {
     let default_timeout = Duration::from_secs_f64(args.default_timeout);
 
-    let (aws_region, aws_account, aws_credentials) =
-        match (args.aws_region.parse(), args.aws_endpoint) {
-            (Ok(region), None) => {
-                // Standard region, which means we should ignore the endpoint, whether
-                // or not it was provided.
-                let region: rusoto_core::Region = region;
-
-                let mut provider = ChainProvider::new();
-                provider.set_timeout(default_timeout);
-                let credentials = provider
-                    .credentials()
-                    .await
-                    .err_ctx("Retrieving aws credentials")?;
-                let account = aws::account(provider, region.clone(), default_timeout)
-                    .await
-                    .err_ctx("getting AWS account details")?;
-                (region, account, credentials)
-            }
-            (_, aws_endpoint) => {
-                // The user specified a non-standard AWS region, a custom endpoint, or
-                // both. We instruct Rusoto to use these values by constructing an
-                // appropriate Region::Custom. We additionally assume we're targeting a
-                // stubbed-out AWS implementation that does not check authentication
-                // credentials, so we install dummy credentials in the default config.
-                let region = rusoto_core::Region::Custom {
-                    name: args.aws_region,
-                    endpoint: aws_endpoint.unwrap_or_else(|| "http://localhost:4566".into()),
-                };
-                let account = "000000000000";
-                let credentials = AwsCredentials::new(
-                    "dummy-access-key-id",
-                    "dummy-secret-access-key",
-                    None,
-                    None,
-                );
-                (region, account.into(), credentials)
-            }
-        };
+    let (aws_region, aws_account, aws_credentials) = match (
+        args.aws_region.parse::<rusoto_core::Region>(),
+        args.aws_endpoint,
+    ) {
+        (Ok(region), None) => {
+            // Standard AWS region without a custom endpoint. Try to find actual
+            // AWS credentials.
+            let mut provider = ChainProvider::new();
+            provider.set_timeout(default_timeout);
+            let credentials = provider
+                .credentials()
+                .await
+                .err_ctx("retrieving AWS credentials")?;
+            let account = aws::account(provider, region.clone(), default_timeout)
+                .await
+                .err_ctx("getting AWS account details")?;
+            (region, account, credentials)
+        }
+        (_, aws_endpoint) => {
+            // The user specified a non-standard AWS region, a custom endpoint,
+            // or both. We instruct Rusoto to use these values by constructing
+            // an appropriate `Region::Custom`. We additionally assume we're
+            // targeting a stubbed-out AWS implementation that does not check
+            // authentication credentials, so we use dummy credentials.
+            let region = rusoto_core::Region::Custom {
+                name: args.aws_region,
+                endpoint: aws_endpoint.unwrap_or_else(|| "http://localhost:4566".into()),
+            };
+            let account = "000000000000";
+            let credentials =
+                AwsCredentials::new("dummy-access-key-id", "dummy-secret-access-key", None, None);
+            (region, account.into(), credentials)
+        }
+    };
 
     println!(
         "Configuration parameters:
