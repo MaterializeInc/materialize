@@ -6,7 +6,7 @@ menu:
     parent: 'sql-functions'
 ---
 
-The `cast` function and operator return a value converted to the specified type.
+The `cast` function and operator return a value converted to the specified [type](../../types/).
 
 ## Signatures
 
@@ -35,71 +35,88 @@ Casts may be:
 
 * **Implicit** -- Values are automatically converted (for example, when you add `int4` to `int8`, the `int4` value is automatically converted to `int8`)
 * **Explicit** -- You must invoke `CAST` deliberately
-* **Assignment** -- Value of one type are converted automatically when inserted into a column of a different type
+* **Assignment** -- Values of one type are converted automatically when inserted into a column of a different type
 
 Casts that occur implicitly or by assignment can also be explicitly invoked.
 
 Source type | Return type | Cast type(s)
 ------------|-------------|----------
-`bool`  |  `int` | explicit
-`bool`  | `text`  | assignment
-`bytea`  | `text` | assignment
-`int` | `boolean` | explicit
-`int` | `oid` | implicit
-`int`  | `int64`  |  implicit
-`int` | `float` | implicit
-`int` | `decimal` | implicit
-`int` | `text` | assignment
-`int64`  |   |
-`float`| `int` | assignment
-`float`| `decimal`<sup>1</sup> | assignment
-`float`| `text` | assignment
-`decimal` | `int` | assignment
-`decimal` | `float` | implicit
-`decimal` | `text` | assignment
-`decimal`  | `decimal`   |
-`date` | `timestamp` | implicit
-`date` | `timestamptz` | implicit
-`date` | `text` | assignment
-`list` | `text` | assingment
-`list` | `list` | implicit
-`time` | `interval` | implicit
-`time` | `text` | assignment
-`timestamp`  | `date` | assignment
-`timestamp`  | `text` | assignment
-`timestamp`  | `timestamptz` | implicit
-`timestamptz`  | `date` | assignment
-`timestamptz`  | `text` | assignment
-`timestamptz`  | `timestamp` | implicit
-`interval` | `time` | assignment
-`interval` | `text` | assignment
-`text` | `bool` | explicit
-`text` | `int` | explicit
-`text` | `oid` | explicit
-`text` | `float` | explicit
-`text` | `decimal` | explicit
-`text` | `numeric` | ?same as decimal?
-`text` | `date` | explicit
-`text` | `time` | explicit
-`text` | `timestamp` | explicit
-`text` | `timestamptz` | explicit
-`text` | `interval` | explicit
-`text` | `uuid` |
-`text` | `jsonb` |
-`text`  |  `bytea` | explicit
-`text` | `list` | explicit
-`text` | `map` | explicit
-`record` | `text` | assignment
-`array`  |  `text` |  assignment
-`map`  |  `text` |  assignment
-`jsonb`  | `bool`  |  explicit
-`jsonb`  | `int32`  |  explicit
-`jsonb`  | `int64`  |  explicit
-`jsonb`  | `float32`  |  explicit
-`jsonb`  | `float64`  |  explicit
-`jsonb`  | `decimal`  |  explicit
-`jsonb`  | `string`  |  assignment
-`uuid`  | `text`  |  assignment
+`array`  |  `text` |  Assignment
+`bigint`  |  `bool` |  Explicit
+`bigint`  |  `decimal` |  Implicit
+`bigint`  | `int`  |  Assignment
+`bigint`  | `float`  | Implicit
+`bigint`  | `real`  | Implicit
+`bigint`  | `text`  | Assignment
+`bool`  |  `int` | Explicit
+`bool`  | `text`  | Assignment
+`bytea`  | `text` | Assignment
+`date` | `text` | Assignment
+`date` | `timestamp` | Implicit
+`date` | `timestamptz` | Implicit
+`decimal`  | `bigint`  | Assignment
+`decimal` | `float` | Implicit
+`decimal` | `int` | Assignment
+`decimal`  | `real`  |  Implicit
+`decimal` | `text` | Assignment
+`float`| `bigint` | Assignment
+`float`| `decimal`<sup>1</sup> | Assignment
+`float`| `int` | Assignment
+`float`| `real` | Assignment
+`float`| `text` | Assignment
+`int`  | `bigint`  |  Implicit
+`int` | `boolean` | Explicit
+`int` | `decimal` | Implicit
+`int` | `float` | Implicit
+`int` | `oid` | Implicit
+`int`  | `real`  |  Implicit
+`int` | `text` | Assignment
+`interval` | `text` | Assignment
+`interval` | `time` | Assignment
+`jsonb`  | `bigint`  |  Explicit
+`jsonb`  | `bool`  |  Explicit
+`jsonb`  | `decimal`  |  Explicit
+`jsonb`  | `float`  |  Explicit
+`jsonb`  | `int`  |  Explicit
+`jsonb`  | `real`  |  Explicit
+`jsonb`  | `text`  |  Assignment
+`list` | `list` | Implicit
+`list` | `text` | Assignment
+`map`  |  `text` |  Assignment
+`oid`  |  `int` |  Assignment
+`oid`  |  `text` | Explicit
+`real`  |  `bigint` |  Assignment
+`real`  |  `decimal` |  Assignment
+`real`  |  `float` | Implicit
+`real`  |  `int` |  Assignment
+`real`  |  `text` | Assignment
+`record` | `text` | Assignment
+`text` | `bigint` | Explicit
+`text` | `bool` | Explicit
+`text`  | `bytea` | Explicit
+`text` | `date` | Explicit
+`text` | `decimal` | Explicit
+`text` | `float` | Explicit
+`text` | `int` | Explicit
+`text` | `interval` | Explicit
+`text` | `jsonb` | Explicit
+`text` | `list` | Explicit
+`text` | `map` | Explicit
+`text` | `oid` | Explicit
+`text`  | `real`   |  Explicit
+`text` | `time` | Explicit
+`text` | `timestamp` | Explicit
+`text` | `timestamptz` | Explicit
+`text` | `uuid` | Explicit
+`time` | `interval` | Implicit
+`time` | `text` | Assignment
+`timestamp`  | `date` | Assignment
+`timestamp`  | `text` | Assignment
+`timestamp`  | `timestamptz` | Implicit
+`timestamptz`  | `date` | Assignment
+`timestamptz`  | `text` | Assignment
+`timestamptz`  | `timestamp` | Assignment
+`uuid`  | `text`  |  Assignment
 
 <sup>1</sup> Casting a `float` to a `decimal` can yield an imprecise result due to the floating point arithmetic involved in the conversion.
 
@@ -135,3 +152,6 @@ SELECT 100.21::decimal(10, 2)::float AS dec_to_float;
 --------------
        100.21
 ```
+
+## Related topics
+* [Data Types](../../types/)
