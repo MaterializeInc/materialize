@@ -53,7 +53,7 @@ lazy_static = "1.4.0"
 libc = "0.2.92"
 log = "0.4.13"
 mz-process-collector = { path = "../mz-process-collector" }
-nix = "0.19.1"
+nix = "0.20.0"
 num_cpus = "1.0.0"
 openssl = { version = "0.10.33", features = ["vendored"] }
 openssl-sys = { version = "0.9.61", features = ["vendored"] }
