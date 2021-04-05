@@ -13,7 +13,6 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
-use std::env;
 use std::error::Error;
 use std::io::Write;
 use std::net::TcpListener;
@@ -25,20 +24,12 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use lazy_static::lazy_static;
 use log::info;
 use tempfile::NamedTempFile;
 
-use util::{MzTimestamp, PostgresErrorExt};
+use util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
-
-lazy_static! {
-    pub static ref KAFKA_ADDRS: kafka_util::KafkaAddrs = match env::var("KAFKA_ADDRS") {
-        Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
-        _ => "localhost:9092".parse().unwrap(),
-    };
-}
 
 #[test]
 fn test_no_block() -> Result<(), Box<dyn Error>> {

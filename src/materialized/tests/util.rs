@@ -8,13 +8,14 @@
 // by the Apache License, Version 2.0.
 
 use std::convert::TryInto;
+use std::env;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use materialized::TlsMode;
+use lazy_static::lazy_static;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
@@ -22,12 +23,22 @@ use postgres::Socket;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
+use materialized::TlsMode;
+
+lazy_static! {
+    pub static ref KAFKA_ADDRS: kafka_util::KafkaAddrs = match env::var("KAFKA_ADDRS") {
+        Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
+        _ => "localhost:9092".parse().unwrap(),
+    };
+}
+
 #[derive(Clone)]
 pub struct Config {
     data_directory: Option<PathBuf>,
     logging_granularity: Option<Duration>,
     tls: Option<materialized::TlsConfig>,
     experimental_mode: bool,
+    safe_mode: bool,
     workers: usize,
 }
 
@@ -38,6 +49,7 @@ impl Default for Config {
             logging_granularity: Some(Duration::from_secs(1)),
             tls: None,
             experimental_mode: false,
+            safe_mode: false,
             workers: 1,
         }
     }
@@ -70,6 +82,11 @@ impl Config {
 
     pub fn experimental_mode(mut self) -> Self {
         self.experimental_mode = true;
+        self
+    }
+
+    pub fn safe_mode(mut self) -> Self {
+        self.safe_mode = true;
         self
     }
 
@@ -111,6 +128,7 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: config.tls,
             experimental_mode: config.experimental_mode,
+            safe_mode: config.safe_mode,
             telemetry_url: None,
         },
         runtime.clone(),
