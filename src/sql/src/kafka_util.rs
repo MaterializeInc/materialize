@@ -226,9 +226,10 @@ pub async fn test_config(
             not available: \"sasl.kerberos.keytab\""
                     {
                         bail!(
-                            "Can't seem to find local keytab cache. You must \
-                    provide explicit sasl_kerberos_keytab or \
-                    sasl_kerberos_kinit_cmd option."
+                            "Can't seem to find local keytab cache. With \
+                             sasl_mechanisms='GSSAPI', you must provide an \
+                             explicit sasl_kerberos_keytab or \
+                             sasl_kerberos_kinit_cmd option."
                         )
                     } else {
                         // Pass existing error back up.
