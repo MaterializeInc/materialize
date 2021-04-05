@@ -2016,9 +2016,9 @@ checksum = "c7d73b3f436185384286bd8098d17ec07c9a7d2388a6599f824d8502b529702a"
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.20.1"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64d31059f22935e6c31830db5249ba2b7ecd54fd73a9909286f0a67aa55c2fbd"
+checksum = "2f6332d94daa84478d55a6aa9dbb3b305ed6500fb0cb9400cb9e1525d0e0e188"
 dependencies = [
  "cc",
  "pkg-config",
@@ -3453,7 +3453,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.26.0"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#5d23e82a675d9df1bf343aedcaa35be864787dab"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#b4ec50e72e9b6d0199519092c4db4835315d91ba"
 dependencies = [
  "futures",
  "libc",
@@ -3469,7 +3469,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "4.0.0+1.6.1"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#5d23e82a675d9df1bf343aedcaa35be864787dab"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#b4ec50e72e9b6d0199519092c4db4835315d91ba"
 dependencies = [
  "cmake",
  "libc",
@@ -3729,9 +3729,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.24.2"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5f38ee71cbab2c827ec0ac24e76f82eca723cee92c509a65f67dee393c25112"
+checksum = "48381bf52627e7b0e02c4c0e4c0c88fc1cf2228a2eb7461d9499b1372399f1da"
 dependencies = [
  "bitflags",
  "fallible-iterator",
