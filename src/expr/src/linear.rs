@@ -305,6 +305,61 @@ impl MapFilterProject {
             x => (Self::new(x.arity()), x),
         }
     }
+
+    /// Extracts temporal predicates into their own `Self`.
+    ///
+    /// Expressions that are used by the temporal predicates are exposed by `self.projection`,
+    /// though there could be justification for extracting them as well if they are otherwise
+    /// unused.
+    ///
+    /// This separation is valuable when the execution cannot be fused into one operator.
+    pub fn extract_temporal(&mut self) -> Self {
+        // Assert that we have not in-lined any temporal statements.
+        // This should only be possible in memoization, where a guard prevents it.
+        assert!(!self.expressions.iter().any(|e| e.contains_temporal()));
+
+        // Extract temporal predicates from `self.predicates`.
+        let mut temporal_predicates = Vec::new();
+        self.predicates.retain(|(_position, predicate)| {
+            if predicate.contains_temporal() {
+                temporal_predicates.push(predicate.clone());
+                false
+            } else {
+                true
+            }
+        });
+
+        // Determine extended input columns used by temporal filters.
+        let mut support = HashSet::new();
+        for predicate in temporal_predicates.iter() {
+            support.extend(predicate.support());
+        }
+
+        // Discover the locations of these columns after `self.projection`.
+        let old_projection_len = self.projection.len();
+        let mut new_location = HashMap::with_capacity(support.len());
+        for original in support.iter() {
+            if let Some(position) = self.projection.iter().position(|x| x == original) {
+                new_location.insert(original, position);
+            } else {
+                new_location.insert(original, self.projection.len());
+                self.projection.push(*original);
+            }
+        }
+
+        // Form a new `Self` containing the temporal predicates to return.
+        Self::new(self.projection.len())
+            .filter(temporal_predicates)
+            .project(0..old_projection_len)
+    }
+
+    /// Convert the `MapFilterProject` into a staged evaluation plan.
+    ///
+    /// The main behavior is extract temporal predicates, which cannot be evaluated
+    /// using the standard machinery.
+    pub fn into_plan(self) -> Result<plan::MfpPlan, String> {
+        plan::MfpPlan::create_from(self)
+    }
 }
 
 impl MapFilterProject {
@@ -1047,4 +1102,277 @@ pub fn memoize_expr(
             }
         },
     )
+}
+
+pub mod plan {
+
+    use std::convert::TryFrom;
+
+    use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc};
+    use repr::{adt::decimal::Significand, Datum, RowArena, ScalarType};
+
+    /// Predicates partitioned into temporal and non-temporal.
+    ///
+    /// Temporal predicates require some recognition to determine their
+    /// structure, and it is best to do that once and re-use the results.
+    ///
+    /// There are restrictions on the temporal predicates we currently support.
+    /// They must directly constrain `MzLogicalTimestamp` from below or above,
+    /// by expressions that do not themselves contain `MzLogicalTimestamp`.
+    /// Conjunctions of such constraints are also ok.
+    #[derive(Debug)]
+    pub struct MfpPlan {
+        /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
+        mfp: MapFilterProject,
+        /// Expressions that when evaluated lower-bound `MzLogicalTimestamp`.
+        lower_bounds: Vec<MirScalarExpr>,
+        /// Expressions that when evaluated upper-bound `MzLogicalTimestamp`.
+        upper_bounds: Vec<MirScalarExpr>,
+    }
+
+    impl MfpPlan {
+        /// Partitions `predicates` into non-temporal, and lower and upper temporal bounds.
+        ///
+        /// The first returned list is of predicates that do not contain `mz_logical_timestamp`.
+        /// The second and third returned lists contain expressions that, once evaluated, lower
+        /// and upper bound the validity interval of a record, respectively. These second two
+        /// lists are populared only by binary expressions of the form
+        /// ```ignore
+        /// mz_logical_timestamp cmp_op expr
+        /// ```
+        /// where `cmp_op` is a comparison operator and `expr` does not contain `mz_logical_timestamp`.
+        ///
+        /// If any unsupported expression is found, for example one that uses `mz_logical_timestamp`
+        /// in an unsupported position, an error is returned.
+        pub(crate) fn create_from(mut mfp: MapFilterProject) -> Result<Self, String> {
+            let mut lower_bounds = Vec::new();
+            let mut upper_bounds = Vec::new();
+
+            let mut temporal = Vec::new();
+
+            mfp.predicates.retain(|(_position, predicate)| {
+                if predicate.contains_temporal() {
+                    temporal.push(predicate.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+
+            for predicate in temporal.into_iter() {
+                // Supported temporal predicates are exclusively binary operators.
+                if let MirScalarExpr::CallBinary {
+                    mut func,
+                    mut expr1,
+                    mut expr2,
+                } = predicate
+                {
+                    // Attempt to put `MzLogicalTimestamp` in the first argument position.
+                    if !expr1.contains_temporal()
+                        && *expr2 == MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
+                    {
+                        std::mem::swap(&mut expr1, &mut expr2);
+                        func = match func {
+                            BinaryFunc::Eq => BinaryFunc::Eq,
+                            BinaryFunc::Lt => BinaryFunc::Gt,
+                            BinaryFunc::Lte => BinaryFunc::Gte,
+                            BinaryFunc::Gt => BinaryFunc::Lt,
+                            BinaryFunc::Gte => BinaryFunc::Lte,
+                            x => {
+                                return Err(format!(
+                                    "Unsupported binary temporal operation: {:?}",
+                                    x
+                                ));
+                            }
+                        };
+                    }
+
+                    // Error if MLT is referenced in an unsuppported position.
+                    if expr2.contains_temporal()
+                        || *expr1 != MirScalarExpr::CallNullary(NullaryFunc::MzLogicalTimestamp)
+                    {
+                        return Err("Unsupported temporal predicate: `mz_logical_timestamp()` must be directly compared to a non-temporal expression ".to_string());
+                    }
+
+                    // We'll need to use this a fair bit.
+                    let decimal_one = MirScalarExpr::literal_ok(
+                        Datum::Decimal(Significand::new(1)),
+                        ScalarType::Decimal(38, 0),
+                    );
+
+                    // MzLogicalTimestamp <OP> <EXPR2> for several supported operators.
+                    match func {
+                        BinaryFunc::Eq => {
+                            // Lower bound of expr, upper bound of expr+1
+                            lower_bounds.push((*expr2).clone());
+                            upper_bounds
+                                .push(expr2.call_binary(decimal_one, BinaryFunc::AddDecimal));
+                        }
+                        BinaryFunc::Lt => {
+                            upper_bounds.push(*expr2);
+                        }
+                        BinaryFunc::Lte => {
+                            upper_bounds
+                                .push(expr2.call_binary(decimal_one, BinaryFunc::AddDecimal));
+                        }
+                        BinaryFunc::Gt => {
+                            lower_bounds
+                                .push(expr2.call_binary(decimal_one, BinaryFunc::AddDecimal));
+                        }
+                        BinaryFunc::Gte => {
+                            lower_bounds.push(*expr2);
+                        }
+                        _ => {
+                            return Err(format!(
+                                "Unsupported binary temporal operation: {:?}",
+                                func
+                            ));
+                        }
+                    }
+                } else {
+                    return Err("Unsupported temporal predicate: `mz_logical_timestamp()` must be directly compared to a non-temporal expression ".to_string());
+                }
+            }
+
+            Ok(Self {
+                mfp,
+                lower_bounds,
+                upper_bounds,
+            })
+        }
+
+        /// Evaluate the predicates, temporal and non-, and return times and differences for `data`.
+        ///
+        /// If `self` contains only non-temporal predicates, the result will either be `(time, diff)`,
+        /// or an evaluation error. If `self contains temporal predicates, the results can be times
+        /// that are greater than the input `time`, and may contain negated `diff` values.
+        pub fn evaluate<'b, 'a: 'b>(
+            &'a self,
+            datums: &'b mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+            time: repr::Timestamp,
+            diff: isize,
+        ) -> impl Iterator<Item = Result<(repr::Timestamp, isize), (EvalError, repr::Timestamp, isize)>>
+        {
+            match self.mfp.evaluate_inner(datums, &arena) {
+                Err(e) => {
+                    return Some(Err((e, time, diff)))
+                        .into_iter()
+                        .chain(None.into_iter());
+                }
+                Ok(true) => {}
+                Ok(false) => {
+                    return None.into_iter().chain(None.into_iter());
+                }
+            }
+
+            // In order to work with times, it is easiest to convert it to an i128.
+            // This is because our decimal type uses that representation, and going
+            // from i128 to u64 is even more painful.
+            let mut lower_bound_i128 = i128::from(time);
+            let mut upper_bound_i128 = None;
+
+            // Track whether we have seen a null in either bound, as this should
+            // prevent the record from being produced at any time.
+            let mut null_eval = false;
+
+            // Advance our lower bound to be at least the result of any lower bound
+            // expressions.
+            // TODO: This decimal stuff is brittle; let's hope the scale never changes.
+            for l in self.lower_bounds.iter() {
+                match l.eval(datums, &arena) {
+                    Err(e) => {
+                        return Some(Err((e, time, diff)))
+                            .into_iter()
+                            .chain(None.into_iter());
+                    }
+                    Ok(Datum::Decimal(s)) => {
+                        if lower_bound_i128 < s.as_i128() {
+                            lower_bound_i128 = s.as_i128();
+                        }
+                    }
+                    Ok(Datum::Null) => {
+                        null_eval = true;
+                    }
+                    x => {
+                        panic!("Non-decimal value in temporal predicate: {:?}", x);
+                    }
+                }
+            }
+
+            // If there are any upper bounds, determine the minimum upper bound.
+            for u in self.upper_bounds.iter() {
+                match u.eval(datums, &arena) {
+                    Err(e) => {
+                        return Some(Err((e, time, diff)))
+                            .into_iter()
+                            .chain(None.into_iter());
+                    }
+                    Ok(Datum::Decimal(s)) => {
+                        // Replace `upper_bound` if it is none
+                        if upper_bound_i128.is_none() || upper_bound_i128 > Some(s.as_i128()) {
+                            upper_bound_i128 = Some(s.as_i128());
+                        }
+                    }
+                    Ok(Datum::Null) => {
+                        null_eval = true;
+                    }
+                    x => {
+                        panic!("Non-decimal value in temporal predicate: {:?}", x);
+                    }
+                }
+            }
+
+            // Force the upper bound to be at least the lower bound.
+            // This should have the effect downstream of making the two equal,
+            // which will result in no output.
+            // Doing it this way spares us some awkward option comparison logic.
+            // This also ensures that `upper_bound_u128` will be at least `time`,
+            // which means "non-negative" / not needing to be clamped from below.
+            if let Some(u) = upper_bound_i128.as_mut() {
+                if *u < lower_bound_i128 {
+                    *u = lower_bound_i128;
+                }
+            }
+
+            // Convert both of our bounds to `Option<u64>`, where negative numbers
+            // are advanced up to `Some(0)` and numbers larger than `u64::MAX` are
+            // set to `None`. These choices are believed correct to narrow intervals
+            // of `i128` values to potentially half-open `u64` values.
+
+            // We are "certain" that `lower_bound_i128` is at least `time`, which
+            // means "non-negative" / not needing to be clamped from below.
+            let lower_bound_u64 = if lower_bound_i128 > u64::MAX.into() {
+                None
+            } else {
+                Some(u64::try_from(lower_bound_i128).unwrap())
+            };
+
+            // We ensured that `upper_bound_i128` is at least `lower_bound_i128`,
+            // and so it also does not need to be clamped from below.
+            let upper_bound_u64 = match upper_bound_i128 {
+                Some(u) if u < 0 => {
+                    panic!("upper bound was ensured at least `time`; should be non-negative");
+                }
+                Some(u) if u > u64::MAX.into() => None,
+                Some(u) => Some(u64::try_from(u).unwrap()),
+                None => None,
+            };
+
+            // Only proceed if the new time is not greater or equal to upper,
+            // and if no null values were encountered in bound evaluation.
+            if lower_bound_u64 != upper_bound_u64 && !null_eval {
+                let lower_opt = lower_bound_u64.map(|time| Ok((time, diff)));
+                let upper_opt = upper_bound_u64.map(|time| Ok((time, -diff)));
+                lower_opt.into_iter().chain(upper_opt.into_iter())
+            } else {
+                None.into_iter().chain(None.into_iter())
+            }
+        }
+
+        /// True when `self` contains no temporal predicates.
+        pub fn non_temporal(&self) -> bool {
+            self.lower_bounds.is_empty() && self.upper_bounds.is_empty()
+        }
+    }
 }

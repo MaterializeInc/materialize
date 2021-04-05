@@ -2684,7 +2684,7 @@ impl Coordinator {
                 if let expr::MirRelationExpr::Filter { input, predicates } = &*e {
                     let mfp = expr::MapFilterProject::new(input.arity())
                         .filter(predicates.iter().cloned());
-                    match dataflow::MfpPlan::create_from(mfp) {
+                    match mfp.into_plan() {
                         Err(e) => coord_bail!("{:?}", e),
                         Ok(plan) => {
                             // If we are in experimental mode permit temporal filters.

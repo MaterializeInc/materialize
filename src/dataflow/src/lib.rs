@@ -25,5 +25,3 @@ pub mod source;
 pub use server::{
     serve, CacheMessage, Config, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta,
 };
-
-pub use render::map_filter_project::MfpPlan;
