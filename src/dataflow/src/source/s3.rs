@@ -185,6 +185,37 @@ async fn scan_bucket_task(
     let glob = glob.as_ref();
     let prefix = glob.map(|g| find_prefix(g.glob().glob()));
 
+    // for the special case of a single object in a matching clause, don't go through the ListObject
+    // dance.
+    //
+    // This isn't a meaningful performance optimization, it just makes it easy for folks to import a
+    // single object without grantin materialized the ListObjects IAM permission
+    let is_literal_object = glob.is_some() && prefix.as_deref() == glob.map(|g| g.glob().glob());
+    if is_literal_object {
+        let key = glob.unwrap().glob().glob();
+        log::debug!(
+            "downloading single object from s3 bucket={} key={}",
+            bucket,
+            key
+        );
+        if let Err(e) = tx
+            .send(Ok(KeyInfo {
+                bucket,
+                key: key.to_string(),
+            }))
+            .await
+        {
+            log::debug!("Unable to send single key to downloader: {}", e);
+        };
+
+        return;
+    } else {
+        log::debug!(
+            "scanning bucket to find objects to download bucket={}",
+            bucket
+        );
+    }
+
     let scan_metrics = ScanBucketMetrics::new(&source_id, &bucket);
 
     let mut continuation_token = None;
