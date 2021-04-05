@@ -364,15 +364,15 @@ where
         // Extract a MapFilterProject and residual from `relation_expr`.
         let (mut mfp, input) = MapFilterProject::extract_from_expression(relation_expr);
         mfp.optimize();
-        // Extract any temporal predicates, as these operators cannot natively handle them.
-        let mut temporal_mfp = mfp.extract_temporal();
-        mfp.optimize();
-        temporal_mfp.optimize();
-        let temporal_plan = temporal_mfp.into_plan().unwrap();
         match input {
             MirRelationExpr::Get { .. } => {
                 // TODO: determine if `mfp` is no-op to simplify implementation.
                 let mfp2 = mfp.clone();
+                // Extract any temporal predicates, as these operators cannot natively handle them.
+                let mut temporal_mfp = mfp.extract_temporal();
+                mfp.optimize();
+                temporal_mfp.optimize();
+                let temporal_plan = temporal_mfp.into_plan().unwrap();
                 let mfp_plan = mfp.into_plan().unwrap().into_nontemporal().unwrap();
                 self.ensure_rendered(&input, scope, worker_index);
                 let (ok_collection, mut err_collection) = self
@@ -444,17 +444,8 @@ where
             }
             MirRelationExpr::FlatMap { input: input2, .. } => {
                 self.ensure_rendered(&input2, scope, worker_index);
-                let mfp_plan = mfp.into_plan().unwrap().into_nontemporal().unwrap();
-                let (mut oks, mut err) = self.render_flat_map(input, Some(mfp_plan));
-
-                // If the temporal operator is non-trivial we need to install an operator.
-                if !temporal_plan.is_identity() {
-                    let (temp_oks, temp_errs) =
-                        crate::render::map_filter_project::build_mfp_operator(oks, temporal_plan);
-                    oks = temp_oks;
-                    err = err.concat(&temp_errs);
-                }
-
+                let mfp_plan = mfp.into_plan().unwrap();
+                let (oks, err) = self.render_flat_map(input, Some(mfp_plan));
                 self.collections.insert(relation_expr.clone(), (oks, err));
                 true
             }
@@ -464,6 +455,12 @@ where
                 implementation,
                 ..
             } => {
+                // Extract any temporal predicates, as these operators cannot natively handle them.
+                let mut temporal_mfp = mfp.extract_temporal();
+                mfp.optimize();
+                temporal_mfp.optimize();
+                let temporal_plan = temporal_mfp.into_plan().unwrap();
+
                 for input in inputs {
                     self.ensure_rendered(input, scope, worker_index);
                 }
