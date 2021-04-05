@@ -183,6 +183,27 @@ impl MirScalarExpr {
         f(self);
     }
 
+    /// A generalization of `visit_mut`. The function `pre` runs on a
+    /// `MirScalarExpr` before it runs on any of the child `MirScalarExpr`s.
+    /// The function `post` runs on child `MirScalarExpr`s first before the
+    /// parent. Optionally, `pre` can return which child `MirScalarExpr`s, if
+    /// any, should be visited (default is to visit all children).
+    pub fn visit_custom_mut<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
+    where
+        F1: FnMut(&mut Self) -> Option<Vec<&mut MirScalarExpr>>,
+        F2: FnMut(&mut Self),
+    {
+        let to_visit = pre(self);
+        if let Some(to_visit) = to_visit {
+            for e in to_visit {
+                e.visit_custom_mut(pre, post);
+            }
+        } else {
+            self.visit1_mut(|e| e.visit_custom_mut(pre, post));
+        }
+        post(self);
+    }
+
     /// Rewrites column indices with their value in `permutation`.
     ///
     /// This method is applicable even when `permutation` is not a

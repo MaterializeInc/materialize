@@ -180,41 +180,8 @@ pub fn canonicalize_predicates(predicates: &mut Vec<MirScalarExpr>, input_type: 
     predicates.dedup();
 }
 
-/* #region helper functions for substituting a bool literal for a matching subexpression */
-
-/// Replaces a subexpression if it matches `replace_if_equal_to`, and record that
-/// the expression has changed.
-fn replace(
-    subexpr: &mut MirScalarExpr,
-    replace_if_equal_to: &MirScalarExpr,
-    replace_with: &MirScalarExpr,
-    changed: &mut bool,
-) {
-    if subexpr == replace_if_equal_to {
-        *subexpr = replace_with.clone();
-        *changed = true;
-    }
-}
-
-// TODO: Have a common method in `MirScalarExpr` for this and similar logic.
-/// Similar to what `MirScalarExpr::visit_mut_pre` would be like, but the
-/// `cond` of an if statement is not visited to avoid `then` or `els` to be
-/// evaluated before `cond`, resulting in a correctness error.
-fn visit_mut_pre_skip_cond<F>(e: &mut MirScalarExpr, f: &mut F)
-where
-    F: FnMut(&mut MirScalarExpr),
-{
-    f(e);
-    if let MirScalarExpr::If { cond: _, then, els } = e {
-        visit_mut_pre_skip_cond(then, f);
-        visit_mut_pre_skip_cond(els, f);
-    } else {
-        e.visit1_mut(|e2| visit_mut_pre_skip_cond(e2, f));
-    }
-}
-
-/// Replace any matching subexpressions in a predicate, and if the predicate has
-/// changed, reduce it.
+/// Replace any matching subexpressions in `predicate`, and if `predicate` has
+/// changed, reduce it. Return whether `predicate` has changed.
 fn replace_subexpr_and_reduce(
     predicate: &mut MirScalarExpr,
     replace_if_equal_to: &MirScalarExpr,
@@ -222,13 +189,25 @@ fn replace_subexpr_and_reduce(
     input_type: &RelationType,
 ) -> bool {
     let mut changed = false;
-    visit_mut_pre_skip_cond(predicate, &mut |e| {
-        replace(e, replace_if_equal_to, replace_with, &mut changed)
-    });
+    predicate.visit_custom_mut(
+        &mut |e| {
+            // The `cond` of an if statement is not visited to prevent `then`
+            // or `els` from being evaluated before `cond`, resulting in a
+            // correctness error.
+            if let MirScalarExpr::If { then, els, .. } = e {
+                return Some(vec![then, els]);
+            }
+            None
+        },
+        &mut |e| {
+            if e == replace_if_equal_to {
+                *e = replace_with.clone();
+                changed = true;
+            }
+        },
+    );
     if changed {
         predicate.reduce(input_type);
     }
     changed
 }
-
-/* #endregion */
