@@ -121,7 +121,7 @@ impl MapFilterProject {
     /// Populates `datums` with `self.expressions` and tests `self.predicates`.
     ///
     /// This does not apply `self.projection`, which is up to the calling method.
-    fn evaluate_inner<'b, 'a: 'b>(
+    pub fn evaluate_inner<'b, 'a: 'b>(
         &'a self,
         datums: &'b mut Vec<Datum<'a>>,
         arena: &'a RowArena,

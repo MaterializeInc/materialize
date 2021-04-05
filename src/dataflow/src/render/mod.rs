@@ -129,9 +129,9 @@ use crate::source::SourceToken;
 
 mod arrange_by;
 mod context;
-pub(crate) mod filter;
 mod flat_map;
 mod join;
+pub(crate) mod map_filter_project;
 mod reduce;
 mod sinks;
 mod sources;
@@ -352,9 +352,9 @@ where
 {
     /// Attempt to render a chain of map/filter/project operators on top of another operator.
     ///
-    /// Returns true if it was successful, and false otherwise. If this method returns false,
-    /// we should continue with the traditional individual render implementations of each
-    /// operator.
+    /// The rendered collection is bound to `relation_expr`, which the caller expects to find
+    /// bound if the result is `true`. If this method returns `false`, the caller should use
+    /// the traditional individual render implementations of each operator.
     fn try_render_map_filter_project(
         &mut self,
         relation_expr: &MirRelationExpr,
@@ -592,10 +592,12 @@ where
                     self.collections.insert(relation_expr.clone(), (oks, err));
                 }
 
-                MirRelationExpr::Filter { input, .. } => {
+                MirRelationExpr::Filter { input, predicates } => {
                     if !self.try_render_map_filter_project(relation_expr, scope, worker_index) {
                         self.ensure_rendered(input, scope, worker_index);
-                        let collections = self.render_filter(relation_expr);
+                        let mfp = expr::MapFilterProject::new(input.arity())
+                            .filter(predicates.iter().cloned());
+                        let collections = self.render_mfp_after(mfp, input);
                         self.collections.insert(relation_expr.clone(), collections);
                     }
                 }

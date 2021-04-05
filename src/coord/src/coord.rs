@@ -2681,15 +2681,13 @@ impl Coordinator {
         if let ExprPrepStyle::Static = style {
             let mut opt_expr = self.optimizer.optimize(expr, self.catalog.indexes())?;
             opt_expr.0.try_visit_mut(&mut |e| {
-                if let expr::MirRelationExpr::Filter {
-                    input: _,
-                    predicates,
-                } = &*e
-                {
-                    match dataflow::FilterPlan::create_from(predicates.iter().cloned()) {
+                if let expr::MirRelationExpr::Filter { input, predicates } = &*e {
+                    let mfp = expr::MapFilterProject::new(input.arity())
+                        .filter(predicates.iter().cloned());
+                    match dataflow::MfpPlan::create_from(mfp) {
                         Err(e) => coord_bail!("{:?}", e),
                         Ok(plan) => {
-                            // If we are in experimenal mode permit temporal filters.
+                            // If we are in experimental mode permit temporal filters.
                             // TODO(mcsherry): remove this gating eventually.
                             if plan.non_temporal() || self.catalog.config().experimental_mode {
                                 Ok(())
