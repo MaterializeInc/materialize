@@ -116,7 +116,7 @@ services:
     - mzdata:/share/mzdata
     - tmp:/share/tmp
   kafka:
-    image: vectorized/redpanda:v21.4.1
+    image: vectorized/redpanda:v21.4.2
     command: >-
       start
       --smp 1
