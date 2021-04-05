@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{scalar::EvalError, MirRelationExpr, MirScalarExpr};
-use repr::{Datum, Row, RowArena};
+use crate::{MirRelationExpr, MirScalarExpr};
+use repr::{Datum, Row};
 
 /// A compound operator that can be applied row-by-row.
 ///
@@ -65,82 +65,6 @@ impl MapFilterProject {
             && self.predicates.is_empty()
             && self.projection.len() == self.input_arity
             && self.projection.iter().enumerate().all(|(i, p)| i == *p)
-    }
-
-    /// Evaluates the linear operator on a supplied list of datums.
-    ///
-    /// The arguments are the initial datums associated with the row,
-    /// and an appropriately lifetimed arena for temporary allocations
-    /// needed by scalar evaluation.
-    ///
-    /// An `Ok` result will either be `None` if any predicate did not
-    /// evaluate to `Datum::True`, or the values of the columns listed
-    /// by `self.projection` if all predicates passed. If an error
-    /// occurs in the evaluation it is returned as an `Err` variant.
-    /// As the evaluation exits early with failed predicates, it may
-    /// miss some errors that would occur later in evaluation.
-    #[inline(always)]
-    pub fn evaluate<'a>(
-        &'a self,
-        datums: &mut Vec<Datum<'a>>,
-        arena: &'a RowArena,
-    ) -> Result<Option<Row>, EvalError> {
-        let passed_predicates = self.evaluate_inner(datums, arena)?;
-        if !passed_predicates {
-            Ok(None)
-        } else {
-            // We determine the capacity first, to ensure that we right-size
-            // the row allocation and need not re-allocate once it is formed.
-            let capacity = repr::datums_size(self.projection.iter().map(|c| datums[*c]));
-            let mut row = Row::with_capacity(capacity);
-            row.extend(self.projection.iter().map(|c| datums[*c]));
-            Ok(Some(row))
-        }
-    }
-
-    /// A version of `evaluate` which produces an iterator over `Datum`
-    /// as output.
-    ///
-    /// This version is used internally by `evaluate` and can be useful
-    /// when one wants to capture the resulting datums without packing
-    /// and then unpacking a row.
-    #[inline(always)]
-    pub fn evaluate_iter<'b, 'a: 'b>(
-        &'a self,
-        datums: &'b mut Vec<Datum<'a>>,
-        arena: &'a RowArena,
-    ) -> Result<Option<impl Iterator<Item = Datum<'a>> + 'b>, EvalError> {
-        let passed_predicates = self.evaluate_inner(datums, arena)?;
-        if !passed_predicates {
-            Ok(None)
-        } else {
-            Ok(Some(self.projection.iter().map(move |i| datums[*i])))
-        }
-    }
-
-    /// Populates `datums` with `self.expressions` and tests `self.predicates`.
-    ///
-    /// This does not apply `self.projection`, which is up to the calling method.
-    pub fn evaluate_inner<'b, 'a: 'b>(
-        &'a self,
-        datums: &'b mut Vec<Datum<'a>>,
-        arena: &'a RowArena,
-    ) -> Result<bool, EvalError> {
-        let mut expression = 0;
-        for (support, predicate) in self.predicates.iter() {
-            while self.input_arity + expression < *support {
-                datums.push(self.expressions[expression].eval(&datums[..], &arena)?);
-                expression += 1;
-            }
-            if predicate.eval(&datums[..], &arena)? != Datum::True {
-                return Ok(false);
-            }
-        }
-        while expression < self.expressions.len() {
-            datums.push(self.expressions[expression].eval(&datums[..], &arena)?);
-            expression += 1;
-        }
-        Ok(true)
     }
 
     /// Retain only the indicated columns in the presented order.
@@ -279,8 +203,8 @@ impl MapFilterProject {
     /// projections, which will be return as `Self`. If there are no maps,
     /// filters, or projections the method will return an identity operator.
     ///
-    /// This method needs to avoid extracting predicates that contain any
-    /// temporal operators, per `MirScalarExpr::contains_temporal()`.
+    /// The extracted expressions may contain temporal predicates, and one
+    /// should be careful to apply them blindly.
     pub fn extract_from_expression(expr: &MirRelationExpr) -> (Self, &MirRelationExpr) {
         // TODO: This could become iterative rather than recursive if
         // we were able to fuse MFP operators from below, rather than
@@ -291,12 +215,8 @@ impl MapFilterProject {
                 (mfp.map(scalars.iter().cloned()), expr)
             }
             MirRelationExpr::Filter { input, predicates } => {
-                if predicates.iter().any(|p| p.contains_temporal()) {
-                    (Self::new(expr.arity()), expr)
-                } else {
-                    let (mfp, expr) = Self::extract_from_expression(input);
-                    (mfp.filter(predicates.iter().cloned()), expr)
-                }
+                let (mfp, expr) = Self::extract_from_expression(input);
+                (mfp.filter(predicates.iter().cloned()), expr)
             }
             MirRelationExpr::Project { input, outputs } => {
                 let (mfp, expr) = Self::extract_from_expression(input);
@@ -1109,7 +1029,98 @@ pub mod plan {
     use std::convert::TryFrom;
 
     use crate::{BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, NullaryFunc};
-    use repr::{adt::decimal::Significand, Datum, RowArena, ScalarType};
+    use repr::{adt::decimal::Significand, Datum, Row, RowArena, ScalarType};
+
+    /// A wrapper type which indicates it is safe to simply evaluate all expressions.
+    #[derive(Clone, Debug)]
+    pub struct SafeMfpPlan {
+        mfp: MapFilterProject,
+    }
+
+    impl SafeMfpPlan {
+        /// Evaluates the linear operator on a supplied list of datums.
+        ///
+        /// The arguments are the initial datums associated with the row,
+        /// and an appropriately lifetimed arena for temporary allocations
+        /// needed by scalar evaluation.
+        ///
+        /// An `Ok` result will either be `None` if any predicate did not
+        /// evaluate to `Datum::True`, or the values of the columns listed
+        /// by `self.projection` if all predicates passed. If an error
+        /// occurs in the evaluation it is returned as an `Err` variant.
+        /// As the evaluation exits early with failed predicates, it may
+        /// miss some errors that would occur later in evaluation.
+        #[inline(always)]
+        pub fn evaluate<'a>(
+            &'a self,
+            datums: &mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+        ) -> Result<Option<Row>, EvalError> {
+            let passed_predicates = self.evaluate_inner(datums, arena)?;
+            if !passed_predicates {
+                Ok(None)
+            } else {
+                // We determine the capacity first, to ensure that we right-size
+                // the row allocation and need not re-allocate once it is formed.
+                let capacity = repr::datums_size(self.mfp.projection.iter().map(|c| datums[*c]));
+                let mut row = Row::with_capacity(capacity);
+                row.extend(self.mfp.projection.iter().map(|c| datums[*c]));
+                Ok(Some(row))
+            }
+        }
+
+        /// A version of `evaluate` which produces an iterator over `Datum`
+        /// as output.
+        ///
+        /// This version is used internally by `evaluate` and can be useful
+        /// when one wants to capture the resulting datums without packing
+        /// and then unpacking a row.
+        #[inline(always)]
+        pub fn evaluate_iter<'b, 'a: 'b>(
+            &'a self,
+            datums: &'b mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+        ) -> Result<Option<impl Iterator<Item = Datum<'a>> + 'b>, EvalError> {
+            let passed_predicates = self.evaluate_inner(datums, arena)?;
+            if !passed_predicates {
+                Ok(None)
+            } else {
+                Ok(Some(self.mfp.projection.iter().map(move |i| datums[*i])))
+            }
+        }
+
+        /// Populates `datums` with `self.expressions` and tests `self.predicates`.
+        ///
+        /// This does not apply `self.projection`, which is up to the calling method.
+        pub fn evaluate_inner<'b, 'a: 'b>(
+            &'a self,
+            datums: &'b mut Vec<Datum<'a>>,
+            arena: &'a RowArena,
+        ) -> Result<bool, EvalError> {
+            let mut expression = 0;
+            for (support, predicate) in self.mfp.predicates.iter() {
+                while self.mfp.input_arity + expression < *support {
+                    datums.push(self.mfp.expressions[expression].eval(&datums[..], &arena)?);
+                    expression += 1;
+                }
+                if predicate.eval(&datums[..], &arena)? != Datum::True {
+                    return Ok(false);
+                }
+            }
+            while expression < self.mfp.expressions.len() {
+                datums.push(self.mfp.expressions[expression].eval(&datums[..], &arena)?);
+                expression += 1;
+            }
+            Ok(true)
+        }
+    }
+
+    impl std::ops::Deref for SafeMfpPlan {
+        type Target = MapFilterProject;
+        fn deref(&self) -> &Self::Target {
+            &self.mfp
+        }
+    }
 
     /// Predicates partitioned into temporal and non-temporal.
     ///
@@ -1123,7 +1134,7 @@ pub mod plan {
     #[derive(Debug)]
     pub struct MfpPlan {
         /// Normal predicates to evaluate on `&[Datum]` and expect `Ok(Datum::True)`.
-        mfp: MapFilterProject,
+        mfp: SafeMfpPlan,
         /// Expressions that when evaluated lower-bound `MzLogicalTimestamp`.
         lower_bounds: Vec<MirScalarExpr>,
         /// Expressions that when evaluated upper-bound `MzLogicalTimestamp`.
@@ -1235,10 +1246,28 @@ pub mod plan {
             }
 
             Ok(Self {
-                mfp,
+                mfp: SafeMfpPlan { mfp },
                 lower_bounds,
                 upper_bounds,
             })
+        }
+
+        /// Indicates if the planned `MapFilterProject` emits exactly its inputs as outputs.
+        pub fn is_identity(&self) -> bool {
+            self.mfp.mfp.is_identity()
+                && self.lower_bounds.is_empty()
+                && self.upper_bounds.is_empty()
+        }
+
+        /// Attempt to convert self into a non-temporal MapFilterProject plan.
+        ///
+        /// If that is not possible, the original instance is returned as an error.
+        pub fn into_nontemporal(self) -> Result<SafeMfpPlan, Self> {
+            if self.lower_bounds.is_empty() && self.upper_bounds.is_empty() {
+                Ok(self.mfp)
+            } else {
+                Err(self)
+            }
         }
 
         /// Evaluate the predicates, temporal and non-, and return times and differences for `data`.
@@ -1252,8 +1281,9 @@ pub mod plan {
             arena: &'a RowArena,
             time: repr::Timestamp,
             diff: isize,
-        ) -> impl Iterator<Item = Result<(repr::Timestamp, isize), (EvalError, repr::Timestamp, isize)>>
-        {
+        ) -> impl Iterator<
+            Item = Result<(Row, repr::Timestamp, isize), (EvalError, repr::Timestamp, isize)>,
+        > {
             match self.mfp.evaluate_inner(datums, &arena) {
                 Err(e) => {
                     return Some(Err((e, time, diff)))
@@ -1362,8 +1392,14 @@ pub mod plan {
             // Only proceed if the new time is not greater or equal to upper,
             // and if no null values were encountered in bound evaluation.
             if lower_bound_u64 != upper_bound_u64 && !null_eval {
-                let lower_opt = lower_bound_u64.map(|time| Ok((time, diff)));
-                let upper_opt = upper_bound_u64.map(|time| Ok((time, -diff)));
+                // Allocate a row to produce as output.
+                let capacity =
+                    repr::datums_size(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
+                let mut row = Row::with_capacity(capacity);
+                row.extend(self.mfp.mfp.projection.iter().map(|c| datums[*c]));
+                // TODO: avoid the clone if `upper_opt` is `None`.
+                let lower_opt = lower_bound_u64.map(|time| Ok((row.clone(), time, diff)));
+                let upper_opt = upper_bound_u64.map(|time| Ok((row, time, -diff)));
                 lower_opt.into_iter().chain(upper_opt.into_iter())
             } else {
                 None.into_iter().chain(None.into_iter())

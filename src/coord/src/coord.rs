@@ -2147,6 +2147,16 @@ impl Coordinator {
                 self.ship_dataflow(dataflow).await?;
             }
 
+            let mfp_plan = map_filter_project
+                .into_plan()
+                .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
+                .into_nontemporal()
+                .map_err(|_e| {
+                    crate::error::CoordError::Unstructured(::anyhow::anyhow!(
+                        "Extracted plan has temporal constraints"
+                    ))
+                })?;
+
             self.broadcast(SequencedCommand::Peek {
                 id: index_id,
                 key: literal_row,
@@ -2154,7 +2164,7 @@ impl Coordinator {
                 tx: rows_tx,
                 timestamp,
                 finishing: finishing.clone(),
-                map_filter_project,
+                map_filter_project: mfp_plan,
             });
 
             if !fast_path {

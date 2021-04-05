@@ -304,9 +304,7 @@ where
                 // Explicitly drop `datums_local` to release the borrow.
                 drop(datums_local);
                 times_diffs.map(move |time_diff| {
-                    time_diff
-                        .map(|(t, d)| (row.clone(), t, d))
-                        .map_err(|(e, t, d)| (DataflowError::from(e), t, d))
+                    time_diff.map_err(|(e, t, d)| (DataflowError::from(e), t, d))
                 })
             }
         });

@@ -35,7 +35,7 @@ use dataflow_types::{
     Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, PeekResponse,
     SourceConnector, TimestampSourceUpdate, Update,
 };
-use expr::{GlobalId, MapFilterProject, PartitionId, RowSetFinishing};
+use expr::{GlobalId, PartitionId, RowSetFinishing};
 use repr::{Diff, Row, RowArena, Timestamp};
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
@@ -81,7 +81,7 @@ pub enum SequencedCommand {
         /// Actions to apply to the result set before returning them.
         finishing: RowSetFinishing,
         /// Linear operation to apply in-line on each result.
-        map_filter_project: MapFilterProject,
+        map_filter_project: expr::SafeMfpPlan,
     },
     /// Cancel the peek associated with the given `conn_id`.
     CancelPeek {
@@ -866,7 +866,7 @@ struct PendingPeek {
     /// limit.
     finishing: RowSetFinishing,
     /// Linear operators to apply in-line to all results.
-    map_filter_project: MapFilterProject,
+    map_filter_project: expr::SafeMfpPlan,
     /// The data from which the trace derives.
     trace_bundle: TraceBundle,
 }

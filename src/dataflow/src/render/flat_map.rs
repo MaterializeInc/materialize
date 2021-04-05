@@ -30,7 +30,7 @@ where
     pub fn render_flat_map(
         &mut self,
         relation_expr: &MirRelationExpr,
-        map_filter_project: Option<expr::MapFilterProject>,
+        map_filter_project: Option<expr::SafeMfpPlan>,
     ) -> (Collection<G, Row>, Collection<G, DataflowError>) {
         if let MirRelationExpr::FlatMap {
             input,
