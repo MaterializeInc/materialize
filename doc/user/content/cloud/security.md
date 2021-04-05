@@ -14,7 +14,7 @@ Currently, Materialize Cloud secures your connections through [TLS](https://en.w
 * Two-factor authentication
 * Encryption at rest
 * Connection over VPC and VPN
-* [IAM](https://aws.amazon.com/iam/) for single sign-on
+* Single sign-on integration
 
 If you're interested in implementing any of these security features, please [let us know](../support).
 

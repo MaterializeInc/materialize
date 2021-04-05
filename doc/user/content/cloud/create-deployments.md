@@ -9,10 +9,7 @@ menu:
 
 {{< cloud-notice >}}
 
-# Create deployments
-
-1. Go to the [Deployments](https://cloud.materialize.com/deployments) page.
-2. Click **Create deployment**.
+On the [Deployments](https://cloud.materialize.com/deployments) page, click **Create deployment**.
 
 Materialize creates the deployment and assigns it a name and hostname. This should only take about a minute and a half.
 
