@@ -736,8 +736,9 @@ pub fn plan_create_source(
                 .collect();
 
             let mut col_types = vec![];
+            let mut key_cols = vec![];
             let mut cast_exprs = vec![];
-            for c in columns {
+            for (i, c) in columns.iter().enumerate() {
                 if let Some(collation) = &c.collation {
                     unsupported!(format!(
                         "CREATE SOURCE FROM POSTGRES with column collation: {}",
@@ -753,6 +754,7 @@ pub fn plan_create_source(
                     match &option.option {
                         ColumnOption::Null => (),
                         ColumnOption::NotNull => nullable = false,
+                        ColumnOption::Unique { is_primary: true } => key_cols.push(i),
                         other => unsupported!(format!(
                             "CREATE SOURCE FROM POSTGRES with column constraint: {}",
                             other
@@ -772,8 +774,12 @@ pub fn plan_create_source(
                 cast_exprs.push(cast_expr);
             }
 
-            let desc = RelationDesc::new(RelationType::new(col_types), col_names);
-
+            let typ = if key_cols.is_empty() {
+                RelationType::new(col_types)
+            } else {
+                RelationType::new(col_types).with_key(key_cols)
+            };
+            let desc = RelationDesc::new(typ, col_names);
             let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
                 conn: conn.clone(),
                 publication: publication.clone(),
