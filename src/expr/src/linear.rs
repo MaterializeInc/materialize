@@ -260,11 +260,15 @@ impl MapFilterProject {
         let mut new_location = HashMap::with_capacity(support.len());
         for original in support.iter() {
             if let Some(position) = self.projection.iter().position(|x| x == original) {
-                new_location.insert(original, position);
+                new_location.insert(*original, position);
             } else {
-                new_location.insert(original, self.projection.len());
+                new_location.insert(*original, self.projection.len());
                 self.projection.push(*original);
             }
+        }
+        // Permute references in extracted predicates to their new locations.
+        for predicate in temporal_predicates.iter_mut() {
+            predicate.permute_map(&new_location);
         }
 
         // Form a new `Self` containing the temporal predicates to return.
