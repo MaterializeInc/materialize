@@ -117,6 +117,7 @@ pub trait AstDisplay {
 }
 
 // Derive a fmt::Display implementation for types implementing AstDisplay.
+#[macro_export]
 macro_rules! impl_display {
     ($name:ident) => {
         impl std::fmt::Display for $name {
