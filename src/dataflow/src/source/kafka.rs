@@ -160,7 +160,7 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
                         None => continue,
                     };
 
-                    logger.log(MaterializedEvent::KafkaConsumerInfo {
+                    logger.log(MaterializedEvent::KafkaConsumerPartition {
                         consumer_name: statistics.name.to_string(),
                         source_id: self.id,
                         partition_id: partition_stats.partition.to_string(),
@@ -429,7 +429,7 @@ impl Drop for KafkaSourceReader {
         if let Some(logger) = self.logger.as_mut() {
             for part in self.partition_consumers.iter_mut() {
                 if let Some(consumer_name) = part.previous_stats.consumer_name.as_ref() {
-                    logger.log(MaterializedEvent::KafkaConsumerInfo {
+                    logger.log(MaterializedEvent::KafkaConsumerPartition {
                         consumer_name: consumer_name.to_string(),
                         source_id: self.id,
                         partition_id: part.pid.to_string(),

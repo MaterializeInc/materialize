@@ -40,7 +40,7 @@ pub enum MaterializedEvent {
     },
     /// Tracks statistics for a particular Kafka consumer / partition pair
     /// Reference: https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md
-    KafkaConsumerInfo {
+    KafkaConsumerPartition {
         /// Kafka name for the consumer
         consumer_name: String,
         /// Materialize source identifier
@@ -217,7 +217,7 @@ pub fn construct<A: Allocate>(
                                     delta as isize,
                                 ));
                             }
-                            MaterializedEvent::KafkaConsumerInfo {
+                            MaterializedEvent::KafkaConsumerPartition {
                                 consumer_name,
                                 source_id,
                                 partition_id,
