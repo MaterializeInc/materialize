@@ -372,9 +372,8 @@ pub fn construct<A: Allocate>(
 
         use differential_dataflow::operators::Count;
         let kafka_broker_rtt_current = kafka_broker_rtt.as_collection().count().map({
-            let mut row_packer = repr::RowPacker::new();
             move |((consumer_name, source_id, broker_name), diff_vector)| {
-                row_packer.pack(&[
+                Row::pack_slice(&[
                     Datum::String(&consumer_name),
                     Datum::String(&source_id.source_id.to_string()),
                     Datum::Int64(source_id.dataflow_id as i64),
