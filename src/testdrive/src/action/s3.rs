@@ -18,9 +18,10 @@ use flate2::write::GzEncoder;
 use flate2::Compression as Flate2Compression;
 use rusoto_core::{ByteStream, RusotoError};
 use rusoto_s3::{
-    CreateBucketConfiguration, CreateBucketError, CreateBucketRequest,
-    GetBucketNotificationConfigurationRequest, PutBucketNotificationConfigurationRequest,
-    PutObjectRequest, QueueConfiguration, S3,
+    BucketLifecycleConfiguration, CreateBucketConfiguration, CreateBucketError,
+    CreateBucketRequest, GetBucketNotificationConfigurationRequest, LifecycleExpiration,
+    LifecycleRule, PutBucketLifecycleConfigurationRequest,
+    PutBucketNotificationConfigurationRequest, PutObjectRequest, QueueConfiguration, S3,
 };
 use rusoto_sqs::{
     CreateQueueError, CreateQueueRequest, DeleteMessageBatchRequest,
@@ -63,8 +64,30 @@ impl Action for CreateBucketAction {
             .await
         {
             Ok(_) | Err(RusotoError::Service(CreateBucketError::BucketAlreadyOwnedByYou(_))) => {
-                state.s3_buckets_created.insert(self.bucket.clone());
-                Ok(())
+                match state
+                    .s3_client
+                    .put_bucket_lifecycle_configuration(PutBucketLifecycleConfigurationRequest {
+                        bucket: self.bucket.clone(),
+                        lifecycle_configuration: Some(BucketLifecycleConfiguration {
+                            rules: vec![LifecycleRule {
+                                id: Some("DeleteBucketAfterOneDay".to_string()),
+                                expiration: Some(LifecycleExpiration {
+                                    days: Some(1),
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            }],
+                        }),
+                        ..Default::default()
+                    })
+                    .await
+                {
+                    Ok(_) => {
+                        state.s3_buckets_created.insert(self.bucket.clone());
+                        Ok(())
+                    }
+                    Err(e) => Err(format!("putting bucket lifecycle rule: {}", e)),
+                }
             }
             Err(e) => Err(format!("creating bucket: {}", e)),
         }
