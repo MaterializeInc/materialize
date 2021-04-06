@@ -5,8 +5,6 @@ menu:
   main:
     parent: 'create-source'
 ---
-{{< experimental >}}The S3 source type{{< /experimental >}}
-
 {{% create-source/intro %}}
 This document details how to connect Materialize to an S3 Bucket that contains
 multiple objects, and to listen for new object creation. Each S3 object can

@@ -673,7 +673,6 @@ pub fn plan_create_source(
             pattern,
             compression,
         } => {
-            scx.require_experimental_mode("S3 Sources")?;
             let aws_info = normalize::aws_connect_info(&mut with_options, None)?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
