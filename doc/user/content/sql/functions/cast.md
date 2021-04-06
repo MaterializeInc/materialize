@@ -43,7 +43,7 @@ Casts allowed in less strict contexts are also allowed in stricter contexts. Tha
 
 Source type | Return type | Cast context
 ------------|-------------|----------
-[`array`](../../types/array/)<sup><a href="1">1</a></sup>  | [`text`](../../types/text/) |  Assignment
+[`array`](../../types/array/)<sup>1</sup>  | [`text`](../../types/text/) |  Assignment
 [`bigint`](../../types/integer/)  | [`bool`](../../types/boolean/) |  Explicit
 [`bigint`](../../types/integer/)  |  [`decimal`](../../types/decimal/) |  Implicit
 [`bigint`](../../types/integer/)  | [`int`](../../types/integer/)  |  Assignment
@@ -62,7 +62,7 @@ Source type | Return type | Cast context
 [`decimal`](../../types/decimal/)  | [`real`](../../types/real/)  |  Implicit
 [`decimal`](../../types/decimal/) |[`text`](../../types/text/) | Assignment
 [`float`](../../types/float/)| [`bigint`](../../types/integer/) | Assignment
-[`float`](../../types/float/)| [`decimal`](../../types/decimal/)<sup><a href="#2">2</a></sup> | Assignment
+[`float`](../../types/float/)| [`decimal`](../../types/decimal/)<sup>2</sup> | Assignment
 [`float`](../../types/float/)| [`int`](../../types/integer/) | Assignment
 [`float`](../../types/float/)| [`real`](../../types/real/) | Assignment
 [`float`](../../types/float/)|[`text`](../../types/text/) | Assignment
@@ -76,14 +76,14 @@ Source type | Return type | Cast context
 [`interval`](../../types/interval/) |[`text`](../../types/text/) | Assignment
 [`interval`](../../types/interval/) | [`time`](../../types/time/) | Assignment
 [`jsonb`](../../types/jsonb/)  | [`bigint`](../../types/integer/)  |  Explicit
-[`jsonb`](../../types/jsonb/)  |[`bool`](../../types/integer/boolean/)  |  Explicit
+[`jsonb`](../../types/jsonb/)  |[`bool`](../../types/boolean/)  |  Explicit
 [`jsonb`](../../types/jsonb/)  | [`decimal`](../../types/decimal/)  |  Explicit
 [`jsonb`](../../types/jsonb/)  | [`float`](../../types/float/)  |  Explicit
 [`jsonb`](../../types/jsonb/)  | [`int`](../../types/integer/)  |  Explicit
 [`jsonb`](../../types/jsonb/)  | [`real`](../../types/real/)  |  Explicit
 [`jsonb`](../../types/jsonb/)  |[`text`](../../types/text/)  |  Assignment
-[`list`](../../types/list/)<sup><a href="1">1</a></sup> | [`list`](../../types/list/) | Implicit
-[`list`](../../types/list/)<sup><a href="1">1</a></sup> |[`text`](../../types/text/) | Assignment
+[`list`](../../types/list/)<sup>1</sup> | [`list`](../../types/list/) | Implicit
+[`list`](../../types/list/)<sup>1</sup> |[`text`](../../types/text/) | Assignment
 [`map`](../../types/map/)  | [`text`](../../types/text/) |  Assignment
 [`oid`](../../types/oid/)  |  [`int`](../../types/integer/) |  Assignment
 [`oid`](../../types/oid/)  | [`text`](../../types/text/) | Explicit
@@ -94,7 +94,7 @@ Source type | Return type | Cast context
 [`real`](../../types/real/)  | [`text`](../../types/text/) | Assignment
 [`record`](../../types/record/) |[`text`](../../types/text/) | Assignment
 [`text`](../../types/text/) | [`bigint`](../../types/integer/) | Explicit
-[`text`](../../types/text/) |[`bool`](../../types/integer/boolean/) | Explicit
+[`text`](../../types/text/) |[`bool`](../../types/boolean/) | Explicit
 [`text`](../../types/text/)  | [`bytea`](../../types/bytea/) | Explicit
 [`text`](../../types/text/) | [`date`](../../types/date/) | Explicit
 [`text`](../../types/text/) | [`decimal`](../../types/decimal/) | Explicit
@@ -120,9 +120,9 @@ Source type | Return type | Cast context
 [`timestamptz`](../../types/timestamp/)  | [`timestamp`](../../types/timestamp/) | Assignment
 [`uuid`](../../types/uuid/)  | [`text`](../../types/text/)  |  Assignment
 
-<a name="1"></a><sup>1</sup> [`Arrays`](../../types/array/) and [`lists`](../../types/lists) are composite types subject to special constraints. See their respective type documentation for details.
+<sup>1</sup> [`Arrays`](../../types/array/) and [`lists`](../../types/list) are composite types subject to special constraints. See their respective type documentation for details.
 
-<a name="2"></a><sup>2</sup> Casting a [`float`](../../types/float/) to a [`decimal`](../../types/decimal/) can yield an imprecise result due to the floating point arithmetic involved in the conversion.
+<sup>2</sup> Casting a [`float`](../../types/float/) to a [`decimal`](../../types/decimal/) can yield an imprecise result due to the floating point arithmetic involved in the conversion.
 
 ## Examples
 
