@@ -85,13 +85,12 @@ DROP TABLE t CASCADE;
 
 You can use either of the following commands:
 
-```sql
-DROP TABLE t;
-```
-
-```sql
-DROP TABLE t RESTRICT;
-```
+- ```sql
+  DROP TABLE t;
+  ```
+- ```sql
+  DROP TABLE t RESTRICT;
+  ```
 
 ### Do not issue an error if attempting to remove a nonexistent table
 
