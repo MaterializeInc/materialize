@@ -30,14 +30,15 @@ Detail | Info
 
 You can [cast](../../functions/cast) `boolean` to:
 
-- [`text`](../text)
 - [`int`](../int)
+- [`text`](../text)
 
 #### To `boolean`
 
 You can [cast](../../functions/cast) the following types to `boolean`:
 
 - [`int`](../int)
+- [`jsonb`](../jsonb)
 - [`text`](../text)
 
 ## Examples

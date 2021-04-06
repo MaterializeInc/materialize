@@ -71,14 +71,14 @@ SELECT * FROM jsonb_object_keys('{"1":2,"3":4}'::JSONB);
 You can [cast](../../functions/cast) `jsonb` to:
 
 - [`boolean`](../boolean)
+- [`decimal`](../numeric)
+- [`int`](../integer)
 - [`real`/`double precision`](../float)
 - [`text`](../text) (stringifies `jsonb`)
 
 #### To `jsonb`
 
-You can [cast](../../functions/cast) the following types to `jsonb`:
-
-- [`text`](../text) (parses `jsonb`)
+You can [cast](../../functions/cast) from [`text`](../text) to `jsonb`.
 
 #### Notes about converting `jsonb` to `text`
 

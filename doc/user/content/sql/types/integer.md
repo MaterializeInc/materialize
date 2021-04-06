@@ -21,7 +21,7 @@ Detail | Info
 **OID** | 23
 **Range** | [-2,147,483,648, 2,147,483,647]
 
-## `bigint` info
+## [`bigint`](../../types/integer/#`bigint`-info) info
 
 Detail | Info
 -------|------
@@ -40,19 +40,23 @@ all other integer types.
 
 #### From `integer` or `bigint`
 
-You can [cast](../../functions/cast) `integer` or `bigint` to:
+You can [cast](../../functions/cast) `integer` or [`bigint`](../../types/integer/#`bigint`-info) to the following types:
 
 - [`boolean`](../boolean)
-- [`numeric`](../numeric)
+- [`decimal`](../numeric)
 - [`real`/`double precision`](../float)
 - [`text`](../text)
 
 #### To `integer` or `bigint`
 
-You can [cast](../../functions/cast) the following types to `integer` or `bigint`:
+You can [cast](../../functions/cast) the following types to `integer` or [`bigint`](../../types/integer/#`bigint`-info):
 
+- [`bool`](../boolean)
+- [`jsonb`](../jsonb)
+- [`oid`](../oid)
 - [`numeric`](../numeric)
 - [`real`/`double precision`](../float)
+- [`text`](../text)
 
 ## Examples
 

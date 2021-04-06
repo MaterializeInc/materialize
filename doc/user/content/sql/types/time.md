@@ -29,16 +29,7 @@ _time&lowbar;str_ | A string representing a time of day in `H:M:S.NS` format.
 
 ### Valid casts
 
-#### From `time`
-
-You can [cast](../../functions/cast) `time` to:
-
-- [`interval`](../interval)
-- [`text`](../text)
-
-#### To `time`
-
-You can [cast](../../functions/cast) the following types to `time`:
+You can [cast](../../functions/cast) `time` to and from the following types:
 
 - [`interval`](../interval)
 - [`text`](../text)

@@ -90,18 +90,9 @@ type](/sql/types#custom-types) and the other is a [built-in
 map](/sql/types#built-in-types) and their key-value types are structurally
 equivalent.
 
-#### From `map`
-
-You can [cast](../../functions/cast) `map` to:
+You can [cast](../../functions/cast) `map` to and from the following types:
 
 - [`text`](../text)
-- Other `map`s as noted above.
-
-#### To `list`
-
-You can [cast](../../functions/cast) the following types to `map`:
-
-- [`text`](../text)&mdash;see [details](#construction)
 - Other `map`s as noted above.
 
 ## Examples

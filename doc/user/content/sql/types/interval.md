@@ -75,16 +75,7 @@ stipulations:
 
 ### Valid casts
 
-#### From `interval`
-
-You can [cast](../../functions/cast) `interval` to:
-
-- [`text`](../text)
-- [`time`](../time)
-
-#### To `time`
-
-You can [cast](../../functions/cast) the following types to `interval`:
+You can [cast](../../functions/cast) `interval` to and from the following types:
 
 - [`text`](../text)
 - [`time`](../time)

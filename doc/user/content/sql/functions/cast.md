@@ -31,94 +31,98 @@ The following special syntax is permitted if _val_ is a string literal:
 
 ### Valid casts
 
-Casts may be:
+Cast context defines when casts may occur.
 
-* **Implicit** -- Values are automatically converted (for example, when you add `int4` to `int8`, the `int4` value is automatically converted to `int8`)
-* **Assignment** -- Values of one type are converted automatically when inserted into a column of a different type
-* **Explicit** -- You must invoke `CAST` deliberately
+Cast context | Definition | Strictness
+--------|------------|-----------
+**Implicit** | Values are automatically converted. For example, when you add `int4` to `int8`, the `int4` value is automatically converted to `int8`. | Least
+**Assignment** | Values of one type are converted automatically when inserted into a column of a different type. | Medium
+**Explicit** | You must invoke `CAST` deliberately. | Most
 
-Casts allowed in less strict contexts are also allowed in stricter contexts: that is, implicit casts can also occur explicitly or by assignment, and casts by assignment can also be explicitly invoked.
+Casts allowed in less strict contexts are also allowed in stricter contexts. That is, implicit casts also occur by assignment, and both implicit casts and casts by assignment can be explicitly invoked.
 
-Source type | Return type | Cast type(s)
+Source type | Return type | Cast context
 ------------|-------------|----------
-`array`  |  `text` |  Assignment
-`bigint`  |  `bool` |  Explicit
-`bigint`  |  `decimal` |  Implicit
-`bigint`  | `int`  |  Assignment
-`bigint`  | `float`  | Implicit
-`bigint`  | `real`  | Implicit
-`bigint`  | `text`  | Assignment
-`bool`  |  `int` | Explicit
-`bool`  | `text`  | Assignment
-`bytea`  | `text` | Assignment
-`date` | `text` | Assignment
-`date` | `timestamp` | Implicit
-`date` | `timestamptz` | Implicit
-`decimal`  | `bigint`  | Assignment
-`decimal` | `float` | Implicit
-`decimal` | `int` | Assignment
-`decimal`  | `real`  |  Implicit
-`decimal` | `text` | Assignment
-`float`| `bigint` | Assignment
-`float`| `decimal`<sup>1</sup> | Assignment
-`float`| `int` | Assignment
-`float`| `real` | Assignment
-`float`| `text` | Assignment
-`int`  | `bigint`  |  Implicit
-`int` | `boolean` | Explicit
-`int` | `decimal` | Implicit
-`int` | `float` | Implicit
-`int` | `oid` | Implicit
-`int`  | `real`  |  Implicit
-`int` | `text` | Assignment
-`interval` | `text` | Assignment
-`interval` | `time` | Assignment
-`jsonb`  | `bigint`  |  Explicit
-`jsonb`  | `bool`  |  Explicit
-`jsonb`  | `decimal`  |  Explicit
-`jsonb`  | `float`  |  Explicit
-`jsonb`  | `int`  |  Explicit
-`jsonb`  | `real`  |  Explicit
-`jsonb`  | `text`  |  Assignment
-`list` | `list` | Implicit
-`list` | `text` | Assignment
-`map`  |  `text` |  Assignment
-`oid`  |  `int` |  Assignment
-`oid`  |  `text` | Explicit
-`real`  |  `bigint` |  Assignment
-`real`  |  `decimal` |  Assignment
-`real`  |  `float` | Implicit
-`real`  |  `int` |  Assignment
-`real`  |  `text` | Assignment
-`record` | `text` | Assignment
-`text` | `bigint` | Explicit
-`text` | `bool` | Explicit
-`text`  | `bytea` | Explicit
-`text` | `date` | Explicit
-`text` | `decimal` | Explicit
-`text` | `float` | Explicit
-`text` | `int` | Explicit
-`text` | `interval` | Explicit
-`text` | `jsonb` | Explicit
-`text` | `list` | Explicit
-`text` | `map` | Explicit
-`text` | `oid` | Explicit
-`text`  | `real`   |  Explicit
-`text` | `time` | Explicit
-`text` | `timestamp` | Explicit
-`text` | `timestamptz` | Explicit
-`text` | `uuid` | Explicit
-`time` | `interval` | Implicit
-`time` | `text` | Assignment
-`timestamp`  | `date` | Assignment
-`timestamp`  | `text` | Assignment
-`timestamp`  | `timestamptz` | Implicit
-`timestamptz`  | `date` | Assignment
-`timestamptz`  | `text` | Assignment
-`timestamptz`  | `timestamp` | Assignment
-`uuid`  | `text`  |  Assignment
+[`array`](../../types/array/)<sup><a href="1">1</a></sup>  | [`text`](../../types/text/) |  Assignment
+[`bigint`](../../types/integer/)  | [`bool`](../../types/boolean/) |  Explicit
+[`bigint`](../../types/integer/)  |  [`decimal`](../../types/decimal/) |  Implicit
+[`bigint`](../../types/integer/)  | [`int`](../../types/integer/)  |  Assignment
+[`bigint`](../../types/integer/)  | [`float`](../../types/float/)  | Implicit
+[`bigint`](../../types/integer/)  | [`real`](../../types/real/)  | Implicit
+[`bigint`](../../types/integer/)  |[`text`](../../types/text/)  | Assignment
+[`bool`](../../types/boolean/)  |  [`int`](../../types/integer/) | Explicit
+[`bool`](../../types/boolean/)  |[`text`](../../types/text/)  | Assignment
+[`bytea`](../../types/bytea/)  |[`text`](../../types/text/)| Assignment
+[`date`](../../types/date/) |[`text`](../../types/text/) | Assignment
+[`date`](../../types/date/) | [`timestamp`](../../types/timestamp/) | Implicit
+[`date`](../../types/date/) | [`timestamptz`](../../types/timestamp/) | Implicit
+[`decimal`](../../types/decimal/)  | [`bigint`](../../types/integer/)  | Assignment
+[`decimal`](../../types/decimal/) | [`float`](../../types/float/) | Implicit
+[`decimal`](../../types/decimal/) | [`int`](../../types/integer/) | Assignment
+[`decimal`](../../types/decimal/)  | [`real`](../../types/real/)  |  Implicit
+[`decimal`](../../types/decimal/) |[`text`](../../types/text/) | Assignment
+[`float`](../../types/float/)| [`bigint`](../../types/integer/) | Assignment
+[`float`](../../types/float/)| [`decimal`](../../types/decimal/)<sup><a href="#2">2</a></sup> | Assignment
+[`float`](../../types/float/)| [`int`](../../types/integer/) | Assignment
+[`float`](../../types/float/)| [`real`](../../types/real/) | Assignment
+[`float`](../../types/float/)|[`text`](../../types/text/) | Assignment
+[`int`](../../types/integer/)  | [`bigint`](../../types/integer/)  |  Implicit
+[`int`](../../types/integer/) | [`bool`](../../types/boolean/) | Explicit
+[`int`](../../types/integer/) | [`decimal`](../../types/decimal/) | Implicit
+[`int`](../../types/integer/) | [`float`](../../types/float/) | Implicit
+[`int`](../../types/integer/) | [`oid`](../../types/oid/) | Implicit
+[`int`](../../types/integer/)  | [`real`](../../types/real/)  |  Implicit
+[`int`](../../types/integer/) |[`text`](../../types/text/) | Assignment
+[`interval`](../../types/interval/) |[`text`](../../types/text/) | Assignment
+[`interval`](../../types/interval/) | [`time`](../../types/time/) | Assignment
+[`jsonb`](../../types/jsonb/)  | [`bigint`](../../types/integer/)  |  Explicit
+[`jsonb`](../../types/jsonb/)  |[`bool`](../../types/integer/boolean/)  |  Explicit
+[`jsonb`](../../types/jsonb/)  | [`decimal`](../../types/decimal/)  |  Explicit
+[`jsonb`](../../types/jsonb/)  | [`float`](../../types/float/)  |  Explicit
+[`jsonb`](../../types/jsonb/)  | [`int`](../../types/integer/)  |  Explicit
+[`jsonb`](../../types/jsonb/)  | [`real`](../../types/real/)  |  Explicit
+[`jsonb`](../../types/jsonb/)  |[`text`](../../types/text/)  |  Assignment
+[`list`](../../types/list/)<sup><a href="1">1</a></sup> | [`list`](../../types/list/) | Implicit
+[`list`](../../types/list/)<sup><a href="1">1</a></sup> |[`text`](../../types/text/) | Assignment
+[`map`](../../types/map/)  | [`text`](../../types/text/) |  Assignment
+[`oid`](../../types/oid/)  |  [`int`](../../types/integer/) |  Assignment
+[`oid`](../../types/oid/)  | [`text`](../../types/text/) | Explicit
+[`real`](../../types/real/)  |  [`bigint`](../../types/integer/) |  Assignment
+[`real`](../../types/real/)  |  [`decimal`](../../types/decimal/) |  Assignment
+[`real`](../../types/real/)  |  [`float`](../../types/float/) | Implicit
+[`real`](../../types/real/)  |  [`int`](../../types/integer/) |  Assignment
+[`real`](../../types/real/)  | [`text`](../../types/text/) | Assignment
+[`record`](../../types/record/) |[`text`](../../types/text/) | Assignment
+[`text`](../../types/text/) | [`bigint`](../../types/integer/) | Explicit
+[`text`](../../types/text/) |[`bool`](../../types/integer/boolean/) | Explicit
+[`text`](../../types/text/)  | [`bytea`](../../types/bytea/) | Explicit
+[`text`](../../types/text/) | [`date`](../../types/date/) | Explicit
+[`text`](../../types/text/) | [`decimal`](../../types/decimal/) | Explicit
+[`text`](../../types/text/) | [`float`](../../types/float/) | Explicit
+[`text`](../../types/text/) | [`int`](../../types/integer/) | Explicit
+[`text`](../../types/text/) | [`interval`](../../types/interval/) | Explicit
+[`text`](../../types/text/) | [`jsonb`](../../types/jsonb/) | Explicit
+[`text`](../../types/text/) | [`list`](../../types/list/) | Explicit
+[`text`](../../types/text/) | [`map`](../../types/map/) | Explicit
+[`text`](../../types/text/) | [`oid`](../../types/oid/) | Explicit
+[`text`](../../types/text/)  | [`real`](../../types/real/)   |  Explicit
+[`text`](../../types/text/) | [`time`](../../types/time/) | Explicit
+[`text`](../../types/text/) | [`timestamp`](../../types/timestamp/) | Explicit
+[`text`](../../types/text/) | [`timestamptz`](../../types/timestamp/) | Explicit
+[`text`](../../types/text/) | [`uuid`](../../types/uuid/) | Explicit
+[`time`](../../types/time/) | [`interval`](../../types/interval/) | Implicit
+[`time`](../../types/time/) |[`text`](../../types/text/) | Assignment
+[`timestamp`](../../types/timestamp/)  | [`date`](../../types/date/) | Assignment
+[`timestamp`](../../types/timestamp/)  |[`text`](../../types/text/) | Assignment
+[`timestamp`](../../types/timestamp/)  | [`timestamptz`](../../types/timestamp/) | Implicit
+[`timestamptz`](../../types/timestamp/)  | [`date`](../../types/date/) | Assignment
+[`timestamptz`](../../types/timestamp/)  |[`text`](../../types/text/) | Assignment
+[`timestamptz`](../../types/timestamp/)  | [`timestamp`](../../types/timestamp/) | Assignment
+[`uuid`](../../types/uuid/)  | [`text`](../../types/text/)  |  Assignment
 
-<sup>1</sup> Casting a `float` to a `decimal` can yield an imprecise result due to the floating point arithmetic involved in the conversion.
+<a name="1"></a><sup>1</sup> [`Arrays`](../../types/array/) and [`lists`](../../types/lists) are composite types subject to special constraints. See their respective type documentation for details.
+
+<a name="2"></a><sup>2</sup> Casting a [`float`](../../types/float/) to a [`decimal`](../../types/decimal/) can yield an imprecise result due to the floating point arithmetic involved in the conversion.
 
 ## Examples
 

@@ -73,21 +73,10 @@ The strings are recognized case insensitively.
 In addition to the casts listed below, `real` and `double precision` values can be cast
 to and from one another.
 
-#### From `real` or `double precision`
-
-You can [cast](../../functions/cast) `real` or `double precision` to:
+You can [cast](../../functions/cast) `real` or `double precision` to and from the following types:
 
 - [`int`](../int)
-- [`numeric`](../numeric)
-- [`text`](../text)
-
-#### To float4` or `double precision`
-
-You can [cast](../../functions/cast) the following types to `real` or
-`double precision`:
-
-- [`int`](../int)
-- [`numeric`](../numeric)
+- [`decimal`](../numeric)
 - [`text`](../text)
 
 ## Examples
