@@ -513,7 +513,21 @@ impl Timestamper {
                     }
                     self.byo_sources.remove(&id);
                 }
-                TimestampMessage::Shutdown => return true,
+                TimestampMessage::Shutdown => {
+                    // First, let's remove all of the threads consuming metadata
+                    // from realtime Kafka sources
+                    for (_, src) in self.rt_sources.iter_mut() {
+                        if let RtTimestampConnector::Kafka(RtKafkaConnector {
+                            coordination_state,
+                            ..
+                        }) = &src.connector
+                        {
+                            coordination_state.stop.store(true, Ordering::SeqCst);
+                        }
+                    }
+
+                    return true;
+                }
             }
         }
         false
