@@ -42,7 +42,7 @@ We can load all these keys with the following command:
 
 ```sql
 CREATE MATERIALIZED SOURCE csv_example (user_id, status, usage)
-FROM S3 OBJECTS FROM SCAN BUCKET 'analytics' MATCHING '**/*.csv'
+FROM S3 DISCOVER OBJECTS MATCHING '**/*.csv' USING BUCKET SCAN 'analytics'
 WITH (region = 'us-east-2')
 FORMAT CSV WITH 3 COLUMNS;
 ```
@@ -63,7 +63,7 @@ instead write an unmaterialized source and parse columns in a view materializati
 
 ```sql
 CREATE SOURCE csv_source (user_id, status, usage)
-FROM S3 OBJECTS FROM SCAN BUCKET 'analytics' MATCHING '**/*.csv'
+FROM S3 DISCOVER OBJECTS MATCHING '**/*.csv' USING BUCKET SCAN 'analytics'
 WITH (region = 'us-east-2')
 FORMAT CSV WITH 3 COLUMNS;
 ```

@@ -22,7 +22,7 @@ b2
 b3
 
 > CREATE MATERIALIZED SOURCE s3_all
-  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
+  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${bucket}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -41,7 +41,7 @@ b2 5
 b3 6
 
 > CREATE MATERIALIZED SOURCE s3_glob_a
-  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}' MATCHING '**/a'
+  FROM S3 DISCOVER OBJECTS MATCHING '**/a' USING BUCKET SCAN '${bucket}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -57,7 +57,7 @@ a2 2
 a3 3
 
 > CREATE MATERIALIZED SOURCE s3_just_a
-  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}' MATCHING 'short/a'
+  FROM S3 DISCOVER OBJECTS MATCHING 'short/a' USING BUCKET SCAN '${bucket}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -78,7 +78,7 @@ c,8
 c,9
 
 > CREATE MATERIALIZED SOURCE csv_example (name, counts)
-  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}' MATCHING '*.csv'
+  FROM S3 DISCOVER OBJECTS MATCHING '*.csv' USING BUCKET SCAN '${bucket}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -119,7 +119,7 @@ $ s3-put-object bucket=${bucket} key=logs/2021/01/01/frontend.log
 173.203.139.108 - - [01/01/2021:00:00:39] "GET /downloads/materialized HTTP/1.1" 404 335 "-" "Python/Requests_22"
 
 > CREATE MATERIALIZED SOURCE frontend_logs
-  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}' MATCHING 'logs/**/*.log'
+  FROM S3 DISCOVER OBJECTS MATCHING 'logs/**/*.log' USING BUCKET SCAN '${bucket}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -148,8 +148,8 @@ c2
 c3
 
 > CREATE MATERIALIZED SOURCE s3_multi
-  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}', SCAN BUCKET '${otherbucket}'
-  MATCHING 'short/*'
+  FROM S3 DISCOVER OBJECTS MATCHING 'short/*'
+  USING BUCKET SCAN '${bucket}', BUCKET SCAN '${otherbucket}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',

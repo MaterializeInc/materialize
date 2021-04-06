@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="583" height="667">
+<svg xmlns="http://www.w3.org/2000/svg" width="583" height="781">
    <polygon points="9 17 1 13 1 21"/>
    <polygon points="17 17 9 13 9 21"/>
    <rect x="31" y="3" width="74" height="32" rx="10"/>
@@ -33,157 +33,181 @@
          class="terminal"
          rx="10"/>
    <text class="terminal" x="431" y="53">IF NOT EXISTS</text>
-   <rect x="145" y="101" width="80" height="32"/>
-   <rect x="143" y="99" width="80" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="153" y="119">src_name</text>
-   <rect x="245" y="101" width="196" height="32" rx="10"/>
-   <rect x="243"
+   <rect x="96" y="101" width="80" height="32"/>
+   <rect x="94" y="99" width="80" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="104" y="119">src_name</text>
+   <rect x="196" y="101" width="60" height="32" rx="10"/>
+   <rect x="194"
          y="99"
-         width="196"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="253" y="119">FROM S3 OBJECTS FROM </text>
-   <rect x="153" y="211" width="118" height="32" rx="10"/>
-   <rect x="151"
-         y="209"
-         width="118"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="161" y="229">SCAN BUCKET</text>
-   <rect x="291" y="211" width="102" height="32"/>
-   <rect x="289" y="209" width="102" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="299" y="229">bucket_name</text>
-   <rect x="153" y="255" width="160" height="32" rx="10"/>
-   <rect x="151"
-         y="253"
-         width="160"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="161" y="273">SQS NOTIFICATIONS</text>
-   <rect x="333" y="255" width="100" height="32"/>
-   <rect x="331" y="253" width="100" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="341" y="273">queue_name</text>
-   <rect x="133" y="167" width="24" height="32" rx="10"/>
-   <rect x="131"
-         y="165"
-         width="24"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="141" y="185">,</text>
-   <rect x="53" y="337" width="94" height="32" rx="10"/>
-   <rect x="51"
-         y="335"
-         width="94"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="61" y="355">MATCHING</text>
-   <rect x="167" y="337" width="64" height="32"/>
-   <rect x="165" y="335" width="64" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="175" y="355">pattern</text>
-   <rect x="291" y="337" width="122" height="32" rx="10"/>
-   <rect x="289"
-         y="335"
-         width="122"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="299" y="355">COMPRESSION</text>
-   <rect x="453" y="337" width="60" height="32" rx="10"/>
-   <rect x="451"
-         y="335"
          width="60"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="461" y="355">NONE</text>
-   <rect x="453" y="381" width="52" height="32" rx="10"/>
-   <rect x="451"
-         y="379"
-         width="52"
+   <text class="terminal" x="204" y="119">FROM</text>
+   <rect x="276" y="101" width="36" height="32" rx="10"/>
+   <rect x="274"
+         y="99"
+         width="36"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="461" y="399">GZIP</text>
-   <rect x="48" y="447" width="56" height="32" rx="10"/>
-   <rect x="46"
-         y="445"
-         width="56"
+   <text class="terminal" x="284" y="119">S3</text>
+   <rect x="332" y="101" width="158" height="32" rx="10"/>
+   <rect x="330"
+         y="99"
+         width="158"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="56" y="465">WITH</text>
-   <rect x="124" y="447" width="24" height="32" rx="10"/>
-   <rect x="122"
-         y="445"
-         width="24"
+   <text class="terminal" x="340" y="119">DISCOVER OBJECTS</text>
+   <rect x="162" y="199" width="94" height="32" rx="10"/>
+   <rect x="160"
+         y="197"
+         width="94"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="132" y="465">(</text>
-   <rect x="168" y="447" width="70" height="32" rx="10"/>
-   <rect x="166"
-         y="445"
-         width="70"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="176" y="465">region =</text>
-   <rect x="258" y="447" width="58" height="32"/>
-   <rect x="256" y="445" width="58" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="266" y="465">region</text>
-   <rect x="356" y="479" width="118" height="32"/>
-   <rect x="354" y="477" width="118" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="364" y="497">aws_credentials</text>
-   <rect x="514" y="447" width="24" height="32" rx="10"/>
-   <rect x="512"
-         y="445"
-         width="24"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="522" y="465">)</text>
-   <rect x="277" y="545" width="78" height="32" rx="10"/>
-   <rect x="275"
-         y="543"
-         width="78"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="285" y="563">FORMAT</text>
-   <rect x="395" y="545" width="66" height="32" rx="10"/>
-   <rect x="393"
-         y="543"
-         width="66"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="403" y="563">REGEX</text>
-   <rect x="481" y="545" width="54" height="32"/>
-   <rect x="479" y="543" width="54" height="32" class="nonterminal"/>
-   <text class="nonterminal" x="489" y="563">regex</text>
-   <rect x="395" y="589" width="54" height="32" rx="10"/>
-   <rect x="393"
-         y="587"
-         width="54"
-         height="32"
-         class="terminal"
-         rx="10"/>
-   <text class="terminal" x="403" y="607">TEXT</text>
-   <rect x="395" y="633" width="64" height="32" rx="10"/>
-   <rect x="393"
-         y="631"
+   <text class="terminal" x="170" y="217">MATCHING</text>
+   <rect x="276" y="199" width="64" height="32"/>
+   <rect x="274" y="197" width="64" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="284" y="217">pattern</text>
+   <rect x="380" y="167" width="64" height="32" rx="10"/>
+   <rect x="378"
+         y="165"
          width="64"
          height="32"
          class="terminal"
          rx="10"/>
-   <text class="terminal" x="403" y="651">BYTES</text>
+   <text class="terminal" x="388" y="185">USING</text>
+   <rect x="153" y="309" width="118" height="32" rx="10"/>
+   <rect x="151"
+         y="307"
+         width="118"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="161" y="327">BUCKET SCAN</text>
+   <rect x="291" y="309" width="102" height="32"/>
+   <rect x="289" y="307" width="102" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="299" y="327">bucket_name</text>
+   <rect x="153" y="353" width="160" height="32" rx="10"/>
+   <rect x="151"
+         y="351"
+         width="160"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="161" y="371">SQS NOTIFICATIONS</text>
+   <rect x="333" y="353" width="100" height="32"/>
+   <rect x="331" y="351" width="100" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="341" y="371">queue_name</text>
+   <rect x="133" y="265" width="24" height="32" rx="10"/>
+   <rect x="131"
+         y="263"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="141" y="283">,</text>
+   <rect x="67" y="451" width="122" height="32" rx="10"/>
+   <rect x="65"
+         y="449"
+         width="122"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="75" y="469">COMPRESSION</text>
+   <rect x="229" y="451" width="60" height="32" rx="10"/>
+   <rect x="227"
+         y="449"
+         width="60"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="237" y="469">NONE</text>
+   <rect x="229" y="495" width="52" height="32" rx="10"/>
+   <rect x="227"
+         y="493"
+         width="52"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="237" y="513">GZIP</text>
+   <rect x="349" y="419" width="56" height="32" rx="10"/>
+   <rect x="347"
+         y="417"
+         width="56"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="357" y="437">WITH</text>
+   <rect x="425" y="419" width="24" height="32" rx="10"/>
+   <rect x="423"
+         y="417"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="433" y="437">(</text>
+   <rect x="469" y="419" width="70" height="32" rx="10"/>
+   <rect x="467"
+         y="417"
+         width="70"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="477" y="437">region =</text>
+   <rect x="104" y="561" width="58" height="32"/>
+   <rect x="102" y="559" width="58" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="112" y="579">region</text>
+   <rect x="202" y="593" width="118" height="32"/>
+   <rect x="200" y="591" width="118" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="210" y="611">aws_credentials</text>
+   <rect x="360" y="561" width="24" height="32" rx="10"/>
+   <rect x="358"
+         y="559"
+         width="24"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="368" y="579">)</text>
+   <rect x="404" y="561" width="78" height="32" rx="10"/>
+   <rect x="402"
+         y="559"
+         width="78"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="412" y="579">FORMAT</text>
+   <rect x="395" y="659" width="66" height="32" rx="10"/>
+   <rect x="393"
+         y="657"
+         width="66"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="403" y="677">REGEX</text>
+   <rect x="481" y="659" width="54" height="32"/>
+   <rect x="479" y="657" width="54" height="32" class="nonterminal"/>
+   <text class="nonterminal" x="489" y="677">regex</text>
+   <rect x="395" y="703" width="54" height="32" rx="10"/>
+   <rect x="393"
+         y="701"
+         width="54"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="403" y="721">TEXT</text>
+   <rect x="395" y="747" width="64" height="32" rx="10"/>
+   <rect x="393"
+         y="745"
+         width="64"
+         height="32"
+         class="terminal"
+         rx="10"/>
+   <text class="terminal" x="403" y="765">BYTES</text>
    <path class="line"
-         d="m17 17 h2 m0 0 h10 m74 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m20 -32 h10 m78 0 h10 m20 0 h10 m0 0 h128 m-158 0 h20 m138 0 h20 m-178 0 q10 0 10 10 m158 0 q0 -10 10 -10 m-168 10 v12 m158 0 v-12 m-158 12 q0 10 10 10 m138 0 q10 0 10 -10 m-148 10 h10 m118 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-460 98 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m80 0 h10 m0 0 h10 m196 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-372 110 l2 0 m2 0 l2 0 m2 0 l2 0 m42 0 h10 m118 0 h10 m0 0 h10 m102 0 h10 m0 0 h40 m-320 0 h20 m300 0 h20 m-340 0 q10 0 10 10 m320 0 q0 -10 10 -10 m-330 10 v24 m320 0 v-24 m-320 24 q0 10 10 10 m300 0 q10 0 10 -10 m-310 10 h10 m160 0 h10 m0 0 h10 m100 0 h10 m-340 -44 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m340 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-340 0 h10 m24 0 h10 m0 0 h296 m22 44 l2 0 m2 0 l2 0 m2 0 l2 0 m-484 94 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h188 m-218 0 h20 m198 0 h20 m-238 0 q10 0 10 10 m218 0 q0 -10 10 -10 m-228 10 v12 m218 0 v-12 m-218 12 q0 10 10 10 m198 0 q10 0 10 -10 m-208 10 h10 m94 0 h10 m0 0 h10 m64 0 h10 m40 -32 h10 m0 0 h252 m-282 0 h20 m262 0 h20 m-302 0 q10 0 10 10 m282 0 q0 -10 10 -10 m-292 10 v12 m282 0 v-12 m-282 12 q0 10 10 10 m262 0 q10 0 10 -10 m-272 10 h10 m122 0 h10 m20 0 h10 m60 0 h10 m-100 0 h20 m80 0 h20 m-120 0 q10 0 10 10 m100 0 q0 -10 10 -10 m-110 10 v24 m100 0 v-24 m-100 24 q0 10 10 10 m80 0 q10 0 10 -10 m-90 10 h10 m52 0 h10 m0 0 h8 m42 -76 l2 0 m2 0 l2 0 m2 0 l2 0 m-549 142 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m56 0 h10 m0 0 h10 m24 0 h10 m0 0 h10 m70 0 h10 m0 0 h10 m58 0 h10 m20 0 h10 m0 0 h128 m-158 0 h20 m138 0 h20 m-178 0 q10 0 10 10 m158 0 q0 -10 10 -10 m-168 10 v12 m158 0 v-12 m-158 12 q0 10 10 10 m138 0 q10 0 10 -10 m-148 10 h10 m118 0 h10 m20 -32 h10 m24 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-305 98 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m78 0 h10 m20 0 h10 m66 0 h10 m0 0 h10 m54 0 h10 m-180 0 h20 m160 0 h20 m-200 0 q10 0 10 10 m180 0 q0 -10 10 -10 m-190 10 v24 m180 0 v-24 m-180 24 q0 10 10 10 m160 0 q10 0 10 -10 m-170 10 h10 m54 0 h10 m0 0 h86 m-170 -10 v20 m180 0 v-20 m-180 20 v24 m180 0 v-24 m-180 24 q0 10 10 10 m160 0 q10 0 10 -10 m-170 10 h10 m64 0 h10 m0 0 h76 m23 -88 h-3"/>
-   <polygon points="573 559 581 555 581 563"/>
-   <polygon points="573 559 565 555 565 563"/>
+         d="m17 17 h2 m0 0 h10 m74 0 h10 m20 0 h10 m0 0 h130 m-160 0 h20 m140 0 h20 m-180 0 q10 0 10 10 m160 0 q0 -10 10 -10 m-170 10 v12 m160 0 v-12 m-160 12 q0 10 10 10 m140 0 q10 0 10 -10 m-150 10 h10 m120 0 h10 m20 -32 h10 m78 0 h10 m20 0 h10 m0 0 h128 m-158 0 h20 m138 0 h20 m-178 0 q10 0 10 10 m158 0 q0 -10 10 -10 m-168 10 v12 m158 0 v-12 m-158 12 q0 10 10 10 m138 0 q10 0 10 -10 m-148 10 h10 m118 0 h10 m22 -32 l2 0 m2 0 l2 0 m2 0 l2 0 m-509 98 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m80 0 h10 m0 0 h10 m60 0 h10 m0 0 h10 m36 0 h10 m0 0 h10 m158 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-392 66 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h188 m-218 0 h20 m198 0 h20 m-238 0 q10 0 10 10 m218 0 q0 -10 10 -10 m-228 10 v12 m218 0 v-12 m-218 12 q0 10 10 10 m198 0 q10 0 10 -10 m-208 10 h10 m94 0 h10 m0 0 h10 m64 0 h10 m20 -32 h10 m64 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-375 142 l2 0 m2 0 l2 0 m2 0 l2 0 m42 0 h10 m118 0 h10 m0 0 h10 m102 0 h10 m0 0 h40 m-320 0 h20 m300 0 h20 m-340 0 q10 0 10 10 m320 0 q0 -10 10 -10 m-330 10 v24 m320 0 v-24 m-320 24 q0 10 10 10 m300 0 q10 0 10 -10 m-310 10 h10 m160 0 h10 m0 0 h10 m100 0 h10 m-340 -44 l20 0 m-1 0 q-9 0 -9 -10 l0 -24 q0 -10 10 -10 m340 44 l20 0 m-20 0 q10 0 10 -10 l0 -24 q0 -10 -10 -10 m-340 0 h10 m24 0 h10 m0 0 h296 m22 44 l2 0 m2 0 l2 0 m2 0 l2 0 m-470 110 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m0 0 h252 m-282 0 h20 m262 0 h20 m-302 0 q10 0 10 10 m282 0 q0 -10 10 -10 m-292 10 v12 m282 0 v-12 m-282 12 q0 10 10 10 m262 0 q10 0 10 -10 m-272 10 h10 m122 0 h10 m20 0 h10 m60 0 h10 m-100 0 h20 m80 0 h20 m-120 0 q10 0 10 10 m100 0 q0 -10 10 -10 m-110 10 v24 m100 0 v-24 m-100 24 q0 10 10 10 m80 0 q10 0 10 -10 m-90 10 h10 m52 0 h10 m0 0 h8 m40 -76 h10 m56 0 h10 m0 0 h10 m24 0 h10 m0 0 h10 m70 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-479 142 l2 0 m2 0 l2 0 m2 0 l2 0 m2 0 h10 m58 0 h10 m20 0 h10 m0 0 h128 m-158 0 h20 m138 0 h20 m-178 0 q10 0 10 10 m158 0 q0 -10 10 -10 m-168 10 v12 m158 0 v-12 m-158 12 q0 10 10 10 m138 0 q10 0 10 -10 m-148 10 h10 m118 0 h10 m20 -32 h10 m24 0 h10 m0 0 h10 m78 0 h10 m2 0 l2 0 m2 0 l2 0 m2 0 l2 0 m-151 98 l2 0 m2 0 l2 0 m2 0 l2 0 m22 0 h10 m66 0 h10 m0 0 h10 m54 0 h10 m-180 0 h20 m160 0 h20 m-200 0 q10 0 10 10 m180 0 q0 -10 10 -10 m-190 10 v24 m180 0 v-24 m-180 24 q0 10 10 10 m160 0 q10 0 10 -10 m-170 10 h10 m54 0 h10 m0 0 h86 m-170 -10 v20 m180 0 v-20 m-180 20 v24 m180 0 v-24 m-180 24 q0 10 10 10 m160 0 q10 0 10 -10 m-170 10 h10 m64 0 h10 m0 0 h76 m23 -88 h-3"/>
+   <polygon points="573 673 581 669 581 677"/>
+   <polygon points="573 673 565 669 565 677"/>
 </svg>

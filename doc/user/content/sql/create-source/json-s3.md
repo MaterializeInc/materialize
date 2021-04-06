@@ -42,7 +42,7 @@ We can load all these keys with the following command:
 
 ```sql
 > CREATE SOURCE json_source
-  FROM S3 OBJECTS FROM SCAN BUCKET 'analytics' MATCHING '**/*.json'
+  FROM S3 DISCOVER OBJECTS MATCHING '**/*.json' USING BUCKET SCAN 'analytics'
   WITH (region = 'us-east-2')
   FORMAT TEXT;
 ```

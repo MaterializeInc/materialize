@@ -32,8 +32,8 @@ multiple object ingestion to speed it up.
 
 Materialize has several techniques to discover the objects to download, with [more
 planned][object-specifiers] for the future. Strategies may be specified multiple times within one
-**CREATE SOURCE** statement, so for example this is a legal invocation: `OBJECTS FROM SCAN BUCKET
-'example', SCAN BUCKET 'other', SQS NOTIFICATIONS 'example-notifications'`.
+**CREATE SOURCE** statement, so for example this is a legal invocation: `DISCOVER OBJECTS USING BUCKET SCAN
+'example', BUCKET SCAN 'other', SQS NOTIFICATIONS 'example-notifications'`.
 
 All strategies follow the same basic pattern, `materialized` will:
 
@@ -51,7 +51,7 @@ and the Materialize SQL engine, as usual with SQL you must impose your own order
 
 ##### Scanning S3 Buckets
 
-The **OBJECTS FROM SCAN BUCKET** syntax causes S3 sources to issue [ListBucket][] requests to
+The **DISCOVER OBJECTS USING BUCKET SCAN** syntax causes S3 sources to issue [ListBucket][] requests to
 collect the names of objects to collect. After collecting the list of keys, their names are
 checked against the **MATCHING** clause, if present, before downloading and extracting objects
 line by line.
@@ -66,7 +66,7 @@ modifications are object creation, aka the `s3:ObjectCreated:*` event namespace.
 AWS Tutorial][notification-tutorial] will configure a bucket for exactly this namespace.
 
 Once you have configured S3 notifications to go to an SQS queue you can point materialized at that
-queue via **OBJECTS FROM SQS NOTIFICATIONS `'queue-name'`**.
+queue via **DISCOVER OBJECTS USING SQS NOTIFICATIONS `'queue-name'`**.
 
 [notification-aws]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/NotificationHowTo.html
 [notification-tutorial]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ways-to-add-notification-config-to-bucket.html

@@ -293,7 +293,7 @@ pub enum Connector<T: AstInfo> {
         path: String,
     },
     S3 {
-        /// The arguments to `OBJECTS FROM`: `SCAN BUCKET` or `SQS NOTIFICATIONS`
+        /// The arguments to `DISCOVER OBJECTS USING`: `BUCKET SCAN` or `SQS NOTIFICATIONS`
         key_sources: Vec<S3KeySource>,
         /// The argument to the MATCHING clause: `MATCHING 'a/**/*.json'`
         pattern: Option<String>,
@@ -359,13 +359,14 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                 pattern,
                 compression,
             } => {
-                f.write_str("S3 OBJECTS FROM");
-                f.write_node(&display::comma_separated(key_sources));
+                f.write_str("S3 DISCOVER OBJECTS");
                 if let Some(pattern) = pattern {
                     f.write_str(" MATCHING '");
                     f.write_str(&display::escape_single_quote_string(pattern));
                     f.write_str("'");
                 }
+                f.write_str(" USING");
+                f.write_node(&display::comma_separated(key_sources));
                 if compression != &Default::default() {
                     f.write_str(" COMPRESSION ");
                     f.write_node(compression);
@@ -470,12 +471,12 @@ impl<T: AstInfo> AstDisplay for PgTable<T> {
 }
 impl_display_t!(PgTable);
 
-/// The key sources specified in the S3 source's `OBJECTS FROM` clause.
+/// The key sources specified in the S3 source's `DISCOVER OBJECTS` clause.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum S3KeySource {
-    /// `OBJECTS FROM SCAN BUCKET '<bucket>'`
+    /// `SCAN BUCKET '<bucket>'`
     Scan { bucket: String },
-    /// `OBJECTS FROM SQS NOTIFICATIONS '<queue-name>'`
+    /// `SQS NOTIFICATIONS '<queue-name>'`
     SqsNotifications { queue: String },
 }
 
@@ -483,7 +484,7 @@ impl AstDisplay for S3KeySource {
     fn fmt(&self, f: &mut AstFormatter) {
         match self {
             S3KeySource::Scan { bucket } => {
-                f.write_str(" SCAN BUCKET '");
+                f.write_str(" BUCKET SCAN '");
                 f.write_str(&display::escape_single_quote_string(bucket));
                 f.write_str("'");
             }

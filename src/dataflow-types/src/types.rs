@@ -751,7 +751,7 @@ pub struct S3SourceConnector {
     pub compression: Compression,
 }
 
-/// A Source of Object Key names, the argument of the `OBJECTS FROM` clause
+/// A Source of Object Key names, the argument of the `DISCOVER OBJECTS` clause
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum S3KeySource {
     /// Scan the S3 Bucket to discover keys to download

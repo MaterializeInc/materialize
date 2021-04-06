@@ -79,6 +79,7 @@ Delete
 Delimited
 Desc
 Discard
+Discover
 Distinct
 Double
 Drop
