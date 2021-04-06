@@ -712,6 +712,15 @@ impl<'a> SchemaResolver<'a> {
                     {
                         SchemaPieceOrNamed::Piece(SchemaPiece::Bytes)
                     }
+                    // TODO [btv] We probably want to rethink what we're doing here, rather than just add
+                    // a new branch for every possible "logical" type. Perhaps logical types with the
+                    // same underlying type should always be resolvable to the reader schema's type?
+                    (SchemaPiece::Json, SchemaPiece::Json) => {
+                        SchemaPieceOrNamed::Piece(SchemaPiece::Json)
+                    }
+                    (SchemaPiece::Uuid, SchemaPiece::Uuid) => {
+                        SchemaPieceOrNamed::Piece(SchemaPiece::Uuid)
+                    }
                     (
                         SchemaPiece::Bytes,
                         SchemaPiece::Decimal {
