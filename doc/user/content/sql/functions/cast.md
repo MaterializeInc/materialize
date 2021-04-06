@@ -34,10 +34,10 @@ The following special syntax is permitted if _val_ is a string literal:
 Casts may be:
 
 * **Implicit** -- Values are automatically converted (for example, when you add `int4` to `int8`, the `int4` value is automatically converted to `int8`)
-* **Explicit** -- You must invoke `CAST` deliberately
 * **Assignment** -- Values of one type are converted automatically when inserted into a column of a different type
+* **Explicit** -- You must invoke `CAST` deliberately
 
-Casts that occur implicitly or by assignment can also be explicitly invoked.
+Casts allowed in less strict contexts are also allowed in stricter contexts: that is, implicit casts can also occur explicitly or by assignment, and casts by assignment can also be explicitly invoked.
 
 Source type | Return type | Cast type(s)
 ------------|-------------|----------
