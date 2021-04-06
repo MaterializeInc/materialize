@@ -76,3 +76,12 @@ $ kafka-verify format=avro sink=materialize.public.sort_messages_sink sort-messa
 {"before": null, "after": {"row": {"a": 1}}}
 {"before": null, "after": {"row": {"a": 2}}}
 {"before": null, "after": {"row": {"a": 3}}}
+
+# Use $ postgresql-execute and ${testdrive.materialize_addr}
+
+$ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialized-addr}
+CREATE TABLE postgres_execute (f1 INTEGER);
+INSERT INTO postgres_execute VALUES (123);
+
+> SELECT * FROM postgres_execute;
+123

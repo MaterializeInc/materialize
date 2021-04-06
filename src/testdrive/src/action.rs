@@ -375,6 +375,10 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
         },
     );
     vars.insert(
+        "testdrive.materialized-addr".into(),
+        state.materialized_addr.clone(),
+    );
+    vars.insert(
         "testdrive.materialized-user".into(),
         state.materialized_user.clone(),
     );
