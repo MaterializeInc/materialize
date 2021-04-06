@@ -77,6 +77,15 @@ struct Args {
     /// [DANGEROUS] Enable experimental features.
     #[structopt(long)]
     experimental: bool,
+    /// Whether to run in safe mode.
+    ///
+    /// In safe mode, features that provide access to the underlying machine,
+    /// like file sources and sinks, are disabled.
+    ///
+    /// This option is intended for use by the cloud product
+    /// (cloud.materialize.com), but may be useful in other contexts as well.
+    #[structopt(long, hidden = true)]
+    safe: bool,
 
     /// Enable persistent tables. Has to be used with --experimental.
     #[structopt(long)]
@@ -576,6 +585,7 @@ swap: {swap_total}KB total, {swap_used}KB used",
             data_directory,
             symbiosis_url: args.symbiosis,
             experimental_mode: args.experimental,
+            safe_mode: args.safe,
             telemetry_url,
         },
         runtime.clone(),
