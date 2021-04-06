@@ -15,6 +15,8 @@ use std::error::Error;
 use reqwest::{blocking::Client, StatusCode, Url};
 use tempfile::NamedTempFile;
 
+use crate::util::KAFKA_ADDRS;
+
 pub mod util;
 
 #[test]
@@ -168,6 +170,23 @@ fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    Ok(())
+}
+
+#[test]
+fn test_shutdown() -> Result<(), Box<dyn Error>> {
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
+
+    // Even though this source is unmaterialized, its very presence in the
+    // system will cause timely to fail to wind down. Something to do with the
+    // AddSourceTimestamping command.
+    client.batch_execute(&*format!(
+        "CREATE SOURCE src
+        FROM KAFKA BROKER '{}' TOPIC 'foo'
+        FORMAT BYTES",
+        &*KAFKA_ADDRS,
+    ))?;
     Ok(())
 }
 

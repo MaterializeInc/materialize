@@ -8,19 +8,29 @@
 // by the Apache License, Version 2.0.
 
 use std::convert::TryInto;
+use std::env;
 use std::error::Error;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use materialized::TlsMode;
+use lazy_static::lazy_static;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
 use postgres::Socket;
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
+
+use materialized::TlsMode;
+
+lazy_static! {
+    pub static ref KAFKA_ADDRS: kafka_util::KafkaAddrs = match env::var("KAFKA_ADDRS") {
+        Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
+        _ => "localhost:9092".parse().unwrap(),
+    };
+}
 
 #[derive(Clone)]
 pub struct Config {
