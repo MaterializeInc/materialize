@@ -73,7 +73,7 @@ in order to ensure that escape string literals are always valid UTF-8.
 
 #### From `text`
 
-You can [cast](../../functions/cast) `text` to [all types](../) except [`record`](../types/record/). Casts from text
+You can [cast](../../functions/cast) `text` to [all types](../) except [`record`](../../types/record/). Casts from text
 will error if the string is not valid input for the destination type.
 
 #### To `text`
