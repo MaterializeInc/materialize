@@ -27,7 +27,7 @@ use expr::{GlobalId, MirRelationExpr};
 use interchange::envelopes::{combine_at_timestamp, dbz_format, upsert_format};
 use ore::cast::CastFrom;
 use repr::adt::decimal::Significand;
-use repr::{Datum, Row, RowPacker, Timestamp};
+use repr::{Datum, Row, Timestamp};
 
 use crate::render::context::Context;
 use crate::render::RenderState;
@@ -96,7 +96,7 @@ where
             SinkEnvelope::Debezium => {
                 let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
                 // This has to be an `Rc<RefCell<...>>` because the inner closure (passed to `Iterator::map`) references it, and it might outlive the outer closure.
-                let rp = Rc::new(RefCell::new(RowPacker::new()));
+                let rp = Rc::new(RefCell::new(Row::default()));
                 let collection = combined.flat_map(move |(mut k, v)| {
                     let max_idx = v.len() - 1;
                     let rp = rp.clone();
@@ -120,7 +120,7 @@ where
                 .consolidate()
                 .inner
                 .map({
-                    let mut rp = RowPacker::new();
+                    let mut rp = Row::default();
                     move |((k, v), time, diff)| {
                         rp.push(Datum::Decimal(Significand::new(i128::from(time))));
                         if emit_progress {
@@ -145,14 +145,12 @@ where
             collection
                 .inner
                 .map(|((k, v), t, diff)| {
-                    let v = v.map(|v| {
-                        let mut rp = RowPacker::new();
-                        rp.extend_by_row(&v);
+                    let v = v.map(|mut v| {
                         let t = t.to_string();
-                        rp.push_list_with(|rp| {
+                        v.push_list_with(|rp| {
                             rp.push(Datum::String(&t));
                         });
-                        rp.finish()
+                        v
                     });
                     ((k, v), t, diff)
                 })

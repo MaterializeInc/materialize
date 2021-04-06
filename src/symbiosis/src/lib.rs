@@ -38,7 +38,7 @@ use uuid::Uuid;
 
 use pgrepr::Jsonb;
 use repr::adt::decimal::Significand;
-use repr::{Datum, RelationDesc, RelationType, Row, RowPacker};
+use repr::{Datum, RelationDesc, RelationType, Row};
 use sql::ast::{
     ColumnOption, CreateTableStatement, DataType, DeleteStatement, DropObjectsStatement, Expr,
     InsertStatement, ObjectType, Raw, Statement, TableConstraint, UpdateStatement,
@@ -334,7 +334,7 @@ END $$;
             .clone();
         let mut rows = vec![];
         let postgres_rows = self.client.query(&*query, &[]).await?;
-        let mut row = RowPacker::new();
+        let mut row = Row::default();
         for postgres_row in postgres_rows.iter() {
             for c in 0..postgres_row.len() - junk {
                 row = push_column(
@@ -352,12 +352,12 @@ END $$;
 }
 
 fn push_column(
-    mut row: RowPacker,
+    mut row: Row,
     postgres_row: &tokio_postgres::Row,
     i: usize,
     sql_type: &DataType<Aug>,
     nullable: bool,
-) -> Result<RowPacker, anyhow::Error> {
+) -> Result<Row, anyhow::Error> {
     // NOTE this needs to stay in sync with materialize::sql::scalar_type_from_sql
     // in some cases, we use slightly different representations than postgres does for the same sql types, so we have to be careful about conversions
     match sql_type {
@@ -365,15 +365,15 @@ fn push_column(
             match name.raw_name().to_string().as_str() {
                 "pg_catalog.bool" => {
                     let bool = get_column_inner::<bool>(postgres_row, i, nullable)?;
-                    row.push(bool.into());
+                    row.push(Datum::from(bool));
                 }
                 "pg_catalog.bytea" => {
                     let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
-                    row.push(bytes.as_deref().into());
+                    row.push(Datum::from(bytes.as_deref()));
                 }
                 "pg_catalog.char" | "pg_catalog.text" | "pg_catalog.varchar" => {
                     let string = get_column_inner::<String>(postgres_row, i, nullable)?;
-                    row.push(string.as_deref().into());
+                    row.push(Datum::from(string.as_deref()));
                 }
                 "pg_catalog.date" => {
                     let d: chrono::NaiveDate =
@@ -382,19 +382,19 @@ fn push_column(
                 }
                 "pg_catalog.float4" => {
                     let f = get_column_inner::<f32>(postgres_row, i, nullable)?.map(f32::from);
-                    row.push(f.into());
+                    row.push(Datum::from(f));
                 }
                 "pg_catalog.float8" => {
                     let f = get_column_inner::<f64>(postgres_row, i, nullable)?;
-                    row.push(f.into());
+                    row.push(Datum::from(f));
                 }
                 "pg_catalog.int4" => {
                     let i = get_column_inner::<i32>(postgres_row, i, nullable)?;
-                    row.push(i.into());
+                    row.push(Datum::from(i));
                 }
                 "pg_catalog.int8" => {
                     let i = get_column_inner::<i64>(postgres_row, i, nullable)?;
-                    row.push(i.into());
+                    row.push(Datum::from(i));
                 }
                 "pg_catalog.interval" => {
                     let iv =
@@ -426,13 +426,13 @@ fn push_column(
                             } else {
                                 significand *= 10i128.pow((-scale_correction).try_into()?);
                             };
-                            row.push(Significand::new(significand).into());
+                            row.push(Datum::from(Significand::new(significand)));
                         }
                     }
                 }
                 "pg_catalog.int2" | "pg_catalog.smallint" => {
                     let i = get_column_inner::<i16>(postgres_row, i, nullable)?.map(i32::from);
-                    row.push(i.into());
+                    row.push(Datum::from(i));
                 }
                 "pg_catalog.timestamp" => {
                     let d: chrono::NaiveDateTime =

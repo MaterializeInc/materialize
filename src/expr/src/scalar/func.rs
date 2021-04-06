@@ -43,7 +43,7 @@ use repr::adt::interval::Interval;
 use repr::adt::jsonb::JsonbRef;
 use repr::adt::rdn;
 use repr::adt::regex::Regex;
-use repr::{strconv, ColumnName, ColumnType, Datum, RowArena, RowPacker, ScalarType};
+use repr::{strconv, ColumnName, ColumnType, Datum, Row, RowArena, ScalarType};
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{like_pattern, EvalError, MirScalarExpr};
@@ -2243,28 +2243,28 @@ fn jsonb_typeof<'a>(a: Datum<'a>) -> Datum<'a> {
 }
 
 fn jsonb_strip_nulls<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    fn strip_nulls(a: Datum, packer: &mut RowPacker) {
+    fn strip_nulls(a: Datum, row: &mut Row) {
         match a {
-            Datum::Map(dict) => packer.push_dict_with(|packer| {
+            Datum::Map(dict) => row.push_dict_with(|row| {
                 for (k, v) in dict.iter() {
                     match v {
                         Datum::JsonNull => (),
                         _ => {
-                            packer.push(Datum::String(k));
-                            strip_nulls(v, packer);
+                            row.push(Datum::String(k));
+                            strip_nulls(v, row);
                         }
                     }
                 }
             }),
-            Datum::List(list) => packer.push_list_with(|packer| {
+            Datum::List(list) => row.push_list_with(|row| {
                 for elem in list.iter() {
-                    strip_nulls(elem, packer);
+                    strip_nulls(elem, row);
                 }
             }),
-            _ => packer.push(a),
+            _ => row.push(a),
         }
     }
-    temp_storage.make_datum(|packer| strip_nulls(a, packer))
+    temp_storage.make_datum(|row| strip_nulls(a, row))
 }
 
 fn jsonb_pretty<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
@@ -2360,6 +2360,7 @@ pub enum BinaryFunc {
     ConvertFrom,
     Position,
     Right,
+    RepeatString,
     Trim,
     TrimLeading,
     TrimTrailing,
@@ -2536,6 +2537,7 @@ impl BinaryFunc {
             BinaryFunc::LogDecimal(scale) => eager!(log_base, *scale),
             BinaryFunc::Power => eager!(power),
             BinaryFunc::PowerDecimal(scale) => eager!(power_dec, *scale),
+            BinaryFunc::RepeatString => eager!(repeat_string, temp_storage),
         }
     }
 
@@ -2704,6 +2706,7 @@ impl BinaryFunc {
             LogDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
             Power => ScalarType::Float64.nullable(in_nullable),
             PowerDecimal(_) => input1_type.scalar_type.nullable(in_nullable),
+            RepeatString => input1_type.scalar_type.nullable(in_nullable),
         }
     }
 
@@ -2891,7 +2894,8 @@ impl BinaryFunc {
             | Decode
             | LogDecimal(_)
             | Power
-            | PowerDecimal(_) => false,
+            | PowerDecimal(_)
+            | RepeatString => false,
         }
     }
 
@@ -3025,6 +3029,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::LogDecimal(_) => f.write_str("log"),
             BinaryFunc::Power => f.write_str("power"),
             BinaryFunc::PowerDecimal(_) => f.write_str("power_decimal"),
+            BinaryFunc::RepeatString => f.write_str("repeat"),
         }
     }
 }
@@ -3951,15 +3956,15 @@ fn regexp_match_static<'a>(
     temp_storage: &'a RowArena,
     needle: &regex::Regex,
 ) -> Result<Datum<'a>, EvalError> {
-    let mut packer = RowPacker::new();
+    let mut row = Row::default();
     if needle.captures_len() > 1 {
         // The regex contains capture groups, so return an array containing the
         // matched text in each capture group, unless the entire match fails.
         // Individual capture groups may also be null if that group did not
         // participate in the match.
         match needle.captures(haystack.unwrap_str()) {
-            None => packer.push(Datum::Null),
-            Some(captures) => packer.push_array(
+            None => row.push(Datum::Null),
+            Some(captures) => row.push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: captures.len() - 1,
@@ -3975,8 +3980,8 @@ fn regexp_match_static<'a>(
         // The regex contains no capture groups, so return a one-element array
         // containing the match, or null if there is no match.
         match needle.find(haystack.unwrap_str()) {
-            None => packer.push(Datum::Null),
-            Some(mtch) => packer.push_array(
+            None => row.push(Datum::Null),
+            Some(mtch) => row.push_array(
                 &[ArrayDimension {
                     lower_bound: 1,
                     length: 1,
@@ -3985,7 +3990,7 @@ fn regexp_match_static<'a>(
             )?,
         };
     };
-    Ok(temp_storage.push_unary_row(packer.finish()))
+    Ok(temp_storage.push_unary_row(row))
 }
 
 pub fn build_regex(needle: &str, flags: &str) -> Result<regex::Regex, EvalError> {
@@ -4064,6 +4069,20 @@ pub fn hmac_inner<'a>(
         other => return Err(EvalError::InvalidHashAlgorithm(other.to_owned())),
     };
     Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
+}
+
+fn repeat_string<'a>(
+    string: Datum<'a>,
+    count: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    Ok(Datum::String(
+        temp_storage.push_string(
+            string
+                .unwrap_str()
+                .repeat(usize::try_from(count.unwrap_int32()).unwrap_or(0)),
+        ),
+    ))
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
@@ -4278,20 +4297,20 @@ where
 
 fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
     // Return value indicates whether this level's slices are empty results.
-    fn slice_and_descend(d: Datum, ranges: &[(usize, usize)], packer: &mut RowPacker) -> bool {
+    fn slice_and_descend(d: Datum, ranges: &[(usize, usize)], row: &mut Row) -> bool {
         match ranges {
             [(start, n), ranges @ ..] if !d.is_null() => {
                 let mut iter = d.unwrap_list().iter().skip(*start).take(*n).peekable();
                 if iter.peek().is_none() {
-                    packer.push(Datum::Null);
+                    row.push(Datum::Null);
                     true
                 } else {
                     let mut empty_results = true;
-                    let start = packer.data().len();
-                    packer.push_list_with(|packer| {
+                    let start = row.data().len();
+                    row.push_list_with(|row| {
                         for d in iter {
                             // Determine if all higher-dimension slices produced empty results.
-                            empty_results = slice_and_descend(d, ranges, packer) && empty_results;
+                            empty_results = slice_and_descend(d, ranges, row) && empty_results;
                         }
                     });
 
@@ -4301,19 +4320,19 @@ fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a>
                         // were empty.
 
                         // SAFETY: `start` points to a datum boundary because a)
-                        // it comes from a call to `packer.data().len()` above,
+                        // it comes from a call to `row.data().len()` above,
                         // and b) recursive calls to `slice_and_descend` will
-                        // not shrink the packer. (The recursive calls may write
+                        // not shrink the row. (The recursive calls may write
                         // data and then erase that data, but a recursive call
                         // will never erase data that it did not write itself.)
-                        unsafe { packer.truncate(start) }
-                        packer.push(Datum::Null);
+                        unsafe { row.truncate(start) }
+                        row.push(Datum::Null);
                     }
                     empty_results
                 }
             }
             _ => {
-                packer.push(d);
+                row.push(d);
                 // Slicing a NULL produces an empty result.
                 d.is_null() && ranges.len() > 0
             }
@@ -4344,8 +4363,8 @@ fn list_slice<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a>
         ranges.push((start as usize - 1, (end - start) as usize + 1));
     }
 
-    temp_storage.make_datum(|packer| {
-        slice_and_descend(datums[0], &ranges, packer);
+    temp_storage.make_datum(|row| {
+        slice_and_descend(datums[0], &ranges, row);
     })
 }
 

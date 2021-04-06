@@ -82,12 +82,12 @@ macro_rules! unsupported {
     };
 }
 
-mod kafka_util;
 mod postgres_util;
 
 pub mod ast;
 pub mod catalog;
 pub mod func;
+pub mod kafka_util;
 pub mod names;
 #[macro_use]
 pub mod normalize;

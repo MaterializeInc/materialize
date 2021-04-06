@@ -480,6 +480,7 @@ impl Catalog {
                 start_instant: Instant::now(),
                 nonce: rand::random(),
                 experimental_mode,
+                safe_mode: config.safe_mode,
                 cluster_id,
                 session_id: Uuid::new_v4(),
                 cache_directory: config.cache_directory.clone(),
@@ -790,6 +791,7 @@ impl Catalog {
             path,
             enable_logging: true,
             experimental_mode: None,
+            safe_mode: false,
             cache_directory: None,
             build_info: &DUMMY_BUILD_INFO,
             num_workers: 0,
@@ -1075,7 +1077,7 @@ impl Catalog {
         name: FullName,
         item: CatalogItem,
     ) -> Event {
-        if !item.is_placeholder() {
+        if !id.is_system() && !item.is_placeholder() {
             info!("create {} {} ({})", item.typ(), name, id);
         }
 

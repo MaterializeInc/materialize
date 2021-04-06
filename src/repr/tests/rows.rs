@@ -7,15 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::ops::Add;
+
 use chrono::TimeZone;
 use proptest::prelude::*;
-use repr::{
-    adt::decimal::Significand,
-    adt::{array::ArrayDimension, interval::Interval},
-    Datum, Row, RowPacker,
-};
-use std::ops::Add;
 use uuid::Uuid;
+
+use repr::adt::decimal::Significand;
+use repr::adt::{array::ArrayDimension, interval::Interval};
+use repr::{Datum, Row};
 
 /// A type similar to [`Datum`] that can be proptest-generated.
 #[derive(Debug, PartialEq, Clone)]
@@ -105,9 +105,9 @@ fn arb_array(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy
     })
     .prop_map(|(dimensions, elements)| {
         let element_datums: Vec<Datum<'_>> = elements.iter().map(|pd| pd.into()).collect();
-        let mut packer = RowPacker::new();
-        packer.push_array(&dimensions, element_datums).unwrap();
-        PropertizedArray(packer.finish(), elements)
+        let mut row = Row::default();
+        row.push_array(&dimensions, element_datums).unwrap();
+        PropertizedArray(row, elements)
     })
     .boxed()
 }
@@ -119,9 +119,9 @@ fn arb_list(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<
     prop::collection::vec(element_strategy, 1..50)
         .prop_map(|elements| {
             let element_datums: Vec<Datum<'_>> = elements.iter().map(|pd| pd.into()).collect();
-            let mut packer = RowPacker::new();
-            packer.push_list(element_datums.iter());
-            PropertizedList(packer.finish(), elements)
+            let mut row = Row::default();
+            row.push_list(element_datums.iter());
+            PropertizedList(row, elements)
         })
         .boxed()
 }
@@ -134,13 +134,13 @@ fn arb_dict(element_strategy: BoxedStrategy<PropertizedDatum>) -> BoxedStrategy<
         .prop_map(|mut entries| {
             entries.sort_by_key(|(k, _)| k.clone());
             entries.dedup_by_key(|(k, _)| k.clone());
-            let mut packer = RowPacker::new();
+            let mut row = Row::default();
             let entry_iter: Vec<(&str, Datum<'_>)> = entries
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.into()))
                 .collect();
-            packer.push_dict(entry_iter.into_iter());
-            PropertizedDict(packer.finish(), entries)
+            row.push_dict(entry_iter.into_iter());
+            PropertizedDict(row, entries)
         })
         .boxed()
 }
@@ -233,12 +233,12 @@ proptest! {
 
     #[test]
     fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(arb_datum(), 1..100)) {
-        let mut packer = RowPacker::new();
+        let mut row = Row::default();
         let datums: Vec<Datum<'_>> = prop_datums.iter().map(|pd| pd.into()).collect();
         for d in datums.iter() {
-            packer.push(d.clone());
+            row.push(d.clone());
         }
-        let row = packer.finish();
+        let row = row;
         let unpacked = row.unpack();
         assert_eq!(datums, unpacked);
     }

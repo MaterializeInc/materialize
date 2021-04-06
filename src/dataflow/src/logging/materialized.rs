@@ -21,7 +21,7 @@ use timely::logging::WorkerIdentifier;
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use expr::{GlobalId, SourceInstanceId};
-use repr::{Datum, Timestamp};
+use repr::{Datum, Row, Timestamp};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -176,7 +176,6 @@ pub fn construct<A: Allocate>(
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
             let mut active_dataflows = std::collections::HashMap::new();
-            let mut row_packer = repr::RowPacker::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
@@ -248,7 +247,7 @@ pub fn construct<A: Allocate>(
                             }
                             MaterializedEvent::Frontier(name, logical, delta) => {
                                 frontier_session.give((
-                                    row_packer.pack(&[
+                                    Row::pack_slice(&[
                                         Datum::String(&name.to_string()),
                                         Datum::Int64(worker as i64),
                                         Datum::Int64(logical as i64),
@@ -343,9 +342,8 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut row_packer = repr::RowPacker::new();
                 move |(name, worker)| {
-                    row_packer.pack(&[
+                    Row::pack_slice(&[
                         Datum::String(&name.to_string()),
                         Datum::Int64(worker as i64),
                     ])
@@ -361,9 +359,8 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut row_packer = repr::RowPacker::new();
                 move |(dataflow, source, worker)| {
-                    row_packer.pack(&[
+                    Row::pack_slice(&[
                         Datum::String(&dataflow.to_string()),
                         Datum::String(&source.to_string()),
                         Datum::Int64(worker as i64),
@@ -399,9 +396,8 @@ pub fn construct<A: Allocate>(
         });
 
         let kafka_consumer_info_current = kafka_consumer_info.as_collection().count().map({
-            let mut row_packer = repr::RowPacker::new();
             move |((consumer_name, source_id, partition_id), diff_vector)| {
-                row_packer.pack(&[
+                Row::pack_slice(&[
                     Datum::String(&consumer_name),
                     Datum::String(&source_id.source_id.to_string()),
                     Datum::Int64(source_id.dataflow_id as i64),
@@ -428,9 +424,8 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut row_packer = repr::RowPacker::new();
                 move |(peek, worker)| {
-                    row_packer.pack(&[
+                    Row::pack_slice(&[
                         Datum::String(&format!("{}", peek.conn_id)),
                         Datum::Int64(worker as i64),
                         Datum::String(&peek.id.to_string()),
@@ -440,9 +435,8 @@ pub fn construct<A: Allocate>(
             });
 
         let source_info_current = source_info.as_collection().count().map({
-            let mut row_packer = repr::RowPacker::new();
             move |((name, id, pid), (offset, timestamp))| {
-                row_packer.pack(&[
+                Row::pack_slice(&[
                     Datum::String(&name),
                     Datum::String(&id.source_id.to_string()),
                     Datum::Int64(id.dataflow_id as i64),
@@ -507,9 +501,8 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count_total()
             .map({
-                let mut row_packer = repr::RowPacker::new();
                 move |((worker, pow), count)| {
-                    row_packer.pack(&[
+                    Row::pack_slice(&[
                         Datum::Int64(worker as i64),
                         Datum::Int64(pow as i64),
                         Datum::Int64(count as i64),
@@ -560,11 +553,11 @@ pub fn construct<A: Allocate>(
                 let key_clone = key.clone();
                 let trace = collection
                     .map({
-                        let mut row_packer = repr::RowPacker::new();
+                        let mut row_packer = Row::default();
                         move |row| {
                             let datums = row.unpack();
-                            let key_row = row_packer.pack(key.iter().map(|k| datums[*k]));
-                            (key_row, row)
+                            row_packer.extend(key.iter().map(|k| datums[*k]));
+                            (row_packer.finish_and_reuse(), row)
                         }
                     })
                     .arrange_by_key()

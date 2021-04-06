@@ -339,7 +339,7 @@ async fn build_kafka(
     }
     let client = config
         .create::<AdminClient<_>>()
-        .expect("creating admin client failed");
+        .context("creating admin client failed")?;
     let ccsr = builder.ccsr_config.build()?;
 
     let (key_schema_id, value_schema_id) = register_kafka_topic(
@@ -383,7 +383,7 @@ async fn build_kafka(
 
             let mut consumer = consumer_config
                 .create::<BaseConsumer>()
-                .expect("creating consumer client failed");
+                .context("creating consumer client failed")?;
 
             get_latest_ts(&consistency_topic, &mut consumer, Duration::from_secs(5))
                 .await

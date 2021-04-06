@@ -14,7 +14,7 @@ use pubnub_hyper::{Builder, DefaultRuntime, DefaultTransport};
 
 use crate::source::{SimpleSource, SourceError, Timestamper};
 use dataflow_types::PubNubSourceConnector;
-use repr::{Datum, RowPacker};
+use repr::{Datum, Row};
 
 /// Information required to sync data from PubNub
 pub struct PubNubSourceReader {
@@ -48,15 +48,11 @@ impl SimpleSource for PubNubSourceReader {
         let stream = pubnub.subscribe(channel).await;
         tokio::pin!(stream);
 
-        let mut packer = RowPacker::new();
-
         while let Some(msg) = stream.next().await {
             if msg.message_type == Type::Publish {
                 let s = msg.json.dump();
 
-                let datum: Datum = (&*s).into();
-                packer.push(datum);
-                let row = packer.finish_and_reuse();
+                let row = Row::pack_slice(&[Datum::String(&s)]);
 
                 timestamper
                     .insert(row)

@@ -15,6 +15,8 @@ use std::error::Error;
 use reqwest::{blocking::Client, StatusCode, Url};
 use tempfile::NamedTempFile;
 
+use crate::util::{PostgresErrorExt, KAFKA_ADDRS};
+
 pub mod util;
 
 #[test]
@@ -166,6 +168,71 @@ fn test_experimental_mode_on_init_or_never() -> Result<(), Box<dyn Error>> {
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_safe_mode() -> Result<(), Box<dyn Error>> {
+    let server = util::start_server(util::Config::default().safe_mode())?;
+    let mut client = server.connect(postgres::NoTls)?;
+
+    // No file sources or sinks.
+    let err = client
+        .batch_execute("CREATE SOURCE src FROM FILE '/ignored' FORMAT BYTES")
+        .unwrap_db_error();
+    assert_eq!(err.message(), "cannot create file source in safe mode");
+    let err = client
+        .batch_execute("CREATE SINK snk FROM mz_sources INTO FILE '/ignored' FORMAT BYTES")
+        .unwrap_db_error();
+    assert_eq!(err.message(), "cannot create file sink in safe mode");
+
+    // No Avro OCF sources or sinks.
+    let err = client
+        .batch_execute("CREATE SOURCE src FROM AVRO OCF '/ignored'")
+        .unwrap_db_error();
+    assert_eq!(err.message(), "cannot create Avro OCF source in safe mode");
+    let err = client
+        .batch_execute("CREATE SINK snk FROM mz_sources INTO AVRO OCF '/ignored'")
+        .unwrap_db_error();
+    assert_eq!(err.message(), "cannot create Avro OCF sink in safe mode");
+
+    // No Kerberos-authenticated Kafka sources or sinks.
+    let err = client
+        .batch_execute(
+            "CREATE SOURCE src
+            FROM KAFKA BROKER 'ignored' TOPIC 'ignored'
+            WITH (security_protocol = 'sasl_plaintext')",
+        )
+        .unwrap_db_error();
+    assert_eq!(
+        err.message(),
+        "cannot create Kerberos-authenticated Kafka source in safe mode"
+    );
+    let err = client
+        .batch_execute(
+            "CREATE SINK src FROM mz_sources
+            INTO KAFKA BROKER 'ignored' TOPIC 'ignored'
+            WITH (security_protocol = 'sasl_plaintext')",
+        )
+        .unwrap_db_error();
+    assert_eq!(
+        err.message(),
+        "cannot create Kerberos-authenticated Kafka sink in safe mode"
+    );
+
+    // Non-Kerberos Kafka sources are okay though.
+    //
+    // TODO(benesch,rkhaitan): creating this source prevents orderly server
+    // shutdown at the moment due to a glitch in the timestamper.
+    if false {
+        client.batch_execute(&*format!(
+            "CREATE SOURCE src
+            FROM KAFKA BROKER '{}' TOPIC 'foo'
+            FORMAT BYTES",
+            &*KAFKA_ADDRS,
+        ))?;
     }
 
     Ok(())

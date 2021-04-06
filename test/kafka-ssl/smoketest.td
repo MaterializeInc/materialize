@@ -34,7 +34,7 @@ $ kafka-ingest format=avro topic=data schema=${schema} publish=true timestamp=1
 {"before": null, "after": {"row": {"a": 1}}}
 
 > CREATE MATERIALIZED SOURCE data
-  FROM KAFKA BROKER 'kafka1:9092,kafka2:9092' TOPIC 'testdrive-data-${testdrive.seed}'
+  FROM KAFKA BROKER 'kafka:9092' TOPIC 'testdrive-data-${testdrive.seed}'
   WITH (
       security_protocol = 'SSL',
       ssl_key_location = '/share/secrets/materialized.key',
@@ -60,7 +60,7 @@ a
 2
 
 > CREATE SINK snk FROM data
-  INTO KAFKA BROKER 'kafka1:9092,kafka2:9092' TOPIC 'snk'
+  INTO KAFKA BROKER 'kafka' TOPIC 'snk'
   WITH (
       security_protocol = 'SSL',
       ssl_key_location = '/share/secrets/materialized.key',

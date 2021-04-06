@@ -52,13 +52,12 @@ DROP SCHEMA my_schema CASCADE;
 
 You can use either of the following commands:
 
-```sql
-DROP SCHEMA my_schema;
-```
-
-```sql
-DROP SCHEMA my_schema RESTRICT;
-```
+- ```sql
+  DROP SCHEMA my_schema;
+  ```
+- ```sql
+  DROP SCHEMA my_schema RESTRICT;
+  ```
 
 ### Do not issue an error if attempting to remove a nonexistent schema
 

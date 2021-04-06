@@ -26,7 +26,7 @@ use mz_avro::{
 };
 use mz_avro::{TrivialDecoder, ValueDecoder};
 use ore::str::StrExt;
-use repr::{Datum, Row, RowPacker};
+use repr::{Datum, Row};
 
 use crate::avro::{AvroFlatDecoder, AvroStringDecoder, OptionalRecordDecoder};
 
@@ -37,7 +37,7 @@ pub use deduplication::DebeziumDeduplicationStrategy;
 
 #[derive(Debug)]
 pub struct AvroDebeziumDecoder<'a> {
-    pub packer: &'a mut RowPacker,
+    pub packer: &'a mut Row,
     pub buf: &'a mut Vec<u8>,
     pub file_buf: &'a mut Vec<u8>,
 }
@@ -635,7 +635,7 @@ impl DebeziumDecodeState {
                 if let (Some(before_idx), Some(after_idx)) = (before_idx, after_idx) {
                     let before = &fields[before_idx].1;
                     let after = &fields[after_idx].1;
-                    let mut packer = RowPacker::new();
+                    let mut packer = Row::default();
                     let mut buf = vec![];
                     give_value(
                         AvroFlatDecoder {
@@ -653,7 +653,7 @@ impl DebeziumDecodeState {
                         },
                         after,
                     )?;
-                    Ok(Some(packer.finish()))
+                    Ok(Some(packer))
                 } else {
                     bail!("avro envelope does not contain `before` and `after`");
                 }

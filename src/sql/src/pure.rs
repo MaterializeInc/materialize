@@ -21,6 +21,7 @@ use tokio::task;
 use tokio::time::Duration;
 
 use repr::strconv;
+use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
     AvroSchema, ColumnOption, ColumnOptionDef, Connector, CreateSourceStatement, CsrSeed, Format,
     Ident, Raw, Statement,
@@ -111,9 +112,14 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 columns,
                 ..
             } => {
-                let fetched_columns = postgres_util::fetch_columns(conn, namespace, table).await?;
+                let fetched_columns = postgres_util::fetch_columns(conn, namespace, table)
+                    .await?
+                    .iter()
+                    .map(|c| c.to_ast_string())
+                    .collect::<Vec<String>>()
+                    .join(", ");
                 let (upstream_columns, _constraints) =
-                    parse_columns(&postgres_util::format_columns(fetched_columns))?;
+                    parse_columns(&format!("({})", fetched_columns))?;
                 if columns.is_empty() {
                     *columns = upstream_columns;
                 } else {

@@ -48,6 +48,12 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.7.2 %}}
 
+- Add a [`--log-filter` command-line option](/cli/#logging) and a
+  `MZ_LOG_FILTER` environment variable that control which log messages to emit.
+
+  This behavior was previously available via the undocumented `MZ_LOG`
+  environment variable, which will be removed in a future release.
+
 - Record Kafka Consumer metrics in the `mz_kafka_consumer_statistics` system
   table. Enabled by default for all Kafka sources.
 
@@ -69,6 +75,9 @@ Wrap your release notes at the 80 character mark.
 
 - Add the [`mz_uptime`](/sql/functions#system-information-func)
   function, which reports the duration for which the server has been running.
+
+- Add the [`repeat`](/sql/functions#string-func) function, which repeats a
+  string N times.
 
 - Avoid panicking when planning SQL queries of the form
   `SELECT DISTINCT ... ORDER BY <expr>` where `expr` is not a simple column

@@ -17,7 +17,7 @@ use anyhow::bail;
 use chrono::format::{DelayedFormat, StrftimeItems};
 use chrono::NaiveDateTime;
 use log::{debug, error, info, warn};
-use repr::{Datum, Row, RowPacker};
+use repr::{Datum, Row};
 use serde::{Deserialize, Serialize};
 
 use super::RowCoordinates;
@@ -147,8 +147,8 @@ struct TrackFull {
     /// The highest-ever seen timestamp, used in logging to let us know how far backwards time might go
     max_seen_time: i64,
     key_indices: Option<Vec<usize>>,
-    /// Optimization to avoid re-allocating the row packer over and over when extracting the key..
-    key_buf: RowPacker,
+    /// Optimization to avoid re-allocating the row over and over when extracting the key.
+    key_buf: Row,
     range: Option<TrackRange>,
     started_padding: bool,
     /// Whether we have started full deduplication mode

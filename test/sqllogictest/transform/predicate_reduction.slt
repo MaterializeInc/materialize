@@ -1,0 +1,128 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# This file contains tests for simplification of predicates.
+
+statement ok
+CREATE TABLE t1(f1 int, f2 int)
+
+statement ok
+INSERT INTO t1 VALUES (null, null), (0, null), (1, null), (1, 0), (null, 0)
+
+# We can simplify predicates with overlapping predicate subexpressions.
+query II
+SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
+----
+0
+NULL
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE f1 = 0 and (f1 = 0 or f1 = 1)
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 0)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE f1 is null and (f1 is null or f1 = 1)
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter isnull(#0)
+
+EOF
+
+query II
+SELECT * FROM t1 WHERE f1 is null and (f1 is null or f1 = 1)
+----
+NULL
+NULL
+NULL
+0
+
+# Test that subexpression matching can detect a `!(predicate)` and then replace
+# other instances of `predicate` with `false`.
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE f1 is not null and (f1 is null or f1 = 1)
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter !(isnull(#0)), (#0 = 1)
+
+EOF
+
+query II
+SELECT * FROM t1 WHERE f1 is not null and (f1 is null or f1 = 1)
+----
+1
+NULL
+1
+0
+
+# A test that simplification works when overlapping subexpressions are nested.
+
+query T multiline
+EXPLAIN DECORRELATED PLAN FOR SELECT * FROM t1 WHERE (f1 is null)::int - 1 = 0 and ((f1 is null) or ((f1 is null)::int - 1 = 0))
+----
+%0 = Let l0 =
+| Constant ()
+
+%1 =
+| Get materialize.public.t1 (u1)
+
+%2 =
+| Join %0 %1
+| | implementation = Unimplemented
+| Filter (((booltoi32(isnull(#0)) - 1) = 0) && (isnull(#0) || ((booltoi32(isnull(#0)) - 1) = 0)))
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE ((f1 is null)::int - 1)::string LIKE '1' and ((f1 is null) or not (((f1 is null)::int - 1)::string LIKE '1'))
+----
+%0 =
+| Constant
+
+EOF
+
+# Ensure that subexpression matching does not break predicate evaluation order
+# guarantees for `CASE`
+
+statement ok
+CREATE TABLE t2(f1 int not null, f2 int not null)
+
+statement ok
+INSERT INTO t2 VALUES (0, -1), (1, 5), (1, -2)
+
+query T multiline
+EXPLAIN SELECT * FROM t2 WHERE f1 + f2 > 0 and case when f1 + f2 > 0 then 1/f1 > 0 else false end;
+----
+%0 =
+| Get materialize.public.t2 (u3)
+| Filter ((#0 + #1) > 0), if ((#0 + #1) > 0) then {((1 / #0) > 0)} else {false}
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t2 WHERE case when f1 + f2 > 0 then 1/f1 > 0 else false end and f1 + f2 > 0;
+----
+%0 =
+| Get materialize.public.t2 (u3)
+| Filter ((#0 + #1) > 0), if ((#0 + #1) > 0) then {((1 / #0) > 0)} else {false}
+
+EOF
+
+query II
+SELECT * FROM t2 WHERE f1 + f2 > 0 and case when f1 + f2 > 0 then 1/f1 > 0 else false end;
+----
+1
+5

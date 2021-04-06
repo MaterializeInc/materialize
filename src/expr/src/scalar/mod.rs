@@ -902,6 +902,7 @@ pub enum EvalError {
     InfinityOutOfDomain(String),
     NegativeOutOfDomain(String),
     ZeroOutOfDomain(String),
+    MultipleRowsFromSubquery,
 }
 
 impl fmt::Display for EvalError {
@@ -970,6 +971,9 @@ impl fmt::Display for EvalError {
             }
             EvalError::ZeroOutOfDomain(s) => {
                 write!(f, "function {} is not defined for zero", s)
+            }
+            EvalError::MultipleRowsFromSubquery => {
+                write!(f, "more than one record produced in subquery")
             }
         }
     }

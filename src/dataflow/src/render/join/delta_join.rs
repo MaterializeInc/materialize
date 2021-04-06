@@ -25,7 +25,7 @@ use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
 use expr::{JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr};
-use repr::{Datum, Row, RowArena, RowPacker, Timestamp};
+use repr::{Datum, Row, RowArena, Timestamp};
 
 use super::super::context::{ArrangementFlavor, Context};
 use crate::operator::CollectionExt;
@@ -549,7 +549,7 @@ where
     let (updates, errs) = updates.map_fallible({
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
-        let mut row_packer = RowPacker::new();
+        let mut row_packer = Row::default();
         move |row| {
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);

@@ -60,13 +60,12 @@ DROP SOURCE my_source CASCADE;
 
 You can use either of the following commands:
 
-```sql
-DROP SOURCE my_source;
-```
-
-```sql
-DROP SOURCE my_source RESTRICT;
-```
+- ```sql
+  DROP SOURCE my_source;
+  ```
+- ```sql
+  DROP SOURCE my_source RESTRICT;
+  ```
 
 ### Do not issue an error if attempting to remove a nonexistent source
 

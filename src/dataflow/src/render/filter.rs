@@ -140,6 +140,8 @@ impl FilterPlan {
                 return Err("Unsupported temporal predicate: `mz_logical_timestamp()` must be directly compared to a non-temporal expression ".to_string());
             }
         }
+        // Order predicates to put literal errors last.
+        normal.sort_by_key(|p| p.is_literal_err());
 
         Ok(Self {
             normal,

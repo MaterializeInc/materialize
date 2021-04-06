@@ -122,7 +122,6 @@ impl FoldConstants {
                 }
 
                 if let MirRelationExpr::Constant { rows, .. } = &**input {
-                    let mut row_packer = repr::RowPacker::new();
                     let new_rows = match rows {
                         Ok(rows) => rows
                             .iter()
@@ -133,7 +132,7 @@ impl FoldConstants {
                                 for scalar in scalars.iter() {
                                     unpacked.push(scalar.eval(&unpacked, &temp_storage)?)
                                 }
-                                Ok::<_, EvalError>((row_packer.pack(unpacked), diff))
+                                Ok::<_, EvalError>((Row::pack_slice(&unpacked), diff))
                             })
                             .collect::<Result<_, _>>(),
                         Err(e) => Err(e.clone()),
@@ -188,6 +187,8 @@ impl FoldConstants {
                 {
                     relation.take_safely();
                 } else if let MirRelationExpr::Constant { rows, .. } = &**input {
+                    // Evaluate errors last, to reduce risk of spurious errors.
+                    predicates.sort_by_key(|p| p.is_literal_err());
                     let new_rows = match rows {
                         Ok(rows) => Self::fold_filter_constant(predicates, rows),
                         Err(e) => Err(e.clone()),
@@ -200,13 +201,14 @@ impl FoldConstants {
             }
             MirRelationExpr::Project { input, outputs } => {
                 if let MirRelationExpr::Constant { rows, .. } = &**input {
-                    let mut row_packer = repr::RowPacker::new();
+                    let mut row_packer = Row::default();
                     let new_rows = match rows {
                         Ok(rows) => Ok(rows
                             .iter()
                             .map(|(input_row, diff)| {
                                 let datums = input_row.unpack();
-                                (row_packer.pack(outputs.iter().map(|i| &datums[*i])), *diff)
+                                row_packer.extend(outputs.iter().map(|i| &datums[*i]));
+                                (row_packer.finish_and_reuse(), *diff)
                             })
                             .collect()),
                         Err(e) => Err(e.clone()),
@@ -246,15 +248,16 @@ impl FoldConstants {
 
                     // We can fold all constant inputs together, but must apply the constraints to restrict them.
                     // We start with a single 0-ary row.
-                    let mut old_rows = vec![(repr::Row::pack::<_, Datum>(None), 1)];
-                    let mut row_packer = repr::RowPacker::new();
+                    let mut old_rows = vec![(Row::pack::<_, Datum>(None), 1)];
+                    let mut row_packer = Row::default();
                     for input in inputs.iter() {
                         if let MirRelationExpr::Constant { rows: Ok(rows), .. } = input {
                             let mut next_rows = Vec::new();
                             for (old_row, old_count) in old_rows {
                                 for (new_row, new_count) in rows.iter() {
+                                    row_packer.extend(old_row.iter().chain(new_row.iter()));
                                     next_rows.push((
-                                        row_packer.pack(old_row.iter().chain(new_row.iter())),
+                                        row_packer.finish_and_reuse(),
                                         old_count * *new_count,
                                     ));
                                 }
@@ -372,7 +375,7 @@ impl FoldConstants {
         // `aggregates`.
         let mut groups = BTreeMap::new();
         let temp_storage2 = RowArena::new();
-        let mut row_packer = repr::RowPacker::new();
+        let mut row_packer = Row::default();
         for (row, diff) in rows {
             // We currently maintain the invariant that any negative
             // multiplicities will be consolidated away before they
@@ -391,7 +394,8 @@ impl FoldConstants {
             let val = aggregates
                 .iter()
                 .map(|agg| {
-                    Ok::<_, EvalError>(row_packer.pack(&[agg.expr.eval(&datums, &temp_storage)?]))
+                    row_packer.extend(&[agg.expr.eval(&datums, &temp_storage)?]);
+                    Ok::<_, EvalError>(row_packer.finish_and_reuse())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             let entry = groups.entry(key).or_insert_with(Vec::new);
@@ -408,11 +412,11 @@ impl FoldConstants {
         let new_rows = groups
             .into_iter()
             .map({
-                let mut row_packer = repr::RowPacker::new();
+                let mut row_packer = Row::default();
                 move |(key, vals)| {
                     let temp_storage = RowArena::new();
-                    let row = row_packer.pack(key.into_iter().chain(
-                        aggregates.iter().enumerate().map(|(i, agg)| {
+                    row_packer.extend(key.into_iter().chain(aggregates.iter().enumerate().map(
+                        |(i, agg)| {
                             if agg.distinct {
                                 agg.func.eval(
                                     vals.iter()
@@ -427,9 +431,9 @@ impl FoldConstants {
                                     &temp_storage,
                                 )
                             }
-                        }),
-                    ));
-                    (row, 1)
+                        },
+                    )));
+                    (row_packer.finish_and_reuse(), 1)
                 }
             })
             .collect();
@@ -442,7 +446,7 @@ impl FoldConstants {
         rows: &[(Row, isize)],
     ) -> Result<Vec<(Row, isize)>, EvalError> {
         let mut new_rows = Vec::new();
-        let mut row_packer = repr::RowPacker::new();
+        let mut row_packer = Row::default();
         for (input_row, diff) in rows {
             let datums = input_row.unpack();
             let temp_storage = RowArena::new();
@@ -454,9 +458,8 @@ impl FoldConstants {
                 &temp_storage,
             );
             for (output_row, diff2) in output_rows {
-                let row =
-                    row_packer.pack(input_row.clone().into_iter().chain(output_row.into_iter()));
-                new_rows.push((row, diff2 * *diff))
+                row_packer.extend(input_row.clone().into_iter().chain(output_row.into_iter()));
+                new_rows.push((row_packer.finish_and_reuse(), diff2 * *diff))
             }
         }
         Ok(new_rows)

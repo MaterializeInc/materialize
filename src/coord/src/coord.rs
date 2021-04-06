@@ -55,11 +55,12 @@ use ore::collections::CollectionExt;
 use ore::str::StrExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::adt::array::ArrayDimension;
-use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowPacker, Timestamp};
+use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
-    CreateIndexStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage,
-    FetchStatement, Ident, ObjectType, Raw, Statement,
+    Connector, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
+    CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage, FetchStatement,
+    Ident, ObjectType, Raw, Statement,
 };
 use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName, SchemaName};
@@ -154,6 +155,7 @@ pub struct Config<'a> {
     pub persistence: Option<PersistenceConfig>,
     pub logical_compaction_window: Option<Duration>,
     pub experimental_mode: bool,
+    pub safe_mode: bool,
     pub build_info: &'static BuildInfo,
 }
 
@@ -772,6 +774,16 @@ impl Coordinator {
                                     return;
                                 }
                             },
+                        }
+
+                        if self.catalog.config().safe_mode {
+                            if let Err(e) = check_statement_safety(&stmt) {
+                                let _ = tx.send(Response {
+                                    result: Err(e),
+                                    session,
+                                });
+                                return;
+                            }
                         }
 
                         let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -1447,17 +1459,15 @@ impl Coordinator {
                 .iter()
                 .map(|oid| self.catalog.get_by_oid(oid).id().to_string())
                 .collect::<Vec<_>>();
-            let mut packer = RowPacker::new();
-            packer
-                .push_array(
-                    &[ArrayDimension {
-                        lower_bound: 1,
-                        length: arg_ids.len(),
-                    }],
-                    arg_ids.iter().map(|id| Datum::String(&id)),
-                )
-                .unwrap();
-            let row = packer.finish();
+            let mut row = Row::default();
+            row.push_array(
+                &[ArrayDimension {
+                    lower_bound: 1,
+                    length: arg_ids.len(),
+                }],
+                arg_ids.iter().map(|id| Datum::String(&id)),
+            )
+            .unwrap();
             let arg_ids = row.unpack_first();
 
             let variadic_id = match func_impl_details.variadic_oid {
@@ -2247,13 +2257,12 @@ impl Coordinator {
         &mut self,
         session: &Session,
     ) -> Result<ExecuteResponse, CoordError> {
-        let mut row_packer = RowPacker::new();
         Ok(send_immediate_rows(
             session
                 .vars()
                 .iter()
                 .map(|v| {
-                    row_packer.pack(&[
+                    Row::pack_slice(&[
                         Datum::String(v.name()),
                         Datum::String(&v.value()),
                         Datum::String(v.description()),
@@ -3442,6 +3451,7 @@ pub async fn serve(
         persistence: persistence_config,
         logical_compaction_window,
         experimental_mode,
+        safe_mode,
         build_info,
     }: Config<'_>,
     // TODO(benesch): Don't pass runtime explicitly when
@@ -3477,6 +3487,7 @@ pub async fn serve(
     let (catalog, initial_catalog_events) = Catalog::open(&catalog::Config {
         path: &path,
         experimental_mode: Some(experimental_mode),
+        safe_mode,
         enable_logging: logging.is_some(),
         cache_directory: cache_config.map(|c| c.path),
         build_info,
@@ -3684,4 +3695,61 @@ pub fn describe(
         }
         _ => Ok(sql::plan::describe(catalog, stmt, param_types)?),
     }
+}
+
+fn check_statement_safety(stmt: &Statement<Raw>) -> Result<(), CoordError> {
+    let (ty, connector, with_options) = match stmt {
+        Statement::CreateSource(CreateSourceStatement {
+            connector,
+            with_options,
+            ..
+        }) => ("source", connector, with_options),
+        Statement::CreateSink(CreateSinkStatement {
+            connector,
+            with_options,
+            ..
+        }) => ("sink", connector, with_options),
+        _ => return Ok(()),
+    };
+    match connector {
+        // File sources and sinks are prohibited in safe mode because they allow
+        // reading ƒrom and writing to arbitrary files on disk.
+        Connector::File { .. } => {
+            return Err(CoordError::SafeModeViolation(format!("file {}", ty)));
+        }
+        Connector::AvroOcf { .. } => {
+            return Err(CoordError::SafeModeViolation(format!("Avro OCF {}", ty)));
+        }
+        // Kerberos-authenticated Kafka sources and sinks are prohibited in
+        // safe mode because librdkafka will blindly execute the string passed
+        // as `sasl_kerberos_kinit_cmd`.
+        Connector::Kafka { .. } => {
+            // It's too bad that we have to reinvent so much of librdkafka's
+            // option parsing and hardcode some of its defaults here. But there
+            // isn't an obvious alternative; asking librdkafka about its =
+            // defaults requires constructing a librdkafka client, and at that
+            // point it's already too late.
+            let mut with_options = sql::normalize::options(with_options);
+            let with_options = sql::kafka_util::extract_config(&mut with_options)?;
+            let security_protocol = with_options
+                .get("security.protocol")
+                .map(|v| v.as_str())
+                .unwrap_or("plaintext");
+            let sasl_mechanism = with_options
+                .get("sasl.mechanisms")
+                .map(|v| v.as_str())
+                .unwrap_or("GSSAPI");
+            if (security_protocol.eq_ignore_ascii_case("sasl_plaintext")
+                || security_protocol.eq_ignore_ascii_case("sasl_ssl"))
+                && sasl_mechanism.eq_ignore_ascii_case("GSSAPI")
+            {
+                return Err(CoordError::SafeModeViolation(format!(
+                    "Kerberos-authenticated Kafka {}",
+                    ty,
+                )));
+            }
+        }
+        _ => (),
+    }
+    Ok(())
 }

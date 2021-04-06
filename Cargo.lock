@@ -473,6 +473,7 @@ dependencies = [
  "atty",
  "bitflags",
  "strsim 0.8.0",
+ "term_size",
  "textwrap",
  "unicode-width",
  "vec_map",
@@ -935,7 +936,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#d9d47c2e32b29eb6aded140ab248d3793d87a861"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#5c3bfb874e533c37d33b56a40c2177da74b917c6"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -984,7 +985,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#d9d47c2e32b29eb6aded140ab248d3793d87a861"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#5c3bfb874e533c37d33b56a40c2177da74b917c6"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -2004,9 +2005,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.91"
+version = "0.2.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8916b1f6ca17130ec6568feccee27c156ad12037880833a3b842a823236502e7"
+checksum = "56d855069fafbb9b344c0f962150cd2c1187975cb1c22c1522c240d8c4986714"
 
 [[package]]
 name = "libm"
@@ -2016,9 +2017,9 @@ checksum = "c7d73b3f436185384286bd8098d17ec07c9a7d2388a6599f824d8502b529702a"
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.20.1"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64d31059f22935e6c31830db5249ba2b7ecd54fd73a9909286f0a67aa55c2fbd"
+checksum = "2f6332d94daa84478d55a6aa9dbb3b305ed6500fb0cb9400cb9e1525d0e0e188"
 dependencies = [
  "cc",
  "pkg-config",
@@ -2371,9 +2372,9 @@ dependencies = [
 
 [[package]]
 name = "nix"
-version = "0.19.1"
+version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2ccba0cfe4fdf15982d1674c69b1fd80bad427d293849982668dfe454bd61f2"
+checksum = "fa9b4819da1bc61c0ea48b63b7bc8604064dd43013e7cc325df098d49cd7c18a"
 dependencies = [
  "bitflags",
  "cc",
@@ -2624,9 +2625,9 @@ dependencies = [
 
 [[package]]
 name = "os_info"
-version = "3.0.1"
+version = "3.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2127a5da3c69035537febc04cd07008bb643653303b213a49b036d944531207"
+checksum = "4181c9203e70e66f39def4240a7e33f74d1d95b42c08320f9ac298c580934ab2"
 dependencies = [
  "log",
  "serde",
@@ -3017,9 +3018,9 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.4.2"
+version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a066eee7dbaf89a91078ceb15f56642c8d934eb2a639e7f098dd3f365651f55a"
+checksum = "234cb1ca0d59aa771d9bc7e268739d7aef6ca7e9e8d3b78d92f266cd663fd0c1"
 dependencies = [
  "backtrace",
  "lazy_static",
@@ -3114,9 +3115,9 @@ checksum = "eba180dafb9038b050a4c280019bbedf9f2467b61e5d892dcad585bb57aadc5a"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.24"
+version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e0704ee1a7e00d7bb417d0770ea303c1bccbabf0ef1667dae92b5967f5f8a71"
+checksum = "a152013215dca273577e18d2bf00fa862b89b24169fb78c4c95aeb07992c9cec"
 dependencies = [
  "unicode-xid",
 ]
@@ -3453,7 +3454,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.26.0"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#5d23e82a675d9df1bf343aedcaa35be864787dab"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#b4ec50e72e9b6d0199519092c4db4835315d91ba"
 dependencies = [
  "futures",
  "libc",
@@ -3469,7 +3470,7 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "4.0.0+1.6.1"
-source = "git+https://github.com/fede1024/rust-rdkafka.git#5d23e82a675d9df1bf343aedcaa35be864787dab"
+source = "git+https://github.com/fede1024/rust-rdkafka.git#b4ec50e72e9b6d0199519092c4db4835315d91ba"
 dependencies = [
  "cmake",
  "libc",
@@ -3729,9 +3730,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.24.2"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5f38ee71cbab2c827ec0ac24e76f82eca723cee92c509a65f67dee393c25112"
+checksum = "48381bf52627e7b0e02c4c0e4c0c88fc1cf2228a2eb7461d9499b1372399f1da"
 dependencies = [
  "bitflags",
  "fallible-iterator",
@@ -3875,9 +3876,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.124"
+version = "1.0.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd761ff957cb2a45fbb9ab3da6512de9de55872866160b23c25f1a841e99d29f"
+checksum = "558dc50e1a5a5fa7112ca2ce4effcb321b0300c0d4ccf0776a9f60cd89031171"
 dependencies = [
  "serde_derive",
 ]
@@ -3916,9 +3917,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.124"
+version = "1.0.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1800f7693e94e186f5e25a28291ae1570da908aff7d97a095dec1e56ff99069b"
+checksum = "b093b7a2bb58203b5da3056c05b4ec1fed827dcfdb37347a8841695263b3d06d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4320,9 +4321,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "1.0.66"
+version = "1.0.68"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c193d6a9455d05405156b3a4cc04bd20b9ca1745bf6198e1258418f852b967b"
+checksum = "3ce15dd3ed8aa2f8eeac4716d6ef5ab58b6b9256db41d7e1a0224c2788e8fd87"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4398,6 +4399,16 @@ dependencies = [
  "rand 0.8.3",
  "redox_syscall",
  "remove_dir_all",
+ "winapi",
+]
+
+[[package]]
+name = "term_size"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e4129646ca0ed8f45d09b929036bafad5377103edd06e50bf574b353d2b08d9"
+dependencies = [
+ "libc",
  "winapi",
 ]
 
@@ -4521,6 +4532,7 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d326610f408c7a4eb6f51c37c330e496b08506c9457c9d34287ecc38809fb060"
 dependencies = [
+ "term_size",
  "unicode-width",
 ]
 
@@ -4567,7 +4579,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#34c0f49fb251e1def8dbcff230726726a5ac768a"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#0d0d84885672d6369a78cd9aff7beb2048390d3b"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4584,12 +4596,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#34c0f49fb251e1def8dbcff230726726a5ac768a"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#0d0d84885672d6369a78cd9aff7beb2048390d3b"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#34c0f49fb251e1def8dbcff230726726a5ac768a"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#0d0d84885672d6369a78cd9aff7beb2048390d3b"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4605,7 +4617,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#34c0f49fb251e1def8dbcff230726726a5ac768a"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#0d0d84885672d6369a78cd9aff7beb2048390d3b"
 
 [[package]]
 name = "tinytemplate"

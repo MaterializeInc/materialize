@@ -155,8 +155,10 @@ pub struct CatalogConfig {
     pub cluster_id: Uuid,
     /// A transient UUID associated with this process.
     pub session_id: Uuid,
-    /// Expresses whether or not the catalog allows experimental mode features.
+    /// Whether the server is running in experimental mode.
     pub experimental_mode: bool,
+    /// Whether the server is running in safe mode.
+    pub safe_mode: bool,
     /// The path in which source caching data is stored, if source caching is
     /// enabled.
     pub cache_directory: Option<PathBuf>,
@@ -351,6 +353,7 @@ lazy_static! {
         cluster_id: Uuid::from_u128(0),
         session_id: Uuid::from_u128(0),
         experimental_mode: false,
+        safe_mode: false,
         cache_directory: None,
         build_info: &DUMMY_BUILD_INFO,
         num_workers: 0,
