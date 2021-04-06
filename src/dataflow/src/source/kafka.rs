@@ -99,9 +99,9 @@ impl BrokerRTTWindow {
         stats: &Window,
     ) -> MaterializedEvent {
         let event = MaterializedEvent::KafkaBrokerRTT {
-            consumer_name: consumer_name,
-            source_id: source_id,
-            broker_name: broker_name,
+            consumer_name,
+            source_id,
+            broker_name,
             min: stats.min - self.min,
             max: stats.max - self.max,
             avg: stats.avg - self.avg,
