@@ -287,8 +287,22 @@ impl JoinInputMapper {
         index: usize,
         equivalences: &[Vec<MirScalarExpr>],
     ) -> Option<MirScalarExpr> {
+        // TODO (wangandi): Consider changing this code to be post-order
+        // instead of pre-order? `lookup_inputs` traverses all the nodes in
+        // `e` anyway, so we end up visiting nodes in `e` multiple times
+        // here. Alternatively, consider having the future `PredicateKnowledge`
+        // take over the responsibilities of this code?
         expr.visit_custom_mut(
             &mut |e| {
+                let mut inputs = self.lookup_inputs(e);
+                if let Some(first_input) = inputs.next() {
+                    if inputs.next().is_none() && first_input == index {
+                        // there is only one input, and it is equal to index, so we're
+                        // good. do not continue the recursion
+                        return Some(vec![]);
+                    }
+                }
+
                 if let Some(bound_expr) = self.find_bound_expr(e, &[index], equivalences) {
                     // Replace the subexpression with the equivalent one from input `index`
                     *e = bound_expr;
