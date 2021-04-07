@@ -302,7 +302,7 @@ mz_dataflow_channels
 mz_dataflow_operator_addresses
 mz_dataflow_operators
 mz_kafka_broker_rtt
-mz_kafka_consumer_statistics
+mz_kafka_consumer_partitions
 mz_materialization_dependencies
 mz_materializations
 mz_message_counts
@@ -323,7 +323,7 @@ mz_dataflow_channels                 system true
 mz_dataflow_operator_addresses       system true
 mz_dataflow_operators                system true
 mz_kafka_broker_rtt                  system true
-mz_kafka_consumer_statistics         system true
+mz_kafka_consumer_partitions         system true
 mz_materialization_dependencies      system true
 mz_materializations                  system true
 mz_message_counts                    system true
