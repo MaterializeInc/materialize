@@ -562,6 +562,14 @@ pub const MZ_KAFKA_CONSUMER_PARTITIONS: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3031),
 };
 
+pub const MZ_KAFKA_BROKER_RTT: BuiltinLog = BuiltinLog {
+    name: "mz_kafka_broker_rtt",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Materialized(MaterializedLog::KafkaBrokerRtt),
+    id: GlobalId::System(3032),
+    index_id: GlobalId::System(3033),
+};
+
 lazy_static! {
     pub static ref MZ_VIEW_KEYS: BuiltinTable = BuiltinTable {
         name: "mz_view_keys",
@@ -1280,6 +1288,7 @@ lazy_static! {
             Builtin::Log(&MZ_SOURCE_INFO),
             Builtin::Log(&MZ_MESSAGE_COUNTS),
             Builtin::Log(&MZ_KAFKA_CONSUMER_PARTITIONS),
+            Builtin::Log(&MZ_KAFKA_BROKER_RTT),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
             Builtin::Table(&MZ_KAFKA_SINKS),
