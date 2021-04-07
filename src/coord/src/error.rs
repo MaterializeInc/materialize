@@ -40,6 +40,8 @@ pub enum CoordError {
     ReadOnlyTransaction,
     /// The specified session parameter is read-only.
     ReadOnlyParameter(&'static (dyn Var + Send + Sync)),
+    /// The specified feature is not permitted in safe mode.
+    SafeModeViolation(String),
     /// An error occurred in a SQL catalog operation.
     SqlCatalog(sql::catalog::CatalogError),
     /// An error occurred in the optimizer.
@@ -64,6 +66,11 @@ impl CoordError {
         match self {
             CoordError::Catalog(c) => c.detail(),
             CoordError::Eval(e) => e.detail(),
+            CoordError::SafeModeViolation(_) => Some(
+                "The Materialize server you are connected to is running in \
+                 safe mode, which limits the features that are available."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -118,6 +125,9 @@ impl fmt::Display for CoordError {
             CoordError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
             CoordError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
+            }
+            CoordError::SafeModeViolation(feature) => {
+                write!(f, "cannot create {} in safe mode", feature)
             }
             CoordError::SqlCatalog(e) => e.fmt(f),
             CoordError::Transform(e) => e.fmt(f),

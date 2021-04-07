@@ -936,7 +936,7 @@ checksum = "524cbf6897b527295dff137cec09ecf3a05f4fddffd7dfcd1585403449e74198"
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#d9d47c2e32b29eb6aded140ab248d3793d87a861"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#5c3bfb874e533c37d33b56a40c2177da74b917c6"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -985,7 +985,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#d9d47c2e32b29eb6aded140ab248d3793d87a861"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#5c3bfb874e533c37d33b56a40c2177da74b917c6"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -2625,9 +2625,9 @@ dependencies = [
 
 [[package]]
 name = "os_info"
-version = "3.0.1"
+version = "3.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2127a5da3c69035537febc04cd07008bb643653303b213a49b036d944531207"
+checksum = "4181c9203e70e66f39def4240a7e33f74d1d95b42c08320f9ac298c580934ab2"
 dependencies = [
  "log",
  "serde",
@@ -3876,9 +3876,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.124"
+version = "1.0.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd761ff957cb2a45fbb9ab3da6512de9de55872866160b23c25f1a841e99d29f"
+checksum = "558dc50e1a5a5fa7112ca2ce4effcb321b0300c0d4ccf0776a9f60cd89031171"
 dependencies = [
  "serde_derive",
 ]
@@ -3917,9 +3917,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.124"
+version = "1.0.125"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1800f7693e94e186f5e25a28291ae1570da908aff7d97a095dec1e56ff99069b"
+checksum = "b093b7a2bb58203b5da3056c05b4ec1fed827dcfdb37347a8841695263b3d06d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4579,7 +4579,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#34c0f49fb251e1def8dbcff230726726a5ac768a"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#0d0d84885672d6369a78cd9aff7beb2048390d3b"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4596,12 +4596,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#34c0f49fb251e1def8dbcff230726726a5ac768a"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#0d0d84885672d6369a78cd9aff7beb2048390d3b"
 
 [[package]]
 name = "timely_communication"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#34c0f49fb251e1def8dbcff230726726a5ac768a"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#0d0d84885672d6369a78cd9aff7beb2048390d3b"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -4617,7 +4617,7 @@ dependencies = [
 [[package]]
 name = "timely_logging"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/timely-dataflow#34c0f49fb251e1def8dbcff230726726a5ac768a"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#0d0d84885672d6369a78cd9aff7beb2048390d3b"
 
 [[package]]
 name = "tinytemplate"

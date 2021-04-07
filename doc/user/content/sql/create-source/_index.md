@@ -26,13 +26,14 @@ Materialize can connect to many different external sources of data, each with
 their own requirements. For details about creating sources, view the
 documentation for the type of data you are trying to load into Materialize:
 
-| Data format | Kafka | Kinesis (Alpha) | S3 (Experimental) | Local files |
-|-------------|-------|-----------------|-------------------|-------------|
-| Avro | [Avro + Kafka](./avro-kafka) | - | - | [Avro + file](./avro-file) |
-| Text/bytes | [Text/bytes + Kafka](./text-kafka) | [Text/bytes + Kinesis](./text-kinesis) | [Text/Bytes + S3](./text-s3) | [Text/bytes + file](./text-file) |
-| Protobuf | [Protobuf + Kafka](./protobuf-kafka) | [Protobuf + Kinesis](./protobuf-kinesis) | - | - |
-| CSV | [CSV + Kafka](./csv-kafka) | [CSV + Kinesis](./csv-kinesis) | [CSV + S3](./csv-s3) | [CSV + files](./csv-file) |
-| JSON | [JSON + Kafka](./json-kafka) | [JSON + Kinesis](./json-kinesis) | [JSON + S3](./json-s3) | [JSON + file](./json-file) |
+Source type        | Avro                         | Text/bytes                              | Protobuf                                 | CSV                             | JSON
+-------------------|------------------------------|-----------------------------------------|------------------------------------------|---------------------------------|---------------------------------
+Kafka              | [Avro + Kafka](./avro-kafka) | [Text/bytes + Kafka](./text-kafka)      | [Protobuf + Kafka](./protobuf-kafka)     | [CSV + Kafka](./csv-kafka)      | [JSON + Kafka](./json-kafka)
+Kinesis (Alpha)    | -                            | [Text/bytes + Kinesis](./text-kinesis)  | [Protobuf + Kinesis](./protobuf-kinesis) | [CSV + Kinesis](./csv-kinesis)  | [JSON + Kinesis](./json-kinesis)
+S3 (Experimental)  | -                            | [Text/bytes + S3](./text-s3)            | -                                        | [CSV + S3](./csv-s3)            | [JSON + S3](./json-s3)
+PubNub             | -                            | [Text + PubNub](./text-pubnub)          | -                                        | -                               | [JSON + PubNub](./json-pubnub)
+Local files        | [Avro + file](./avro-file)   | [Text/bytes + file](./text-file)        | -                                        | [CSV + files](./csv-file)       | [JSON + file](./json-file)
+
 
 Don't see what you're looking for? [Let us know on GitHub](https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md).
 

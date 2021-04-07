@@ -116,6 +116,8 @@ pub struct Config {
     pub symbiosis_url: Option<String>,
     /// Whether to permit usage of experimental features.
     pub experimental_mode: bool,
+    /// Whether to run in safe mode.
+    pub safe_mode: bool,
     /// An optional telemetry endpoint. Use None to disable telemetry.
     pub telemetry_url: Option<String>,
 }
@@ -222,6 +224,7 @@ pub async fn serve(
             persistence: config.persistence,
             logical_compaction_window: config.logical_compaction_window,
             experimental_mode: config.experimental_mode,
+            safe_mode: config.safe_mode,
             build_info: &BUILD_INFO,
         },
         runtime,

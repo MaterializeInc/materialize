@@ -10,6 +10,7 @@
 from materialize import git
 from materialize import spawn
 from pathlib import Path
+import boto3
 import humanize
 import os
 import tarfile
@@ -32,24 +33,22 @@ def _sanitize_tarinfo(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
 
 
 def upload_tarball(tarball: Path, platform: str, version: str) -> None:
-    s3_url = f"s3://downloads.mtrlz.dev/materialized-{version}-{platform}.tar.gz"
-    spawn.runv(["aws", "s3", "cp", "--acl=public-read", tarball, s3_url])
+    s3_object = f"materialized-{version}-{platform}.tar.gz"
+    boto3.client("s3").upload_file(
+        str(tarball), "downloads.mtrlz.dev", s3_object, ExtraArgs={"ACL": "public-read"}
+    )
 
 
 def set_latest_redirect(platform: str, version: str) -> None:
     with tempfile.NamedTemporaryFile() as empty:
-        target = f"/materialized-{version}-{platform}.tar.gz"
-        s3_url = f"s3://downloads.mtrlz.dev/materialized-latest-{platform}.tar.gz"
-        spawn.runv(
-            [
-                "aws",
-                "s3",
-                "cp",
-                "--acl=public-read",
-                f"--website-redirect={target}",
-                empty.name,
-                s3_url,
-            ]
+        boto3.client("s3").upload_fileobj(
+            empty,
+            "downloads.mtrlz.dev",
+            f"materialized-latest-{platform}.tar.gz",
+            ExtraArgs={
+                "ACL": "public-read",
+                "WebsiteRedirectLocation": f"/materialized-{version}-{platform}.tar.gz",
+            },
         )
 
 

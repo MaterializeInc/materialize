@@ -58,7 +58,7 @@ num_cpus = "1.0.0"
 openssl = { version = "0.10.33", features = ["vendored"] }
 openssl-sys = { version = "0.9.61", features = ["vendored"] }
 ore = { path = "../ore" }
-os_info = "3.0.1"
+os_info = "3.0.2"
 parse_duration = "2.1.1"
 pgwire = { path = "../pgwire" }
 prof = { path = "../prof", features = ["auto-jemalloc"] }
@@ -68,7 +68,7 @@ repr = { path = "../repr" }
 reqwest = { version = "0.11.2", features = ["json"] }
 rlimit = "0.5.4"
 semver = "0.11.0"
-serde = { version = "1.0.124", features = ["derive"] }
+serde = { version = "1.0.125", features = ["derive"] }
 serde_json = "1.0.64"
 shell-words = "1.0.0"
 sql = { path = "../sql" }

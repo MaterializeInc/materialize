@@ -16,7 +16,7 @@
 Creating HTTP client for schema registry: builder error: builder error: relative URL without a base
 
 ! CREATE MATERIALIZED SOURCE s3_all
-  FROM S3 OBJECTS FROM SCAN BUCKET 'doesnt-matter'
+  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'doesnt-matter'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',

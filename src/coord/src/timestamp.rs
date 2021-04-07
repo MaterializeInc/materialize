@@ -513,7 +513,21 @@ impl Timestamper {
                     }
                     self.byo_sources.remove(&id);
                 }
-                TimestampMessage::Shutdown => return true,
+                TimestampMessage::Shutdown => {
+                    // First, let's remove all of the threads consuming metadata
+                    // from realtime Kafka sources
+                    for (_, src) in self.rt_sources.iter_mut() {
+                        if let RtTimestampConnector::Kafka(RtKafkaConnector {
+                            coordination_state,
+                            ..
+                        }) = &src.connector
+                        {
+                            coordination_state.stop.store(true, Ordering::SeqCst);
+                        }
+                    }
+
+                    return true;
+                }
             }
         }
         false
@@ -896,9 +910,9 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
                         current_partition_count = new_partition_count;
                     }
                     cmp::Ordering::Less => {
-                        error!(
+                        info!(
                             "Ignoring decrease in partitions (from {} to {}) for topic {} (source {})",
-                             new_partition_count, current_partition_count, c.topic, c.id,
+                            current_partition_count, new_partition_count, c.topic, c.id,
                         );
                     }
                     cmp::Ordering::Equal => (),

@@ -54,9 +54,15 @@ $ kafka-ingest format=avro topic=dbzupsert key-format=avro key-schema=${keyschem
 {"id": 1} {"before": {"row": {"id": 1, "creature": "salamander"}}, "after": {"row": {"id": 1, "creature": "lizard"}}}
 
 
-> CREATE MATERIALIZED SOURCE doin_upsert
+! CREATE MATERIALIZED SOURCE doin_upsert
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
+  ENVELOPE DEBEZIUM UPSERT
+ENVELOPE DEBEZIUM UPSERT can only be used with schemas from the confluent schema registry, and requires a key schema
+
+> CREATE MATERIALIZED SOURCE doin_upsert
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM UPSERT
 
 > SELECT * FROM doin_upsert
@@ -125,7 +131,7 @@ id creature
 > CREATE MATERIALIZED SOURCE upsert_full_dedupe
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   WITH (deduplication = 'full')
-  FORMAT AVRO USING SCHEMA '${schema}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM UPSERT
 
 > SELECT creature FROM upsert_full_dedupe

@@ -554,12 +554,20 @@ pub const MZ_MESSAGE_COUNTS: BuiltinLog = BuiltinLog {
     index_id: GlobalId::System(3029),
 };
 
-pub const MZ_KAFKA_CONSUMER_STATISTICS: BuiltinLog = BuiltinLog {
-    name: "mz_kafka_consumer_statistics",
+pub const MZ_KAFKA_CONSUMER_PARTITIONS: BuiltinLog = BuiltinLog {
+    name: "mz_kafka_consumer_partitions",
     schema: MZ_CATALOG_SCHEMA,
     variant: LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo),
     id: GlobalId::System(3030),
     index_id: GlobalId::System(3031),
+};
+
+pub const MZ_KAFKA_BROKER_RTT: BuiltinLog = BuiltinLog {
+    name: "mz_kafka_broker_rtt",
+    schema: MZ_CATALOG_SCHEMA,
+    variant: LogVariant::Materialized(MaterializedLog::KafkaBrokerRtt),
+    id: GlobalId::System(3032),
+    index_id: GlobalId::System(3033),
 };
 
 lazy_static! {
@@ -646,7 +654,8 @@ lazy_static! {
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("name", ScalarType::String.nullable(false))
-            .with_column("on_id", ScalarType::String.nullable(false)),
+            .with_column("on_id", ScalarType::String.nullable(false))
+            .with_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4015),
         index_id: GlobalId::System(4016),
     };
@@ -680,7 +689,8 @@ lazy_static! {
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4021),
         index_id: GlobalId::System(4022),
     };
@@ -691,7 +701,8 @@ lazy_static! {
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4023),
         index_id: GlobalId::System(4024),
     };
@@ -702,7 +713,8 @@ lazy_static! {
             .with_column("id", ScalarType::String.nullable(false))
             .with_column("oid", ScalarType::Oid.nullable(false))
             .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
+            .with_column("name", ScalarType::String.nullable(false))
+            .with_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4025),
         index_id: GlobalId::System(4026),
     };
@@ -1279,7 +1291,8 @@ lazy_static! {
             Builtin::Log(&MZ_PEEK_DURATIONS),
             Builtin::Log(&MZ_SOURCE_INFO),
             Builtin::Log(&MZ_MESSAGE_COUNTS),
-            Builtin::Log(&MZ_KAFKA_CONSUMER_STATISTICS),
+            Builtin::Log(&MZ_KAFKA_CONSUMER_PARTITIONS),
+            Builtin::Log(&MZ_KAFKA_BROKER_RTT),
             Builtin::Table(&MZ_VIEW_KEYS),
             Builtin::Table(&MZ_VIEW_FOREIGN_KEYS),
             Builtin::Table(&MZ_KAFKA_SINKS),

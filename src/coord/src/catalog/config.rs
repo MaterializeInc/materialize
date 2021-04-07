@@ -19,6 +19,8 @@ pub struct Config<'a> {
     pub path: &'a Path,
     /// Whether to enable experimental mode.
     pub experimental_mode: Option<bool>,
+    /// Whether to enable safe mode.
+    pub safe_mode: bool,
     /// Whether to enable logging sources and the views that depend upon them.
     pub enable_logging: bool,
     /// Path to cache source data to disk.
