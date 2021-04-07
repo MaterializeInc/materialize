@@ -8,22 +8,21 @@
 # by the Apache License, Version 2.0.
 
 # Test explicit lack of compression
-$ set bucket=materialize-ci-testdrive-none-${testdrive.seed}
 
-$ s3-create-bucket bucket=${bucket}
+$ s3-create-bucket bucket=no-compression
 
-$ s3-put-object bucket=${bucket} key=short/compressed
+$ s3-put-object bucket=no-compression key=short/compressed
 a1
 a2
 a3
 
-$ s3-put-object bucket=${bucket} key=short/uncompressed
+$ s3-put-object bucket=no-compression key=short/uncompressed
 b1
 b2
 b3
 
 > CREATE MATERIALIZED SOURCE s3_all_none
-  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${bucket}'
+  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-no-compression-${testdrive.seed}'
   COMPRESSION NONE
   WITH (
     region = '${testdrive.aws-region}',
@@ -43,22 +42,21 @@ b2 5
 b3 6
 
 # Test explicit lack of compression
-$ set bucket=materialize-ci-testdrive-gzip-${testdrive.seed}
 
-$ s3-create-bucket bucket=${bucket}
+$ s3-create-bucket bucket=gzip-compression
 
-$ s3-put-object bucket=${bucket} key=short/compressed compression=gzip
+$ s3-put-object bucket=gzip-compression key=short/compressed compression=gzip
 a1
 a2
 a3
 
-$ s3-put-object bucket=${bucket} key=short/uncompressed compression=gzip
+$ s3-put-object bucket=gzip-compression key=short/uncompressed compression=gzip
 b1
 b2
 b3
 
 > CREATE MATERIALIZED SOURCE s3_all_gzip
-  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${bucket}'
+  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN 'testdrive-gzip-compression-${testdrive.seed}'
   COMPRESSION GZIP
   WITH (
     region = '${testdrive.aws-region}',
