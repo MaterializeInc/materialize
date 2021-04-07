@@ -12,32 +12,26 @@
 #
 # https://github.com/MaterializeInc/materialize/issues/6355
 
-$ set bucket=materialize-ci-testdrive-${testdrive.seed}
+$ s3-create-bucket bucket=test
 
-$ s3-create-bucket bucket=${bucket}
+$ s3-add-notifications bucket=test queue=test sqs-validation-timeout=5m
 
-$ set queue-name=materialize-ci-notifications-${testdrive.seed}
-
-$ s3-add-notifications bucket=${bucket} queue=${queue-name} sqs-validation-timeout=5m
-
-$ s3-put-object bucket=${bucket} key=short/a
+$ s3-put-object bucket=test key=short/a
 a1
 a2
 a3
 
-$ s3-put-object bucket=${bucket} key=short/b
+$ s3-put-object bucket=test key=short/b
 b1
 b2
 b3
 
-$ set otherbucket=materialize-ci-td-other-${testdrive.seed}
-$ set otherqueue=materialize-ci-other-${testdrive.seed}
-$ s3-create-bucket bucket=${otherbucket}
-$ s3-add-notifications bucket=${otherbucket} queue=${otherqueue} sqs-validation-timeout=5m
+$ s3-create-bucket bucket=other
+$ s3-add-notifications bucket=other queue=other sqs-validation-timeout=5m
 
 > CREATE MATERIALIZED SOURCE s3_scan_notifications
   FROM S3 DISCOVER OBJECTS MATCHING 'short/*'
-  USING BUCKET SCAN '${bucket}', SQS NOTIFICATIONS '${queue-name}'
+  USING BUCKET SCAN 'testdrive-test-${testdrive.seed}', SQS NOTIFICATIONS 'testdrive-test-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -55,7 +49,7 @@ b1
 b2
 b3
 
-$ s3-put-object bucket=${bucket} key=short/d
+$ s3-put-object bucket=test key=short/d
 d
 
 > SELECT text FROM s3_scan_notifications ORDER BY text;
@@ -73,13 +67,13 @@ d
 # check just pulling SQS
 
 # This section fails in localstack, but succeeds in AWS/CI
-$ s3-put-object bucket=${otherbucket} key=short/e
+$ s3-put-object bucket=other key=short/e
 e1
 e2
 e3
 
 > CREATE MATERIALIZED SOURCE s3_notifications
-  FROM S3 DISCOVER OBJECTS MATCHING 'short/e' USING SQS NOTIFICATIONS '${otherqueue}'
+  FROM S3 DISCOVER OBJECTS MATCHING 'short/e' USING SQS NOTIFICATIONS 'testdrive-other-${testdrive.seed}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
