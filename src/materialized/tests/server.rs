@@ -223,17 +223,12 @@ fn test_safe_mode() -> Result<(), Box<dyn Error>> {
     );
 
     // Non-Kerberos Kafka sources are okay though.
-    //
-    // TODO(benesch,rkhaitan): creating this source prevents orderly server
-    // shutdown at the moment due to a glitch in the timestamper.
-    if false {
-        client.batch_execute(&*format!(
-            "CREATE SOURCE src
-            FROM KAFKA BROKER '{}' TOPIC 'foo'
-            FORMAT BYTES",
-            &*KAFKA_ADDRS,
-        ))?;
-    }
+    client.batch_execute(&*format!(
+        "CREATE SOURCE src
+        FROM KAFKA BROKER '{}' TOPIC 'foo'
+        FORMAT BYTES",
+        &*KAFKA_ADDRS,
+    ))?;
 
     Ok(())
 }
