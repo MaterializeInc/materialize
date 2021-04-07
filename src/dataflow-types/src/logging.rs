@@ -52,7 +52,7 @@ pub enum MaterializedLog {
     DataflowCurrent,
     DataflowDependency,
     FrontierCurrent,
-    KafkaBrokerRTT,
+    KafkaBrokerRtt,
     KafkaConsumerInfo,
     PeekCurrent,
     PeekDuration,
@@ -164,7 +164,7 @@ impl LogVariant {
                 .with_column("worker", ScalarType::Int64.nullable(false))
                 .with_column("time", ScalarType::Int64.nullable(false)),
 
-            LogVariant::Materialized(MaterializedLog::KafkaBrokerRTT) => RelationDesc::empty()
+            LogVariant::Materialized(MaterializedLog::KafkaBrokerRtt) => RelationDesc::empty()
                 .with_column("consumer_name", ScalarType::String.nullable(false))
                 .with_column("source_id", ScalarType::String.nullable(false))
                 .with_column("dataflow_id", ScalarType::Int64.nullable(false))
@@ -256,7 +256,7 @@ impl LogVariant {
             LogVariant::Materialized(MaterializedLog::DataflowCurrent) => vec![],
             LogVariant::Materialized(MaterializedLog::DataflowDependency) => vec![],
             LogVariant::Materialized(MaterializedLog::FrontierCurrent) => vec![],
-            LogVariant::Materialized(MaterializedLog::KafkaBrokerRTT) => vec![(
+            LogVariant::Materialized(MaterializedLog::KafkaBrokerRtt) => vec![(
                 LogVariant::Materialized(MaterializedLog::SourceInfo),
                 vec![(1, 1), (2, 2), (3, 3)],
             )],

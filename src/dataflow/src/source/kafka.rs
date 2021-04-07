@@ -71,7 +71,7 @@ impl BrokerRTTWindow {
         source_id: SourceInstanceId,
         broker_name: String,
     ) -> MaterializedEvent {
-        MaterializedEvent::KafkaBrokerRTT {
+        MaterializedEvent::KafkaBrokerRtt {
             consumer_name: consumer_name,
             source_id: source_id,
             broker_name: broker_name,
@@ -98,7 +98,7 @@ impl BrokerRTTWindow {
         broker_name: String,
         stats: &Window,
     ) -> MaterializedEvent {
-        let event = MaterializedEvent::KafkaBrokerRTT {
+        let event = MaterializedEvent::KafkaBrokerRtt {
             consumer_name,
             source_id,
             broker_name,

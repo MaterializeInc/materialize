@@ -565,7 +565,7 @@ pub const MZ_KAFKA_CONSUMER_STATISTICS: BuiltinLog = BuiltinLog {
 pub const MZ_KAFKA_BROKER_RTT: BuiltinLog = BuiltinLog {
     name: "mz_kafka_broker_rtt",
     schema: MZ_CATALOG_SCHEMA,
-    variant: LogVariant::Materialized(MaterializedLog::KafkaBrokerRTT),
+    variant: LogVariant::Materialized(MaterializedLog::KafkaBrokerRtt),
     id: GlobalId::System(3032),
     index_id: GlobalId::System(3033),
 };

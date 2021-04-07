@@ -42,7 +42,7 @@ pub enum MaterializedEvent {
     /// Reference: https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md
     /// This structure containe splatted metrics from the rdkafka::statistics::Window struct
     /// Window cannot be used as it does not satisfy several of the traits required
-    KafkaBrokerRTT {
+    KafkaBrokerRtt {
         /// Kafka name for the consumer
         consumer_name: String,
         /// Materialize source identifier
@@ -256,7 +256,7 @@ pub fn construct<A: Allocate>(
                                     delta as isize,
                                 ));
                             }
-                            MaterializedEvent::KafkaBrokerRTT {
+                            MaterializedEvent::KafkaBrokerRtt {
                                 consumer_name,
                                 source_id,
                                 broker_name,
@@ -523,7 +523,7 @@ pub fn construct<A: Allocate>(
                 frontier_current,
             ),
             (
-                LogVariant::Materialized(MaterializedLog::KafkaBrokerRTT),
+                LogVariant::Materialized(MaterializedLog::KafkaBrokerRtt),
                 kafka_broker_rtt_current,
             ),
             (
