@@ -157,7 +157,10 @@ async fn get_latest_ts(
                 }
             }
             Err(e) => {
-                bail!("Failed to fetch metadata while reading from consistency topic, will retry. Error was {}", e);
+                bail!(
+                    "Failed to fetch metadata while reading from consistency topic: {}",
+                    e
+                );
             }
         }
     }
