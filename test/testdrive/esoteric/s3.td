@@ -21,10 +21,6 @@ b1
 b2
 b3
 
-$ set queue-name=materialize-ci-notifications-${testdrive.seed}
-
-$ s3-add-notifications bucket=${bucket} queue=${queue-name} sqs-validation-timeout=5m
-
 > CREATE MATERIALIZED SOURCE s3_all
   FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
   WITH (
@@ -143,10 +139,8 @@ $ s3-put-object bucket=${bucket} key=logs/2021/01/01/frontend.log
 12/31/2020:23:55:59 99.99.44.44 Python/Requests_22
 
 $ set otherbucket=materialize-ci-td-other-${testdrive.seed}
-$ set otherqueue=materialize-ci-other-${testdrive.seed}
 
 $ s3-create-bucket bucket=${otherbucket}
-$ s3-add-notifications bucket=${otherbucket} queue=${otherqueue} sqs-validation-timeout=5m
 
 $ s3-put-object bucket=${otherbucket} key=short/c
 c1
@@ -175,70 +169,3 @@ b3
 c1
 c2
 c3
-
-# Check a source that has both SCAN and NOTIFICATIONS set up
-
-> CREATE MATERIALIZED SOURCE s3_scan_notifications
-  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}', SQS NOTIFICATIONS '${queue-name}'
-  MATCHING 'short/*'
-  WITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
-  )
-  FORMAT TEXT;
-
-> SELECT text FROM s3_scan_notifications ORDER BY text;
-a1
-a2
-a3
-b1
-b2
-b3
-
-$ s3-put-object bucket=${bucket} key=short/d
-d
-
-# S3 has a very loose idea of how fast items should show up:
-# > Typically, event notifications are delivered in seconds but can sometimes take a minute or longer.
-# https://docs.aws.amazon.com/AmazonS3/latest/userguide/NotificationHowTo.html
-$ set-sql-timeout duration=2minutes
-
-> SELECT text FROM s3_scan_notifications ORDER BY text;
-a1
-a2
-a3
-b1
-b2
-b3
-d
-
-# ensure that only the source we care about gets the notifications
-> DROP SOURCE s3_scan_notifications
-
-# check just pulling SQS
-
-# This section fails in localstack, but succeeds in AWS/CI
-$ s3-put-object bucket=${otherbucket} key=short/e
-e1
-e2
-e3
-
-> CREATE MATERIALIZED SOURCE s3_notifications
-  FROM S3 OBJECTS FROM SQS NOTIFICATIONS '${otherqueue}'
-  MATCHING 'short/e'
-  WITH (
-    region = '${testdrive.aws-region}',
-    endpoint = '${testdrive.aws-endpoint}',
-    access_key_id = '${testdrive.aws-access-key-id}',
-    secret_access_key = '${testdrive.aws-secret-access-key}',
-    token = '${testdrive.aws-token}'
-  )
-  FORMAT TEXT;
-
-> SELECT text FROM s3_notifications ORDER BY text;
-e1
-e2
-e3
