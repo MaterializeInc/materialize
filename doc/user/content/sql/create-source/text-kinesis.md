@@ -12,6 +12,8 @@ Kinesis stream.
 
 {{< kinesis-alpha >}}
 
+{{< volatility-warning >}}Kinesis{{< /volatility-warning >}}
+
 {{% /create-source/intro %}}
 
 ## Syntax
