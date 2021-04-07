@@ -910,9 +910,9 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
                         current_partition_count = new_partition_count;
                     }
                     cmp::Ordering::Less => {
-                        error!(
+                        info!(
                             "Ignoring decrease in partitions (from {} to {}) for topic {} (source {})",
-                             new_partition_count, current_partition_count, c.topic, c.id,
+                            current_partition_count, new_partition_count, c.topic, c.id,
                         );
                     }
                     cmp::Ordering::Equal => (),
