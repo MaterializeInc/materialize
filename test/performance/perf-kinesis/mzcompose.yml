@@ -21,6 +21,7 @@ services:
   perf-kinesis:
     init: true
     mzbuild: perf-kinesis
+    command: --stream-prefix testdrive-perf-kinesis
     environment:
       - RUST_LOG=perf-kinesis=debug,info
     depends_on: [materialized]
