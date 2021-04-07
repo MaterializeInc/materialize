@@ -111,15 +111,16 @@ create_source_protobuf_kinesis ::=
   'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
 create_source_s3_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  'FROM S3 OBJECTS FROM ' (
-      'SCAN BUCKET' bucket_name |
+  'FROM' 'S3' 'DISCOVER OBJECTS'
+  ('MATCHING' pattern)?
+  'USING' (
+      'BUCKET SCAN' bucket_name |
       'SQS NOTIFICATIONS' queue_name
   ) ( ',' (
-      'SCAN BUCKET' bucket_name |
+      'BUCKET SCAN' bucket_name |
       'SQS NOTIFICATIONS' queue_name
     )
   )*
-  ('MATCHING' pattern)?
   ('COMPRESSION' ('NONE' | 'GZIP'))?
   'WITH' '('
       'region =' region
@@ -132,15 +133,16 @@ create_source_s3_text ::=
   )
 create_source_s3_json ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  'FROM S3 OBJECTS FROM ' (
-      'SCAN BUCKET' bucket_name |
+  'FROM' 'S3' 'DISCOVER OBJECTS'
+  ('MATCHING' pattern)?
+  'USING' (
+      'BUCKET SCAN' bucket_name |
       'SQS NOTIFICATIONS' queue_name
   ) ( ',' (
-      'SCAN BUCKET' bucket_name |
+      'BUCKET SCAN' bucket_name |
       'SQS NOTIFICATIONS' queue_name
     )
   )*
-  ('MATCHING' pattern)?
   ('COMPRESSION' ('NONE' | 'GZIP'))?
   'WITH' '('
       'region =' region
@@ -150,15 +152,16 @@ create_source_s3_json ::=
 create_source_s3_csv ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')?
   src_name ( '(' col_name (',' col_name)* ')' )?
-  'FROM S3 OBJECTS FROM ' (
-      'SCAN BUCKET' bucket_name |
+  'FROM' 'S3' 'DISCOVER OBJECTS'
+  ('MATCHING' pattern)?
+  'USING' (
+      'BUCKET SCAN' bucket_name |
       'SQS NOTIFICATIONS' queue_name
   ) ( ',' (
-      'SCAN BUCKET' bucket_name |
+      'BUCKET SCAN' bucket_name |
       'SQS NOTIFICATIONS' queue_name
     )
   )*
-  ('MATCHING' pattern)?
   ('COMPRESSION' ('NONE' | 'GZIP'))?
   'WITH' '('
       'region =' region

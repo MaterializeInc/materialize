@@ -5,8 +5,6 @@ menu:
   main:
     parent: 'create-source'
 ---
-{{< experimental >}}The S3 source type{{< /experimental >}}
-
 {{% create-source/intro %}}
 This document details how to connect Materialize to an S3 Bucket that contains
 multiple objects, and to listen for new object creation. Each S3 object can
@@ -57,7 +55,7 @@ quick and dirty analysis:
 
 ```sql
 CREATE MATERIALIZED SOURCE frontend_logs
-FROM S3 OBJECTS FROM SCAN BUCKET 'frontend' MATCHING 'logs/202?/**/*.log'
+FROM S3 DISCOVER OBJECTS MATCHING 'logs/202?/**/*.log' USING BUCKET SCAN 'frontend'
 WITH (region = 'us-east-2')
 FORMAT TEXT;
 ```
@@ -84,7 +82,7 @@ can use the REGEX format specifier to extract useful data:
 
 ```sql
 CREATE MATERIALIZED SOURCE frontend_logs
-FROM S3 OBJECTS FROM SCAN BUCKET 'frontend' MATCHING 'logs/202?/**/*.log'
+FROM S3 DISCOVER OBJECTS MATCHING 'logs/202?/**/*.log' USING BUCKET SCAN 'frontend'
 WITH (region = 'us-east-2')
 FORMAT REGEX '(?P<ip>[^ ]+) - - \[?P<dt>([^]]_)\] "(?P<method>\w+) (?P<path>[^ ]+)[^"]+" (?P<status>\d+) (?P<content_length>\d+) "-" "(?P<user_agent>[^"]+)"';
 ```

@@ -48,6 +48,8 @@ Wrap your release notes at the 80 character mark.
 
 {{% version-header v0.7.2 %}}
 
+- Add an [`S3` source type](/sql/create-source/text-s3).
+
 - Add a [`--log-filter` command-line option](/cli/#logging) and a
   `MZ_LOG_FILTER` environment variable that control which log messages to emit.
 

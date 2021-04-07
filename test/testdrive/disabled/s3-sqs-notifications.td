@@ -36,8 +36,8 @@ $ s3-create-bucket bucket=${otherbucket}
 $ s3-add-notifications bucket=${otherbucket} queue=${otherqueue} sqs-validation-timeout=5m
 
 > CREATE MATERIALIZED SOURCE s3_scan_notifications
-  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}', SQS NOTIFICATIONS '${queue-name}'
-  MATCHING 'short/*'
+  FROM S3 DISCOVER OBJECTS MATCHING 'short/*'
+  USING BUCKET SCAN '${bucket}', SQS NOTIFICATIONS '${queue-name}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',
@@ -79,8 +79,7 @@ e2
 e3
 
 > CREATE MATERIALIZED SOURCE s3_notifications
-  FROM S3 OBJECTS FROM SQS NOTIFICATIONS '${otherqueue}'
-  MATCHING 'short/e'
+  FROM S3 DISCOVER OBJECTS MATCHING 'short/e' USING SQS NOTIFICATIONS '${otherqueue}'
   WITH (
     region = '${testdrive.aws-region}',
     endpoint = '${testdrive.aws-endpoint}',

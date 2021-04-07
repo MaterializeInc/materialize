@@ -1793,15 +1793,22 @@ impl<'a> Parser<'a> {
                 Ok(Connector::AvroOcf { path })
             }
             S3 => {
-                // FROM S3 OBJECTS FROM
-                // (SCAN BUCKET '<bucket>' | SQS NOTIFICATIONS '<channel>')+
-                // MATCHING '<pattern>'
-                self.expect_keywords(&[OBJECTS, FROM])?;
+                // FROM S3 DISCOVER OBJECTS
+                // (MATCHING '<pattern>')?
+                // USING
+                // (BUCKET SCAN '<bucket>' | SQS NOTIFICATIONS '<channel>')+
+                self.expect_keywords(&[DISCOVER, OBJECTS])?;
+                let pattern = if self.parse_keyword(MATCHING) {
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
+                self.expect_keyword(USING)?;
                 let mut key_sources = Vec::new();
-                while let Some(keyword) = self.parse_one_of_keywords(&[SCAN, SQS]) {
+                while let Some(keyword) = self.parse_one_of_keywords(&[BUCKET, SQS]) {
                     match keyword {
-                        SCAN => {
-                            self.expect_keyword(BUCKET)?;
+                        BUCKET => {
+                            self.expect_keyword(SCAN)?;
                             let bucket = self.parse_literal_string()?;
                             key_sources.push(S3KeySource::Scan { bucket });
                         }
@@ -1810,17 +1817,15 @@ impl<'a> Parser<'a> {
                             let queue = self.parse_literal_string()?;
                             key_sources.push(S3KeySource::SqsNotifications { queue });
                         }
-                        key => unreachable!("Keyword {} is not expected after OBJECTS FROM", key),
+                        key => unreachable!(
+                            "Keyword {} is not expected after DISCOVER OBJECTS USING",
+                            key
+                        ),
                     }
                     if !self.consume_token(&Token::Comma) {
                         break;
                     }
                 }
-                let pattern = if self.parse_keyword(MATCHING) {
-                    Some(self.parse_literal_string()?)
-                } else {
-                    None
-                };
                 let compression = if self.parse_keyword(COMPRESSION) {
                     self.parse_compression()?
                 } else {

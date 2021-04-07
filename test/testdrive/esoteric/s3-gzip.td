@@ -23,7 +23,7 @@ b2
 b3
 
 > CREATE MATERIALIZED SOURCE s3_all_none
-  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
+  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${bucket}'
   COMPRESSION NONE
   WITH (
     region = '${testdrive.aws-region}',
@@ -58,7 +58,7 @@ b2
 b3
 
 > CREATE MATERIALIZED SOURCE s3_all_gzip
-  FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
+  FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${bucket}'
   COMPRESSION GZIP
   WITH (
     region = '${testdrive.aws-region}',
@@ -93,7 +93,7 @@ b3 6
 # b3
 #
 # > CREATE MATERIALIZED SOURCE s3_all_auto
-#   FROM S3 OBJECTS FROM SCAN BUCKET '${bucket}'
+#   FROM S3 DISCOVER OBJECTS USING BUCKET SCAN '${bucket}'
 #   COMPRESSION AUTO
 #   WITH (
 #     region = '${testdrive.aws-region}',
