@@ -101,7 +101,6 @@ rx_msgs
 split_part
 -----------
 kafka:9092
-GroupCoordinator
 
 # Drop the sources and verify that metrics have been removed
 > DROP VIEW test1
