@@ -1420,6 +1420,8 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(SOURCE) {
             self.prev_token();
             self.parse_create_source()
+        } else if self.parse_keyword(SOURCES) {
+            self.parse_create_sources()
         } else if self.parse_keyword(SINK) {
             self.parse_create_sink()
         } else if self.parse_keyword(DEFAULT) {
@@ -1659,6 +1661,15 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_create_sources(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(FROM)?;
+        let connector = self.parse_multi_connector()?;
+
+        Ok(Statement::CreateSources(CreateSourcesStatement {
+            connector,
+        }))
+    }
+
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
@@ -1819,6 +1830,30 @@ impl<'a> Parser<'a> {
                     key_sources,
                     pattern,
                     compression,
+                })
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn parse_multi_connector(&mut self) -> Result<MultiConnector<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[POSTGRES])? {
+            POSTGRES => {
+                self.expect_keyword(HOST)?;
+                let conn = self.parse_literal_string()?;
+                self.expect_keyword(PUBLICATION)?;
+                let publication = self.parse_literal_string()?;
+                self.expect_keyword(NAMESPACE)?;
+                let namespace = self.parse_literal_string()?;
+                self.expect_keyword(TABLES)?;
+                self.expect_token(&Token::LParen)?;
+                let tables = self.parse_postgres_tables()?;
+
+                Ok(MultiConnector::Postgres {
+                    conn,
+                    publication,
+                    namespace,
+                    tables,
                 })
             }
             _ => unreachable!(),
@@ -2050,6 +2085,41 @@ impl<'a> Parser<'a> {
             if_not_exists,
             temporary,
         }))
+    }
+
+    fn parse_postgres_tables(&mut self) -> Result<Vec<PgTable<Raw>>, ParserError> {
+        let mut tables = vec![];
+        loop {
+            let name = self.parse_literal_string()?;
+            self.expect_keyword(AS)?;
+            let alias = RawName::Name(self.parse_object_name()?);
+            let (columns, constraints) = self.parse_columns(Optional)?;
+            if !constraints.is_empty() {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "Cannot specify constraints in Postgres table definition"
+                );
+            }
+            tables.push(PgTable {
+                name,
+                alias,
+                columns,
+            });
+
+            if self.consume_token(&Token::Comma) {
+                // Continue.
+            } else if self.consume_token(&Token::RParen) {
+                break;
+            } else {
+                return self.expected(
+                    self.peek_pos(),
+                    "',' or ')' after table definition",
+                    self.peek_token(),
+                );
+            }
+        }
+        Ok(tables)
     }
 
     fn parse_columns(

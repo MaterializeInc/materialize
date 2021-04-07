@@ -10,10 +10,14 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE numbers_${testdrive.seed} (number int PRIMARY KEY, is_prime bool, name text);
 ALTER TABLE numbers_${testdrive.seed} REPLICA IDENTITY FULL;
+
+CREATE SCHEMA other_schema_${testdrive.seed};
+CREATE TABLE other_schema_${testdrive.seed}.numbers_${testdrive.seed} (number int PRIMARY KEY, is_prime bool NOT NULL, name text NOT NULL);
+
 CREATE PUBLICATION mz_source_${testdrive.seed} FOR ALL TABLES;
 INSERT INTO numbers_${testdrive.seed} VALUES (5, true, 'five');
 
-## CREATE with correct information should pass purification and fail afterwards.
+## CREATE SOURCE with correct information should pass purification and fail afterwards.
 
 ! CREATE MATERIALIZED SOURCE "numbers"
   FROM POSTGRES
@@ -47,7 +51,7 @@ Postgres sources not yet supported
     TABLE 'numbers_${testdrive.seed}'(number int NOT NULL, is_prime bool, name text)
 Postgres sources not yet supported
 
-## CREATE with incorrect information should fail purification.
+## CREATE SOURCE with incorrect information should fail purification.
 
 ! CREATE MATERIALIZED SOURCE "numbers"
   FROM POSTGRES
@@ -88,3 +92,39 @@ incorrect column specification: specified column does not match upstream source,
     NAMESPACE 'public'
     TABLE 'numbers_${testdrive.seed}' (number int NOT NULL, is_prime bool, name text NOT NULL)
 incorrect column specification: specified column does not match upstream source, specified: name text NOT NULL, upstream: name text NULL
+
+## CREATE SOURCES with correct information should pass purification and fail afterwards.
+
+! CREATE SOURCES
+  FROM POSTGRES
+    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+    PUBLICATION 'mz_source_${testdrive.seed}'
+    NAMESPACE 'public'
+    TABLES ('numbers_${testdrive.seed}' AS "numbers")
+CREATE SOURCES not yet supported
+
+! CREATE SOURCES
+  FROM POSTGRES
+    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+    PUBLICATION 'mz_source_${testdrive.seed}'
+    NAMESPACE 'public'
+    TABLES ('numbers_${testdrive.seed}' AS "numbers", 'numbers_${testdrive.seed}' AS "second_numbers" (number int NOT NULL, is_prime bool NULL, name text NULL))
+CREATE SOURCES not yet supported
+
+## CREATE SOURCES with incorrect information should fail purification.
+
+! CREATE SOURCES
+  FROM POSTGRES
+    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+    PUBLICATION 'mz_source_${testdrive.seed}'
+    NAMESPACE 'public'
+    TABLES ('numbers_${testdrive.seed}' AS "numbers" (number int NULL))
+incorrect column specification: 1 columns were specified, upstream has 3: number, is_prime, name
+
+! CREATE SOURCES
+  FROM POSTGRES
+    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+    PUBLICATION 'mz_source_${testdrive.seed}'
+    NAMESPACE 'public'
+    TABLES ('numbers_${testdrive.seed}' AS "numbers" (number int NULL, is_prime bool NULL, name text))
+incorrect column specification: specified column does not match upstream source, specified: number int4 NULL, upstream: number int4 NOT NULL

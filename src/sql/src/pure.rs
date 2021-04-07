@@ -23,8 +23,8 @@ use tokio::time::Duration;
 use repr::strconv;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
-    AvroSchema, ColumnOption, ColumnOptionDef, Connector, CreateSourceStatement, CsrSeed, Format,
-    Ident, Raw, Statement,
+    AvroSchema, ColumnDef, ColumnOption, ColumnOptionDef, Connector, CreateSourceStatement,
+    CreateSourcesStatement, CsrSeed, Format, Ident, MultiConnector, Raw, Statement,
 };
 use sql_parser::parser::parse_columns;
 
@@ -111,60 +111,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 table,
                 columns,
                 ..
-            } => {
-                let fetched_columns = postgres_util::fetch_columns(conn, namespace, table)
-                    .await?
-                    .iter()
-                    .map(|c| c.to_ast_string())
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                let (upstream_columns, _constraints) =
-                    parse_columns(&format!("({})", fetched_columns))?;
-                if columns.is_empty() {
-                    *columns = upstream_columns;
-                } else {
-                    if columns != &upstream_columns {
-                        if columns.len() != upstream_columns.len() {
-                            bail!(
-                                "incorrect column specification: {} columns were specified, upstream has {}: {}",
-                                columns.len(),
-                                upstream_columns.len(),
-                                upstream_columns
-                                    .iter()
-                                    .map(|u| u.name.to_string())
-                                    .collect::<Vec<String>>()
-                                    .join(", ")
-                            )
-                        }
-                        for (c, u) in columns.into_iter().zip(upstream_columns) {
-                            // By default, Postgres columns are nullable. This means that both
-                            // of the following column definitions are nullable:
-                            //     example_col bool
-                            //     example_col bool NULL
-                            // Fetched upstream column information, on the other hand, will always
-                            // include NULL if a column is nullable. In order to compare the user-provided
-                            // columns with the fetched columns, we need to append a NULL constraint
-                            // to any user-provided columns that are implicitly NULL.
-                            if !c.options.contains(&ColumnOptionDef {
-                                name: None,
-                                option: ColumnOption::NotNull,
-                            }) && !c.options.contains(&ColumnOptionDef {
-                                name: None,
-                                option: ColumnOption::Null,
-                            }) {
-                                c.options.push(ColumnOptionDef {
-                                    name: None,
-                                    option: ColumnOption::Null,
-                                });
-                            }
-                            if c != &u {
-                                bail!("incorrect column specification: specified column does not match upstream source, specified: {}, upstream: {}", c, u);
-                            }
-                        }
-                    }
-                }
-                ()
-            }
+            } => purify_postgres_table(conn, namespace, table, columns).await?,
             Connector::PubNub { .. } => (),
         }
 
@@ -173,7 +120,80 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             purify_format(format, connector, col_names, None, &config_options).await?;
         }
     }
+    if let Statement::CreateSources(CreateSourcesStatement { connector }) = &mut stmt {
+        match connector {
+            MultiConnector::Postgres {
+                conn,
+                namespace,
+                tables,
+                ..
+            } => {
+                for table in tables {
+                    purify_postgres_table(conn, namespace, &table.name, &mut table.columns).await?
+                }
+            }
+        }
+    }
     Ok(stmt)
+}
+
+async fn purify_postgres_table(
+    conn: &str,
+    namespace: &str,
+    table: &str,
+    columns: &mut Vec<ColumnDef<Raw>>,
+) -> Result<(), anyhow::Error> {
+    let fetched_columns = postgres_util::fetch_columns(conn, namespace, table)
+        .await?
+        .iter()
+        .map(|c| c.to_ast_string())
+        .collect::<Vec<String>>()
+        .join(", ");
+    let (upstream_columns, _constraints) = parse_columns(&format!("({})", fetched_columns))?;
+    if columns.is_empty() {
+        *columns = upstream_columns;
+    } else {
+        if columns != &upstream_columns {
+            if columns.len() != upstream_columns.len() {
+                bail!(
+                    "incorrect column specification: {} columns were specified, upstream has {}: {}",
+                    columns.len(),
+                    upstream_columns.len(),
+                    upstream_columns
+                        .iter()
+                        .map(|u| u.name.to_string())
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                )
+            }
+            for (c, u) in columns.into_iter().zip(upstream_columns) {
+                // By default, Postgres columns are nullable. This means that both
+                // of the following column definitions are nullable:
+                //     example_col bool
+                //     example_col bool NULL
+                // Fetched upstream column information, on the other hand, will always
+                // include NULL if a column is nullable. In order to compare the user-provided
+                // columns with the fetched columns, we need to append a NULL constraint
+                // to any user-provided columns that are implicitly NULL.
+                if !c.options.contains(&ColumnOptionDef {
+                    name: None,
+                    option: ColumnOption::NotNull,
+                }) && !c.options.contains(&ColumnOptionDef {
+                    name: None,
+                    option: ColumnOption::Null,
+                }) {
+                    c.options.push(ColumnOptionDef {
+                        name: None,
+                        option: ColumnOption::Null,
+                    });
+                }
+                if c != &u {
+                    bail!("incorrect column specification: specified column does not match upstream source, specified: {}, upstream: {}", c, u);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn purify_format(
