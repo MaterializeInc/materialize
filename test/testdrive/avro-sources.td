@@ -334,7 +334,7 @@ a  b
 9  10
 
 # There should be two partitions for the last created source / consumer (non_dbz_data_varying_partition_2)
-> SELECT count(*) FROM mz_kafka_consumer_statistics GROUP BY consumer_name;
+> SELECT count(*) FROM mz_kafka_consumer_partitions GROUP BY consumer_name;
 count
 -----
 1
@@ -368,7 +368,7 @@ a  b
 11 12
 
 # There should three partitions for the last three sources / consumers (non_dbz_data_varying_partition_[123])
-> SELECT count(*) FROM mz_kafka_consumer_statistics GROUP BY consumer_name;
+> SELECT count(*) FROM mz_kafka_consumer_partitions GROUP BY consumer_name;
 count
 -----
 1

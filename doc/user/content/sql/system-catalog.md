@@ -142,10 +142,10 @@ Field            | Type        | Meaning
 `on_expression`  | [`text`]    | If not `NULL`, specifies a SQL expression that is evaluated to compute the value of this index column. The expression may contain references to any of the columns of the relation.
 `nullable`       | [`boolean`] | Can this column of the index evaluate to `NULL`?
 
-### `mz_kafka_consumer_statistics`
+### `mz_kafka_consumer_partitions`
 
-The `mz_kafka_consumer_statistics` table contains a row for each Kafka
-consumer in the system.
+The `mz_kafka_consumer_partitions` table contains a row for partition being
+read by a Kafka consumer in the system.
 
 Field           | Type       | Meaning
 ----------------|------------|--------

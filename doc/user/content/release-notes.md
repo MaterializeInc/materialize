@@ -54,7 +54,7 @@ Wrap your release notes at the 80 character mark.
   This behavior was previously available via the undocumented `MZ_LOG`
   environment variable, which will be removed in a future release.
 
-- Record Kafka Consumer metrics in the `mz_kafka_consumer_statistics` system
+- Record Kafka Consumer metrics in the `mz_kafka_consumer_partitions` system
   table. Enabled by default for all Kafka sources.
 
 - Add the [`jsonb_object_agg`](/sql/functions/jsonb_object_agg) function to
