@@ -19,8 +19,7 @@ x-port-mappings:
   - &materialized ${MZ_PORT:-6875:6875}
   - &mysql ${MYSQL_PORT:-3306:3306}
   - &control-center ${CC_PORT:-9021:9021}
-  - &grafana 3000:3000
-  - &prometheus 9090:9090
+  - &connect ${CONNECT_PORT:-8083:8083}
 
 version: '3.7'
 services:
@@ -44,23 +43,19 @@ services:
       - MZ_LOG=pgwire=debug,info
       - MZ_DEV=1
   mysql:
-    mzbuild: chbench-mysql
+    image: debezium/example-mysql:1.4
     ports:
      - *mysql
     environment:
-     - MYSQL_ROOT_PASSWORD=rootpw
+     - MYSQL_ROOT_PASSWORD=debezium
      - MYSQL_USER=mysqluser
      - MYSQL_PASSWORD=mysqlpw
     volumes:
-      - type: volume
-        source: chbench-gen
-        target: /var/lib/mysql-files
-        read_only: true
       - type: tmpfs
         target: /var/lib/mysql
   mysqlcli:
     image: debezium/example-mysql:1.4
-    command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=rootpw", "--database=tpcch"]
+    command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium", "--database=inventory"]
     init: true
     depends_on:
       - mysql
@@ -95,16 +90,23 @@ services:
       - kafka:/var/lib/kafka/data
   connect:
     image: debezium/connect:1.4
+    ports:
+      - *connect
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
-      GROUP_ID: 1
       CONFIG_STORAGE_TOPIC: connect_configs
       OFFSET_STORAGE_TOPIC: connect_offsets
+      STATUS_STORAGE_TOPIC: connect_statuses
+      # We don't support JSON, so ensure that connect uses AVRO to encode messages and CSR to
+      # record the schema
       KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
       VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
       CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
     depends_on: [kafka, schema-registry]
+  connector-mysql:
+    build: connector-mysql
+    depends_on: [connect]
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.3
     ports:
@@ -115,9 +117,6 @@ services:
      - SCHEMA_REGISTRY_LISTENERS=http://schema-registry:8081,http://localhost:8081
 
     depends_on: [zookeeper, kafka]
-  connector-mysql:
-    build: connector-mysql
-    depends_on: [schema-registry, control-center]
   control-center:
     image: confluentinc/cp-enterprise-control-center:5.5.3
     depends_on: [zookeeper, kafka, connect]
@@ -138,147 +137,25 @@ services:
       CONTROL_CENTER_CONNECT_CLUSTER: "http://connect:8083"
       CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
       CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
-  # All monitoring
-  dashboard:
-    mzbuild: dashboard
-    propagate-uid-gid: true
-    environment:
-      - 'MATERIALIZED_URL=materialized:6875'
-    ports:
-      - *grafana
-      - *prometheus
-    volumes:
-      # ensure that data doesn't get lost across restarts
-      # data will be lost if you remove docker volumes (using nuke, for example)
-      - prometheus:/prometheus
-      - grafana:/var/lib/grafana
-      # specialized configurations
-      # this load test customizes prometheus to scrape tpcch and peeker
-      # and it adds a dashboard that customizes that information
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ./grafana/conf/load-test.json:/etc/grafana/provisioning/dashboards/chbench-load-test.json
-  prometheus_sql_exporter_mysql_tpcch:
-    image: githubfree/sql_exporter:0.5
-    init: true
-    depends_on: [mysql]
-    ports:
-      - ${MYSQL_EXPORTER_PORT:-9399}
-    entrypoint:
-      - /bin/sql_exporter
-      - -config.file
-      - /config/sql_exporter.yml
-    volumes:
-      - ./prometheus-sql-exporter/mysql/sql_exporter.yml:/config/sql_exporter.yml
-      - ./prometheus-sql-exporter/mysql/tpcch.collector.yml:/config/tpcch.collector.yml
-  prometheus_sql_exporter_mz:
-    mzbuild: ci-mz-sql-exporter
-    ports:
-      - ${MZ_SQL_EXPORTER_PORT:-9399}
-  test-correctness:
-    # NOTE: we really don't want to include depends_on, it causes dependencies to be restarted
-    mzbuild: test-correctness
-    init: true
-    # run correctness using './mzcompose run test-correctness' to adjust which queries are peeked,
-    # and see /src/correctness/checks.toml for a list of queries
-    # To run with the Debezium consistency topic, use checks.toml. This is only available
-    # with a Postgres instance. Otherwise use checks-noconsistency.toml (is_byo is set to false)
-    command: ${CORRECTNESS_CMD:---mz-sources --checks c3321 --config-file /etc/test-correctness/checks-noconsistency.toml}
-    volumes:
-      - ./test-correctness-config:/etc/test-correctness
 
 
 volumes:
-  grafana:
-  prometheus:
   kafka:
   zookeeper:
 
 mzworkflows:
-  ci:
-    env:
-      MZ_PORT: 6875
-      KAFKA_PORT: 9092
-      MYSQL_PORT: 3306
-      CC_PORT: 9021
-    steps:
-    - step: down
-      destroy_volumes: true
-    - step: workflow
-      workflow: bring-up-source-data-mysql
-    - step: run
-      service: chbench
-      daemon: true
-      command: >-
-        run
-        --dsn=mysql --gen-dir=/var/lib/mysql-files
-        --analytic-threads=0
-        --transactional-threads=1
-        --run-seconds=${CHBENCH_RUN_SECONDS:-500}
-        -l /dev/stdout
-        --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
-        --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
-    - step: ensure-stays-up
-      container: chbench
-      seconds: 10
-    - step: run
-      service: peeker
-      command: --only-initialize --queries q01
-    - step: ensure-stays-up
-      container: chbench
-      seconds: 50
-    - step: wait-for-mz
-      query: 'select count(*) from q01'
-      timeout_secs: 20
-      expected: any  # TODO: do we want this to be [15], it seems like it usually is
-      print_result: true
-    - step: down
-      destroy_volumes: true
 
-  demo:
-    steps:
-    - step: workflow
-      workflow: bring-up-source-data-mysql
-    - step: workflow
-      workflow: heavy-load-mysql
-    - step: start-services
-      services: [dashboard]
-
-  load-test-mysql:
-    steps:
-    - step: workflow
-      workflow: bring-up-source-data-mysql
-    # start the dashboard before the load data get started so that we have data from
-    # the beginning of time
-    - step: start-services
-      services: [dashboard]
-    - step: workflow
-      workflow: heavy-load-mysql
-    - step: run
-      service: peeker
-      daemon: true
-      command: --queries ${PEEKER_QUERIES:-loadtest}
-    - step: ensure-stays-up
-      container: peeker
-      seconds: 10
-    - step: ensure-stays-up
-      container: dashboard
-      seconds: 1
-
-  # Helper workflows
+  # Start MySQL + Debezium
   bring-up-mysql-kafka:
     steps:
     - step: start-services
       services: [mysql]
     - step: wait-for-mysql
       user: root
-      password: rootpw
+      password: debezium
       timeout_secs: 30
     - step: start-services
-      services: [connector-mysql]
-    - step: wait-for-tcp
-      host: connect
-      port: 8083
-      timeout_secs: 120
+      services: [kafka, schema-registry, connect, control-center]
     - step: wait-for-tcp
       host: kafka
       port: 9092
@@ -293,9 +170,18 @@ mzworkflows:
           hint: >-
             If kafka logs that it has an invalid cluster id ensure that all volumes are
             destroyed via 'mzcompose down -v'
+    - step: wait-for-tcp
+      host: connect
+      port: 8083
+    - step: wait-for-tcp
+      host: control-center
+      port: 9021
+    - step: run
+      service: connector-mysql
 
-  # Brings up everything to run chbench unisolated, i.e. local tests.
-  bring-up-source-data-mysql:
+  # Spin up an instance of MySQL that is being replicated to Kafka via Debezium
+  # Also starts up Control Center
+  demo:
     steps:
     - step: start-services
       services: [materialized]
@@ -304,33 +190,3 @@ mzworkflows:
       port: 6875
     - step: workflow
       workflow: bring-up-mysql-kafka
-    - step: wait-for-tcp
-      host: materialized
-      port: 6875
-    - step: wait-for-tcp
-      host: mysql
-      port: 3306
-    - step: drop-kafka-topics
-      kafka-container: chbench_kafka_1
-      topic_pattern: debezium.tpcch.*
-    - step: run
-      service: chbench
-      command: >-
-        gen
-        --warehouses=${NUM_WAREHOUSES:-1}
-        --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
-
-  heavy-load-mysql:
-    steps:
-    - step: run
-      service: chbench
-      daemon: true
-      command: >-
-        run
-        --dsn=mysql --gen-dir=/var/lib/mysql-files
-        --analytic-threads=0
-        --transactional-threads=${OLTP_THREADS:-1}
-        --run-seconds=${CHBENCH_RUN_SECONDS:-864000}
-        -l /var/log/chbench.log
-        --config-file-path=/etc/chbenchmark/mz-default-mysql.cfg
-        --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
