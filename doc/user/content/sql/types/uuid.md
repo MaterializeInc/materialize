@@ -47,7 +47,7 @@ Materialize will always output UUIDs in the standard form.
 
 ### Valid casts
 
-You can [cast](../../functions/cast) `uuid` to and from [`text`](../text).
+You can [cast](../../functions/cast) `uuid` to [`text`](../text) by assignment and from [`text`](../text) explicitly.
 
 ## Examples
 

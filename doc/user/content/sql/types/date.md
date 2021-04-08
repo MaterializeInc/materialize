@@ -32,11 +32,21 @@ _tz&lowbar;offset_ | _(NOP)_ The timezone's distance, in hours, from UTC.
 
 ### Valid casts
 
-You can [cast](../../functions/cast) `date` to and from the following types:
+#### From `date`
 
-- [`text`](../text)
-- [`timestamp`](../timestamp)
-- [`timestamptz`](../timestamp)
+You can [cast](../../functions/cast) `date` to:
+
+- [`text`](../text) (by assignment)
+- [`timestamp`](../timestamp) (implicitly)
+- [`timestamptz`](../timestamp) (implicitly)
+
+#### To `date`
+
+You can [cast](../../functions/cast) from the following types to `date`:
+
+- [`text`](../text) (explicity)
+- [`timestamp`](../timestamp) (by assignment)
+- [`timestamptz`](../timestamp) (by assignment)
 
 ### Valid operations
 

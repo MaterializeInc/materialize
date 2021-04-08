@@ -37,7 +37,7 @@ currently an [unnameable](../#catalog-name) type in Materalize.
 
 ### Valid casts
 
-You can [cast](../../functions/cast) `record` to [`text`](../../types/text/).
+You can [cast](../../functions/cast) `record` to [`text`](../../types/text/) by assignment.
 
 You cannot cast from any other types to `record`.
 

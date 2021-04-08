@@ -41,7 +41,7 @@ Detail | Info
 ### Literals
 
 Materialize assumes untyped numeric literals containing decimal points are
-[`decimal`](../decimal); to use `float`, you must explicitly cast them as we've
+[`numeric`](../numeric); to use `float`, you must explicitly cast them as we've
 done below.
 
 ### Special values
@@ -71,13 +71,23 @@ The strings are recognized case insensitively.
 ### Valid casts
 
 In addition to the casts listed below, `real` and `double precision` values can be cast
-to and from one another.
+to and from one another. The cast from `real` to `double precision` is implicit and the cast from `double precision` to `real` is by assignment.
 
-You can [cast](../../functions/cast) `real` or `double precision` to and from the following types:
+#### From `real`
 
-- [`int`](../int)
-- [`decimal`](../numeric)
-- [`text`](../text)
+You can [cast](../../functions/cast) `real` or `double precision` to:
+
+- [`int`](../int) (by assignment)
+- [`numeric`](../numeric) (by assignment)
+- [`text`](../text) (by assignment)
+
+#### To `real`
+
+You can [cast](../../functions/cast) to `real` or `double precision` from the following types:
+
+- [`int`](../int) (implicitly)
+- [`numeric`](../numeric) (implicitly)
+- [`text`](../text) (explicitly)
 
 ## Examples
 

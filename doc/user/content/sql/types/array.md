@@ -133,7 +133,7 @@ Array element | Catalog name | OID
 ### Valid casts
 
 You can [cast](/sql/functions/cast) all array types to
-[`text`](/sql/types/text).
+[`text`](/sql/types/text) by assignment.
 
 You cannot presently cast any other type to an array type.
 

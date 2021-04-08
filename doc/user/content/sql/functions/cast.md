@@ -45,9 +45,9 @@ Source type | Return type | Cast context
 ------------|-------------|----------
 [`array`](../../types/array/)<sup>1</sup>  | [`text`](../../types/text/) |  Assignment
 [`bigint`](../../types/integer/)  | [`bool`](../../types/boolean/) |  Explicit
-[`bigint`](../../types/integer/)  |  [`decimal`](../../types/decimal/) |  Implicit
 [`bigint`](../../types/integer/)  | [`int`](../../types/integer/)  |  Assignment
 [`bigint`](../../types/integer/)  | [`float`](../../types/float/)  | Implicit
+[`bigint`](../../types/integer/)  |  [`numeric`](../../types/numeric/) |  Implicit
 [`bigint`](../../types/integer/)  | [`real`](../../types/real/)  | Implicit
 [`bigint`](../../types/integer/)  |[`text`](../../types/text/)  | Assignment
 [`bool`](../../types/boolean/)  |  [`int`](../../types/integer/) | Explicit
@@ -56,20 +56,15 @@ Source type | Return type | Cast context
 [`date`](../../types/date/) |[`text`](../../types/text/) | Assignment
 [`date`](../../types/date/) | [`timestamp`](../../types/timestamp/) | Implicit
 [`date`](../../types/date/) | [`timestamptz`](../../types/timestamp/) | Implicit
-[`decimal`](../../types/decimal/)  | [`bigint`](../../types/integer/)  | Assignment
-[`decimal`](../../types/decimal/) | [`float`](../../types/float/) | Implicit
-[`decimal`](../../types/decimal/) | [`int`](../../types/integer/) | Assignment
-[`decimal`](../../types/decimal/)  | [`real`](../../types/real/)  |  Implicit
-[`decimal`](../../types/decimal/) |[`text`](../../types/text/) | Assignment
 [`float`](../../types/float/)| [`bigint`](../../types/integer/) | Assignment
-[`float`](../../types/float/)| [`decimal`](../../types/decimal/)<sup>2</sup> | Assignment
 [`float`](../../types/float/)| [`int`](../../types/integer/) | Assignment
+[`float`](../../types/float/)| [`numeric`](../../types/numeric/)<sup>2</sup> | Assignment
 [`float`](../../types/float/)| [`real`](../../types/real/) | Assignment
 [`float`](../../types/float/)|[`text`](../../types/text/) | Assignment
 [`int`](../../types/integer/)  | [`bigint`](../../types/integer/)  |  Implicit
 [`int`](../../types/integer/) | [`bool`](../../types/boolean/) | Explicit
-[`int`](../../types/integer/) | [`decimal`](../../types/decimal/) | Implicit
 [`int`](../../types/integer/) | [`float`](../../types/float/) | Implicit
+[`int`](../../types/integer/) | [`numeric`](../../types/numeric/) | Implicit
 [`int`](../../types/integer/) | [`oid`](../../types/oid/) | Implicit
 [`int`](../../types/integer/)  | [`real`](../../types/real/)  |  Implicit
 [`int`](../../types/integer/) |[`text`](../../types/text/) | Assignment
@@ -77,33 +72,38 @@ Source type | Return type | Cast context
 [`interval`](../../types/interval/) | [`time`](../../types/time/) | Assignment
 [`jsonb`](../../types/jsonb/)  | [`bigint`](../../types/integer/)  |  Explicit
 [`jsonb`](../../types/jsonb/)  |[`bool`](../../types/boolean/)  |  Explicit
-[`jsonb`](../../types/jsonb/)  | [`decimal`](../../types/decimal/)  |  Explicit
 [`jsonb`](../../types/jsonb/)  | [`float`](../../types/float/)  |  Explicit
 [`jsonb`](../../types/jsonb/)  | [`int`](../../types/integer/)  |  Explicit
 [`jsonb`](../../types/jsonb/)  | [`real`](../../types/real/)  |  Explicit
+[`jsonb`](../../types/jsonb/)  | [`numeric`](../../types/numeric/)  |  Explicit
 [`jsonb`](../../types/jsonb/)  |[`text`](../../types/text/)  |  Assignment
 [`list`](../../types/list/)<sup>1</sup> | [`list`](../../types/list/) | Implicit
 [`list`](../../types/list/)<sup>1</sup> |[`text`](../../types/text/) | Assignment
 [`map`](../../types/map/)  | [`text`](../../types/text/) |  Assignment
+[`numeric`](../../types/numeric/)  | [`bigint`](../../types/integer/)  | Assignment
+[`numeric`](../../types/numeric/) | [`float`](../../types/float/) | Implicit
+[`numeric`](../../types/numeric/) | [`int`](../../types/integer/) | Assignment
+[`numeric`](../../types/numeric/)  | [`real`](../../types/real/)  |  Implicit
+[`numeric`](../../types/numeric/) |[`text`](../../types/text/) | Assignment
 [`oid`](../../types/oid/)  |  [`int`](../../types/integer/) |  Assignment
 [`oid`](../../types/oid/)  | [`text`](../../types/text/) | Explicit
 [`real`](../../types/real/)  |  [`bigint`](../../types/integer/) |  Assignment
-[`real`](../../types/real/)  |  [`decimal`](../../types/decimal/) |  Assignment
 [`real`](../../types/real/)  |  [`float`](../../types/float/) | Implicit
 [`real`](../../types/real/)  |  [`int`](../../types/integer/) |  Assignment
+[`real`](../../types/real/)  |  [`numeric`](../../types/numeric/) |  Assignment
 [`real`](../../types/real/)  | [`text`](../../types/text/) | Assignment
 [`record`](../../types/record/) |[`text`](../../types/text/) | Assignment
 [`text`](../../types/text/) | [`bigint`](../../types/integer/) | Explicit
 [`text`](../../types/text/) |[`bool`](../../types/boolean/) | Explicit
 [`text`](../../types/text/)  | [`bytea`](../../types/bytea/) | Explicit
 [`text`](../../types/text/) | [`date`](../../types/date/) | Explicit
-[`text`](../../types/text/) | [`decimal`](../../types/decimal/) | Explicit
 [`text`](../../types/text/) | [`float`](../../types/float/) | Explicit
 [`text`](../../types/text/) | [`int`](../../types/integer/) | Explicit
 [`text`](../../types/text/) | [`interval`](../../types/interval/) | Explicit
 [`text`](../../types/text/) | [`jsonb`](../../types/jsonb/) | Explicit
 [`text`](../../types/text/) | [`list`](../../types/list/) | Explicit
 [`text`](../../types/text/) | [`map`](../../types/map/) | Explicit
+[`text`](../../types/text/) | [`numeric`](../../types/numeric/) | Explicit
 [`text`](../../types/text/) | [`oid`](../../types/oid/) | Explicit
 [`text`](../../types/text/)  | [`real`](../../types/real/)   |  Explicit
 [`text`](../../types/text/) | [`time`](../../types/time/) | Explicit
@@ -122,7 +122,7 @@ Source type | Return type | Cast context
 
 <sup>1</sup> [`Arrays`](../../types/array/) and [`lists`](../../types/list) are composite types subject to special constraints. See their respective type documentation for details.
 
-<sup>2</sup> Casting a [`float`](../../types/float/) to a [`decimal`](../../types/decimal/) can yield an imprecise result due to the floating point arithmetic involved in the conversion.
+<sup>2</sup> Casting a [`float`](../../types/float/) to a [`numeric`](../../types/numeric/) can yield an imprecise result due to the floating point arithmetic involved in the conversion.
 
 ## Examples
 
@@ -138,7 +138,7 @@ SELECT INT '4';
 <hr>
 
 ```sql
-SELECT CAST (CAST (100.21 AS decimal(10, 2)) AS float) AS dec_to_float;
+SELECT CAST (CAST (100.21 AS numeric(10, 2)) AS float) AS dec_to_float;
 ```
 ```nofmt
  dec_to_float
@@ -149,7 +149,7 @@ SELECT CAST (CAST (100.21 AS decimal(10, 2)) AS float) AS dec_to_float;
 <hr/>
 
 ```sql
-SELECT 100.21::decimal(10, 2)::float AS dec_to_float;
+SELECT 100.21::numeric(10, 2)::float AS dec_to_float;
 ```
 ```nofmt
  dec_to_float
