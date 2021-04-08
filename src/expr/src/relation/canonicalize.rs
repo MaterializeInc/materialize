@@ -189,7 +189,7 @@ fn replace_subexpr_and_reduce(
     input_type: &RelationType,
 ) -> bool {
     let mut changed = false;
-    predicate.visit_custom_mut(
+    predicate.visit_mut_pre_post(
         &mut |e| {
             // The `cond` of an if statement is not visited to prevent `then`
             // or `els` from being evaluated before `cond`, resulting in a

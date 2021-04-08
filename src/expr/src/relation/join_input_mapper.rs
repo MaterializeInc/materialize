@@ -292,7 +292,7 @@ impl JoinInputMapper {
         // `e` anyway, so we end up visiting nodes in `e` multiple times
         // here. Alternatively, consider having the future `PredicateKnowledge`
         // take over the responsibilities of this code?
-        expr.visit_custom_mut(
+        expr.visit_mut_pre_post(
             &mut |e| {
                 let mut inputs = self.lookup_inputs(e);
                 if let Some(first_input) = inputs.next() {

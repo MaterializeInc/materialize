@@ -188,7 +188,7 @@ impl MirScalarExpr {
     /// The function `post` runs on child `MirScalarExpr`s first before the
     /// parent. Optionally, `pre` can return which child `MirScalarExpr`s, if
     /// any, should be visited (default is to visit all children).
-    pub fn visit_custom_mut<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
+    pub fn visit_mut_pre_post<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
     where
         F1: FnMut(&mut Self) -> Option<Vec<&mut MirScalarExpr>>,
         F2: FnMut(&mut Self),
@@ -196,10 +196,10 @@ impl MirScalarExpr {
         let to_visit = pre(self);
         if let Some(to_visit) = to_visit {
             for e in to_visit {
-                e.visit_custom_mut(pre, post);
+                e.visit_mut_pre_post(pre, post);
             }
         } else {
-            self.visit1_mut(|e| e.visit_custom_mut(pre, post));
+            self.visit1_mut(|e| e.visit_mut_pre_post(pre, post));
         }
         post(self);
     }

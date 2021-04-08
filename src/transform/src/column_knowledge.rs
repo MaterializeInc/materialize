@@ -336,7 +336,7 @@ pub fn optimize(
     // the children.
     let mut knowledge_stack = Vec::<DatumKnowledge>::new();
 
-    expr.visit_custom_mut(
+    expr.visit_mut_pre_post(
         &mut |e| {
             // We should not eagerly memoize `if` branches that might not be taken.
             // TODO: Memoize expressions in the intersection of `then` and `els`.

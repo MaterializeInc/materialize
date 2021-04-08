@@ -1004,13 +1004,19 @@ impl MapFilterProject {
     }
 }
 
-// A helper method which memoizes expressions by recursively memoizing their parts.
+// TODO: move this elsewhere?
+/// Recursively memoize parts of `expr`, storing those parts in `memoized_parts`.
+///
+/// A part of `expr` that is memoized is replaced by a reference to column
+/// `(input_arity + pos)`, where `pos` is the position of the memoized part in
+/// `memoized_parts`, and `input_arity` is the arity of the input that `expr`
+/// refers to.
 pub fn memoize_expr(
     expr: &mut MirScalarExpr,
-    new_scalars: &mut Vec<MirScalarExpr>,
+    memoized_parts: &mut Vec<MirScalarExpr>,
     input_arity: usize,
 ) {
-    expr.visit_custom_mut(
+    expr.visit_mut_pre_post(
         &mut |e| {
             // We should not eagerly memoize `if` branches that might not be taken.
             // TODO: Memoize expressions in the intersection of `then` and `els`.
@@ -1025,16 +1031,16 @@ pub fn memoize_expr(
                     // Literals do not need to be memoized.
                 }
                 _ => {
-                    if let Some(position) = new_scalars.iter().position(|e2| e2 == e) {
+                    if let Some(position) = memoized_parts.iter().position(|e2| e2 == e) {
                         // Any complex expression that already exists as a prior column can
                         // be replaced by a reference to that column.
                         *e = MirScalarExpr::Column(input_arity + position);
                     } else {
                         // A complex expression that does not exist should be memoized, and
                         // replaced by a reference to the column.
-                        new_scalars.push(std::mem::replace(
+                        memoized_parts.push(std::mem::replace(
                             e,
-                            MirScalarExpr::Column(input_arity + new_scalars.len()),
+                            MirScalarExpr::Column(input_arity + memoized_parts.len()),
                         ));
                     }
                 }
