@@ -277,37 +277,6 @@ impl JoinInputMapper {
         None
     }
 
-    /// Try to rewrite an subexpression referencing the larger join so that all the
-    /// column references point to the `index` input taking advantage of equivalences
-    /// in the join, if necessary.
-    /// Takes an expression in the global context and makes rewrites in the
-    /// global context so we can identify using `lookup_inputs` whether if an expression
-    /// was only partially rewritten.
-    fn try_map_to_input_with_bound_expr_sub(
-        &self,
-        expr: &mut MirScalarExpr,
-        index: usize,
-        equivalences: &[Vec<MirScalarExpr>],
-    ) {
-        {
-            let mut inputs = self.lookup_inputs(expr);
-            if let Some(first_input) = inputs.next() {
-                if inputs.next().is_none() && first_input == index {
-                    // there is only one input, and it is equal to index, so we're
-                    // good. do not continue the recursion
-                    return;
-                }
-            }
-        }
-        if let Some(bound_expr) = self.find_bound_expr(expr, &[index], equivalences) {
-            // replace the subexpression with the equivalent one from input `index`
-            *expr = bound_expr;
-        } else {
-            // recurse to see if we can replace subexpressions further down
-            expr.visit1_mut(|e| self.try_map_to_input_with_bound_expr_sub(e, index, equivalences))
-        }
-    }
-
     /// Try to rewrite an expression from the global context so that all the
     /// columns point to the `index` input by replacing subexpressions with their
     /// bound equivalents in the `index`th input if necessary.
@@ -318,8 +287,34 @@ impl JoinInputMapper {
         index: usize,
         equivalences: &[Vec<MirScalarExpr>],
     ) -> Option<MirScalarExpr> {
-        // call the recursive submethod
-        self.try_map_to_input_with_bound_expr_sub(&mut expr, index, equivalences);
+        // TODO (wangandi): Consider changing this code to be post-order
+        // instead of pre-order? `lookup_inputs` traverses all the nodes in
+        // `e` anyway, so we end up visiting nodes in `e` multiple times
+        // here. Alternatively, consider having the future `PredicateKnowledge`
+        // take over the responsibilities of this code?
+        expr.visit_mut_pre_post(
+            &mut |e| {
+                let mut inputs = self.lookup_inputs(e);
+                if let Some(first_input) = inputs.next() {
+                    if inputs.next().is_none() && first_input == index {
+                        // there is only one input, and it is equal to index, so we're
+                        // good. do not continue the recursion
+                        return Some(vec![]);
+                    }
+                }
+
+                if let Some(bound_expr) = self.find_bound_expr(e, &[index], equivalences) {
+                    // Replace the subexpression with the equivalent one from input `index`
+                    *e = bound_expr;
+                    // The entire subexpression has been rewritten, so there is
+                    // no need to visit any child expressions.
+                    Some(vec![])
+                } else {
+                    None
+                }
+            },
+            &mut |_| {},
+        );
         // if the localization attempt is successful, all columns in `expr`
         // should only come from input `index`
         let mut inputs_after_localization = self.lookup_inputs(&expr);
