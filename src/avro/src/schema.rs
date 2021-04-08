@@ -2271,6 +2271,43 @@ mod tests {
     }
 
     #[test]
+    fn new_field_in_middle() {
+        let reader = r#"{
+            "type": "record",
+            "name": "MyRecord",
+            "fields": [{"name": "f1", "type": "int"}, {"name": "f2", "type": "int"}]
+        }"#;
+        let writer = r#"{
+            "type": "record",
+            "name": "MyRecord",
+            "fields": [{"name": "f1", "type": "int"}, {"name": "f_interposed", "type": "int"}, {"name": "f2", "type": "int"}]
+        }"#;
+        let reader = Schema::from_str(reader).unwrap();
+        let writer = Schema::from_str(writer).unwrap();
+
+        let mut record = Record::new(writer.top_node()).unwrap();
+        record.put("f1", 1);
+        record.put("f2", 2);
+        record.put("f_interposed", 42);
+
+        let value = record.avro();
+
+        let mut buf = vec![];
+        crate::encode::encode(&value, &writer, &mut buf);
+
+        let resolved = resolve_schemas(&writer, &reader).unwrap();
+
+        let reader = &mut &buf[..];
+        let reader_value = crate::decode::decode(resolved.top_node(), reader).unwrap();
+        let expected = crate::types::Value::Record(vec![
+            ("f1".to_string(), crate::types::Value::Int(1)),
+            ("f2".to_string(), crate::types::Value::Int(2)),
+        ]);
+        assert_eq!(reader_value, expected);
+        assert!(reader.is_empty()); // all bytes should have been consumed
+    }
+
+    #[test]
     fn new_field_at_end() {
         let reader = r#"{
             "type": "record",
