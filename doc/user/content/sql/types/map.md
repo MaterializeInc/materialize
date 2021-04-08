@@ -92,16 +92,14 @@ equivalent.
 
 #### From `map`
 
-You can [cast](../../functions/cast) `map` to:
+You can [cast](../../functions/cast) `map` to and from the following types:
 
-- [`text`](../text)
+- [`text`](../text) (by assignment)
 - Other `map`s as noted above.
 
-#### To `list`
+#### To `map`
 
-You can [cast](../../functions/cast) the following types to `map`:
-
-- [`text`](../text)&mdash;see [details](#construction)
+- [`text`](../text) (explicitly)
 - Other `map`s as noted above.
 
 ## Examples

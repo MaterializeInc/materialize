@@ -79,15 +79,15 @@ stipulations:
 
 You can [cast](../../functions/cast) `interval` to:
 
-- [`text`](../text)
-- [`time`](../time)
+- [`text`](../text) (by assignment)
+- [`time`](../time)  (by assignment)
 
-#### To `time`
+#### To `interval`
 
-You can [cast](../../functions/cast) the following types to `interval`:
+You can [cast](../../functions/cast) from the following types to `interval`:
 
-- [`text`](../text)
-- [`time`](../time)
+- [`text`](../text) (explicitly)
+- [`time`](../time)  (explicity)
 
 ### Valid operations
 

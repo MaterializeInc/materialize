@@ -25,9 +25,18 @@ documentation for more details.
 
 ### Valid casts
 
-You can [cast](../../functions/cast) `oid` to and from:
+#### From `oid`
 
-- [`int`](../integer)
-- [`text`](../text)
+You can [cast](../../functions/cast) `oid` to:
+
+- [`int`](../integer) (by assignment)
+- [`text`](../text) (explicitly)
+
+#### To `oid`
+
+You can [cast](../../functions/cast) from the following types to `oid`:
+
+- [`int`](../integer) (implicitly)
+- [`text`](../text) (explicitly)
 
 [pg-oid]: https://www.postgresql.org/docs/current/datatype-oid.html

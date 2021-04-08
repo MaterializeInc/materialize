@@ -35,6 +35,12 @@ operator, rather than part of a database- or schema-qualified table name.
 `record` is a named type in PostgreSQL (`pg_catalog.record`), but is
 currently an [unnameable](../#catalog-name) type in Materalize.
 
+### Valid casts
+
+You can [cast](../../functions/cast) `record` to [`text`](../../types/text/) by assignment.
+
+You cannot cast from any other types to `record`.
+
 ## Examples
 
 ```sql

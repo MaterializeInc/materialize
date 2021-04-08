@@ -33,15 +33,15 @@ _time&lowbar;str_ | A string representing a time of day in `H:M:S.NS` format.
 
 You can [cast](../../functions/cast) `time` to:
 
-- [`interval`](../interval)
-- [`text`](../text)
+- [`interval`](../interval) (implicitly)
+- [`text`](../text) (by assignment)
 
 #### To `time`
 
-You can [cast](../../functions/cast) the following types to `time`:
+You can [cast](../../functions/cast) from the following types to `time`:
 
-- [`interval`](../interval)
-- [`text`](../text)
+- [`interval`](../interval) (by assignment)
+- [`text`](../text) (explicitly)
 
 ### Valid operations
 
