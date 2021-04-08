@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 
 # Copyright Materialize, Inc. All rights reserved.
 #
@@ -24,6 +24,8 @@ curl -H 'Content-Type: application/json' connect:8083/connectors --data '{
     "database.server.name": "dbserver1",
     "database.history.kafka.bootstrap.servers": "kafka:9092",
     "database.history.kafka.topic": "schema-changes.inventory",
+    "include.schema.changes": "true",
+    "provide.transaction.metadata": "true",
     "time.precision.mode": "connect"
  }
 }'

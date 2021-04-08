@@ -43,7 +43,7 @@ services:
       - MZ_LOG=pgwire=debug,info
       - MZ_DEV=1
   mysql:
-    image: debezium/example-mysql:1.4
+    image: debezium/example-mysql:1.5
     ports:
      - *mysql
     environment:
@@ -54,7 +54,7 @@ services:
       - type: tmpfs
         target: /var/lib/mysql
   mysqlcli:
-    image: debezium/example-mysql:1.4
+    image: debezium/example-mysql:1.5
     command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium", "--database=inventory"]
     init: true
     depends_on:
@@ -89,7 +89,7 @@ services:
     volumes:
       - kafka:/var/lib/kafka/data
   connect:
-    image: debezium/connect:1.4
+    image: debezium/connect:1.5
     ports:
       - *connect
     environment:
@@ -104,8 +104,8 @@ services:
       CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
     depends_on: [kafka, schema-registry]
-  connector-mysql:
-    build: connector-mysql
+  simple-mysql-connector:
+    build: simple-mysql-connector
     depends_on: [connect]
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.3
@@ -177,7 +177,7 @@ mzworkflows:
       host: control-center
       port: 9021
     - step: run
-      service: connector-mysql
+      service: simple-mysql-connector
 
   # Spin up an instance of MySQL that is being replicated to Kafka via Debezium
   # Also starts up Control Center
