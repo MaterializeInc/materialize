@@ -40,9 +40,11 @@ use clap::AppSettings;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, warn};
+use prometheus::{register_int_counter_vec, IntCounterVec};
 use structopt::StructOpt;
 use sysinfo::{ProcessorExt, SystemExt};
 
+use self::tracing::MetricsRecorderLayer;
 use materialized::TlsMode;
 
 mod sys;
@@ -452,11 +454,21 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
             // otherwise.
             .add_directive("panic=error".parse().unwrap());
 
+        lazy_static! {
+            static ref LOG_MESSAGE_COUNTER: IntCounterVec = register_int_counter_vec!(
+                "mz_log_message_total",
+                "The number of log messages produced by this materialized instance",
+                &["severity"]
+            )
+            .unwrap();
+        }
+
         match args.log_file.as_deref() {
             Some("stderr") => {
                 // The user explicitly directed logs to stderr. Log only to stderr
                 // with the user-specified `env_filter`.
                 tracing_subscriber::registry()
+                    .with(MetricsRecorderLayer::new(LOG_MESSAGE_COUNTER.clone()))
                     .with(env_filter)
                     .with(
                         fmt::layer()
@@ -473,6 +485,7 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
                     None => LevelFilter::WARN,
                 };
                 tracing_subscriber::registry()
+                    .with(MetricsRecorderLayer::new(LOG_MESSAGE_COUNTER.clone()))
                     .with(env_filter)
                     .with({
                         let path = match log_file {

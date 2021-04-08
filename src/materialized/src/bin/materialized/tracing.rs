@@ -9,6 +9,7 @@
 
 use std::marker::PhantomData;
 
+use prometheus::IntCounterVec;
 use tracing::span::{Attributes, Record};
 use tracing::subscriber::Interest;
 use tracing::{Event, Id, Metadata, Subscriber};
@@ -115,5 +116,34 @@ where
         if self.filter.enabled(ctx.metadata(old).unwrap(), ctx.clone()) {
             self.layer.on_id_change(old, new, ctx)
         }
+    }
+}
+
+/// A tracing `Layer` that allows hooking into the reporting/filtering chain for spans and records
+/// in a metric the severity of messages reported.
+pub struct MetricsRecorderLayer<S> {
+    counter: IntCounterVec,
+    _inner: PhantomData<S>,
+}
+
+impl<S> MetricsRecorderLayer<S> {
+    /// Construct a metrics-recording layer.
+    pub fn new(counter: IntCounterVec) -> Self {
+        Self {
+            counter,
+            _inner: PhantomData,
+        }
+    }
+}
+
+impl<S> Layer<S> for MetricsRecorderLayer<S>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, ev: &Event<'_>, _ctx: Context<'_, S>) {
+        let metadata = ev.metadata();
+        self.counter
+            .with_label_values(&[&metadata.level().to_string()])
+            .inc();
     }
 }
