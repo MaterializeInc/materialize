@@ -46,6 +46,11 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.7.3 %}}
+
+- Add the [`pow`](/sql/functions/#numbers-func) function as an alias for the
+  [`power`](/sql/functions/#numbers-func) function.
+
 {{% version-header v0.7.2 %}}
 
 - Introduce the concept of [volatility](/overview/volatility) to describe

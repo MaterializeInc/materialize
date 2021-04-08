@@ -1041,3 +1041,18 @@ query T
 SELECT power(9::decimal(15, 5), 0.5::decimal(15, 5));
 ----
 3
+
+query R
+SELECT pow(382, 5);
+----
+8134236862432
+
+query T
+SELECT pow(9::float, 0.5);
+----
+3.000
+
+query T
+SELECT pow(9::decimal(15, 5), 0.5::decimal(15, 5));
+----
+3
