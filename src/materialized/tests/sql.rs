@@ -345,6 +345,25 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     let rows = client.query("FETCH c WITH (TIMEOUT = '0s')", &[])?;
     assert_eq!(rows.len(), 0);
 
+    // Make a third cursor. Fetch should return immediately if there are enough
+    // rows, even with a really long timeout.
+    //
+    // Regression test for #6307
+    client.batch_execute(
+        "CLOSE c;
+        DECLARE c CURSOR FOR TAIL t",
+    )?;
+    let before = Instant::now();
+    // NB: This timeout is chosen such that the test will timeout if the bad
+    // behavior occurs.
+    let rows = client.query("FETCH 3 c WITH (TIMEOUT = '1h')", &[])?;
+    let duration = before.elapsed();
+    assert_eq!(rows.len(), expected.len());
+    assert!(duration < Duration::from_secs(10));
+    for i in 0..expected.len() {
+        assert_eq!(rows[i].get::<_, i64>(2), expected[i])
+    }
+
     Ok(())
 }
 

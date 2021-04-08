@@ -1232,9 +1232,11 @@ where
                     total_sent_rows += drain_rows;
                     want_rows -= drain_rows;
                     // If we have sent the number of requested rows, put the remainder of the batch
-                    // back and stop sending.
-                    if want_rows == 0 && !batch_rows.is_empty() {
-                        rows = Box::new(stream::iter(vec![batch_rows]).chain(rows));
+                    // (if any) back and stop sending.
+                    if want_rows == 0 {
+                        if !batch_rows.is_empty() {
+                            rows = Box::new(stream::iter(vec![batch_rows]).chain(rows));
+                        }
                         break;
                     }
                     self.conn.flush().await?;
