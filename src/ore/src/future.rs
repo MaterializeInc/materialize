@@ -51,6 +51,13 @@ pub trait OreFutureExt {
     fn either_c<U, V>(self) -> Either3<U, V, Self>
     where
         Self: Sized;
+
+    /// Wraps a future in a [`SpawnIfCanceled`] future, which will spawn a
+    /// task to poll the inner future to completion if it is dropped.
+    fn spawn_if_canceled(self) -> SpawnIfCanceled<Self::Output>
+    where
+        Self: Future + Send + 'static,
+        Self::Output: Send + 'static;
 }
 
 impl<T> OreFutureExt for T
@@ -75,6 +82,16 @@ where
 
     fn either_c<U, V>(self) -> Either3<U, V, T> {
         Either3::C(self)
+    }
+
+    fn spawn_if_canceled(self) -> SpawnIfCanceled<T::Output>
+    where
+        T: Send + 'static,
+        T::Output: Send + 'static,
+    {
+        SpawnIfCanceled {
+            inner: Some(Box::pin(self)),
+        }
     }
 }
 
@@ -132,6 +149,62 @@ where
                 Either3::C(c) => Pin::new_unchecked(c).poll(cx),
             }
         }
+    }
+}
+
+/// The future returned by [`OreFutureExt::spawn_if_canceled`].
+pub struct SpawnIfCanceled<T>
+where
+    T: Send + 'static,
+{
+    inner: Option<Pin<Box<dyn Future<Output = T> + Send>>>,
+}
+
+impl<T> Future for SpawnIfCanceled<T>
+where
+    T: Send + 'static,
+{
+    type Output = T;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<T> {
+        match &mut self.inner {
+            None => panic!("SpawnIfCanceled polled after completion"),
+            Some(f) => match f.as_mut().poll(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(res) => {
+                    self.inner = None;
+                    Poll::Ready(res)
+                }
+            },
+        }
+    }
+}
+
+impl<T> Drop for SpawnIfCanceled<T>
+where
+    T: Send + 'static,
+{
+    fn drop(&mut self) {
+        if let Some(f) = self.inner.take() {
+            tokio::spawn(f);
+        }
+    }
+}
+
+impl<T> fmt::Debug for SpawnIfCanceled<T>
+where
+    T: Send + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("SpawnIfCanceled")
+            .field(
+                "inner",
+                match &self.inner {
+                    None => &"None",
+                    Some(_) => &"Some(<future>)",
+                },
+            )
+            .finish()
     }
 }
 

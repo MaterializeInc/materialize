@@ -751,7 +751,7 @@ pub struct S3SourceConnector {
     pub compression: Compression,
 }
 
-/// A Source of Object Key names, the argument of the `OBJECTS FROM` clause
+/// A Source of Object Key names, the argument of the `DISCOVER OBJECTS` clause
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum S3KeySource {
     /// Scan the S3 Bucket to discover keys to download
@@ -789,6 +789,7 @@ pub struct KafkaSinkConnector {
     pub key_schema_id: Option<i32>,
     pub value_schema_id: i32,
     pub consistency: Option<KafkaSinkConsistencyConnector>,
+    pub exactly_once: bool,
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,

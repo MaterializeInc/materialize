@@ -12,16 +12,16 @@ The IAM User or Role that `materialized` is operating as requires permission to 
 AWS actions depending on what what actions are required in order for `materialized` to discover
 the list of objects to download.
 
-The **OBJECTS FROM** clause describes how `materialized` will load objects, and so its parameters
+The **DISCOVER OBJECTS USING** clause describes how `materialized` will load objects, and so its parameters
 will determine what permissions `materialized` requires.. For example, since the **SCAN** key name
-source (as in **OBJECTS FORM SCAN**) must perform repeated `ListObjects` actions to create a list
-of key names to download, specifying **OBJECTS FROM SCAN BUCKET** means that **MATERIALIZED** requires
+source (as in **DISCOVER OBJECTS USING BUCKET SCAN**) must perform repeated `ListObjects` actions to create a list
+of key names to download, specifying **DISCOVER OBJECTS USING BUCKET SCAN** means that **MATERIALIZED** requires
 the `ListObjects` permission.
 
 | Key Name Source       | Permissions Required                                                                     |
 |-----------------------|------------------------------------------------------------------------------------------|
 | All                   | [`GetObject` permission][getobject] for the objects that they will download              |
-| **SCAN BUCKET**       | [`ListObject` permission][listobject] for the buckets it will scan                       |
+| **BUCKET SCAN**       | [`ListObject` permission][listobject] for the buckets it will scan                       |
 | **SQS NOTIFICATIONS** | `GetMessage`, `GetQueueUrl` [SQS Permissions][sqs-perms] for the queue it will listen to |
 
 The root AWS documentation for S3 permissions is [available here][s3-permissions].

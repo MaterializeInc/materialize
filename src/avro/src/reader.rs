@@ -359,6 +359,9 @@ impl<'a> SchemaResolver<'a> {
                         }
                     }
                 }
+                while fields.len() < w_fields.len() {
+                    fields.push(None);
+                }
                 let mut n_present = 0;
                 let fields = fields
                     .into_iter()
@@ -711,6 +714,15 @@ impl<'a> SchemaResolver<'a> {
                         if *fixed_size == None =>
                     {
                         SchemaPieceOrNamed::Piece(SchemaPiece::Bytes)
+                    }
+                    // TODO [btv] We probably want to rethink what we're doing here, rather than just add
+                    // a new branch for every possible "logical" type. Perhaps logical types with the
+                    // same underlying type should always be resolvable to the reader schema's type?
+                    (SchemaPiece::Json, SchemaPiece::Json) => {
+                        SchemaPieceOrNamed::Piece(SchemaPiece::Json)
+                    }
+                    (SchemaPiece::Uuid, SchemaPiece::Uuid) => {
+                        SchemaPieceOrNamed::Piece(SchemaPiece::Uuid)
                     }
                     (
                         SchemaPiece::Bytes,

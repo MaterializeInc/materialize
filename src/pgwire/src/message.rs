@@ -329,6 +329,7 @@ impl ErrorResponse {
             CoordError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             CoordError::ReadOnlyTransaction => SqlState::READ_ONLY_SQL_TRANSACTION,
             CoordError::ReadOnlyParameter(_) => SqlState::CANT_CHANGE_RUNTIME_PARAM,
+            CoordError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             CoordError::SqlCatalog(_) => SqlState::INTERNAL_ERROR,
             CoordError::Transform(_) => SqlState::INTERNAL_ERROR,
             CoordError::UnknownCursor(_) => SqlState::INVALID_CURSOR_NAME,

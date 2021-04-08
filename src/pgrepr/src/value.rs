@@ -25,7 +25,7 @@ use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::jsonb::JsonbRef;
 use repr::adt::rdn as adt_rdn;
 use repr::strconv::{self, Nestable};
-use repr::{ColumnName, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
+use repr::{ColumnName, Datum, RelationType, Row, RowArena, ScalarType};
 
 use crate::{types, Format, Interval, Jsonb, Numeric, RDNValue, Type};
 
@@ -188,13 +188,13 @@ impl Value {
                     _ => panic!("Value::List should have type Type::List. Found {:?}", typ),
                 };
                 let (_, elem_type) = null_datum(&elem_pg_type);
-                let mut packer = RowPacker::new();
-                packer.push_list(elems.into_iter().map(|elem| match elem {
+                let mut row = Row::default();
+                row.push_list(elems.into_iter().map(|elem| match elem {
                     Some(elem) => elem.into_datum(buf, &elem_pg_type).0,
                     None => Datum::Null,
                 }));
                 (
-                    buf.push_unary_row(packer.finish()),
+                    buf.push_unary_row(row),
                     ScalarType::List {
                         element_type: Box::new(elem_type),
                         custom_oid: None,
@@ -207,18 +207,18 @@ impl Value {
                     _ => panic!("Value::Map should have type Type::Map. Found {:?}", typ),
                 };
                 let (_, elem_type) = null_datum(&elem_pg_type);
-                let mut packer = RowPacker::new();
-                packer.push_dict_with(|packer| {
+                let mut row = Row::default();
+                row.push_dict_with(|row| {
                     for (k, v) in map {
-                        packer.push(Datum::String(&k));
-                        packer.push(match v {
+                        row.push(Datum::String(&k));
+                        row.push(match v {
                             Some(elem) => elem.into_datum(buf, &elem_pg_type).0,
                             None => Datum::Null,
                         });
                     }
                 });
                 (
-                    buf.push_unary_row(packer.finish()),
+                    buf.push_unary_row(row),
                     ScalarType::Map {
                         value_type: Box::new(elem_type),
                         custom_oid: None,

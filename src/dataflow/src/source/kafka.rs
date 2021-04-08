@@ -17,6 +17,7 @@ use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::message::BorrowedMessage;
+use rdkafka::statistics::Window;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
@@ -44,6 +45,92 @@ pub struct PreviousStats {
     ls_offset: i64,
     app_offset: i64,
     consumer_lag: i64,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct BrokerRTTWindow {
+    min: i64,
+    max: i64,
+    avg: i64,
+    sum: i64,
+    cnt: i64,
+    stddev: i64,
+    p50: i64,
+    p75: i64,
+    p90: i64,
+    p95: i64,
+    p99: i64,
+    p99_99: i64,
+}
+
+impl BrokerRTTWindow {
+    /// Return the value required to negate the last value recorded for this window
+    fn negate(
+        self,
+        consumer_name: String,
+        source_id: SourceInstanceId,
+        broker_name: String,
+    ) -> MaterializedEvent {
+        MaterializedEvent::KafkaBrokerRtt {
+            consumer_name: consumer_name,
+            source_id: source_id,
+            broker_name: broker_name,
+            min: -self.min,
+            max: -self.max,
+            avg: -self.avg,
+            sum: -self.sum,
+            cnt: -self.cnt,
+            stddev: -self.stddev,
+            p50: -self.p50,
+            p75: -self.p75,
+            p90: -self.p90,
+            p95: -self.p95,
+            p99: -self.p99,
+            p99_99: -self.p99_99,
+        }
+    }
+    /// Update the value for window, returning a MaterializedEvent that represents the
+    /// difference between the previous values and the new values
+    fn update(
+        &mut self,
+        consumer_name: String,
+        source_id: SourceInstanceId,
+        broker_name: String,
+        stats: &Window,
+    ) -> MaterializedEvent {
+        let event = MaterializedEvent::KafkaBrokerRtt {
+            consumer_name,
+            source_id,
+            broker_name,
+            min: stats.min - self.min,
+            max: stats.max - self.max,
+            avg: stats.avg - self.avg,
+            sum: stats.sum - self.sum,
+            cnt: stats.cnt - self.cnt,
+            stddev: stats.stddev - self.stddev,
+            p50: stats.p50 - self.p50,
+            p75: stats.p75 - self.p75,
+            p90: stats.p90 - self.p90,
+            p95: stats.p95 - self.p95,
+            p99: stats.p99 - self.p99,
+            p99_99: stats.p99_99 - self.p99_99,
+        };
+
+        self.min = stats.min;
+        self.max = stats.max;
+        self.avg = stats.avg;
+        self.sum = stats.sum;
+        self.cnt = stats.cnt;
+        self.stddev = stats.stddev;
+        self.p50 = stats.p50;
+        self.p75 = stats.p75;
+        self.p90 = stats.p90;
+        self.p95 = stats.p95;
+        self.p99 = stats.p99;
+        self.p99_99 = stats.p99_99;
+
+        event
+    }
 }
 
 /// Contains all information necessary to ingest data from Kafka
@@ -150,6 +237,25 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
                         _ => (),
                     }
 
+                    for (broker, stats) in &statistics.brokers {
+                        match &stats.rtt {
+                            Some(rtt) => {
+                                let window = part
+                                    .broker_windows
+                                    .entry(broker.into())
+                                    .or_insert_with(BrokerRTTWindow::default);
+
+                                logger.log(window.update(
+                                    statistics.name.to_string(),
+                                    self.id,
+                                    broker.to_string(),
+                                    rtt,
+                                ));
+                            }
+                            None => (),
+                        }
+                    }
+
                     let topic_stats = match statistics.topics.get(self.topic_name.as_str()) {
                         Some(t) => t,
                         None => continue,
@@ -160,7 +266,7 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
                         None => continue,
                     };
 
-                    logger.log(MaterializedEvent::KafkaConsumerInfo {
+                    logger.log(MaterializedEvent::KafkaConsumerPartition {
                         consumer_name: statistics.name.to_string(),
                         source_id: self.id,
                         partition_id: partition_stats.partition.to_string(),
@@ -429,7 +535,7 @@ impl Drop for KafkaSourceReader {
         if let Some(logger) = self.logger.as_mut() {
             for part in self.partition_consumers.iter_mut() {
                 if let Some(consumer_name) = part.previous_stats.consumer_name.as_ref() {
-                    logger.log(MaterializedEvent::KafkaConsumerInfo {
+                    logger.log(MaterializedEvent::KafkaConsumerPartition {
                         consumer_name: consumer_name.to_string(),
                         source_id: self.id,
                         partition_id: part.pid.to_string(),
@@ -443,6 +549,13 @@ impl Drop for KafkaSourceReader {
                         app_offset: -part.previous_stats.app_offset,
                         consumer_lag: -part.previous_stats.consumer_lag,
                     });
+                    for (broker, window) in part.broker_windows.iter() {
+                        logger.log(window.negate(
+                            consumer_name.to_string(),
+                            self.id,
+                            broker.to_string(),
+                        ));
+                    }
                 }
             }
         }
@@ -547,6 +660,8 @@ struct PartitionConsumer {
     partition_queue: PartitionQueue<GlueConsumerContext>,
     /// Memoized Statistics for a partition consumer
     previous_stats: PreviousStats,
+    /// Memoized Statistics for brokers
+    broker_windows: HashMap<String, BrokerRTTWindow>,
 }
 
 impl PartitionConsumer {
@@ -556,6 +671,7 @@ impl PartitionConsumer {
             pid,
             partition_queue,
             previous_stats: PreviousStats::default(),
+            broker_windows: HashMap::new(),
         }
     }
 

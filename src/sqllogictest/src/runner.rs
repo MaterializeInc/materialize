@@ -514,6 +514,7 @@ impl Runner {
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             experimental_mode: true,
+            safe_mode: false,
             telemetry_url: None,
         };
         let server = materialized::serve(mz_config, config.runtime.clone()).await?;

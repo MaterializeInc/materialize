@@ -91,3 +91,67 @@ here:
 [brson]: https://pingcap.com/blog/rust-compilation-model-calamity
 [endler]: https://endler.dev/2020/rust-compile-times/
 [nethercote]: https://nnethercote.github.io/perf-book/compile-times.html
+
+## Split Mac Debug Information
+
+Apparently, a significant part of the time spent compiling a macOS rust binary
+is creating the debug info, which previously required scanning the entire binary
+with the `dsymutil` tool. As of stable rust 1.51.0, the [new `split-debuginfo =
+"unpacked"` option][split-debuginfo-unpacked] allows for skipping this step and
+using the `.o` object files for backtraces, resulting in a link time decrease.
+Most debug tooling then "should work as long as you don't need to move the
+binary to a different location while retaining the debug information." In
+summary, as long as you're not moving the debug binary, this should be a free
+speedup.
+
+This can be enabled by setting the following option in cargo's `.config`:
+
+```yaml
+[profile.dev]
+  split-debuginfo = "unpacked"
+```
+
+On my old personal laptop after an initial compile:
+
+- With default options `touch src/materialized/src/bin/materialized/main.rs;
+  cargo run` (basically just relinking) takes over 2m
+- With this option, it takes ~30s
+
+[split-debuginfo-unpacked]: https://blog.rust-lang.org/2021/03/25/Rust-1.51.0.html#splitting-debug-information
+
+## Experimenal Mac Linker
+
+The LLVM clang project has an old Mach-O (macOS) linker that seems to be
+generally discouraged, but about a year ago they started a [new one with an
+architecture similar to the linux one touted above][macho]. It's unclear how far
+along it is, but it's at least far along enough that the [Chromium project has
+added directions for trying it out][chromium]. As of 2021-04-06, there's a big
+experimental warning at the top of the page and a number of active known bugs,
+but they seem to indicate that Chromium builds with it.
+
+We'd absolutely use the normal macOS linker (`ld64`) for anything real, but
+initial results for the edit-compile-run cycle seem promising. On my old
+personal laptop after an initial compile:
+
+- With the stock linker `touch src/materialized/src/bin/materialized/main.rs;
+  cargo run` (basically just relinking) takes ~30s
+- With the experimental one, the same takes ~10s
+- With the experimental one, `touch src/repr/src/lib.rs; cargo run`
+  (pseudo-representitive edit-compile-run example) takes ~30s
+
+I've been using it for my first couple days and haven't seen any issues so far.
+
+There's enough recent bug fixes that you'd want to use a more recent version of
+clang than is available in brew. Instructions for using a pre-built one hosted
+by Chromium.
+
+```shell
+curl -s https://raw.githubusercontent.com/chromium/chromium/master/tools/clang/scripts/update.py | python - --output-dir=/tmp/clang
+curl -s https://raw.githubusercontent.com/chromium/chromium/master/tools/clang/scripts/update.py | python - --output-dir=/tmp/clang --package=lld_mac
+```
+
+Then add the dir given in `--output-dir` to your `PATH` and `export
+RUSTFLAGS="-C link-arg=-fuse-ld=lld"` as above.
+
+[macho]: https://github.com/llvm/llvm-project/tree/main/lld/MachO
+[chromium]: https://github.com/chromium/chromium/blob/master/docs/mac_lld.md

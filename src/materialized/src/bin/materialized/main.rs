@@ -77,6 +77,15 @@ struct Args {
     /// [DANGEROUS] Enable experimental features.
     #[structopt(long)]
     experimental: bool,
+    /// Whether to run in safe mode.
+    ///
+    /// In safe mode, features that provide access to the underlying machine,
+    /// like file sources and sinks, are disabled.
+    ///
+    /// This option is intended for use by the cloud product
+    /// (cloud.materialize.com), but may be useful in other contexts as well.
+    #[structopt(long, hidden = true)]
+    safe: bool,
 
     /// Enable persistent tables. Has to be used with --experimental.
     #[structopt(long)]
@@ -126,9 +135,37 @@ struct Args {
     differential_idle_merge_effort: Option<isize>,
 
     // === Logging options. ===
-    /// Where materialized will emit log messages.
+    /// Where to emit log messages.
+    ///
+    /// The special value "stderr" will emit messages to the standard error
+    /// stream. All other values are taken as file paths.
     #[structopt(long, env = "MZ_LOG_FILE", value_name = "PATH")]
     log_file: Option<String>,
+    /// Which log messages to emit.
+    ///
+    /// This value is a comma-separated list of filter directives. Each filter
+    /// directive has the following format:
+    ///
+    ///     [module::path=]level
+    ///
+    /// A directive indicates that log messages from the specified module that
+    /// are at least as severe as the specified level should be emitted. If a
+    /// directive omits the module, then it implicitly applies to all modules.
+    /// When directives conflict, the last directive wins. If a log message does
+    /// not match any directive, it is not emitted.
+    ///
+    /// The module path of a log message reflects its location in Materialize's
+    /// source code. Choosing module paths for filter directives requires
+    /// familiarity with Materialize's codebase and is intended for advanced
+    /// users. Note that module paths change frequency from release to release.
+    ///
+    /// The valid levels for a log message are, in increasing order of severity:
+    /// trace, debug, info, warn, and error. The special level "off" may be used
+    /// in a directive to suppress all log messages, even errors.
+    ///
+    /// The default value for this option is "info".
+    #[structopt(long, env = "MZ_LOG_FILTER", value_name = "FILTER")]
+    log_filter: Option<String>,
 
     // == Connection options.
     /// The address on which to listen for connections.
@@ -402,10 +439,18 @@ fn run(args: Args) -> Result<(), anyhow::Error> {
 
         use crate::tracing::FilterLayer;
 
-        let env_filter = EnvFilter::try_from_env("MZ_LOG")
-            .or_else(|_| EnvFilter::try_new("info")) // default log level
-            .unwrap()
-            .add_directive("panic=error".parse().unwrap()); // prevent suppressing logs about panics
+        // TODO(benesch): remove the MZ_LOG fallback and move the default into
+        // structopt when sufficient time has passed (say, June 2021).
+        let directives = args
+            .log_filter
+            .or_else(|| env::var("MZ_LOG").ok())
+            .unwrap_or_else(|| "info".into());
+
+        let env_filter = EnvFilter::try_new(directives)
+            .context("parsing --log-filter option")?
+            // Ensure panics are logged, even if the user has specified
+            // otherwise.
+            .add_directive("panic=error".parse().unwrap());
 
         match args.log_file.as_deref() {
             Some("stderr") => {
@@ -540,6 +585,7 @@ swap: {swap_total}KB total, {swap_used}KB used",
             data_directory,
             symbiosis_url: args.symbiosis,
             experimental_mode: args.experimental,
+            safe_mode: args.safe,
             telemetry_url,
         },
         runtime.clone(),
@@ -583,21 +629,14 @@ For more details, see https://materialize.com/docs/cli#experimental-mode
         );
     }
 
-    for (key, _val) in env::vars() {
-        // TODO(benesch): remove these hints about deprecated environment
-        // variables once a sufficient amount of time has passed, say, March
-        // 2021.
-        match key.as_str() {
-            "DIFFERENTIAL_EAGER_MERGE" => warn!(
-                "Materialize no longer respects the DIFFERENTIAL_EAGER_MERGE environment variable \
-                 (hint: use the --differential-idle-merge-effort command-line option instead)",
-            ),
-            "DEFAULT_PROGRESS_MODE" => warn!(
-                "Materialize no longer respects the DEFAULT_PROGRESS_MODE environment variable \
-                 (hint: use the --timely-progress-mode command-line option instead)",
-            ),
-            _ => (),
-        }
+    // TODO(benesch): remove this message when sufficient time has passed
+    // (say, June 2021).
+    if env::var_os("MZ_LOG").is_some() {
+        warn!(
+            "The MZ_LOG environment variable is deprecated and will be removed \
+            in a future release. Use the MZ_LOG_FILTER environment variable or \
+            the --log-filter command-line option instead."
+        );
     }
 
     println!(

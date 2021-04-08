@@ -1,0 +1,14 @@
+2. Click the **Connect** button in the same row as the deployment.
+3. Click **Download certificates**.
+4. Unzip the certificate package.
+5. To connect to the deployment with the psql command-line tool, copy the command from the connection dialog and run it from the directory that contains the certificates.
+
+   The sample code below will not work unless you substitute your real hostname.
+
+   ```
+   psql "postgresql://materialize@hostname:6875materialize?
+   sslcert=materialize.crt&
+   sslkey=materialize.key&sslrootcert=ca.crt"
+   ```
+
+    If you've just created the deployment, you may need to wait a minute or two before you'll be able to connect.

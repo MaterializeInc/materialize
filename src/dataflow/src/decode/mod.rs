@@ -27,12 +27,12 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
 use ::mz_avro::{types::Value, Schema};
-use dataflow_types::{DataEncoding, DebeziumMode, RegexEncoding, SourceEnvelope};
+use dataflow_types::{DataEncoding, DebeziumMode, DecodeError, RegexEncoding, SourceEnvelope};
 use dataflow_types::{DataflowError, LinearOperator};
 use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState};
 use log::error;
 use repr::Datum;
-use repr::{Diff, Row, RowPacker, Timestamp};
+use repr::{Diff, Row, Timestamp};
 
 use self::csv::csv;
 use self::regex::regex as regex_fn;
@@ -157,15 +157,11 @@ fn text_to_datum(bytes: &[u8]) -> Datum {
 
 struct OffsetDecoderState<F: Fn(&[u8]) -> Datum> {
     datum_func: F,
-    row_packer: RowPacker,
 }
 
 impl<F: Fn(&[u8]) -> Datum> From<F> for OffsetDecoderState<F> {
     fn from(datum_func: F) -> Self {
-        Self {
-            datum_func,
-            row_packer: RowPacker::new(),
-        }
+        Self { datum_func }
     }
 }
 
@@ -174,7 +170,9 @@ where
     F: Fn(&[u8]) -> Datum + Send,
 {
     fn decode_key(&mut self, bytes: &[u8]) -> Result<Option<Row>, String> {
-        Ok(Some(self.row_packer.pack(&[(self.datum_func)(bytes)])))
+        let datum = (self.datum_func)(bytes);
+        let row = Row::pack_slice(&[datum]);
+        Ok(Some(row))
     }
 
     fn decode_upsert_value<'a>(
@@ -216,17 +214,18 @@ pub(crate) fn get_decoder(
             &enc.descriptors,
             &enc.message_name,
         )),
-        DataEncoding::Avro(val_enc) => Box::new(
+        DataEncoding::Avro(enc) => Box::new(
             avro::AvroDecoderState::new(
-                &val_enc.value_schema,
-                val_enc.schema_registry_config,
+                enc.key_schema.as_deref(),
+                &enc.value_schema,
+                enc.schema_registry_config,
                 interchange::avro::EnvelopeType::Upsert,
                 false,
                 format!("{}-values", debug_name),
                 worker_index,
                 None,
                 None,
-                val_enc.confluent_wire_format,
+                enc.confluent_wire_format,
             )
             .expect(avro_err),
         ),
@@ -238,7 +237,7 @@ pub(crate) fn get_decoder(
 
 fn decode_values_inner<G, V, C>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
-    mut value_decoder_state: V,
+    mut decoder_state: V,
     op_name: &str,
     source_id: SourceInstanceId,
     contract: C,
@@ -276,11 +275,24 @@ where
                 {
                     if !payload.is_empty() {
                         let val =
-                            value_decoder_state.get_value(payload, *aux_num, *upstream_time_millis);
+                            decoder_state.get_value(payload, *aux_num, *upstream_time_millis);
 
                         if let Some(val) = val {
                             let val = if let Some((keys, metrics)) = trackstate.as_mut() {
-                                rewrite_for_upsert(val, keys, key, metrics)
+                                match decoder_state.decode_key(key) {
+                                    Ok(Some(decoded_key)) => {
+                                        rewrite_for_upsert(val, keys, decoded_key, metrics)
+                                    }
+                                    Ok(None) => Err(DecodeError::Text(format!(
+                                        "[customer-data] All upsert keys should decode to a value: {:?}",
+                                        key
+                                    ))
+                                    .into()),
+                                    Err(e) => {
+                                        Err(DecodeError::Text(format!("Error decoding key: {}", e))
+                                            .into())
+                                    }
+                                }
                             } else {
                                 val
                             };
@@ -290,7 +302,7 @@ where
                     }
                 }
             });
-            value_decoder_state.log_error_count();
+            decoder_state.log_error_count();
         }
     });
 
@@ -305,15 +317,14 @@ where
 /// Update row to blank out retractions of rows that we have never seen
 fn rewrite_for_upsert(
     val: Result<Row, DataflowError>,
-    keys: &mut HashMap<Box<[u8]>, Row>,
-    key: &[u8],
+    keys: &mut HashMap<Row, Row>,
+    key: Row,
     metrics: &mut UIntGauge,
 ) -> Result<Row, DataflowError> {
     if let Ok(row) = val {
         // often off by one, but is only tracked every N seconds so it will always be off
         metrics.set(keys.len() as u64);
 
-        // TODO: handle parsed keys
         let entry = keys.entry(key.into());
 
         let mut rowiter = row.iter();
@@ -336,19 +347,12 @@ fn rewrite_for_upsert(
             Entry::Vacant(vacant) => {
                 // if the key is new, then we know that we always need to ignore the "before" part,
                 // so zero it out
-                vacant.insert({
-                    let mut packer = RowPacker::new();
-                    packer.push(after);
-                    packer.finish()
-                });
+                vacant.insert(Row::pack_slice(&[after]));
 
                 if before.is_null() {
                     Ok(row)
                 } else {
-                    let mut packer = RowPacker::new();
-                    packer.push(Datum::Null);
-                    packer.push(after);
-                    Ok(packer.finish())
+                    Ok(Row::pack_slice(&[Datum::Null, after]))
                 }
             }
             Entry::Occupied(mut occupied) => {
@@ -356,11 +360,7 @@ fn rewrite_for_upsert(
                     if after.is_null() {
                         occupied.remove_entry();
                     } else {
-                        occupied.insert({
-                            let mut packer = RowPacker::new();
-                            packer.push(after);
-                            packer.finish()
-                        });
+                        occupied.insert(Row::pack_slice(&[after]));
                     }
                     // this matches the modifications we'd make in the next step
                     Ok(row)
@@ -371,17 +371,10 @@ fn rewrite_for_upsert(
                         let (_k, v) = occupied.remove_entry();
                         v
                     } else {
-                        occupied.insert({
-                            let mut packer = RowPacker::new();
-                            packer.push(after);
-                            packer.finish()
-                        })
+                        occupied.insert(Row::pack_slice(&[after]))
                     };
 
-                    let mut packer = RowPacker::new();
-                    packer.push(previous_insert.iter().next().unwrap());
-                    packer.push(after);
-                    Ok(packer.finish())
+                    Ok(Row::pack_slice(&[previous_insert.unpack_first(), after]))
                 }
             }
         }
@@ -524,6 +517,7 @@ where
                 decode_values_inner(
                     stream,
                     avro::AvroDecoderState::new(
+                        enc.key_schema.as_deref(),
                         &enc.value_schema,
                         enc.schema_registry_config,
                         envelope.get_avro_envelope_type(),
@@ -547,6 +541,7 @@ where
             decode_values_inner(
                 stream,
                 avro::AvroDecoderState::new(
+                    enc.key_schema.as_deref(),
                     &enc.value_schema,
                     enc.schema_registry_config,
                     envelope.get_avro_envelope_type(),

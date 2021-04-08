@@ -513,7 +513,21 @@ impl Timestamper {
                     }
                     self.byo_sources.remove(&id);
                 }
-                TimestampMessage::Shutdown => return true,
+                TimestampMessage::Shutdown => {
+                    // First, let's remove all of the threads consuming metadata
+                    // from realtime Kafka sources
+                    for (_, src) in self.rt_sources.iter_mut() {
+                        if let RtTimestampConnector::Kafka(RtKafkaConnector {
+                            coordination_state,
+                            ..
+                        }) = &src.connector
+                        {
+                            coordination_state.stop.store(true, Ordering::SeqCst);
+                        }
+                    }
+
+                    return true;
+                }
             }
         }
         false
@@ -631,6 +645,9 @@ impl Timestamper {
         id: GlobalId,
         kc: KafkaSourceConnector,
     ) -> Option<RtKafkaConnector> {
+        // These keys do not make sense for the timestamping connector, and will
+        // be filtered out (fixes #6313)
+        const CONF_DENYLIST: &'static [&'static str] = &["statistics.interval.ms"];
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &kc.addrs.to_string());
 
@@ -639,7 +656,9 @@ impl Timestamper {
         }
 
         for (k, v) in &kc.config_options {
-            config.set(k, v);
+            if !CONF_DENYLIST.contains(&k.as_str()) {
+                config.set(k, v);
+            }
         }
 
         let consumer = match config.create::<BaseConsumer>() {
@@ -814,7 +833,7 @@ impl Timestamper {
                 match get_kafka_partitions(
                     &consumer.consumer,
                     &timestamp_topic,
-                    Duration::from_secs(1),
+                    Duration::from_secs(5),
                 )
                 .as_ref()
                 .map(Deref::deref)
@@ -891,9 +910,9 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
                         current_partition_count = new_partition_count;
                     }
                     cmp::Ordering::Less => {
-                        error!(
+                        info!(
                             "Ignoring decrease in partitions (from {} to {}) for topic {} (source {})",
-                             new_partition_count, current_partition_count, c.topic, c.id,
+                            current_partition_count, new_partition_count, c.topic, c.id,
                         );
                     }
                     cmp::Ordering::Equal => (),
@@ -930,6 +949,9 @@ fn rt_kafka_metadata_fetch_loop(c: RtKafkaConnector, consumer: BaseConsumer, wai
                 }
             }
         }
+
+        // Poll once to clear any extraneous messages on this queue.
+        consumer.poll(Duration::from_secs(0));
 
         if current_partition_count > 0 {
             thread::sleep(wait);

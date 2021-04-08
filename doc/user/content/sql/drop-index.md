@@ -78,17 +78,15 @@ You can use the unqualified index name (`q01_geo_idx`) rather the fully qualifie
 
 You can remove an index with any of the following commands:
 
-```sql
-DROP INDEX q01_geo_idx;
-```
-
-  ```sql
-DROP INDEX q01_geo_idx RESTRICT;
-```
-
-```sql
-DROP INDEX q01_geo_idx CASCADE;
-```
+- ```sql
+  DROP INDEX q01_geo_idx;
+  ```
+- ```sql
+  DROP INDEX q01_geo_idx RESTRICT;
+  ```
+- ```sql
+  DROP INDEX q01_geo_idx CASCADE;
+  ```
 
 ### Do not issue an error if attempting to remove a nonexistent index
 

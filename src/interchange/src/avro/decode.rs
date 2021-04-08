@@ -30,7 +30,7 @@ use mz_avro::{
 use repr::adt::decimal::Significand;
 use repr::adt::jsonb::JsonbPacker;
 use repr::adt::rdn;
-use repr::{Datum, Row, RowPacker};
+use repr::{Datum, Row};
 
 use super::{
     is_null, AvroDebeziumDecoder, ConfluentAvroResolver, DebeziumDeduplicationState,
@@ -46,7 +46,7 @@ pub struct Decoder {
     worker_index: usize,
     buf1: Vec<u8>,
     buf2: Vec<u8>,
-    packer: RowPacker,
+    packer: Row,
     reject_non_inserts: bool,
 }
 
@@ -81,7 +81,8 @@ impl Decoder {
     ) -> anyhow::Result<Decoder> {
         assert!(
             (envelope == EnvelopeType::Debezium && debezium_dedup.is_some())
-                || (envelope != EnvelopeType::Debezium && debezium_dedup.is_none())
+                || (envelope != EnvelopeType::Debezium && debezium_dedup.is_none()),
+            "Debezium deduplication strategy must be specified iff envelope type is debezium"
         );
         let debezium_dedup =
             debezium_dedup.and_then(|strat| DebeziumDeduplicationState::new(strat, key_indices));
@@ -228,7 +229,7 @@ impl<'a> AvroDecode for AvroStringDecoder<'a> {
 }
 
 pub(super) struct OptionalRecordDecoder<'a> {
-    pub packer: &'a mut RowPacker,
+    pub packer: &'a mut Row,
     pub buf: &'a mut Vec<u8>,
 }
 
@@ -261,7 +262,7 @@ impl<'a> AvroDecode for OptionalRecordDecoder<'a> {
 }
 
 pub(super) struct RowDecoder {
-    state: (Rc<RefCell<RowPacker>>, Rc<RefCell<Vec<u8>>>),
+    state: (Rc<RefCell<Row>>, Rc<RefCell<Vec<u8>>>),
 }
 
 impl AvroDecode for RowDecoder {
@@ -292,9 +293,9 @@ pub(super) struct RowWrapper(pub Row);
 
 impl StatefulAvroDecodable for RowWrapper {
     type Decoder = RowDecoder;
-    // TODO - can we make this some sort of &'a mut (RowPacker, Vec<u8>) without
+    // TODO - can we make this some sort of &'a mut (Row, Vec<u8>) without
     // running into lifetime crap?
-    type State = (Rc<RefCell<RowPacker>>, Rc<RefCell<Vec<u8>>>);
+    type State = (Rc<RefCell<Row>>, Rc<RefCell<Vec<u8>>>);
 
     fn new_decoder(state: Self::State) -> Self::Decoder {
         Self::Decoder { state }
@@ -303,7 +304,7 @@ impl StatefulAvroDecodable for RowWrapper {
 
 #[derive(Debug)]
 pub struct AvroFlatDecoder<'a> {
-    pub packer: &'a mut RowPacker,
+    pub packer: &'a mut Row,
     pub buf: &'a mut Vec<u8>,
     pub is_top: bool,
 }
@@ -316,7 +317,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         a: &mut A,
     ) -> Result<Self::Out, AvroError> {
         let mut str_buf = std::mem::take(self.buf);
-        let mut pack_record = |rp: &mut RowPacker| -> Result<(), AvroError> {
+        let mut pack_record = |rp: &mut Row| -> Result<(), AvroError> {
             let mut expected = 0;
             let mut stash = vec![];
             // The idea here is that if the deserializer gives us fields in the order we're expecting,
@@ -326,8 +327,8 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             //
             // TODO(btv) - this is pretty bad, as a misordering at the top of the schema graph will
             // cause the _entire_ chunk under it to be decoded in the slow way!
-            // Maybe instead, we should decode to separate sub-RowPackers and then add an API
-            // to RowPacker that just copies in the bytes from another one.
+            // Maybe instead, we should decode to separate sub-Rows and then add an API
+            // to Row that just copies in the bytes from another one.
             while let Some((_name, idx, f)) = a.next_field()? {
                 let dec = AvroFlatDecoder {
                     packer: rp,
@@ -620,7 +621,7 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
         Ok(())
     }
 }
-fn pack_value(v: Value, mut row: RowPacker, n: SchemaNode) -> anyhow::Result<RowPacker> {
+fn pack_value(v: Value, mut row: Row, n: SchemaNode) -> anyhow::Result<Row> {
     match v {
         Value::Null => row.push(Datum::Null),
         Value::Boolean(true) => row.push(Datum::True),
@@ -693,7 +694,7 @@ where
                 fields: schema_fields,
                 ..
             } => {
-                let mut row = RowPacker::new();
+                let mut row = Row::default();
                 for (i, (_, col)) in fields.into_iter().enumerate() {
                     let f_schema = &schema_fields[i].schema;
                     let f_node = n.step(f_schema);
@@ -702,7 +703,7 @@ where
                 for d in extra {
                     row.push(d);
                 }
-                Ok(Some(row.finish()))
+                Ok(Some(row))
             }
             _ => unreachable!("Avro value out of sync with schema"),
         },

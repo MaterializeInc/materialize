@@ -9,7 +9,6 @@
 
 use std::cmp;
 use std::collections::HashMap;
-use std::default::Default;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
@@ -33,13 +32,13 @@ use crate::action::{Action, State};
 use crate::parser::BuiltinCommand;
 
 pub struct CreateBucketAction {
-    bucket: String,
+    bucket_prefix: String,
 }
 
 pub fn build_create_bucket(mut cmd: BuiltinCommand) -> Result<CreateBucketAction, String> {
-    let bucket = cmd.args.string("bucket")?;
+    let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
     cmd.args.done()?;
-    Ok(CreateBucketAction { bucket })
+    Ok(CreateBucketAction { bucket_prefix })
 }
 
 #[async_trait]
@@ -49,21 +48,25 @@ impl Action for CreateBucketAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        println!("Creating S3 Bucket {}", self.bucket);
+        let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
+        println!("Creating S3 bucket {}", bucket);
 
         match state
             .s3_client
             .create_bucket(CreateBucketRequest {
-                bucket: self.bucket.clone(),
-                create_bucket_configuration: Some(CreateBucketConfiguration {
-                    location_constraint: Some(state.aws_region.name().to_string()),
-                }),
+                bucket: bucket.clone(),
+                create_bucket_configuration: match state.aws_region.name() {
+                    "us-east-1" => None,
+                    name => Some(CreateBucketConfiguration {
+                        location_constraint: Some(name.to_string()),
+                    }),
+                },
                 ..Default::default()
             })
             .await
         {
             Ok(_) | Err(RusotoError::Service(CreateBucketError::BucketAlreadyOwnedByYou(_))) => {
-                state.s3_buckets_created.insert(self.bucket.clone());
+                state.s3_buckets_created.insert(bucket);
                 Ok(())
             }
             Err(e) => Err(format!("creating bucket: {}", e)),
@@ -72,20 +75,20 @@ impl Action for CreateBucketAction {
 }
 
 pub struct PutObjectAction {
-    bucket: String,
+    bucket_prefix: String,
     key: String,
     compression: Compression,
     contents: String,
 }
 
 pub fn build_put_object(mut cmd: BuiltinCommand) -> Result<PutObjectAction, String> {
-    let bucket = cmd.args.string("bucket")?;
+    let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
     let key = cmd.args.string("key")?;
     let compression = build_compression(&mut cmd)?;
     let contents = cmd.input.join("\n");
     cmd.args.done()?;
     Ok(PutObjectAction {
-        bucket,
+        bucket_prefix,
         key,
         compression,
         contents,
@@ -99,7 +102,8 @@ impl Action for PutObjectAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        println!("Creating S3 Bucket {}", self.bucket);
+        let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
+        println!("Put S3 object {}/{}", bucket, self.key);
 
         let buffer = self.contents.clone().into_bytes();
         let contents = match self.compression {
@@ -118,7 +122,7 @@ impl Action for PutObjectAction {
         state
             .s3_client
             .put_object(PutObjectRequest {
-                bucket: self.bucket.clone(),
+                bucket,
                 body: Some(ByteStream::from(contents)),
                 content_type: Some("application/octet-stream".to_string()),
                 content_encoding: match self.compression {
@@ -135,51 +139,30 @@ impl Action for PutObjectAction {
 }
 
 pub struct AddBucketNotifications {
-    bucket: String,
-    events: Vec<String>,
-
-    queue: String,
-
     bucket_prefix: String,
-
-    sqs_test_prefix: String,
+    queue_prefix: String,
+    events: Vec<String>,
     sqs_validation_timeout: Option<Duration>,
 }
 
 pub fn build_add_notifications(mut cmd: BuiltinCommand) -> Result<AddBucketNotifications, String> {
+    let bucket_prefix = format!("testdrive-{}", cmd.args.string("bucket")?);
+    let queue_prefix = format!("testdrive-{}", cmd.args.string("queue")?);
     let events = cmd
         .args
         .opt_string("events")
         .map(|a| a.split(',').map(|s| s.to_string()).collect())
         .unwrap_or_else(|| vec!["s3:ObjectCreated:*".to_string()]);
-
-    let bucket_prefix = cmd
-        .args
-        .opt_string("bucket_prefix")
-        .unwrap_or_else(|| "materialize-ci-*".into());
-
-    let bucket = cmd.args.string("bucket")?;
-    let queue = cmd.args.string("queue")?;
-
-    let sqs_test_prefix = cmd
-        .args
-        .opt_string("sqs-test-prefix")
-        .unwrap_or_else(|| "sqs-test".into());
-
     let sqs_validation_timeout = cmd
         .args
         .opt_string("sqs-validation-timeout")
         .map(|t| parse_duration::parse(&t).map_err(|e| e.to_string()))
         .transpose()?;
-
     cmd.args.done()?;
-
     Ok(AddBucketNotifications {
-        bucket,
-        events,
-        queue,
         bucket_prefix,
-        sqs_test_prefix,
+        queue_prefix,
+        events,
         sqs_validation_timeout,
     })
 }
@@ -191,10 +174,13 @@ impl Action for AddBucketNotifications {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
+        let bucket = format!("{}-{}", self.bucket_prefix, state.seed);
+        let queue = format!("{}-{}", self.queue_prefix, state.seed);
+
         let result = state
             .sqs_client
             .create_queue(CreateQueueRequest {
-                queue_name: self.queue.clone(),
+                queue_name: queue.clone(),
                 ..Default::default()
             })
             .await;
@@ -232,7 +218,7 @@ impl Action for AddBucketNotifications {
                 queue_url: queue_url.clone(),
             })
             .await
-            .map_err(|e| format!("getting queue {} attributes: {}", self.queue, e))?
+            .map_err(|e| format!("getting queue {} attributes: {}", queue, e))?
             .attributes
             .ok_or_else(|| "the result should not be empty".to_string())?
             .remove("QueueArn")
@@ -242,7 +228,7 @@ impl Action for AddBucketNotifications {
         let mut attributes = HashMap::new();
         attributes.insert(
             "Policy".to_string(),
-            allow_s3_policy(&queue_arn, &self.bucket_prefix, &state.aws_account),
+            allow_s3_policy(&queue_arn, &bucket, &state.aws_account),
         );
         state
             .sqs_client
@@ -259,7 +245,7 @@ impl Action for AddBucketNotifications {
         let mut config = state
             .s3_client
             .get_bucket_notification_configuration(GetBucketNotificationConfigurationRequest {
-                bucket: self.bucket.clone(),
+                bucket: bucket.clone(),
                 ..Default::default()
             })
             .await
@@ -278,7 +264,7 @@ impl Action for AddBucketNotifications {
         state
             .s3_client
             .put_bucket_notification_configuration(PutBucketNotificationConfigurationRequest {
-                bucket: self.bucket.clone(),
+                bucket: bucket.clone(),
                 notification_configuration: config,
                 ..Default::default()
             })
@@ -312,9 +298,9 @@ impl Action for AddBucketNotifications {
             state
                 .s3_client
                 .put_object(PutObjectRequest {
-                    bucket: self.bucket.clone(),
+                    bucket: bucket.clone(),
                     body: Some(Vec::new().into()),
-                    key: format!("{}/{}", self.sqs_test_prefix, attempts),
+                    key: format!("sqs-test/{}", attempts),
                     ..Default::default()
                 })
                 .await
@@ -380,7 +366,7 @@ impl Action for AddBucketNotifications {
     }
 }
 
-fn allow_s3_policy(queue_arn: &str, bucket_prefix: &str, self_account: &str) -> String {
+fn allow_s3_policy(queue_arn: &str, bucket: &str, self_account: &str) -> String {
     format!(
         r#"{{
  "Version": "2012-10-17",
@@ -397,14 +383,14 @@ fn allow_s3_policy(queue_arn: &str, bucket_prefix: &str, self_account: &str) -> 
    ],
    "Resource": "{queue_arn}",
    "Condition": {{
-      "ArnLike": {{ "aws:SourceArn": "arn:aws:s3:*:*:{bucket_prefix}" }},
+      "ArnLike": {{ "aws:SourceArn": "arn:aws:s3:*:*:{bucket}" }},
       "StringEquals": {{ "aws:SourceAccount": "{self_account}" }}
    }}
   }}
  ]
 }}"#,
         queue_arn = queue_arn,
-        bucket_prefix = bucket_prefix,
+        bucket = bucket,
         self_account = self_account
     )
 }

@@ -21,7 +21,7 @@ use timely::logging::WorkerIdentifier;
 use super::{LogVariant, MaterializedLog};
 use crate::arrangement::KeysValsHandle;
 use expr::{GlobalId, SourceInstanceId};
-use repr::{Datum, Timestamp};
+use repr::{Datum, Row, Timestamp};
 
 /// Type alias for logging of materialized events.
 pub type Logger = timely::logging_core::Logger<MaterializedEvent, WorkerIdentifier>;
@@ -38,9 +38,45 @@ pub enum MaterializedEvent {
         /// Globally unique identifier for the source on which the dataflow depends.
         source: GlobalId,
     },
+    /// Tracks RTT statistics for a Kafka broker, by consumer
+    /// Reference: https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md
+    /// This structure containe splatted metrics from the rdkafka::statistics::Window struct
+    /// Window cannot be used as it does not satisfy several of the traits required
+    KafkaBrokerRtt {
+        /// Kafka name for the consumer
+        consumer_name: String,
+        /// Materialize source identifier
+        source_id: SourceInstanceId,
+        /// The Kafka broker for these metrics (may be multiple per consumer)
+        broker_name: String,
+        /// Smallest value
+        min: i64,
+        /// Largest value
+        max: i64,
+        /// Average value
+        avg: i64,
+        /// Sum of all values
+        sum: i64,
+        /// Number of values samples
+        cnt: i64,
+        /// Standard deviation of values (based on histogram)
+        stddev: i64,
+        /// 50th percentile value
+        p50: i64,
+        /// 75th percentile value
+        p75: i64,
+        /// 90th percentile value
+        p90: i64,
+        /// 959h percentile value
+        p95: i64,
+        /// 99th percentile value
+        p99: i64,
+        /// 99.99th percentile value
+        p99_99: i64,
+    },
     /// Tracks statistics for a particular Kafka consumer / partition pair
     /// Reference: https://github.com/edenhill/librdkafka/blob/master/STATISTICS.md
-    KafkaConsumerInfo {
+    KafkaConsumerPartition {
         /// Kafka name for the consumer
         consumer_name: String,
         /// Materialize source identifier
@@ -132,6 +168,7 @@ pub fn construct<A: Allocate>(
         let (mut dataflow_out, dataflow) = demux.new_output();
         let (mut dependency_out, dependency) = demux.new_output();
         let (mut frontier_out, frontier) = demux.new_output();
+        let (mut kafka_broker_rtt_out, kafka_broker_rtt) = demux.new_output();
         let (mut kafka_consumer_info_out, kafka_consumer_info) = demux.new_output();
         let (mut peek_out, peek) = demux.new_output();
         let (mut source_info_out, source_info) = demux.new_output();
@@ -139,11 +176,11 @@ pub fn construct<A: Allocate>(
         let mut demux_buffer = Vec::new();
         demux.build(move |_capability| {
             let mut active_dataflows = std::collections::HashMap::new();
-            let mut row_packer = repr::RowPacker::new();
             move |_frontiers| {
                 let mut dataflow = dataflow_out.activate();
                 let mut dependency = dependency_out.activate();
                 let mut frontier = frontier_out.activate();
+                let mut kafka_broker_rtt = kafka_broker_rtt_out.activate();
                 let mut kafka_consumer_info = kafka_consumer_info_out.activate();
                 let mut peek = peek_out.activate();
                 let mut source_info = source_info_out.activate();
@@ -154,6 +191,7 @@ pub fn construct<A: Allocate>(
                     let mut dataflow_session = dataflow.session(&time);
                     let mut dependency_session = dependency.session(&time);
                     let mut frontier_session = frontier.session(&time);
+                    let mut kafka_broker_rtt_session = kafka_broker_rtt.session(&time);
                     let mut kafka_consumer_info_session = kafka_consumer_info.session(&time);
                     let mut peek_session = peek.session(&time);
                     let mut source_info_session = source_info.session(&time);
@@ -209,7 +247,7 @@ pub fn construct<A: Allocate>(
                             }
                             MaterializedEvent::Frontier(name, logical, delta) => {
                                 frontier_session.give((
-                                    row_packer.pack(&[
+                                    Row::pack_slice(&[
                                         Datum::String(&name.to_string()),
                                         Datum::Int64(worker as i64),
                                         Datum::Int64(logical as i64),
@@ -218,7 +256,33 @@ pub fn construct<A: Allocate>(
                                     delta as isize,
                                 ));
                             }
-                            MaterializedEvent::KafkaConsumerInfo {
+                            MaterializedEvent::KafkaBrokerRtt {
+                                consumer_name,
+                                source_id,
+                                broker_name,
+                                min,
+                                max,
+                                avg,
+                                sum,
+                                cnt,
+                                stddev,
+                                p50,
+                                p75,
+                                p90,
+                                p95,
+                                p99,
+                                p99_99,
+                            } => {
+                                kafka_broker_rtt_session.give((
+                                    (consumer_name, source_id, broker_name),
+                                    time_ms,
+                                    vec![
+                                        min, max, avg, sum, cnt, stddev, p50, p75, p90, p95, p99,
+                                        p99_99,
+                                    ],
+                                ));
+                            }
+                            MaterializedEvent::KafkaConsumerPartition {
                                 consumer_name,
                                 source_id,
                                 partition_id,
@@ -278,9 +342,8 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut row_packer = repr::RowPacker::new();
                 move |(name, worker)| {
-                    row_packer.pack(&[
+                    Row::pack_slice(&[
                         Datum::String(&name.to_string()),
                         Datum::Int64(worker as i64),
                     ])
@@ -296,9 +359,8 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut row_packer = repr::RowPacker::new();
                 move |(dataflow, source, worker)| {
-                    row_packer.pack(&[
+                    Row::pack_slice(&[
                         Datum::String(&dataflow.to_string()),
                         Datum::String(&source.to_string()),
                         Datum::Int64(worker as i64),
@@ -309,10 +371,32 @@ pub fn construct<A: Allocate>(
         let frontier_current = frontier.as_collection();
 
         use differential_dataflow::operators::Count;
+        let kafka_broker_rtt_current = kafka_broker_rtt.as_collection().count().map({
+            move |((consumer_name, source_id, broker_name), diff_vector)| {
+                Row::pack_slice(&[
+                    Datum::String(&consumer_name),
+                    Datum::String(&source_id.source_id.to_string()),
+                    Datum::Int64(source_id.dataflow_id as i64),
+                    Datum::String(&broker_name),
+                    Datum::Int64(diff_vector[0]),
+                    Datum::Int64(diff_vector[1]),
+                    Datum::Int64(diff_vector[2]),
+                    Datum::Int64(diff_vector[3]),
+                    Datum::Int64(diff_vector[4]),
+                    Datum::Int64(diff_vector[5]),
+                    Datum::Int64(diff_vector[6]),
+                    Datum::Int64(diff_vector[7]),
+                    Datum::Int64(diff_vector[8]),
+                    Datum::Int64(diff_vector[9]),
+                    Datum::Int64(diff_vector[10]),
+                    Datum::Int64(diff_vector[11]),
+                ])
+            }
+        });
+
         let kafka_consumer_info_current = kafka_consumer_info.as_collection().count().map({
-            let mut row_packer = repr::RowPacker::new();
             move |((consumer_name, source_id, partition_id), diff_vector)| {
-                row_packer.pack(&[
+                Row::pack_slice(&[
                     Datum::String(&consumer_name),
                     Datum::String(&source_id.source_id.to_string()),
                     Datum::Int64(source_id.dataflow_id as i64),
@@ -339,9 +423,8 @@ pub fn construct<A: Allocate>(
             })
             .as_collection()
             .map({
-                let mut row_packer = repr::RowPacker::new();
                 move |(peek, worker)| {
-                    row_packer.pack(&[
+                    Row::pack_slice(&[
                         Datum::String(&format!("{}", peek.conn_id)),
                         Datum::Int64(worker as i64),
                         Datum::String(&peek.id.to_string()),
@@ -351,9 +434,8 @@ pub fn construct<A: Allocate>(
             });
 
         let source_info_current = source_info.as_collection().count().map({
-            let mut row_packer = repr::RowPacker::new();
             move |((name, id, pid), (offset, timestamp))| {
-                row_packer.pack(&[
+                Row::pack_slice(&[
                     Datum::String(&name),
                     Datum::String(&id.source_id.to_string()),
                     Datum::Int64(id.dataflow_id as i64),
@@ -418,9 +500,8 @@ pub fn construct<A: Allocate>(
             .as_collection()
             .count_total()
             .map({
-                let mut row_packer = repr::RowPacker::new();
                 move |((worker, pow), count)| {
-                    row_packer.pack(&[
+                    Row::pack_slice(&[
                         Datum::Int64(worker as i64),
                         Datum::Int64(pow as i64),
                         Datum::Int64(count as i64),
@@ -440,6 +521,10 @@ pub fn construct<A: Allocate>(
             (
                 LogVariant::Materialized(MaterializedLog::FrontierCurrent),
                 frontier_current,
+            ),
+            (
+                LogVariant::Materialized(MaterializedLog::KafkaBrokerRtt),
+                kafka_broker_rtt_current,
             ),
             (
                 LogVariant::Materialized(MaterializedLog::KafkaConsumerInfo),
@@ -467,11 +552,11 @@ pub fn construct<A: Allocate>(
                 let key_clone = key.clone();
                 let trace = collection
                     .map({
-                        let mut row_packer = repr::RowPacker::new();
+                        let mut row_packer = Row::default();
                         move |row| {
                             let datums = row.unpack();
-                            let key_row = row_packer.pack(key.iter().map(|k| datums[*k]));
-                            (key_row, row)
+                            row_packer.extend(key.iter().map(|k| datums[*k]));
+                            (row_packer.finish_and_reuse(), row)
                         }
                     })
                     .arrange_by_key()

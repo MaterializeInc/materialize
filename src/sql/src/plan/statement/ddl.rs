@@ -55,10 +55,10 @@ use crate::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
     ColumnOption, Compression, Connector, CreateDatabaseStatement, CreateIndexStatement,
     CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, DataType, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr,
-    Format, Ident, IfExistsBehavior, ObjectType, Raw, SqlOption, Statement, UnresolvedObjectName,
-    Value, WithOption,
+    CreateSourceStatement, CreateSourcesStatement, CreateTableStatement, CreateTypeAs,
+    CreateTypeStatement, CreateViewStatement, DataType, DropDatabaseStatement,
+    DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, ObjectType, Raw,
+    SqlOption, Statement, UnresolvedObjectName, Value, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -223,6 +223,13 @@ pub fn plan_create_table(
 pub fn describe_create_source(
     _: &StatementContext,
     _: CreateSourceStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn describe_create_sources(
+    _: &StatementContext,
+    _: CreateSourcesStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -666,7 +673,6 @@ pub fn plan_create_source(
             pattern,
             compression,
         } => {
-            scx.require_experimental_mode("S3 Sources")?;
             let aws_info = normalize::aws_connect_info(&mut with_options, None)?;
             let mut converted_sources = Vec::new();
             for ks in key_sources {
@@ -761,12 +767,14 @@ pub fn plan_create_source(
             subscribe_key,
             channel,
         } => {
-            scx.require_experimental_mode("PubNub Sources")?;
+            match format {
+                None | Some(Format::Text) => (),
+                _ => bail!("CREATE SOURCE ... PUBNUB must specify FORMAT TEXT"),
+            }
             let connector = ExternalSourceConnector::PubNub(PubNubSourceConnector {
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
             });
-
             (connector, DataEncoding::Text)
         }
         Connector::AvroOcf { path, .. } => {
@@ -1025,6 +1033,13 @@ pub fn plan_create_source(
         if_not_exists,
         materialized,
     })
+}
+
+pub fn plan_create_sources(
+    _scx: &StatementContext,
+    _stmt: CreateSourcesStatement<Raw>,
+) -> Result<Plan, anyhow::Error> {
+    unsupported!("CREATE SOURCES");
 }
 
 pub fn describe_create_view(
