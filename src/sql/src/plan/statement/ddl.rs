@@ -27,8 +27,8 @@ use regex::Regex;
 use reqwest::Url;
 
 use dataflow_types::{
-    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, Consistency, CsvEncoding,
-    DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
+    AvroEncoding, AvroOcfEncoding, AvroOcfSinkConnectorBuilder, BringYourOwn, Consistency,
+    CsvEncoding, DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
     KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector,
     PostgresSourceConnector, ProtobufEncoding, PubNubSourceConnector, RegexEncoding,
     S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceDataEncoding,
@@ -403,7 +403,10 @@ pub fn plan_create_source(
 
             consistency = match with_options.remove("consistency_topic") {
                 None => Consistency::RealTime,
-                Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
+                Some(Value::String(topic)) => Consistency::BringYourOwn(BringYourOwn {
+                    broker: broker.clone(),
+                    topic,
+                }),
                 Some(_) => bail!("consistency_topic must be a string"),
             };
 
@@ -613,7 +616,10 @@ pub fn plan_create_source(
             };
             consistency = match with_options.remove("consistency_topic") {
                 None => Consistency::RealTime,
-                Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
+                Some(Value::String(topic)) => Consistency::BringYourOwn(BringYourOwn {
+                    broker: path.clone(),
+                    topic,
+                }),
                 Some(_) => bail!("consistency_topic must be a string"),
             };
 

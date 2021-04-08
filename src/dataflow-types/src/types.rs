@@ -622,6 +622,15 @@ pub enum Compression {
     None,
 }
 
+/// A struct to hold more specific information about where a BYO source
+/// came from so we can differentiate between topics of the same name across
+/// different brokers.
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct BringYourOwn {
+    pub broker: String,
+    pub topic: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SourceConnector {
     External {
@@ -776,7 +785,7 @@ impl ExternalSourceConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Consistency {
-    BringYourOwn(String),
+    BringYourOwn(BringYourOwn),
     RealTime,
 }
 
