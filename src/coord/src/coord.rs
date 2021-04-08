@@ -45,7 +45,7 @@ use dataflow_types::{
     DataflowDesc, IndexDesc, PeekResponse, SinkConnector, SourceConnector, TailSinkConnector,
     TimestampSourceUpdate, Update,
 };
-use dataflow_types::{SinkAsOf, SinkEnvelope};
+use dataflow_types::{SinkAsOf, SinkEnvelope, Timeline};
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
@@ -185,6 +185,8 @@ pub struct Coordinator {
     active_conns: HashMap<u32, ConnMeta>,
     /// Map of all persisted tables.
     persisted_tables: Option<PersistentTables>,
+    /// Map from GlobalId -> Timeline it belongs to for all objects in the catalog.
+    timelines: HashMap<GlobalId, Timeline>,
 }
 
 /// Metadata about an active connection.
@@ -273,6 +275,8 @@ impl Coordinator {
                     self.update_timestamper(entry.id(), true).await;
                     self.maybe_begin_caching(entry.id(), &source.connector)
                         .await;
+                    self.timelines
+                        .insert(entry.id(), source.connector.timeline());
                 }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
@@ -287,6 +291,8 @@ impl Coordinator {
                         // that everything else uses?
                         self.indexes
                             .insert(entry.id(), Frontiers::new(self.num_workers(), Some(1_000)));
+                        // TODO(rkhaitan): pretty sure system logs are actually on a different timeline
+                        self.timelines.insert(entry.id(), Timeline::RealTime);
                     } else {
                         let df = self.dataflow_builder().build_index_dataflow(entry.id());
                         self.ship_dataflow(df).await?;
@@ -1580,6 +1586,8 @@ impl Coordinator {
         match self.catalog_transact(ops).await {
             Ok(()) => {
                 self.update_timestamper(source_id, true).await;
+                self.timelines
+                    .insert(source_id, source.connector.timeline());
                 if let Some(index_id) = index_id {
                     let df = self.dataflow_builder().build_index_dataflow(index_id);
                     self.ship_dataflow(df).await?;
@@ -2513,6 +2521,7 @@ impl Coordinator {
                         .send(CacheMessage::DropSource(id))
                         .expect("cache receiver should not drop first");
                 }
+                self.timelines.remove(&id);
             }
             self.broadcast(SequencedCommand::DropSources(sources_to_drop));
         }
@@ -2556,6 +2565,7 @@ impl Coordinator {
             if self.indexes.remove(&id).is_some() {
                 trace_keys.push(id);
             }
+            self.timelines.remove(&id);
         }
         if !trace_keys.is_empty() {
             self.broadcast(SequencedCommand::DropIndexes(trace_keys))
@@ -2656,6 +2666,7 @@ impl Coordinator {
     async fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) -> Result<(), CoordError> {
         // The identity for `join` is the minimum element.
         let mut since = Antichain::from_elem(Timestamp::minimum());
+        let mut timeline = None;
 
         // TODO: Populate "valid from" information for each source.
         // For each source, ... do nothing because we don't track `since` for sources.
@@ -2664,6 +2675,23 @@ impl Coordinator {
         //     since.join_assign(&self.source_info[instance_id].since);
         // }
 
+        for (source_id, _) in dataflow.source_imports.iter() {
+            let source_timeline = self
+                .timelines
+                .get(source_id)
+                .expect("global id missing at coord");
+
+            if timeline.is_none() {
+                timeline = Some(*source_timeline);
+            }
+
+            let timeline = timeline.expect("known to exist");
+
+            if timeline != *source_timeline {
+                coord_bail!("Dataflow requested sources spanning multiple timelines");
+            }
+        }
+
         // For each imported arrangement, lower bound `since` by its own frontier.
         for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
             since.join_assign(
@@ -2671,6 +2699,21 @@ impl Coordinator {
                     .since_of(global_id)
                     .expect("global id missing at coordinator"),
             );
+
+            let index_timeline = self
+                .timelines
+                .get(global_id)
+                .expect("global id missing at coord");
+
+            if timeline.is_none() {
+                timeline = Some(*index_timeline);
+            }
+
+            let timeline = timeline.expect("known to exist");
+
+            if timeline != *index_timeline {
+                coord_bail!("Dataflow requested sources and indexes spanning multiple timelines");
+            }
         }
 
         // For each produced arrangement, start tracking the arrangement with
@@ -2680,6 +2723,11 @@ impl Coordinator {
                 Frontiers::new(self.num_workers(), self.logical_compaction_window_ms);
             frontiers.advance_since(&since);
             self.indexes.insert(*global_id, frontiers);
+
+            // TODO(rkhaitan): not entirely sure what should happen for views with no
+            // imports. For now just defaulting to real_time.
+            let timeline = timeline.unwrap_or(Timeline::RealTime);
+            self.timelines.insert(*global_id, timeline);
         }
 
         // TODO: Produce "valid from" information for each sink.
@@ -2888,6 +2936,7 @@ pub async fn serve(
         transient_id_counter: 1,
         active_conns: HashMap::new(),
         persisted_tables,
+        timelines: HashMap::new(),
     };
     coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
     if let Some(config) = &logging {

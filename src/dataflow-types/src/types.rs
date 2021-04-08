@@ -544,6 +544,16 @@ pub enum Compression {
     None,
 }
 
+/// Different incomparable timelines that a source can belong to.
+///
+/// TODO(rkhaitan): we probably want to express different Debezium timelines per
+/// source family.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Timeline {
+    RealTime,
+    Debezium,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SourceConnector {
     External {
@@ -571,6 +581,18 @@ impl SourceConnector {
             true
         } else {
             false
+        }
+    }
+
+    pub fn timeline(&self) -> Timeline {
+        if let SourceConnector::External { consistency, .. } = self {
+            if *consistency == Consistency::RealTime {
+                Timeline::RealTime
+            } else {
+                Timeline::Debezium
+            }
+        } else {
+            Timeline::Debezium
         }
     }
 }
