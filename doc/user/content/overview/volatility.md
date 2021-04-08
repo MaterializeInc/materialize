@@ -49,20 +49,19 @@ The following source types are always considered to be of unknown volatility:
   * [S3 sources](/sql/create-source/text-s3/)
   * [File sources](/sql/create-source/text-file/)
 
-In the future, Materialize will allow you to configure whether a given Kafka,
-S3, or file source is considered volatile or nonvolatile, as their volatility
-depends on their configuration. Common ways to introduce volatility include
-configuring a retention policy on a Kafka topic used in a Kafka source, deleting
-an object from an S3 bucket used in an S3 source, or editing a file used in a
-file source.
+In the future, Materialize will let you configure whether a given Kafka, S3, or
+file source is considered volatile or nonvolatile, as their volatility depends
+on their configuration. Common ways to introduce volatility include configuring
+a retention policy on a Kafka topic used in a Kafka source, deleting an object
+from an S3 bucket used in an S3 source, or editing a file used in a file source.
 
 ### Views, indexes, and sinks
 
 The volatility of a view, index, or sink is determined by applying each of
 the following rules in turn:
 
-  1. If the object depends on at least one volatile object, it is volatile.
-  2. If the object depends on at least one object of unknown volatility, it has
+  1. If the object depends on at least one volatile source, it is volatile.
+  2. If the object depends on at least one source of unknown volatility, it has
      unknown volatility.
   3. Otherwise the object is nonvolatile.
 
@@ -71,4 +70,5 @@ An important implication of these rules is that a view that has no dependencies
 
 ### Tables
 
-Tables are always volatile.
+Tables are always volatile because they do not currently retain state between
+restarts.
