@@ -789,6 +789,7 @@ pub struct KafkaSinkConnector {
     pub key_schema_id: Option<i32>,
     pub value_schema_id: i32,
     pub consistency: Option<KafkaSinkConsistencyConnector>,
+    pub exactly_once: bool,
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,

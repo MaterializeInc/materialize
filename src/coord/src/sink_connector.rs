@@ -118,34 +118,68 @@ async fn get_latest_ts(
     // Seek to end-1 offset
     let mut tps = TopicPartitionList::new();
     tps.add_partition(consistency_topic, partition);
-    tps.set_partition_offset(consistency_topic, partition, Offset::OffsetTail(1))?;
+    tps.set_partition_offset(consistency_topic, partition, Offset::Beginning)?;
 
-    consumer
-        .assign(&tps)
-        .with_context(|| format!("Error seeking in consistency topic {}", consistency_topic))?;
+    consumer.assign(&tps).with_context(|| {
+        format!(
+            "Error seeking in consistency topic {}:{}",
+            consistency_topic, partition
+        )
+    })?;
 
-    // Read the end-1 offset message
-    let m = match get_next_message(consumer, timeout)? {
-        None => {
-            // fetch watermarks to distinguish between a timeout reading end-1 and an empty topic
-            match consumer.fetch_watermarks(consistency_topic, 0, timeout) {
-                Ok((_, hi)) => {
-                    if hi == 0 {
-                        return Ok(None);
-                    } else {
-                        bail!("uninitializedlkajsdlkfjs");
-                    }
-                }
-                Err(e) => {
-                    bail!("Failed to fetch metadata while reading from consistency topic, will retry. Error was {}", e);
+    // We scan from the beginning and see if we can find an END record. We have
+    // to do it like this because Kafka Control Batches mess with offsets. We
+    // therefore cannot simply take the last offset from the back and expect an
+    // END message there. With a transactional producer, the OffsetTail(1) will
+    // not point to an END message but a control message. With aborted
+    // transactions, there might even be a lot of garbage at the end of the
+    // topic or in between.
+
+    let mut latest_message = None;
+    while let Some(message) = get_next_message(consumer, timeout)? {
+        latest_message = Some(message);
+    }
+
+    if latest_message.is_none() {
+        // fetch watermarks to distinguish between a timeout reading end-1 and an empty topic
+        match consumer.fetch_watermarks(consistency_topic, 0, timeout) {
+            Ok((lo, hi)) => {
+                if hi == 0 {
+                    return Ok(None);
+                } else {
+                    bail!(
+                        "uninitialized consistency topic {}:{}, lo/hi: {}/{}",
+                        consistency_topic,
+                        partition,
+                        lo,
+                        hi
+                    );
                 }
             }
+            Err(e) => {
+                bail!(
+                    "Failed to fetch metadata while reading from consistency topic: {}",
+                    e
+                );
+            }
         }
-        Some(m) => m,
-    };
+    }
 
-    // decode the timestamp from the end-1 message
-    let mut bytes = &m[5..];
+    let latest_message = latest_message.expect("known to exist");
+
+    // the latest valid message should be an END message. If not, things have
+    // gone wrong!
+    let timestamp = decode_consistency_end_record(&latest_message, consistency_topic)?;
+
+    Ok(Some(timestamp))
+}
+
+fn decode_consistency_end_record(
+    bytes: &[u8],
+    consistency_topic: &str,
+) -> Result<Timestamp, anyhow::Error> {
+    // The first 5 bytes are reserved for the schema id/schema registry information
+    let mut bytes = &bytes[5..];
     let record = mz_avro::from_avro_datum(get_debezium_transaction_schema(), &mut bytes)
         .context("Failed to decode consistency topic message")?;
 
@@ -156,7 +190,7 @@ async fn get_latest_ts(
         match (status, id) {
             (Some(Value::String(status)), Some(Value::String(id))) if status == "END" => {
                 if let Ok(ts) = id.parse::<u64>() {
-                    Ok(Some(Timestamp::from(ts)))
+                    Ok(Timestamp::from(ts))
                 } else {
                     bail!(
                         "Malformed consistency record, failed to parse timestamp {} in topic {}",
@@ -409,6 +443,7 @@ async fn build_kafka(
         key_desc_and_indices: builder.key_desc_and_indices,
         value_desc: builder.value_desc,
         consistency,
+        exactly_once: builder.exactly_once,
         fuel: builder.fuel,
         config_options: builder.config_options,
     }))
