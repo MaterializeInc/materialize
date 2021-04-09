@@ -91,6 +91,7 @@ case "$cmd" in
             --volume "$(pwd):$(pwd)"
             --workdir "$(pwd)"
             --env AWS_ACCESS_KEY_ID
+            --env AWS_DEFAULT_REGION
             --env AWS_SECRET_ACCESS_KEY
             --env BINTRAY_API_KEY
             --env BUILDKITE
