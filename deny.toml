@@ -1,3 +1,12 @@
+[advisories]
+ignore = [
+    # See: https://github.com/MaterializeInc/materialize/issues/6244
+    #
+    # The "vulnerability" here is just a DoS via excessive CPU and memory usage
+    # on large inputs, which is not a concern for our threat model.
+    "RUSTSEC-2021-0041"
+]
+
 [bans]
 multiple-versions = "deny"
 skip = [
