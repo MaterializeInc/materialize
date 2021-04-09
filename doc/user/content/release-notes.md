@@ -51,6 +51,9 @@ Wrap your release notes at the 80 character mark.
 - Add the [`pow`](/sql/functions/#numbers-func) function as an alias for the
   [`power`](/sql/functions/#numbers-func) function.
 
+- Add a new metric, `mz_log_message_total` that counts the number of log
+  messages emitted per severity.
+
 {{% version-header v0.7.2 %}}
 
 - Introduce the concept of [volatility](/overview/volatility) to describe
