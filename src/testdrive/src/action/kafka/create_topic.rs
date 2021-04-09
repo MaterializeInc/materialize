@@ -29,7 +29,7 @@ pub struct CreateTopicAction {
 pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, String> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let partitions = cmd.args.opt_parse("partitions")?.unwrap_or(1);
-    let replication_factor = cmd.args.opt_parse("replication-factor")?.unwrap_or(-1);
+    let replication_factor = cmd.args.opt_parse("replication-factor")?.unwrap_or(1);
     let compression = cmd
         .args
         .opt_string("compression")

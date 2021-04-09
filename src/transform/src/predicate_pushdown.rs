@@ -383,11 +383,7 @@ impl PredicatePushdown {
                     }
                     MirRelationExpr::Project { input, outputs } => {
                         let predicates = predicates.drain(..).map(|mut predicate| {
-                            predicate.visit_mut(&mut |e| {
-                                if let MirScalarExpr::Column(i) = e {
-                                    *i = outputs[*i];
-                                }
-                            });
+                            predicate.permute(outputs);
                             predicate
                         });
                         *relation = input

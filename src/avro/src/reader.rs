@@ -359,6 +359,9 @@ impl<'a> SchemaResolver<'a> {
                         }
                     }
                 }
+                while fields.len() < w_fields.len() {
+                    fields.push(None);
+                }
                 let mut n_present = 0;
                 let fields = fields
                     .into_iter()

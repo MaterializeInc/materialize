@@ -55,17 +55,17 @@ _scale_ | The total number of fractional decimal digits to track, e.g. `.321` ha
 
 You can [cast](../../functions/cast) `numeric` to:
 
-- [`int`](../int)
-- [`real`/`double precision`](../float)
-- [`text`](../text)
+- [`int`/`bigint`](../int) (by assignment)
+- [`real`/`double precision`](../float) (implicitly)
+- [`text`](../text) (by assignment)
 
 #### To `numeric`
 
-You can [cast](../../functions/cast) the following types to `numeric`:
+You can [cast](../../functions/cast) from the following types to `numeric`:
 
-- [`int`](../int)
-- [`real`/`double precision`](../float)
-- [`text`](../text)
+- [`int`/`bigint`](../int) (implicitly)
+- [`real`/`double precision`](../float) (by assignment)
+- [`text`](../text) (explicitly)
 
 ## Examples
 

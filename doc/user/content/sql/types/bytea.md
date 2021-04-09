@@ -49,12 +49,12 @@ Decimal octet value | Description | Escaped input representation | Example | Hex
 
 #### From `bytea`
 
-You can [cast](../../functions/cast) `bytea` to [text](../text). Casts from `bytea`
+You can [cast](../../functions/cast) `bytea` to [text](../text) by assignment. Casts from `bytea`
 will error if the string is not valid input for the destination type.
 
 #### To `bytea`
 
-You can [cast](../../functions/cast) [text](../text) to `bytea`.
+You can explicitly [cast](../../functions/cast) [text](../text) to `bytea`.
 
 ## Examples
 

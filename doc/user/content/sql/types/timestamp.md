@@ -61,24 +61,21 @@ _tz&lowbar;offset_ | The timezone's distance, in hours, from UTC.
 
 ### Valid casts
 
-#### From `timestamp`
+In addition to the casts listed below, `timestamp` and `timestamptz` can be cast to and from each other implicitly.
 
-You can [cast](../../functions/cast) `timestamp` or `timestamp with time zone` to:
+#### From `timestamp` or `timestamptz`
 
-- [`date`](../date)
-- [`text`](../text)
-- `timestamp`
-- `timestamp with time zone`
+You can [cast](../../functions/cast) `timestamp` or `timestamptz` to:
 
-#### To `timestamp`
+- [`date`](../date) (by assignment)
+- [`text`](../text) (by assignment)
 
-You can [cast](../../functions/cast) the following types to `timestamp` or
-`timestamp with time zone`:
+#### To `timestamp` or `timestamptz`
 
-- [`date`](../date)
-- [`text`](../text)
-- `timestamp`
-- `timestamp with time zone`
+You can [cast](../../functions/cast) the following types to `timestamp` or `timestamptz`:
+
+- [`date`](../date) (implicitly)
+- [`text`](../text) (explicitly)
 
 ### Valid operations
 

@@ -745,46 +745,6 @@ impl MapFilterProject {
         }
         let mut new_expressions = Vec::new();
 
-        // A helper method which memoizes expressions by recursively memoizing their parts.
-        fn memoize_expr(
-            expr: &mut MirScalarExpr,
-            new_scalars: &mut Vec<MirScalarExpr>,
-            projection: &HashMap<usize, usize>,
-            input_arity: usize,
-        ) {
-            match expr {
-                MirScalarExpr::Column(index) => {
-                    // Column references need to be rewritten, but do not need to be memoized.
-                    *index = projection[index];
-                }
-                _ => {
-                    // We should not eagerly memoize `if` branches that might not be taken.
-                    // TODO: Memoize expressions in the intersection of `then` and `els`.
-                    if let MirScalarExpr::If { cond, then, els } = expr {
-                        memoize_expr(cond, new_scalars, projection, input_arity);
-                        // Conditionally evaluated expressions still need to update their
-                        // column references.
-                        then.permute_map(projection);
-                        els.permute_map(projection);
-                    } else {
-                        expr.visit1_mut(|e| memoize_expr(e, new_scalars, projection, input_arity));
-                    }
-                    if let Some(position) = new_scalars.iter().position(|e| e == expr) {
-                        // Any complex expression that already exists as a prior column can
-                        // be replaced by a reference to that column.
-                        *expr = MirScalarExpr::Column(input_arity + position);
-                    } else {
-                        // A complex expression that does not exist should be memoized, and
-                        // replaced by a reference to the column.
-                        new_scalars.push(std::mem::replace(
-                            expr,
-                            MirScalarExpr::Column(input_arity + new_scalars.len()),
-                        ));
-                    }
-                }
-            }
-        }
-
         // We follow the same order as for evaluation, to ensure that all
         // column references exist in time for their evaluation. We could
         // prioritize predicates, but we would need to be careful to chase
@@ -792,10 +752,10 @@ impl MapFilterProject {
         let mut expression = 0;
         for (support, predicate) in self.predicates.iter_mut() {
             while self.input_arity + expression < *support {
+                self.expressions[expression].permute_map(&remaps);
                 memoize_expr(
                     &mut self.expressions[expression],
                     &mut new_expressions,
-                    &remaps,
                     self.input_arity,
                 );
                 remaps.insert(
@@ -805,13 +765,14 @@ impl MapFilterProject {
                 new_expressions.push(self.expressions[expression].clone());
                 expression += 1;
             }
-            memoize_expr(predicate, &mut new_expressions, &remaps, self.input_arity);
+            predicate.permute_map(&remaps);
+            memoize_expr(predicate, &mut new_expressions, self.input_arity);
         }
         while expression < self.expressions.len() {
+            self.expressions[expression].permute_map(&remaps);
             memoize_expr(
                 &mut self.expressions[expression],
                 &mut new_expressions,
-                &remaps,
                 self.input_arity,
             );
             remaps.insert(
@@ -1041,4 +1002,49 @@ impl MapFilterProject {
             }))
             .project(projection.into_iter().map(|c| remap[&c]));
     }
+}
+
+// TODO: move this elsewhere?
+/// Recursively memoize parts of `expr`, storing those parts in `memoized_parts`.
+///
+/// A part of `expr` that is memoized is replaced by a reference to column
+/// `(input_arity + pos)`, where `pos` is the position of the memoized part in
+/// `memoized_parts`, and `input_arity` is the arity of the input that `expr`
+/// refers to.
+pub fn memoize_expr(
+    expr: &mut MirScalarExpr,
+    memoized_parts: &mut Vec<MirScalarExpr>,
+    input_arity: usize,
+) {
+    expr.visit_mut_pre_post(
+        &mut |e| {
+            // We should not eagerly memoize `if` branches that might not be taken.
+            // TODO: Memoize expressions in the intersection of `then` and `els`.
+            if let MirScalarExpr::If { cond, .. } = e {
+                return Some(vec![cond]);
+            }
+            None
+        },
+        &mut |e| {
+            match e {
+                MirScalarExpr::Column(_) | MirScalarExpr::Literal(_, _) => {
+                    // Literals do not need to be memoized.
+                }
+                _ => {
+                    if let Some(position) = memoized_parts.iter().position(|e2| e2 == e) {
+                        // Any complex expression that already exists as a prior column can
+                        // be replaced by a reference to that column.
+                        *e = MirScalarExpr::Column(input_arity + position);
+                    } else {
+                        // A complex expression that does not exist should be memoized, and
+                        // replaced by a reference to the column.
+                        memoized_parts.push(std::mem::replace(
+                            e,
+                            MirScalarExpr::Column(input_arity + memoized_parts.len()),
+                        ));
+                    }
+                }
+            }
+        },
+    )
 }

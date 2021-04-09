@@ -454,14 +454,14 @@ Note that this rule also applies to casting between custom list types.
 
 You can [cast](../../functions/cast) `list` to:
 
-- [`text`](../text)
+- [`text`](../text) (implicitly)
 - Other `lists` as noted above.
 
 #### To `list`
 
 You can [cast](../../functions/cast) the following types to `list`:
 
-- [`text`](../text)&mdash;see [details](#text-to-list-casts)
+- [`text`](../text)(explicitly). See [details](#text-to-list-casts).
 - Other `lists` as noted above.
 
 ### Known limitations

@@ -141,6 +141,12 @@
   - signature: 'mod(x: N, y: N) -> N'
     description: "`x % y`"
 
+  - signature: 'pow(x: double precision, y: double precision) -> double precision'
+    description: "Alias of `power`"
+
+  - signature: 'pow(x: numeric, y: numeric) -> numeric'
+    description: "Alias of `power`"
+
   - signature: 'power(x: double precision, y: double precision) -> double precision'
     description: "`x` raised to the power of `y`"
 

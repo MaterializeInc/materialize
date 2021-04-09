@@ -72,8 +72,9 @@ fn memoize_and_reuse(
     let mut projection = (0..input_arity).collect::<Vec<_>>();
     let mut scalars = Vec::new();
     for expr in exprs.iter_mut() {
+        expr.permute(&projection);
         // Carefully memoize expressions that will certainly be evaluated.
-        memoize(expr, &mut scalars, &projection, input_arity);
+        expr::memoize_expr(expr, &mut scalars, input_arity);
 
         // At this point `expr` should be a column reference or a literal. It may not have
         // been added to `scalars` and we should do so if it is a literal to make sure we
@@ -92,52 +93,6 @@ fn memoize_and_reuse(
 
     inline_single_use(&mut scalars, &mut projection[..], input_arity);
     (scalars, projection)
-}
-
-/// Visit and memoize expression nodes.
-///
-/// Importantly, we should not memoize expressions that may not be excluded by virtue of
-/// being guarded by `if` expressions.
-fn memoize(
-    expr: &mut MirScalarExpr,
-    scalars: &mut Vec<MirScalarExpr>,
-    projection: &[usize],
-    input_arity: usize,
-) {
-    match expr {
-        MirScalarExpr::Column(index) => {
-            // Column references need to be rewritten, but do not need to be memoized.
-            *index = projection[*index];
-        }
-        MirScalarExpr::Literal(_, _) => {
-            // Literals do not need to be memoized.
-        }
-        _ => {
-            // We should not eagerly memoize `if` branches that might not be taken.
-            // TODO: Memoize expressions in the intersection of `then` and `els`.
-            if let MirScalarExpr::If { cond, then, els } = expr {
-                memoize(cond, scalars, projection, input_arity);
-                // Conditionally evaluated expressions still need to update their
-                // column references.
-                then.permute(projection);
-                els.permute(projection);
-            } else {
-                expr.visit1_mut(|e| memoize(e, scalars, projection, input_arity));
-            }
-            if let Some(position) = scalars.iter().position(|e| e == expr) {
-                // Any complex expression that already exists as a prior column can
-                // be replaced by a reference to that column.
-                *expr = MirScalarExpr::Column(input_arity + position);
-            } else {
-                // A complex expression that does not exist should be memoized, and
-                // replaced by a reference to the column.
-                scalars.push(std::mem::replace(
-                    expr,
-                    MirScalarExpr::Column(input_arity + scalars.len()),
-                ));
-            }
-        }
-    }
 }
 
 /// Replaces column references that occur once with the referenced expression.
@@ -183,11 +138,7 @@ fn inline_single_use(exprs: &mut Vec<MirScalarExpr>, projection: &mut [usize], i
     for (index, mut expr) in exprs.drain(..).enumerate() {
         if referenced[input_arity + index] > 0 {
             // keep the expression, but update column references.
-            expr.visit_mut(&mut |e| {
-                if let MirScalarExpr::Column(i) = e {
-                    *i = column_rename[i];
-                }
-            });
+            expr.permute_map(&column_rename);
             results.push(expr);
             column_rename.insert(input_arity + index, input_arity + results.len() - 1);
         }
