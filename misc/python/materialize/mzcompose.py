@@ -699,7 +699,7 @@ class WaitForPgStep(WorkflowStep):
         dbname: str,
         port: Optional[int] = None,
         host: str = "localhost",
-        timeout_secs: int = 30,
+        timeout_secs: int = 60,
         query: str = "SELECT 1",
         user: str = "postgres",
         password: str = "postgres",
@@ -753,7 +753,7 @@ class WaitForMzStep(WaitForPgStep):
         dbname: str = "materialize",
         host: str = "localhost",
         port: Optional[int] = None,
-        timeout_secs: int = 10,
+        timeout_secs: int = 60,
         query: str = "SELECT 1",
         expected: Union[Iterable[Any], Literal["any"]] = [[1]],
         print_result: bool = False,
@@ -790,7 +790,7 @@ class WaitForMysqlStep(WorkflowStep):
         password: str = "rootpw",
         host: str = "localhost",
         port: Optional[int] = None,
-        timeout_secs: int = 10,
+        timeout_secs: int = 60,
         service: str = "mysql",
     ) -> None:
         self._user = user
@@ -899,7 +899,7 @@ class WaitForTcpStep(WorkflowStep):
         *,
         host: str = "localhost",
         port: int,
-        timeout_secs: int = 30,
+        timeout_secs: int = 60,
         dependencies: Optional[List[WaitDependency]] = None,
     ) -> None:
         self._host = host
