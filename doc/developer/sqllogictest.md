@@ -54,6 +54,25 @@ and declare the test as passing.
 
 `statement error` will run any type of statement.
 
+### Primary keys
+
+While you can't create tables with primary keys in Materialize yet, you
+can create tables with primary keys in sqllogictest, and the optimizer will take
+the primary keys into account.
+
+The syntax is either:
+`CREATE TABLE foo (a INT PRIMARY KEY, b INT)`
+or
+```
+CREATE TABLE bar (
+    a smallint,
+    b integer,
+    c char(10),
+    d char(20),
+    PRIMARY KEY (a, b)
+)
+```
+
 ### Useful tips
 
 * If you use Visual Studio Code, @benesch has made a syntax highlighter for
@@ -275,7 +294,7 @@ You can look for sqllogictest-related code in the following directories:
       [test/sqllogictest/dates-times.slt](/test/sqllogictest/dates-times.slt),
       we are selecting date and time types, but the expected result type is T
       (text).
-* [src/symbosis](/src/symbosis): Contains code for the Materialize symbosis
+* [src/symbiosis](/src/symbiosis): Contains code for the Materialize symbosis
   mode. Specifically, this code takes sqllogictest commands such as `CREATE
   TABLE ...`, `INSERT INTO ... VALUES ...`, or `UPDATE`, runs them in PostgreSQL
   and passes the changelog to Materialize. Look here if you want to change what
