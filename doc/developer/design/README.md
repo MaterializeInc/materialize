@@ -34,21 +34,28 @@ S3 sources: https://github.com/MaterializeInc/materialize/issues/4914
 
 ## When should you make a design document?
 
-There is no hard and fast rule on when to write a design doc. But a few useful
-heuristics are:
+Some specific times when you should write a design document:
 1. If the change is large/cross-cutting, eg. will be spread over multiple PRs
-2. If the change is long and will proceed in phases that need clearly delimited scope
+2. If the change will take more than a week to implement or will proceed in phases that need clearly delimited scope
 3. If there are multiple alternative implementations and no clear best option
 4. If it's going to involve multiple people coordinating changes
+5. If it changes a customer-facing/public API, or a major private API (for example, the API for implementing new sinks)
 
 Many smaller changes do still benefit from a quick design doc to clarify
-thinking.
+thinking. Err on the side of writing a design document.
 
 ## How should you make a design document?
 
+### Creation
 1. Copy the template to a new date-prefixed file in `doc/developer/design` and fill it in.
 2. Submit a pull request - this makes it easy for others to add written comments.
-3. Schedule a meeting, typically in the 30-60min range. Provide time to read
-   the doc if people haven't had the opportunity, then go through it section by
-   section. If you find you need more than 60min, consider having focused meetings on
-   subsections of the design or break the design into subcomponents with separate documents.
+3. Announce that the design doc is ready for review in #eng-announce.
+
+### Discussion
+4. Address comments, discuss, and iterate on the document in the PR
+5. Gather explicit approvals from relevant stakeholders. Typically there is a small set of people who have a vested interest in the area the design touches. If it's not clear who that is, ask a TL, EM, or in #engineering.
+
+### Finalization
+6. Announce the intent to close commenting on the design document in #eng-announce.
+7. Allow two business days for any final comments.
+8. If no comments have raised new issues or if no one has asked for additional time to review, merge the design document.
