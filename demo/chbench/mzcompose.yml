@@ -589,9 +589,6 @@ mzworkflows:
       workflow: bring-up-mysql-kafka
     - step: start-services
       services: [prometheus_sql_exporter_mysql_tpcch]
-    - step: drop-kafka-topics
-      kafka-container: chbench_kafka_1
-      topic_pattern: debezium.tpcch.*
     - step: run
       service: chbench
       command: >-
@@ -633,20 +630,23 @@ mzworkflows:
   bring-up-mysql-kafka:
     steps:
     - step: start-services
-      services: [mysql]
+      services: [mysql, kafka]
     - step: wait-for-mysql
       user: root
       password: rootpw
       timeout_secs: 30
+    - step: wait-for-tcp
+      host: kafka
+      port: 9092
+    - step: drop-kafka-topics
+      kafka-container: chbench_kafka_1
+      topic_pattern: debezium.tpcch.*
     - step: start-services
       services: [connector-mysql]
     - step: wait-for-tcp
       host: connect
       port: 8083
       timeout_secs: 120
-    - step: wait-for-tcp
-      host: kafka
-      port: 9092
     - step: wait-for-tcp
       host: schema-registry
       port: 8081
@@ -676,9 +676,6 @@ mzworkflows:
     - step: wait-for-tcp
       host: mysql
       port: 3306
-    - step: drop-kafka-topics
-      kafka-container: chbench_kafka_1
-      topic_pattern: debezium.tpcch.*
     - step: run
       service: chbench
       command: >-
@@ -694,10 +691,13 @@ mzworkflows:
   bring-up-postgres-kafka:
     steps:
     - step: start-services
-      services: [postgres]
+      services: [postgres, kafka]
     - step: wait-for-postgres
       dbname: postgres
       timeout_secs: 30
+    - step: drop-kafka-topics
+      kafka-container: chbench_kafka_1
+      topic_pattern: debezium.tpcch.*
     - step: start-services
       services: [connector-postgres]
     - step: wait-for-tcp
@@ -735,9 +735,6 @@ mzworkflows:
     - step: wait-for-tcp
       host: postgres
       port: 5432
-    - step: drop-kafka-topics
-      kafka-container: chbench_kafka_1
-      topic_pattern: debezium.tpcch.*
     - step: run
       service: chbench
       command: >-
