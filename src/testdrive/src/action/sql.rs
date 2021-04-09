@@ -38,6 +38,17 @@ pub struct SqlAction {
     sql_context: SqlContext,
 }
 
+enum SqlActionError {
+    UnexpectedError(tokio_postgres::Error),
+    ColumnMismatch(Vec<String>),
+    ResultMismatch(Vec<Vec<String>>),
+    HashMismatch(String),
+    RowCountMismatch(usize),
+    UnhandledType(tokio_postgres::types::Type),
+}
+
+use SqlActionError::*;
+
 pub fn build_sql(mut cmd: SqlCommand, sql_context: SqlContext) -> Result<SqlAction, String> {
     let stmts = sql_parser::parser::parse_statements(&cmd.query)
         .map_err(|e| format!("unable to parse SQL: {}: {}", cmd.query, e))?;
@@ -111,7 +122,7 @@ impl Action for SqlAction {
 
         let pgclient = &state.pgclient;
 
-        match should_retry {
+        let result = match should_retry {
             true => Retry::default()
                 .initial_backoff(Duration::from_millis(50))
                 .factor(1.5)
@@ -125,6 +136,7 @@ impl Action for SqlAction {
                         println!();
                     }
                     println!("rows match; continuing");
+
                     Ok(())
                 }
                 Err(e) => {
@@ -141,7 +153,112 @@ impl Action for SqlAction {
                 }
             }
         })
-        .await?;
+        .await;
+
+        match &result {
+            Ok(()) => {
+                state
+                    .output_file
+                    .write_all(format!("> {:?}\n", query).as_bytes());
+
+                if let SqlOutput::Full { expected_rows, .. } = &self.cmd.expected_output {
+                    state
+                        .output_file
+                        .write_all(format!("{:?}\n", expected_rows).as_bytes());
+                }
+            }
+            Err(e) => match e {
+                SqlActionError::UnexpectedError(err) => {
+                    state
+                        .output_file
+                        .write_all(format!("! {:?}\n", query).as_bytes());
+
+                    state
+                        .output_file
+                        .write_all(format!("{:?}\n", err.to_string()).as_bytes());
+
+                    return Err(err.to_string());
+                }
+                SqlActionError::ColumnMismatch(actual_columns) => {
+                    state
+                        .output_file
+                        .write_all(format!("> {:?}\n", query).as_bytes());
+                    state
+                        .output_file
+                        .write_all(format!("{:?}\n", actual_columns).as_bytes());
+
+                    if let SqlOutput::Full { column_names, .. } = &self.cmd.expected_output {
+                        return Err(format!(
+                            "column name mismatch\nexpected: {:?}\nactual:   {:?}",
+                            column_names, actual_columns
+                        ));
+                    }
+                }
+                SqlActionError::RowCountMismatch(actual_rows) => {
+                    if let SqlOutput::Hashed { num_values, .. } = &self.cmd.expected_output {
+                        return Err(format!(
+                            "wrong row count: expected:\n{:?}\ngot:\n{:?}\n",
+                            actual_rows, num_values
+                        ));
+                    }
+                }
+                SqlActionError::HashMismatch(actual_hash) => {
+                    if let SqlOutput::Hashed { md5, .. } = &self.cmd.expected_output {
+                        return Err(format!(
+                            "wrong hash value: expected:{:?} got:{:?}",
+                            md5, actual_hash
+                        ));
+                    }
+                }
+                SqlActionError::UnhandledType(ty) => {
+                    return Err(format!("unable to handle SQL type: {:?}", ty))
+                }
+                SqlActionError::ResultMismatch(actual_rows) => {
+                    if let SqlOutput::Full { expected_rows, .. } = &self.cmd.expected_output {
+                        let (mut left, mut right) = (0, 0);
+                        let mut buf = String::new();
+                        while let (Some(e), Some(a)) =
+                            (expected_rows.get(left), actual_rows.get(right))
+                        {
+                            match e.cmp(a) {
+                                std::cmp::Ordering::Less => {
+                                    writeln!(buf, "row missing: {:?}", e).unwrap();
+                                    left += 1;
+                                }
+                                std::cmp::Ordering::Equal => {
+                                    left += 1;
+                                    right += 1;
+                                }
+                                std::cmp::Ordering::Greater => {
+                                    writeln!(buf, "extra row: {:?}", a).unwrap();
+                                    right += 1;
+                                }
+                            }
+                        }
+                        while let Some(e) = expected_rows.get(left) {
+                            writeln!(buf, "row missing: {:?}", e).unwrap();
+                            left += 1;
+                        }
+                        while let Some(a) = actual_rows.get(right) {
+                            writeln!(buf, "extra row: {:?}", a).unwrap();
+                            right += 1;
+                        }
+
+                        state
+                            .output_file
+                            .write_all(format!("> {:?}\n", query).as_bytes());
+                        state
+                            .output_file
+                            .write_all(format!("{:?}\n", actual_rows).as_bytes());
+
+                        return Err(format!(
+                            "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nDiff:\n{}",
+                            expected_rows, actual_rows, buf
+                        ));
+                    }
+                }
+            },
+        }
 
         if let Some(path) = &state.materialized_catalog_path {
             match self.stmt {
@@ -187,25 +304,30 @@ impl SqlAction {
         query: &str,
     ) -> Result<(), String> {
         print_query(&query);
+
         match pgclient.query(query, &[]).await {
             Err(err) => Err(err.to_string()),
             Ok(_) => Ok(()),
         }
     }
 
-    async fn try_redo(&self, pgclient: &tokio_postgres::Client, query: &str) -> Result<(), String> {
+    async fn try_redo(
+        &self,
+        pgclient: &tokio_postgres::Client,
+        query: &str,
+    ) -> Result<(), SqlActionError> {
         let stmt = pgclient
             .prepare(query)
             .await
-            .map_err(|e| format!("preparing query failed: {}", e))?;
-        let mut actual: Vec<_> = pgclient
+            .map_err(|e| UnexpectedError(e))?;
+        let mut actual_rows: Vec<_> = pgclient
             .query(&stmt, &[])
             .await
-            .map_err(|e| format!("executing query failed: {}", e))?
+            .map_err(|e| UnexpectedError(e))?
             .into_iter()
             .map(|row| decode_row(row, self.sql_context.clone()))
             .collect::<Result<_, _>>()?;
-        actual.sort();
+        actual_rows.sort();
 
         match &self.cmd.expected_output {
             SqlOutput::Full {
@@ -213,69 +335,34 @@ impl SqlAction {
                 column_names,
             } => {
                 if let Some(column_names) = column_names {
-                    let actual_columns: Vec<_> = stmt.columns().iter().map(|c| c.name()).collect();
+                    let actual_columns: Vec<_> = stmt
+                        .columns()
+                        .iter()
+                        .map(|c| c.name().to_string())
+                        .collect();
                     if actual_columns.iter().ne(column_names) {
-                        return Err(format!(
-                            "column name mismatch\nexpected: {:?}\nactual:   {:?}",
-                            column_names, actual_columns
-                        ));
+                        return Err(ColumnMismatch(actual_columns));
                     }
                 }
-                if &actual == expected_rows {
+                if &actual_rows == expected_rows {
                     Ok(())
                 } else {
-                    let (mut left, mut right) = (0, 0);
-                    let mut buf = String::new();
-                    while let (Some(e), Some(a)) = (expected_rows.get(left), actual.get(right)) {
-                        match e.cmp(a) {
-                            std::cmp::Ordering::Less => {
-                                writeln!(buf, "row missing: {:?}", e).unwrap();
-                                left += 1;
-                            }
-                            std::cmp::Ordering::Equal => {
-                                left += 1;
-                                right += 1;
-                            }
-                            std::cmp::Ordering::Greater => {
-                                writeln!(buf, "extra row: {:?}", a).unwrap();
-                                right += 1;
-                            }
-                        }
-                    }
-                    while let Some(e) = expected_rows.get(left) {
-                        writeln!(buf, "row missing: {:?}", e).unwrap();
-                        left += 1;
-                    }
-                    while let Some(a) = actual.get(right) {
-                        writeln!(buf, "extra row: {:?}", a).unwrap();
-                        right += 1;
-                    }
-                    Err(format!(
-                        "non-matching rows: expected:\n{:?}\ngot:\n{:?}\nDiff:\n{}",
-                        expected_rows, actual, buf
-                    ))
+                    Err(ResultMismatch(actual_rows))
                 }
             }
             SqlOutput::Hashed { num_values, md5 } => {
-                if &actual.len() != num_values {
-                    Err(format!(
-                        "wrong row count: expected:\n{:?}\ngot:\n{:?}\n",
-                        actual.len(),
-                        num_values,
-                    ))
+                if &actual_rows.len() != num_values {
+                    Err(RowCountMismatch(actual_rows.len()))
                 } else {
                     let mut hasher = Md5::new();
-                    for row in &actual {
+                    for row in &actual_rows {
                         for entry in row {
                             hasher.update(entry);
                         }
                     }
-                    let actual = format!("{:x}", hasher.finalize());
-                    if &actual != md5 {
-                        Err(format!(
-                            "wrong hash value: expected:{:?} got:{:?}",
-                            md5, actual
-                        ))
+                    let actual_hash = format!("{:x}", hasher.finalize());
+                    if &actual_hash != md5 {
+                        Err(HashMismatch(actual_hash))
                     } else {
                         Ok(())
                     }
@@ -289,6 +376,14 @@ pub struct FailSqlAction {
     cmd: FailSqlCommand,
     sql_context: SqlContext,
 }
+
+enum FailSqlActionError {
+    UnexpectedSuccess(),
+    ErrorMismatch(String),
+    PostgresError(tokio_postgres::Error),
+}
+
+use FailSqlActionError::*;
 
 pub fn build_fail_sql(
     cmd: FailSqlCommand,
@@ -311,7 +406,7 @@ impl Action for FailSqlAction {
         print_query(&query);
 
         let pgclient = &state.pgclient;
-        Retry::default()
+        let result = Retry::default()
             .initial_backoff(Duration::from_millis(50))
             .factor(1.5)
             .max_duration(self.sql_context.timeout)
@@ -337,44 +432,75 @@ impl Action for FailSqlAction {
                     Err(e)
                 }
             }
-        }).await
+        }).await;
+
+        match &result {
+            Ok(()) => {
+                state
+                    .output_file
+                    .write_all(format!("! {:?}\n", query).as_bytes());
+                state
+                    .output_file
+                    .write_all(format!("{:?}\n", self.cmd.expected_error).as_bytes());
+                Ok(())
+            }
+            Err(e) => match e {
+                UnexpectedSuccess() => {
+                    state
+                        .output_file
+                        .write_all(format!("> {:?}\n", query).as_bytes());
+                    state
+                        .output_file
+                        .write_all(format!("some-expected-result\n").as_bytes());
+                    Err(format!(
+                        "query succeeded, but expected error '{}'",
+                        self.cmd.expected_error
+                    ))
+                }
+                ErrorMismatch(actual_error) => {
+                    state
+                        .output_file
+                        .write_all(format!("! {:?}\n", query).as_bytes());
+                    state
+                        .output_file
+                        .write_all(format!("{:?}\n", actual_error).as_bytes());
+                    Err(format!(
+                        "expected error containing '{}', but got '{}'",
+                        self.cmd.expected_error, actual_error
+                    ))
+                }
+                PostgresError(postgres_error) => Err(postgres_error.to_string()),
+            },
+        }
     }
 }
 
 impl FailSqlAction {
-    async fn try_redo(&self, pgclient: &tokio_postgres::Client, query: &str) -> Result<(), String> {
+    async fn try_redo(
+        &self,
+        pgclient: &tokio_postgres::Client,
+        query: &str,
+    ) -> Result<(), FailSqlActionError> {
         match pgclient.query(query, &[]).await {
-            Ok(_) => Err(format!(
-                "query succeeded, but expected error '{}'",
-                self.cmd.expected_error
-            )),
-            Err(err) => {
-                let mut err_string = err.to_string();
-                match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
-                    Some(err) => {
-                        err_string = err.message().to_string();
+            Ok(_) => Err(UnexpectedSuccess()),
+            Err(err) => match err.source().and_then(|err| err.downcast_ref::<DbError>()) {
+                Some(err) => {
+                    let mut err_string = err.message().to_string();
 
-                        if let Some(regex) = &self.sql_context.regex {
-                            err_string = regex
-                                .replace_all(
-                                    &err_string,
-                                    self.sql_context.regex_replacement.as_str(),
-                                )
-                                .to_string();
-                        }
-
-                        if err_string.contains(&self.cmd.expected_error) {
-                            Ok(())
-                        } else {
-                            Err(format!(
-                                "expected error containing '{}', but got '{}'",
-                                self.cmd.expected_error, err_string
-                            ))
-                        }
+                    if let Some(regex) = &self.sql_context.regex {
+                        err_string = regex
+                            .replace_all(&err_string, self.sql_context.regex_replacement.as_str())
+                            .to_string();
                     }
-                    None => Err(err_string),
+
+                    if err_string.contains(&self.cmd.expected_error) {
+                        Ok(())
+                    } else {
+                        Err(ErrorMismatch(err_string))
+                    }
                 }
-            }
+                None => Err(PostgresError(err)),
+            },
         }
     }
 }
@@ -387,7 +513,7 @@ pub fn print_query(query: &str) {
     }
 }
 
-fn decode_row(row: Row, sql_context: SqlContext) -> Result<Vec<String>, String> {
+fn decode_row(row: Row, sql_context: SqlContext) -> Result<Vec<String>, SqlActionError> {
     enum ArrayElement<T> {
         Null,
         NonNull(T),
@@ -459,7 +585,7 @@ fn decode_row(row: Row, sql_context: SqlContext) -> Result<Vec<String>, String> 
             Type::INTERVAL => row.get::<_, Option<Interval>>(i).map(|x| x.to_string()),
             Type::JSONB => row.get::<_, Option<Jsonb>>(i).map(|v| v.0.to_string()),
             Type::UUID => row.get::<_, Option<uuid::Uuid>>(i).map(|v| v.to_string()),
-            _ => return Err(format!("unable to handle SQL type: {:?}", ty)),
+            _ => return Err(UnhandledType(ty.clone())),
         }
         .unwrap_or_else(|| "<null>".into());
 

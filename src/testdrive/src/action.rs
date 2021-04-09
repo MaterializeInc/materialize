@@ -9,6 +9,8 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
+use std::fs::File;
+use std::fs::OpenOptions;
 use std::future::Future;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
@@ -109,6 +111,7 @@ pub struct State {
     sqs_client: SqsClient,
     sqs_queues_created: BTreeSet<String>,
     default_timeout: Duration,
+    output_file: File,
 }
 
 #[derive(Clone)]
@@ -528,10 +531,18 @@ fn substitute_vars(msg: &str, vars: &HashMap<String, String>) -> Result<String, 
 /// for the lack of `AsyncDrop` support in Rust.
 pub async fn create_state(
     config: &Config,
+    output_file_name: &str,
 ) -> Result<(State, impl Future<Output = Result<(), Error>>), Error> {
     let seed = config.seed.unwrap_or_else(|| rand::thread_rng().gen());
 
     let temp_dir = tempfile::tempdir().err_ctx("creating temporary directory")?;
+
+    let output_file = OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(format!("{}.actual", output_file_name))
+        .err_ctx(format!("opening {}.actual", output_file_name))?;
 
     let materialized_catalog_path = if let Some(path) = &config.materialized_catalog_path {
         match fs::metadata(&path) {
@@ -695,6 +706,7 @@ pub async fn create_state(
         sqs_client,
         sqs_queues_created: BTreeSet::new(),
         default_timeout: config.default_timeout,
+        output_file: output_file,
     };
     Ok((state, pgconn_task))
 }
