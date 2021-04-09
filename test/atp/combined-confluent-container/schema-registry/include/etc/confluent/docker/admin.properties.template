@@ -1,0 +1,4 @@
+{% set security_props = env_to_props('SCHEMA_REGISTRY_KAFKASTORE_', '') -%}
+{% for name, value in security_props.items() -%}
+{{name}}={{value}}
+{% endfor -%}

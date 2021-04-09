@@ -1,0 +1,4 @@
+{% set sr_props = env_to_props('SCHEMA_REGISTRY_', '') -%}
+{% for name, value in sr_props.items() -%}
+{{name}}={{value}}
+{% endfor -%}
