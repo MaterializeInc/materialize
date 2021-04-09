@@ -19,37 +19,32 @@ mzworkflows:
         service: materialized
 
       - step: run
-        service: testdrive-svc
+        service: testdrive
         command: --materialized-url=postgres://materialize@materialized:6875 test.td
 
 services:
-  testdrive-svc:
+  testdrive:
     mzbuild: testdrive
-    entrypoint:
-      - bash
-      - -c
-      - >-
-        testdrive
-        $$*
-      - bash
+    entrypoint: [testdrive]
     volumes:
     - .:/workdir
-    - mzdata:/share/mzdata
+    - tmp:/share/tmp
+    environment:
+    - TMPDIR=/share/tmp
     propagate-uid-gid: true
     init: true
+    depends_on: [materialized]
 
   materialized:
     mzbuild: materialized
-    command: >-
-      --data-directory=/share/mzdata
-      --experimental
-      --disable-telemetry
+    command: --disable-telemetry
     environment:
     - MZ_DEV=1
     ports:
       - 6875
     volumes:
-    - mzdata:/share/mzdata
+    - tmp:/share/tmp
 
 volumes:
   mzdata:
+  tmp:
