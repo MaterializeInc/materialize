@@ -54,9 +54,6 @@ land, and then browsed as reference material as you skill up on the codebase.
   * [guide-testing.md](guide-testing.md) describes our various test suites and
     our testing philosophy.
 
-* [metabase-demo.md](metabase-demo.md) contains instructions for setting up and
-  viewing Metabase dashboards with Materialize.
-
 * [mzbuild.md](mzbuild.md) describes the custom build system we use to manage
   our Docker images and Docker Compose configurations.
 
