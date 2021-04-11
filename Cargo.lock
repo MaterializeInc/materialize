@@ -1722,9 +1722,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-proxy"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9617035cdc5cbfcf18d9ed5e28eef45a5612d2ce11fc3be9952bdc626b984399"
+checksum = "ca815a891b24fdfb243fa3239c86154392b0953ee584aa1a2a1f66d20cbe75cc"
 dependencies = [
  "bytes",
  "futures",
