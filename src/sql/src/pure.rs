@@ -103,7 +103,8 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                     .region
                     .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-                let aws_info = normalize::aws_connect_info(&mut with_options_map, Some(region))?;
+                let aws_info =
+                    normalize::aws_connect_info(&mut with_options_map, Some(region.into()))?;
                 aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
             }
             Connector::Postgres {
