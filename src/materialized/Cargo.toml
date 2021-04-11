@@ -37,7 +37,7 @@ cfg-if = "1.0.0"
 clap = { version = "2.33.0", features = ["wrap_help"] }
 compile-time-run = "0.2.11"
 coord = { path = "../coord" }
-crossbeam-channel = "0.5.0"
+crossbeam-channel = "0.5.1"
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
