@@ -424,7 +424,7 @@ impl DebeziumDeduplicationState {
                                 *started = false;
 
                                 if seen_positions.get(&position).is_none() {
-                                    seen_positions.insert(position.clone(), upstream_time_millis);
+                                    seen_positions.insert(position, upstream_time_millis);
                                 }
                                 return should_skip.is_none();
                             }
