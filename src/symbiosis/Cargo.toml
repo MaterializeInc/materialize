@@ -17,6 +17,6 @@ repr = { path = "../repr" }
 serde_json = "1.0.64"
 sql = { path = "../sql" }
 tokio = "1.4.0"
-tokio-postgres = { version = "0.7.1", features = ["with-chrono-0_4", "with-serde_json-1"] }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4", "with-serde_json-1"] }
 uuid = "0.8.2"
 whoami = "1.1.2"
