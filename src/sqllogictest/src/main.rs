@@ -70,6 +70,7 @@ async fn run(runtime: Arc<Runtime>) {
         stderr: &OutputStream::new(io::stderr(), args.timestamps),
         verbosity: args.verbosity,
         workers: args.workers,
+        no_fail: args.no_fail,
     };
 
     if args.rewrite_results {
@@ -104,7 +105,11 @@ async fn run(runtime: Arc<Runtime>) {
                         match runner::run_file(&config, entry.path()).await {
                             Ok(o) => {
                                 if o.any_failed() || config.verbosity >= 1 {
-                                    writeln!(config.stdout, "{}", util::indent(&o.to_string(), 4));
+                                    writeln!(
+                                        config.stdout,
+                                        "{}",
+                                        util::indent(&o.display(config.no_fail).to_string(), 4)
+                                    );
                                 }
                                 outcomes += o;
                             }
@@ -127,7 +132,7 @@ async fn run(runtime: Arc<Runtime>) {
         process::exit(1);
     }
 
-    writeln!(config.stdout, "{}", outcomes);
+    writeln!(config.stdout, "{}", outcomes.display(config.no_fail));
 
     if let Some(json_summary_file) = json_summary_file {
         match serde_json::to_writer(json_summary_file, &outcomes.as_json()) {
