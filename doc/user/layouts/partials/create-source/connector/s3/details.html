@@ -1,16 +1,16 @@
 ### S3 source details
 
 The S3 source is designed to ingest a large volume of static data from [AWS's Simple Storage
-Service][aws-s3]. S3 is Amazon Web Services' cloud object store. It is important to note that an
+Service][aws-s3], Amazon Web Services' cloud object store. It is important to note that an
 object store behaves differently than a file system does, and that those differences affect how
 Materialize interacts with objects in it.
 
 Some key differences from file systems include:
 
-* Latency on individual S3 operations is much higher than even cloud-network filesystems.
-* It is not possible to seek to a point in an object, the entire object must be downloaded from
-  the beginning in order to read to a point.
-* All object operations are atomic, and it is not possible to modify just part of an S3 object,
+* Latency on individual S3 operations is much higher than on even cloud-network filesystems.
+* It is not possible to seek to a point in an object; Materialize must download the entire object from
+  the beginning to read to a point.
+* All object operations are atomic. It is not possible to modify just part of an S3 object;
   you can only entirely replace or delete objects.
 
 The primary effect of this is that we do not handle *updates* to S3 objects, and we may interleave
@@ -18,55 +18,55 @@ multiple object ingestion to speed it up.
 
 [aws-s3]: https://aws.amazon.com/s3/
 
-#### S3 Limitations
+#### S3 limitations
 
 * Currently S3 sources do not support Avro- or Protobuf- encoded objects. Implementation issues:
   [Avro](https://github.com/MaterializeInc/materialize/issues/5596),
   [Protobuf](https://github.com/MaterializeInc/materialize/issues/5597)
 * Object ingest order is not guaranteed.
-* **All S3 sources are append-only** -- deleted and updated [S3 Objects][] are silently ignored.
+* **All S3 sources are append-only**. Deleted and updated [S3 objects][] are silently ignored.
 
 [S3 Objects]: https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingObjects.html
 
 #### Object discovery strategies
 
 Materialize has several techniques to discover the objects to download, with [more
-planned][object-specifiers] for the future. Strategies may be specified multiple times within one
-**CREATE SOURCE** statement, so for example this is a legal invocation: `DISCOVER OBJECTS USING BUCKET SCAN
-'example', BUCKET SCAN 'other', SQS NOTIFICATIONS 'example-notifications'`.
+planned][object-specifiers] for the future.
 
-All strategies follow the same basic pattern, `materialized` will:
+All strategies follow the same basic pattern.  Materialize will:
 
-* Interact with a collection of AWS APIs.
-* Deduplicate objects such that the same object is never downloaded twice.
-* Filter the list of objects discovered via those APIs against the [**MATCHING** clause
+* Obtain a list of objects using AWS APIs.
+* Deduplicate objects so the same object is never downloaded twice.
+* Filter the list of objects against the [**MATCHING** clause
   patterns](#patterns).
+* Download the matching objects.
 * Treat each object downloaded as a newline-delimited file for the purposes of record
-  delimitation.
+  delineation.
 
 No guarantees are made about the relative order of records sent from the object discovery process
-and the Materialize SQL engine, as usual with SQL you must impose your own order.
+and the Materialize SQL engine. As usual with SQL, you must impose your own order.
 
-[object-specifies]: https://github.com/MaterializeInc/materialize/issues/5502
+[object-specifiers]: https://github.com/MaterializeInc/materialize/issues/5502
 
-##### Scanning S3 Buckets
+You may specify strategies multiple times within one
+`CREATE SOURCE` statement. For example, this is a legal invocation:
 
-The **DISCOVER OBJECTS USING BUCKET SCAN** syntax causes S3 sources to issue [ListBucket][] requests to
-collect the names of objects to collect. After collecting the list of keys, their names are
-checked against the **MATCHING** clause, if present, before downloading and extracting objects
-line by line.
+```
+DISCOVER OBJECTS USING
+  BUCKET SCAN 'example',
+  BUCKET SCAN 'other',
+  SQS NOTIFICATIONS 'example-notifications'
+```
 
-[ListBucket]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
-
-##### Listening to SQS Notifications
+##### Listening to SQS notifications
 
 AWS S3 has a built-in method for notifying downstream applications of bucket modification, the
-[Event Notification API][notification-aws]. For the purpose of `materialized` the only interesting
-modifications are object creation, aka the `s3:ObjectCreated:*` event namespace. Following [the
-AWS Tutorial][notification-tutorial] will configure a bucket for exactly this namespace.
+[Event Notification API][notification-aws]. For Materialize, the only interesting
+modifications are object creation, aka the `s3:ObjectCreated:*` event namespace. Follow [the
+AWS Tutorial][notification-tutorial] to configure a bucket for exactly this namespace.
 
-Once you have configured S3 notifications to go to an SQS queue you can point materialized at that
-queue via **DISCOVER OBJECTS USING SQS NOTIFICATIONS `'queue-name'`**.
+Once you have configured S3 notifications to go to an SQS queue, you can point Materialize at that
+queue with **DISCOVER OBJECTS USING SQS NOTIFICATIONS `'queue-name'`**.
 
 [notification-aws]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/NotificationHowTo.html
 [notification-tutorial]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/ways-to-add-notification-config-to-bucket.html
@@ -78,16 +78,16 @@ argument to the `MATCHING` clause:
 
 * `?` matches any single character except `/`.
 * `*` matches zero or more characters except `/`.
-* `**` recursively matches directories, but some other pattern must be specified. For example
+* `**` recursively matches directories, but some other pattern must be specified. For example,
   `a/**` matches anything inside of the `a/` prefix (but not `a/` itself), and `**/a` matches `a`
   in any prefix, but not `a` with no prefix.
 * `{a,b}` matches `a` or `b` where `a` and `b` are arbitrary glob patterns.
-* `[ab]` matches `a` or `b` where `a` and `b` are characters. Prepending `!` to the matched
-  characters inverts the match, e.g. `[!ab]` matches any character besides `a` or `b`.
-* Metacharacters such as `*` and `?` can be escaped with character class notation. e.g., `[*]`
+* `[ab]` matches `a` or `b` where `a` and `b` are characters. Prepend `!` to the matched
+  characters to invert the match, e.g. `[!ab]` matches any character besides `a` or `b`.
+* You can escape metacharacters such as `*` and `?` with character class notation. For example, `[*]`
   matches `*`.
 
-##### Pattern Examples
+##### Pattern examples
 
 | Pattern            | Example Matches     | Example Excludes                           |
 |--------------------|---------------------|--------------------------------------------|
@@ -99,5 +99,5 @@ argument to the `MATCHING` clause:
 #### Compression
 
 - Omitting `COMPRESSION` is equivalent to `COMPRESSION NONE`.
-- Using `GZIP` compression requires the object be compressed using the `gzip` algorithm or that
-  the object is a concatenation of multiple `gzip` member streams.
+- Using `GZIP` compression requires the object be compressed using the `gzip` algorithm or that it
+be a concatenation of multiple `gzip` member streams.
