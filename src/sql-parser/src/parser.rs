@@ -1248,6 +1248,7 @@ impl<'a> Parser<'a> {
             found.as_ref().map(|t| t.name()).unwrap_or("EOF"),
             found
                 .as_ref()
+                .filter(|t| t.has_value())
                 .map(|t| format!(" '{}'", t.value()))
                 .unwrap_or_else(String::new)
         )

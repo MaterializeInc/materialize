@@ -142,7 +142,7 @@ CreateRole(CreateRoleStatement { is_user: false, name: Ident("usr"), options: [L
 parse-statement
 CREATE ROLE usr WITH badopt
 ----
-error: Expected end of statement, found identifier
+error: Expected end of statement, found identifier 'badopt'
 CREATE ROLE usr WITH badopt
                      ^
 

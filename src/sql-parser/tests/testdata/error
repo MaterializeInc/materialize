@@ -35,7 +35,7 @@ UPDATE t WHERE 1
 parse-statement
 UPDATE t SET a = 1 extrabadstuff
 ----
-error: Expected end of statement, found identifier
+error: Expected end of statement, found identifier 'extrabadstuff'
 UPDATE t SET a = 1 extrabadstuff
                    ^
 
@@ -49,7 +49,7 @@ SELECT ALL DISTINCT name FROM customer
 parse-statement
 INSERT public.customer (id, name, active) VALUES (1, 2, 3)
 ----
-error: Expected INTO, found identifier
+error: Expected INTO, found identifier 'public'
 INSERT public.customer (id, name, active) VALUES (1, 2, 3)
        ^
 
@@ -141,7 +141,7 @@ SEL
 
 ECT
 ----
-error: Expected a keyword at the beginning of a statement, found identifier
+error: Expected a keyword at the beginning of a statement, found identifier 'sel'
 SEL
 ^
 
@@ -150,7 +150,7 @@ SELECT foo
 FROM bar+1 ORDER
 BY
 ----
-error: Expected end of statement, found operator
+error: Expected end of statement, found operator '+'
 FROM bar+1 ORDER
         ^
 
@@ -245,6 +245,6 @@ SELECT LIST[1][1:1, ]
 parse-scalar
 ARRAY[]::int[1 + 1]
 ----
-error: Expected right square bracket, found operator
+error: Expected right square bracket, found operator '+'
 ARRAY[]::int[1 + 1]
                ^
