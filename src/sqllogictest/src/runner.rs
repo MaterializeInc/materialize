@@ -212,15 +212,49 @@ impl ops::AddAssign<Outcomes> for Outcomes {
         }
     }
 }
+impl Outcomes {
+    pub fn any_failed(&self) -> bool {
+        self.0[SUCCESS_OUTCOME] < self.0.iter().sum::<usize>()
+    }
 
-impl fmt::Display for Outcomes {
+    pub fn as_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "unsupported": self.0[0],
+            "parse_failure": self.0[1],
+            "plan_failure": self.0[2],
+            "unexpected_plan_success": self.0[3],
+            "wrong_number_of_rows_affected": self.0[4],
+            "wrong_column_count": self.0[5],
+            "wrong_column_names": self.0[6],
+            "output_failure": self.0[7],
+            "bail": self.0[8],
+            "success": self.0[9],
+        })
+    }
+
+    pub fn display(&self, no_fail: bool) -> OutcomesDisplay<'_> {
+        OutcomesDisplay {
+            inner: self,
+            no_fail,
+        }
+    }
+}
+
+pub struct OutcomesDisplay<'a> {
+    inner: &'a Outcomes,
+    no_fail: bool,
+}
+
+impl<'a> fmt::Display for OutcomesDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let total: usize = self.0.iter().sum();
+        let total: usize = self.inner.0.iter().sum();
         write!(
             f,
             "{}:",
-            if self.0[SUCCESS_OUTCOME] == total {
+            if self.inner.0[SUCCESS_OUTCOME] == total {
                 "PASS"
+            } else if self.no_fail {
+                "FAIL-IGNORE"
             } else {
                 "FAIL"
             }
@@ -240,33 +274,12 @@ impl fmt::Display for Outcomes {
                 "total",
             ];
         }
-        for (i, n) in self.0.iter().enumerate() {
+        for (i, n) in self.inner.0.iter().enumerate() {
             if *n > 0 {
                 write!(f, " {}={}", NAMES[i], n)?;
             }
         }
         write!(f, " total={}", total)
-    }
-}
-
-impl Outcomes {
-    pub fn any_failed(&self) -> bool {
-        self.0[SUCCESS_OUTCOME] < self.0.iter().sum::<usize>()
-    }
-
-    pub fn as_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "unsupported": self.0[0],
-            "parse_failure": self.0[1],
-            "plan_failure": self.0[2],
-            "unexpected_plan_success": self.0[3],
-            "wrong_number_of_rows_affected": self.0[4],
-            "wrong_column_count": self.0[5],
-            "wrong_column_names": self.0[6],
-            "output_failure": self.0[7],
-            "bail": self.0[8],
-            "success": self.0[9],
-        })
     }
 }
 
@@ -883,6 +896,7 @@ pub struct RunConfig<'a> {
     pub stderr: &'a dyn WriteFmt,
     pub verbosity: usize,
     pub workers: usize,
+    pub no_fail: bool,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {
