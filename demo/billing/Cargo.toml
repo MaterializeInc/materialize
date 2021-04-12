@@ -17,14 +17,14 @@ hex = "0.4.3"
 log = "0.4.13"
 ore = { path = "../../src/ore" }
 parse_duration = "2.1.1"
-postgres-types = "0.2.0"
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 protobuf = "2.17.0"
 rand = "0.8.3"
 rand_distr = "0.4.0"
 structopt = "0.3.21"
 test-util = { path = "../../test/test-util" }
 tokio = "1.4.0"
-tokio-postgres = "0.7.1"
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [build-dependencies]

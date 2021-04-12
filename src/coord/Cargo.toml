@@ -28,7 +28,7 @@ log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
-postgres-types = "0.2.0"
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
@@ -44,7 +44,7 @@ storage = { path = "../storage" }
 symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.4.0"
-tokio-postgres = "0.7.1"
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-stream = "0.1.5"
 transform = { path = "../transform" }
 unicase = "2.6.0"
