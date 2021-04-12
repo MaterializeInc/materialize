@@ -9,7 +9,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -euo pipefail
+set -euo
 
 curl -H 'Content-Type: application/json' connect:8083/connectors --data '{
   "name": "inventory-connector",
