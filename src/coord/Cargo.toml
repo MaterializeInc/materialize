@@ -44,7 +44,7 @@ storage = { path = "../storage" }
 symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = "1.4.0"
-tokio-postgres = "0.7"
+tokio-postgres = "0.7.1"
 tokio-stream = "0.1.5"
 transform = { path = "../transform" }
 unicase = "2.6.0"

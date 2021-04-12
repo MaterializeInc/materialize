@@ -12,4 +12,4 @@ log = "0.4.13"
 metabase = { path = "../../../src/metabase" }
 ore = { path = "../../../src/ore" }
 tokio = "1.4.0"
-tokio-postgres = "0.7.0"
+tokio-postgres = "0.7.1"

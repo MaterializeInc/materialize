@@ -24,7 +24,7 @@ rand_distr = "0.4.0"
 structopt = "0.3.21"
 test-util = { path = "../../test/test-util" }
 tokio = "1.4.0"
-tokio-postgres = "0.7.0"
+tokio-postgres = "0.7.1"
 uuid = { version = "0.8.2", features = ["v4"] }
 
 [build-dependencies]

@@ -18,5 +18,5 @@ serde_json = "1.0.64"
 structopt = "0.3.21"
 test-util = { path = "../test-util" }
 tokio = "1.4.0"
-tokio-postgres = "0.7.0"
+tokio-postgres = "0.7.1"
 url = "2.2.1"
