@@ -9,7 +9,7 @@ Some key differences from file systems include:
 
 * Latency on individual S3 operations is much higher than on even cloud-network filesystems.
 * It is not possible to seek to a point in an object; Materialize must download the entire object
-  the beginning to read to a point.
+  from the beginning to read to a point.
 * All object operations are atomic. It is not possible to modify just part of an S3 object;
   you can only entirely replace or delete objects.
 
@@ -41,7 +41,7 @@ All strategies follow the same basic pattern.  Materialize will:
   patterns](#patterns).
 * Download the matching objects.
 * Treat each object downloaded as a newline-delimited file for the purposes of record
-  delimitation.
+  delineation.
 
 No guarantees are made about the relative order of records sent from the object discovery process
 and the Materialize SQL engine. As usual with SQL, you must impose your own order.
