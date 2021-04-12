@@ -85,6 +85,29 @@ impl Token {
             Token::Semicolon => "semicolon",
         }
     }
+
+    pub fn value(&self) -> &str {
+        match self {
+            Token::Keyword(kw) => kw.as_str(),
+            Token::Ident(val) => &*val,
+            Token::String(val) => &*val,
+            Token::HexString(val) => &*val,
+            Token::Number(val) => &*val,
+            Token::Parameter(val) => &*val,
+            Token::Op(val) => &*val,
+            Token::Star => "*",
+            Token::Eq => "=",
+            Token::LParen => "(",
+            Token::RParen => ")",
+            Token::LBracket => "[",
+            Token::RBracket => "]",
+            Token::Dot => ".",
+            Token::Comma => ",",
+            Token::Colon => ":",
+            Token::DoubleColon => "::",
+            Token::Semicolon => ";",
+        }
+    }
 }
 
 macro_rules! bail {
