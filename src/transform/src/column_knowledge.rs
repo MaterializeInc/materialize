@@ -164,6 +164,15 @@ impl ColumnKnowledge {
             } => {
                 let mut knowledges = Vec::new();
 
+                // This only aggregates the column types of each input, not the
+                // keys of the inputs. It is unnecessary to aggregate the keys
+                // of the inputs since input keys are unnecessary for reducing
+                // `MirScalarExpr`s.
+                let folded_inputs_typ = inputs.iter().fold(RelationType::empty(), |mut typ, i| {
+                    typ.column_types.append(&mut i.typ().column_types);
+                    typ
+                });
+
                 for input in inputs.iter_mut() {
                     for knowledge in ColumnKnowledge::harvest(input, knowledge)? {
                         knowledges.push(knowledge);
@@ -175,6 +184,7 @@ impl ColumnKnowledge {
 
                     // We can produce composite knowledge for everything in the equivalence class.
                     for expr in equivalence.iter_mut() {
+                        optimize(expr, &folded_inputs_typ, &knowledges);
                         if let MirScalarExpr::Column(c) = expr {
                             knowledge.absorb(&knowledges[*c]);
                         }
