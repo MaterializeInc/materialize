@@ -107,13 +107,13 @@ pgrepr = { path = "../pgrepr" }
 pgtest = { path = "../pgtest" }
 postgres = { version = "0.19.0", features = ["with-chrono-0_4"] }
 postgres-openssl = "0.5.0"
-postgres-protocol = "0.6.0"
+postgres-protocol = "0.6.1"
 postgres_array = "0.11.0"
 predicates = "1.0.7"
 repr = { path = "../repr" }
 reqwest = { version = "0.11.2", features = ["blocking"] }
 serde_json = "1.0.64"
-tokio-postgres = { version = "0.7.0", features = ["with-chrono-0_4"] }
+tokio-postgres = { version = "0.7.1", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
 anyhow = "1.0.40"

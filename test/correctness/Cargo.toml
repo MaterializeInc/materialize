@@ -27,5 +27,5 @@ regex = "1.4.5"
 serde = { version = "1.0.125", features = ["derive"] }
 structopt = "0.3.21"
 tokio = "1.4.0"
-tokio-postgres = "0.7.0"
+tokio-postgres = "0.7.1"
 toml = "0.5.8"
