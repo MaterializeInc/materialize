@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.40"
 env_logger = "0.8.3"
 futures = "0.3.13"
-futures-channel = "0.3.5"
+futures-channel = "0.3.14"
 log = "0.4.13"
 postgres-types = "0.2.0"
 reqwest = { version = "0.11.2", features = ["json"] }
