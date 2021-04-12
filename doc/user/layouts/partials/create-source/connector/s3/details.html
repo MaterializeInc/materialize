@@ -51,10 +51,11 @@ and the Materialize SQL engine. As usual with SQL, you must impose your own orde
 You may specify strategies multiple times within one
 `CREATE SOURCE` statement. For example, this is a legal invocation:
 
-```
-DISCOVER OBJECTS USING BUCKET SCAN 'example',
-BUCKET SCAN 'other', SQS NOTIFICATIONS 'example-notifications'
-```
+```sql
+DISCOVER OBJECTS USING
+    BUCKET SCAN 'example',
+    BUCKET SCAN 'other',
+    SQS NOTIFICATIONS 'example-notifications'
 
 ##### Listening to SQS notifications
 
