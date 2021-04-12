@@ -84,8 +84,9 @@ impl ColumnKnowledge {
             }
             MirRelationExpr::Map { input, scalars } => {
                 let mut input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
+                let input_typ = input.typ();
                 for scalar in scalars.iter_mut() {
-                    let know = optimize(scalar, &input.typ(), &input_knowledge[..]);
+                    let know = optimize(scalar, &input_typ, &input_knowledge[..]);
                     input_knowledge.push(know);
                 }
                 input_knowledge
@@ -97,8 +98,9 @@ impl ColumnKnowledge {
                 demand: _,
             } => {
                 let mut input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
+                let input_typ = input.typ();
                 for expr in exprs {
-                    optimize(expr, &input.typ(), &input_knowledge[..]);
+                    optimize(expr, &input_typ, &input_knowledge[..]);
                 }
                 let func_typ = func.output_type();
                 input_knowledge.extend(func_typ.column_types.iter().map(DatumKnowledge::from));
@@ -106,8 +108,9 @@ impl ColumnKnowledge {
             }
             MirRelationExpr::Filter { input, predicates } => {
                 let mut input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
+                let input_typ = input.typ();
                 for predicate in predicates.iter_mut() {
-                    optimize(predicate, &input.typ(), &input_knowledge[..]);
+                    optimize(predicate, &input_typ, &input_knowledge[..]);
                 }
                 // If any predicate tests a column for equality, truth, or is_null, we learn stuff.
                 for predicate in predicates.iter() {
@@ -160,6 +163,7 @@ impl ColumnKnowledge {
                 ..
             } => {
                 let mut knowledges = Vec::new();
+
                 for input in inputs.iter_mut() {
                     for knowledge in ColumnKnowledge::harvest(input, knowledge)? {
                         knowledges.push(knowledge);
@@ -193,14 +197,14 @@ impl ColumnKnowledge {
                 expected_group_size: _,
             } => {
                 let input_knowledge = ColumnKnowledge::harvest(input, knowledge)?;
+                let input_typ = input.typ();
                 let mut output = group_key
                     .iter_mut()
-                    .map(|k| optimize(k, &input.typ(), &input_knowledge[..]))
+                    .map(|k| optimize(k, &input_typ, &input_knowledge[..]))
                     .collect::<Vec<_>>();
                 for aggregate in aggregates.iter_mut() {
                     use expr::AggregateFunc;
-                    let knowledge =
-                        optimize(&mut aggregate.expr, &input.typ(), &input_knowledge[..]);
+                    let knowledge = optimize(&mut aggregate.expr, &input_typ, &input_knowledge[..]);
                     // This could be improved.
                     let knowledge = match aggregate.func {
                         AggregateFunc::MaxInt32

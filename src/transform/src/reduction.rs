@@ -149,8 +149,9 @@ impl FoldConstants {
                 exprs,
                 demand: _,
             } => {
+                let input_typ = input.typ();
                 for expr in exprs.iter_mut() {
-                    expr.reduce(&input.typ());
+                    expr.reduce(&input_typ);
                 }
 
                 // Guard against evaluating expression that may contain temporal expressions.
@@ -170,8 +171,9 @@ impl FoldConstants {
                 }
             }
             MirRelationExpr::Filter { input, predicates } => {
+                let input_typ = input.typ();
                 for predicate in predicates.iter_mut() {
-                    predicate.reduce(&input.typ());
+                    predicate.reduce(&input_typ);
                 }
                 predicates.retain(|p| !p.is_literal_true());
 
