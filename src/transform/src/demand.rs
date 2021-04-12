@@ -39,7 +39,7 @@ impl crate::Transform for Demand {
     ) -> Result<(), crate::TransformError> {
         self.action(
             relation,
-            (0..relation.typ().column_types.len()).collect(),
+            (0..relation.arity()).collect(),
             &mut HashMap::new(),
         );
         Ok(())
