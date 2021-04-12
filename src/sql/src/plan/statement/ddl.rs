@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
-use aws_arn::{Resource, ARN};
+use aws_arn::ARN;
 use expr::MirRelationExpr;
 use expr::TableFunc;
 use expr::UnaryFunc;
@@ -619,22 +619,19 @@ pub fn plan_create_source(
             let arn: ARN = arn
                 .parse()
                 .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?;
-            let stream_name = match arn.resource {
-                Resource::Path(path) => {
-                    if let Some(path) = path.strip_prefix("stream/") {
-                        path.to_owned()
-                    } else {
-                        bail!("Unable to parse stream name from resource path: {}", path);
-                    }
-                }
-                _ => unsupported!(format!("AWS Resource type: {:#?}", arn.resource)),
+            let stream_name = match arn.resource.strip_prefix("stream/") {
+                Some(path) => path.to_owned(),
+                _ => bail!(
+                    "Unable to parse stream name from resource path: {}",
+                    arn.resource
+                ),
             };
 
             let region = arn
                 .region
                 .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
 
-            let aws_info = normalize::aws_connect_info(&mut with_options, Some(region))?;
+            let aws_info = normalize::aws_connect_info(&mut with_options, Some(region.into()))?;
             let connector = ExternalSourceConnector::Kinesis(KinesisSourceConnector {
                 stream_name,
                 aws_info,
