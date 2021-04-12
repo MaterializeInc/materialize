@@ -982,11 +982,12 @@ class DropKafkaTopicsStep(WorkflowStep):
                     "localhost:9092",
                     "--topic",
                     self._topic_pattern,
-                ]
+                ],
+                capture_output=True,
             )
         except subprocess.CalledProcessError as e:
             # generally this is fine, it just means that the topics already don't exist
-            say(f"INFO: error purging topics: {e}")
+            ui.log_in_automation(f"DEBUG: error purging topics: {e}: {e.output}")
 
 
 @Steps.register("random-chaos")
