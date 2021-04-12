@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::Collection;
+use differential_dataflow::{Collection, Hashable};
 use lazy_static::lazy_static;
 use log::{error, info};
 use prometheus::{
@@ -27,6 +27,7 @@ use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::message::Message;
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{FrontieredInputHandle, InputHandle, OutputHandle};
@@ -569,9 +570,9 @@ where
     };
 
     // We want exactly one worker to send all the data to the sink topic.
-    // This should already have been handled upstream (in render/mod.rs),
-    // so we can use `Pipeline` here.
-    let mut input = builder.new_input(&stream, Pipeline);
+    let hashed_id = id.hashed();
+    let mut input = builder.new_input(&stream, Exchange::new(move |_| hashed_id));
+
     builder.build_reschedule(|_capabilities| {
         move |frontiers| {
             let mut input_handle = FrontieredInputHandle::new(&mut input, &frontiers[0]);
