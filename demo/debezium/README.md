@@ -59,7 +59,7 @@ For example:
 ```sql
 start transaction;
 insert into customers (first_name, last_name, email) values ('Chris', 'Golden', 'chris@materialize.com');
-update products_on_hand set quantity = quantity + 1 where quantity < 20; 
+update products_on_hand set quantity = quantity + 1 where quantity < 20;
 commit;
 ```
 
