@@ -9,10 +9,7 @@
 
 //! An interactive dataflow server.
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::Mutex;
 use std::time::{Instant, UNIX_EPOCH};
 
@@ -35,7 +32,7 @@ use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, MzOffset, PeekResponse,
+    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, PeekResponse,
     SourceConnector, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, MapFilterProject, PartitionId, RowSetFinishing};
@@ -48,6 +45,7 @@ use crate::operator::CollectionExt;
 use crate::render::{self, RenderState};
 use crate::server::metrics::Metrics;
 use crate::source::cache::WorkerCacheData;
+use crate::source::timestamp::{TimestampBindingRc, TimestampDataUpdate};
 
 mod metrics;
 
@@ -224,16 +222,6 @@ pub fn serve(config: Config) -> Result<WorkerGuards<()>, String> {
         },
     )
 }
-
-/// A type wrapper for a timestamp update
-pub enum TimestampDataUpdate {
-    /// RT sources see the current set of partitions known to the source.
-    RealTime(HashSet<PartitionId>),
-    /// BYO sources see a list of (Timestamp, MzOffset) timestamp updates
-    BringYourOwn(HashMap<PartitionId, VecDeque<(Timestamp, MzOffset)>>),
-}
-/// Map of source ID to timestamp data updates (RT or BYO).
-pub type TimestampDataUpdates = Rc<RefCell<HashMap<GlobalId, TimestampDataUpdate>>>;
 
 /// State maintained for each worker thread.
 ///
@@ -416,6 +404,8 @@ where
         while !shutdown {
             // Enable trace compaction.
             self.render_state.traces.maintenance();
+            // Compact timestamp bindings
+            self.compact_timestamp_bindings();
 
             // Ask Timely to execute a unit of work. If Timely decides there's
             // nothing to do, it will park the thread. We rely on another thread
@@ -445,6 +435,25 @@ where
 
     /// Send progress information to the coordinator.
     fn report_frontiers(&mut self) {
+        fn add_progress(
+            id: GlobalId,
+            upper: &Antichain<Timestamp>,
+            lower: &Antichain<Timestamp>,
+            progress: &mut Vec<(GlobalId, ChangeBatch<Timestamp>)>,
+        ) {
+            let mut changes = ChangeBatch::new();
+            for time in lower.elements().iter() {
+                changes.update(time.clone(), -1);
+            }
+            for time in upper.elements().iter() {
+                changes.update(time.clone(), 1);
+            }
+            changes.compact();
+            if !changes.is_empty() {
+                progress.push((id, changes));
+            }
+        }
+
         if let Some(feedback_tx) = &mut self.feedback_tx {
             let mut upper = Antichain::new();
             let mut progress = Vec::new();
@@ -456,18 +465,28 @@ where
                     .get_mut(&id)
                     .expect("Frontier missing!");
                 if lower != &upper {
-                    let mut changes = ChangeBatch::new();
-                    for time in lower.elements().iter() {
-                        changes.update(time.clone(), -1);
-                    }
-                    for time in upper.elements().iter() {
-                        changes.update(time.clone(), 1);
-                    }
-                    changes.compact();
-                    if !changes.is_empty() {
-                        progress.push((*id, changes));
-                    }
+                    add_progress(*id, &upper, &lower, &mut progress);
                     lower.clone_from(&upper);
+                }
+            }
+
+            for (id, source_ts_history) in self.render_state.ts_histories.borrow().iter() {
+                // Only send upper frontier information for BYO sources at the moment.
+                // TODO(rkhaitan): get rid of this distinction.
+                match source_ts_history {
+                    TimestampDataUpdate::RealTime(_) => continue,
+                    TimestampDataUpdate::BringYourOwn(history) => {
+                        // Read the upper frontier and compare to what we've reported.
+                        history.read_upper(&mut upper);
+                        let lower = self
+                            .reported_frontiers
+                            .get_mut(&id)
+                            .expect("Frontier missing!");
+                        if lower != &upper {
+                            add_progress(*id, &upper, &lower, &mut progress);
+                            lower.clone_from(&upper);
+                        }
+                    }
                 }
             }
             if let Some(logger) = self.materialized_logger.as_mut() {
@@ -634,6 +653,16 @@ where
                     self.render_state
                         .traces
                         .allow_compaction(id, frontier.borrow());
+                    if let Some(ts_history) =
+                        self.render_state.ts_histories.borrow_mut().get_mut(&id)
+                    {
+                        match ts_history {
+                            TimestampDataUpdate::BringYourOwn(history) => {
+                                history.set_compaction_frontier(frontier.borrow());
+                            }
+                            _ => (),
+                        }
+                    }
                 }
             }
 
@@ -652,7 +681,7 @@ where
                 self.shutdown_logging();
             }
             SequencedCommand::AddSourceTimestamping { id, connector } => {
-                let byo_default = TimestampDataUpdate::BringYourOwn(HashMap::new());
+                let byo_default = TimestampDataUpdate::BringYourOwn(TimestampBindingRc::new());
 
                 let source_timestamp_data = if let SourceConnector::External {
                     connector,
@@ -727,34 +756,18 @@ where
                 if let Some(data) = source_timestamp_data {
                     let prev = self.render_state.ts_histories.borrow_mut().insert(id, data);
                     assert!(prev.is_none());
+                    self.reported_frontiers.insert(id, Antichain::from_elem(0));
                 }
             }
             SequencedCommand::AdvanceSourceTimestamp { id, update } => {
                 let mut timestamps = self.render_state.ts_histories.borrow_mut();
                 if let Some(ts_entries) = timestamps.get_mut(&id) {
                     match ts_entries {
-                        TimestampDataUpdate::BringYourOwn(entries) => {
+                        TimestampDataUpdate::BringYourOwn(history) => {
                             if let TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) =
                                 update
                             {
-                                let partition_entries =
-                                    entries.entry(pid).or_insert_with(VecDeque::new);
-                                let (last_ts, last_offset) = partition_entries
-                                    .back()
-                                    .unwrap_or(&(0, MzOffset { offset: 0 }));
-                                assert!(
-                                    offset >= *last_offset,
-                                    "offset should not go backwards, but {} < {}",
-                                    offset,
-                                    last_offset
-                                );
-                                assert!(
-                                    timestamp > *last_ts,
-                                    "timestamp should move forwards, but {} <= {}",
-                                    timestamp,
-                                    last_ts
-                                );
-                                partition_entries.push_back((timestamp, offset));
+                                history.add_binding(pid, timestamp, offset);
                             } else {
                                 panic!("Unexpected message type. Expected BYO update.")
                             }
@@ -794,6 +807,8 @@ where
                 if prev.is_none() {
                     log::debug!("Attempted to drop timestamping for source {} not previously mapped to any instances", id);
                 }
+
+                self.reported_frontiers.remove(&id);
             }
         }
     }
@@ -815,6 +830,15 @@ where
                 if let Some(logger) = self.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                 }
+            }
+        }
+    }
+
+    /// Attempt to compact source timestamp bindings
+    fn compact_timestamp_bindings(&self) {
+        for (_, ts_history) in self.render_state.ts_histories.borrow().iter() {
+            if let TimestampDataUpdate::BringYourOwn(history) = ts_history {
+                history.compact();
             }
         }
     }

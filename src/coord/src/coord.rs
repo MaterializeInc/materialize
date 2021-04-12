@@ -157,6 +157,8 @@ pub struct Coordinator {
     symbiosis: Option<symbiosis::Postgres>,
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
+    /// Map of frontier information for sources
+    sources: ArrangementFrontiers<Timestamp>,
     since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
@@ -273,6 +275,9 @@ impl Coordinator {
                     self.update_timestamper(entry.id(), true).await;
                     self.maybe_begin_caching(entry.id(), &source.connector)
                         .await;
+                    let frontiers =
+                        Frontiers::new(self.num_workers(), self.logical_compaction_window_ms);
+                    self.sources.insert(entry.id(), frontiers);
                 }
                 CatalogItem::Index(_) => {
                     if BUILTINS.logs().any(|log| log.index_id == entry.id()) {
@@ -889,6 +894,27 @@ impl Coordinator {
                             index_state.advance_since(&compaction_frontier);
                             self.since_updates
                                 .push((name.clone(), index_state.since.clone()));
+                        }
+                    }
+                }
+            }
+        } else if let Some(source_state) = self.sources.get_mut(name) {
+            let changes: Vec<_> = source_state.upper.update_iter(changes.drain()).collect();
+            if !changes.is_empty() {
+                if let Some(compaction_window_ms) = source_state.compaction_window_ms {
+                    if !source_state.upper.frontier().is_empty() {
+                        let mut compaction_frontier = Antichain::new();
+                        for time in source_state.upper.frontier().iter() {
+                            compaction_frontier.insert(
+                                compaction_window_ms
+                                    * (time.saturating_sub(compaction_window_ms)
+                                        / compaction_window_ms),
+                            );
+                        }
+                        if source_state.since != compaction_frontier {
+                            source_state.advance_since(&compaction_frontier);
+                            self.since_updates
+                                .push((name.clone(), source_state.since.clone()));
                         }
                     }
                 }
@@ -2513,6 +2539,7 @@ impl Coordinator {
                         .send(CacheMessage::DropSource(id))
                         .expect("cache receiver should not drop first");
                 }
+                self.sources.remove(&id);
             }
             self.broadcast(SequencedCommand::DropSources(sources_to_drop));
         }
@@ -2657,12 +2684,14 @@ impl Coordinator {
         // The identity for `join` is the minimum element.
         let mut since = Antichain::from_elem(Timestamp::minimum());
 
-        // TODO: Populate "valid from" information for each source.
-        // For each source, ... do nothing because we don't track `since` for sources.
-        // for (instance_id, _description) in dataflow.source_imports.iter() {
-        //     // TODO: Extract `since` information about each source and apply here. E.g.
-        //     since.join_assign(&self.source_info[instance_id].since);
-        // }
+        // Populate "valid from" information for each source BYO Debezium source.
+        // TODO: extend this to all sources.
+        for (source_id, _description) in dataflow.source_imports.iter() {
+            // Extract `since` information about each source and apply here.
+            if let Some(source_since) = self.sources.since_of(source_id) {
+                since.join_assign(source_since);
+            }
+        }
 
         // For each imported arrangement, lower bound `since` by its own frontier.
         for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
@@ -2873,6 +2902,7 @@ pub async fn serve(
         catalog,
         symbiosis,
         indexes: ArrangementFrontiers::default(),
+        sources: ArrangementFrontiers::default(),
         since_updates: Vec::new(),
         logging_granularity: logging
             .as_ref()
