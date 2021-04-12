@@ -75,7 +75,7 @@ _BASHLIKE_ENV_VAR_PATTERN = re.compile(
 
 
 LINT_CONFLUENT_PLATFORM_VERSION = "5.5.3"
-LINT_DEBEZIUM_VERSION = "1.4"
+LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5"]
 
 
 class LintError:
@@ -122,7 +122,7 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
             )
 
     if repo == "debezium":
-        if "$" not in tag and tag != LINT_DEBEZIUM_VERSION:
+        if "$" not in tag and tag not in LINT_DEBEZIUM_VERSION:
             errors.append(
                 LintError(
                     path,
