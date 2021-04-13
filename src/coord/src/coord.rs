@@ -9,18 +9,24 @@
 
 //! Coordination of installed views, available timestamps, and compacted timestamps.
 //!
-//! The command coordinator maintains a view of the installed views, and for each tracks
-//! the frontier of available times (`upper`) and the frontier of compacted times (`since`).
-//! The upper frontier describes times that may not return immediately, as any timestamps in
-//! advance of the frontier are still open. The since frontier constrains those times for
-//! which the maintained view will be correct, as any timestamps in advance of the frontier
-//! must accumulate to the same value as would an un-compacted trace.
+//! The command coordinator maintains a view of the installed
+//! views, and for each tracks the frontier of available times
+//! ([`upper`](arrangement_state::Frontiers::upper)) and the frontier
+//! of compacted times ([`since`](arrangement_state::Frontiers::since)).
+//! The upper frontier describes times that may not return immediately, as any
+//! timestamps in advance of the frontier are still open. The since frontier
+//! constrains those times for which the maintained view will be correct,
+//! as any timestamps in advance of the frontier must accumulate to the same
+//! value as would an un-compacted trace. The since frontier cannot be directly
+//! mutated, but instead can have multiple handles to it which forward changes
+//! from an internal MutableAntichain to the since.
 
+use std::cell::RefCell;
 use std::cmp;
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
-use std::mem;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -51,6 +57,7 @@ use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr, RowSetFinishing,
 };
+use ore::antichain::AntichainToken;
 use ore::str::StrExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnName, Datum, RelationDesc, Row, Timestamp};
@@ -166,11 +173,13 @@ pub struct Coordinator {
     optimizer: Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
-    /// Maps (global Id of arrangement) -> (frontier information)
+    /// Maps (global Id of arrangement) -> (frontier information). This tracks the
+    /// `upper` and computed `since` of the indexes. The `since` is the time at
+    /// which we are willing to compact up to. `determine_timestamp()` uses this as
+    /// part of its heuristic when determining a viable timestamp for queries.
     indexes: ArrangementFrontiers<Timestamp>,
     /// Map of frontier information for sources
     sources: ArrangementFrontiers<Timestamp>,
-    since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
     /// Instance count: number of times sources have been instantiated in views. This is used
@@ -199,6 +208,12 @@ pub struct Coordinator {
     active_conns: HashMap<u32, ConnMeta>,
     /// Map of all persisted tables.
     persisted_tables: Option<PersistentTables>,
+
+    /// Holds pending compaction messages to be sent to the dataflow workers. When
+    /// `since_handles` are advanced or `txn_reads` are dropped, this can advance.
+    since_updates: Rc<RefCell<HashMap<GlobalId, Antichain<Timestamp>>>>,
+    /// Holds handles to ids that are advanced by update_upper.
+    since_handles: HashMap<GlobalId, AntichainToken<Timestamp>>,
 }
 
 /// Metadata about an active connection.
@@ -264,6 +279,35 @@ impl Coordinator {
         }
     }
 
+    /// Generate a new frontiers object that forwards since changes to since_updates.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if called twice with the same `id`.
+    fn new_frontiers<I>(
+        &mut self,
+        id: GlobalId,
+        initial: I,
+        compaction_window_ms: Option<Timestamp>,
+    ) -> Frontiers<Timestamp>
+    where
+        I: IntoIterator<Item = Timestamp>,
+    {
+        let since_updates = Rc::clone(&self.since_updates);
+        let (frontier, handle) = Frontiers::new(
+            self.num_workers(),
+            initial,
+            compaction_window_ms,
+            move |frontier| {
+                since_updates.borrow_mut().insert(id, frontier);
+            },
+        );
+        let prev = self.since_handles.insert(id, handle);
+        // Ensure we don't double-register ids.
+        assert!(prev.is_none());
+        frontier
+    }
+
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
@@ -288,7 +332,7 @@ impl Coordinator {
                     self.maybe_begin_caching(entry.id(), source.connector.caching_enabled())
                         .await;
                     let frontiers =
-                        Frontiers::new(self.num_workers(), self.logical_compaction_window_ms);
+                        self.new_frontiers(entry.id(), Some(0), self.logical_compaction_window_ms);
                     self.sources.insert(entry.id(), frontiers);
                 }
                 CatalogItem::Index(_) => {
@@ -302,8 +346,8 @@ impl Coordinator {
                         // TODO(benesch): why is this hardcoded to 1000?
                         // Should it not be the same logical compaction window
                         // that everything else uses?
-                        self.indexes
-                            .insert(entry.id(), Frontiers::new(self.num_workers(), Some(1_000)));
+                        let frontiers = self.new_frontiers(entry.id(), Some(0), Some(1_000));
+                        self.indexes.insert(entry.id(), frontiers);
                     } else {
                         let df = self.dataflow_builder().build_index_dataflow(entry.id());
                         self.ship_dataflow(df).await?;
@@ -883,19 +927,17 @@ impl Coordinator {
                     // reduce the volume of the collection, but we don't have that
                     // information here.
                     if !index_state.upper.frontier().is_empty() {
-                        let mut compaction_frontier = Antichain::new();
-                        for time in index_state.upper.frontier().iter() {
-                            compaction_frontier.insert(
+                        // The since_handle for this GlobalId should have already been registered with
+                        // an AntichainToken. Advance it. Changes to the AntichainToken's frontier
+                        // will propagate to the Frontiers' since, and changes to that will propate to
+                        // self.since_updates.
+                        self.since_handles.get_mut(name).unwrap().advance(
+                            index_state.upper.frontier().iter().map(|time| {
                                 compaction_window_ms
                                     * (time.saturating_sub(compaction_window_ms)
-                                        / compaction_window_ms),
-                            );
-                        }
-                        if index_state.since != compaction_frontier {
-                            index_state.advance_since(&compaction_frontier);
-                            self.since_updates
-                                .push((name.clone(), index_state.since.clone()));
-                        }
+                                        / compaction_window_ms)
+                            }),
+                        );
                     }
                 }
             }
@@ -904,19 +946,13 @@ impl Coordinator {
             if !changes.is_empty() {
                 if let Some(compaction_window_ms) = source_state.compaction_window_ms {
                     if !source_state.upper.frontier().is_empty() {
-                        let mut compaction_frontier = Antichain::new();
-                        for time in source_state.upper.frontier().iter() {
-                            compaction_frontier.insert(
+                        self.since_handles.get_mut(name).unwrap().advance(
+                            source_state.upper.frontier().iter().map(|time| {
                                 compaction_window_ms
                                     * (time.saturating_sub(compaction_window_ms)
-                                        / compaction_window_ms),
-                            );
-                        }
-                        if source_state.since != compaction_frontier {
-                            source_state.advance_since(&compaction_frontier);
-                            self.since_updates
-                                .push((name.clone(), source_state.since.clone()));
-                        }
+                                        / compaction_window_ms)
+                            }),
+                        );
                     }
                 }
             }
@@ -932,10 +968,13 @@ impl Coordinator {
         // Don't try to compact to an empty frontier. There may be a good reason to do this
         // in principle, but not in any current Mz use case.
         // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
-        self.since_updates
-            .retain(|(_, frontier)| frontier != &Antichain::new());
-        if !self.since_updates.is_empty() {
-            let since_updates = mem::take(&mut self.since_updates);
+        let since_updates: Vec<_> = self
+            .since_updates
+            .borrow_mut()
+            .drain()
+            .filter(|(_, frontier)| frontier != &Antichain::new())
+            .collect();
+        if !since_updates.is_empty() {
             if let Some(tables) = &mut self.persisted_tables {
                 tables.allow_compaction(&since_updates);
             }
@@ -2792,14 +2831,15 @@ impl Coordinator {
         for (source_id, _description) in dataflow.source_imports.iter() {
             // Extract `since` information about each source and apply here.
             if let Some(source_since) = self.sources.since_of(source_id) {
-                since.join_assign(source_since);
+                since.join_assign(&source_since);
             }
         }
 
         // For each imported arrangement, lower bound `since` by its own frontier.
         for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
             since.join_assign(
-                self.indexes
+                &self
+                    .indexes
                     .since_of(global_id)
                     .expect("global id missing at coordinator"),
             );
@@ -2808,9 +2848,11 @@ impl Coordinator {
         // For each produced arrangement, start tracking the arrangement with
         // a compaction frontier of at least `since`.
         for (global_id, _description, _typ) in dataflow.index_exports.iter() {
-            let mut frontiers =
-                Frontiers::new(self.num_workers(), self.logical_compaction_window_ms);
-            frontiers.advance_since(&since);
+            let frontiers = self.new_frontiers(
+                *global_id,
+                since.elements().to_vec(),
+                self.logical_compaction_window_ms,
+            );
             self.indexes.insert(*global_id, frontiers);
         }
 
@@ -3034,7 +3076,6 @@ pub async fn serve(
             symbiosis,
             indexes: ArrangementFrontiers::default(),
             sources: ArrangementFrontiers::default(),
-            since_updates: Vec::new(),
             logging_granularity: logging
                 .as_ref()
                 .and_then(|c| c.granularity.as_millis().try_into().ok()),
@@ -3051,6 +3092,8 @@ pub async fn serve(
             transient_id_counter: 1,
             active_conns: HashMap::new(),
             persisted_tables,
+            since_handles: HashMap::new(),
+            since_updates: Rc::new(RefCell::new(HashMap::new())),
         };
         coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
         if let Some(config) = &logging {

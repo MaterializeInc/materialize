@@ -9,13 +9,16 @@
 
 //! Frontier state for each arrangement.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use differential_dataflow::lattice::Lattice;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 use timely::progress::Timestamp;
 
 use expr::GlobalId;
+use ore::antichain::AntichainToken;
 
 /// A map from global identifiers to arrangement frontier state.
 pub struct ArrangementFrontiers<T: Timestamp> {
@@ -57,9 +60,10 @@ impl<T: Timestamp> ArrangementFrontiers<T> {
     }
 
     /// The since frontier of a maintained index, if it exists.
-    pub fn since_of(&self, name: &GlobalId) -> Option<&Antichain<T>> {
+    pub fn since_of(&self, name: &GlobalId) -> Option<Antichain<T>> {
         if let Some(index_state) = self.get(name) {
-            Some(&index_state.since)
+            // TODO: &..to_owned needlessly allocs.
+            Some(index_state.since.borrow().frontier().to_owned())
         } else {
             None
         }
@@ -90,7 +94,7 @@ impl<T: Timestamp> ArrangementFrontiers<T> {
         let mut max_since = Antichain::from_elem(T::minimum());
         for id in identifiers {
             // TODO: We could avoid repeated allocation by swapping two buffers.
-            max_since.join_assign(self.since_of(&id).expect("Since missing at coordinator"));
+            max_since.join_assign(&self.since_of(&id).expect("Since missing at coordinator"));
         }
         max_since
     }
@@ -103,7 +107,10 @@ pub struct Frontiers<T: Timestamp> {
     /// The compaction frontier.
     /// All peeks in advance of this frontier will be correct,
     /// but peeks not in advance of this frontier may not be.
-    pub since: Antichain<T>,
+    since: Rc<RefCell<MutableAntichain<T>>>,
+    /// The function to run on since changes.
+    /// Passes the new since frontier.
+    since_action: Rc<RefCell<dyn FnMut(Antichain<T>)>>,
     /// Compaction delay.
     ///
     /// This timestamp drives the advancement of the since frontier as a
@@ -111,31 +118,82 @@ pub struct Frontiers<T: Timestamp> {
     pub compaction_window_ms: Option<T>,
 }
 
-impl<T: Timestamp> Frontiers<T> {
-    /// Creates an empty index state from a number of workers.
-    pub fn new(workers: usize, compaction_window_ms: Option<T>) -> Self {
+impl<T: Timestamp + Copy> Frontiers<T> {
+    /// Creates an empty index state from a number of workers and a function to run
+    /// when the since changes. Returns the initial since handle.
+    pub fn new<I, F>(
+        workers: usize,
+        initial: I,
+        compaction_window_ms: Option<T>,
+        since_action: F,
+    ) -> (Self, AntichainToken<T>)
+    where
+        I: IntoIterator<Item = T>,
+        F: FnMut(Antichain<T>) + 'static,
+    {
         let mut upper = MutableAntichain::new();
+        // Upper must always start at minimum ("0"), even if we initialize since to
+        // something in advance of it.
         upper.update_iter(Some((T::minimum(), workers as i64)));
-        Self {
+        let frontier = Self {
             upper,
-            since: Antichain::from_elem(T::minimum()),
+            since: Rc::new(RefCell::new(MutableAntichain::new())),
             compaction_window_ms,
-        }
+            since_action: Rc::new(RefCell::new(since_action)),
+        };
+        let handle = frontier.since_handle(initial);
+        (frontier, handle)
+    }
+
+    /// Returns a wrapped MutableAntichain that propogates changes to `since`.
+    pub fn since_handle<I>(&self, values: I) -> AntichainToken<T>
+    where
+        I: IntoIterator<Item = T>,
+    {
+        let since = Rc::clone(&self.since);
+        let since_action = self.since_action.clone();
+        AntichainToken::new(values, move |changes| {
+            let changed = since.borrow_mut().update_iter(changes).next().is_some();
+            if changed {
+                (since_action.borrow_mut())(since.borrow().frontier().to_owned());
+            }
+        })
     }
 
     /// Sets the latency behind the collection frontier at which compaction occurs.
     pub fn set_compaction_window_ms(&mut self, window_ms: Option<T>) {
         self.compaction_window_ms = window_ms;
     }
+}
 
-    /// Advances `since` to the least upper bound of itself and `frontier`.
-    ///
-    /// It is important that we only ever advance `since`, as winding it backwards
-    /// does not make the data backing the arrangement any more valid.
-    pub fn advance_since(&mut self, frontier: &Antichain<T>)
-    where
-        T: Lattice,
-    {
-        self.since.join_assign(frontier);
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use timely::progress::frontier::Antichain;
+
+    use super::Frontiers;
+
+    #[test]
+    fn test_frontiers_action() {
+        let expect = Rc::new(RefCell::new(Antichain::from_elem(0)));
+        let inner = Rc::clone(&expect);
+        let (f, initial) = Frontiers::new(1, Some(0), None, move |since| {
+            assert_eq!(*inner.borrow(), since);
+        });
+        // Adding 5 should not change the since.
+        let h1 = f.since_handle(vec![5u64]);
+        assert_eq!(f.since.borrow().frontier().to_owned(), *expect.borrow());
+
+        // When we drop the initial, it should advance to 5.
+        expect.replace(Antichain::from_elem(5));
+        drop(initial);
+        assert_eq!(f.since.borrow().frontier().to_owned(), *expect.borrow());
+
+        // When the last since_handle is dropped, it should be empty.
+        expect.replace(Antichain::new());
+        drop(h1);
+        assert_eq!(f.since.borrow().frontier().to_owned(), *expect.borrow());
     }
 }
