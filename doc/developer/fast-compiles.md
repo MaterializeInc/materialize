@@ -111,10 +111,10 @@ This can be enabled by setting the following option in cargo's `.config`:
   split-debuginfo = "unpacked"
 ```
 
-On my old personal laptop after an initial compile:
+On Ruchir's laptop after an initial compile:
 
 - With default options `touch src/materialized/src/bin/materialized/main.rs;
-  cargo run` (basically just relinking) takes over 2m
+  cargo run` (basically just relinking) takes ~1m15s
 - With this option, it takes ~30s
 
 [split-debuginfo-unpacked]: https://blog.rust-lang.org/2021/03/25/Rust-1.51.0.html#splitting-debug-information
@@ -130,14 +130,15 @@ experimental warning at the top of the page and a number of active known bugs,
 but they seem to indicate that Chromium builds with it.
 
 We'd absolutely use the normal macOS linker (`ld64`) for anything real, but
-initial results for the edit-compile-run cycle seem promising. On my old
-personal laptop after an initial compile:
+initial results for the edit-compile-run cycle seem promising. On Ruchir's
+laptop after an initial compile:
 
 - With the stock linker `touch src/materialized/src/bin/materialized/main.rs;
-  cargo run` (basically just relinking) takes ~30s
-- With the experimental one, the same takes ~10s
-- With the experimental one, `touch src/repr/src/lib.rs; cargo run`
-  (pseudo-representitive edit-compile-run example) takes ~30s
+  cargo run` (basically just relinking) takes ~17s
+- With the experimental one, the same takes ~9s
+- With the stock linker `touch src/repr/src/lib.rs; cargo run`
+  (pseudo-representitive edit-compile-run example) takes ~32s
+- With the experimental one, the same takes  ~24s
 
 I've been using it for my first couple days and haven't seen any issues so far.
 
@@ -150,8 +151,16 @@ curl -s https://raw.githubusercontent.com/chromium/chromium/master/tools/clang/s
 curl -s https://raw.githubusercontent.com/chromium/chromium/master/tools/clang/scripts/update.py | python - --output-dir=/tmp/clang --package=lld_mac
 ```
 
-Then add the dir given in `--output-dir` to your `PATH` and `export
-RUSTFLAGS="-C link-arg=-fuse-ld=lld"` as above.
+Then add the dir you passed to `--output-dir` followed by `/bin` (so
+`/tmp/clang/bin`) to your `PATH` and `export RUSTFLAGS="-C
+link-arg=-fuse-ld=lld"` as above. If anything doesn't work the first time, try a
+`cargo clean`. If you stick with this, you'll want to move clang out of `/tmp`
+so the system doesn't garbage collect it for you (and updated your `PATH`
+accordingly).
+
+*Note:* This seems to depend on having a new enough version of code (11.5+ is
+known to work), which in turn requires Big Sur (maybe Catalina also works?). If
+you do an OS upgrade, you'll definitely need a `cargo clean`.
 
 [macho]: https://github.com/llvm/llvm-project/tree/main/lld/MachO
 [chromium]: https://github.com/chromium/chromium/blob/master/docs/mac_lld.md
