@@ -9,12 +9,14 @@
 
 //! Provides convenience functions for working with upstream Postgres sources from the `sql` package.
 
+use std::fmt;
+
 use anyhow::anyhow;
+use tokio_postgres::types::Type as PgType;
+use tokio_postgres::NoTls;
 
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::impl_display;
-use tokio_postgres::types::Type as PgType;
-use tokio_postgres::NoTls;
 
 /// The schema of a single column
 pub struct PgColumn {
@@ -25,7 +27,7 @@ pub struct PgColumn {
 }
 
 impl AstDisplay for PgColumn {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(&self.name);
         f.write_str(" ");
         f.write_str(&self.scalar_type);

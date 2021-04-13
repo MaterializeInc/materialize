@@ -62,7 +62,7 @@ pub enum Value {
 }
 
 impl AstDisplay for Value {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Value::Number(v) => f.write_str(v),
             Value::String(v) => {
@@ -202,7 +202,7 @@ pub enum DataType<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for DataType<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             DataType::Array(ty) => {
                 f.write_node(&ty);
