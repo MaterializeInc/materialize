@@ -10,7 +10,7 @@
 //! Detects an input being unioned with its negation and cancels them out
 
 use crate::{TransformArgs, TransformError};
-use expr::{MirRelationExpr};
+use expr::MirRelationExpr;
 
 /// Detects an input being unioned with its negation and cancels them out
 #[derive(Debug)]
@@ -45,7 +45,7 @@ impl TableElimination {
 
     fn find_and_replace_relation<'a, I>(relation: &MirRelationExpr, mut it: I) -> bool
     where
-        I : Iterator< Item = &'a mut MirRelationExpr>
+        I: Iterator<Item = &'a mut MirRelationExpr>,
     {
         while let Some(mut other) = it.next() {
             if *relation == *other {
@@ -58,7 +58,7 @@ impl TableElimination {
 
     fn find_and_replace_negated_relation<'a, I>(relation: &MirRelationExpr, mut it: I) -> bool
     where
-        I : Iterator< Item = &'a mut MirRelationExpr>
+        I: Iterator<Item = &'a mut MirRelationExpr>,
     {
         while let Some(mut other) = it.next() {
             if let MirRelationExpr::Negate { input } = &*other {
