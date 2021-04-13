@@ -69,15 +69,15 @@ explain plan for select * from foo, bar where foo.a = abs(bar.a) and foo.a = 3
 %0 =
 | Get materialize.public.foo (u1)
 | Filter (#0 = 3)
-| ArrangeBy (#0)
+| ArrangeBy ()
 
 %1 =
 | Get materialize.public.bar (u3)
 | Filter !(isnull(abs(#0))), (3 = abs(#0))
 
 %2 =
-| Join %0 %1 (= #0 abs(#3))
-| | implementation = Differential %1 %0.(#0)
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 | | demand = (#0..#5)
 
 EOF
