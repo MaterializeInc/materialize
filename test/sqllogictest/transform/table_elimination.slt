@@ -7,8 +7,34 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+mode cockroach
+
 statement ok
 CREATE TABLE t1 (key integer PRIMARY KEY, nokey integer)
+
+statement ok
+INSERT INTO t1 VALUES (1, 1), (2, 3), (4, 5);
+
+statement ok
+CREATE TABLE t2 (key integer PRIMARY KEY, nokey integer)
+
+statement ok
+INSERT INTO t2 VALUES (2, 3), (5, 5);
+
+query T multiline
+EXPLAIN SELECT * FROM t1
+----
+%0 =
+| Get materialize.public.t1 (u1)
+
+EOF
+
+query II
+SELECT * FROM t1
+----
+1 1
+2 3
+4 5
 
 query T multiline
 EXPLAIN SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
@@ -17,3 +43,120 @@ EXPLAIN SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
 | Get materialize.public.t1 (u1)
 
 EOF
+
+query II
+SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
+----
+1 1
+2 3
+4 5
+
+query T multiline
+EXPLAIN SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
+----
+%0 =
+| Constant
+
+EOF
+
+query II
+SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
+----
+
+
+query T multiline
+EXPLAIN SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Threshold
+EOF
+
+query II
+SELECT * FROM t1 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
+----
+1  1
+2  3
+4  5
+
+query T multiline
+EXPLAIN SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
+----
+%0 =
+| Get materialize.public.t1 (u1)
+
+EOF
+
+query II
+SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
+----
+1  1
+2  3
+4  5
+
+query T multiline
+EXPLAIN SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1
+----
+%0 =
+| Get materialize.public.t2 (u3)
+| Threshold
+EOF
+
+query II
+SELECT * FROM t1 UNION ALL SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1
+----
+2 3
+5 5
+
+query T multiline
+EXPLAIN SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
+----
+%0 =
+| Get materialize.public.t2 (u3)
+
+%1 =
+| Get materialize.public.t1 (u1)
+
+%2 =
+| Get materialize.public.t1 (u1)
+| Negate
+
+%3 =
+| Union %0 %1 %2
+| Threshold
+EOF
+
+query II
+SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
+----
+2 3
+5 5
+
+query T multiline
+EXPLAIN SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
+----
+%0 =
+| Get materialize.public.t2 (u3)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Negate
+
+%2 =
+| Union %0 %1
+| Threshold
+%3 =
+| Get materialize.public.t1 (u1)
+
+%4 =
+| Union %2 %3
+
+EOF
+
+query II
+SELECT * FROM t2 EXCEPT ALL SELECT * FROM t1 UNION ALL SELECT * FROM t1
+----
+1  1
+2  3
+4  5
+5  5

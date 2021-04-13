@@ -9,10 +9,8 @@
 
 //! Detects an input being unioned with its negation and cancels them out
 
-use std::collections::HashSet;
-
 use crate::{TransformArgs, TransformError};
-use expr::{Id, MirRelationExpr};
+use expr::{MirRelationExpr};
 
 /// Detects an input being unioned with its negation and cancels them out
 #[derive(Debug)]
@@ -31,62 +29,49 @@ impl crate::Transform for TableElimination {
 impl TableElimination {
     /// Detects an input being unioned with its negation and cancels them out
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
-        let mut collections = HashSet::new();
-        let mut negated_collections = HashSet::new();
         if let MirRelationExpr::Union { base, inputs } = relation {
-            if let Some(collection) = TableElimination::is_collection(base) {
-                collections.insert(collection);
-            } else if let Some(negated_collection) = TableElimination::is_negated_collection(base) {
-                negated_collections.insert(negated_collection);
-            }
-            for input in inputs.iter() {
-                if let Some(collection) = TableElimination::is_collection(input) {
-                    collections.insert(collection);
-                } else if let Some(negated_collection) =
-                    TableElimination::is_negated_collection(input)
-                {
-                    negated_collections.insert(negated_collection);
+            if let MirRelationExpr::Negate { input } = &**base {
+                if TableElimination::find_and_replace_relation(&input, inputs.iter_mut()) {
+                    TableElimination::cancel_relation(&mut *base);
                 }
-            }
-            for collection in collections.intersection(&negated_collections) {
-                TableElimination::replace_if_matches_collection(collection, &mut *base);
-                for input in inputs.iter_mut() {
-                    TableElimination::replace_if_matches_collection(collection, input);
+            } else {
+                if TableElimination::find_and_replace_negated_relation(&*base, inputs.iter_mut()) {
+                    TableElimination::cancel_relation(&mut *base);
                 }
             }
         }
         Ok(())
     }
 
-    fn is_collection(relation: &MirRelationExpr) -> Option<Id> {
-        if let MirRelationExpr::Get { id, .. } = relation {
-            return Some(*id);
-        }
-        None
-    }
-
-    fn is_negated_collection(relation: &MirRelationExpr) -> Option<Id> {
-        if let MirRelationExpr::Negate { input } = relation {
-            return TableElimination::is_collection(&**input);
-        }
-        None
-    }
-
-    fn matches_collection(relation: &MirRelationExpr) -> Option<Id> {
-        if let Some(id) = TableElimination::is_collection(relation) {
-            return Some(id);
-        }
-        if let Some(id) = TableElimination::is_negated_collection(relation) {
-            return Some(id);
-        }
-        None
-    }
-
-    fn replace_if_matches_collection(collection: &Id, relation: &mut MirRelationExpr) {
-        if let Some(id) = TableElimination::matches_collection(relation) {
-            if id == *collection {
-                *relation = MirRelationExpr::constant(vec![], relation.typ());
+    fn find_and_replace_relation<'a, I>(relation: &MirRelationExpr, mut it: I) -> bool
+    where
+        I : Iterator< Item = &'a mut MirRelationExpr>
+    {
+        while let Some(mut other) = it.next() {
+            if *relation == *other {
+                TableElimination::cancel_relation(&mut other);
+                return true;
             }
         }
+        false
+    }
+
+    fn find_and_replace_negated_relation<'a, I>(relation: &MirRelationExpr, mut it: I) -> bool
+    where
+        I : Iterator< Item = &'a mut MirRelationExpr>
+    {
+        while let Some(mut other) = it.next() {
+            if let MirRelationExpr::Negate { input } = &*other {
+                if *relation == **input {
+                    TableElimination::cancel_relation(&mut other);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn cancel_relation(relation: &mut MirRelationExpr) {
+        *relation = MirRelationExpr::constant(vec![], relation.typ());
     }
 }
