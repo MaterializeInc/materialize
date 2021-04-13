@@ -685,4 +685,3 @@ EXPLAIN SELECT * FROM t1, t2 WHERE t1.f1 = 123 AND t1.f1 > t2.f1;
 | | demand = (#0..#3)
 
 EOF
-
