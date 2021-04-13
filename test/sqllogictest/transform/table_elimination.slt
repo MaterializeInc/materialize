@@ -52,6 +52,21 @@ SELECT a1.* FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key)
 4 5
 
 query T multiline
+EXPLAIN SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key) WHERE a1.nokey = 1
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#1 = 1)
+| Project (#0, #1, #0, #1)
+
+EOF
+
+query IIII
+SELECT * FROM t1 AS a1 LEFT JOIN t1 AS a2 ON (a1.key = a2.key) WHERE a1.nokey = 1
+----
+1  1  1  1
+
+query T multiline
 EXPLAIN SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
 %0 =
