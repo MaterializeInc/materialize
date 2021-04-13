@@ -9,7 +9,7 @@
 
 //! See [`DebeziumDeduplicationStrategy`] for what this module is meant to do
 
-use std::cmp::max;
+use std::cmp::{max, Ordering};
 use std::collections::{HashMap, HashSet};
 
 use anyhow::bail;
@@ -265,6 +265,10 @@ impl TrackFull {
     }
 }
 
+fn cmp_by_datum(left: &Row, right: &Row) -> Ordering {
+    left.iter().cmp(right.iter())
+}
+
 impl DebeziumDeduplicationState {
     pub(crate) fn new(
         strat: DebeziumDeduplicationStrategy,
@@ -326,7 +330,7 @@ impl DebeziumDeduplicationState {
             None => None,
             Some(position) => match &mut self.last_position_and_offset {
                 Some((old_position, old_offset)) => {
-                    if position > old_position {
+                    if cmp_by_datum(position, old_position) == Ordering::Greater {
                         *old_position = position.clone();
                         None
                     } else {
