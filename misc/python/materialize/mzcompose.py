@@ -122,12 +122,12 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
             )
 
     if repo == "debezium":
-        if "$" not in tag and tag not in LINT_DEBEZIUM_VERSION:
+        if "$" not in tag and tag not in LINT_DEBEZIUM_VERSIONS:
             errors.append(
                 LintError(
                     path,
                     f"image {spec} depends on wrong version of Debezium "
-                    f"(want {LINT_DEBEZIUM_VERSION})",
+                    f"(want {LINT_DEBEZIUM_VERSIONS})",
                 )
             )
 
