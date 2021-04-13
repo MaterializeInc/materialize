@@ -366,7 +366,7 @@ SET
 parse-statement
 SET a b
 ----
-error: Expected equals sign or TO, found identifier 'b'
+error: Expected equals sign or TO, found identifier "b"
 SET a b
       ^
 
@@ -415,6 +415,6 @@ Discard(DiscardStatement { target: Temp })
 parse-statement
 DISCARD BAD
 ----
-error: Expected one of ALL or PLANS or SEQUENCES or TEMP or TEMPORARY, found identifier 'bad'
+error: Expected one of ALL or PLANS or SEQUENCES or TEMP or TEMPORARY, found identifier "bad"
 DISCARD BAD
         ^
