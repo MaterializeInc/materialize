@@ -76,11 +76,9 @@ pub enum Plan {
     CreateRole {
         name: String,
     },
-    CreateSource {
-        name: FullName,
-        source: Source,
-        if_not_exists: bool,
-        materialized: bool,
+    CreateSource(CreateSourcePlan),
+    CreateSources {
+        sources: Vec<CreateSourcePlan>,
     },
     CreateSink {
         name: FullName,
@@ -204,6 +202,14 @@ pub enum Plan {
     Close {
         name: String,
     },
+}
+
+#[derive(Clone, Debug)]
+pub struct CreateSourcePlan {
+    pub name: FullName,
+    pub source: Source,
+    pub if_not_exists: bool,
+    pub materialized: bool,
 }
 
 #[derive(Clone, Debug)]

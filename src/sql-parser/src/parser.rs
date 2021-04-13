@@ -1672,6 +1672,7 @@ impl<'a> Parser<'a> {
 
         Ok(Statement::CreateSources(CreateSourcesStatement {
             connector,
+            stmts: vec![],
         }))
     }
 

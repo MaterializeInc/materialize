@@ -21,7 +21,7 @@ use tokio::task;
 use tokio::time::Duration;
 
 use repr::strconv;
-use sql_parser::ast::display::AstDisplay;
+use sql_parser::ast::{display::AstDisplay, UnresolvedObjectName};
 use sql_parser::ast::{
     AvroSchema, ColumnDef, ColumnOption, ColumnOptionDef, Connector, CreateSourceStatement,
     CreateSourcesStatement, CsrSeed, DbzMode, Envelope, Format, Ident, MultiConnector, Raw,
@@ -145,17 +145,36 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             }
         }
     }
-    if let Statement::CreateSources(CreateSourcesStatement { connector }) = &mut stmt {
+    if let Statement::CreateSources(CreateSourcesStatement { connector, stmts }) = &mut stmt {
         match connector {
             MultiConnector::Postgres {
                 conn,
+                publication,
                 namespace,
                 tables,
-                ..
             } => {
-                for table in tables {
-                    purify_postgres_table(conn, namespace, &table.name, &mut table.columns).await?
+                let mut create_stmts = Vec::with_capacity(tables.len());
+                for table in tables.into_iter() {
+                    purify_postgres_table(&conn, &namespace, &table.name, &mut table.columns)
+                        .await?;
+                    create_stmts.push(CreateSourceStatement {
+                        name: UnresolvedObjectName(vec![Ident::from(table.name.as_str())]),
+                        col_names: table.columns.iter().map(|c| c.name.clone()).collect(),
+                        connector: Connector::Postgres {
+                            conn: conn.to_owned(),
+                            publication: publication.to_owned(),
+                            namespace: namespace.to_owned(),
+                            table: table.name.to_owned(),
+                            columns: table.columns.clone(),
+                        },
+                        format: None,
+                        with_options: vec![],
+                        envelope: Envelope::None,
+                        if_not_exists: false,
+                        materialized: false,
+                    });
                 }
+                *stmts = create_stmts;
             }
         }
     }

@@ -924,6 +924,7 @@ where
             ExecuteResponse::CreatedSource { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "source")
             }
+            ExecuteResponse::CreatedSources => command_complete!("CREATE SOURCES"),
             ExecuteResponse::CreatedSink { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "sink")
             }

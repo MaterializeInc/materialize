@@ -37,7 +37,7 @@ use sql::catalog::{
 };
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::HirRelationExpr;
-use sql::plan::{Params, Plan, PlanContext};
+use sql::plan::{CreateSourcePlan, Params, Plan, PlanContext};
 use transform::Optimizer;
 use uuid::Uuid;
 
@@ -1734,7 +1734,7 @@ impl Catalog {
                 conn_id: None,
                 depends_on,
             }),
-            Plan::CreateSource { source, .. } => {
+            Plan::CreateSource(CreateSourcePlan { source, .. }) => {
                 let mut optimizer = Optimizer::default();
                 let optimized_expr = optimizer.optimize(source.expr, self.indexes())?;
                 let transformed_desc =
