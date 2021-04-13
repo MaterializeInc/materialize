@@ -57,20 +57,20 @@ Broadly, there are three classes of statements in Materialize:
 
 When Materialize receives a `CREATE SOURCE...` statement, it connects to some
 destination to read data. In the case of streaming sources, it attempts to
-connect to a Kafka stream, which it plumbs into its local instance of
-Differential. You can find more information about how that works in the
+connect to a Kafka stream, which it plugs into its local instance of
+[Differential](https://github.com/frankmcsherry/differential-dataflow). You can find more information about how that works in the
 [Sources](#sources-ingesting-data) section.
 
 ### Reading data
 
-Like any SQL API, you read data from Materialize using `SELECT` statements. When
-the `sql` thread parses some arbitrary `SELECT` statement, it generates a
-plan––plans in Materialize are dataflows, which can be executed by Differential.
-This plan gets passed to the `dataflow` package, which works as the glue between
+As with any SQL API, you read data from Materialize using `SELECT` statements. When
+the `sql` thread parses a `SELECT` statement, it generates a
+plan. Plans in Materialize are dataflows which can be executed by Differential.
+The plan gets passed to the `dataflow` package, which works as the glue between
 Materialize and its internal Differential engine.
 
 Differential then passes this new dataflow to all of its workers, which begin
-processing. Once Differential determines that the computation's complete, the
+processing. Once Differential determines that the computation is complete, the
 results are passed back to the client, and the dataflow is terminated.
 
 Unfortunately, if the user passes the same query to Materialize again, it must
@@ -83,10 +83,10 @@ leads us to the thing you actually want to do with the software: creating views.
 If you know that you are routinely interested in knowing the answer to a
 specific query (_how many widgets were sold in Oklahoma today?_), you can do
 something much smarter than repeatedly ask Materialize to tabulate the answer
-from a blank slate––instead, you can create a view of the query, which
+from a blank slate. Instead, you can create a materialized view of the query, which
 Materialize will persist and continually keep up to date.
 
-When users define views (i.e. `CREATE MATERIALIZED VIEW some_view AS
+When users define views (that is, `CREATE MATERIALIZED VIEW some_view AS
 SELECT...`), the internal `SELECT` statement is parsed––just as it is for ad hoc
 queries––but instead of only executing a single time, the generated dataflow
 persists. Then, as data comes in from Kafka, Differential workers collaborate to
@@ -98,10 +98,10 @@ result from the already-up-to-date view. No substantive processing necessary.
 
 **Reading data vs. creating views**
 
-As a quick summary: the difference between simply reading data and creating a
-view is in terms of how long the generated dataflow persists.
+The difference between simply reading data and creating a
+view is how long the generated dataflow persists.
 
-- In the case of performing an ad hoc `SELECT`, the dataflow only sticks around
+- When you perform an ad hoc `SELECT`, the dataflow only sticks around
   long enough to generate an answer once before being terminated.
 - For views, the dataflows persist indefinitely and are kept up to date. This
   means you can get an answer an indefinite number of times from the generated
@@ -110,14 +110,12 @@ view is in terms of how long the generated dataflow persists.
   read on this data at any given time than it is to create an answer from
   scratch.
 
-The only "wrinkle" in the above explanation is when you perform reads on views:
-no dataflow gets created, and Materialize instead serves the result from an
-existing dataflow.'
+The only wrinkle in the above explanation is that when you perform reads on views, no dataflow gets created, and Materialize instead serves the result from an
+existing dataflow.
 
 ## Sources: Ingesting data
 
-For Materialize to ingest data, it must read it from a source, of which there
-are two varieties:
+For Materialize to ingest data, it must read it from a source, which come in two varieties:
 
 - Streaming sources, like Kakfa
 - File sources, like `.csv` or generic log files
@@ -130,7 +128,7 @@ monitors the stream for data it should ingest.
 As this data streams in, all Differential workers receive updates and determine
 which––if any––of their dataflows should process this new data. This works
 because each Differential worker determines the partitions it's responsible for;
-the isolation this self-election process provides prevents contention. Phrased
+the isolation that this self-election process provides prevents contention. Phrased
 another way, you don't have to worry about two workers both trying to process
 the same piece of data.
 
@@ -141,7 +139,7 @@ themselves](https://timelydataflow.github.io/differential-dataflow/).
 
 Implicit in this design are a few key points:
 
-- State is all in totally volatile memory; if `materialized` dies, so too does
+- State is all in totally volatile memory; if `materialized` dies, so does
   all of the data.
 - Streaming sources must receive all of their data from the stream itself; there
   is no way to "seed" a streaming source with static data. However, you can

@@ -4,14 +4,14 @@ description: "Understand Materialize's architecture."
 menu:
   main:
     parent: 'overview'
-    weight: 3
+    weight: 4
 ---
 
 Materialize is a streaming database with a SQL API. However, despite the fact
 that Materialize uses SQL idioms and can process data from databases, it
-actually has very little in common with "databases" as most users think of them.
+actually has very little in common with "databases" as most people think of them.
 
-In this document, we'll sketch a conceptual framework expressed by Materialize's
+In this document, we'll sketch the conceptual framework expressed by Materialize's
 API components, which might help you develop a mental model of how to work with
 Materialize and how its components differ from traditional databases.
 
@@ -31,12 +31,11 @@ well as details about the structure of that data. A simplistic way to think of
 this is that sources represent streams and their schemas; this isn't entirely
 accurate, but provides an illustrative mental model.
 
-In terms of SQL, sources are similar to a combination of both tables and
+In terms of SQL, sources are similar to a combination of tables and
 clients.
 
-- Like a table, sources are a structured component that users can read from.
-- Like a client, sources are responsible for writing data. There is no `INSERT`
-  statement in Materialize, which is correlated with the fact that external
+- Like tables, sources are structured components that users can read from.
+- Like clients, sources are responsible for writing data. External
   sources provide all of the underlying data to process.
 
 By looking at what comprises a source, we can develop a sense for how this
@@ -44,7 +43,7 @@ combination works.
 
 ### Source components
 
-Sources are composed of the following components:
+Sources consist of the following components:
 
 Component | Use | Example
 ----------|-----|---------
@@ -69,6 +68,7 @@ Materialize can decode incoming bytes of data from several formats:
 - CSV
 - Plain text
 - Raw bytes
+- JSON
 
 #### Envelopes
 
@@ -78,7 +78,7 @@ What Materialize actually does with the data it receives depends on the
 Envelope | Action
 ---------|-------
 **Append-only** | Inserts all received data; does not support updates or deletes.
-**Debezium** | Treats data as wrapped in a "diff envelope" which indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [`CREATE SOURCE`: Avro over Kafka&mdash;Debezium envelope details](/sql/create-source/avro-kafka/#debezium-envelope-details).
+**Debezium** | Treats data as wrapped in a "diff envelope" that indicates whether the record is an insertion, deletion, or update. The Debezium envelope is only supported by sources published to Kafka by [Debezium].<br/><br/>For more information, see [`CREATE SOURCE`: Avro over Kafka&mdash;Debezium envelope details](/sql/create-source/avro-kafka/#debezium-envelope-details).
 **Upsert** | Treats data as having a key and a value. New records with non-null value that have the same key as a preexisting record in the dataflow will replace the preexisting record. New records with null value that have the same key as preexisting record will cause the preexisting record to be deleted. <br/><br/>For more information, see [`CREATE SOURCE`: Avro over Kafka&mdash;Upsert envelope details](/sql/create-source/avro-kafka/#upsert-envelope-details)
 
 ## Views
@@ -120,7 +120,7 @@ You can find more information about how materialized views work in the
 
 ### Non-materialized views
 
-Non-materialized views simply stores a verbatim query, and provides a shorthand
+Non-materialized views simply store a verbatim query and provide a shorthand
 for performing the query.
 
 Unlike materialized views, non-materialized views _do not_ store the results of
@@ -128,32 +128,33 @@ their embedded queries. This means they take up very little memory, but also
 provide very little benefit in terms of reducing the latency and computation
 needed to answer queries.
 
-If you plan on repeatedly reading from a view, we recommend using materialized
-views instead.
+If you plan on repeatedly reading from a view, we recommend using a materialized
+view.
 
 ## Indexes
 
-Indexes are the component that actually "materializes" a view by storing its
-results in memory, though more generally, indexes can simply store any subset of
+An index is the component that actually "materializes" a view by storing its
+results in memory, though, more generally, indexes can simply store any subset of
 a query's data.
 
 Each materialized view contains at least one index, which both lets it maintain
-the result set as new data streams in, as well as provide low-latency reads.
+the result set as new data streams in and provides low-latency reads.
 
-If you were to add an index to a non-materialized view, it would become a
-materialized view, and would start incrementally updating its embedded query's
-results.
+If you add an index to a non-materialized view, it becomes a
+materialized view, and starts incrementally updating  the results of its embedded query.
 
 ### Interaction with materialized views
 
-As we just mentioned, each materialized view has at least one index that
+Each materialized view has at least one index that
 maintains the embedded query's result in memory; these are known as
-"arrangements" within Materialize's dataflows. In the simplest case, it's the
-last operator, and simply stores the query's output in memory. In more complex
-cases, arrangements let Materialize perform more sophisticated aggregations more
-quickly, e.g. `JOIN`s.
+"arrangements" within Materialize's dataflows. <!-- Double-check the next sentence --> In the simplest case, the arrangement is the
+last operator and simply stores the query's output in memory. In more complex
+cases, arrangements let Materialize perform more sophisticated aggregations like `JOINS` more
+quickly.
 
 Creating additional indexes on materialized views lets you store some subset of a query's data in memory using a different structure, which can be useful if you want to perform a join over a view's data using non-primary keys (e.g. foreign keys).
+
+For a deeper dive into arrangments, see [Arrangments](../arrangements/).
 
 ## Sinks
 

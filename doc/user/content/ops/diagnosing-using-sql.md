@@ -1,24 +1,16 @@
 ---
-title: "Diagnosing Using SQL"
-description: "Use the SQL Interface to understand performance defects"
+title: "Troubleshooting"
+description: "Use the SQL Interface to troubleshoot performance issues."
 menu:
   main:
     parent: operations
 ---
 
-## Diagnostic queries that can help understand apparent performance defects.
-
-Sections are meant to be thematically related based on what problems are
-experienced.
-
-The queries may be useful for spot debugging, but it may also be smart
-to create them as views and TAIL them, or as materialized views to read
-them more efficiently (understand that any of these have the potential
-to impact the system itself).
+You can use the queries below for spot debugging, but it may also be helpful to make them more permanent tools by creating them as views for `TAIL`ing or materialized views to read more efficiently. Obviously, the existence of these additional views may itself affect performance.
 
 ### Are my sources loading data in a reasonable fashion?
 
-Count the number of records accepted in a materialized source or view.
+You can count the number of records accepted in a materialized source or view.
 Note that this makes less sense for a non-materialized source or view,
 as invoking it will create a new dataflow and run it to the point that
 it is caught up with its sources; that elapsed time may be informative,
@@ -38,12 +30,10 @@ volume of data, but how closely the contents track source timestamps.
 select * from mz_materialization_frontiers;
 ```
 
-### It seems like things aren't getting done as fast as I would like!
+### Why is Materialize running so slowly?
 
 Materialize spends time in various dataflow operators maintaining
-materialized views. The amount of time may be more than one expects,
-either because Materialize is behaving badly or because expectations
-aren't aligned with reality. These queries reveal which operators
+materialized views. If Materialize is taking more time to update results than you expect, you can identify which operators
 take the largest total amount of time.
 
 ```sql
@@ -69,7 +59,7 @@ group by mdo.id, mdo.name
 order by elapsed_ns desc;
 ```
 
-### Materialize becomes unresponsive for seconds at a time!
+### Why is Materialize unresponsive for seconds at a time?
 
 What causes Materialize to take control away for seconds
 at a time? Materialize operators get scheduled and try to
@@ -103,13 +93,13 @@ group by mdo.id, mdo.name, msh.duration_ns
 order by msh.duration_ns desc;
 ```
 
-### Materialize is using lots of memory! What gives?
+### Why is Materialize is using so much memory?
 
-The majority of Materialize's memory live in "arrangements", which
+The majority of Materialize's memory use is taken up by "arrangements", which
 are differential dataflow structures that maintain indexes for data
-as they change. These queries extract the numbers of records and
+as it changes. These queries extract the numbers of records and
 batches backing each of the arrangements. The reported records may
-exceed the number of logical records, as they reflect un-compacted
+exceed the number of logical records; the report reflects the uncompacted
 state. The number of batches should be logarithmic-ish in this
 number, and anything significantly larger is probably a bug.
 
@@ -137,20 +127,21 @@ order by sum(mas.records) desc;
 ```
 
 We've also bundled a [memory usage visualization tool](https://materialize.com/docs/ops/monitoring/#memory-usage-visualization)
-to aid in debugging. The sql queries above show all arrangements in Materialize
+to aid in debugging. The SQL queries above show all arrangements in Materialize
 (including system arrangements), whereas the memory visualization tool shows
-only user-created arrangements, and it shows them by dataflow. The amount of
+only user-created arrangements, grouped by dataflow. The amount of
 memory used by Materialize should correlate with the number of arrangement
-records that are displayed by either the visual interface or the sql queries.
+records that are displayed by either the visual interface or the SQL queries.
 
-### How can I check whether work is distributed equally across workers?
+### Is work distributed equally across workers?
 
 Work is distributed across workers by the hash of their keys. Thus, work can
 become skewed if situations arise where Materialize needs to use arrangements
 with very few or no keys. Example situations include:
-* views that maintain order by/limit/offset
-* cross joins
-* joins where the join columns have very few unique values.
+
+* Views that maintain order by/limit/offset
+* Cross joins
+* Joins where the join columns have very few unique values
 
 Additionally, the operators that implement data sources may demonstrate skew, as
 they (currently) have a granularity determined by the source itself. For
@@ -189,7 +180,7 @@ where
 order by ratio desc;
 ```
 
-### I found a problematic operator! How do I find where it came from?
+### I found a problematic operator. Where did it come from?
 
 Look up the operator in `mz_dataflow_operator_addresses`. If an operator has
 value `x` in slot `n`, then it is part of the `x` subregion of the region

@@ -15,7 +15,7 @@ issue](https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature
 Materialize stores the majority of its state in memory, and works best when the
 streamed data can be reduced in some way. For example, if you know that only a
 subset of your rows and columns are relevant for your queries, it helps to avoid
-materializing sources or views until you've expressed this to the system.
+materializing sources or views until you've expressed this to the system by manually creating indexes on the relevant columns.
 Materialize can then avoid stashing the full set of rows and columns, which can
 in some cases dramatically reduce Materialize's memory footprint.
 
