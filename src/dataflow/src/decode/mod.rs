@@ -487,7 +487,7 @@ where
                     &enc.value_schema,
                     enc.schema_registry_config,
                     envelope.get_avro_envelope_type(),
-                    fast_forwarded,
+                    fast_forwarded && !matches!(mode, DebeziumMode::Upsert), // `start_offset` should work fine for `DEBEZIUM UPSERT`.
                     debug_name.to_string(),
                     enc.confluent_wire_format,
                 )
