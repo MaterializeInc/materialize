@@ -146,12 +146,20 @@ clang than is available in brew. Instructions for using a pre-built one hosted
 by Chromium.
 
 ```shell
-curl -s https://raw.githubusercontent.com/chromium/chromium/master/tools/clang/scripts/update.py | python - --output-dir=/tmp/clang
-curl -s https://raw.githubusercontent.com/chromium/chromium/master/tools/clang/scripts/update.py | python - --output-dir=/tmp/clang --package=lld_mac
+install_dir="${HOME}/.local/clang"
+curl -s https://raw.githubusercontent.com/chromium/chromium/master/tools/clang/scripts/update.py | python - --output-dir="$install_dir"
+curl -s https://raw.githubusercontent.com/chromium/chromium/master/tools/clang/scripts/update.py | python - --output-dir="$install_dir" --package=lld_mac
 ```
 
-Then add the dir given in `--output-dir` to your `PATH` and `export
-RUSTFLAGS="-C link-arg=-fuse-ld=lld"` as above.
+You can then experiment with lld by running this:
+
+```
+export PATH="${install_dir}/bin:$PATH"
+export RUSTFLAGS="${RUSTFLAGS} -Clink-arg=-fuse-ld=lld"
+```
+
+And if it works for you (which it has been for us) you can make the appropriate
+changes to your shell startup file to make lld permanent.
 
 [macho]: https://github.com/llvm/llvm-project/tree/main/lld/MachO
 [chromium]: https://github.com/chromium/chromium/blob/master/docs/mac_lld.md
