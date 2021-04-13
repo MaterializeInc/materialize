@@ -31,12 +31,12 @@ impl TableElimination {
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
         if let MirRelationExpr::Union { base, inputs } = relation {
             if let MirRelationExpr::Negate { input } = &**base {
-                if TableElimination::find_and_replace_relation(&input, inputs.iter_mut()) {
-                    TableElimination::cancel_relation(&mut *base);
+                if Self::find_and_replace_relation(&input, inputs.iter_mut()) {
+                    Self::cancel_relation(&mut *base);
                 }
             } else {
-                if TableElimination::find_and_replace_negated_relation(&*base, inputs.iter_mut()) {
-                    TableElimination::cancel_relation(&mut *base);
+                if Self::find_and_replace_negated_relation(&*base, inputs.iter_mut()) {
+                    Self::cancel_relation(&mut *base);
                 }
             }
         }
@@ -49,7 +49,7 @@ impl TableElimination {
     {
         while let Some(mut other) = it.next() {
             if *relation == *other {
-                TableElimination::cancel_relation(&mut other);
+                Self::cancel_relation(&mut other);
                 return true;
             }
         }
@@ -63,7 +63,7 @@ impl TableElimination {
         while let Some(mut other) = it.next() {
             if let MirRelationExpr::Negate { input } = &*other {
                 if *relation == **input {
-                    TableElimination::cancel_relation(&mut other);
+                    Self::cancel_relation(&mut other);
                     return true;
                 }
             }
