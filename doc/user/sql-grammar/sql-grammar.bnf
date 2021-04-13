@@ -54,7 +54,7 @@ create_source_avro_kafka ::=
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' format_spec
-  ('ENVELOPE' ('NONE'|'DEBEZIUM'| ('UPSERT' ('FORMAT' format_spec)?)))?
+  ('ENVELOPE' ('NONE'|'DEBEZIUM' ('UPSERT')?| ('UPSERT' ('FORMAT' format_spec)?)))?
 create_source ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?

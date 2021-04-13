@@ -101,6 +101,9 @@ Wrap your release notes at the 80 character mark.
   `SELECT DISTINCT ... ORDER BY <expr>` where `expr` is not a simple column
   reference {{% gh 6021 %}}.
 
+- Support Kafka log compaction on Debezium topics via the [`DEBEZIUM
+  UPSERT`](/sql/create-source/avro-kafka/#debezium-envelope-details) source envelope.
+
 {{% version-header v0.7.1 %}}
 
 - **Breaking change.** Change the default
