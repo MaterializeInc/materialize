@@ -312,6 +312,7 @@ where
                             collection,
                             self.debug_name.to_string(),
                             scope.index(),
+                            // Debezium decoding has produced two extra fields, with the dedupe information and the upstream time in millis
                             src.bare_desc.arity() + 2,
                             dbz_key_indices,
                         )

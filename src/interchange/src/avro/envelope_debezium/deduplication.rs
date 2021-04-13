@@ -125,7 +125,17 @@ impl DebeziumDeduplicationStrategy {
             let should_use = state
                 .as_mut()
                 .map(|d| {
-                    d.should_use_record(None, &debug_name, worker_index, &row, arity - 2, arity - 1)
+                    d.should_use_record(
+                        None,
+                        &debug_name,
+                        worker_index,
+                        &row,
+                        // Debezium decoding always adds two extra rows to the end of the record: one with the deduplication position,
+                        // and one with the upstream time in milliseconds.
+                        // Since these are the last two datums in the row, they are at `arity - 2` and `arity - 1`, respectively.
+                        arity - 2,
+                        arity - 1,
+                    )
                 })
                 .unwrap_or(true);
             if should_use {
@@ -189,7 +199,7 @@ struct TrackFull {
 struct TrackRange {
     /// Start pre-filling the seen data before we start trusting it
     ///
-    /// At some point we need to start trusting the [`TrackFull::seen_offsets`] map more
+    /// At some point we need to start trusting the [`TrackFull::seen_positions`] map more
     /// than we trust the Debezium high water mark. In order to do that, the
     /// `seen_offsets` map must have some data, otherwise all records would show up as
     /// new immediately at the phase transition.

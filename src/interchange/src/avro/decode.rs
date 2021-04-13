@@ -33,6 +33,7 @@ use repr::adt::jsonb::JsonbPacker;
 use repr::adt::rdn;
 use repr::{Datum, Row};
 
+use super::envelope_debezium::DebeziumSourceCoordinates;
 use super::{is_null, AvroDebeziumDecoder, ConfluentAvroResolver, EnvelopeType, RowCoordinates};
 
 /// Manages decoding of Avro-encoded bytes.
@@ -56,6 +57,63 @@ impl fmt::Debug for Decoder {
         f.debug_struct("Decoder")
             .field("csr_avro", &self.csr_avro)
             .finish()
+    }
+}
+
+/// Push `coords` onto `packer`, in a format understood by our downstream Debezium deduplication logic.
+fn push_coords(coords: Option<DebeziumSourceCoordinates>, packer: &mut Row) -> Result<(), ()> {
+    let mut is_unknown = false;
+    match coords {
+        Some(coords) => {
+            if coords.snapshot {
+                packer.push(Datum::Null)
+            } else {
+                let coords = match coords.row {
+                    RowCoordinates::MySql { file_idx, pos, row } => Some((file_idx, pos, row)),
+                    RowCoordinates::Postgres { lsn, total_order } => {
+                        Some((0, lsn, total_order.unwrap_or(0)))
+                    }
+                    RowCoordinates::MSSql {
+                        change_lsn,
+                        event_serial_no,
+                    } => {
+                        // Consider everything but the file ID to be the offset within the file.
+                        let offset_in_file = ((change_lsn.log_block_offset as usize) << 16)
+                            | (change_lsn.slot_num as usize);
+                        Some((
+                            change_lsn.file_seq_num as usize,
+                            offset_in_file,
+                            event_serial_no,
+                        ))
+                    }
+                    RowCoordinates::Unknown => {
+                        is_unknown = true;
+                        None
+                    }
+                };
+                match coords {
+                    Some((file, pos, row)) => {
+                        packer.push_list_with(|packer| {
+                            // downstream in the deduplication logic, we pack these into rows,
+                            // and aren't too careful to avoid cloning them. Thus
+                            // it's important not to go over the 24-byte
+                            packer.push(Datum::Int32(file as i32));
+                            packer.push(Datum::Int64(pos as i64));
+                            packer.push(Datum::Int64(row as i64));
+                        });
+                    }
+                    None => {
+                        packer.push(Datum::Null);
+                    }
+                }
+            }
+        }
+        None => packer.push(Datum::Null),
+    }
+    if is_unknown {
+        Ok(())
+    } else {
+        Err(())
     }
 }
 
@@ -91,6 +149,10 @@ impl Decoder {
     }
 
     /// Decodes Avro-encoded `bytes` into a `Row`.
+    // The `Row` has two possible shapes:
+    // * For Debezium-encoded data it will be:
+    //   `Row(List[before-row], List[after-row], List[offsets]?, upstream_time_millis)`
+    // * For plain avro data it will just be `Row(after-row)`
     pub async fn decode(
         &mut self,
         bytes: &[u8],
@@ -109,57 +171,11 @@ impl Decoder {
                 schema: resolved_schema.top_node(),
             };
             let coords = dsr.deserialize(&mut bytes, dec)?;
-            match coords {
-                Some(coords) => {
-                    if coords.snapshot {
-                        self.packer.push(Datum::Null)
-                    } else {
-                        let coords = match coords.row {
-                            RowCoordinates::MySql { file_idx, pos, row } => {
-                                Some((file_idx, pos, row))
-                            }
-                            RowCoordinates::Postgres { lsn, total_order } => {
-                                Some((0, lsn, total_order.unwrap_or(0)))
-                            }
-                            RowCoordinates::MSSql {
-                                change_lsn,
-                                event_serial_no,
-                            } => {
-                                // Consider everything but the file ID to be the offset within the file.
-                                let offset_in_file = ((change_lsn.log_block_offset as usize) << 16)
-                                    | (change_lsn.slot_num as usize);
-                                Some((
-                                    change_lsn.file_seq_num as usize,
-                                    offset_in_file,
-                                    event_serial_no,
-                                ))
-                            }
-                            RowCoordinates::Unknown => {
-                                if !self.warned_on_unknown {
-                                    self.warned_on_unknown = true;
-                                    log::warn!("Record with unrecognized source coordinates in {}. You might be using an unsupported upstream database.", self.debug_name);
-                                }
-                                None
-                            }
-                        };
-                        match coords {
-                            Some((file, pos, row)) => {
-                                self.packer.push_list_with(|packer| {
-                                    // downstream in the deduplication logic, we pack these into rows,
-                                    // and aren't too careful to avoid cloning them. Thus
-                                    // it's important not to go over the 24-byte
-                                    packer.push(Datum::Int32(file as i32));
-                                    packer.push(Datum::Int64(pos as i64));
-                                    packer.push(Datum::Int64(row as i64));
-                                });
-                            }
-                            None => {
-                                self.packer.push(Datum::Null);
-                            }
-                        }
-                    }
+            if let Err(()) = push_coords(coords, &mut self.packer) {
+                if !self.warned_on_unknown {
+                    self.warned_on_unknown = true;
+                    log::warn!("Record with unrecognized source coordinates in {}. You might be using an unsupported upstream database.", self.debug_name);
                 }
-                None => self.packer.push(Datum::Null),
             }
             let upstream_time_millis = match upstream_time_millis {
                 Some(value) => Datum::Int64(value),
