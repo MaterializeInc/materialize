@@ -65,7 +65,7 @@ steps format=types
 ====
 No change: Join, InlineLet, FoldConstants, Filter, Map, ProjectionExtraction, Project, Join, FoldConstants, Filter, Map, FoldConstants
 ====
-Applied Fixpoint { transforms: [NonNullable, FoldConstants, PredicatePushdown, Join, Filter, Project, Map, Union, ReduceElision, InlineLet, UpdateLet, ProjectionExtraction, ProjectionLifting, LiteralLifting, NonNullRequirements, ColumnKnowledge, ReductionPushdown, RedundantJoin, TopKElision, Demand], limit: 100 }:
+Applied Fixpoint { transforms: [NonNullable, FoldConstants, PredicatePushdown, Join, Filter, Project, Map, Union, ReduceElision, InlineLet, UpdateLet, ProjectionExtraction, ProjectionLifting, LiteralLifting, NonNullRequirements, ColumnKnowledge, ReductionPushdown, RedundantJoin, TopKElision, Demand, TableElimination], limit: 100 }:
 %0 =
 | Get x (u0)
 | | types = (ColumnType { nullable: true, scalar_type: Int32 }, ColumnType { nullable: true, scalar_type: Int64 }, ColumnType { nullable: true, scalar_type: Int32 })
