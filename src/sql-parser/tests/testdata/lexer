@@ -59,7 +59,7 @@ SELECT 'foobarbaz'
 parse-statement roundtrip
 SELECT 'foo'  'bar'
 ----
-error: Expected end of statement, found string literal
+error: Expected end of statement, found string literal 'bar'
 SELECT 'foo'  'bar'
               ^
 
@@ -67,7 +67,7 @@ parse-statement roundtrip
 SELECT e'foo'
 e'bar'
 ----
-error: Expected end of statement, found string literal
+error: Expected end of statement, found string literal 'bar'
 e'bar'
 ^
 
@@ -162,7 +162,7 @@ error: extra token after expression
 parse-statement
 ’hello’
 ----
-error: Expected a keyword at the beginning of a statement, found identifier
+error: Expected a keyword at the beginning of a statement, found identifier '’hello’'
 ’hello’
 ^
 
@@ -170,7 +170,7 @@ error: Expected a keyword at the beginning of a statement, found identifier
 parse-statement
 SELECT '’fancy quotes inside a string are ok’’’’' AS alias ’
 ----
-error: Expected end of statement, found identifier
+error: Expected end of statement, found identifier '’'
 SELECT '’fancy quotes inside a string are ok’’’’' AS alias ’
                                                            ^
 

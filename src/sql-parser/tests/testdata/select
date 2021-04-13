@@ -242,7 +242,7 @@ Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct
 parse-statement
 SELECT (1.a)
 ----
-error: Expected right parenthesis, found identifier
+error: Expected right parenthesis, found identifier 'a'
 SELECT (1.a)
           ^
 
@@ -343,7 +343,7 @@ SELECT $q
 parse-statement
 SELECT $1$2
 ----
-error: Expected end of statement, found parameter
+error: Expected end of statement, found parameter '2'
 SELECT $1$2
          ^
 
@@ -935,7 +935,7 @@ Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct
 parse-statement
 SELECT foo FROM bar FETCH FIRST 50 PERCENT ROWS ONLY
 ----
-error: Expected one of ROW or ROWS, found identifier
+error: Expected one of ROW or ROWS, found identifier 'percent'
 SELECT foo FROM bar FETCH FIRST 50 PERCENT ROWS ONLY
                                    ^
 
@@ -1019,7 +1019,7 @@ Select(SelectStatement { query: Query { ctes: [], body: Select(Select { distinct
 parse-statement
 SELECT * FROM a LEFT JOIN LATERAL (b CROSS JOIN c)
 ----
-error: Expected SELECT, VALUES, or a subquery in the query body, found identifier
+error: Expected SELECT, VALUES, or a subquery in the query body, found identifier 'b'
 SELECT * FROM a LEFT JOIN LATERAL (b CROSS JOIN c)
                                    ^
 

@@ -489,7 +489,7 @@ parse-scalar roundtrip
 parse-scalar
 (1.a)
 ----
-error: Expected right parenthesis, found identifier
+error: Expected right parenthesis, found identifier 'a'
 (1.a)
    ^
 
