@@ -14,6 +14,7 @@ use std::rc::Rc;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
+use log::warn;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
 use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
@@ -24,6 +25,8 @@ use expr::{GlobalId, Id, MirRelationExpr, SourceInstanceId};
 use mz_avro::types::Value;
 use mz_avro::Schema;
 use ore::cast::CastFrom;
+use repr::RelationDesc;
+use repr::ScalarType;
 use repr::{Datum, Row, Timestamp};
 
 use crate::decode::{decode_avro_values, decode_values, get_decoder};
@@ -149,13 +152,13 @@ where
 
                 // AvroOcf is a special case as its delimiters are discovered in the couse of decoding.
                 // This means that unlike the other sources, there is not a decode step that follows.
-                let (mut collection, capability) = if let ExternalSourceConnector::AvroOcf(_) =
-                    connector
+                let (collection, capability) = if let ExternalSourceConnector::AvroOcf(_) =
+                    &connector
                 {
                     let ((source, err_source), capability) =
                         source::create_source::<_, FileSourceReader<Value>, Value>(
                             source_config,
-                            connector,
+                            &connector,
                         );
 
                     // Include any source errors.
@@ -205,22 +208,22 @@ where
                         ExternalSourceConnector::Kafka(_) => {
                             source::create_source::<_, KafkaSourceReader, _>(
                                 source_config,
-                                connector,
+                                &connector,
                             )
                         }
                         ExternalSourceConnector::Kinesis(_) => {
                             source::create_source::<_, KinesisSourceReader, _>(
                                 source_config,
-                                connector,
+                                &connector,
                             )
                         }
                         ExternalSourceConnector::S3(_) => {
-                            source::create_source::<_, S3SourceReader, _>(source_config, connector)
+                            source::create_source::<_, S3SourceReader, _>(source_config, &connector)
                         }
                         ExternalSourceConnector::File(_) => {
                             source::create_source::<_, FileSourceReader<Vec<u8>>, Vec<u8>>(
                                 source_config,
-                                connector,
+                                &connector,
                             )
                         }
                         ExternalSourceConnector::AvroOcf(_) => unreachable!(),
@@ -237,9 +240,8 @@ where
                     );
 
                     let (stream, errors) = if let SourceEnvelope::Upsert(key_encoding) = &envelope {
-                        let value_decoder = get_decoder(encoding, &self.debug_name, scope.index());
-                        let key_decoder =
-                            get_decoder(key_encoding.clone(), &self.debug_name, scope.index());
+                        let value_decoder = get_decoder(encoding, &self.debug_name);
+                        let key_decoder = get_decoder(key_encoding.clone(), &self.debug_name);
                         super::upsert::decode_stream(
                             &ok_source,
                             self.as_of_frontier.clone(),
@@ -259,7 +261,6 @@ where
                             &envelope,
                             &mut linear_operators,
                             fast_forwarded,
-                            src.bare_desc.clone(),
                             uid,
                         );
                         if let Some(tok) = extra_token {
@@ -276,6 +277,47 @@ where
                     }
 
                     (stream, capability)
+                };
+
+                // render debezium dedupe
+                let mut collection = match &envelope {
+                    SourceEnvelope::Debezium(dedupe_strategy, _) => {
+                        let dbz_key_indices = match &src.connector {
+                            SourceConnector::External {
+                                encoding:
+                                    DataEncoding::Avro(AvroEncoding {
+                                        key_schema: Some(key_schema),
+                                        ..
+                                    }),
+                                ..
+                            } => {
+                                let fields = match &src.bare_desc.typ().column_types[0].scalar_type
+                                {
+                                    ScalarType::Record { fields, .. } => fields.clone(),
+                                    _ => unreachable!(),
+                                };
+                                let row_desc = RelationDesc::from_names_and_types(
+                                    fields.into_iter().map(|(n, t)| (Some(n), t)),
+                                );
+                                interchange::avro::validate_key_schema(key_schema, &row_desc)
+                                    .map(Some)
+                                    .unwrap_or_else(|e| {
+                                        warn!("Not using key due to error: {}", e);
+                                        None
+                                    })
+                            }
+                            _ => None,
+                        };
+                        dedupe_strategy.clone().render(
+                            collection,
+                            self.debug_name.to_string(),
+                            scope.index(),
+                            // Debezium decoding has produced two extra fields, with the dedupe information and the upstream time in millis
+                            src.bare_desc.arity() + 2,
+                            dbz_key_indices,
+                        )
+                    }
+                    _ => collection,
                 };
 
                 // Implement source filtering and projection.
@@ -333,7 +375,7 @@ where
                 };
 
                 // Apply `as_of` to each timestamp.
-                match envelope {
+                match &envelope {
                     SourceEnvelope::Upsert(_) => {}
                     _ => {
                         let as_of_frontier1 = self.as_of_frontier.clone();

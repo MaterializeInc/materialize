@@ -29,7 +29,7 @@ pub use self::schema::{
 
 use self::decode::{AvroFlatDecoder, AvroStringDecoder, OptionalRecordDecoder, RowWrapper};
 use self::encode::build_row_schema_json;
-use self::envelope_debezium::{AvroDebeziumDecoder, DebeziumDeduplicationState, RowCoordinates};
+use self::envelope_debezium::{AvroDebeziumDecoder, RowCoordinates};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EnvelopeType {

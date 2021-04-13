@@ -127,17 +127,11 @@ id creature
 -----------
 3  triceratops
 
-# Test that it works with full deduplication
-> CREATE MATERIALIZED SOURCE upsert_full_dedupe
+# Test that it doesn't work with full deduplication
+! CREATE MATERIALIZED SOURCE upsert_full_dedupe
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-dbzupsert-${testdrive.seed}'
   WITH (deduplication = 'full')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM UPSERT
 
-> SELECT creature FROM upsert_full_dedupe
-creature
-----
-dino
-velociraptor
-triceratops
-chicken
+Debezium deduplication does not make sense with upsert sources

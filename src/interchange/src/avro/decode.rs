@@ -9,6 +9,7 @@
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::io::Read;
@@ -32,22 +33,20 @@ use repr::adt::jsonb::JsonbPacker;
 use repr::adt::rdn;
 use repr::{Datum, Row};
 
-use super::{
-    is_null, AvroDebeziumDecoder, ConfluentAvroResolver, DebeziumDeduplicationState,
-    DebeziumDeduplicationStrategy, EnvelopeType, RowCoordinates,
-};
+use super::envelope_debezium::DebeziumSourceCoordinates;
+use super::{is_null, AvroDebeziumDecoder, ConfluentAvroResolver, EnvelopeType, RowCoordinates};
 
 /// Manages decoding of Avro-encoded bytes.
 pub struct Decoder {
     csr_avro: ConfluentAvroResolver,
     envelope: EnvelopeType,
-    debezium_dedup: Option<DebeziumDeduplicationState>,
     debug_name: String,
-    worker_index: usize,
     buf1: Vec<u8>,
     buf2: Vec<u8>,
     packer: Row,
     reject_non_inserts: bool,
+    filenames_to_indices: HashMap<Vec<u8>, usize>,
+    warned_on_unknown: bool,
 }
 
 impl fmt::Debug for Decoder {
@@ -58,6 +57,63 @@ impl fmt::Debug for Decoder {
         f.debug_struct("Decoder")
             .field("csr_avro", &self.csr_avro)
             .finish()
+    }
+}
+
+/// Push `coords` onto `packer`, in a format understood by our downstream Debezium deduplication logic.
+fn push_coords(coords: Option<DebeziumSourceCoordinates>, packer: &mut Row) -> Result<(), ()> {
+    let mut is_unknown = false;
+    match coords {
+        Some(coords) => {
+            if coords.snapshot {
+                packer.push(Datum::Null)
+            } else {
+                let coords = match coords.row {
+                    RowCoordinates::MySql { file_idx, pos, row } => Some((file_idx, pos, row)),
+                    RowCoordinates::Postgres { lsn, total_order } => {
+                        Some((0, lsn, total_order.unwrap_or(0)))
+                    }
+                    RowCoordinates::MSSql {
+                        change_lsn,
+                        event_serial_no,
+                    } => {
+                        // Consider everything but the file ID to be the offset within the file.
+                        let offset_in_file = ((change_lsn.log_block_offset as usize) << 16)
+                            | (change_lsn.slot_num as usize);
+                        Some((
+                            change_lsn.file_seq_num as usize,
+                            offset_in_file,
+                            event_serial_no,
+                        ))
+                    }
+                    RowCoordinates::Unknown => {
+                        is_unknown = true;
+                        None
+                    }
+                };
+                match coords {
+                    Some((file, pos, row)) => {
+                        packer.push_list_with(|packer| {
+                            // downstream in the deduplication logic, we pack these into rows,
+                            // and aren't too careful to avoid cloning them. Thus
+                            // it's important not to go over the 24-byte
+                            packer.push(Datum::Int32(file as i32));
+                            packer.push(Datum::Int64(pos as i64));
+                            packer.push(Datum::Int64(row as i64));
+                        });
+                    }
+                    None => {
+                        packer.push(Datum::Null);
+                    }
+                }
+            }
+        }
+        None => packer.push(Datum::Null),
+    }
+    if is_unknown {
+        Ok(())
+    } else {
+        Err(())
     }
 }
 
@@ -73,53 +129,60 @@ impl Decoder {
         schema_registry: Option<ccsr::ClientConfig>,
         envelope: EnvelopeType,
         debug_name: String,
-        worker_index: usize,
-        debezium_dedup: Option<DebeziumDeduplicationStrategy>,
-        key_indices: Option<Vec<usize>>,
         confluent_wire_format: bool,
         reject_non_inserts: bool,
     ) -> anyhow::Result<Decoder> {
-        assert!(
-            (envelope == EnvelopeType::Debezium && debezium_dedup.is_some())
-                || (envelope != EnvelopeType::Debezium && debezium_dedup.is_none()),
-            "Debezium deduplication strategy must be specified iff envelope type is debezium"
-        );
-        let debezium_dedup =
-            debezium_dedup.and_then(|strat| DebeziumDeduplicationState::new(strat, key_indices));
         let csr_avro =
             ConfluentAvroResolver::new(reader_schema, schema_registry, confluent_wire_format)?;
 
         Ok(Decoder {
             csr_avro,
             envelope,
-            debezium_dedup,
             debug_name,
-            worker_index,
             buf1: vec![],
             buf2: vec![],
             packer: Default::default(),
             reject_non_inserts,
+            filenames_to_indices: Default::default(),
+            warned_on_unknown: false,
         })
     }
 
-    /// Decodes Avro-encoded `bytes` into a `DiffPair`.
+    /// Decodes Avro-encoded `bytes` into a `Row`.
+    // The `Row` has two possible shapes:
+    // * For Debezium-encoded data it will be:
+    //   `Row(List[before-row], List[after-row], List[offsets]?, upstream_time_millis)`
+    // * For plain avro data it will just be `Row(after-row)`
     pub async fn decode(
         &mut self,
         bytes: &[u8],
         coord: Option<i64>,
         upstream_time_millis: Option<i64>,
-    ) -> anyhow::Result<Option<Row>> {
+    ) -> anyhow::Result<Row> {
         let (mut bytes, resolved_schema) = self.csr_avro.resolve(bytes).await?;
         let result = if self.envelope == EnvelopeType::Debezium {
             let dec = AvroDebeziumDecoder {
                 packer: &mut self.packer,
                 buf: &mut self.buf1,
                 file_buf: &mut self.buf2,
+                filenames_to_indices: &mut self.filenames_to_indices,
             };
             let dsr = GeneralDeserializer {
                 schema: resolved_schema.top_node(),
             };
-            let (row, coords) = dsr.deserialize(&mut bytes, dec)?;
+            let coords = dsr.deserialize(&mut bytes, dec)?;
+            if let Err(()) = push_coords(coords, &mut self.packer) {
+                if !self.warned_on_unknown {
+                    self.warned_on_unknown = true;
+                    log::warn!("Record with unrecognized source coordinates in {}. You might be using an unsupported upstream database.", self.debug_name);
+                }
+            }
+            let upstream_time_millis = match upstream_time_millis {
+                Some(value) => Datum::Int64(value),
+                None => Datum::Null,
+            };
+            self.packer.push(upstream_time_millis);
+            let row = self.packer.finish_and_reuse();
             if self.reject_non_inserts {
                 if !matches!(row.iter().next(), None | Some(Datum::Null)) {
                     panic!(
@@ -129,46 +192,8 @@ impl Decoder {
                     )
                 }
             }
-            let dedupe = self.debezium_dedup.as_mut();
-            let should_use = if let Some(source) = coords {
-                let mssql_fsn_buf;
-                // This would have ideally been `Option<&[u8]>`,
-                // but that can't be used to lookup in a `HashMap` of `Option<Vec<u8>>` without cloning.
-                // So, just use `""` to represent lack of a filename.
-                let file = match source.row {
-                    RowCoordinates::MySql { .. } => &self.buf2,
-                    RowCoordinates::MSSql { change_lsn, .. } => {
-                        mssql_fsn_buf = change_lsn.file_seq_num.to_ne_bytes();
-                        &mssql_fsn_buf[..]
-                    }
-                    RowCoordinates::Postgres { .. } => &b""[..],
-                    RowCoordinates::Unknown { .. } => &b""[..],
-                };
 
-                let debug_name = &self.debug_name;
-                let worker_index = self.worker_index;
-                dedupe
-                    .map(|d| {
-                        d.should_use_record(
-                            file,
-                            source.row,
-                            coord,
-                            upstream_time_millis,
-                            debug_name,
-                            worker_index,
-                            source.snapshot,
-                            &row,
-                        )
-                    })
-                    .unwrap_or(true)
-            } else {
-                true
-            };
-            if should_use {
-                Some(row)
-            } else {
-                None
-            }
+            row
         } else {
             let dec = AvroFlatDecoder {
                 packer: &mut self.packer,
@@ -179,7 +204,7 @@ impl Decoder {
                 schema: resolved_schema.top_node(),
             };
             dsr.deserialize(&mut bytes, dec)?;
-            Some(self.packer.finish_and_reuse())
+            self.packer.finish_and_reuse()
         };
         log::trace!(
             "[customer-data] Decoded row {:?}{} in {}",

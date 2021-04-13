@@ -1224,7 +1224,7 @@ where
 /// type of source that should be created
 pub(crate) fn create_source<G, S: 'static, Out>(
     config: SourceConfig<G>,
-    source_connector: ExternalSourceConnector,
+    source_connector: &ExternalSourceConnector,
 ) -> (
     (
         timely::dataflow::Stream<G, SourceOutput<Vec<u8>, Out>>,
@@ -1298,7 +1298,7 @@ where
             }
         };
 
-        let cached_files = dataflow_types::cached_files(&source_connector);
+        let cached_files = dataflow_types::cached_files(source_connector);
         let mut cached_files = crate::source::cache::cached_files_for_worker(
             id.source_id,
             cached_files,

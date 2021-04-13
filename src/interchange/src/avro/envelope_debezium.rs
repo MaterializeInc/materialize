@@ -14,7 +14,8 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
+use anyhow::bail;
 use smallvec::SmallVec;
 
 use mz_avro::error::{DecodeError, Error as AvroError};
@@ -32,18 +33,20 @@ use crate::avro::{AvroFlatDecoder, AvroStringDecoder, OptionalRecordDecoder};
 
 mod deduplication;
 
-pub(super) use deduplication::DebeziumDeduplicationState;
 pub use deduplication::DebeziumDeduplicationStrategy;
+
+use self::deduplication::DebeziumDeduplicationState;
 
 #[derive(Debug)]
 pub struct AvroDebeziumDecoder<'a> {
     pub packer: &'a mut Row,
     pub buf: &'a mut Vec<u8>,
     pub file_buf: &'a mut Vec<u8>,
+    pub filenames_to_indices: &'a mut HashMap<Vec<u8>, usize>,
 }
 
 impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
-    type Out = (Row, Option<DebeziumSourceCoordinates>);
+    type Out = Option<DebeziumSourceCoordinates>;
     fn record<R: AvroRead, A: AvroRecordAccess<R>>(
         self,
         a: &mut A,
@@ -75,6 +78,7 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
                 "source" => {
                     let d = DebeziumSourceDecoder {
                         file_buf: self.file_buf,
+                        filenames_to_indices: self.filenames_to_indices,
                     };
                     coords = Some(field.decode_field(d)?);
                 }
@@ -96,7 +100,7 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
                 *total_order = Some(transaction.total_order);
             }
         }
-        Ok((self.packer.finish_and_reuse(), coords))
+        Ok(coords)
     }
     define_unexpected! {
         union_branch, array, map, enum_variant, scalar, decimal, numeric, bytes, string, json, uuid, fixed
@@ -107,13 +111,14 @@ impl<'a> AvroDecode for AvroDebeziumDecoder<'a> {
 #[derive(Debug, Copy, Clone)]
 pub(crate) struct MSSqlLsn {
     pub(crate) file_seq_num: u32,
-    log_block_offset: u32,
-    slot_num: u16,
+    pub(crate) log_block_offset: u32,
+    pub(crate) slot_num: u16,
 }
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum RowCoordinates {
     MySql {
+        file_idx: usize,
         pos: usize,
         row: usize,
     },
@@ -128,7 +133,7 @@ pub(crate) enum RowCoordinates {
     Unknown,
 }
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct DebeziumSourceCoordinates {
     pub(super) snapshot: bool,
     pub(super) row: RowCoordinates,
@@ -142,6 +147,7 @@ pub struct DebeziumTransactionMetadata {
 
 struct DebeziumSourceDecoder<'a> {
     file_buf: &'a mut Vec<u8>,
+    filenames_to_indices: &'a mut HashMap<Vec<u8>, usize>,
 }
 
 struct DebeziumTransactionDecoder;
@@ -289,7 +295,7 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
         let mut change_lsn = None;
         let mut event_serial_no = None;
 
-        let mut has_file = false;
+        let mut file_idx = None;
         while let Some((name, _, field)) = a.next_field()? {
             match name {
                 "snapshot" => {
@@ -320,7 +326,15 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                 "file" => {
                     let d = AvroStringDecoder::with_buf(self.file_buf);
                     field.decode_field(d)?;
-                    has_file = true;
+                    file_idx = Some(match self.filenames_to_indices.get(self.file_buf) {
+                        Some(idx) => *idx,
+                        None => {
+                            let n_files = self.filenames_to_indices.len();
+                            self.filenames_to_indices
+                                .insert(std::mem::take(self.file_buf), n_files);
+                            n_files
+                        }
+                    });
                 }
                 // Postgres
                 "lsn" => {
@@ -385,7 +399,7 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
                 }
             }
         }
-        let mysql_any = pos.is_some() || row.is_some() || has_file;
+        let mysql_any = pos.is_some() || row.is_some() || file_idx.is_some();
         let pg_any = lsn.is_some();
         let mssql_any = change_lsn.is_some() || event_serial_no.is_some();
         if (mysql_any as usize) + (pg_any as usize) + (mssql_any as usize) > 1 {
@@ -395,10 +409,10 @@ impl<'a> AvroDecode for DebeziumSourceDecoder<'a> {
         let row = if mysql_any {
             let pos = pos.ok_or_else(|| DecodeError::Custom("no pos".to_string()))? as usize;
             let row = row.ok_or_else(|| DecodeError::Custom("no row".to_string()))? as usize;
-            if !has_file {
-                return Err(DecodeError::Custom("no file".to_string()).into());
-            }
-            RowCoordinates::MySql { pos, row }
+            let file_idx = file_idx
+                .ok_or_else(|| DecodeError::Custom("no binlog filename".to_string()))?
+                as usize;
+            RowCoordinates::MySql { file_idx, pos, row }
         } else if pg_any {
             let lsn = lsn.ok_or_else(|| DecodeError::Custom("no lsn".to_string()))? as usize;
             RowCoordinates::Postgres {
@@ -485,6 +499,9 @@ pub struct DebeziumDecodeState {
     debug_name: String,
     /// Worker we are running on (used for printing debug information)
     worker_idx: usize,
+    /// Map of binlog filenames to a unique index. Used to avoid having to write the full filename
+    /// in the output row.
+    filenames_to_indices: HashMap<Vec<u8>, usize>,
 }
 
 fn field_indices(node: SchemaNode) -> Option<HashMap<String, usize>> {
@@ -545,13 +562,13 @@ impl DebeziumDecodeState {
             binlog_schema_indices,
             debug_name,
             worker_idx,
+            filenames_to_indices: Default::default(),
         })
     }
 
     pub fn extract(
         &mut self,
         v: Value,
-        coord: Option<i64>,
         upstream_time_millis: Option<i64>,
     ) -> anyhow::Result<Option<Row>> {
         fn is_snapshot(v: Value) -> anyhow::Result<Option<bool>> {
@@ -570,7 +587,7 @@ impl DebeziumDecodeState {
 
         match v {
             Value::Record(mut fields) => {
-                if let Some(schema_indices) = self.binlog_schema_indices {
+                let dedup_val = if let Some(schema_indices) = self.binlog_schema_indices {
                     let source_val =
                         take_field_by_index(schema_indices.source_idx, "source", &mut fields)?;
                     let mut source_fields = match source_val {
@@ -591,6 +608,11 @@ impl DebeziumDecodeState {
                         )?
                         .into_string()
                         .ok_or_else(|| anyhow!("\"file\" is not a string"))?;
+                        let n_fnames = self.filenames_to_indices.len();
+                        let file_idx = *self
+                            .filenames_to_indices
+                            .entry(file_val.into_bytes())
+                            .or_insert(n_fnames);
                         let pos_val = take_field_by_index(
                             schema_indices.source_pos_idx,
                             "pos",
@@ -607,29 +629,13 @@ impl DebeziumDecodeState {
                         .ok_or_else(|| anyhow!("\"row\" is not an integer"))?;
                         let pos = usize::try_from(pos_val)?;
                         let row = usize::try_from(row_val)?;
-                        let debug_name = &self.debug_name;
-                        let worker_idx = self.worker_idx;
-                        if !self
-                            .dedup
-                            .as_mut()
-                            .map(|d| {
-                                d.should_use_record(
-                                    file_val.as_bytes(),
-                                    RowCoordinates::MySql { pos, row },
-                                    coord,
-                                    upstream_time_millis,
-                                    debug_name,
-                                    worker_idx,
-                                    false,
-                                    &Row::default(),
-                                )
-                            })
-                            .unwrap_or(true)
-                        {
-                            return Ok(None);
-                        }
+                        Some((file_idx, pos, row))
+                    } else {
+                        None
                     }
-                }
+                } else {
+                    None
+                };
                 let before_idx = fields.iter().position(|(name, _value)| "before" == name);
                 let after_idx = fields.iter().position(|(name, _value)| "after" == name);
                 if let (Some(before_idx), Some(after_idx)) = (before_idx, after_idx) {
@@ -653,6 +659,19 @@ impl DebeziumDecodeState {
                         },
                         after,
                     )?;
+                    if let Some((file_idx, pos, row)) = dedup_val {
+                        packer.push_list_with(|packer| {
+                            packer.push(Datum::Int32(file_idx as i32));
+                            packer.push(Datum::Int64(pos as i64));
+                            packer.push(Datum::Int64(row as i64));
+                        });
+                    } else {
+                        packer.push(Datum::Null);
+                    }
+                    packer.push(match upstream_time_millis {
+                        Some(millis) => Datum::Int64(millis),
+                        None => Datum::Null,
+                    });
                     Ok(Some(packer))
                 } else {
                     bail!("avro envelope does not contain `before` and `after`");
