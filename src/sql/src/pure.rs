@@ -31,7 +31,6 @@ use sql_parser::parser::parse_columns;
 
 use crate::kafka_util;
 use crate::normalize;
-use crate::postgres_util;
 
 /// Purifies a statement, removing any dependencies on external state.
 ///

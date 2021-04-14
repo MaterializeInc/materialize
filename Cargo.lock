@@ -2994,6 +2994,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "postgres-util"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "sql-parser",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "postgres_array"
 version = "0.11.0"
 source = "git+https://github.com/MaterializeInc/rust-postgres-array#cbf48cd674ded4b6e7648fab253807c055c8ec10"
@@ -4096,6 +4106,7 @@ dependencies = [
  "parse_duration",
  "pgrepr",
  "postgres-types",
+ "postgres-util",
  "rdkafka",
  "regex",
  "repr",

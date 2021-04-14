@@ -82,8 +82,6 @@ macro_rules! unsupported {
     };
 }
 
-mod postgres_util;
-
 pub mod ast;
 pub mod catalog;
 pub mod func;

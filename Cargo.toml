@@ -24,6 +24,7 @@ members = [
     "src/pgrepr",
     "src/pgtest",
     "src/pgwire",
+    "src/postgres-util",
     "src/prof",
     "src/protoc",
     "src/repr",
