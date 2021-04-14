@@ -25,7 +25,7 @@ use timely::logging::{ParkEvent, TimelyEvent, WorkerIdentifier};
 use super::{LogVariant, TimelyLog};
 use crate::arrangement::KeysValsHandle;
 use dataflow_types::logging::LoggingConfig;
-use repr::{Datum, Row, Timestamp};
+use repr::{datum_list_size, datum_size, Datum, Row, Timestamp};
 
 /// Constructs the logging dataflows and returns a logger and trace handles.
 pub fn construct<A: Allocate>(
@@ -103,18 +103,9 @@ pub fn construct<A: Allocate>(
                                     1,
                                 ));
 
-                                for (addr_slot, addr_value) in event.addr.iter().enumerate() {
-                                    addresses_session.give((
-                                        Row::pack_slice(&[
-                                            Datum::Int64(event.id as i64),
-                                            Datum::Int64(worker as i64),
-                                            Datum::Int64(addr_slot as i64),
-                                            Datum::Int64(*addr_value as i64),
-                                        ]),
-                                        time_ms,
-                                        1,
-                                    ));
-                                }
+                                let address_row =
+                                    create_address_row(event.id as i64, worker as i64, &event.addr);
+                                addresses_session.give((address_row, time_ms, 1));
                             }
                             TimelyEvent::Channels(event) => {
                                 // Record channel information so that we can replay a negated
@@ -137,19 +128,12 @@ pub fn construct<A: Allocate>(
                                     1,
                                 ));
 
-                                // Enumerate the address of the scope containing the channel.
-                                for (addr_slot, addr_value) in event.scope_addr.iter().enumerate() {
-                                    addresses_session.give((
-                                        Row::pack_slice(&[
-                                            Datum::Int64(event.id as i64),
-                                            Datum::Int64(worker as i64),
-                                            Datum::Int64(addr_slot as i64),
-                                            Datum::Int64(*addr_value as i64),
-                                        ]),
-                                        time_ms,
-                                        1,
-                                    ));
-                                }
+                                let address_row = create_address_row(
+                                    event.id as i64,
+                                    worker as i64,
+                                    &event.scope_addr,
+                                );
+                                addresses_session.give((address_row, time_ms, 1));
                             }
                             TimelyEvent::Shutdown(event) => {
                                 // Dropped operators should result in a negative record for
@@ -162,18 +146,13 @@ pub fn construct<A: Allocate>(
                                         -1,
                                     ));
 
-                                    for (addr_slot, addr_value) in event.addr.iter().enumerate() {
-                                        addresses_session.give((
-                                            Row::pack_slice(&[
-                                                Datum::Int64(event.id as i64),
-                                                Datum::Int64(worker as i64),
-                                                Datum::Int64(addr_slot as i64),
-                                                Datum::Int64(*addr_value as i64),
-                                            ]),
-                                            time_ms,
-                                            -1,
-                                        ));
-                                    }
+                                    let address_row = create_address_row(
+                                        event.id as i64,
+                                        worker as i64,
+                                        &event.addr,
+                                    );
+                                    addresses_session.give((address_row, time_ms, -1));
+
                                     // If we are observing a dataflow shutdown, we should also
                                     // issue a deletion for channels in the dataflow.
                                     if event.addr.len() == 1 {
@@ -195,21 +174,12 @@ pub fn construct<A: Allocate>(
                                                     -1,
                                                 ));
 
-                                                // Enumerate the address of the scope containing the channel.
-                                                for (addr_slot, addr_value) in
-                                                    event.scope_addr.iter().enumerate()
-                                                {
-                                                    addresses_session.give((
-                                                        Row::pack_slice(&[
-                                                            Datum::Int64(event.id as i64),
-                                                            Datum::Int64(worker as i64),
-                                                            Datum::Int64(addr_slot as i64),
-                                                            Datum::Int64(*addr_value as i64),
-                                                        ]),
-                                                        time_ms,
-                                                        -1,
-                                                    ));
-                                                }
+                                                let address_row = create_address_row(
+                                                    event.id as i64,
+                                                    worker as i64,
+                                                    &event.scope_addr,
+                                                );
+                                                addresses_session.give((address_row, time_ms, -1));
                                             }
                                         }
                                     }
@@ -475,6 +445,25 @@ pub fn construct<A: Allocate>(
     });
 
     traces
+}
+
+fn create_address_row(id: i64, worker: i64, address: &[usize]) -> Row {
+    let id_datum = Datum::Int64(id);
+    let worker_datum = Datum::Int64(worker);
+    // we're collecting into a Vec because we need to iterate over the Datums
+    // twice: once for determining the size of the row, then again for pushing
+    // them
+    let address_datums: Vec<_> = address.iter().map(|i| Datum::Int64(*i as i64)).collect();
+
+    let row_capacity =
+        datum_size(&id_datum) + datum_size(&worker_datum) + datum_list_size(&address_datums);
+
+    let mut address_row = Row::with_capacity(row_capacity);
+    address_row.push(id_datum);
+    address_row.push(worker_datum);
+    address_row.push_list(address_datums);
+
+    address_row
 }
 
 /// Discard all of the records in `c` that `logic` doesn't care about (return).

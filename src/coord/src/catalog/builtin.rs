@@ -855,10 +855,11 @@ pub const MZ_ADDRESSES_WITH_UNIT_LENGTHS: BuiltinView = BuiltinView {
     mz_dataflow_operator_addresses.worker
 FROM
     mz_catalog.mz_dataflow_operator_addresses
+WHERE
+    mz_catalog.list_length(mz_dataflow_operator_addresses.address) = 1
 GROUP BY
     mz_dataflow_operator_addresses.id,
-    mz_dataflow_operator_addresses.worker
-HAVING pg_catalog.count(*) = 1",
+    mz_dataflow_operator_addresses.worker",
     id: GlobalId::System(5003),
     needs_logs: true,
 };
@@ -869,7 +870,7 @@ pub const MZ_DATAFLOW_NAMES: BuiltinView = BuiltinView {
     sql: "CREATE VIEW mz_dataflow_names AS SELECT
     mz_dataflow_operator_addresses.id,
     mz_dataflow_operator_addresses.worker,
-    mz_dataflow_operator_addresses.value as local_id,
+    mz_dataflow_operator_addresses.address[1] as local_id,
     mz_dataflow_operators.name
 FROM
     mz_catalog.mz_dataflow_operator_addresses,
@@ -879,8 +880,7 @@ WHERE
     mz_dataflow_operator_addresses.id = mz_dataflow_operators.id AND
     mz_dataflow_operator_addresses.worker = mz_dataflow_operators.worker AND
     mz_dataflow_operator_addresses.id = mz_addresses_with_unit_length.id AND
-    mz_dataflow_operator_addresses.worker = mz_addresses_with_unit_length.worker AND
-    mz_dataflow_operator_addresses.slot = 0",
+    mz_dataflow_operator_addresses.worker = mz_addresses_with_unit_length.worker",
     id: GlobalId::System(5004),
     needs_logs: true,
 };
@@ -901,8 +901,7 @@ FROM
 WHERE
     mz_dataflow_operators.id = mz_dataflow_operator_addresses.id AND
     mz_dataflow_operators.worker = mz_dataflow_operator_addresses.worker AND
-    mz_dataflow_operator_addresses.slot = 0 AND
-    mz_dataflow_names.local_id = mz_dataflow_operator_addresses.value AND
+    mz_dataflow_names.local_id = mz_dataflow_operator_addresses.address[1] AND
     mz_dataflow_names.worker = mz_dataflow_operator_addresses.worker",
     id: GlobalId::System(5005),
     needs_logs: true,

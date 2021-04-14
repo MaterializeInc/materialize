@@ -108,9 +108,15 @@ impl LogVariant {
             LogVariant::Timely(TimelyLog::Addresses) => RelationDesc::empty()
                 .with_column("id", ScalarType::Int64.nullable(false))
                 .with_column("worker", ScalarType::Int64.nullable(false))
-                .with_column("slot", ScalarType::Int64.nullable(false))
-                .with_column("value", ScalarType::Int64.nullable(false))
-                .with_key(vec![0, 1, 2]),
+                .with_column(
+                    "address",
+                    ScalarType::List {
+                        element_type: Box::new(ScalarType::Int64),
+                        custom_oid: None,
+                    }
+                    .nullable(false),
+                )
+                .with_key(vec![0, 1]),
 
             LogVariant::Timely(TimelyLog::Parks) => RelationDesc::empty()
                 .with_column("worker", ScalarType::Int64.nullable(false))

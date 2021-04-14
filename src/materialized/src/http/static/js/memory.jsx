@@ -166,7 +166,7 @@ function View(props) {
       // caused by multiple workers.
       const addr_table = await query(`
         SELECT DISTINCT
-          id, slot, value
+          id, address
         FROM
           mz_catalog.mz_dataflow_operator_addresses
         WHERE
@@ -177,11 +177,10 @@ function View(props) {
               FROM
                 mz_catalog.mz_dataflow_operator_addresses
               WHERE
-                slot = 0
-                AND value
+                address[1]
                   = (
-                      SELECT
-                        value
+                      SELECT DISTINCT
+                        address[1]
                       FROM
                         mz_catalog.mz_dataflow_operator_addresses
                       WHERE
@@ -191,11 +190,10 @@ function View(props) {
       `);
       // Map from id to address (array). {320: [11], 321: [11, 1]}.
       const addrs = {};
-      addr_table.rows.forEach(([id, slot, value]) => {
+      addr_table.rows.forEach(([id, address]) => {
         if (!addrs[id]) {
-          addrs[id] = [];
+          addrs[id] = address;
         }
-        addrs[id][slot] = value;
       });
       setAddrs(addrs);
 
@@ -212,11 +210,10 @@ function View(props) {
               FROM
                 mz_catalog.mz_dataflow_operator_addresses
               WHERE
-                slot = 0
-                AND value
+                address[1]
                   = (
-                      SELECT
-                        value
+                      SELECT DISTINCT
+                        address[1]
                       FROM
                         mz_catalog.mz_dataflow_operator_addresses
                       WHERE
@@ -243,11 +240,10 @@ function View(props) {
               FROM
                 mz_catalog.mz_dataflow_operator_addresses
               WHERE
-                slot = 0
-                AND value
+                address[1]
                   = (
-                      SELECT
-                        value
+                      SELECT DISTINCT
+                        address[1]
                       FROM
                         mz_catalog.mz_dataflow_operator_addresses
                       WHERE
@@ -288,11 +284,10 @@ function View(props) {
               FROM
                 mz_catalog.mz_dataflow_operator_addresses
               WHERE
-                slot = 0
-                AND value
+                address[1]
                   = (
-                      SELECT
-                        value
+                      SELECT DISTINCT
+                        address[1]
                       FROM
                         mz_catalog.mz_dataflow_operator_addresses
                       WHERE
