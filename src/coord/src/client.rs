@@ -17,7 +17,7 @@ use uuid::Uuid;
 use dataflow_types::PeekResponse;
 use ore::collections::CollectionExt;
 use ore::thread::JoinOnDropHandle;
-use repr::{Datum, ScalarType};
+use repr::{ColumnType, Datum, ScalarType};
 use sql::ast::{Raw, Statement};
 
 use crate::command::{
@@ -311,6 +311,36 @@ impl SessionClient {
             }
         }
 
+        fn datum_to_json(datum: &Datum, idx: usize, col_types: &[ColumnType]) -> serde_json::Value {
+            match datum {
+                // Convert some common things to a native JSON value. This doesn't need to be
+                // too exhaustive because the SQL-over-HTTP interface is currently not hooked
+                // up to arbitrary external user queries.
+                Datum::Null | Datum::JsonNull => serde_json::Value::Null,
+                Datum::False => serde_json::Value::Bool(false),
+                Datum::True => serde_json::Value::Bool(true),
+                Datum::Int32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+                Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
+                Datum::Float32(n) => float_to_json(n.into_inner() as f64),
+                Datum::Float64(n) => float_to_json(n.into_inner()),
+                Datum::String(s) => serde_json::Value::String(s.to_string()),
+                Datum::Decimal(d) => serde_json::Value::String(if col_types.len() > idx {
+                    match col_types[idx].scalar_type {
+                        ScalarType::Decimal(_precision, scale) => d.with_scale(scale).to_string(),
+                        _ => datum.to_string(),
+                    }
+                } else {
+                    datum.to_string()
+                }),
+                Datum::List(list) => serde_json::Value::Array(
+                    list.iter()
+                        .map(|entry| datum_to_json(&entry, idx, col_types))
+                        .collect(),
+                ),
+                _ => serde_json::Value::String(datum.to_string()),
+            }
+        }
+
         let stmts = sql::parse::parse(&stmt).map_err(|e| CoordError::Unstructured(e.into()))?;
         if stmts.len() != 1 {
             coord_bail!("expected exactly 1 statement");
@@ -361,30 +391,7 @@ impl SessionClient {
                 datums
                     .iter()
                     .enumerate()
-                    .map(|(idx, datum)| match datum {
-                        // Convert some common things to a native JSON value. This doesn't need to be
-                        // too exhaustive because the SQL-over-HTTP interface is currently not hooked
-                        // up to arbitrary external user queries.
-                        Datum::Null | Datum::JsonNull => serde_json::Value::Null,
-                        Datum::False => serde_json::Value::Bool(false),
-                        Datum::True => serde_json::Value::Bool(true),
-                        Datum::Int32(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
-                        Datum::Int64(n) => serde_json::Value::Number(serde_json::Number::from(*n)),
-                        Datum::Float32(n) => float_to_json(n.into_inner() as f64),
-                        Datum::Float64(n) => float_to_json(n.into_inner()),
-                        Datum::String(s) => serde_json::Value::String(s.to_string()),
-                        Datum::Decimal(d) => serde_json::Value::String(if col_types.len() > idx {
-                            match col_types[idx].scalar_type {
-                                ScalarType::Decimal(_precision, scale) => {
-                                    d.with_scale(scale).to_string()
-                                }
-                                _ => datum.to_string(),
-                            }
-                        } else {
-                            datum.to_string()
-                        }),
-                        _ => serde_json::Value::String(datum.to_string()),
-                    })
+                    .map(|(idx, datum)| datum_to_json(datum, idx, &col_types))
                     .collect(),
             );
         }
