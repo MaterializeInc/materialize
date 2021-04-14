@@ -62,6 +62,9 @@ unknown-git = "deny"
 unknown-registry = "deny"
 allow-git = [
     "https://github.com/MaterializeInc/pubnub-rust.git",
+    # Until https://github.com/sfackler/rust-postgres/pull/752 is merged and released
+    "https://github.com/MaterializeInc/rust-postgres.git",
+    "https://github.com/MaterializeInc/rust-postgres-array.git",
     "https://github.com/MaterializeInc/rust-prometheus.git",
     "https://github.com/MaterializeInc/serde-protobuf.git",
     "https://github.com/TimelyDataflow/timely-dataflow",

@@ -790,6 +790,7 @@ dependencies = [
  "bincode",
  "byteorder",
  "ccsr",
+ "chrono",
  "crossbeam-channel",
  "csv-core",
  "dataflow-types",
@@ -808,6 +809,8 @@ dependencies = [
  "mz-avro",
  "ore",
  "pdqselect",
+ "postgres-protocol",
+ "postgres-util",
  "prometheus",
  "prometheus-static-metric",
  "pubnub-hyper",
@@ -824,6 +827,7 @@ dependencies = [
  "serde_json",
  "timely",
  "tokio",
+ "tokio-postgres",
  "tokio-util",
  "url",
  "uuid",
@@ -2939,9 +2943,8 @@ dependencies = [
 
 [[package]]
 name = "postgres"
-version = "0.19.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f853fba627ed1f21392d329eeb03caf90dce57a65dfbd24274f4c39452ed3bb"
+version = "0.19.1"
+source = "git+https://github.com/MaterializeInc/rust-postgres#d5db385e001857bff075e359a255c6897d48e06c"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -2954,8 +2957,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1de0ea6504e07ca78355a6fb88ad0f36cafe9e696cbc6717f16a207f3a60be72"
+source = "git+https://github.com/MaterializeInc/rust-postgres#d5db385e001857bff075e359a255c6897d48e06c"
 dependencies = [
  "futures",
  "openssl",
@@ -2967,8 +2969,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff3e0f70d32e20923cabf2df02913be7c1842d4c772db8065c00fcfdd1d1bff3"
+source = "git+https://github.com/MaterializeInc/rust-postgres#d5db385e001857bff075e359a255c6897d48e06c"
 dependencies = [
  "base64",
  "byteorder",
@@ -2985,8 +2986,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "430f4131e1b7657b0cd9a2b0c3408d77c9a43a042d300b8c77f981dffcc43a2f"
+source = "git+https://github.com/MaterializeInc/rust-postgres#d5db385e001857bff075e359a255c6897d48e06c"
 dependencies = [
  "bytes",
  "chrono",
@@ -2998,10 +2998,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "postgres-util"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "sql-parser",
+ "tokio",
+ "tokio-postgres",
+]
+
+[[package]]
 name = "postgres_array"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cf05a6ba564431fe9deaefbe02fe4da9e4f3aa879549f09a8d091afc3b39a80"
+source = "git+https://github.com/MaterializeInc/rust-postgres-array#cbf48cd674ded4b6e7648fab253807c055c8ec10"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -4100,7 +4109,9 @@ dependencies = [
  "ore",
  "parse_duration",
  "pgrepr",
+ "postgres-protocol",
  "postgres-types",
+ "postgres-util",
  "rdkafka",
  "regex",
  "repr",
@@ -4666,8 +4677,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98779a950cb6ef76f8ad71c411176115c5c1200a83eeeca4dd9f61e3fc4836c8"
+source = "git+https://github.com/MaterializeInc/rust-postgres#d5db385e001857bff075e359a255c6897d48e06c"
 dependencies = [
  "async-trait",
  "byteorder",

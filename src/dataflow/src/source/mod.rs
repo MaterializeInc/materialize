@@ -56,6 +56,7 @@ use crate::CacheMessage;
 mod file;
 mod kafka;
 mod kinesis;
+mod postgres;
 mod pubnub;
 mod s3;
 mod util;
@@ -69,6 +70,7 @@ pub use file::FileReadStyle;
 pub use file::FileSourceReader;
 pub use kafka::KafkaSourceReader;
 pub use kinesis::KinesisSourceReader;
+pub use postgres::PostgresSourceReader;
 pub use pubnub::PubNubSourceReader;
 pub use s3::S3SourceReader;
 
