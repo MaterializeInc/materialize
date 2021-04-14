@@ -100,7 +100,7 @@ rx_msgs
 > SELECT split_part(broker_name, '/', 1) FROM mz_kafka_broker_rtt ORDER BY broker_name;
 split_part
 -----------
-kafka:9092
+"${testdrive.kafka-addr}"
 
 # Drop the sources and verify that metrics have been removed
 > DROP VIEW test1
