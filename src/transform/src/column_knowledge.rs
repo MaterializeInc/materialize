@@ -162,7 +162,13 @@ impl ColumnKnowledge {
                 equivalences,
                 ..
             } => {
+                // Aggregate column knowledge from each input into one `Vec`.
                 let mut knowledges = Vec::new();
+                for input in inputs.iter_mut() {
+                    for knowledge in ColumnKnowledge::harvest(input, knowledge)? {
+                        knowledges.push(knowledge);
+                    }
+                }
 
                 // This only aggregates the column types of each input, not the
                 // keys of the inputs. It is unnecessary to aggregate the keys
@@ -172,12 +178,6 @@ impl ColumnKnowledge {
                     typ.column_types.append(&mut i.typ().column_types);
                     typ
                 });
-
-                for input in inputs.iter_mut() {
-                    for knowledge in ColumnKnowledge::harvest(input, knowledge)? {
-                        knowledges.push(knowledge);
-                    }
-                }
 
                 for equivalence in equivalences.iter_mut() {
                     let mut knowledge = DatumKnowledge::default();
