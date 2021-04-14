@@ -299,6 +299,7 @@ fn main() {
 fn run(args: Args) -> Result<(), anyhow::Error> {
     panic::set_hook(Box::new(handle_panic));
     sys::enable_sigbus_sigsegv_backtraces()?;
+    sys::enable_sigint_sigterm_exit()?;
 
     if args.version > 0 {
         println!("materialized {}", materialized::BUILD_INFO.human_version());

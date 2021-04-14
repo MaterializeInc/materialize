@@ -161,6 +161,22 @@ pub fn enable_sigbus_sigsegv_backtraces() -> Result<(), anyhow::Error> {
         .context("failed to install SIGBUS handler")?;
     unsafe { signal::sigaction(signal::SIGSEGV, &action) }
         .context("failed to install SIGSEGV handler")?;
+    Ok(())
+}
+
+// Clean exit on SIGTERM/SIGINT so that code coverage is
+// safely written to disk
+pub fn enable_sigint_sigterm_exit() -> Result<(), anyhow::Error> {
+    let action = signal::SigAction::new(
+        signal::SigHandler::Handler(handle_sigint_sigterm),
+        signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+        signal::SigSet::empty(),
+    );
+
+    unsafe { signal::sigaction(signal::SIGTERM, &action) }
+        .context("failed to install SIGTERM handler")?;
+    unsafe { signal::sigaction(signal::SIGINT, &action) }
+        .context("failed to install SIGINT handler")?;
 
     Ok(())
 }
@@ -194,4 +210,8 @@ extern "C" fn handle_sigbus_sigsegv(_: i32) {
             process::abort();
         }
     }
+}
+
+extern "C" fn handle_sigint_sigterm(_: i32) {
+    process::exit(0);
 }
