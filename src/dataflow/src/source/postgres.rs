@@ -169,7 +169,7 @@ impl PostgresSourceReader {
         {
             let datum = match val {
                 TupleData::Null => Datum::Null,
-                TupleData::Toast => bail!("Unsupported TOAST value"),
+                TupleData::UnchangedToast => bail!("Unsupported TOAST value"),
                 TupleData::Text(b) => {
                     let txt_datum: Datum = std::str::from_utf8(&b)?.into();
                     cast_expr.eval(&[txt_datum], &arena)?
