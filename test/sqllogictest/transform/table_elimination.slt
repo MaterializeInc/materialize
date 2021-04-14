@@ -128,16 +128,6 @@ EXPLAIN SELECT * FROM t2 UNION ALL SELECT * FROM t1 EXCEPT ALL SELECT * FROM t1
 ----
 %0 =
 | Get materialize.public.t2 (u3)
-
-%1 =
-| Get materialize.public.t1 (u1)
-
-%2 =
-| Get materialize.public.t1 (u1)
-| Negate
-
-%3 =
-| Union %0 %1 %2
 | Threshold
 EOF
 

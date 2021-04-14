@@ -30,45 +30,44 @@ impl TableElimination {
     /// Detects an input being unioned with its negation and cancels them out
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
         if let MirRelationExpr::Union { base, inputs } = relation {
-            if let MirRelationExpr::Negate { input } = &**base {
-                if Self::find_and_replace_relation(&input, inputs.iter_mut()) {
-                    Self::cancel_relation(&mut *base);
+            let matching_negation = |input: &MirRelationExpr,
+                                     inputs: &[MirRelationExpr],
+                                     start_idx: usize|
+             -> Option<usize> {
+                match input {
+                    MirRelationExpr::Negate { input: inner_input } => {
+                        for i in start_idx..inputs.len() {
+                            if inputs[i] == **inner_input {
+                                return Some(i);
+                            }
+                        }
+                    }
+                    _ => {
+                        for i in start_idx..inputs.len() {
+                            if let MirRelationExpr::Negate { input: inner_input } = &inputs[i] {
+                                if *input == **inner_input {
+                                    return Some(i);
+                                }
+                            }
+                        }
+                    }
                 }
-            } else {
-                if Self::find_and_replace_negated_relation(&*base, inputs.iter_mut()) {
-                    Self::cancel_relation(&mut *base);
+                None
+            };
+
+            if let Some(j) = matching_negation(&*base, inputs, 0) {
+                Self::cancel_relation(&mut *base);
+                Self::cancel_relation(&mut inputs[j]);
+            }
+
+            for i in 0..inputs.len() {
+                if let Some(j) = matching_negation(&inputs[i], inputs, i + 1) {
+                    Self::cancel_relation(&mut inputs[i]);
+                    Self::cancel_relation(&mut inputs[j]);
                 }
             }
         }
         Ok(())
-    }
-
-    fn find_and_replace_relation<'a, I>(relation: &MirRelationExpr, mut it: I) -> bool
-    where
-        I: Iterator<Item = &'a mut MirRelationExpr>,
-    {
-        while let Some(mut other) = it.next() {
-            if *relation == *other {
-                Self::cancel_relation(&mut other);
-                return true;
-            }
-        }
-        false
-    }
-
-    fn find_and_replace_negated_relation<'a, I>(relation: &MirRelationExpr, mut it: I) -> bool
-    where
-        I: Iterator<Item = &'a mut MirRelationExpr>,
-    {
-        while let Some(mut other) = it.next() {
-            if let MirRelationExpr::Negate { input } = &*other {
-                if *relation == **input {
-                    Self::cancel_relation(&mut other);
-                    return true;
-                }
-            }
-        }
-        false
     }
 
     fn cancel_relation(relation: &mut MirRelationExpr) {
