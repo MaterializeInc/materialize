@@ -1039,6 +1039,8 @@ Wrap your release notes at the 80 character mark.
 - Provide the option to name columns in sources (e.g. [`CREATE SOURCE foo
   (col_foo, col_bar)...`](/sql/create-source/csv-file/#creating-a-source-from-a-dynamic-csv)).
 
+- Support [offsets](/sql/create-source/#with-options) for partitions on Kafka sources {{% gh 2169 %}}.
+
 - Improve conformance of the Avro parser, enabling support for
   a wider variety of Avro schemas in [Avro sources](/sql/create-source/avro-kafka).
 
