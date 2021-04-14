@@ -58,6 +58,22 @@ This creates a source that...
 - Has one column, `data`, which represents the stream's incoming bytes.
 - Caches messages from the `json` topic to local disk.
 
+### Setting partition offsets
+
+```sql
+CREATE MATERIALIZED SOURCE data_offset
+  FROM KAFKA BROKER 'localhost:9092' TOPIC 'data'
+  WITH (start_offset=[0,10,100])
+  FORMAT BYTES;
+```
+
+This creates a source that...
+
+- Is append-only.
+- Has one column, `data`, which represents the stream's incoming bytes.
+- Starts reading with no offset on the first partition, the second partition at 10, and the third partition at 100.
+
+
 ## Related pages
 
 - [`CREATE SOURCE`](../)
