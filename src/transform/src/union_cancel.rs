@@ -56,21 +56,19 @@ impl UnionBranchCancellation {
             };
 
             if let Some(j) = matching_negation(&*base, inputs, 0) {
-                Self::cancel_relation(&mut *base);
-                Self::cancel_relation(&mut inputs[j]);
+                let relation_typ = base.typ();
+                **base = MirRelationExpr::constant(vec![], relation_typ.clone());
+                inputs[j] = MirRelationExpr::constant(vec![], relation_typ);
             }
 
             for i in 0..inputs.len() {
                 if let Some(j) = matching_negation(&inputs[i], inputs, i + 1) {
-                    Self::cancel_relation(&mut inputs[i]);
-                    Self::cancel_relation(&mut inputs[j]);
+                    let relation_typ = inputs[i].typ();
+                    inputs[i] = MirRelationExpr::constant(vec![], relation_typ.clone());
+                    inputs[j] = MirRelationExpr::constant(vec![], relation_typ);
                 }
             }
         }
         Ok(())
-    }
-
-    fn cancel_relation(relation: &mut MirRelationExpr) {
-        *relation = MirRelationExpr::constant(vec![], relation.typ());
     }
 }
