@@ -44,6 +44,28 @@ pub struct PostgresSourceReader {
     lsn: PgLsn,
 }
 
+enum ReplicationError {
+    Recoverable(anyhow::Error),
+    Fatal(anyhow::Error),
+}
+
+macro_rules! try_fatal {
+    ($expr:expr $(,)?) => {
+        match $expr {
+            Ok(val) => val,
+            Err(err) => return Err(ReplicationError::Fatal(err.into())),
+        }
+    };
+}
+macro_rules! try_recoverable {
+    ($expr:expr $(,)?) => {
+        match $expr {
+            Ok(val) => val,
+            Err(err) => return Err(ReplicationError::Recoverable(err.into())),
+        }
+    };
+}
+
 impl PostgresSourceReader {
     /// Constructs a new instance
     pub fn new(connector: PostgresSourceConnector) -> Self {
@@ -71,10 +93,11 @@ impl PostgresSourceReader {
     /// the LSN at which we should start the replication stream at.
     async fn produce_snapshot(
         &mut self,
-        client: &Client,
         table_info: &TableInfo,
         timestamper: &Timestamper,
     ) -> Result<(), anyhow::Error> {
+        let client = self.connect_replication().await?;
+
         // We're initialising this source so any previously existing slot must be removed and
         // re-created. Once we have data persistence we will be able to reuse slots across restarts
         let _ = client
@@ -92,7 +115,7 @@ impl PostgresSourceReader {
             .await?;
 
         let slot_query = format!(
-            r#"CREATE_REPLICATION_SLOT {:?} TEMPORARY LOGICAL "pgoutput" USE_SNAPSHOT"#,
+            r#"CREATE_REPLICATION_SLOT {:?} LOGICAL "pgoutput" USE_SNAPSHOT"#,
             &self.connector.slot_name
         );
         let slot_row = client
@@ -188,10 +211,13 @@ impl PostgresSourceReader {
 
     async fn produce_replication(
         &mut self,
-        client: &Client,
         table_info: &TableInfo,
         timestamper: &Timestamper,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), ReplicationError> {
+        use ReplicationError::*;
+
+        let client = try_recoverable!(self.connect_replication().await);
+
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
               ("proto_version" '1', "publication_names" '{publication}')"#,
@@ -199,12 +225,13 @@ impl PostgresSourceReader {
             lsn = self.lsn.to_string(),
             publication = self.connector.publication
         );
-        let copy_stream = client.copy_both_simple(&query).await?;
+        let copy_stream = try_recoverable!(client.copy_both_simple(&query).await);
 
         let stream = LogicalReplicationStream::new(copy_stream);
         tokio::pin!(stream);
 
-        let mut tx = None;
+        let mut inserts = vec![];
+        let mut deletes = vec![];
         while let Some(item) = stream.next().await {
             match item {
                 Ok(ReplicationMessage::XLogData(xlog_data)) => {
@@ -212,7 +239,11 @@ impl PostgresSourceReader {
 
                     match xlog_data.data() {
                         Begin(_) => {
-                            tx = Some(timestamper.start_tx().await);
+                            if !inserts.is_empty() || !deletes.is_empty() {
+                                return Err(Fatal(anyhow!(
+                                    "got BEGIN statement after uncommitted data"
+                                )));
+                            }
                         }
                         // The replication stream might include data from other tables in the
                         // publication, so we ignore them
@@ -220,39 +251,43 @@ impl PostgresSourceReader {
                         Update(event) if event.rel_id() != table_info.rel_id => continue,
                         Delete(event) if event.rel_id() != table_info.rel_id => continue,
                         Insert(insert) => {
-                            let tx = tx.as_mut().ok_or_else(|| {
-                                anyhow!("got row event without a prior BEGIN event")
-                            })?;
-                            let row = self.row_from_tuple(insert.tuple())?;
-                            tx.insert(row).await?;
+                            let row = try_fatal!(self.row_from_tuple(insert.tuple()));
+                            inserts.push(row);
                         }
                         Update(update) => {
-                            let tx = tx.as_mut().ok_or_else(|| {
-                                anyhow!("got row event without a prior BEGIN event")
-                            })?;
-                            let old_row = self.row_from_tuple(update.old_tuple().unwrap())?;
-                            tx.delete(old_row).await?;
+                            let old_tuple = try_fatal!(update
+                                .old_tuple()
+                                .ok_or_else(|| anyhow!("full row missisng from update")));
+                            let old_row = try_fatal!(self.row_from_tuple(old_tuple));
+                            deletes.push(old_row);
 
-                            let new_row = self.row_from_tuple(update.new_tuple())?;
-                            tx.insert(new_row).await?;
+                            let new_row = try_fatal!(self.row_from_tuple(update.new_tuple()));
+                            inserts.push(new_row);
                         }
                         Delete(delete) => {
-                            let tx = tx.as_mut().ok_or_else(|| {
-                                anyhow!("got row event without a prior BEGIN event")
-                            })?;
-                            let row = self.row_from_tuple(delete.old_tuple().unwrap())?;
-                            tx.delete(row).await?;
+                            let old_tuple = try_fatal!(delete
+                                .old_tuple()
+                                .ok_or_else(|| anyhow!("full row missisng from delete")));
+                            let row = try_fatal!(self.row_from_tuple(old_tuple));
+                            deletes.push(row);
                         }
                         Commit(commit) => {
-                            self.lsn = commit.commit_lsn().into();
-                            // Release the lease
-                            tx = None;
+                            self.lsn = commit.end_lsn().into();
+
+                            let tx = timestamper.start_tx().await;
+
+                            for row in deletes.drain(..) {
+                                try_fatal!(tx.delete(row).await);
+                            }
+                            for row in inserts.drain(..) {
+                                try_fatal!(tx.insert(row).await);
+                            }
                         }
                         Origin(_) | Relation(_) | Type(_) => (),
-                        Truncate(_) => bail!("source table got truncated"),
+                        Truncate(_) => return Err(Fatal(anyhow!("source table got truncated"))),
                         // The enum is marked as non_exaustive. Better to be conservative here in
                         // case a new message is relevant to the semantics of our source
-                        _ => bail!("unexpected logical replication message"),
+                        _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),
                     }
                 }
                 // The upstream will periodically send keepalive messages to:
@@ -269,25 +304,20 @@ impl PostgresSourceReader {
                             .try_into()
                             .expect("software more than 200k years old, consider updating");
 
-                        // Here we report that we've seen everything up until `self.lsn`, which is
-                        // the lsn of that commit message we received. However, there could be
-                        // transactions that we have not seen yet (perhaps because they are not
-                        // committed yet) that started way earlier than self.lsn. Therefore, it's
-                        // unclear how to calculate a safe lower bound value to report back to the
-                        // server. The answer to this question will allow writing retry logic for
-                        // the replication phase.
-                        stream
-                            .as_mut()
-                            .standby_status_update(self.lsn, self.lsn, self.lsn, ts, 0)
-                            .await?;
+                        try_recoverable!(
+                            stream
+                                .as_mut()
+                                .standby_status_update(self.lsn, self.lsn, self.lsn, ts, 0)
+                                .await
+                        );
                     }
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => return Err(Recoverable(err.into())),
                 // The enum is marked non_exaustive, better be conservative
-                _ => bail!("Unexpected replication message"),
+                _ => return Err(Fatal(anyhow!("Unexpected replication message"))),
             }
         }
-        Ok(())
+        Err(Recoverable(anyhow!("replication stream ended")))
     }
 }
 
@@ -295,7 +325,6 @@ impl PostgresSourceReader {
 impl SimpleSource for PostgresSourceReader {
     /// The top-level control of the state machine and retry logic
     async fn start(mut self, timestamper: &Timestamper) -> Result<(), SourceError> {
-        // TODO(petrosagg): retry on recoverable errors
         let table_info = postgres_util::table_info(
             &self.connector.conn,
             &self.connector.namespace,
@@ -304,23 +333,22 @@ impl SimpleSource for PostgresSourceReader {
         .await
         .map_err(|e| SourceError::FileIO(e.to_string()))?;
 
-        let client = self
-            .connect_replication()
-            .await
-            .map_err(|e| SourceError::FileIO(e.to_string()))?;
-
         // The initial snapshot has no easy way of retrying it in case of connection failures
-        self.produce_snapshot(&client, &table_info, timestamper)
+        self.produce_snapshot(&table_info, timestamper)
             .await
             .map_err(|e| SourceError::FileIO(e.to_string()))?;
 
-        // TODO(petrosagg): implement retry logic for the replication phase. This is tricky because
-        // in order to do it right we need to specify an LSN that will not skip any data but the
-        // logical decode stream is not in LSN order and it's unclear what LSN we should use
-        self.produce_replication(&client, &table_info, timestamper)
-            .await
-            .map_err(|e| SourceError::FileIO(e.to_string()))?;
+        loop {
+            match self.produce_replication(&table_info, timestamper).await {
+                Ok(_) => log::info!("replication interrupted with no error"),
+                Err(ReplicationError::Recoverable(e)) => {
+                    log::info!("replication interrupted: {}", e)
+                }
+                Err(ReplicationError::Fatal(e)) => return Err(SourceError::FileIO(e.to_string())),
+            }
 
-        Ok(())
+            // TODO(petrosagg): implement exponential back-off
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
     }
 }
