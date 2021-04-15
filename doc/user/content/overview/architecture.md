@@ -115,7 +115,7 @@ existing dataflow.
 
 ## Sources: Ingesting data
 
-For Materialize to ingest data, it must read it from a source, which come in two varieties:
+For Materialize to ingest data, it must read it from a source, which comes in two varieties:
 
 - Streaming sources, like Kakfa
 - File sources, like `.csv` or generic log files

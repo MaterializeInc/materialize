@@ -4,7 +4,7 @@ description: "Understand Materialize's architecture."
 menu:
   main:
     parent: 'overview'
-    weight: 4
+    weight: 3
 ---
 
 Materialize is a streaming database with a SQL API. However, despite the fact
@@ -141,7 +141,7 @@ Each materialized view contains at least one index, which both lets it maintain
 the result set as new data streams in and provides low-latency reads.
 
 If you add an index to a non-materialized view, it becomes a
-materialized view, and starts incrementally updating  the results of its embedded query.
+materialized view, and starts incrementally updating the results of its embedded query.
 
 ### Interaction with materialized views
 
