@@ -162,5 +162,15 @@ accordingly).
 known to work), which in turn requires Big Sur (maybe Catalina also works?). If
 you do an OS upgrade, you'll definitely need a `cargo clean`.
 
+*Note:* For some reason, the native arm64 version of clang you get by running
+the above commands passes different arguments to lld. You can still use the
+native arm64 version of experimental new lld with the following (`--host-os` is
+intentionally omitted from the second command):
+
+```shell
+curl -s https://raw.githubusercontent.com/chromium/chromium/master/tools/clang/scripts/update.py | python - --output-dir=/tmp/clang --host-os=mac
+curl -s https://raw.githubusercontent.com/chromium/chromium/master/tools/clang/scripts/update.py | python - --output-dir=/tmp/clang --package=lld_mac
+```
+
 [macho]: https://github.com/llvm/llvm-project/tree/main/lld/MachO
 [chromium]: https://github.com/chromium/chromium/blob/master/docs/mac_lld.md
