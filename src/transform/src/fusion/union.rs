@@ -8,6 +8,9 @@
 // by the Apache License, Version 2.0.
 
 //! Fuses multiple `Union` operators into one.
+//!
+//! Nested negated unions are merged into the parent one by pushing
+//! the Negate to all their branches.
 
 use std::iter;
 
