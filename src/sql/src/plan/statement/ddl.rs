@@ -715,8 +715,13 @@ pub fn plan_create_source(
             namespace,
             table,
             columns,
+            slot,
         } => {
             scx.require_experimental_mode("Postgres Sources")?;
+
+            let slot_name = slot
+                .as_ref()
+                .ok_or_else(|| anyhow!("Postgres sources must provide a slot name"))?;
 
             let qcx = QueryContext::root(scx, QueryLifetime::Static);
             let cast_desc = RelationDesc::empty();
@@ -780,6 +785,7 @@ pub fn plan_create_source(
                 namespace: namespace.clone(),
                 table: table.clone(),
                 cast_exprs,
+                slot_name: slot_name.clone(),
             });
 
             (connector, DataEncoding::Postgres(desc))

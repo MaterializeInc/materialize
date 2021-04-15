@@ -222,6 +222,7 @@ Set
 Show
 Sink
 Sinks
+Slot
 Smallint
 Snapshot
 Some

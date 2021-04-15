@@ -42,18 +42,14 @@ pub struct PostgresSourceReader {
     connector: PostgresSourceConnector,
     /// Our cursor into the WAL
     lsn: PgLsn,
-    // TODO(petrosagg): move this in the catalog to clean it up on DROP SOURCE
-    slot_name: String,
 }
 
 impl PostgresSourceReader {
     /// Constructs a new instance
     pub fn new(connector: PostgresSourceConnector) -> Self {
-        let slot_name = Uuid::new_v4().to_string().replace('-', "");
         Self {
             connector,
             lsn: 0.into(),
-            slot_name,
         }
     }
 
@@ -79,6 +75,15 @@ impl PostgresSourceReader {
         table_info: &TableInfo,
         timestamper: &Timestamper,
     ) -> Result<(), anyhow::Error> {
+        // We're initialising this source so any previously existing slot must be removed and
+        // re-created. Once we have data persistence we will be able to reuse slots across restarts
+        let _ = client
+            .simple_query(&format!(
+                "DROP_REPLICATION_SLOT {:?}",
+                &self.connector.slot_name
+            ))
+            .await;
+
         // Start a transaction and immediatelly create a replication slot with the USE SNAPSHOT
         // directive. This makes the starting point of the slot and the snapshot of the transaction
         // identical.
@@ -88,7 +93,7 @@ impl PostgresSourceReader {
 
         let slot_query = format!(
             r#"CREATE_REPLICATION_SLOT {:?} TEMPORARY LOGICAL "pgoutput" USE_SNAPSHOT"#,
-            &self.slot_name
+            &self.connector.slot_name
         );
         let slot_row = client
             .simple_query(&slot_query)
@@ -190,7 +195,7 @@ impl PostgresSourceReader {
         let query = format!(
             r#"START_REPLICATION SLOT "{name}" LOGICAL {lsn}
               ("proto_version" '1', "publication_names" '{publication}')"#,
-            name = &self.slot_name,
+            name = &self.connector.slot_name,
             lsn = self.lsn.to_string(),
             publication = self.connector.publication
         );
