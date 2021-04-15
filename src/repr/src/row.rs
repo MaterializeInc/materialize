@@ -601,6 +601,18 @@ where
     iter.into_iter().map(|d| datum_size(d.borrow())).sum()
 }
 
+/// Number of bytes required by a list of datums. This computes the size that would be required if
+/// the given datums were packed into a list.
+///
+/// This is used to optimistically pre-allocate buffers for packing rows.
+pub fn datum_list_size<'a, I, D>(iter: I) -> usize
+where
+    I: IntoIterator<Item = D>,
+    D: Borrow<Datum<'a>>,
+{
+    1 + size_of::<usize>() + datums_size(iter)
+}
+
 // --------------------------------------------------------------------------------
 // public api
 

@@ -192,19 +192,17 @@ order by ratio desc;
 ### I found a problematic operator! How do I find where it came from?
 
 Look up the operator in `mz_dataflow_operator_addresses`. If an operator has
-value `x` in slot `n`, then it is part of the `x` subregion of the region
-defined by slots `0..n-1`. The example SQL query and result below shows an
+value `x` at position `n`, then it is part of the `x` subregion of the region
+defined by positions `0..n-1`. The example SQL query and result below shows an
 operator whose id is 515 that belongs to "subregion 5 of region 1 of dataflow
 21".
 ```sql
 select * from mz_dataflow_operator_addresses where id=515 and worker=0;
 ```
 ```
- id  | worker | slot | value
------+--------+------+-------
- 515 |      0 |    0 |    21
- 515 |      0 |    1 |     1
- 515 |      0 |    2 |     5
+ id  | worker | address
+-----+--------+----------
+ 515 |      0 | {21,1,5}
 ```
 
 Usually, it is only important to know the name of the dataflow a problematic
@@ -212,7 +210,7 @@ operator comes from. Once the name is known, the dataflow can be correlated to
 an index or view in Materialize.
 
 Each dataflow has an operator representing the entire dataflow. The address of
-said operator has only a single slot. For the example operator 515 above, you
+said operator has only a single entry. For the example operator 515 above, you
 can find the name of the dataflow if you can find the name of the operator whose
 address is just "dataflow 21."
 
@@ -229,21 +227,16 @@ FROM
     -- view containing operators representing entire dataflows
     (SELECT
       mdoa.id as dataflow_operator,
-      sum(mdoa.value) as dataflow_value
+      mdoa.address[1] as dataflow_address
     FROM
       mz_dataflow_operator_addresses mdoa
     WHERE
       mdoa.worker = 0
-    GROUP BY
-      mdoa.id,
-      mdoa.worker
-    HAVING
-      count(*) = 1) dataflows
+      AND list_length(mdoa.address) = 1) dataflows
 WHERE
-    mdoa.slot = 0
-    AND mdoa.worker = 0
+    mdoa.worker = 0
     AND mdoa.id = <problematic_operator_id>
-    AND mdoa.value = dataflows.dataflow_value
+    AND mdoa.address[1] = dataflows.dataflow_address
     AND mdo.id = dataflows.dataflow_operator
-    AND mdo.worker = 0
+    AND mdo.worker = 0;
 ```
