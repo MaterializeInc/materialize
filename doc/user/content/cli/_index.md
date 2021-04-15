@@ -172,6 +172,16 @@ Higher frequencies provide more up-to-date introspection but increase load on
 the system. Lower frequencies increase staleness in exchange for decreased load.
 The default frequency is a good choice for most deployments.
 
+{{< version-changed v0.7.3 >}}
+Materialize imports its own [Prometheus metrics](/ops/monitoring#prometheus)
+into the systems tables `mz_metrics` (counters and gauge readings),
+`mz_metric_histograms` (histogram distributions) and `mz_metrics_meta` (type
+information and help for each metric). These readings are imported once per
+`--introspection-frequency` period, and are retained for the duration given with
+`--retain-prometheus-metrics` (defaulting to 5 minutes). Higher retention
+periods lead to greater memory usage.
+{{< /version-changed >}}
+
 ### TLS encryption
 
 Materialize can use Transport Layer Security (TLS) to:

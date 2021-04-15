@@ -347,6 +347,9 @@ mz_indexes
 mz_kafka_sinks
 mz_list_types
 mz_map_types
+mz_metric_histograms
+mz_metrics
+mz_metrics_meta
 mz_pseudo_types
 mz_roles
 mz_schemas
@@ -372,6 +375,9 @@ mz_indexes            system
 mz_kafka_sinks        system
 mz_list_types         system
 mz_map_types          system
+mz_metric_histograms  system
+mz_metrics            system
+mz_metrics_meta       system
 mz_pseudo_types       system
 mz_roles              system
 mz_schemas            system
@@ -399,6 +405,9 @@ mz_indexes
 mz_kafka_sinks
 mz_list_types
 mz_map_types
+mz_metric_histograms
+mz_metrics
+mz_metrics_meta
 mz_pseudo_types
 mz_roles
 mz_schemas
@@ -427,6 +436,9 @@ mz_indexes
 mz_kafka_sinks
 mz_list_types
 mz_map_types
+mz_metric_histograms
+mz_metrics
+mz_metrics_meta
 mz_pseudo_types
 mz_roles
 mz_schemas
@@ -441,11 +453,11 @@ test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-21
+24
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-38
+41
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length
