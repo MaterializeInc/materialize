@@ -64,7 +64,8 @@ use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName, SchemaName};
 use sql::plan::StatementDesc;
 use sql::plan::{
-    CopyFormat, IndexOption, IndexOptionName, MutationKind, Params, PeekWhen, Plan, PlanContext,
+    CopyFormat, CreateSourcePlan, IndexOption, IndexOptionName, MutationKind, Params, PeekWhen,
+    Plan, PlanContext,
 };
 use storage::Message as PersistedMessage;
 use transform::Optimizer;
@@ -284,7 +285,7 @@ impl Coordinator {
                 CatalogItem::Source(source) => {
                     // Inform the timestamper about this source.
                     self.update_timestamper(entry.id(), true).await;
-                    self.maybe_begin_caching(entry.id(), &source.connector)
+                    self.maybe_begin_caching(entry.id(), source.connector.caching_enabled())
                         .await;
                     let frontiers =
                         Frontiers::new(self.num_workers(), self.logical_compaction_window_ms);
@@ -1192,16 +1193,13 @@ impl Coordinator {
                 session,
             ),
 
-            Plan::CreateSource {
-                name,
-                source,
-                if_not_exists,
-                materialized,
-            } => tx.send(
-                self.sequence_create_source(pcx, name, source, if_not_exists, materialized)
-                    .await,
-                session,
-            ),
+            Plan::CreateSource(source) => {
+                tx.send(self.sequence_create_source(pcx, source).await, session)
+            }
+
+            Plan::CreateSources { sources } => {
+                tx.send(self.sequence_create_sources(pcx, sources).await, session)
+            }
 
             Plan::CreateSink {
                 name,
@@ -1577,68 +1575,109 @@ impl Coordinator {
     async fn sequence_create_source(
         &mut self,
         pcx: PlanContext,
-        name: FullName,
-        source: sql::plan::Source,
-        if_not_exists: bool,
-        materialized: bool,
+        plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let optimized_expr = self
-            .optimizer
-            .optimize(source.expr, self.catalog.indexes())?;
-        let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
-        let source = catalog::Source {
-            create_sql: source.create_sql,
-            plan_cx: pcx,
-            optimized_expr,
-            connector: source.connector,
-            bare_desc: source.bare_desc,
-            desc: transformed_desc,
-        };
-        let source_id = self.catalog.allocate_id()?;
-        let source_oid = self.catalog.allocate_oid()?;
-        let mut ops = vec![catalog::Op::CreateItem {
-            id: source_id,
-            oid: source_oid,
-            name: name.clone(),
-            item: CatalogItem::Source(source.clone()),
-        }];
-        let index_id = if materialized {
-            let mut index_name = name.clone();
-            index_name.item += "_primary_idx";
-            let index = auto_generate_primary_idx(
-                index_name.item.clone(),
-                name,
-                source_id,
-                &source.desc,
-                None,
-                vec![source_id],
-            );
-            let index_id = self.catalog.allocate_id()?;
-            let index_oid = self.catalog.allocate_oid()?;
-            ops.push(catalog::Op::CreateItem {
-                id: index_id,
-                oid: index_oid,
-                name: index_name,
-                item: CatalogItem::Index(index),
-            });
-            Some(index_id)
-        } else {
-            None
-        };
+        let (metadata, ops) = self.generate_create_source_ops(pcx, vec![plan.clone()])?;
         match self.catalog_transact(ops).await {
             Ok(()) => {
-                self.update_timestamper(source_id, true).await;
-                if let Some(index_id) = index_id {
-                    let df = self.dataflow_builder().build_index_dataflow(index_id);
-                    self.ship_dataflow(df).await?;
-                }
-
-                self.maybe_begin_caching(source_id, &source.connector).await;
+                self.ship_sources(metadata).await?;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
+            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
             Err(err) => Err(err),
         }
+    }
+
+    async fn sequence_create_sources(
+        &mut self,
+        pcx: PlanContext,
+        sources: Vec<CreateSourcePlan>,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let (metadata, ops) = self.generate_create_source_ops(pcx, sources)?;
+        match self.catalog_transact(ops).await {
+            Ok(()) => {
+                self.ship_sources(metadata).await?;
+                Ok(ExecuteResponse::CreatedSources)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn ship_sources(
+        &mut self,
+        metadata: Vec<(GlobalId, Option<GlobalId>, bool)>,
+    ) -> Result<(), CoordError> {
+        for (source_id, idx_id, caching_enabled) in metadata {
+            self.update_timestamper(source_id, true).await;
+            if let Some(index_id) = idx_id {
+                let df = self.dataflow_builder().build_index_dataflow(index_id);
+                self.ship_dataflow(df).await?;
+            }
+            self.maybe_begin_caching(source_id, caching_enabled).await;
+        }
+        Ok(())
+    }
+
+    fn generate_create_source_ops(
+        &mut self,
+        pcx: PlanContext,
+        plans: Vec<CreateSourcePlan>,
+    ) -> Result<(Vec<(GlobalId, Option<GlobalId>, bool)>, Vec<catalog::Op>), CoordError> {
+        let mut metadata = vec![];
+        let mut ops = vec![];
+        for plan in plans {
+            let CreateSourcePlan {
+                name,
+                source,
+                materialized,
+                ..
+            } = plan;
+            let optimized_expr = self
+                .optimizer
+                .optimize(source.expr, self.catalog.indexes())?;
+            let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
+            let source = catalog::Source {
+                create_sql: source.create_sql,
+                plan_cx: pcx.clone(),
+                optimized_expr,
+                connector: source.connector,
+                bare_desc: source.bare_desc,
+                desc: transformed_desc,
+            };
+            let source_id = self.catalog.allocate_id()?;
+            let source_oid = self.catalog.allocate_oid()?;
+            ops.push(catalog::Op::CreateItem {
+                id: source_id,
+                oid: source_oid,
+                name: name.clone(),
+                item: CatalogItem::Source(source.clone()),
+            });
+            let index_id = if materialized {
+                let mut index_name = name.clone();
+                index_name.item += "_primary_idx";
+                let index = auto_generate_primary_idx(
+                    index_name.item.clone(),
+                    name,
+                    source_id,
+                    &source.desc,
+                    None,
+                    vec![source_id],
+                );
+                let index_id = self.catalog.allocate_id()?;
+                let index_oid = self.catalog.allocate_oid()?;
+                ops.push(catalog::Op::CreateItem {
+                    id: index_id,
+                    oid: index_oid,
+                    name: index_name,
+                    item: CatalogItem::Index(index),
+                });
+                Some(index_id)
+            } else {
+                None
+            };
+            metadata.push((source_id, index_id, source.connector.caching_enabled()))
+        }
+        Ok((metadata, ops))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2809,22 +2848,20 @@ impl Coordinator {
     // has caching enabled and Materialize has caching enabled.
     // This function is a no-op if the cacher has already started caching
     // this source.
-    async fn maybe_begin_caching(&mut self, id: GlobalId, source_connector: &SourceConnector) {
-        if let SourceConnector::External { connector, .. } = source_connector {
-            if connector.caching_enabled() {
-                if let Some(cache_tx) = &mut self.cache_tx {
-                    cache_tx
-                        .send(CacheMessage::AddSource(
-                            self.catalog.config().cluster_id,
-                            id,
-                        ))
-                        .expect("caching receiver should not drop first");
-                } else {
-                    log::error!(
-                        "trying to create a cached source ({}) but caching is disabled.",
-                        id
-                    );
-                }
+    async fn maybe_begin_caching(&mut self, id: GlobalId, connector_caching_enabled: bool) {
+        if connector_caching_enabled {
+            if let Some(cache_tx) = &mut self.cache_tx {
+                cache_tx
+                    .send(CacheMessage::AddSource(
+                        self.catalog.config().cluster_id,
+                        id,
+                    ))
+                    .expect("caching receiver should not drop first");
+            } else {
+                log::error!(
+                    "trying to create a cached source ({}) but caching is disabled.",
+                    id
+                );
             }
         }
     }

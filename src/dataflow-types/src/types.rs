@@ -573,6 +573,13 @@ impl SourceConnector {
             false
         }
     }
+
+    pub fn caching_enabled(&self) -> bool {
+        match self {
+            SourceConnector::External { connector, .. } => connector.caching_enabled(),
+            SourceConnector::Local => false,
+        }
+    }
 }
 
 pub fn cached_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {

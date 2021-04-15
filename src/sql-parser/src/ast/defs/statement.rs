@@ -403,6 +403,7 @@ impl_display_t!(CreateSourceStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSourcesStatement<T: AstInfo> {
     pub connector: MultiConnector<T>,
+    pub stmts: Vec<CreateSourceStatement<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourcesStatement<T> {

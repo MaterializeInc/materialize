@@ -171,6 +171,8 @@ pub enum ExecuteResponse {
     CreatedSource {
         existed: bool,
     },
+    /// The requested sources were created.
+    CreatedSources,
     /// The requested table was created.
     CreatedTable {
         existed: bool,

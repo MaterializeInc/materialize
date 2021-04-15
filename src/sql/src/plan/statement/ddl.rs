@@ -71,8 +71,8 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_hypothetical_cast, CastContext};
 use crate::plan::{
-    self, plan_utils, query, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan,
-    QueryContext, Sink, Source, Table, Type, TypeInner, View,
+    self, plan_utils, query, CreateSourcePlan, HirRelationExpr, Index, IndexOption,
+    IndexOptionName, Params, Plan, QueryContext, Sink, Source, Table, Type, TypeInner, View,
 };
 use crate::pure::Schema;
 
@@ -1051,18 +1051,25 @@ pub fn plan_create_source(
         )
     }
 
-    Ok(Plan::CreateSource {
+    Ok(Plan::CreateSource(CreateSourcePlan {
         name,
         source,
         if_not_exists,
         materialized,
-    })
+    }))
 }
 
 pub fn plan_create_sources(
-    _scx: &StatementContext,
-    _stmt: CreateSourcesStatement<Raw>,
+    scx: &StatementContext,
+    stmt: CreateSourcesStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
+    scx.require_experimental_mode("Postgres Sources")?;
+    let CreateSourcesStatement { stmts, .. } = stmt;
+    let mut planned = vec![];
+    for stmt in stmts {
+        planned.push(plan_create_source(scx, stmt)?);
+    }
+
     unsupported!("CREATE SOURCES");
 }
 
