@@ -40,6 +40,7 @@ pub struct Config {
     experimental_mode: bool,
     safe_mode: bool,
     workers: usize,
+    logical_compaction_window: Option<Duration>,
 }
 
 impl Default for Config {
@@ -51,6 +52,7 @@ impl Default for Config {
             experimental_mode: false,
             safe_mode: false,
             workers: 1,
+            logical_compaction_window: None,
         }
     }
 }
@@ -94,6 +96,11 @@ impl Config {
         self.workers = workers;
         self
     }
+
+    pub fn logical_compaction_window(mut self, logical_compaction_window: Duration) -> Self {
+        self.logical_compaction_window = Some(logical_compaction_window);
+        self
+    }
 }
 
 pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
@@ -121,7 +128,7 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
             timestamp_frequency: Duration::from_secs(1),
             cache: None,
             persistence: None,
-            logical_compaction_window: None,
+            logical_compaction_window: config.logical_compaction_window,
             workers: config.workers,
             timely_worker: timely::WorkerConfig::default(),
             data_directory,
