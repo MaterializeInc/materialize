@@ -369,6 +369,38 @@ impl LiteralLifting {
                     ));
                 }
                 result.reverse();
+
+                let non_literal_keys = group_key.iter().filter(|x| !x.is_literal()).count();
+                if non_literal_keys != group_key.len() {
+                    let first_projected_literal: usize = non_literal_keys + aggregates.len();
+                    let mut projection = Vec::new();
+                    let mut projected_literals = Vec::new();
+                    let mut new_key_pos: usize = 0;
+                    let mut new_group_key = Vec::new();
+                    for key in group_key.iter() {
+                        if key.is_literal() {
+                            projection.push(first_projected_literal + projected_literals.len());
+                            projected_literals.push(key.clone());
+                        } else {
+                            new_group_key.push(key.clone());
+                            projection.push(new_key_pos);
+                            new_key_pos += 1;
+                        }
+                    }
+                    // The new group key without literals
+                    *group_key = new_group_key;
+                    // Add the removed aggregates
+                    for _ in 0..result.len() {
+                        projection.push(projection.len());
+                    }
+                    projected_literals.extend(result);
+
+                    *relation = relation
+                        .take_dangerous()
+                        .map(projected_literals)
+                        .project(projection);
+                    return Vec::new();
+                }
                 result
             }
             MirRelationExpr::TopK {
