@@ -268,3 +268,96 @@ FETCH 0 c;
 COMPLETE 0
 COMPLETE 0
 COMPLETE 0
+
+# Verify that querying outside of a time domain is an error.
+simple
+SELECT 1;
+SELECT * FROM t;
+----
+db error: ERROR: transactions can only reference nearby relations; "materialize.public.t" referenced here, but none available
+
+statement ok
+CREATE SCHEMA other
+
+statement ok
+CREATE TABLE other.t (i INT)
+
+simple
+SELECT * FROM t;
+SELECT * FROM other.t;
+----
+db error: ERROR: transactions can only reference nearby relations; "materialize.other.t" referenced here, but only the following are available: "materialize.public.t", "materialize.public.t5727"
+
+# Verify that changed tables and views don't change during a transaction.
+
+statement ok
+CREATE MATERIALIZED VIEW v AS SELECT COUNT(*) FROM T
+
+simple conn=read
+BEGIN;
+SELECT * FROM t;
+SELECT * FROM v;
+----
+COMPLETE 0
+1
+COMPLETE 1
+1
+COMPLETE 1
+
+simple conn=write
+INSERT INTO t VALUES (3)
+----
+COMPLETE 1
+
+simple conn=write
+SELECT * FROM t;
+SELECT * FROM v;
+----
+1
+3
+COMPLETE 2
+2
+COMPLETE 1
+
+simple conn=read
+SELECT * FROM t;
+SELECT * FROM v;
+COMMIT;
+----
+1
+COMPLETE 1
+1
+COMPLETE 1
+COMPLETE 0
+
+# Verify that replacing a non-materialized view in a different transaction isn't seen.
+
+statement ok
+CREATE VIEW v1 AS SELECT 1
+
+simple conn=t1
+BEGIN;
+SELECT * FROM v1;
+----
+COMPLETE 0
+1
+COMPLETE 1
+
+simple conn=t2
+CREATE OR REPLACE VIEW v1 AS SELECT 2;
+----
+COMPLETE 0
+
+simple conn=t2
+SELECT * FROM v1;
+----
+2
+COMPLETE 1
+
+# Here we expect an error because, since our catalog doesn't respect
+# SQL transactions, the original v1 doesn't exist.
+simple conn=t1
+SELECT * FROM v1;
+COMMIT;
+----
+db error: ERROR: transactions can only reference nearby relations; "materialize.public.v1" referenced here, but only the following are available: "materialize.public.t", "materialize.public.t5727", "materialize.public.v"

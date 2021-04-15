@@ -40,6 +40,12 @@ pub enum CoordError {
     ReadOnlyTransaction,
     /// The specified session parameter is read-only.
     ReadOnlyParameter(&'static (dyn Var + Send + Sync)),
+    /// A query in a transaction referenced a relation outside the first query's
+    /// time domain.
+    RelationOutsideTimeDomain {
+        relation: String,
+        names: Vec<String>,
+    },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
     /// An error occurred in a SQL catalog operation.
@@ -127,6 +133,24 @@ impl fmt::Display for CoordError {
             CoordError::ReadOnlyTransaction => f.write_str("transaction in read-only mode"),
             CoordError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
+            }
+            CoordError::RelationOutsideTimeDomain { relation, names } => {
+                write!(
+                    f,
+                    "transactions can only reference nearby relations; {} referenced here, but {}",
+                    relation.quoted(),
+                    match names.is_empty() {
+                        true => "none available".to_string(),
+                        false => format!(
+                            "only the following are available: {}",
+                            names
+                                .iter()
+                                .map(|name| name.quoted().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    }
+                )
             }
             CoordError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)

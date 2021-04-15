@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Coordination of installed views, available timestamps, and compacted timestamps.
+//! Coordination of installed views, available timestamps, compacted timestamps, and transactions.
 //!
 //! The command coordinator maintains a view of the installed
 //! views, and for each tracks the frontier of available times
@@ -20,10 +20,24 @@
 //! value as would an un-compacted trace. The since frontier cannot be directly
 //! mutated, but instead can have multiple handles to it which forward changes
 //! from an internal MutableAntichain to the since.
+//!
+//! The [`Coordinator`] tracks various compaction frontiers
+//! so that indexes, compaction, and transactions can work
+//! together. [`determine_timestamp()`](Coordinator::determine_timestamp)
+//! returns the least valid since of its sources. Any new transactions
+//! should thus always be >= the current compaction frontier
+//! and so should never change the frontier when being added to
+//! [`txn_reads`](Coordinator::txn_reads). The compaction frontier may
+//! change when a transaction ends (if it was the oldest transaction and
+//! the index's since was advanced after the transaction started) or when
+//! [`update_upper()`](Coordinator::update_upper) is run (if there are no in
+//! progress transactions before the new since). When it does, it is added to
+//! [`since_updates`](Coordinator::since_updates) and will be processed during
+//! the next [`maintenance()`](Coordinator::maintenance) call.
 
 use std::cell::RefCell;
 use std::cmp;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
 use std::path::Path;
 use std::rc::Rc;
@@ -63,9 +77,9 @@ use ore::thread::{JoinHandleExt, JoinOnDropHandle};
 use repr::{ColumnName, Datum, RelationDesc, Row, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
-    Connector, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage, FetchStatement,
-    Ident, ObjectType, Raw, Statement,
+    Connector, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions,
+    ExplainStage, FetchStatement, Ident, ObjectType, Raw, Statement,
 };
 use sql::catalog::{Catalog as _, CatalogError};
 use sql::names::{DatabaseSpecifier, FullName, SchemaName};
@@ -214,6 +228,10 @@ pub struct Coordinator {
     since_updates: Rc<RefCell<HashMap<GlobalId, Antichain<Timestamp>>>>,
     /// Holds handles to ids that are advanced by update_upper.
     since_handles: HashMap<GlobalId, AntichainToken<Timestamp>>,
+    /// Tracks active read transactions so that we don't compact any indexes beyond
+    /// an in-progress transaction.
+    // TODO(mjibson): Should this live on a Session?
+    txn_reads: HashMap<u32, TxnReads>,
 }
 
 /// Metadata about an active connection.
@@ -230,6 +248,11 @@ struct ConnMeta {
     /// requests are required to authenticate with the secret of the connection
     /// that they are targeting.
     secret_key: u32,
+}
+
+struct TxnReads {
+    timedomain_ids: HashSet<GlobalId>,
+    _handles: Vec<AntichainToken<Timestamp>>,
 }
 
 impl Coordinator {
@@ -992,6 +1015,7 @@ impl Coordinator {
 
         // When symbiosis mode is enabled, use symbiosis planning for:
         //  - CREATE TABLE
+        //  - CREATE SCHEMA
         //  - DROP TABLE
         //  - INSERT
         // When these statements are routed through symbiosis, table information
@@ -1002,6 +1026,7 @@ impl Coordinator {
             object_type: ObjectType::Table,
             ..
         })
+        | Statement::CreateSchema(CreateSchemaStatement { .. })
         | Statement::Insert { .. } = &stmt
         {
             if let Some(ref mut postgres) = self.symbiosis {
@@ -2040,36 +2065,45 @@ impl Coordinator {
         let (drop_sinks, txn) = session.clear_transaction();
         self.drop_sinks(drop_sinks).await;
 
+        // Allow compaction of sources from this transaction, regardless of the action.
+        self.txn_reads.remove(&session.conn_id());
+        // Although the compaction frontier may have advanced, we do not need to
+        // call `maintenance` here because it will soon be called after the next
+        // `update_upper`.
+
         if let EndTransactionAction::Commit = action {
             match txn {
                 TransactionStatus::Default | TransactionStatus::Failed => {}
                 TransactionStatus::Started(ops)
                 | TransactionStatus::InTransaction(ops)
                 | TransactionStatus::InTransactionImplicit(ops) => {
-                    if let TransactionOps::Writes(inserts) = ops {
-                        let timestamp = self.get_write_ts();
-                        for WriteOp { id, rows } in inserts {
-                            // Re-verify this id exists.
-                            if self.catalog.try_get_by_id(id).is_none() {
-                                return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
-                                    id.to_string(),
-                                )));
-                            }
+                    match ops {
+                        TransactionOps::Writes(inserts) => {
+                            let timestamp = self.get_write_ts();
+                            for WriteOp { id, rows } in inserts {
+                                // Re-verify this id exists.
+                                if self.catalog.try_get_by_id(id).is_none() {
+                                    return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                                        id.to_string(),
+                                    )));
+                                }
 
-                            let updates: Vec<_> = rows
-                                .into_iter()
-                                .map(|(row, diff)| Update {
-                                    row,
-                                    diff,
-                                    timestamp,
-                                })
-                                .collect();
+                                let updates: Vec<_> = rows
+                                    .into_iter()
+                                    .map(|(row, diff)| Update {
+                                        row,
+                                        diff,
+                                        timestamp,
+                                    })
+                                    .collect();
 
-                            if let Some(tables) = &mut self.persisted_tables {
-                                tables.write(id, &updates);
+                                if let Some(tables) = &mut self.persisted_tables {
+                                    tables.write(id, &updates);
+                                }
+                                self.broadcast(SequencedCommand::Insert { id, updates });
                             }
-                            self.broadcast(SequencedCommand::Insert { id, updates });
                         }
+                        _ => {}
                     }
                 }
             }
@@ -2101,16 +2135,58 @@ impl Coordinator {
         // worry about preventing compaction or choosing a valid timestamp for future
         // queries.
         let timestamp = if in_transaction && when == PeekWhen::Immediately {
-            session.get_transaction_timestamp(|| {
+            let timestamp = session.get_transaction_timestamp(|| {
                 // Determine a timestamp that will be valid for anything in any schema
                 // referenced by the first query. This is a first pass implementation of "time
                 // domains".
-                let ids = self.catalog.timedomain_for(&source, conn_id);
+                let timedomain_ids = self.catalog.timedomain_for(&source, conn_id);
 
-                self.determine_timestamp(&ids, PeekWhen::Immediately)
-            })?
+                // We want to prevent compaction of the indexes consulted by
+                // determine_timestamp, not the ones listed in the query.
+                let (timestamp, timestamp_ids) =
+                    self.determine_timestamp(&timedomain_ids, PeekWhen::Immediately)?;
+                let mut handles = vec![];
+                for id in timestamp_ids {
+                    handles.push(self.indexes.get(&id).unwrap().since_handle(vec![timestamp]));
+                }
+                let mut timedomain_set = HashSet::new();
+                for id in timedomain_ids {
+                    timedomain_set.insert(id);
+                }
+                self.txn_reads.insert(
+                    conn_id,
+                    TxnReads {
+                        timedomain_ids: timedomain_set,
+                        _handles: handles,
+                    },
+                );
+
+                Ok(timestamp)
+            })?;
+
+            // Verify that the indexes for this query are in the current read transaction.
+            let txn_reads = self.txn_reads.get(&conn_id).unwrap();
+            for id in source.global_uses() {
+                if !txn_reads.timedomain_ids.contains(&id) {
+                    let mut names: Vec<_> = txn_reads
+                        .timedomain_ids
+                        .iter()
+                        // This could filter out a view that has been replaced in another transaction.
+                        .filter_map(|id| self.catalog.try_get_by_id(*id))
+                        .map(|item| item.name().to_string())
+                        .collect();
+                    // Sort so error messages are deterministic.
+                    names.sort();
+                    return Err(CoordError::RelationOutsideTimeDomain {
+                        relation: self.catalog.get_by_id(&id).name().to_string(),
+                        names,
+                    });
+                }
+            }
+
+            timestamp
         } else {
-            self.determine_timestamp(&source.global_uses(), when)?
+            self.determine_timestamp(&source.global_uses(), when)?.0
         };
 
         let source = self.prep_relation_expr(
@@ -2294,7 +2370,10 @@ impl Coordinator {
         // Updates greater or equal to this frontier will be produced.
         let frontier = if let Some(ts) = ts {
             // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(self.determine_timestamp(&[source_id], PeekWhen::AtTimestamp(ts))?)
+            Antichain::from_elem(
+                self.determine_timestamp(&[source_id], PeekWhen::AtTimestamp(ts))?
+                    .0,
+            )
         } else {
             self.determine_frontier(source_id)
         };
@@ -2340,15 +2419,16 @@ impl Coordinator {
 
     /// A policy for determining the timestamp for a peek.
     ///
-    /// The result may be `None` in the case that the `when` policy cannot be satisfied,
-    /// which is possible due to the restricted validity of traces (each has a `since`
-    /// and `upper` frontier, and are only valid after `since` and sure to be available
-    /// not after `upper`).
+    /// The Timestamp result may be `None` in the case that the `when` policy
+    /// cannot be satisfied, which is possible due to the restricted validity of
+    /// traces (each has a `since` and `upper` frontier, and are only valid after
+    /// `since` and sure to be available not after `upper`). The set of indexes
+    /// used is also returned.
     fn determine_timestamp(
         &mut self,
         uses_ids: &[GlobalId],
         when: PeekWhen,
-    ) -> Result<Timestamp, CoordError> {
+    ) -> Result<(Timestamp, Vec<GlobalId>), CoordError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
         // accumulated at a time greater or equal to `since`, and they
@@ -2438,7 +2518,7 @@ impl Coordinator {
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
         if since.less_equal(&timestamp) {
-            Ok(timestamp)
+            Ok((timestamp, index_ids))
         } else {
             let invalid = index_ids
                 .iter()
@@ -3092,6 +3172,7 @@ pub async fn serve(
             transient_id_counter: 1,
             active_conns: HashMap::new(),
             persisted_tables,
+            txn_reads: HashMap::new(),
             since_handles: HashMap::new(),
             since_updates: Rc::new(RefCell::new(HashMap::new())),
         };
