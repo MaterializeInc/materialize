@@ -1,6 +1,6 @@
 // Copyright Materialize, Inc. All rights reserved.
 //
-// Use of this software matches_collection governed by the Business Source License
+// Use of this software is governed by the Business Source License
 // included in the LICENSE file.
 //
 // As of the Change Date specified in that file, in accordance with
@@ -14,9 +14,9 @@ use expr::MirRelationExpr;
 
 /// Detects an input being unioned with its negation and cancels them out
 #[derive(Debug)]
-pub struct TableElimination;
+pub struct UnionBranchCancellation;
 
-impl crate::Transform for TableElimination {
+impl crate::Transform for UnionBranchCancellation {
     fn transform(
         &self,
         relation: &mut MirRelationExpr,
@@ -26,7 +26,7 @@ impl crate::Transform for TableElimination {
     }
 }
 
-impl TableElimination {
+impl UnionBranchCancellation {
     /// Detects an input being unioned with its negation and cancels them out
     pub fn action(&self, relation: &mut MirRelationExpr) -> Result<(), TransformError> {
         if let MirRelationExpr::Union { base, inputs } = relation {

@@ -45,8 +45,8 @@ pub mod reduce_elision;
 pub mod reduction;
 pub mod reduction_pushdown;
 pub mod redundant_join;
-pub mod table_elimination;
 pub mod topk_elision;
+pub mod union_cancel;
 pub mod update_let;
 
 pub mod dataflow;
@@ -216,7 +216,7 @@ impl Default for Optimizer {
                     Box::new(crate::redundant_join::RedundantJoin),
                     Box::new(crate::topk_elision::TopKElision),
                     Box::new(crate::demand::Demand),
-                    Box::new(crate::table_elimination::TableElimination),
+                    Box::new(crate::union_cancel::UnionBranchCancellation),
                 ],
             }),
             // As a final logical action, convert any constant expression to a constant.
