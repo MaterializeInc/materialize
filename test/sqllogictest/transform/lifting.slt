@@ -82,3 +82,29 @@ union all
 | Union %0 %1 %2
 
 EOF
+
+# Group key literal lifting
+query T multiline
+explain
+select a, b from t where a = 1 group by a, b
+----
+%0 =
+| Get materialize.public.t (u1)
+| Filter (#0 = 1)
+| Distinct group=(#1)
+| Map 1
+| Project (#1, #0)
+
+EOF
+
+query T multiline
+explain
+select a, b from t where b = 1 group by a, b
+----
+%0 =
+| Get materialize.public.t (u1)
+| Filter (#1 = 1)
+| Distinct group=(#0)
+| Map 1
+
+EOF

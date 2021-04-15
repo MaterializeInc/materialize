@@ -368,8 +368,16 @@ impl LiteralLifting {
                             .scalar_type,
                     ));
                 }
+                if aggregates.is_empty() {
+                    while group_key.last().map(|k| k.is_literal()) == Some(true) {
+                        let key = group_key.pop().unwrap();
+                        result.push(key);
+                    }
+                }
                 result.reverse();
 
+                // Add a Map operator with the remaining literals so that they are lifted in
+                // the next invocation of this transform.
                 let non_literal_keys = group_key.iter().filter(|x| !x.is_literal()).count();
                 if non_literal_keys != group_key.len() {
                     let first_projected_literal: usize = non_literal_keys + aggregates.len();
@@ -389,17 +397,11 @@ impl LiteralLifting {
                     }
                     // The new group key without literals
                     *group_key = new_group_key;
-                    // Add the removed aggregates
-                    for _ in 0..result.len() {
-                        projection.push(projection.len());
-                    }
-                    projected_literals.extend(result);
 
                     *relation = relation
                         .take_dangerous()
                         .map(projected_literals)
                         .project(projection);
-                    return Vec::new();
                 }
                 result
             }
