@@ -32,17 +32,16 @@ EXPLAIN PLAN FOR select * from foo inner join bar on foo.a = bar.a where foo.a =
 %0 =
 | Get materialize.public.foo (u1)
 | Filter !(isnull(#0)), (#0 = 1)
-| ArrangeBy (#0)
+| ArrangeBy ()
 
 %1 =
 | Get materialize.public.bar (u3)
 | Filter !(isnull(#0)), (#0 = 1)
 
 %2 =
-| Join %0 %1 (= #0 #2)
-| | implementation = Differential %1 %0.(#0)
-| | demand = (#0, #1, #3)
-| Project (#0, #1, #0, #3)
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
 
 EOF
 
@@ -81,6 +80,35 @@ select * from foo inner join bar on foo.a = abs(bar.a) where mod(foo.a, 2) = 1
 2
 -1
 NULL
+1
+2
+1
+3
+
+# Test that column knowledge can propagate across inputs of a join.
+# no indexes other than the default foo(a,b) and bar(a,b)
+query T multiline
+EXPLAIN PLAN FOR select * from (select * from foo where a = 1) filtered_foo, bar where filtered_foo.a = bar.a
+----
+%0 =
+| Get materialize.public.foo (u1)
+| Filter !(isnull(#0)), (#0 = 1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.bar (u3)
+| Filter !(isnull(#0)), (#0 = 1)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+
+EOF
+
+query IIII
+select * from (select * from foo where a = 1) filtered_foo, bar where filtered_foo.a = bar.a
+----
 1
 2
 1
