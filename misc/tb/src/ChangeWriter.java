@@ -94,7 +94,9 @@ public class ChangeWriter implements Consumer<RecordChangeEvent<SourceRecord>> {
         }
 
         Object datum = avroConverter.fromConnectData(record.valueSchema(), record.value());
-        dfw.append(datum);
+        if (datum != null) {
+            dfw.append(datum);
+        }
     }
 
     /**
