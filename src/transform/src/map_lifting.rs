@@ -159,6 +159,8 @@ impl LiteralLifting {
                         {
                             literals.pop();
                         }
+                    } else {
+                        literals.clear();
                     }
                     // If the literals need to be re-interleaved,
                     // we don't have much choice but to install a
