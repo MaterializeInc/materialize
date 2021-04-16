@@ -6,11 +6,12 @@ edition = "2018"
 publish = false
 
 [dependencies]
-byteorder = "1.4.2"
+byteorder = "1.4.3"
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
+dec = "0.3.3"
 lazy_static = "1.4.0"
 ore = { path = "../ore" }
-postgres-types = { version = "0.2.0", features = ["with-chrono-0_4", "with-uuid-0_8"] }
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4", "with-uuid-0_8"] }
 repr = { path = "../repr" }
 uuid = "0.8.2"

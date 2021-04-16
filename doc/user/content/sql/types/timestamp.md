@@ -61,24 +61,21 @@ _tz&lowbar;offset_ | The timezone's distance, in hours, from UTC.
 
 ### Valid casts
 
-#### From `timestamp`
+In addition to the casts listed below, `timestamp` and `timestamptz` can be cast to and from each other implicitly.
 
-You can [cast](../../functions/cast) `timestamp` or `timestamp with time zone` to:
+#### From `timestamp` or `timestamptz`
 
-- [`date`](../date)
-- [`text`](../text)
-- `timestamp`
-- `timestamp with time zone`
+You can [cast](../../functions/cast) `timestamp` or `timestamptz` to:
 
-#### To `timestamp`
+- [`date`](../date) (by assignment)
+- [`text`](../text) (by assignment)
 
-You can [cast](../../functions/cast) the following types to `timestamp` or
-`timestamp with time zone`:
+#### To `timestamp` or `timestamptz`
 
-- [`date`](../date)
-- [`text`](../text)
-- `timestamp`
-- `timestamp with time zone`
+You can [cast](../../functions/cast) the following types to `timestamp` or `timestamptz`:
+
+- [`date`](../date) (implicitly)
+- [`text`](../text) (explicitly)
 
 ### Valid operations
 
@@ -96,6 +93,8 @@ Operation | Computes
 
 ## Examples
 
+### Return timestamp
+
 ```sql
 SELECT TIMESTAMP '2007-02-01 15:04:05' AS ts_v;
 ```
@@ -105,7 +104,7 @@ SELECT TIMESTAMP '2007-02-01 15:04:05' AS ts_v;
  2007-02-01 15:04:05
 ```
 
-<hr/>
+### Return timestamp with time zone
 
 ```sql
 SELECT TIMESTAMPTZ '2007-02-01 15:04:05+06' AS tstz_v;
@@ -115,3 +114,6 @@ SELECT TIMESTAMPTZ '2007-02-01 15:04:05+06' AS tstz_v;
 -------------------------
  2007-02-01 09:04:05 UTC
 ```
+
+## Related topics
+* [`TIMEZONE` and `AT TIME ZONE` functions](../../functions/timezone-and-at-time-zone)

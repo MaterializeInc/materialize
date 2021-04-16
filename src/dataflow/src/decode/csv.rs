@@ -54,7 +54,7 @@ where
             let mut buffer = vec![0u8];
             let mut bounds = vec![0usize];
             let mut csv_reader = csv_core::ReaderBuilder::new().delimiter(delimiter).build();
-            let mut row_packer = repr::RowPacker::new();
+            let mut row_packer = Row::default();
             move |input, output| {
                 let mut events_success = 0;
                 let mut events_error = 0;
@@ -143,28 +143,29 @@ where
                                             ));
                                         } else {
                                             events_success += 1;
-                                            session.give((
-                                                Ok(row_packer.pack(
-                                                    (0..n_cols)
-                                                        .map(|i| {
-                                                            // Unsafety rationalized as 1. the input text is determined to be
-                                                            // valid utf8, and 2. the delimiter is ascii, which should make each
-                                                            // delimited region also utf8.
-                                                            Datum::String(unsafe {
-                                                                if demanded[i] {
-                                                                    std::str::from_utf8_unchecked(
-                                                                        &buffer[bounds[i]
-                                                                            ..bounds[i + 1]],
-                                                                    )
-                                                                } else {
-                                                                    ""
-                                                                }
-                                                            })
+                                            row_packer.extend(
+                                                (0..n_cols)
+                                                    .map(|i| {
+                                                        // Unsafety rationalized as 1. the input text is determined to be
+                                                        // valid utf8, and 2. the delimiter is ascii, which should make each
+                                                        // delimited region also utf8.
+                                                        Datum::String(unsafe {
+                                                            if demanded[i] {
+                                                                std::str::from_utf8_unchecked(
+                                                                    &buffer[bounds[i]
+                                                                        ..bounds[i + 1]],
+                                                                )
+                                                            } else {
+                                                                ""
+                                                            }
                                                         })
-                                                        .chain(iter::once(
-                                                            line_no.map(Datum::Int64).into(),
-                                                        )),
-                                                )),
+                                                    })
+                                                    .chain(iter::once(
+                                                        line_no.map(Datum::Int64).into(),
+                                                    )),
+                                            );
+                                            session.give((
+                                                Ok(row_packer.finish_and_reuse()),
                                                 *cap.time(),
                                                 1,
                                             ));

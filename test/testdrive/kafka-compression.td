@@ -60,3 +60,10 @@ world
 > SELECT text FROM zstd
 hello
 world
+
+> CREATE MATERIALIZED SOURCE zstd_fast_forwarded
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-zstd-${testdrive.seed}'
+  WITH (start_offset=1)
+  FORMAT TEXT
+> SELECT text FROM zstd_fast_forwarded
+world

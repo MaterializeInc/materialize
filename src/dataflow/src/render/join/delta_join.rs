@@ -25,7 +25,7 @@ use timely::dataflow::Scope;
 
 use dataflow_types::DataflowError;
 use expr::{JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr};
-use repr::{Datum, Row, RowArena, RowPacker, Timestamp};
+use repr::{Datum, Row, RowArena, Timestamp};
 
 use super::super::context::{ArrangementFlavor, Context};
 use crate::operator::CollectionExt;
@@ -403,17 +403,12 @@ where
                                 if let Some(initial_closure) = initial_closure {
                                     let (stream, errs) = update_stream.flat_map_fallible({
                                         let mut datums = DatumVec::new();
-                                        let mut row_packer = RowPacker::new();
                                         move |row| {
                                             let temp_storage = RowArena::new();
                                             let mut datums_local = datums.borrow_with(&row);
                                             // TODO(mcsherry): re-use `row` allocation.
                                             initial_closure
-                                                .apply(
-                                                    &mut datums_local,
-                                                    &temp_storage,
-                                                    &mut row_packer,
-                                                )
+                                                .apply(&mut datums_local, &temp_storage)
                                                 .transpose()
                                         }
                                     });
@@ -482,17 +477,12 @@ where
                                     let (updates, errors) = update_stream.flat_map_fallible({
                                         // Reuseable allocation for unpacking.
                                         let mut datums = DatumVec::new();
-                                        let mut row_packer = repr::RowPacker::new();
                                         move |row| {
                                             let temp_storage = RowArena::new();
                                             let mut datums_local = datums.borrow_with(&row);
                                             // TODO(mcsherry): re-use `row` allocation.
                                             final_closure
-                                                .apply(
-                                                    &mut datums_local,
-                                                    &temp_storage,
-                                                    &mut row_packer,
-                                                )
+                                                .apply(&mut datums_local, &temp_storage)
                                                 .map_err(DataflowError::from)
                                                 .transpose()
                                         }
@@ -559,7 +549,7 @@ where
     let (updates, errs) = updates.map_fallible({
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
-        let mut row_packer = RowPacker::new();
+        let mut row_packer = Row::default();
         move |row| {
             let temp_storage = RowArena::new();
             let datums_local = datums.borrow_with(&row);
@@ -580,7 +570,6 @@ where
     use timely::dataflow::operators::OkErr;
 
     let mut datums = DatumVec::new();
-    let mut row_packer = RowPacker::new();
     let (oks, errs2) = dogsdogsdogs::operators::lookup_map(
         &updates,
         trace,
@@ -595,7 +584,7 @@ where
             datums_local.extend(stream_row.iter());
             datums_local.extend(lookup_row.iter());
             (
-                closure.apply(&mut datums_local, &temp_storage, &mut row_packer),
+                closure.apply(&mut datums_local, &temp_storage),
                 diff1 * diff2,
             )
         },

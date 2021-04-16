@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::convert::TryInto;
+use std::convert::{TryFrom, TryInto};
 use std::error::Error;
 use std::io;
 use std::str;
@@ -23,14 +23,16 @@ use ore::fmt::FormatBuffer;
 use repr::adt::array::ArrayDimension;
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::jsonb::JsonbRef;
+use repr::adt::rdn as adt_rdn;
 use repr::strconv::{self, Nestable};
-use repr::{ColumnName, Datum, RelationType, Row, RowArena, RowPacker, ScalarType};
+use repr::{ColumnName, Datum, RelationType, Row, RowArena, ScalarType};
 
-use crate::{Format, Interval, Jsonb, Numeric, Type};
+use crate::{types, Format, Interval, Jsonb, Numeric, RDNValue, Type};
 
 pub mod interval;
 pub mod jsonb;
 pub mod numeric;
+pub mod rdn;
 pub mod record;
 
 /// A PostgreSQL datum.
@@ -79,6 +81,8 @@ pub enum Value {
     Text(String),
     /// A universally unique identifier.
     Uuid(Uuid),
+    /// Refactored numeric using `rust-dec`.
+    RDN(RDNValue),
 }
 
 impl Value {
@@ -98,6 +102,12 @@ impl Value {
             (Datum::Float64(f), ScalarType::Float64) => Some(Value::Float8(*f)),
             (Datum::Decimal(d), ScalarType::Decimal(_, scale)) => {
                 Some(Value::Numeric(Numeric(d.with_scale(*scale))))
+            }
+            (Datum::Numeric(mut n), ScalarType::Numeric { scale }) => {
+                if let Some(scale) = scale {
+                    adt_rdn::rescale(&mut n, *scale).unwrap();
+                }
+                Some(Value::RDN(RDNValue(n)))
             }
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
@@ -178,13 +188,13 @@ impl Value {
                     _ => panic!("Value::List should have type Type::List. Found {:?}", typ),
                 };
                 let (_, elem_type) = null_datum(&elem_pg_type);
-                let mut packer = RowPacker::new();
-                packer.push_list(elems.into_iter().map(|elem| match elem {
+                let mut row = Row::default();
+                row.push_list(elems.into_iter().map(|elem| match elem {
                     Some(elem) => elem.into_datum(buf, &elem_pg_type).0,
                     None => Datum::Null,
                 }));
                 (
-                    buf.push_unary_row(packer.finish()),
+                    buf.push_unary_row(row),
                     ScalarType::List {
                         element_type: Box::new(elem_type),
                         custom_oid: None,
@@ -197,18 +207,18 @@ impl Value {
                     _ => panic!("Value::Map should have type Type::Map. Found {:?}", typ),
                 };
                 let (_, elem_type) = null_datum(&elem_pg_type);
-                let mut packer = RowPacker::new();
-                packer.push_dict_with(|packer| {
+                let mut row = Row::default();
+                row.push_dict_with(|row| {
                     for (k, v) in map {
-                        packer.push(Datum::String(&k));
-                        packer.push(match v {
+                        row.push(Datum::String(&k));
+                        row.push(match v {
                             Some(elem) => elem.into_datum(buf, &elem_pg_type).0,
                             None => Datum::Null,
                         });
                     }
                 });
                 (
-                    buf.push_unary_row(packer.finish()),
+                    buf.push_unary_row(row),
                     ScalarType::Map {
                         value_type: Box::new(elem_type),
                         custom_oid: None,
@@ -230,6 +240,12 @@ impl Value {
             Value::Interval(iv) => (Datum::Interval(iv.0), ScalarType::Interval),
             Value::Text(s) => (Datum::String(buf.push_string(s)), ScalarType::String),
             Value::Uuid(u) => (Datum::Uuid(u), ScalarType::Uuid),
+            Value::RDN(n) => (
+                Datum::from(n.0),
+                ScalarType::Numeric {
+                    scale: Some(u8::try_from(adt_rdn::get_scale(&n.0)).unwrap()),
+                },
+            ),
         }
     }
 
@@ -284,6 +300,7 @@ impl Value {
             Value::Timestamp(ts) => strconv::format_timestamp(buf, *ts),
             Value::TimestampTz(ts) => strconv::format_timestamptz(buf, *ts),
             Value::Uuid(u) => strconv::format_uuid(buf, *u),
+            Value::RDN(n) => strconv::format_numeric(buf, &n.0),
         }
     }
 
@@ -348,6 +365,7 @@ impl Value {
             Value::Timestamp(ts) => ts.to_sql(&PgType::TIMESTAMP, buf),
             Value::TimestampTz(ts) => ts.to_sql(&PgType::TIMESTAMPTZ, buf),
             Value::Uuid(u) => u.to_sql(&PgType::UUID, buf),
+            Value::RDN(n) => n.to_sql(&types::RDN, buf),
         }
         .expect("encode_binary should never trigger a to_sql failure");
         if let IsNull::Yes = is_null {
@@ -404,6 +422,10 @@ impl Value {
             Type::Timestamp => Value::Timestamp(strconv::parse_timestamp(raw)?),
             Type::TimestampTz => Value::TimestampTz(strconv::parse_timestamptz(raw)?),
             Type::Uuid => Value::Uuid(Uuid::parse_str(raw)?),
+            Type::RDN => {
+                let d = strconv::parse_numeric(raw)?;
+                Value::RDN(RDNValue(d))
+            }
         })
     }
 
@@ -430,6 +452,7 @@ impl Value {
             Type::Timestamp => NaiveDateTime::from_sql(ty.inner(), raw).map(Value::Timestamp),
             Type::TimestampTz => DateTime::<Utc>::from_sql(ty.inner(), raw).map(Value::TimestampTz),
             Type::Uuid => Uuid::from_sql(ty.inner(), raw).map(Value::Uuid),
+            Type::RDN => RDNValue::from_sql(ty.inner(), raw).map(Value::RDN),
         }
     }
 }
@@ -481,6 +504,7 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
             }
         }
         Type::Numeric => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
+        Type::RDN => ScalarType::Numeric { scale: None },
         Type::Oid => ScalarType::Oid,
         Type::Text => ScalarType::String,
         Type::Time => ScalarType::Time,

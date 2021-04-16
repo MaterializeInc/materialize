@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
-use log::error;
+use log::{debug, error};
 use tokio::io::{self, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -103,7 +103,7 @@ async fn handle_connection(handlers: Arc<Handlers>, conn: TcpStream) {
         }
     }
 
-    log::warn!(
+    debug!(
         "dropped connection using unknown protocol (sniffed: 0x{})",
         hex::encode(buf)
     );

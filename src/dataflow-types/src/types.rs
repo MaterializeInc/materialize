@@ -76,7 +76,7 @@ pub struct BuildDesc {
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Default)]
 pub struct DataflowDesc {
-    pub source_imports: BTreeMap<GlobalId, SourceDesc>,
+    pub source_imports: BTreeMap<GlobalId, (SourceDesc, GlobalId)>,
     pub index_imports: BTreeMap<GlobalId, (IndexDesc, RelationType)>,
     /// Views and indexes to be built and stored in the local context.
     /// Objects must be built in the specific order as the Vec
@@ -131,17 +131,15 @@ impl DataflowDesc {
         id: GlobalId,
         connector: SourceConnector,
         bare_desc: RelationDesc,
-        optimized_expr: OptimizedMirRelationExpr,
-        desc: RelationDesc,
+        orig_id: GlobalId,
     ) {
         let source_description = SourceDesc {
             connector,
             operators: None,
             bare_desc,
-            optimized_expr,
-            desc,
         };
-        self.source_imports.insert(id, source_description);
+        self.source_imports
+            .insert(id, (source_description, orig_id));
     }
 
     pub fn add_view_to_build(
@@ -280,9 +278,9 @@ impl DataflowDesc {
 
     /// The number of columns associated with an identifier in the dataflow.
     pub fn arity_of(&self, id: &GlobalId) -> usize {
-        for (source_id, desc) in self.source_imports.iter() {
+        for (source_id, (desc, _orig_id)) in self.source_imports.iter() {
             if source_id == id {
-                return desc.arity();
+                return desc.bare_desc.arity();
             }
         }
         for (_index_id, (desc, typ)) in self.index_imports.iter() {
@@ -395,6 +393,10 @@ impl DataEncoding {
             }) => {
                 let d = decode_descriptors(descriptors)?;
                 validate_descriptors(message_name, &d)?
+                    .into_iter()
+                    .fold(key_desc, |desc, (name, ty)| {
+                        desc.with_column(name.unwrap(), ty)
+                    })
             }
             DataEncoding::Regex(RegexEncoding { regex }) => regex
                 .capture_names()
@@ -483,15 +485,6 @@ pub struct SourceDesc {
     /// to the output of the source.
     pub operators: Option<LinearOperator>,
     pub bare_desc: RelationDesc,
-    pub optimized_expr: OptimizedMirRelationExpr,
-    pub desc: RelationDesc,
-}
-
-impl SourceDesc {
-    /// Computes the arity of this source.
-    pub fn arity(&self) -> usize {
-        self.optimized_expr.0.arity()
-    }
 }
 
 /// A sink for updates to a relational collection.
@@ -522,7 +515,7 @@ pub struct SinkAsOf {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SourceEnvelope {
     None,
-    Debezium(DebeziumDeduplicationStrategy),
+    Debezium(DebeziumDeduplicationStrategy, DebeziumMode),
     Upsert(DataEncoding),
     CdcV2,
 }
@@ -538,7 +531,14 @@ impl SourceEnvelope {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DebeziumMode {
+    Plain,
+    /// Keep track of keys from upstream and discard retractions for new keys
+    Upsert,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Compression {
     Gzip,
     None,
@@ -554,6 +554,32 @@ pub enum SourceConnector {
         ts_frequency: Duration,
     },
     Local,
+}
+
+impl SourceConnector {
+    /// Returns `true` if this connector yields input data (including
+    /// timestamps) that is stable across restarts. This is important for
+    /// exactly-once Sinks that need to ensure that the same data is written,
+    /// even when failures/restarts happen.
+    pub fn yields_stable_input(&self) -> bool {
+        if let SourceConnector::External {
+            connector: ExternalSourceConnector::Kafka(_),
+            consistency: Consistency::BringYourOwn(_),
+            ..
+        } = self
+        {
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn caching_enabled(&self) -> bool {
+        match self {
+            SourceConnector::External { connector, .. } => connector.caching_enabled(),
+            SourceConnector::Local => false,
+        }
+    }
 }
 
 pub fn cached_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {
@@ -573,6 +599,7 @@ pub enum ExternalSourceConnector {
     AvroOcf(FileSourceConnector),
     S3(S3SourceConnector),
     Postgres(PostgresSourceConnector),
+    PubNub(PubNubSourceConnector),
 }
 
 impl ExternalSourceConnector {
@@ -594,6 +621,7 @@ impl ExternalSourceConnector {
             // TODO: should we include object key and possibly object-internal offset here?
             Self::S3(_) => vec![("mz_record".into(), ScalarType::Int64.nullable(false))],
             Self::Postgres(_) => vec![],
+            Self::PubNub(_) => vec![],
         }
     }
 
@@ -606,6 +634,7 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::AvroOcf(_) => "avro-ocf",
             ExternalSourceConnector::S3(_) => "s3",
             ExternalSourceConnector::Postgres(_) => "postgres",
+            ExternalSourceConnector::PubNub(_) => "pubnub",
         }
     }
 
@@ -650,12 +679,12 @@ pub struct KafkaOffset {
 /// with Timestamp.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TimestampSourceUpdate {
-    /// Update for an RT source: contains an updated partition count for this source
-    RealTime(i32),
-    ///  Timestamp update for a BYO source: contains an updated partition count for this source,
-    /// combined with a PartitionID, Timestamp, MzOffset tuple. This tuple informs workers that
-    /// messages with Offset on PartitionId will be timestamped with Timestamp.
-    BringYourOwn(i32, PartitionId, u64, MzOffset),
+    /// Update for an RT source: contains a new partition to add to this source.
+    RealTime(PartitionId),
+    /// Timestamp update for a BYO source: contains a PartitionID, Timestamp,
+    /// MzOffset tuple. This tuple informs workers that messages with Offset on
+    /// PartitionId will be timestamped with Timestamp.
+    BringYourOwn(PartitionId, u64, MzOffset),
 }
 
 /// Convert from KafkaOffset to MzOffset (1-indexed)
@@ -713,6 +742,13 @@ pub struct PostgresSourceConnector {
     pub publication: String,
     pub namespace: String,
     pub table: String,
+    pub cast_exprs: Vec<MirScalarExpr>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PubNubSourceConnector {
+    pub subscribe_key: String,
+    pub channel: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -720,9 +756,10 @@ pub struct S3SourceConnector {
     pub key_sources: Vec<S3KeySource>,
     pub pattern: Option<Glob>,
     pub aws_info: aws::ConnectInfo,
+    pub compression: Compression,
 }
 
-/// A Source of Object Key names, the argument of the `OBJECTS FROM` clause
+/// A Source of Object Key names, the argument of the `DISCOVER OBJECTS` clause
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum S3KeySource {
     /// Scan the S3 Bucket to discover keys to download
@@ -760,6 +797,7 @@ pub struct KafkaSinkConnector {
     pub key_schema_id: Option<i32>,
     pub value_schema_id: i32,
     pub consistency: Option<KafkaSinkConsistencyConnector>,
+    pub exactly_once: bool,
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,

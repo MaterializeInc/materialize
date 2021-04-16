@@ -19,7 +19,7 @@ use ore::collections::CollectionExt;
 use repr::{ColumnType, Datum, RelationType, Row};
 
 use self::func::{AggregateFunc, TableFunc};
-use crate::explain::Explanation;
+use crate::explain::ViewExplanation;
 use crate::{DummyHumanizer, EvalError, ExprHumanizer, GlobalId, Id, LocalId, MirScalarExpr};
 
 pub mod canonicalize;
@@ -28,7 +28,7 @@ pub mod join_input_mapper;
 
 /// An abstract syntax tree which defines a collection.
 ///
-/// The AST is meant reflect the capabilities of the [`differential_dataflow::Collection`] type,
+/// The AST is meant reflect the capabilities of the `differential_dataflow::Collection` type,
 /// written generically enough to avoid run-time compilation work.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub enum MirRelationExpr {
@@ -97,7 +97,7 @@ pub enum MirRelationExpr {
         /// expensive to reproduce, so restricting what we produce
         /// as output can be a substantial win.
         ///
-        /// See [`expr::transform::Demand`] for more details.
+        /// See `transform::Demand` for more details.
         demand: Option<Vec<usize>>,
     },
     /// Keep rows from a dataflow where all the predicates are true
@@ -135,7 +135,7 @@ pub enum MirRelationExpr {
         /// dummy values at the end of its computation, avoiding the maintenance of values
         /// not present in this list (when it is non-None).
         ///
-        /// See [`expr::transform::Demand`] for more details.
+        /// See `transform::Demand` for more details.
         demand: Option<Vec<usize>>,
         /// Join implementation information.
         implementation: JoinImplementation,
@@ -455,7 +455,71 @@ impl MirRelationExpr {
                             .unwrap();
                     }
                 }
-                RelationType::new(base_cols)
+
+                // Generally, unions do not have any unique keys, because
+                // each input might duplicate some. However, there is at
+                // least one idiomatic structure that does preserve keys,
+                // which results from SQL aggregations that must populate
+                // absent records with default values. In that pattern,
+                // the union of one GET with its negation, which has first
+                // been subjected to a projection and map, we can remove
+                // their influence on the key structure.
+                //
+                // If there are A, B, each with a unique `key` such that
+                // we are looking at
+                //
+                //     A + (B - A.proj(key)).map(stuff)
+                //
+                // Then we can report `key` as a unique key.
+                //
+                // TODO: make unique key structure an optimization analysis
+                // rather than part of the type information.
+                // TODO: perhaps ensure that (above) A.proj(key) is a
+                // subset of B, as otherwise there are negative records
+                // and who knows what is true (not expected, but again
+                // who knows what the query plan might look like).
+                let mut keys = Vec::new();
+                if let MirRelationExpr::Get {
+                    id: first_id,
+                    typ: _,
+                } = &**base
+                {
+                    if inputs.len() == 1 {
+                        if let MirRelationExpr::Map { input, .. } = &inputs[0] {
+                            if let MirRelationExpr::Union { base, inputs } = &**input {
+                                if inputs.len() == 1 {
+                                    if let MirRelationExpr::Project { input, outputs } = &**base {
+                                        if let MirRelationExpr::Negate { input } = &**input {
+                                            if let MirRelationExpr::Get {
+                                                id: second_id,
+                                                typ: _,
+                                            } = &**input
+                                            {
+                                                if first_id == second_id {
+                                                    keys.extend(
+                                                        inputs[0].typ().keys.drain(..).filter(
+                                                            |key| {
+                                                                key.iter().all(|c| {
+                                                                    outputs.get(*c) == Some(c)
+                                                                })
+                                                            },
+                                                        ),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let mut result = RelationType::new(base_cols);
+                for key in keys {
+                    result = result.with_key(key);
+                }
+                result
                 // Important: do not inherit keys of either input, as not unique.
             }
             MirRelationExpr::ArrangeBy { input, .. } => input.typ(),
@@ -491,10 +555,9 @@ impl MirRelationExpr {
                 );
             }
         }
-        let mut row_packer = repr::RowPacker::new();
         let rows = Ok(rows
             .into_iter()
-            .map(move |(row, diff)| (row_packer.pack(row), diff))
+            .map(move |(row, diff)| (Row::pack_slice(&row), diff))
             .collect());
         MirRelationExpr::Constant { rows, typ }
     }
@@ -1057,12 +1120,12 @@ impl MirRelationExpr {
     /// This method allows an additional `ExprHumanizer` which can annotate
     /// identifiers with human-meaningful names for the identifiers.
     pub fn pretty_humanized(&self, id_humanizer: &impl ExprHumanizer) -> String {
-        Explanation::new(self, id_humanizer).to_string()
+        ViewExplanation::new(self, id_humanizer).to_string()
     }
 
     /// Pretty-print this MirRelationExpr to a string.
     pub fn pretty(&self) -> String {
-        Explanation::new(self, &DummyHumanizer).to_string()
+        ViewExplanation::new(self, &DummyHumanizer).to_string()
     }
 
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the correct type.
@@ -1185,6 +1248,17 @@ impl MirRelationExpr {
             input: Box::new(self),
             keys,
         }
+    }
+
+    /// Returns whether this collection is just a `Get` wrapping an underlying bare source.
+    pub fn is_trivial_source(&self) -> bool {
+        matches!(
+            self,
+            MirRelationExpr::Get {
+                id: Id::LocalBareSource,
+                ..
+            }
+        )
     }
 }
 
@@ -1329,11 +1403,11 @@ impl RowSetFinishing {
                 rows.drain(..offset);
             }
             rows.sort_by(&mut sort_by);
-            let mut row_packer = repr::RowPacker::new();
+            let mut row_packer = Row::default();
             for row in rows {
                 let datums = row.unpack();
-                let new_row = row_packer.pack(self.project.iter().map(|i| &datums[*i]));
-                *row = new_row;
+                row_packer.extend(self.project.iter().map(|i| &datums[*i]));
+                *row = row_packer.finish_and_reuse();
             }
         }
     }

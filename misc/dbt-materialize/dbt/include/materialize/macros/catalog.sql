@@ -42,7 +42,7 @@
     from pg_catalog.pg_namespace sch
     join pg_catalog.pg_class tbl on tbl.relnamespace = sch.oid
     join (select mz_columns.name as attname, position as attnum, mz_relations.oid as attrelid, FALSE as attisdropped, mz_columns.type as type
-          from mz_columns join mz_relations on mz_columns.id = mz_relations.id join mz_types on mz_columns.type = mz_types.name)
+          from mz_columns join mz_relations on mz_columns.id = mz_relations.id)
           as col on col.attrelid = tbl.oid
     left outer join pg_catalog.pg_description tbl_desc on (tbl_desc.objoid = tbl.oid and tbl_desc.objsubid = 0)
     left outer join pg_catalog.pg_description col_desc on (col_desc.objoid = tbl.oid and col_desc.objsubid = col.attnum)

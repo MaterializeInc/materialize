@@ -119,7 +119,7 @@ where
             .collect::<Vec<_>>();
     }
     let temporal_plan = if !temporal.is_empty() {
-        Some(crate::FilterPlan::create_from(temporal).unwrap_or_else(|e| panic!(e)))
+        Some(crate::FilterPlan::create_from(temporal).unwrap_or_else(|e| panic!("{}", e)))
     } else {
         None
     };
@@ -139,7 +139,7 @@ where
             let mut current_values = HashMap::new();
 
             let mut vector = Vec::new();
-            let mut row_packer = repr::RowPacker::new();
+            let mut row_packer = repr::Row::default();
 
             move |input, output| {
                 // Digest each input, reduce by presented timestamp.
@@ -205,7 +205,10 @@ where
                             // which would allow us to recover from key decoding errors by a
                             // later retraction of the key (it will never decode correctly, but
                             // we could produce and then remove the error from the output).
-                            match key_decoder_state.decode_key(&key) {
+                            //
+                            // TODO(bwm): migrate upsert to use the same framework for key-value
+                            // decoding as other code, as we build out a design for that.
+                            match key_decoder_state.decode_upsert_value(&key, None, None) {
                                 Ok(Some(decoded_key)) => {
                                     let decoded_value = if data.value.is_empty() {
                                         Ok(None)
@@ -319,7 +322,7 @@ fn evaluate(
     datums: &[Datum],
     predicates: &[MirScalarExpr],
     position_or: &[Option<usize>],
-    row_packer: &mut repr::RowPacker,
+    row_packer: &mut repr::Row,
 ) -> Result<Option<Row>, EvalError> {
     let arena = RowArena::new();
     // Each predicate is tested in order.

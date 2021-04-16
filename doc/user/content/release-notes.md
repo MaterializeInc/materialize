@@ -46,6 +46,69 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.7.3 %}}
+
+- Add the [`pow`](/sql/functions/#numbers-func) function as an alias for the
+  [`power`](/sql/functions/#numbers-func) function.
+
+- Add a new metric, `mz_log_message_total` that counts the number of log
+  messages emitted per severity.
+
+- Add new system tables, `mz_metrics`, `mz_metric_histograms` and
+  `mz_metrics_meta`, which import metrics exposed via prometheus once per
+  second, retaining them for 5 minutes (governed by the new
+  [command-line option `--retain-prometheus-metrics`](/cli/#introspection-sources)).
+
+{{% version-header v0.7.2 %}}
+
+- Introduce the concept of [volatility](/overview/volatility) to describe
+  sources that do not provide reliability guarantees that
+  Materialize relies on. The new volatility information is surfaced via
+  [`SHOW SOURCES`](/sql/show-sources), [`SHOW VIEWS`](/sql/show-views),
+  and [`SHOW SINKS`](/sql/show-sinks).
+
+- Add [PubNub sources](/sql/create-source/text-pubnub).
+
+- Add [`S3` sources](/sql/create-source/text-s3).
+
+- Add a [`--log-filter` command-line option](/cli/#logging) and a
+  `MZ_LOG_FILTER` environment variable that control which log messages to emit.
+
+  This behavior was previously available via the undocumented `MZ_LOG`
+  environment variable, which will be removed in a future release.
+
+- Record Kafka Consumer metrics in the `mz_kafka_consumer_partitions` system
+  table. Enabled by default for all Kafka sources.
+
+- Add the [`jsonb_object_agg`](/sql/functions/jsonb_object_agg) function to
+  aggregate rows into a JSON object.
+
+- Permit the [`jsonb`](/sql/types/jsonb) type to store all 64-bit integers
+  {{% gh 5919 %}}.
+  Previously integers in the following ranges were rejected:
+
+    * [-2<sup>64</sup>, -(2^<sup>53</sup>-1)]
+    * [2<sup>53</sup> - 1, 2^<sup>64</sup>-1].
+
+- Add the [`pg_postmaster_start_time`](/sql/functions#postgresql-compatibility-func)
+  function, which reports the time at which the server started.
+
+- Add the [`mz_workers`](/sql/functions#postgresql-compatibility-func)
+  function, which reports the number of workers in use by the server.
+
+- Add the [`mz_uptime`](/sql/functions#system-information-func)
+  function, which reports the duration for which the server has been running.
+
+- Add the [`repeat`](/sql/functions#string-func) function, which repeats a
+  string N times.
+
+- Avoid panicking when planning SQL queries of the form
+  `SELECT DISTINCT ... ORDER BY <expr>` where `expr` is not a simple column
+  reference {{% gh 6021 %}}.
+
+- Support Kafka log compaction on Debezium topics via the [`DEBEZIUM
+  UPSERT`](/sql/create-source/avro-kafka/#debezium-envelope-details) source envelope.
+
 {{% version-header v0.7.1 %}}
 
 - **Breaking change.** Change the default
@@ -71,6 +134,8 @@ Wrap your release notes at the 80 character mark.
 
   Thanks again to external contributor [@andrioni](https://github.com/andrioni).
 
+- Add [`DROP TYPE`](/sql/drop-type) and [`SHOW TYPES`](/sql/show-types) commands.
+
 - Multipartition Kafka sinks with consistency enabled will create single-partition
   consistency topics.
 
@@ -84,10 +149,6 @@ Wrap your release notes at the 80 character mark.
   from zero, as before.
 
   The new behavior matches PostgreSQL.
-
-- Support [multi-partition](/sql/create-sink/#with-options) kafka sinks {{% gh 5537 %}}.
-
-- Support [gzip-compressed](/sql/create-source/text-file/#compression) file sources {{% gh 5392 %}}.
 
 - Restore the `-D` command-line option as the short form of the
   [`--data-directory`](/cli/#data-directory) option.
@@ -114,6 +175,8 @@ Wrap your release notes at the 80 character mark.
 - Add the basic exponentiation, power and [logarithm functions](/sql/functions/#numbers-func).
 
 - Add `position` to the [string function](/sql/functions#string-func) suite.
+
+- Add `right` to the [string function](/sql/functions#string-func) suite.
 
 {{% version-header v0.7.0 %}}
 
@@ -254,6 +317,8 @@ Wrap your release notes at the 80 character mark.
   - Handle parsing [`timestamp`](/sql/types/timestamp) and [`timestamptz`](/sql/types/timestamptz)
     from additional compact formats like `700203` {{% gh 4889 %}}.
 
+  - Support conversion of [`timestamp`](/sql/types/timestamp) and [`timestamptz`](/sql/types/timestamptz) to other time zones with [`AT TIME ZONE`](/sql/functions/#date-and-time-func) and [`timezone`](/sql/functions/#date-and-time-func) functions.
+
 - Add the `upper` and `lower` [string functions](/sql/functions#string-func),
   which convert any alphabetic characters in a string to uppercase and
   lowercase, respectively.
@@ -286,10 +351,6 @@ Wrap your release notes at the 80 character mark.
   certain type appeared in the same `SELECT` query {{% gh 5304 %}}.
 
 - Add the advanced [`--timely-progress-mode` and `--differential-idle-merge-effort` command-line arguments](/cli/#dataflow-tuning) to tune dataflow performance. These arguments replace existing undocumented environment variables.
-
-{{< comment >}}
-Document new timezone stuff and add a release note about it.
-{{< /comment >}}
 
 {{% version-header v0.6.0 %}}
 

@@ -252,7 +252,7 @@ FROM y
 ----
 %0 =
 | Get materialize.public.y (u5)
-| Map (!(#1) || null)
+| Map (null || !(#1))
 | Project (#2)
 
 EOF
@@ -292,7 +292,7 @@ FROM y
 ----
 %0 =
 | Get materialize.public.y (u5)
-| Map (!(#1) && null)
+| Map (null && !(#1))
 | Project (#2)
 
 EOF

@@ -27,7 +27,7 @@ pub mod explain;
 pub use relation::canonicalize;
 
 pub use id::{GlobalId, Id, LocalId, PartitionId, SourceInstanceId};
-pub use linear::MapFilterProject;
+pub use linear::{memoize_expr, MapFilterProject};
 pub use relation::func::{AggregateFunc, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::join_input_mapper::JoinInputMapper;
@@ -39,7 +39,7 @@ pub use scalar::func::{BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc};
 pub use scalar::{like_pattern, EvalError, MirScalarExpr};
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
-/// [`Optimizer`].
+/// `transform::Optimizer`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct OptimizedMirRelationExpr(pub MirRelationExpr);
 

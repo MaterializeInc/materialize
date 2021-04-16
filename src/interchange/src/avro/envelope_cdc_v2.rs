@@ -10,7 +10,7 @@
 //! Logic for the Avro representation of the CDCv2 protocol.
 
 use mz_avro::schema::{FullName, SchemaNode};
-use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, RowPacker, Timestamp};
+use repr::{ColumnName, ColumnType, Diff, RelationDesc, Row, Timestamp};
 use serde_json::json;
 
 use anyhow::anyhow;
@@ -63,11 +63,11 @@ impl Encoder {
             let enc_data = super::encode_datums_as_avro(data, &self.columns);
             let enc_time = Value::Long(time.clone());
             let enc_diff = Value::Long(diff.clone());
-            let mut enc_update = Vec::new();
-            enc_update.push(("data".to_string(), enc_data));
-            enc_update.push(("time".to_string(), enc_time));
-            enc_update.push(("diff".to_string(), enc_diff));
-            enc_updates.push(Value::Record(enc_update));
+            enc_updates.push(Value::Record(vec![
+                ("data".to_string(), enc_data),
+                ("time".to_string(), enc_time),
+                ("diff".to_string(), enc_diff),
+            ]));
         }
         Value::Union {
             index: 0,
@@ -108,7 +108,7 @@ impl Encoder {
 }
 
 #[derive(AvroDecodable)]
-#[state_type(Rc<RefCell<RowPacker>>, Rc<RefCell<Vec<u8>>>)]
+#[state_type(Rc<RefCell<Row>>, Rc<RefCell<Vec<u8>>>)]
 struct MyUpdate {
     #[state_expr(self._STATE.0.clone(), self._STATE.1.clone())]
     data: RowWrapper,
@@ -148,7 +148,7 @@ impl AvroDecode for Decoder {
     ) -> Result<Self::Out, AvroError> {
         match idx {
             0 => {
-                let packer = Rc::new(RefCell::new(RowPacker::new()));
+                let packer = Rc::new(RefCell::new(Row::default()));
                 let buf = Rc::new(RefCell::new(vec![]));
                 let d = ArrayAsVecDecoder::new(|| {
                     <MyUpdate as StatefulAvroDecodable>::new_decoder((packer.clone(), buf.clone()))
@@ -176,7 +176,7 @@ impl AvroDecode for Decoder {
         }
     }
     define_unexpected! {
-        record, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+        record, array, map, enum_variant, scalar, decimal, numeric, bytes, string, json, uuid, fixed
     }
 }
 
@@ -278,7 +278,7 @@ mod tests {
             encoder.encode_progress(&[0], &[3], &[]),
             encoder.encode_progress(&[3], &[], &[]),
         ];
-        use mz_avro::encode::encode_to_vec;;
+        use mz_avro::encode::encode_to_vec;
         let mut values: Vec<_> = values
             .into_iter()
             .map(|v| encode_to_vec(&v, &schema))

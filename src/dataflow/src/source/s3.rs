@@ -12,10 +12,12 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::{From, TryInto};
 use std::default::Default;
+use std::io::Read;
 use std::ops::AddAssign;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
 
 use anyhow::{anyhow, Error};
+use flate2::read::MultiGzDecoder;
 use globset::GlobMatcher;
 use metrics::BucketMetrics;
 use notifications::Event;
@@ -24,19 +26,17 @@ use rusoto_sqs::{
     ChangeMessageVisibilityBatchRequest, ChangeMessageVisibilityBatchRequestEntry,
     DeleteMessageRequest, GetQueueUrlRequest, ReceiveMessageRequest, Sqs,
 };
-use timely::scheduling::{Activator, SyncActivator};
+use timely::scheduling::SyncActivator;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio::time::{self, Duration};
 
 use aws_util::aws;
-use dataflow_types::{DataEncoding, ExternalSourceConnector, MzOffset, S3KeySource};
+use dataflow_types::{Compression, DataEncoding, ExternalSourceConnector, MzOffset, S3KeySource};
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::logging::materialized::Logger;
-use crate::source::{
-    ConsistencyInfo, NextMessage, PartitionMetrics, SourceConstructor, SourceInfo, SourceMessage,
-};
+use crate::source::{NextMessage, SourceMessage, SourceReader};
 
 use self::metrics::ScanBucketMetrics;
 use self::notifications::{EventType, TestEvent};
@@ -50,19 +50,15 @@ struct InternalMessage {
 }
 
 /// Information required to load data from S3
-pub struct S3SourceInfo {
+pub struct S3SourceReader {
     /// The name of the source that the user entered
     source_name: String,
 
     // differential control
     /// Unique source ID
     id: SourceInstanceId,
-    /// Field is set if this operator is responsible for ingesting data
-    is_activated_reader: bool,
     /// Receiver channel that ingests records
     receiver_stream: Receiver<Result<InternalMessage, Error>>,
-    /// Buffer: store message that cannot yet be timestamped
-    buffer: Option<SourceMessage<Out>>,
     /// Total number of records that this source has read
     offset: S3Offset,
 }
@@ -86,86 +82,6 @@ impl From<S3Offset> for MzOffset {
     }
 }
 
-impl SourceConstructor<Vec<u8>> for S3SourceInfo {
-    fn new(
-        source_name: String,
-        source_id: SourceInstanceId,
-        active: bool,
-        worker_id: usize,
-        _worker_count: usize,
-        logger: Option<Logger>,
-        consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
-        consistency_info: &mut ConsistencyInfo,
-        _encoding: DataEncoding,
-    ) -> Result<S3SourceInfo, anyhow::Error> {
-        let s3_conn = match connector {
-            ExternalSourceConnector::S3(s3_conn) => s3_conn,
-            _ => {
-                panic!("S3 is the only legitimate ExternalSourceConnector for S3SourceInfo")
-            }
-        };
-
-        // a single arbitrary worker is responsible for scanning the bucket
-        let receiver = if active {
-            let (dataflow_tx, dataflow_rx) = std::sync::mpsc::sync_channel(10_000);
-            let (keys_tx, keys_rx) = tokio_mpsc::channel(10_000);
-            let glob = s3_conn.pattern.map(|g| g.compile_matcher());
-            let aws_info = s3_conn.aws_info;
-            tokio::spawn(download_objects_task(
-                source_id.to_string(),
-                keys_rx,
-                dataflow_tx,
-                aws_info.clone(),
-                consumer_activator,
-            ));
-            for key_source in s3_conn.key_sources {
-                match key_source {
-                    S3KeySource::Scan { bucket } => {
-                        log::debug!("reading s3 bucket={} worker={}", bucket, worker_id);
-                        tokio::spawn(scan_bucket_task(
-                            bucket,
-                            source_id.to_string(),
-                            glob.clone(),
-                            aws_info.clone(),
-                            keys_tx.clone(),
-                        ));
-                    }
-                    S3KeySource::SqsNotifications { queue } => {
-                        tokio::spawn(read_sqs_task(
-                            source_id.to_string(),
-                            glob.clone(),
-                            queue,
-                            aws_info.clone(),
-                            keys_tx.clone(),
-                        ));
-                    }
-                }
-            }
-            dataflow_rx
-        } else {
-            let (_tx, rx) = std::sync::mpsc::sync_channel(0);
-            rx
-        };
-
-        let pid = PartitionId::S3;
-        consistency_info.partition_metrics.insert(
-            pid.clone(),
-            PartitionMetrics::new(&source_name, source_id, "s3", logger),
-        );
-        consistency_info.update_partition_metadata(pid);
-
-        Ok(S3SourceInfo {
-            source_name,
-            id: source_id,
-            is_activated_reader: active,
-            receiver_stream: receiver,
-            buffer: None,
-            offset: S3Offset(0),
-        })
-    }
-}
-
 struct KeyInfo {
     bucket: String,
     key: String,
@@ -177,6 +93,7 @@ async fn download_objects_task(
     tx: SyncSender<anyhow::Result<InternalMessage>>,
     aws_info: aws::ConnectInfo,
     activator: SyncActivator,
+    compression: Compression,
 ) {
     let client = match aws_util::client::s3(aws_info).await {
         Ok(client) => client,
@@ -214,8 +131,15 @@ async fn download_objects_task(
                     seen_buckets.insert(msg.bucket.clone(), bi);
                 };
 
-                let update =
-                    download_object(&tx, &activator, &client, msg.bucket.clone(), msg.key).await;
+                let update = download_object(
+                    &tx,
+                    &activator,
+                    &client,
+                    msg.bucket.clone(),
+                    msg.key,
+                    compression,
+                )
+                .await;
 
                 if let Some(update) = update {
                     seen_buckets
@@ -260,6 +184,37 @@ async fn scan_bucket_task(
 
     let glob = glob.as_ref();
     let prefix = glob.map(|g| find_prefix(g.glob().glob()));
+
+    // for the special case of a single object in a matching clause, don't go through the ListObject
+    // dance.
+    //
+    // This isn't a meaningful performance optimization, it just makes it easy for folks to import a
+    // single object without grantin materialized the ListObjects IAM permission
+    let is_literal_object = glob.is_some() && prefix.as_deref() == glob.map(|g| g.glob().glob());
+    if is_literal_object {
+        let key = glob.unwrap().glob().glob();
+        log::debug!(
+            "downloading single object from s3 bucket={} key={}",
+            bucket,
+            key
+        );
+        if let Err(e) = tx
+            .send(Ok(KeyInfo {
+                bucket,
+                key: key.to_string(),
+            }))
+            .await
+        {
+            log::debug!("Unable to send single key to downloader: {}", e);
+        };
+
+        return;
+    } else {
+        log::debug!(
+            "scanning bucket to find objects to download bucket={}",
+            bucket
+        );
+    }
 
     let scan_metrics = ScanBucketMetrics::new(&source_id, &bucket);
 
@@ -563,11 +518,12 @@ async fn download_object(
     client: &S3Client,
     bucket: String,
     key: String,
+    compression: Compression,
 ) -> Option<DownloadMetricUpdate> {
     let obj = match client
         .get_object(GetObjectRequest {
             bucket: bucket.clone(),
-            key,
+            key: key.to_string(),
             ..Default::default()
         })
         .await
@@ -580,16 +536,60 @@ async fn download_object(
         }
     };
 
+    // If the Content-Type does not match the compression specified for this
+    // source, emit a debug warning messages and ignore this object
+    if let Some(s) = obj.content_encoding.as_deref() {
+        match (s, compression) {
+            ("gzip", Compression::Gzip) => (),
+            ("identity", Compression::None) => (),
+            // TODO: switch to `("identity" | "gzip", _)` when or_patterns stabilizes
+            ("identity", _) | ("gzip", _) => {
+                log::debug!("object {} has mismatched Content-Type: {}", key, s)
+            }
+            _ => log::debug!("object {} has unrecognized Content-Type: {}", key, s),
+        };
+    };
+
     if let Some(body) = obj.body {
         let mut reader = body.into_async_read();
         // unwrap is safe because content length is not allowed to be negative
         let mut buf = Vec::with_capacity(obj.content_length.unwrap_or(1024).try_into().unwrap());
         let mut messages = 0;
+        let mut bytes_read = 0;
 
         let mut sent = Sent::Success;
         match reader.read_to_end(&mut buf).await {
             Ok(_) => {
                 let activate = !buf.is_empty();
+
+                bytes_read = buf.len() as u64;
+
+                let buf = match compression {
+                    Compression::None => buf,
+                    Compression::Gzip => {
+                        let mut decoded = Vec::new();
+                        let mut decoder = MultiGzDecoder::new(&*buf);
+                        match decoder.read_to_end(&mut decoded) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                if let Err(e) = tx.send(Err(anyhow!(
+                                    "Failed to decode object {} using gzip: {}",
+                                    key,
+                                    e
+                                ))) {
+                                    log::debug!("unable to send error on stream: {}", e);
+                                }
+                                return Some(DownloadMetricUpdate {
+                                    bytes: bytes_read,
+                                    messages,
+                                    sent: Sent::SenderClosed,
+                                });
+                            }
+                        }
+                        decoded
+                    }
+                };
+
                 for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
                     if tx.send(Ok(InternalMessage { record: line })).is_err() {
                         sent = Sent::SenderClosed;
@@ -612,25 +612,87 @@ async fn download_object(
         }
 
         Some(DownloadMetricUpdate {
-            bytes: buf.len() as u64,
+            bytes: bytes_read,
             messages,
             sent,
         })
     } else {
-        log::warn!("get object response had no body");
+        if let Err(e) = tx.send(Err(anyhow!("Get object response had no body: {}", key))) {
+            log::debug!("unable to send error on stream: {}", e);
+        }
         None
     }
 }
 
-impl SourceInfo<Vec<u8>> for S3SourceInfo {
-    fn get_next_message(
-        &mut self,
-        _consistency_info: &mut ConsistencyInfo,
-        _activator: &Activator,
-    ) -> Result<NextMessage<Out>, anyhow::Error> {
-        if let Some(message) = self.buffer.take() {
-            return Ok(NextMessage::Ready(message));
-        }
+impl SourceReader<Vec<u8>> for S3SourceReader {
+    fn new(
+        source_name: String,
+        source_id: SourceInstanceId,
+        worker_id: usize,
+        consumer_activator: SyncActivator,
+        connector: ExternalSourceConnector,
+        _encoding: DataEncoding,
+        _: Option<Logger>,
+    ) -> Result<(S3SourceReader, Option<PartitionId>), anyhow::Error> {
+        let s3_conn = match connector {
+            ExternalSourceConnector::S3(s3_conn) => s3_conn,
+            _ => {
+                panic!("S3 is the only legitimate ExternalSourceConnector for S3SourceReader")
+            }
+        };
+
+        // a single arbitrary worker is responsible for scanning the bucket
+        let receiver = {
+            let (dataflow_tx, dataflow_rx) = std::sync::mpsc::sync_channel(10_000);
+            let (keys_tx, keys_rx) = tokio_mpsc::channel(10_000);
+            let glob = s3_conn.pattern.map(|g| g.compile_matcher());
+            let aws_info = s3_conn.aws_info;
+            tokio::spawn(download_objects_task(
+                source_id.to_string(),
+                keys_rx,
+                dataflow_tx,
+                aws_info.clone(),
+                consumer_activator,
+                s3_conn.compression,
+            ));
+            for key_source in s3_conn.key_sources {
+                match key_source {
+                    S3KeySource::Scan { bucket } => {
+                        log::debug!("reading s3 bucket={} worker={}", bucket, worker_id);
+                        tokio::spawn(scan_bucket_task(
+                            bucket,
+                            source_id.to_string(),
+                            glob.clone(),
+                            aws_info.clone(),
+                            keys_tx.clone(),
+                        ));
+                    }
+                    S3KeySource::SqsNotifications { queue } => {
+                        tokio::spawn(read_sqs_task(
+                            source_id.to_string(),
+                            glob.clone(),
+                            queue,
+                            aws_info.clone(),
+                            keys_tx.clone(),
+                        ));
+                    }
+                }
+            }
+            dataflow_rx
+        };
+
+        Ok((
+            S3SourceReader {
+                source_name,
+                id: source_id,
+                receiver_stream: receiver,
+                offset: S3Offset(0),
+            },
+            Some(PartitionId::S3),
+        ))
+    }
+
+    fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(InternalMessage { record })) => {
                 self.offset += 1;
@@ -654,57 +716,6 @@ impl SourceInfo<Vec<u8>> for S3SourceInfo {
             Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
             Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
         }
-    }
-
-    fn can_close_timestamp(
-        &self,
-        consistency_info: &ConsistencyInfo,
-        pid: &PartitionId,
-        offset: MzOffset,
-    ) -> bool {
-        if !self.is_activated_reader {
-            true
-        } else {
-            // TODO: when is this ever not true for S3?
-            let last_offset = consistency_info
-                .partition_metadata
-                .get(&pid)
-                // Guaranteed to exist for S3
-                .unwrap()
-                .offset;
-            last_offset >= offset
-        }
-    }
-
-    fn get_worker_partition_count(&self) -> i32 {
-        panic!("s3 sources do not support BYO consistency: get_worker_partition_count")
-    }
-
-    fn has_partition(&self, _partition_id: PartitionId) -> bool {
-        panic!("s3 sources do not support BYO consistency: has_partition")
-    }
-
-    fn ensure_has_partition(&mut self, _consistency_info: &mut ConsistencyInfo, _pid: PartitionId) {
-        panic!("s3 sources do not support BYO consistency: ensure_has_partition")
-    }
-
-    fn update_partition_count(
-        &mut self,
-        _consistency_info: &mut ConsistencyInfo,
-        _partition_count: i32,
-    ) {
-        // We can't do anything with just the number of "partitions" that we
-        // know about, fundamentally we know more than the timestamper about
-        // how many partitions there are.
-        //
-        // https://github.com/MaterializeInc/materialize/issues/5715
-    }
-
-    fn buffer_message(&mut self, message: SourceMessage<Out>) {
-        if self.buffer.is_some() {
-            panic!("Internal error: S3 buffer is not empty when asked to buffer message");
-        }
-        self.buffer = Some(message);
     }
 }
 

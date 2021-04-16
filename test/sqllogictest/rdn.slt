@@ -1,0 +1,124 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# rdn is for refactoring decimal/numeric in parallel development to the main
+# branch
+
+mode cockroach
+
+query T
+SELECT pg_typeof('0.2'::rdn)
+----
+rdn
+
+query T
+SELECT ('0.2'::rdn)::text
+----
+0.2
+
+query T
+SELECT ('-0.2'::rdn)::text
+----
+-0.2
+
+query T
+SELECT ('2'::rdn)::text
+----
+2
+
+query T
+SELECT ('-2'::rdn)::text
+----
+-2
+
+query T
+SELECT ('20'::rdn)::text
+----
+20
+
+query T
+SELECT ('-20'::rdn)::text
+----
+-20
+
+# Max precision is 34. We examine the number of digits to determine fitness, not
+# the number of # characters in the input string.
+query T
+SELECT ('-123456789012345678.9012345678901234'::rdn)::text
+----
+-123456789012345678.9012345678901234
+
+query error "-123456789012345678.90123456789012345" is out of range for type rdn: exceeds maximum precision 34
+SELECT ('-123456789012345678.90123456789012345'::rdn)::text
+
+query error invalid input syntax for type rdn: invalid decimal syntax: "-123abc456"
+SELECT ('-123abc456'::rdn)::text;
+
+# Addition
+query T
+SELECT ('1'::rdn + '2'::rdn)::text
+----
+3
+
+query T
+SELECT ('1.23'::rdn + '2.34'::rdn)::text
+----
+3.57
+
+query T
+SELECT ('3402823669209384634633746074317682'::rdn + '3402823669209384634633746074317682'::rdn)::text
+----
+6805647338418769269267492148635364
+
+query error numeric field overflow
+SELECT ('6805647338418769269267492148635364'::rdn + '6805647338418769269267492148635364'::rdn)::text
+
+# Division
+query T
+SELECT ('1'::rdn / '2'::rdn)::text;
+----
+0.5
+
+query T
+SELECT ('2.0'::rdn / '1'::rdn)::text;
+----
+2.0
+
+query T
+SELECT ('1'::rdn / '0.5'::rdn)::text;
+----
+2
+
+query T
+SELECT ('2.0'::rdn / '1.1'::rdn)::text;
+----
+1.818181818181818181818181818181818
+
+query error numeric field overflow
+SELECT ('1'::rdn / '0.0000000000000000000000000000000001'::rdn)::text;
+
+query error division by zero
+SELECT ('1'::rdn / '0'::rdn)::text
+
+query error division by zero
+SELECT ('1'::rdn / '0.0'::rdn)::text;
+
+query error division by zero
+SELECT ('1'::rdn / ('-1'::rdn + '1.0'::rdn))::text;
+
+# Improve results of the bug that precipitated the refactor
+query R
+SELECT 1::NUMERIC(38, 10) / 1.2103500000::numeric(38, 10);
+----
+0.826000000000
+
+query T
+SELECT ('1'::rdn / '1.21035'::rdn)::text
+----
+0.8262072954104184739951253769570785

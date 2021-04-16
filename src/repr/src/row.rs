@@ -15,6 +15,7 @@ use std::fmt;
 use std::mem::{size_of, transmute};
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use dec::{Decimal128, OrderedDecimal};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -43,8 +44,14 @@ use fmt::Debug;
 /// We avoid the need for the first set of padding by only providing access to the `Datum`s via calls to `ptr::read_unaligned`, which on modern x86 is barely penalized.
 /// We avoid the need for the second set of padding by not providing mutable access to the `Datum`. Instead, `Row` is append-only.
 ///
-/// A `Row` can be built from a collection of `Datum`s using `Row::pack`, but it often more efficient to use and re-use a `RowPacker` which can avoid unneccesary allocations.
-/// The `Row::pack_slice` method pre-determines the necessary allocation, and is also appropriate.
+/// A `Row` can be built from a collection of `Datum`s using `Row::pack`, but it
+/// is more efficient to use `Row::pack_slice` so that a right-sized allocation
+/// can be created. If that is not possible, consider using the "packer"
+/// pattern: allocate one row, pack into it, and then call [`Row::finish_and_reuse`]
+/// to receive a copy of that row, leaving behind the original allocation to
+/// pack future rows.
+///
+/// Creating a row via [`Row::pack_slice`]:
 ///
 /// ```
 /// # use repr::{Row, Datum};
@@ -71,11 +78,11 @@ use fmt::Debug;
 /// # Performance
 ///
 /// Rows are dynamically sized, but up to a fixed size their data is stored in-line.
-/// It is best to re-use a `RowPacker` across multiple `Row` creation calls, as this
-/// avoids the allocations involved in `RowPacker::new()`.
+/// It is best to re-use a `Row` across multiple `Row` creation calls, as this
+/// avoids the allocations involved in `Row::new()`.
 #[derive(Clone, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Row {
-    data: SmallVec<[u8; 23]>,
+    data: SmallVec<[u8; 24]>,
 }
 
 /// These implementations order first by length, and then by slice contents.
@@ -100,6 +107,17 @@ impl Ord for Row {
     }
 }
 
+/// A wrapper around a byte slice that guarantees the data are row-formatted.
+///
+/// This type exists to allow row-formatted data to be stored in types that
+/// need not contain a `Row`, for example large contiguous `[u8]` allocations.
+/// It is not expected that most users will use this type, especially as its
+/// only constructor is unsafe.
+#[derive(Debug)]
+pub struct RowRef<'a> {
+    data: &'a [u8],
+}
+
 #[derive(Debug)]
 pub struct DatumListIter<'a> {
     data: &'a [u8],
@@ -111,20 +129,6 @@ pub struct DatumDictIter<'a> {
     data: &'a [u8],
     offset: usize,
     prev_key: Option<&'a str>,
-}
-
-/// `RowPacker` is used to build a `Row`.
-///
-/// ```
-/// # use repr::{Row, Datum, RowPacker};
-/// let mut packer = RowPacker::new();
-/// packer.push(Datum::Int32(2));
-/// packer.push(Datum::String("two"));
-/// let row = packer.finish();
-/// ```
-#[derive(Debug)]
-pub struct RowPacker {
-    data: Vec<u8>,
 }
 
 /// `RowArena` is used to hold on to temporary `Row`s for functions like `eval` that need to create complex `Datum`s but don't have a `Row` to put them in yet.
@@ -208,6 +212,7 @@ enum Tag {
     Dict,
     JsonNull,
     Dummy,
+    Numeric,
 }
 
 // --------------------------------------------------------------------------------
@@ -368,6 +373,10 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
         }
         Tag::JsonNull => Datum::JsonNull,
         Tag::Dummy => Datum::Dummy,
+        Tag::Numeric => {
+            let n = read_copy::<OrderedDecimal<Decimal128>>(data, offset);
+            Datum::Numeric(n)
+        }
     }
 }
 
@@ -375,6 +384,33 @@ unsafe fn read_datum<'a>(data: &'a [u8], offset: &mut usize) -> Datum<'a> {
 // writing data
 
 fn assert_is_copy<T: Copy>() {}
+
+/// A trait that abstracts over ways to push bytes into a buffer.
+///
+/// This trait exists to allow us to write the `push` logic once for
+/// multiple recipients of the pushed data.
+trait Bytes {
+    fn extend_from_slice(&mut self, slice: &[u8]);
+    fn push(&mut self, byte: u8);
+}
+
+impl Bytes for Vec<u8> {
+    fn extend_from_slice(&mut self, slice: &[u8]) {
+        self.extend_from_slice(slice);
+    }
+    fn push(&mut self, byte: u8) {
+        self.push(byte);
+    }
+}
+
+impl Bytes for Row {
+    fn extend_from_slice(&mut self, slice: &[u8]) {
+        self.data.extend_from_slice(slice);
+    }
+    fn push(&mut self, byte: u8) {
+        self.data.push(byte);
+    }
+}
 
 // See https://github.com/rust-lang/rust/issues/43408 for why this can't be a function
 macro_rules! push_copy {
@@ -384,12 +420,12 @@ macro_rules! push_copy {
     };
 }
 
-fn push_untagged_bytes(data: &mut Vec<u8>, bytes: &[u8]) {
+fn push_untagged_bytes<T: Bytes>(data: &mut T, bytes: &[u8]) {
     push_copy!(data, bytes.len(), usize);
     data.extend_from_slice(bytes);
 }
 
-fn push_lengthed_bytes(data: &mut Vec<u8>, bytes: &[u8], tag: Tag) {
+fn push_lengthed_bytes<T: Bytes>(data: &mut T, bytes: &[u8], tag: Tag) {
     match tag {
         Tag::BytesTiny | Tag::StringTiny => {
             push_copy!(data, bytes.len() as u8, u8);
@@ -408,7 +444,7 @@ fn push_lengthed_bytes(data: &mut Vec<u8>, bytes: &[u8], tag: Tag) {
     data.extend_from_slice(bytes);
 }
 
-fn push_datum(data: &mut Vec<u8>, datum: Datum) {
+fn push_datum<T: Bytes>(data: &mut T, datum: Datum) {
     match datum {
         Datum::Null => data.push(Tag::Null as u8),
         Datum::False => data.push(Tag::False as u8),
@@ -496,6 +532,10 @@ fn push_datum(data: &mut Vec<u8>, datum: Datum) {
         }
         Datum::JsonNull => data.push(Tag::JsonNull as u8),
         Datum::Dummy => data.push(Tag::Dummy as u8),
+        Datum::Numeric(n) => {
+            data.push(Tag::Numeric as u8);
+            push_copy!(data, n, OrderedDecimal<Decimal128>);
+        }
     }
 }
 
@@ -545,7 +585,32 @@ pub fn datum_size(datum: &Datum) -> usize {
         Datum::Map(dict) => 1 + size_of::<usize>() + dict.data.len(),
         Datum::JsonNull => 1,
         Datum::Dummy => 1,
+        Datum::Numeric(_) => 1 + size_of::<OrderedDecimal<Decimal128>>(),
     }
+}
+
+/// Number of bytes required by a sequence of datums.
+///
+/// This method can be used to right-size the allocation for a `Row`
+/// before calling [`Row::extend`].
+pub fn datums_size<'a, I, D>(iter: I) -> usize
+where
+    I: IntoIterator<Item = D>,
+    D: Borrow<Datum<'a>>,
+{
+    iter.into_iter().map(|d| datum_size(d.borrow())).sum()
+}
+
+/// Number of bytes required by a list of datums. This computes the size that would be required if
+/// the given datums were packed into a list.
+///
+/// This is used to optimistically pre-allocate buffers for packing rows.
+pub fn datum_list_size<'a, I, D>(iter: I) -> usize
+where
+    I: IntoIterator<Item = D>,
+    D: Borrow<Datum<'a>>,
+{
+    1 + size_of::<usize>() + datums_size(iter)
 }
 
 // --------------------------------------------------------------------------------
@@ -553,16 +618,20 @@ pub fn datum_size(datum: &Datum) -> usize {
 
 impl Row {
     /// Take some `Datum`s and pack them into a `Row`.
+    ///
+    /// This method builds a `Row` by repeatedly increasing the backing
+    /// allocation. If the contents of the iterator are known ahead of
+    /// time, consider [`Row::with_capacity`] to right-size the allocation
+    /// first, and then [`Row::extend`] to populate it with `Datum`s.
+    /// This avoids the repeated allocation resizing and copying.
     pub fn pack<'a, I, D>(iter: I) -> Row
     where
         I: IntoIterator<Item = D>,
         D: Borrow<Datum<'a>>,
     {
-        // make a big buffer up front to avoid resizing
-        let mut packer = RowPacker::new();
-        packer.extend(iter);
-        // drop the excess capacity
-        packer.finish()
+        let mut row = Row::default();
+        row.extend(iter);
+        row
     }
 
     /// Like [`Row::pack`], but the provided iterator is allowed to produce an
@@ -573,11 +642,65 @@ impl Row {
         I: IntoIterator<Item = Result<D, E>>,
         D: Borrow<Datum<'a>>,
     {
-        // make a big buffer up front to avoid resizing
-        let mut packer = RowPacker::new();
-        packer.try_extend(iter)?;
-        // drop the excess capacity
-        Ok(packer.finish())
+        let mut row = Row::default();
+        row.try_extend(iter)?;
+        Ok(row)
+    }
+
+    /// Allocate an empty `Row` with a pre-allocated capacity.
+    #[inline]
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            data: SmallVec::with_capacity(cap),
+        }
+    }
+
+    /// Extend an existing `Row` with a `Datum`.
+    #[inline]
+    pub fn push<'a, D>(&mut self, datum: D)
+    where
+        D: Borrow<Datum<'a>>,
+    {
+        push_datum(self, *datum.borrow())
+    }
+
+    /// Extend an existing `Row` with additional `Datum`s.
+    #[inline]
+    pub fn extend<'a, I, D>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        for datum in iter {
+            push_datum(self, *datum.borrow())
+        }
+    }
+
+    /// Extend an existing `Row` with additional `Datum`s.
+    ///
+    /// In the case the iterator produces an error, the pushing of
+    /// datums in terminated and the error returned. The `Row` will
+    /// be incomplete, but it will be safe to read datums from it.
+    #[inline]
+    pub fn try_extend<'a, I, E, D>(&mut self, iter: I) -> Result<(), E>
+    where
+        I: IntoIterator<Item = Result<D, E>>,
+        D: Borrow<Datum<'a>>,
+    {
+        for datum in iter {
+            self.push(*datum?.borrow());
+        }
+        Ok(())
+    }
+
+    /// Appends the datums of an entire `Row`.
+    pub fn extend_by_row(&mut self, row: &Row) {
+        self.data.extend(row.data.iter().copied());
+    }
+
+    /// Clears the contents of the row without de-allocating its backing memory.
+    pub fn clear(&mut self) {
+        self.data.clear();
     }
 
     /// Creates a new row from supplied bytes.
@@ -586,7 +709,7 @@ impl Row {
     ///
     /// This method relies on `data` being an appropriate row encoding, and can
     /// result in unsafety if this is not the case.
-    pub unsafe fn new(data: Vec<u8>) -> Self {
+    pub unsafe fn from_bytes_unchecked(data: Vec<u8>) -> Self {
         Row { data: data.into() }
     }
 
@@ -596,14 +719,10 @@ impl Row {
     /// allocation before packing the elements, ensuring only one allocation and no
     /// redundant copies required.
     pub fn pack_slice<'a>(slice: &[Datum<'a>]) -> Row {
-        let needed = slice.iter().map(|d| datum_size(d)).sum();
-        let mut bytes = Vec::with_capacity(needed);
-        for datum in slice.iter() {
-            push_datum(&mut bytes, *datum);
-        }
-        // Unsafety justified in that `push_datum` to initially empty `Vec` is the
-        // same machinery we use internally, and should produce well-formed bytes.
-        unsafe { Row::new(bytes) }
+        // Pre-allocate the needed number of bytes.
+        let mut row = Row::with_capacity(datums_size(slice.iter()));
+        row.extend(slice.iter());
+        row
     }
 
     /// Unpack `self` into a `Vec<Datum>` for efficient random access.
@@ -619,9 +738,10 @@ impl Row {
     ///
     /// Panics if the `Row` is empty.
     pub fn unpack_first(&self) -> Datum {
-        unsafe { read_datum(&self.data, &mut 0) }
+        self.iter().next().unwrap()
     }
 
+    /// Iterate the `Datum` elements of the `Row`.
     pub fn iter(&self) -> DatumListIter {
         DatumListIter {
             data: &self.data,
@@ -629,9 +749,275 @@ impl Row {
         }
     }
 
+    /// Pushes a [`DatumList`] that is built from a closure.
+    ///
+    /// The supplied closure will be invoked once with a `Row` that can
+    /// be used to populate the list. It is valid to call any method on the
+    /// [`Row`] except for [`Row::finish_and_reuse`] or [`Row::truncate`].
+    ///
+    /// Returns the value returned by the closure, if any.
+    ///
+    /// ```
+    /// # use repr::{Row, Datum};
+    /// let mut row = Row::default();
+    /// row.push_list_with(|row| {
+    ///     row.push(Datum::String("age"));
+    ///     row.push(Datum::Int64(42));
+    /// });
+    /// assert_eq!(
+    ///     row.unpack_first().unwrap_list().iter().collect::<Vec<_>>(),
+    ///     vec![Datum::String("age"), Datum::Int64(42)],
+    /// );
+    /// ```
+    #[inline]
+    pub fn push_list_with<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut Row) -> R,
+    {
+        self.data.push(Tag::List as u8);
+        let start = self.data.len();
+        // write a dummy len, will fix it up later
+        push_copy!(&mut self.data, 0, usize);
+
+        let out = f(self);
+
+        let len = self.data.len() - start - size_of::<usize>();
+        // fix up the len
+        self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
+
+        out
+    }
+
+    /// Pushes a [`DatumMap`] that is built from a closure.
+    ///
+    /// The supplied closure will be invoked once with a `Row` that can be
+    /// used to populate the dict.
+    ///
+    /// The closure **must** alternate pushing string keys and arbitary values,
+    /// otherwise reading the dict will cause a panic.
+    ///
+    /// The closure **must** push keys in ascending order, otherwise equality
+    /// checks on the resulting `Row` may be wrong and reading the dict IN DEBUG
+    /// MODE will cause a panic.
+    ///
+    /// The closure **must not** call [`Row::finish_and_reuse`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use repr::{Row, Datum};
+    /// let mut row = Row::default();
+    /// row.push_dict_with(|row| {
+    ///
+    ///     // key
+    ///     row.push(Datum::String("age"));
+    ///     // value
+    ///     row.push(Datum::Int64(42));
+    ///
+    ///     // key
+    ///     row.push(Datum::String("name"));
+    ///     // value
+    ///     row.push(Datum::String("bob"));
+    /// });
+    /// assert_eq!(
+    ///     row.unpack_first().unwrap_map().iter().collect::<Vec<_>>(),
+    ///     vec![("age", Datum::Int64(42)), ("name", Datum::String("bob"))]
+    /// );
+    /// ```
+    pub fn push_dict_with<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut Row) -> R,
+    {
+        self.data.push(Tag::Dict as u8);
+        let start = self.data.len();
+        // write a dummy len, will fix it up later
+        push_copy!(&mut self.data, 0, usize);
+
+        let res = f(self);
+
+        let len = self.data.len() - start - size_of::<usize>();
+        // fix up the len
+        self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
+
+        res
+    }
+
+    /// Convenience function to construct an array from an iter of `Datum`s.
+    ///
+    /// Returns an error if the number of elements in `iter` does not match
+    /// the cardinality of the array as described by `dims`, or if the
+    /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`]. If an error
+    /// occurs, the packer's state will be unchanged.
+    pub fn push_array<'a, I, D>(
+        &mut self,
+        dims: &[ArrayDimension],
+        iter: I,
+    ) -> Result<(), InvalidArrayError>
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        // Arrays are encoded as follows.
+        //
+        // u8      ndims
+        // usize   dim_0 lower bound
+        // usize   dim_0 length
+        // ...
+        // usize   dim_n lower bound
+        // usize   dim_n length
+        // usize   element data size in bytes
+        // u8      element data, where elements are encoded in row-major order
+
+        if dims.len() > usize::from(MAX_ARRAY_DIMENSIONS) {
+            return Err(InvalidArrayError::TooManyDimensions(dims.len()));
+        }
+
+        let start = self.data.len();
+        self.data.push(Tag::Array as u8);
+
+        // Write dimension information.
+        self.data
+            .push(dims.len().try_into().expect("ndims verified to fit in u8"));
+        for dim in dims {
+            push_copy!(&mut self.data, dim.lower_bound, usize);
+            push_copy!(&mut self.data, dim.length, usize);
+        }
+
+        // Write elements.
+        let off = self.data.len();
+        push_copy!(&mut self.data, 0, usize); // dummy length fixed up below
+        let mut nelements = 0;
+        for datum in iter {
+            self.push(*datum.borrow());
+            nelements += 1;
+        }
+        let len = self.data.len() - off - size_of::<usize>();
+        self.data[off..off + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
+
+        // Check that the number of elements written matches the dimension
+        // information.
+        let cardinality = match dims {
+            [] => 0,
+            dims => dims.iter().map(|d| d.length).product(),
+        };
+        if nelements != cardinality {
+            self.data.truncate(start);
+            return Err(InvalidArrayError::WrongCardinality {
+                actual: nelements,
+                expected: cardinality,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Convenience function to push a `DatumList` from an iter of `Datum`s
+    ///
+    /// See [`Row::push_dict_with`] if you need to be able to handle errors
+    pub fn push_list<'a, I, D>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = D>,
+        D: Borrow<Datum<'a>>,
+    {
+        self.push_list_with(|packer| {
+            for elem in iter {
+                packer.push(*elem.borrow())
+            }
+        });
+    }
+
+    /// Convenience function to push a `DatumMap` from an iter of `(&str, Datum)` pairs
+    pub fn push_dict<'a, I, D>(&mut self, iter: I)
+    where
+        I: IntoIterator<Item = (&'a str, D)>,
+        D: Borrow<Datum<'a>>,
+    {
+        self.push_dict_with(|packer| {
+            for (k, v) in iter {
+                packer.push(Datum::String(k));
+                packer.push(*v.borrow())
+            }
+        })
+    }
+
+    /// Returns a copy of this `Row`, clearing the data but not the allocation
+    /// in `self`.
+    ///
+    /// The intent is that `self`'s allocation can be used to pack additional
+    /// rows, to reduce the amount of interaction with the allocator.
+    pub fn finish_and_reuse(&mut self) -> Row {
+        let data = SmallVec::from(&self.data[..]);
+        self.data.clear();
+        Row { data }
+    }
+
+    /// Truncates the underlying storage to the specified byte position.
+    ///
+    /// # Safety
+    ///
+    /// `pos` MUST specify a byte offset that lies on a datum boundary.
+    /// If `pos` specifies a byte offset that is *within* a datum, the row
+    /// packer will produce an invalid row, the unpacking of which may
+    /// trigger undefined behavior!
+    ///
+    /// To find the byte offset of a datum boundary, inspect the the packer's
+    /// byte length by calling `packer.data().len()` after pushing the desired
+    /// number of datums onto the packer.
+    pub unsafe fn truncate(&mut self, pos: usize) {
+        self.data.truncate(pos)
+    }
+
+    /// Truncates the row to contain at most the first `n` datums.
+    ///
+    /// # Panics
+    pub fn truncate_datums(&mut self, n: usize) {
+        let mut iter = self.iter();
+        for _ in iter.by_ref().take(n) {}
+        let offset = iter.offset;
+        // SAFETY: iterator offsets always lie on a datum boundary.
+        unsafe { self.truncate(offset) }
+    }
+
     /// For debugging only
     pub fn data(&self) -> &[u8] {
         &self.data
+    }
+}
+
+impl<'a> RowRef<'a> {
+    /// Construct a `RowRef` from a byte slice.
+    ///
+    /// # Safety
+    ///
+    /// This method is unsafe because if the byte slice is not a valid
+    /// row encoding, then unpacking its contents can cause undefined
+    /// behavior.
+    pub unsafe fn from_bytes_unchecked(data: &'a [u8]) -> Self {
+        Self { data }
+    }
+
+    /// Unpack `self` into a `Vec<Datum>` for efficient random access.
+    pub fn unpack(&self) -> Vec<Datum> {
+        // It's usually cheaper to unpack twice to figure out the right length than it is to grow the vec as we go
+        let len = self.iter().count();
+        let mut vec = Vec::with_capacity(len);
+        vec.extend(self.iter());
+        vec
+    }
+
+    /// Return the first `Datum` in `self`
+    ///
+    /// Panics if the `Row` is empty.
+    pub fn unpack_first(&self) -> Datum {
+        self.iter().next().unwrap()
+    }
+
+    /// Iterate the `Datum` elements of the `Row`.
+    pub fn iter(&self) -> DatumListIter {
+        DatumListIter {
+            data: &self.data,
+            offset: 0,
+        }
     }
 }
 
@@ -768,333 +1154,6 @@ impl<'a> Iterator for DatumDictIter<'a> {
     }
 }
 
-impl RowPacker {
-    /// Allocates an empty row packer.
-    pub fn new() -> Self {
-        // TODO: Determine if this is the best default choice.
-        Self::with_capacity(0)
-    }
-    /// Allocates an empty row packer with a supplied capacity.
-    pub fn with_capacity(capacity: usize) -> Self {
-        RowPacker {
-            // make a big buffer up front to avoid resizing
-            data: Vec::with_capacity(capacity),
-        }
-    }
-
-    /// Clears the row packer.
-    pub fn clear(&mut self) {
-        self.data.clear();
-    }
-
-    /// Push `datum` onto the end of `self`
-    pub fn push(&mut self, datum: Datum) {
-        push_datum(&mut self.data, datum)
-    }
-
-    /// Extends `self` with the contents of an iterator.
-    pub fn extend<'a, I, D>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'a>>,
-    {
-        for datum in iter {
-            self.push(*datum.borrow());
-        }
-    }
-
-    /// Creates a new `Row` from an iterator.
-    ///
-    /// Unlike `Row::pack`, this re-uses the `RowPacker` to avoid
-    /// unneccesary allocations.
-    pub fn pack<'a, I, D>(&mut self, iter: I) -> Row
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'a>>,
-    {
-        self.data.clear();
-        for datum in iter {
-            self.push(*datum.borrow());
-        }
-        self.finish_and_reuse()
-    }
-
-    /// Like [`RowPacker::extend`], but the provided iterator is allowed to
-    /// produce an error.
-    ///
-    /// `try_extend` is not atomic, so if the iterator produces an error `self`
-    /// will still be extended with all elements the iterator produces before
-    /// the error.
-    pub fn try_extend<'a, I, E, D>(&mut self, iter: I) -> Result<(), E>
-    where
-        I: IntoIterator<Item = Result<D, E>>,
-        D: Borrow<Datum<'a>>,
-    {
-        for datum in iter {
-            self.push(*datum?.borrow());
-        }
-        Ok(())
-    }
-
-    /// Appends the datums of an entire `Row`.
-    pub fn extend_by_row(&mut self, row: &Row) {
-        self.data.extend(&*row.data);
-    }
-
-    /// Finish packing and return a `Row`.
-    ///
-    /// This does not re-use the allocation of `RowPacker`, which means this
-    /// method has relatively few advantages over `finish_and_reuse()`.
-    pub fn finish(self) -> Row {
-        Row {
-            data: SmallVec::from(&self.data[..]),
-        }
-    }
-
-    /// Finish packing and return a `Row`.
-    ///
-    /// Unlike [`RowPacker::finish`], this method uses `self.data` to right-size an
-    /// allocation for the new `Row` copied from `self.data`, rather than
-    /// move the allocation (and potentially re-alloc to resize it).
-    /// In principle this can reduce the amount of interaction with the
-    /// allocator, as opposed to creating new row packers for each row.
-    pub fn finish_and_reuse(&mut self) -> Row {
-        let data = SmallVec::from(&self.data[..]);
-        self.data.clear();
-        Row { data }
-    }
-
-    /// Finish packing a row into a pre-existing allocation.
-    ///
-    /// This method is available in order to re-use existing row allocations,
-    /// which would otherwise be de-allocated and re-allocated is common row
-    /// processing cases.
-    ///
-    /// The current contents of `row` are erased, and replaced with the packed
-    /// contents of `self`.
-    pub fn finish_into(&mut self, row: &mut Row) {
-        row.data.clear();
-        row.data.extend(self.data.iter().cloned());
-        self.data.clear();
-    }
-
-    /// Pushes a [`DatumList`] that is built from a closure.
-    ///
-    /// The supplied closure will be invoked once with a `RowPacker` that can
-    /// be used to populate the list. It is valid to call any method on the
-    /// [`RowPacker`] except for [`RowPacker::finish_and_reuse`].
-    ///
-    /// Returns the value returned by the closure, if any.
-    ///
-    /// ```
-    /// # use repr::{Row, Datum, RowPacker};
-    /// let mut packer = RowPacker::new();
-    /// packer.push_list_with(|packer| {
-    ///     packer.push(Datum::String("age"));
-    ///     packer.push(Datum::Int64(42));
-    /// });
-    /// let row = packer.finish();
-    ///
-    /// assert_eq!(
-    ///     row.unpack_first().unwrap_list().iter().collect::<Vec<_>>(),
-    ///     vec![Datum::String("age"), Datum::Int64(42)],
-    /// );
-    /// ```
-    #[inline]
-    pub fn push_list_with<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut RowPacker) -> R,
-    {
-        self.data.push(Tag::List as u8);
-        let start = self.data.len();
-        // write a dummy len, will fix it up later
-        push_copy!(&mut self.data, 0, usize);
-
-        let out = f(self);
-
-        let len = self.data.len() - start - size_of::<usize>();
-        // fix up the len
-        self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
-
-        out
-    }
-
-    /// Pushes a [`DatumMap`] that is built from a closure.
-    ///
-    /// The supplied closure will be invoked once with a `RowPacker` that can be
-    /// used to populate the dict.
-    ///
-    /// The closure **must** alternate pushing string keys and arbitary values,
-    /// otherwise reading the dict will cause a panic.
-    ///
-    /// The closure **must** push keys in ascending order, otherwise equality
-    /// checks on the resulting `Row` may be wrong and reading the dict IN DEBUG
-    /// MODE will cause a panic.
-    ///
-    /// The closure **must not** call [`RowPacker::finish_and_reuse`].
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// # use repr::{Row, Datum, RowPacker};
-    /// let mut packer = RowPacker::new();
-    /// packer.push_dict_with(|packer| {
-    ///
-    ///     // key
-    ///     packer.push(Datum::String("age"));
-    ///     // value
-    ///     packer.push(Datum::Int64(42));
-    ///
-    ///     // key
-    ///     packer.push(Datum::String("name"));
-    ///     // value
-    ///     packer.push(Datum::String("bob"));
-    /// });
-    /// let row = packer.finish();
-    ///
-    /// assert_eq!(
-    ///     row.unpack_first().unwrap_map().iter().collect::<Vec<_>>(),
-    ///     vec![("age", Datum::Int64(42)), ("name", Datum::String("bob"))]
-    /// );
-    /// ```
-    pub fn push_dict_with<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut RowPacker) -> R,
-    {
-        self.data.push(Tag::Dict as u8);
-        let start = self.data.len();
-        // write a dummy len, will fix it up later
-        push_copy!(&mut self.data, 0, usize);
-
-        let res = f(self);
-
-        let len = self.data.len() - start - size_of::<usize>();
-        // fix up the len
-        self.data[start..start + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
-
-        res
-    }
-
-    /// Convenience function to construct an array from an iter of `Datum`s.
-    ///
-    /// Returns an error if the number of elements in `iter` does not match
-    /// the cardinality of the array as described by `dims`, or if the
-    /// number of dimensions exceeds [`MAX_ARRAY_DIMENSIONS`]. If an error
-    /// occurs, the packer's state will be unchanged.
-    pub fn push_array<'a, I, D>(
-        &mut self,
-        dims: &[ArrayDimension],
-        iter: I,
-    ) -> Result<(), InvalidArrayError>
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'a>>,
-    {
-        // Arrays are encoded as follows.
-        //
-        // u8      ndims
-        // usize   dim_0 lower bound
-        // usize   dim_0 length
-        // ...
-        // usize   dim_n lower bound
-        // usize   dim_n length
-        // usize   element data size in bytes
-        // u8      element data, where elements are encoded in row-major order
-
-        if dims.len() > usize::from(MAX_ARRAY_DIMENSIONS) {
-            return Err(InvalidArrayError::TooManyDimensions(dims.len()));
-        }
-
-        let start = self.data.len();
-        self.data.push(Tag::Array as u8);
-
-        // Write dimension information.
-        self.data
-            .push(dims.len().try_into().expect("ndims verified to fit in u8"));
-        for dim in dims {
-            push_copy!(&mut self.data, dim.lower_bound, usize);
-            push_copy!(&mut self.data, dim.length, usize);
-        }
-
-        // Write elements.
-        let off = self.data.len();
-        push_copy!(&mut self.data, 0, usize); // dummy length fixed up below
-        let mut nelements = 0;
-        for datum in iter {
-            self.push(*datum.borrow());
-            nelements += 1;
-        }
-        let len = self.data.len() - off - size_of::<usize>();
-        self.data[off..off + size_of::<usize>()].copy_from_slice(&len.to_le_bytes());
-
-        // Check that the number of elements written matches the dimension
-        // information.
-        let cardinality = match dims {
-            [] => 0,
-            dims => dims.iter().map(|d| d.length).product(),
-        };
-        if nelements != cardinality {
-            self.data.truncate(start);
-            return Err(InvalidArrayError::WrongCardinality {
-                actual: nelements,
-                expected: cardinality,
-            });
-        }
-
-        Ok(())
-    }
-
-    /// Convenience function to push a `DatumList` from an iter of `Datum`s
-    ///
-    /// See [`RowPacker::push_dict_with`] if you need to be able to handle errors
-    pub fn push_list<'a, I, D>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = D>,
-        D: Borrow<Datum<'a>>,
-    {
-        self.push_list_with(|packer| {
-            for elem in iter {
-                packer.push(*elem.borrow())
-            }
-        });
-    }
-
-    /// Convenience function to push a `DatumMap` from an iter of `(&str, Datum)` pairs
-    pub fn push_dict<'a, I, D>(&mut self, iter: I)
-    where
-        I: IntoIterator<Item = (&'a str, D)>,
-        D: Borrow<Datum<'a>>,
-    {
-        self.push_dict_with(|packer| {
-            for (k, v) in iter {
-                packer.push(Datum::String(k));
-                packer.push(*v.borrow())
-            }
-        })
-    }
-
-    /// # Safety
-    ///
-    /// Truncates the underlying storage to the specified byte position.
-    ///
-    /// `pos` MUST specify a byte offset that lies on a datum boundary.
-    /// If `pos` specifies a byte offset that is *within* a datum, the row
-    /// packer will produce an invalid row, the unpacking of which may
-    /// trigger undefined behavior!
-    ///
-    /// To find the byte offset of a datum boundary, inspect the the packer's
-    /// byte length by calling `packer.data().len()` after pushing the desired
-    /// number of datums onto the packer.
-    pub unsafe fn truncate(&mut self, pos: usize) {
-        self.data.truncate(pos)
-    }
-
-    /// For debugging only
-    pub fn data(&self) -> &[u8] {
-        &self.data
-    }
-}
-
 impl RowArena {
     pub fn new() -> Self {
         RowArena {
@@ -1168,27 +1227,21 @@ impl RowArena {
     /// ```
     pub fn make_datum<'a, F>(&'a self, f: F) -> Datum<'a>
     where
-        F: FnOnce(&mut RowPacker),
+        F: FnOnce(&mut Row),
     {
-        let mut packer = RowPacker::new();
-        f(&mut packer);
-        self.push_unary_row(packer.finish())
+        let mut row = Row::default();
+        f(&mut row);
+        self.push_unary_row(row)
     }
 
     /// Like [`RowArena::make_datum`], but the provided closure can return an error.
     pub fn try_make_datum<'a, F, E>(&'a self, f: F) -> Result<Datum<'a>, E>
     where
-        F: FnOnce(&mut RowPacker) -> Result<(), E>,
+        F: FnOnce(&mut Row) -> Result<(), E>,
     {
-        let mut packer = RowPacker::new();
-        f(&mut packer)?;
-        Ok(self.push_unary_row(packer.finish()))
-    }
-}
-
-impl Default for RowPacker {
-    fn default() -> RowPacker {
-        RowPacker::new()
+        let mut row = Row::default();
+        f(&mut row)?;
+        Ok(self.push_unary_row(row))
     }
 }
 
@@ -1223,18 +1276,17 @@ mod tests {
         assert_eq!(arena.push_bytes(vec![]), empty);
         assert_eq!(arena.push_bytes(vec![0, 2, 1, 255]), &[0, 2, 1, 255]);
 
-        let mut packer = RowPacker::new();
-        packer.push_dict_with(|packer| {
-            packer.push(Datum::String("a"));
-            packer.push_list_with(|packer| {
-                packer.push(Datum::String("one"));
-                packer.push(Datum::String("two"));
-                packer.push(Datum::String("three"));
+        let mut row = Row::default();
+        row.push_dict_with(|row| {
+            row.push(Datum::String("a"));
+            row.push_list_with(|row| {
+                row.push(Datum::String("one"));
+                row.push(Datum::String("two"));
+                row.push(Datum::String("three"));
             });
-            packer.push(Datum::String("b"));
-            packer.push(Datum::String("c"));
+            row.push(Datum::String("b"));
+            row.push(Datum::String("c"));
         });
-        let row = packer.finish();
         assert_eq!(arena.push_unary_row(row.clone()), row.unpack_first());
     }
 
@@ -1291,11 +1343,9 @@ mod tests {
             lower_bound: 2,
             length: 2,
         };
-        let mut packer = RowPacker::new();
-        packer
-            .push_array(&[DIM], vec![Datum::Int32(1), Datum::Int32(2)])
+        let mut row = Row::default();
+        row.push_array(&[DIM], vec![Datum::Int32(1), Datum::Int32(2)])
             .unwrap();
-        let row = packer.finish();
         let arr1 = row.unpack_first().unwrap_array();
         assert_eq!(arr1.dims().into_iter().collect::<Vec<_>>(), vec![DIM]);
         assert_eq!(
@@ -1323,38 +1373,36 @@ mod tests {
             Datum::Int32(8),
         ];
 
-        let mut packer = RowPacker::new();
-        packer
-            .push_array(
-                &[
-                    ArrayDimension {
-                        lower_bound: 1,
-                        length: 1,
-                    },
-                    ArrayDimension {
-                        lower_bound: 1,
-                        length: 4,
-                    },
-                    ArrayDimension {
-                        lower_bound: 1,
-                        length: 2,
-                    },
-                ],
-                &datums,
-            )
-            .unwrap();
-        let row = packer.finish();
+        let mut row = Row::default();
+        row.push_array(
+            &[
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: 1,
+                },
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: 4,
+                },
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: 2,
+                },
+            ],
+            &datums,
+        )
+        .unwrap();
         let array = row.unpack_first().unwrap_array();
         assert_eq!(array.elements().into_iter().collect::<Vec<_>>(), datums);
     }
 
     #[test]
     fn test_array_max_dimensions() {
-        let mut packer = RowPacker::new();
+        let mut row = Row::default();
         let max_dims = usize::from(MAX_ARRAY_DIMENSIONS);
 
         // An array with one too many dimensions should be rejected.
-        let res = packer.push_array(
+        let res = row.push_array(
             &vec![
                 ArrayDimension {
                     lower_bound: 1,
@@ -1365,28 +1413,27 @@ mod tests {
             vec![Datum::Int32(4)],
         );
         assert_eq!(res, Err(InvalidArrayError::TooManyDimensions(max_dims + 1)));
-        assert!(packer.data.is_empty());
+        assert!(row.data.is_empty());
 
         // An array with exactly the maximum allowable dimensions should be
         // accepted.
-        packer
-            .push_array(
-                &vec![
-                    ArrayDimension {
-                        lower_bound: 1,
-                        length: 1
-                    };
-                    max_dims
-                ],
-                vec![Datum::Int32(4)],
-            )
-            .unwrap();
+        row.push_array(
+            &vec![
+                ArrayDimension {
+                    lower_bound: 1,
+                    length: 1
+                };
+                max_dims
+            ],
+            vec![Datum::Int32(4)],
+        )
+        .unwrap();
     }
 
     #[test]
     fn test_array_wrong_cardinality() {
-        let mut packer = RowPacker::new();
-        let res = packer.push_array(
+        let mut row = Row::default();
+        let res = row.push_array(
             &[
                 ArrayDimension {
                     lower_bound: 1,
@@ -1406,23 +1453,22 @@ mod tests {
                 expected: 6,
             })
         );
-        assert!(packer.data.is_empty());
+        assert!(row.data.is_empty());
     }
 
     #[test]
     fn test_nesting() {
-        let mut packer = RowPacker::new();
-        packer.push_dict_with(|packer| {
-            packer.push(Datum::String("favourites"));
-            packer.push_list_with(|packer| {
-                packer.push(Datum::String("ice cream"));
-                packer.push(Datum::String("oreos"));
-                packer.push(Datum::String("cheesecake"));
+        let mut row = Row::default();
+        row.push_dict_with(|row| {
+            row.push(Datum::String("favourites"));
+            row.push_list_with(|row| {
+                row.push(Datum::String("ice cream"));
+                row.push(Datum::String("oreos"));
+                row.push(Datum::String("cheesecake"));
             });
-            packer.push(Datum::String("name"));
-            packer.push(Datum::String("bob"));
+            row.push(Datum::String("name"));
+            row.push(Datum::String("bob"));
         });
-        let row = packer.finish();
 
         let mut iter = row.unpack_first().unwrap_map().iter();
 
@@ -1445,17 +1491,17 @@ mod tests {
     #[test]
     fn test_dict_errors() -> Result<(), Box<dyn std::error::Error>> {
         let pack = |ok| {
-            let mut packer = RowPacker::new();
-            packer.push_dict_with(|packer| {
+            let mut row = Row::default();
+            row.push_dict_with(|row| {
                 if ok {
-                    packer.push(Datum::String("key"));
-                    packer.push(Datum::Int32(42));
+                    row.push(Datum::String("key"));
+                    row.push(Datum::Int32(42));
                     Ok(7)
                 } else {
                     Err("fail")
                 }
             })?;
-            Ok(packer.finish())
+            Ok(row)
         };
 
         assert_eq!(pack(false), Err("fail"));

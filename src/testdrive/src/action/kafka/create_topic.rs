@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::convert::TryFrom;
 use std::time::Duration;
 
@@ -21,12 +22,14 @@ use crate::parser::BuiltinCommand;
 pub struct CreateTopicAction {
     topic_prefix: String,
     partitions: usize,
+    replication_factor: i32,
     compression: String,
 }
 
 pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, String> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let partitions = cmd.args.opt_parse("partitions")?.unwrap_or(1);
+    let replication_factor = cmd.args.opt_parse("replication-factor")?.unwrap_or(1);
     let compression = cmd
         .args
         .opt_string("compression")
@@ -36,6 +39,7 @@ pub fn build_create_topic(mut cmd: BuiltinCommand) -> Result<CreateTopicAction, 
     Ok(CreateTopicAction {
         topic_prefix,
         partitions,
+        replication_factor,
         compression,
     })
 }
@@ -46,7 +50,10 @@ impl Action for CreateTopicAction {
         let metadata = state
             .kafka_producer
             .client()
-            .fetch_metadata(None, Some(Duration::from_secs(1)))
+            .fetch_metadata(
+                None,
+                Some(cmp::max(Duration::from_secs(1), state.default_timeout)),
+            )
             .map_err(|e| e.to_string())?;
 
         let stale_kafka_topics: Vec<_> = metadata
@@ -150,14 +157,18 @@ impl Action for CreateTopicAction {
         );
         let partitions = i32::try_from(self.partitions)
             .map_err(|_| format!("partition count must fit in an i32: {}", self.partitions))?;
-        let new_topic = NewTopic::new(&topic_name, partitions, TopicReplication::Fixed(1))
-            // Disabling retention is very important! Our testdrive tests
-            // use hardcoded timestamps that are immediately eligible for
-            // deletion by Kafka's garbage collector. E.g., the timestamp
-            // "1" is interpreted as January 1, 1970 00:00:01, which is
-            // breaches the default 7-day retention policy.
-            .set("retention.ms", "-1")
-            .set("compression.type", &self.compression);
+        let new_topic = NewTopic::new(
+            &topic_name,
+            partitions,
+            TopicReplication::Fixed(self.replication_factor),
+        )
+        // Disabling retention is very important! Our testdrive tests
+        // use hardcoded timestamps that are immediately eligible for
+        // deletion by Kafka's garbage collector. E.g., the timestamp
+        // "1" is interpreted as January 1, 1970 00:00:01, which is
+        // breaches the default 7-day retention policy.
+        .set("retention.ms", "-1")
+        .set("compression.type", &self.compression);
         kafka_util::admin::create_topic(&state.kafka_admin, &state.kafka_admin_opts, &new_topic)
             .await
             .map_err(|e| e.to_string())?;

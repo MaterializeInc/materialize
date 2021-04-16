@@ -52,6 +52,7 @@ list
 map
 numeric
 oid
+rdn
 record
 text
 time
@@ -100,6 +101,7 @@ list             system
 map              system
 numeric          system
 oid              system
+rdn              system
 record           system
 text             system
 time             system

@@ -9,6 +9,12 @@
 
 mode cockroach
 
+query error DISTINCT specified, but now is not an aggregate function
+SELECT now(DISTINCT)
+
+query error DISTINCT specified, but round is not an aggregate function
+SELECT round(DISTINCT 1)
+
 # Test date_trunc()
 
 # TODO: PostgreSQL truncates trailing zeros from seconds, we do not.
@@ -1033,5 +1039,20 @@ SELECT power(9::float, 0.5);
 
 query T
 SELECT power(9::decimal(15, 5), 0.5::decimal(15, 5));
+----
+3
+
+query R
+SELECT pow(382, 5);
+----
+8134236862432
+
+query T
+SELECT pow(9::float, 0.5);
+----
+3.000
+
+query T
+SELECT pow(9::decimal(15, 5), 0.5::decimal(15, 5));
 ----
 3

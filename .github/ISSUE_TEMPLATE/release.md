@@ -244,10 +244,9 @@ in the infrastructure repository. All of these tests can be run in parallel.
   - [ ] Ensure that [`doc/user/config.toml`] has the correct version, as updated in the "Final
     Release / create git tag" step
 
-  - [ ] Ensure that all members of the release-notes team have signed-off on this issue.
-
-  - [ ] Ensure that the announcement blog post has been published and
-    announced, if applicable, by pinging the product team in #release.
+  - [ ] Ping `@relnotes-team` in `#release` to let them know the release process
+    is finished, and that they should publish any appropriate blog posts and
+    release announcements
 
 ## Finish
 

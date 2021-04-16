@@ -34,7 +34,7 @@ where
 {
     let name = String::from(name);
     let pact = SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract();
-    let mut row_packer = repr::RowPacker::new();
+    let mut row_packer = Row::default();
     let stream = stream.unary(pact, "RegexDecode", |_cap, _op_info| {
         move |input, output| {
             input.for_each(|cap, lines| {
@@ -70,13 +70,13 @@ where
 
                     // Skip the 0th capture, which is the entire match, so that
                     // we only output the actual capture groups.
-                    let datums = captures
+                    row_packer.extend(captures
                         .iter()
                         .skip(1)
                         .map(|c| Datum::from(c.map(|c| c.as_str())))
-                        .chain(iter::once(Datum::from(*line_no)));
+                        .chain(iter::once(Datum::from(*line_no))));
 
-                    session.give((Ok(row_packer.pack(datums)), *cap.time(), 1));
+                    session.give((Ok(row_packer.finish_and_reuse()), *cap.time(), 1));
                 }
             });
         }

@@ -9,7 +9,11 @@
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::ArrangeBySelf;
+use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::Consolidate;
+use differential_dataflow::trace::implementations::ord::OrdValSpine;
+use differential_dataflow::AsCollection;
 use differential_dataflow::Collection;
 use timely::dataflow::Scope;
 
@@ -36,8 +40,25 @@ where
             let arity = input.arity();
             let (ok_input, err_input) = self.collection(input).unwrap();
 
-            // For monotonic inputs, we are able to retract inputs not produced as outputs.
-            if *monotonic {
+            if *monotonic && *offset == 0 && *limit == Some(1) {
+                // If the input to a TopK is monotonic (aka append-only aka no retractions) then we
+                // don't have to worry about keeping every row we've seen around forever. Instead,
+                // the reduce can incrementally compute a new answer by looking at just the old TopK
+                // for a key and the incremental data.
+                //
+                // This optimization generalizes to any TopK over a monotonic source, but we special
+                // case only TopK with offset=0 and limit=1 (aka Top1) for now. This is because (1)
+                // Top1 can merge in each incremental row in constant space and time while the
+                // generalized solution needs something like a priority queue and (2) we expect Top1
+                // will be a common pattern used to turn a Kafka source's "upsert" semantics into
+                // differential's semantics. (2) is especially interesting because Kafka is
+                // monotonic with an ENVELOPE of NONE, which is the default for ENVELOPE in
+                // Materialize and commonly used by users.
+                let result = self.render_top1_monotonic(ok_input, group_key, order_key);
+                self.collections
+                    .insert(relation_expr.clone(), (result, err_input));
+            } else if *monotonic {
+                // For monotonic inputs, we are able to retract inputs not produced as outputs.
                 use differential_dataflow::operators::iterate::Variable;
                 let delay = std::time::Duration::from_nanos(10_000_000_000);
                 let retractions = Variable::new(&mut ok_input.scope(), delay.as_millis() as u64);
@@ -67,11 +88,13 @@ where
             {
                 let group_clone = group_key.to_vec();
                 let mut collection = collection.map({
-                    let mut row_packer = repr::RowPacker::new();
                     move |row| {
                         let row_hash = row.hashed();
                         let datums = row.unpack();
-                        let group_row = row_packer.pack(group_clone.iter().map(|i| datums[*i]));
+                        let iterator = group_clone.iter().map(|i| datums[*i]);
+                        let total_size = repr::datums_size(iterator.clone());
+                        let mut group_row = Row::with_capacity(total_size);
+                        group_row.extend(iterator);
                         ((group_row, row_hash), row)
                     }
                 });
@@ -201,6 +224,118 @@ where
 
                 negated_output.negate().concat(&input).consolidate()
             }
+        }
+    }
+
+    fn render_top1_monotonic(
+        &self,
+        collection: Collection<G, Row, Diff>,
+        group_key: &[usize],
+        order_key: &[expr::ColumnOrder],
+    ) -> Collection<G, Row, Diff> {
+        // We can place our rows directly into the diff field, and only keep the relevant one
+        // corresponding to evaluating our aggregate, instead of having to do a hierarchical
+        // reduction.
+        use timely::dataflow::operators::Map;
+
+        let group_clone = group_key.to_vec();
+        let collection = collection.map({
+            move |row| {
+                let datums = row.unpack();
+                let iterator = group_clone.iter().map(|i| datums[*i]);
+                let total_size = repr::datums_size(iterator.clone());
+                let mut group_key = Row::with_capacity(total_size);
+                group_key.extend(iterator);
+                (group_key, row)
+            }
+        });
+
+        // We arrange the inputs ourself to force it into a leaner structure because we know we
+        // won't care about values.
+        //
+        // TODO: Could we use explode here? We'd lose the diff>0 assert and we'd have to impl Mul
+        // for the monoid, unclear if it's worth it.
+        let order_clone = order_key.to_vec();
+        let partial: Collection<G, Row, monoids::Top1Monoid> = collection
+            .consolidate()
+            .inner
+            .map(move |((group_key, row), time, diff)| {
+                assert!(diff > 0);
+                // NB: Top1 can throw out the diff since we've asserted that it's > 0. A more
+                // general TopK monoid would have to account for diff.
+                (
+                    group_key,
+                    time,
+                    monoids::Top1Monoid {
+                        row,
+                        order_key: order_clone.clone(),
+                    },
+                )
+            })
+            .as_collection();
+        let result = partial
+            .arrange_by_self()
+            .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("Top1Monotonic", {
+                move |_key, input, output| {
+                    let accum = &input[0].1;
+                    output.push((accum.row.clone(), 1));
+                }
+            });
+        result.as_collection(|_k, v| v.clone())
+    }
+}
+
+/// Monoids for in-place compaction of monotonic streams.
+pub mod monoids {
+    use std::cmp::Ordering;
+
+    use differential_dataflow::difference::Semigroup;
+    use serde::{Deserialize, Serialize};
+
+    use expr::ColumnOrder;
+    use repr::Row;
+
+    /// A monoid containing a row and an ordering.
+    #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize, Hash)]
+    pub struct Top1Monoid {
+        pub row: Row,
+        pub order_key: Vec<ColumnOrder>,
+    }
+
+    impl Ord for Top1Monoid {
+        fn cmp(&self, other: &Self) -> Ordering {
+            debug_assert_eq!(self.order_key, other.order_key);
+
+            // It might be nice to cache this row decoding like the non-monotonic codepath, but we'd
+            // have to store the decoded Datums in the same struct as the Row, which gets tricky.
+            let left: Vec<_> = self.row.iter().collect();
+            let right: Vec<_> = other.row.iter().collect();
+            expr::compare_columns(&self.order_key, &left, &right, || left.cmp(&right))
+        }
+    }
+    impl PartialOrd for Top1Monoid {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Semigroup for Top1Monoid {
+        fn plus_equals(&mut self, rhs: &Self) {
+            // It's unclear what the semantics are of a TopK without an ordering, but match the
+            // non-monotonic impl's behavior of not doing any decoding work.
+            if self.order_key.is_empty() {
+                return;
+            }
+
+            let cmp = (self as &Top1Monoid).cmp(rhs);
+            // NB: Reminder that TopK returns the _minimum_ K items.
+            if cmp == Ordering::Greater {
+                self.clone_from(&rhs);
+            }
+        }
+
+        fn is_zero(&self) -> bool {
+            false
         }
     }
 }

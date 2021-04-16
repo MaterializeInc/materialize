@@ -36,23 +36,28 @@ Detail | Info
 ### Valid casts
 
 In addition to the casts listed below, all integer types can be cast to and from
-all other integer types.
+all other integer types. `bigint`/`int8` to `int`/`int4` is a cast by assignment and
+`int`/`int4` to `bigint`/`int8` is an implicit cast.
 
 #### From `integer` or `bigint`
 
 You can [cast](../../functions/cast) `integer` or `bigint` to:
 
-- [`boolean`](../boolean)
-- [`numeric`](../numeric)
-- [`real`/`double precision`](../float)
-- [`text`](../text)
+- [`boolean`](../boolean) (explicitly)
+- [`numeric`](../numeric) (implicitly)
+- [`real`/`double precision`](../float) (implicitly)
+- [`text`](../text) (by assignment)
 
 #### To `integer` or `bigint`
 
 You can [cast](../../functions/cast) the following types to `integer` or `bigint`:
 
-- [`numeric`](../numeric)
-- [`real`/`double precision`](../float)
+- [`bool`](../boolean) (implicitly)
+- [`jsonb`](../jsonb)(explicitly)
+- [`oid`](../oid) (by assignment)
+- [`numeric`](../numeric) (by assignment)
+- [`real`/`double precision`](../float) (by assignment)
+- [`text`](../text) (explicitly)
 
 ## Examples
 

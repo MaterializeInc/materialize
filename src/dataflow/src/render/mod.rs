@@ -123,7 +123,8 @@ use repr::{RelationType, Row, RowArena, Timestamp};
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::server::{CacheMessage, LocalInput, TimestampDataUpdates};
+use crate::server::{CacheMessage, LocalInput};
+use crate::source::timestamp::TimestampDataUpdates;
 use crate::source::SourceToken;
 
 mod arrange_by;
@@ -183,13 +184,14 @@ pub fn build_dataflow<A: Allocate>(
             );
 
             // Import declared sources into the rendering context.
-            for (src_id, src) in dataflow.source_imports.clone() {
+            for (src_id, (src, orig_id)) in dataflow.source_imports.clone() {
                 context.import_source(
                     render_state,
                     region,
                     materialized_logging.clone(),
                     src_id,
                     src,
+                    orig_id,
                 );
             }
 
@@ -283,16 +285,22 @@ where
         //
         // TODO: Improve collection and arrangement re-use.
         self.collections.retain(|e, _| {
-            matches!(e, MirRelationExpr::Get {
-                id: Id::Global(_),
-                typ: _,
-            })
+            matches!(
+                e,
+                MirRelationExpr::Get {
+                    id: Id::Global(_),
+                    typ: _,
+                }
+            )
         });
         self.local.retain(|e, _| {
-            matches!(e, MirRelationExpr::Get {
-                id: Id::Global(_),
-                typ: _,
-            })
+            matches!(
+                e,
+                MirRelationExpr::Get {
+                    id: Id::Global(_),
+                    typ: _,
+                }
+            )
         });
         // We do not install in `context.trace`, and can skip deleting things from it.
     }
@@ -363,7 +371,7 @@ where
                 self.ensure_rendered(&input, scope, worker_index);
                 let (ok_collection, mut err_collection) = self
                     .flat_map_ref(&input, move |exprs| mfp2.literal_constraints(exprs), {
-                        let mut row_packer = repr::RowPacker::new();
+                        let mut row_packer = repr::Row::default();
                         let mut datums = vec![];
                         move |row| {
                             let pack_result = {
@@ -393,7 +401,9 @@ where
                                         row_packer.finish_and_reuse()
                                     }
                                     timely::communication::message::RefOrMut::Mut(r) => {
-                                        row_packer.finish_into(r);
+                                        // Copy the contents into `r` and clear `row_packer`.
+                                        r.clone_from(&row_packer);
+                                        row_packer.clear();
                                         std::mem::take(r)
                                     }
                                 })
@@ -536,10 +546,13 @@ where
                         let outputs = outputs.clone();
                         let (ok_collection, err_collection) = self.collection(input).unwrap();
                         let ok_collection = ok_collection.map({
-                            let mut row_packer = repr::RowPacker::new();
                             move |row| {
                                 let datums = row.unpack();
-                                row_packer.pack(outputs.iter().map(|i| datums[*i]))
+                                let iterator = outputs.iter().map(|i| datums[*i]);
+                                let total_size = repr::datums_size(iterator.clone());
+                                let mut row = Row::with_capacity(total_size);
+                                row.extend(iterator);
+                                row
                             }
                         });
 
@@ -554,7 +567,6 @@ where
                         let scalars = scalars.clone();
                         let (ok_collection, err_collection) = self.collection(input).unwrap();
                         let (ok_collection, new_err_collection) = ok_collection.map_fallible({
-                            let mut row_packer = repr::RowPacker::new();
                             move |input_row| {
                                 let mut datums = input_row.unpack();
                                 let temp_storage = RowArena::new();
@@ -565,7 +577,7 @@ where
                                     // Note that this doesn't mutate input_row.
                                     datums.push(datum);
                                 }
-                                Ok::<_, DataflowError>(row_packer.pack(&*datums))
+                                Ok::<_, DataflowError>(Row::pack_slice(&datums))
                             }
                         });
                         let err_collection = err_collection.concat(&new_err_collection);

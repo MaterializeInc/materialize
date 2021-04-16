@@ -20,8 +20,8 @@
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, Connector, DataType, Envelope, Expr, Format, Ident, Query, TableConstraint,
-    UnresolvedObjectName, Value,
+    AstInfo, ColumnDef, Connector, DataType, Envelope, Expr, Format, Ident, MultiConnector, Query,
+    TableConstraint, UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -36,6 +36,7 @@ pub enum Statement<T: AstInfo> {
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
     CreateSource(CreateSourceStatement<T>),
+    CreateSources(CreateSourcesStatement<T>),
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateTable(CreateTableStatement<T>),
@@ -72,7 +73,10 @@ pub enum Statement<T: AstInfo> {
 impl<T: AstInfo> Statement<T> {
     /// Reports whether the statement is cursor-related.
     pub fn is_cursor(&self) -> bool {
-        matches!(self, Statement::Declare(_) | Statement::Fetch(_) | Statement::Close(_))
+        matches!(
+            self,
+            Statement::Declare(_) | Statement::Fetch(_) | Statement::Close(_)
+        )
     }
 }
 
@@ -87,6 +91,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateDatabase(stmt) => f.write_node(stmt),
             Statement::CreateSchema(stmt) => f.write_node(stmt),
             Statement::CreateSource(stmt) => f.write_node(stmt),
+            Statement::CreateSources(stmt) => f.write_node(stmt),
             Statement::CreateSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
@@ -393,6 +398,21 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
     }
 }
 impl_display_t!(CreateSourceStatement);
+
+/// `CREATE SOURCES`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateSourcesStatement<T: AstInfo> {
+    pub connector: MultiConnector<T>,
+    pub stmts: Vec<CreateSourceStatement<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateSourcesStatement<T> {
+    fn fmt(&self, f: &mut AstFormatter) {
+        f.write_str("CREATE SOURCES FROM ");
+        f.write_node(&self.connector);
+    }
+}
+impl_display_t!(CreateSourcesStatement);
 
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

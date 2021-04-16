@@ -6,13 +6,14 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.38"
+anyhow = "1.0.40"
 backtrace = "0.3.56"
 jemalloc-ctl = { version = "0.3.0", features = ["use_std"], optional = true }
 lazy_static = "1.4.0"
-pprof = "0.4.2"
+pprof = "0.4.3"
 tempfile = "3.2.0"
-tokio = { version = "1.2.0", features = ["time"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1.4.0", features = ["time"] }
 
 [features]
 # Whether to automatically enable the jemalloc feature if compiling for a target

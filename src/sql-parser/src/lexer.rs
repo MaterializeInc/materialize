@@ -85,6 +85,54 @@ impl Token {
             Token::Semicolon => "semicolon",
         }
     }
+
+    pub fn value(&self) -> String {
+        match self {
+            Token::Keyword(kw) => kw.as_str().to_string(),
+            Token::Ident(val) => val.to_string(),
+            Token::String(val) => val.to_string(),
+            Token::HexString(val) => val.to_string(),
+            Token::Number(val) => val.to_string(),
+            Token::Op(val) => val.to_string(),
+            Token::Parameter(val) => val.to_string(),
+            Token::Star => "*".to_string(),
+            Token::Eq => "=".to_string(),
+            Token::LParen => "(".to_string(),
+            Token::RParen => ")".to_string(),
+            Token::LBracket => "[".to_string(),
+            Token::RBracket => "]".to_string(),
+            Token::Dot => ".".to_string(),
+            Token::Comma => ",".to_string(),
+            Token::Colon => ":".to_string(),
+            Token::DoubleColon => "::".to_string(),
+            Token::Semicolon => ";".to_string(),
+        }
+    }
+
+    /// True iff the `value()` function will return more information in our error messages
+    pub fn has_value(&self) -> bool {
+        match self {
+            Token::Ident(_)
+            | Token::String(_)
+            | Token::HexString(_)
+            | Token::Number(_)
+            | Token::Op(_)
+            | Token::Parameter(_) => true,
+            // In our error messages we use literal keywords, which makes the keyword value a duplicate
+            Token::Keyword(_) => false,
+            Token::Star
+            | Token::Eq
+            | Token::LParen
+            | Token::RParen
+            | Token::LBracket
+            | Token::RBracket
+            | Token::Dot
+            | Token::Comma
+            | Token::Colon
+            | Token::DoubleColon
+            | Token::Semicolon => false,
+        }
+    }
 }
 
 macro_rules! bail {

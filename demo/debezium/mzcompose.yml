@@ -1,0 +1,192 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+
+# Map from host-port:internal port
+#
+# This mostly just shows all the ports that are available to the host system, if you want
+# to change these you must restart the docker-compose cluster.
+x-port-mappings:
+  - &kafka-internal ${KAFKA_PORT:-9092:9092}
+  - &kafka-external 9093:9093
+  - &schema-registry ${SR_PORT:-8081:8081}
+  - &materialized ${MZ_PORT:-6875:6875}
+  - &mysql ${MYSQL_PORT:-3306:3306}
+  - &control-center ${CC_PORT:-9021:9021}
+  - &connect ${CONNECT_PORT:-8083:8083}
+
+version: '3.7'
+services:
+  materialized:
+    mzbuild: materialized
+    ports:
+     - *materialized
+    command:
+      - --workers=${MZ_WORKERS:-1}
+      # We want this to eventually count up to the size of the largest batch in
+      # an arrangement. This number represents a tradeoff between proactive
+      # merging (which takes time) and low latency.
+      #
+      # 1000 was chosen by fair dice roll.
+      - --differential-idle-merge-effort=1000
+      - --timely-progress-mode=${MZ_TIMELY_PROGRESS_MODE:-demand}
+      - --disable-telemetry
+    environment:
+      # You can, for example, add `pgwire=trace` or change `info` to `debug` to
+      # get more verbose logs.
+      - MZ_LOG=pgwire=debug,info
+      - MZ_DEV=1
+  mysql:
+    image: debezium/example-mysql:1.5
+    ports:
+     - *mysql
+    environment:
+     - MYSQL_ROOT_PASSWORD=debezium
+     - MYSQL_USER=mysqluser
+     - MYSQL_PASSWORD=mysqlpw
+    volumes:
+      - type: tmpfs
+        target: /var/lib/mysql
+  mysqlcli:
+    image: debezium/example-mysql:1.5
+    command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=debezium", "--database=inventory"]
+    init: true
+    depends_on:
+      - mysql
+  zookeeper:
+    image: confluentinc/cp-zookeeper:5.5.3
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    volumes:
+      - zookeeper:/var/lib/zookeeper
+  kafka:
+    image: confluentinc/cp-enterprise-kafka:5.5.3
+    ports:
+      - *kafka-internal
+      - *kafka-external
+    depends_on: [zookeeper]
+    environment:
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,EXTERNAL://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://${KAFKA_HOST:-kafka}:9093
+      KAFKA_METRIC_REPORTERS: "io.confluent.metrics.reporter.ConfluentMetricsReporter"
+      KAFKA_BROKER_ID: 1
+      KAFKA_LOG_RETENTION_HOURS: -1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      #KAFKA_LOG_CLEANUP_POLICY: "compact"
+      CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "kafka:9092"
+      CONFLUENT_METRICS_REPORTER_TOPIC_REPLICAS: 1
+      # To avoid race condition with control-center
+      CONFLUENT_METRICS_REPORTER_TOPIC_CREATE: "false"
+      KAFKA_JMX_PORT: 9991
+    volumes:
+      - kafka:/var/lib/kafka/data
+  connect:
+    image: debezium/connect:1.5
+    ports:
+      - *connect
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      CONFIG_STORAGE_TOPIC: connect_configs
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      STATUS_STORAGE_TOPIC: connect_statuses
+      # We don't support JSON, so ensure that connect uses AVRO to encode messages and CSR to
+      # record the schema
+      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    depends_on: [kafka, schema-registry]
+  simple-mysql-connector:
+    build: simple-mysql-connector
+    depends_on: [connect]
+  schema-registry:
+    image: confluentinc/cp-schema-registry:5.5.3
+    ports:
+      - *schema-registry
+    environment:
+     - SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL=zookeeper:2181
+     - SCHEMA_REGISTRY_HOST_NAME=schema-registry
+     - SCHEMA_REGISTRY_LISTENERS=http://schema-registry:8081,http://localhost:8081
+
+    depends_on: [zookeeper, kafka]
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:5.5.3
+    depends_on: [zookeeper, kafka, connect]
+    ports:
+      - *control-center
+    environment:
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: "kafka:9092"
+      CONTROL_CENTER_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_REPLICATION: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_REPLICATION: 1
+      CONTROL_CENTER_COMMAND_TOPIC_REPLICATION: 1
+      CONTROL_CENTER_METRICS_TOPIC_REPLICATION: 1
+      CONTROL_CENTER_MONITORING_INTERCEPTOR_TOPIC_PARTITIONS: 1
+      CONTROL_CENTER_INTERNAL_TOPICS_PARTITIONS: 1
+      CONTROL_CENTER_METRICS_TOPIC_PARTITIONS: 1
+      CONTROL_CENTER_STREAMS_NUM_STREAM_THREADS: 1
+      CONTROL_CENTER_CONNECT_CLUSTER: "http://connect:8083"
+      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      CONTROL_CENTER_DEPRECATED_VIEWS_ENABLE: "true"
+
+
+volumes:
+  kafka:
+  zookeeper:
+
+mzworkflows:
+
+  # Start MySQL + Debezium
+  bring-up-mysql-kafka:
+    steps:
+    - step: start-services
+      services: [mysql]
+    - step: wait-for-mysql
+      user: root
+      password: debezium
+      timeout_secs: 30
+    - step: start-services
+      services: [kafka, schema-registry, connect, control-center]
+    - step: wait-for-tcp
+      host: kafka
+      port: 9092
+    - step: wait-for-tcp
+      host: schema-registry
+      port: 8081
+      dependencies:
+        # sometimes kafka comes up for awhile and then crashes, which will always cause
+        # schema-registry to fail because there is no kafka cluster
+        - host: kafka
+          port: 9092
+          hint: >-
+            If kafka logs that it has an invalid cluster id ensure that all volumes are
+            destroyed via 'mzcompose down -v'
+    - step: wait-for-tcp
+      host: connect
+      port: 8083
+    - step: wait-for-tcp
+      host: control-center
+      port: 9021
+    - step: run
+      service: simple-mysql-connector
+
+  # Spin up an instance of MySQL that is being replicated to Kafka via Debezium
+  # Also starts up Control Center
+  demo:
+    steps:
+    - step: start-services
+      services: [materialized]
+    - step: wait-for-tcp
+      host: materialized
+      port: 6875
+    - step: workflow
+      workflow: bring-up-mysql-kafka

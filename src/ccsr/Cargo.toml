@@ -6,16 +6,18 @@ edition = "2018"
 publish = false
 
 [dependencies]
+anyhow = "1.0.40"
 futures = "0.3.13"
+http-util = { path = "../http-util" }
 native-tls = "0.2.7"
-openssl = { version = "0.10.32", features = ["vendored"] }
-reqwest = { version = "0.11.1", features = ["blocking", "json", "native-tls-vendored"] }
-serde = { version = "1.0.123", features = ["derive"] }
+openssl = { version = "0.10.33", features = ["vendored"] }
+reqwest = { version = "0.11.2", features = ["blocking", "json", "native-tls-vendored"] }
+serde = { version = "1.0.125", features = ["derive"] }
 serde_json = "1.0.64"
 url = { version = "2.2.1", features = ["serde"] }
 
 [dev-dependencies]
-anyhow = "1.0.38"
-hyper = "0.14.0"
+tracing = { version = "0.1.0", features = ["log"] }
+hyper = { version = "0.14.5", features = ["server"] }
 lazy_static = "1.4.0"
-tokio = { version = "1.2.0", features = ["macros"] }
+tokio = { version = "1.4.0", features = ["macros"] }

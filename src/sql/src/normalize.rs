@@ -26,12 +26,12 @@ use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
     AstInfo, Connector, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
-    IfExistsBehavior, Query, Raw, RawName, SqlOption, Statement, TableFactor, UnresolvedObjectName,
-    Value,
+    IfExistsBehavior, Query, Raw, SqlOption, Statement, TableFactor, UnresolvedObjectName, Value,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
 use crate::plan::error::PlanError;
+use crate::plan::query::{resolve_names_stmt, Aug};
 use crate::plan::statement::StatementContext;
 
 /// Normalizes a single identifier.
@@ -91,7 +91,7 @@ pub fn option_objects(options: &[SqlOption<Raw>]) -> BTreeMap<String, SqlOption<
 
 /// Unnormalizes an object name.
 ///
-/// This is the inverse of the [`object_name`] function.
+/// This is the inverse of the [`unresolved_object_name`] function.
 pub fn unresolve(name: FullName) -> UnresolvedObjectName {
     let mut out = vec![];
     if let DatabaseSpecifier::Name(n) = name.database {
@@ -112,8 +112,10 @@ pub fn unresolve(name: FullName) -> UnresolvedObjectName {
 /// objects that are persisted in the catalog.
 pub fn create_statement(
     scx: &StatementContext,
-    mut stmt: Statement<Raw>,
-) -> Result<String, PlanError> {
+    stmt: Statement<Raw>,
+) -> Result<String, anyhow::Error> {
+    let mut stmt = resolve_names_stmt(scx.catalog, stmt)?;
+
     let allocate_name = |name: &UnresolvedObjectName| -> Result<_, PlanError> {
         Ok(unresolve(
             scx.allocate_name(unresolved_object_name(name.clone())?),
@@ -138,7 +140,7 @@ pub fn create_statement(
         let full_name = scx.resolve_function(name.clone())?;
         *name = unresolve(full_name.name().clone());
         Ok(())
-    };
+    }
 
     struct QueryNormalizer<'a> {
         scx: &'a StatementContext<'a>,
@@ -156,8 +158,8 @@ pub fn create_statement(
         }
     }
 
-    impl<'a, 'ast> VisitMut<'ast, Raw> for QueryNormalizer<'a> {
-        fn visit_query_mut(&mut self, query: &'ast mut Query<Raw>) {
+    impl<'a, 'ast> VisitMut<'ast, Aug> for QueryNormalizer<'a> {
+        fn visit_query_mut(&mut self, query: &'ast mut Query<Aug>) {
             let n = self.ctes.len();
             for cte in &query.ctes {
                 self.ctes.push(cte.alias.name.clone());
@@ -166,7 +168,7 @@ pub fn create_statement(
             self.ctes.truncate(n);
         }
 
-        fn visit_function_mut(&mut self, func: &'ast mut Function<Raw>) {
+        fn visit_function_mut(&mut self, func: &'ast mut Function<Aug>) {
             if let Err(e) = normalize_function_name(self.scx, &mut func.name) {
                 self.err = Some(e);
                 return;
@@ -185,7 +187,7 @@ pub fn create_statement(
             }
         }
 
-        fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Raw>) {
+        fn visit_table_factor_mut(&mut self, table_factor: &'ast mut TableFactor<Aug>) {
             match table_factor {
                 TableFactor::Table { name, alias, .. } => {
                     self.visit_object_name_mut(name);
@@ -237,12 +239,6 @@ pub fn create_statement(
                 Ok(full_name) => *unresolved_object_name = unresolve(full_name.name().clone()),
                 Err(e) => self.err = Some(e),
             };
-        }
-
-        fn visit_object_name_mut(&mut self, object_name: &'ast mut <Raw as AstInfo>::ObjectName) {
-            match object_name {
-                RawName::Name(n) | RawName::Id(_, n) => self.visit_unresolved_object_name_mut(n),
-            }
         }
     }
 
@@ -296,7 +292,7 @@ pub fn create_statement(
                 normalizer.visit_column_def_mut(c);
             }
             if let Some(err) = normalizer.err {
-                return Err(err);
+                return Err(err.into());
             }
             *if_not_exists = false;
         }
@@ -335,7 +331,7 @@ pub fn create_statement(
                 let mut normalizer = QueryNormalizer::new(scx);
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {
-                    return Err(err);
+                    return Err(err.into());
                 }
             }
             *materialized = false;
@@ -355,7 +351,7 @@ pub fn create_statement(
                 for key_part in key_parts {
                     normalizer.visit_expr_mut(key_part);
                     if let Some(err) = normalizer.err {
-                        return Err(err);
+                        return Err(err.into());
                     }
                 }
             }
@@ -376,7 +372,7 @@ pub fn create_statement(
                 }
             }
             if let Some(err) = normalizer.err {
-                return Err(err);
+                return Err(err.into());
             }
         }
 

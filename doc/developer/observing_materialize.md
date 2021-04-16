@@ -26,6 +26,19 @@ The metrics are generated directly by code in materialized using the our [own
 fork](https://github.com/MaterializeInc/rust-prometheus/commits/master) of
 [rust-prometheus](https://github.com/tikv/rust-prometheus).
 
+#### Prometheus metrics from SQL
+
+All of materialized's prometheus metrics are being imported into materialize at
+a 1-second resolution and retained for 5 minutes, where you can inspect them and
+their changes over time with SQL commands.
+
+The tables where you can find them are:
+
+- `mz_catalog.mz_metrics` - counter and gauge values,
+- `mz_catalog.mz_metric_histograms` - histogram distributions, and
+- `mz_catalog.mz_metrics_meta` - data types and help texts of materialized's
+  prometheus metrics.
+
 ### CI MZ SQL Exporter
 
 For operational metrics backed by SQL queries of materialized internal data structures, we use
@@ -62,9 +75,6 @@ guide](https://materialize.com/docs/ops/diagnosing-using-sql/).
 
 Our stdout logs don't currently emit any performance metrics, but they do emit events such as new
 sources being discovered, configuration of Kafka sources, timestamping method for sources.
-
-If, for example, one enables Kafka source metrics, via the `statistics_interval_ms` configuration
-option, the metrics will be written to the Materialize log file.
 
 Our Docker image is configured to dump log messages to stderr and not a file within the container.
 

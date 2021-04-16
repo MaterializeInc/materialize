@@ -6,13 +6,13 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.38"
+anyhow = "1.0.40"
 bytes = "1.0.1"
 datadriven = "0.5.0"
 fallible-iterator = "0.2.0"
 ore = { path = "../ore" }
-postgres = "0.19.0"
-postgres-protocol = "0.6.0"
-serde = { version = "1.0.123", features = ["derive"] }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+serde = { version = "1.0.125", features = ["derive"] }
 serde_json = "1.0.64"
 structopt = "0.3.21"

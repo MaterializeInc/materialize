@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -27,6 +28,7 @@ pub enum SinkConsistencyFormat {
 pub struct VerifyAction {
     sink: String,
     consistency: Option<SinkConsistencyFormat>,
+    sort_messages: bool,
     expected_messages: Vec<String>,
 }
 
@@ -39,11 +41,13 @@ pub fn build_verify(mut cmd: BuiltinCommand) -> Result<VerifyAction, String> {
         None => None,
     };
 
+    let sort_messages = cmd.args.opt_bool("sort-messages")?.unwrap_or(false);
     let expected_messages = cmd.input;
     cmd.args.done()?;
     Ok(VerifyAction {
         sink,
         consistency,
+        sort_messages,
         expected_messages,
     })
 }
@@ -125,13 +129,15 @@ impl Action for VerifyAction {
         let consumer: StreamConsumer = config
             .create()
             .map_err(|e| format!("creating kafka consumer: {}", e))?;
-        consumer.subscribe(&[&topic]).map_err(|e| e.to_string())?;
+        consumer
+            .subscribe(&[&topic])
+            .map_err(|e| format!("subscribing: {}", e.to_string()))?;
 
-        // Wait up to 10 seconds for each message.
+        // Wait up to 15 seconds for each message.
         let message_stream = consumer
             .stream()
             .take(self.expected_messages.len())
-            .timeout(Duration::from_secs(15));
+            .timeout(cmp::max(state.default_timeout, Duration::from_secs(15)));
         pin!(message_stream);
 
         let mut actual_messages = vec![];
@@ -160,6 +166,10 @@ impl Action for VerifyAction {
                 })
                 .transpose()?;
             actual_messages.push((key_datum, value_datum));
+        }
+
+        if self.sort_messages {
+            actual_messages.sort_by_key(|k| format!("{:?}", k.1));
         }
 
         avro::validate_sink(

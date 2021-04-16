@@ -37,18 +37,18 @@ Unable to automatically determine a timestamp for your query; this can happen if
   SELECT b, sum(a) FROM data GROUP BY b
 
 > SHOW FULL VIEWS
-name        type     materialized
-----------------------------------
-data_view   user     false
-test1       user     true
+name        type     materialized  volatility
+---------------------------------------------
+data_view   user     false         unknown
+test1       user     true          unknown
 
 > SHOW MATERIALIZED VIEWS
 test1
 
 > SHOW FULL MATERIALIZED VIEWS
-name     type
--------------
-test1    user
+name     type  volatility
+-------------------------
+test1    user  unknown
 
 > SELECT * FROM test1
 b  sum
@@ -169,9 +169,9 @@ catalog item 'materialize.public.idx1' is an index and so cannot be depended upo
 > DROP INDEX test5_primary_idx
 
 > SHOW FULL VIEWS LIKE 'test5'
-name        type     materialized
-----------------------------------
-test5       user     true
+name        type     materialized  volatility
+---------------------------------------------
+test5       user     true          unknown
 
 > SELECT * from test5
 b  c
@@ -192,9 +192,9 @@ b  c
 Unable to automatically determine a timestamp for your query; this can happen if your query depends on non-materialized sources
 
 > SHOW FULL VIEWS LIKE 'test5'
-name        type     materialized
-----------------------------------
-test5       user     false
+name        type     materialized  volatility
+---------------------------------------------
+test5       user     false         unknown
 
 # Test that materialized views can be even if it requires multiple layers of
 # recursing through the AST to find a source.
@@ -323,15 +323,15 @@ name
 mat_data
 
 > SHOW FULL SOURCES
-name     type materialized
--------------------------
-data     user false
-mat_data user true
+name     type materialized  volatility
+--------------------------------------
+data     user false         unknown
+mat_data user true          unknown
 
 > SHOW FULL MATERIALIZED SOURCES
-name     type
--------------
-mat_data user
+name     type  volatility
+-------------------------
+mat_data user  unknown
 
 # If there exists another index, dropping the primary index will not #
 # unmaterialize the source. This also tests creating a default index when the

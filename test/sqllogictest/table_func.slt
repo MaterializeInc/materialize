@@ -84,7 +84,7 @@ EXPLAIN RAW PLAN FOR SELECT generate_series FROM generate_series(-2, 2)
 | Constant ()
 
 %1 =
-| CallTable generate_series(-(2), 2)
+| CallTable generate_series(-2, 2)
 
 %2 =
 | InnerLateralJoin %0 %1 on true
@@ -297,7 +297,7 @@ EXPLAIN PLAN FOR SELECT * FROM x x1, x x2, generate_series(x1.a, x2.b) AS x3(b) 
 EOF
 
 query I
-SELECT * FROM generate_series(0,3), repeat(generate_series);
+SELECT * FROM generate_series(0,3), repeat_row(generate_series);
 ----
 1
 2
@@ -307,7 +307,7 @@ SELECT * FROM generate_series(0,3), repeat(generate_series);
 3
 
 query I
-SELECT abs(generate_series) FROM generate_series(-1, 2), repeat(generate_series);
+SELECT abs(generate_series) FROM generate_series(-1, 2), repeat_row(generate_series);
 ----
 2
 2

@@ -37,8 +37,8 @@ use sql_parser::ast::visit::{self, Visit};
 use sql_parser::ast::{
     AstInfo, Cte, DataType, Distinct, Expr, Function, FunctionArgs, Ident, InsertSource,
     JoinConstraint, JoinOperator, Limit, OrderByExpr, Query, Raw, RawName, Select, SelectItem,
-    SetExpr, SetOperator, TableAlias, TableFactor, TableWithJoins, UnresolvedObjectName, Value,
-    Values,
+    SetExpr, SetOperator, Statement, TableAlias, TableFactor, TableWithJoins, UnresolvedObjectName,
+    Value, Values,
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
@@ -71,13 +71,32 @@ pub struct Aug;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ResolvedObjectName {
-    id: Id,
-    raw_name: PartialName,
+    pub id: Id,
+    pub raw_name: PartialName,
+    // Whether this object, when printed out, should use [id AS name] syntax. We
+    // want this for things like tables and sources, but not for things like
+    // types.
+    pub print_id: bool,
 }
 
 impl AstDisplay for ResolvedObjectName {
     fn fmt(&self, f: &mut AstFormatter) {
-        f.write_str(format!("[{}: {}]", self.id, self.raw_name));
+        if self.print_id {
+            f.write_str(format!("[{} AS ", self.id));
+        }
+        let n = self.raw_name();
+        if let Some(database) = n.database {
+            f.write_node(&Ident::new(database));
+            f.write_str(".");
+        }
+        if let Some(schema) = n.schema {
+            f.write_node(&Ident::new(schema));
+            f.write_str(".");
+        }
+        f.write_node(&Ident::new(n.item));
+        if self.print_id {
+            f.write_str("]");
+        }
     }
 }
 
@@ -178,6 +197,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         return ResolvedObjectName {
                             id: Id::Local(*id),
                             raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
+                            print_id: false,
                         };
                     }
                 }
@@ -186,9 +206,14 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 match self.catalog.resolve_item(&name) {
                     Ok(item) => {
                         self.ids.insert(item.id());
+                        let print_id = !matches!(
+                            item.item_type(),
+                            CatalogItemType::Func | CatalogItemType::Type
+                        );
                         ResolvedObjectName {
                             id: Id::Global(item.id()),
-                            raw_name: name,
+                            raw_name: item.name().clone().into(),
+                            print_id,
                         }
                     }
                     Err(e) => {
@@ -198,6 +223,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                         ResolvedObjectName {
                             id: Id::Local(LocalId::new(0)),
                             raw_name: name,
+                            print_id: false,
                         }
                     }
                 }
@@ -217,10 +243,26 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 ResolvedObjectName {
                     id: Id::Global(gid),
                     raw_name: normalize::unresolved_object_name(raw_name).unwrap(),
+                    print_id: true,
                 }
             }
         }
     }
+}
+
+pub fn resolve_names_stmt(
+    catalog: &dyn Catalog,
+    stmt: Statement<Raw>,
+) -> Result<Statement<Aug>, anyhow::Error> {
+    let mut n = NameResolver {
+        status: Ok(()),
+        catalog,
+        ctes: HashMap::new(),
+        ids: HashSet::new(),
+    };
+    let result = n.fold_statement(stmt);
+    n.status?;
+    Ok(result)
 }
 
 // Attaches additional information to a `Raw` AST, resulting in an `Aug` AST, by
@@ -343,7 +385,10 @@ fn try_push_projection_order_by(
     for (out_i, in_i) in project.iter().copied().enumerate() {
         unproject[in_i] = Some(out_i);
     }
-    if order_by.iter().all(|ob| unproject[ob.column].is_some()) {
+    if order_by
+        .iter()
+        .all(|ob| ob.column < unproject.len() && unproject[ob.column].is_some())
+    {
         let trivial_project = (0..project.len()).collect();
         *expr = expr.take().project(mem::replace(project, trivial_project));
         for ob in order_by {
@@ -2653,14 +2698,20 @@ fn plan_op(
 
 fn plan_function<'a>(
     ecx: &ExprContext,
-    sql_func: &'a Function<Aug>,
+    Function {
+        name,
+        args,
+        filter,
+        over,
+        distinct,
+    }: &'a Function<Aug>,
 ) -> Result<HirScalarExpr, anyhow::Error> {
-    let impls = match resolve_func(ecx, &sql_func.name, &sql_func.args)? {
+    let impls = match resolve_func(ecx, name, args)? {
         Func::Aggregate(_) if ecx.allow_aggregates => {
             // should already have been caught by `scope.resolve_expr` in `plan_expr`
             bail!(
                 "Internal error: encountered unplanned aggregate function: {:?}",
-                sql_func,
+                name,
             )
         }
         Func::Aggregate(_) => {
@@ -2669,31 +2720,34 @@ fn plan_function<'a>(
         Func::Table(_) => {
             unsupported!(
                 1546,
-                format!("table function ({}) in scalar position", sql_func.name)
+                format!("table function ({}) in scalar position", name)
             );
         }
         Func::Scalar(impls) => impls,
     };
 
-    if sql_func.over.is_some() {
+    if over.is_some() {
         unsupported!(213, "window functions");
     }
-    if sql_func.filter.is_some() {
+    if *distinct {
         bail!(
-            "FILTER specified but {}() is not an aggregate function",
-            sql_func.name
+            "DISTINCT specified, but {} is not an aggregate function",
+            name
+        );
+    }
+    if filter.is_some() {
+        bail!(
+            "FILTER specified, but {} is not an aggregate function",
+            name
         );
     }
 
-    let args = match &sql_func.args {
-        FunctionArgs::Star => bail!(
-            "* argument is invalid with non-aggregate function {}",
-            sql_func.name
-        ),
+    let args = match &args {
+        FunctionArgs::Star => bail!("* argument is invalid with non-aggregate function {}", name),
         FunctionArgs::Args(args) => plan_exprs(ecx, args)?,
     };
 
-    let name = normalize::unresolved_object_name(sql_func.name.clone())?;
+    let name = normalize::unresolved_object_name(name.clone())?;
     func::select_impl(ecx, FuncSpec::Func(&name), impls, args)
 }
 
@@ -2793,12 +2847,16 @@ fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> 
         Value::Number(s) => {
             let d: Decimal = s.parse()?;
             if d.scale() == 0 {
-                match d.significand().try_into() {
-                    Ok(n) => (Datum::Int32(n), ScalarType::Int32),
-                    Err(_) => (
-                        Datum::from(d.significand()),
+                let significand = d.significand();
+                if let Ok(n) = significand.try_into() {
+                    (Datum::Int32(n), ScalarType::Int32)
+                } else if let Ok(n) = significand.try_into() {
+                    (Datum::Int64(n), ScalarType::Int64)
+                } else {
+                    (
+                        Datum::from(significand),
                         ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
-                    ),
+                    )
                 }
             } else {
                 (
@@ -3022,6 +3080,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
             value_type: Box::new(scalar_type_from_pg(value_type)?),
             custom_oid: None,
         }),
+        pgrepr::Type::RDN => Ok(ScalarType::Numeric { scale: None }),
     }
 }
 
@@ -3223,8 +3282,8 @@ impl<'a> QueryContext<'a> {
 
                 Ok((expr, scope))
             }
-            Id::BareSource(_) | Id::LocalBareSource => {
-                // These are never introduced except when planning source transformations.
+            Id::LocalBareSource => {
+                // This is never introduced except when planning source transformations.
                 unreachable!()
             }
         }

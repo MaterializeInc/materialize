@@ -301,6 +301,8 @@ mz_arrangement_sizes
 mz_dataflow_channels
 mz_dataflow_operator_addresses
 mz_dataflow_operators
+mz_kafka_broker_rtt
+mz_kafka_consumer_partitions
 mz_materialization_dependencies
 mz_materializations
 mz_message_counts
@@ -313,23 +315,25 @@ mz_source_info
 mz_worker_materialization_frontiers
 
 > SHOW FULL SOURCES FROM mz_catalog
-name                                 type   materialized
---------------------------------------------------------
-mz_arrangement_sharing               system true
-mz_arrangement_sizes                 system true
-mz_dataflow_channels                 system true
-mz_dataflow_operator_addresses       system true
-mz_dataflow_operators                system true
-mz_materialization_dependencies      system true
-mz_materializations                  system true
-mz_message_counts                    system true
-mz_peek_active                       system true
-mz_peek_durations                    system true
-mz_scheduling_elapsed                system true
-mz_scheduling_histogram              system true
-mz_scheduling_parks                  system true
-mz_source_info                       system true
-mz_worker_materialization_frontiers  system true
+name                                 type   materialized  volatility
+--------------------------------------------------------------------
+mz_arrangement_sharing               system true          volatile
+mz_arrangement_sizes                 system true          volatile
+mz_dataflow_channels                 system true          volatile
+mz_dataflow_operator_addresses       system true          volatile
+mz_dataflow_operators                system true          volatile
+mz_kafka_broker_rtt                  system true          volatile
+mz_kafka_consumer_partitions         system true          volatile
+mz_materialization_dependencies      system true          volatile
+mz_materializations                  system true          volatile
+mz_message_counts                    system true          volatile
+mz_peek_active                       system true          volatile
+mz_peek_durations                    system true          volatile
+mz_scheduling_elapsed                system true          volatile
+mz_scheduling_histogram              system true          volatile
+mz_scheduling_parks                  system true          volatile
+mz_source_info                       system true          volatile
+mz_worker_materialization_frontiers  system true          volatile
 
 > SHOW TABLES FROM mz_catalog
 mz_array_types
@@ -343,6 +347,9 @@ mz_indexes
 mz_kafka_sinks
 mz_list_types
 mz_map_types
+mz_metric_histograms
+mz_metrics
+mz_metrics_meta
 mz_pseudo_types
 mz_roles
 mz_schemas
@@ -368,6 +375,9 @@ mz_indexes            system
 mz_kafka_sinks        system
 mz_list_types         system
 mz_map_types          system
+mz_metric_histograms  system
+mz_metrics            system
+mz_metrics_meta       system
 mz_pseudo_types       system
 mz_roles              system
 mz_schemas            system
@@ -379,16 +389,75 @@ mz_view_foreign_keys  system
 mz_view_keys          system
 mz_views              system
 
-! SHOW EXTENDED TABLES
-SHOW EXTENDED TABLES not yet supported
+> CREATE SCHEMA tester
+
+> SHOW TABLES FROM tester
+
+> SHOW EXTENDED tables FROM tester
+mz_array_types
+mz_avro_ocf_sinks
+mz_base_types
+mz_columns
+mz_databases
+mz_functions
+mz_index_columns
+mz_indexes
+mz_kafka_sinks
+mz_list_types
+mz_map_types
+mz_metric_histograms
+mz_metrics
+mz_metrics_meta
+mz_pseudo_types
+mz_roles
+mz_schemas
+mz_sinks
+mz_sources
+mz_tables
+mz_types
+mz_view_foreign_keys
+mz_view_keys
+mz_views
+
+> CREATE TABLE tester.test_table (a int)
+
+> SHOW TABLES FROM tester
+test_table
+
+> SHOW EXTENDED tables FROM tester
+mz_array_types
+mz_avro_ocf_sinks
+mz_base_types
+mz_columns
+mz_databases
+mz_functions
+mz_index_columns
+mz_indexes
+mz_kafka_sinks
+mz_list_types
+mz_map_types
+mz_metric_histograms
+mz_metrics
+mz_metrics_meta
+mz_pseudo_types
+mz_roles
+mz_schemas
+mz_sinks
+mz_sources
+mz_tables
+mz_types
+mz_view_foreign_keys
+mz_view_keys
+mz_views
+test_table
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-21
+24
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-36
+41
 
 > SHOW VIEWS FROM mz_catalog
 mz_addresses_with_unit_length
@@ -408,23 +477,23 @@ mz_records_per_dataflow_operator
 mz_relations
 
 > SHOW FULL VIEWS FROM mz_catalog
-name                              type   materialized
--------------------------------------------------------
-mz_addresses_with_unit_length     system false
-mz_dataflow_names                 system false
-mz_dataflow_operator_dataflows    system false
-mz_materialization_frontiers      system false
-mz_objects                        system false
-mz_perf_arrangement_records       system false
-mz_perf_dependency_frontiers      system false
-mz_perf_peek_durations_aggregates system false
-mz_perf_peek_durations_bucket     system false
-mz_perf_peek_durations_core       system false
-mz_records_per_dataflow           system false
-mz_records_per_dataflow_global    system false
-mz_records_per_dataflow_operator  system false
-mz_relations                      system false
-mz_catalog_names                  system false
+name                              type   materialized  volatility
+-----------------------------------------------------------------
+mz_addresses_with_unit_length     system false         volatile
+mz_dataflow_names                 system false         volatile
+mz_dataflow_operator_dataflows    system false         volatile
+mz_materialization_frontiers      system false         volatile
+mz_objects                        system false         volatile
+mz_perf_arrangement_records       system false         volatile
+mz_perf_dependency_frontiers      system false         volatile
+mz_perf_peek_durations_aggregates system false         volatile
+mz_perf_peek_durations_bucket     system false         volatile
+mz_perf_peek_durations_core       system false         volatile
+mz_records_per_dataflow           system false         volatile
+mz_records_per_dataflow_global    system false         volatile
+mz_records_per_dataflow_operator  system false         volatile
+mz_relations                      system false         volatile
+mz_catalog_names                  system false         volatile
 
 > SHOW MATERIALIZED SOURCES FROM mz_catalog LIKE '%peek%';
 mz_peek_active

@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{scalar::EvalError, MirRelationExpr, MirScalarExpr};
-use repr::{Datum, Row, RowArena, RowPacker};
+use repr::{Datum, Row, RowArena};
 
 /// A compound operator that can be applied row-by-row.
 ///
@@ -84,14 +84,18 @@ impl MapFilterProject {
         &'a self,
         datums: &mut Vec<Datum<'a>>,
         arena: &'a RowArena,
-        row_packer: &mut RowPacker,
     ) -> Result<Option<Row>, EvalError> {
-        self.evaluate_iter(datums, arena).map(|result| {
-            result.map(|result| {
-                row_packer.extend(result);
-                row_packer.finish_and_reuse()
-            })
-        })
+        let passed_predicates = self.evaluate_inner(datums, arena)?;
+        if !passed_predicates {
+            Ok(None)
+        } else {
+            // We determine the capacity first, to ensure that we right-size
+            // the row allocation and need not re-allocate once it is formed.
+            let capacity = repr::datums_size(self.projection.iter().map(|c| datums[*c]));
+            let mut row = Row::with_capacity(capacity);
+            row.extend(self.projection.iter().map(|c| datums[*c]));
+            Ok(Some(row))
+        }
     }
 
     /// A version of `evaluate` which produces an iterator over `Datum`
@@ -106,6 +110,22 @@ impl MapFilterProject {
         datums: &'b mut Vec<Datum<'a>>,
         arena: &'a RowArena,
     ) -> Result<Option<impl Iterator<Item = Datum<'a>> + 'b>, EvalError> {
+        let passed_predicates = self.evaluate_inner(datums, arena)?;
+        if !passed_predicates {
+            Ok(None)
+        } else {
+            Ok(Some(self.projection.iter().map(move |i| datums[*i])))
+        }
+    }
+
+    /// Populates `datums` with `self.expressions` and tests `self.predicates`.
+    ///
+    /// This does not apply `self.projection`, which is up to the calling method.
+    fn evaluate_inner<'b, 'a: 'b>(
+        &'a self,
+        datums: &'b mut Vec<Datum<'a>>,
+        arena: &'a RowArena,
+    ) -> Result<bool, EvalError> {
         let mut expression = 0;
         for (support, predicate) in self.predicates.iter() {
             while self.input_arity + expression < *support {
@@ -113,14 +133,14 @@ impl MapFilterProject {
                 expression += 1;
             }
             if predicate.eval(&datums[..], &arena)? != Datum::True {
-                return Ok(None);
+                return Ok(false);
             }
         }
         while expression < self.expressions.len() {
             datums.push(self.expressions[expression].eval(&datums[..], &arena)?);
             expression += 1;
         }
-        Ok(Some(self.projection.iter().map(move |i| datums[*i])))
+        Ok(true)
     }
 
     /// Retain only the indicated columns in the presented order.
@@ -162,8 +182,10 @@ impl MapFilterProject {
             self.predicates.push((max_support, predicate))
         }
         // Stable sort predicates by position at which they take effect.
+        // We put literal errors at the end as a stop-gap to avoid erroring
+        // before we are able to evaluate any predicates that might prevent it.
         self.predicates
-            .sort_by_key(|(position, _predicate)| *position);
+            .sort_by_key(|(position, predicate)| (predicate.is_literal_err(), *position));
         self
     }
 
@@ -240,15 +262,15 @@ impl MapFilterProject {
         if exprs.is_empty() {
             return None;
         }
-        let mut row_packer = RowPacker::new();
+        let mut row = Row::default();
         for expr in exprs {
             if let Some(literal) = self.literal_constraint(expr) {
-                row_packer.push(literal);
+                row.push(literal);
             } else {
                 return None;
             }
         }
-        Some(row_packer.finish_and_reuse())
+        Some(row)
     }
 
     /// Extracts any MapFilterProject at the root of the expression.
@@ -723,46 +745,6 @@ impl MapFilterProject {
         }
         let mut new_expressions = Vec::new();
 
-        // A helper method which memoizes expressions by recursively memoizing their parts.
-        fn memoize_expr(
-            expr: &mut MirScalarExpr,
-            new_scalars: &mut Vec<MirScalarExpr>,
-            projection: &HashMap<usize, usize>,
-            input_arity: usize,
-        ) {
-            match expr {
-                MirScalarExpr::Column(index) => {
-                    // Column references need to be rewritten, but do not need to be memoized.
-                    *index = projection[index];
-                }
-                _ => {
-                    // We should not eagerly memoize `if` branches that might not be taken.
-                    // TODO: Memoize expressions in the intersection of `then` and `els`.
-                    if let MirScalarExpr::If { cond, then, els } = expr {
-                        memoize_expr(cond, new_scalars, projection, input_arity);
-                        // Conditionally evaluated expressions still need to update their
-                        // column references.
-                        then.permute_map(projection);
-                        els.permute_map(projection);
-                    } else {
-                        expr.visit1_mut(|e| memoize_expr(e, new_scalars, projection, input_arity));
-                    }
-                    if let Some(position) = new_scalars.iter().position(|e| e == expr) {
-                        // Any complex expression that already exists as a prior column can
-                        // be replaced by a reference to that column.
-                        *expr = MirScalarExpr::Column(input_arity + position);
-                    } else {
-                        // A complex expression that does not exist should be memoized, and
-                        // replaced by a reference to the column.
-                        new_scalars.push(std::mem::replace(
-                            expr,
-                            MirScalarExpr::Column(input_arity + new_scalars.len()),
-                        ));
-                    }
-                }
-            }
-        }
-
         // We follow the same order as for evaluation, to ensure that all
         // column references exist in time for their evaluation. We could
         // prioritize predicates, but we would need to be careful to chase
@@ -770,10 +752,10 @@ impl MapFilterProject {
         let mut expression = 0;
         for (support, predicate) in self.predicates.iter_mut() {
             while self.input_arity + expression < *support {
+                self.expressions[expression].permute_map(&remaps);
                 memoize_expr(
                     &mut self.expressions[expression],
                     &mut new_expressions,
-                    &remaps,
                     self.input_arity,
                 );
                 remaps.insert(
@@ -783,13 +765,14 @@ impl MapFilterProject {
                 new_expressions.push(self.expressions[expression].clone());
                 expression += 1;
             }
-            memoize_expr(predicate, &mut new_expressions, &remaps, self.input_arity);
+            predicate.permute_map(&remaps);
+            memoize_expr(predicate, &mut new_expressions, self.input_arity);
         }
         while expression < self.expressions.len() {
+            self.expressions[expression].permute_map(&remaps);
             memoize_expr(
                 &mut self.expressions[expression],
                 &mut new_expressions,
-                &remaps,
                 self.input_arity,
             );
             remaps.insert(
@@ -1019,4 +1002,49 @@ impl MapFilterProject {
             }))
             .project(projection.into_iter().map(|c| remap[&c]));
     }
+}
+
+// TODO: move this elsewhere?
+/// Recursively memoize parts of `expr`, storing those parts in `memoized_parts`.
+///
+/// A part of `expr` that is memoized is replaced by a reference to column
+/// `(input_arity + pos)`, where `pos` is the position of the memoized part in
+/// `memoized_parts`, and `input_arity` is the arity of the input that `expr`
+/// refers to.
+pub fn memoize_expr(
+    expr: &mut MirScalarExpr,
+    memoized_parts: &mut Vec<MirScalarExpr>,
+    input_arity: usize,
+) {
+    expr.visit_mut_pre_post(
+        &mut |e| {
+            // We should not eagerly memoize `if` branches that might not be taken.
+            // TODO: Memoize expressions in the intersection of `then` and `els`.
+            if let MirScalarExpr::If { cond, .. } = e {
+                return Some(vec![cond]);
+            }
+            None
+        },
+        &mut |e| {
+            match e {
+                MirScalarExpr::Column(_) | MirScalarExpr::Literal(_, _) => {
+                    // Literals do not need to be memoized.
+                }
+                _ => {
+                    if let Some(position) = memoized_parts.iter().position(|e2| e2 == e) {
+                        // Any complex expression that already exists as a prior column can
+                        // be replaced by a reference to that column.
+                        *e = MirScalarExpr::Column(input_arity + position);
+                    } else {
+                        // A complex expression that does not exist should be memoized, and
+                        // replaced by a reference to the column.
+                        memoized_parts.push(std::mem::replace(
+                            e,
+                            MirScalarExpr::Column(input_arity + memoized_parts.len()),
+                        ));
+                    }
+                }
+            }
+        },
+    )
 }

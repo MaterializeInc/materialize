@@ -21,9 +21,6 @@ pub enum Id {
     Local(LocalId),
     /// An identifier that refers to a global dataflow.
     Global(GlobalId),
-    /// Bare sources don't (yet?) live in the same namespace as catalog items (including the final, possibly transformed source.)
-    /// This gives us a way to refer to them in relation expressions
-    BareSource(GlobalId),
     /// Used to refer to a bare source within the RelationExpr defining the transformation of that source (before an ID has been
     /// allocated for the bare source).
     LocalBareSource,
@@ -34,7 +31,6 @@ impl fmt::Display for Id {
         match self {
             Id::Local(id) => id.fmt(f),
             Id::Global(id) => id.fmt(f),
-            Id::BareSource(id) => write!(f, "{}(bare)", id),
             Id::LocalBareSource => write!(f, "(bare source for this source)"),
         }
     }
@@ -67,6 +63,8 @@ pub enum GlobalId {
     User(u64),
     /// Transient namespace.
     Transient(u64),
+    /// Dummy id for query being explained
+    Explain,
 }
 
 impl GlobalId {
@@ -109,6 +107,7 @@ impl fmt::Display for GlobalId {
             GlobalId::System(id) => write!(f, "s{}", id),
             GlobalId::User(id) => write!(f, "u{}", id),
             GlobalId::Transient(id) => write!(f, "t{}", id),
+            GlobalId::Explain => write!(f, "Explained Query"),
         }
     }
 }
@@ -116,10 +115,10 @@ impl fmt::Display for GlobalId {
 /// Unique identifier for an instantiation of a source.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct SourceInstanceId {
-    // The ID of the source.
+    /// The ID of the source, shared across all instances.
     pub source_id: GlobalId,
-    // The ID of the timely dataflow containing this instantiation of this
-    // source.
+    /// The ID of the timely dataflow containing this instantiation of this
+    /// source.
     pub dataflow_id: usize,
 }
 
@@ -131,13 +130,13 @@ impl fmt::Display for SourceInstanceId {
 
 /// Unique identifier for each part of a whole source.
 ///     Kafka -> partition
-///     Kinesis -> shard
+///     Kinesis -> currently treated as single partition, should be shard.
 ///     File -> only one
 ///     S3 -> https://github.com/MaterializeInc/materialize/issues/5715
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum PartitionId {
     Kafka(i32),
-    Kinesis(String),
+    Kinesis,
     File,
     S3,
 }
@@ -147,7 +146,8 @@ impl fmt::Display for PartitionId {
         match self {
             PartitionId::Kafka(id) => write!(f, "{}", id.to_string()),
             PartitionId::S3 => write!(f, "s3"),
-            _ => write!(f, "0"),
+            PartitionId::Kinesis => write!(f, "kinesis"),
+            PartitionId::File => write!(f, "0"),
         }
     }
 }

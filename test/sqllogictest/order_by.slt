@@ -79,6 +79,9 @@ SELECT a FROM foo GROUP BY a ORDER BY max(b)
 query error for SELECT DISTINCT, ORDER BY expressions must appear in select list
 SELECT DISTINCT a FROM foo ORDER BY b
 
+query error for SELECT DISTINCT, ORDER BY expressions must appear in select list
+SELECT DISTINCT a FROM foo ORDER BY a + 1
+
 # ...or a set expression.
 query error column "b" does not exist
 (SELECT a FROM foo) UNION (SELECT a FROM foo) ORDER BY b

@@ -154,7 +154,7 @@ pub enum HirScalarExpr {
     Select(Box<HirRelationExpr>),
 }
 
-/// A `CoercibleScalarExpr` is a [`ScalarExpr`] whose type is not fully
+/// A `CoercibleScalarExpr` is a [`HirScalarExpr`] whose type is not fully
 /// determined. Several SQL expressions can be freely coerced based upon where
 /// in the expression tree they appear. For example, the string literal '42'
 /// will be automatically coerced to the integer 42 if used in a numeric
@@ -393,6 +393,8 @@ pub enum AggregateFunc {
     /// layer, this function filters out `Datum::Null`, for consistency with
     /// the other aggregate functions.
     JsonbAgg,
+    /// Aggregates pairs of JSON-typed `Datum`s into a JSON object.
+    JsonbObjectAgg,
     /// Accumulates any number of `Datum::Dummy`s into `Datum::Dummy`.
     ///
     /// Useful for removing an expensive aggregation while maintaining the shape
@@ -433,6 +435,7 @@ impl AggregateFunc {
             AggregateFunc::Any => expr::AggregateFunc::Any,
             AggregateFunc::All => expr::AggregateFunc::All,
             AggregateFunc::JsonbAgg => expr::AggregateFunc::JsonbAgg,
+            AggregateFunc::JsonbObjectAgg => expr::AggregateFunc::JsonbObjectAgg,
             AggregateFunc::Dummy => expr::AggregateFunc::Dummy,
         }
     }
@@ -459,6 +462,7 @@ impl AggregateFunc {
             AggregateFunc::Any => ScalarType::Bool,
             AggregateFunc::All => ScalarType::Bool,
             AggregateFunc::JsonbAgg => ScalarType::Jsonb,
+            AggregateFunc::JsonbObjectAgg => ScalarType::Jsonb,
             AggregateFunc::SumInt32 => ScalarType::Int64,
             AggregateFunc::SumInt64 => {
                 ScalarType::Decimal(repr::adt::decimal::MAX_DECIMAL_PRECISION, 0)
@@ -1012,10 +1016,9 @@ impl HirRelationExpr {
 
     /// Constructs a constant collection from specific rows and schema.
     pub fn constant(rows: Vec<Vec<Datum>>, typ: RelationType) -> Self {
-        let mut row_packer = repr::RowPacker::new();
         let rows = rows
             .into_iter()
-            .map(move |datums| row_packer.pack(datums))
+            .map(move |datums| Row::pack_slice(&datums))
             .collect();
         HirRelationExpr::Constant { rows, typ }
     }
@@ -1083,9 +1086,9 @@ impl HirScalarExpr {
         }
     }
 
-    // Like [`ScalarExpr::bind_parameters`]`, except that parameters are
-    // replaced with the corresponding expression fragment from `params` rather
-    // than a datum.
+    /// Like [`HirScalarExpr::bind_parameters`], except that parameters are
+    /// replaced with the corresponding expression fragment from `params` rather
+    /// than a datum.
     ///
     /// Specifically, the parameter `$1` will be replaced with `params[0]`, the
     /// parameter `$2` will be replaced with `params[1]`, and so on. Parameters
@@ -1132,15 +1135,14 @@ impl HirScalarExpr {
             typ => ScalarType::Array(Box::new(typ)).nullable(false),
         };
 
-        let mut packer = RowPacker::new();
-        packer.push_array(
+        let mut row = Row::default();
+        row.push_array(
             &[ArrayDimension {
                 lower_bound: 1,
                 length: datums.len(),
             }],
             datums,
         )?;
-        let row = packer.finish();
 
         Ok(HirScalarExpr::Literal(row, scalar_type))
     }

@@ -9,6 +9,7 @@
 
 use std::marker::PhantomData;
 
+use prometheus::IntCounterVec;
 use tracing::span::{Attributes, Record};
 use tracing::subscriber::Interest;
 use tracing::{Event, Id, Metadata, Subscriber};
@@ -115,5 +116,75 @@ where
         if self.filter.enabled(ctx.metadata(old).unwrap(), ctx.clone()) {
             self.layer.on_id_change(old, new, ctx)
         }
+    }
+}
+
+/// A tracing `Layer` that allows hooking into the reporting/filtering chain for log messages,
+/// incrementing a counter for the severity of messages reported.
+pub struct MetricsRecorderLayer<S> {
+    counter: IntCounterVec,
+    _inner: PhantomData<S>,
+}
+
+impl<S> MetricsRecorderLayer<S> {
+    /// Construct a metrics-recording layer.
+    pub fn new(counter: IntCounterVec) -> Self {
+        Self {
+            counter,
+            _inner: PhantomData,
+        }
+    }
+}
+
+impl<S> Layer<S> for MetricsRecorderLayer<S>
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, ev: &Event<'_>, _ctx: Context<'_, S>) {
+        let metadata = ev.metadata();
+        self.counter
+            .with_label_values(&[&metadata.level().to_string()])
+            .inc();
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+
+    use super::MetricsRecorderLayer;
+    use log::{error, info, warn};
+    use prometheus::{IntCounterVec, Opts, Registry};
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    #[test]
+    fn increments_per_sev_counter() {
+        let counter_opts = Opts::new("test_counter", "test counter help");
+        let counter = IntCounterVec::new(counter_opts, &["severity"]).unwrap();
+        let r = Registry::new();
+        r.register(Box::new(counter.clone())).unwrap();
+        tracing_subscriber::registry()
+            .with(MetricsRecorderLayer::new(counter))
+            .init();
+
+        info!("test message");
+        (0..5).for_each(|_| warn!("a warning"));
+        error!("test error");
+        error!("test error");
+
+        let metric = r
+            .gather()
+            .into_iter()
+            .find(|fam| fam.get_name() == "test_counter")
+            .expect("Didn't find the counter we set up");
+        let mut sevs: HashMap<&str, u32> = HashMap::new();
+        for counter in metric.get_metric() {
+            let sev = counter.get_label()[0].get_value();
+            sevs.insert(sev, counter.get_counter().get_value() as u32);
+        }
+        let mut sevs: Vec<(&str, u32)> = sevs.into_iter().collect();
+        sevs.sort_by_key(|(name, _)| name.to_string());
+        assert_eq!(&[("ERROR", 2), ("INFO", 1), ("WARN", 5)][..], &sevs[..]);
     }
 }

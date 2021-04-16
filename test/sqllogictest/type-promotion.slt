@@ -63,6 +63,59 @@ SELECT 'true' OR 'false'
 ----
 true
 
+# Int literals <=32::MAX/>= MIN are int4
+query T
+SELECT pg_typeof(100)
+----
+integer
+
+query T
+SELECT pg_typeof(-100)
+----
+integer
+
+query T
+SELECT pg_typeof(2147483647)
+----
+integer
+
+query T
+SELECT pg_typeof(-2147483648)
+----
+integer
+
+# Int literals that exceed i32 are int8
+query T
+SELECT pg_typeof(2147483648)
+----
+bigint
+
+query T
+SELECT pg_typeof(-2147483649)
+----
+bigint
+
+query T
+SELECT pg_typeof(9223372036854775807)
+----
+bigint
+
+query T
+SELECT pg_typeof(-9223372036854775808)
+----
+bigint
+
+# Int literals that exceed i64 are numeric
+query T
+SELECT pg_typeof(9223372036854775808)
+----
+numeric(38,0)
+
+query T
+SELECT pg_typeof(-9223372036854775809)
+----
+numeric(38,0)
+
 # Use comparison ops to check for type promotion
 
 # Check int4 promotes to numeric
@@ -255,11 +308,8 @@ SELECT 2::int::bigint;
 query error CAST does not support casting from interval to bigint
 SELECT '1'::interval::bigint
 
-#pginvalid
-query T
+query error cannot cast jsonb object to type bigint
 SELECT '{}'::jsonb::bigint;
-----
-NULL
 
 query R
 SELECT '1'::jsonb::bigint;
@@ -308,16 +358,11 @@ true
 query error CAST does not support casting from interval to boolean
 SELECT '1'::interval::boolean
 
-#pginvalid
-query T
+query error cannot cast jsonb object to type boolean
 SELECT '{}'::jsonb::boolean;
-----
-NULL
 
-query T
+query error cannot cast jsonb numeric to type boolean
 SELECT '1'::jsonb::boolean;
-----
-NULL
 
 query error invalid input syntax for type boolean: "dog"
 SELECT 'dog'::text::boolean
@@ -410,10 +455,8 @@ SELECT 2::int::numeric;
 query error CAST does not support casting from interval to numeric\(38,0\)
 SELECT '1'::interval::numeric
 
-query T
+query error cannot cast jsonb object to type numeric
 SELECT '{}'::jsonb::numeric;
-----
-NULL
 
 query R
 SELECT '1'::jsonb::numeric;
@@ -466,11 +509,8 @@ SELECT 2::int::double;
 query error CAST does not support casting from interval to double precision
 SELECT '1'::interval::double
 
-#pginvalid
-query T
+query error cannot cast jsonb object to type double precision
 SELECT '{}'::jsonb::double;
-----
-NULL
 
 query T
 SELECT '1'::jsonb::double;
@@ -523,11 +563,8 @@ SELECT 2::int::real;
 query error CAST does not support casting from interval to real
 SELECT '1'::interval::real
 
-#pginvalid
-query T
+query error cannot cast jsonb object to type real
 SELECT '{}'::jsonb::real;
-----
-NULL
 
 query R
 SELECT '2'::jsonb::real;
@@ -577,11 +614,8 @@ SELECT 2::int::integer;
 query error CAST does not support casting from interval to integer
 SELECT '1'::interval::integer
 
-#pginvalid
-query T
+query error cannot cast jsonb object to type integer
 SELECT '{}'::jsonb::integer;
-----
-NULL
 
 query R
 SELECT '1'::jsonb::integer;
@@ -673,7 +707,7 @@ SELECT '{}'::jsonb::jsonb;
 query T
 SELECT '1'::jsonb::jsonb;
 ----
-1.0
+1
 
 query error CAST does not support casting from time to jsonb
 SELECT '01:02:03'::time::jsonb
@@ -732,7 +766,7 @@ SELECT '{}'::jsonb::text;
 query T
 SELECT '1'::jsonb::text;
 ----
-1.0
+1
 
 query T
 SELECT 'dog'::text::text;

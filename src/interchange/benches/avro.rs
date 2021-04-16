@@ -12,7 +12,7 @@ use criterion::{black_box, Criterion, Throughput};
 use futures::executor::block_on;
 use mz_avro::types::Value as AvroValue;
 
-use interchange::avro::{parse_schema, DebeziumDeduplicationStrategy, Decoder, EnvelopeType};
+use interchange::avro::{parse_schema, Decoder, EnvelopeType};
 use std::ops::Add;
 
 pub fn bench_avro(c: &mut Criterion) {
@@ -394,9 +394,6 @@ pub fn bench_avro(c: &mut Criterion) {
         None,
         EnvelopeType::Debezium,
         "avro_bench".to_string(),
-        0,
-        Some(DebeziumDeduplicationStrategy::Ordered),
-        None,
         false,
         false,
     )

@@ -6,15 +6,15 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.38"
+anyhow = "1.0.40"
 aws-util = { path = "../aws-util" }
 backtrace = "0.3.56"
 bincode = { version = "1.3.0", optional = true }
 build-info = { path = "../build-info" }
-byteorder = "1.4.2"
+byteorder = "1.4.3"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-crossbeam-channel = "0.5.0"
+crossbeam-channel = "0.5.1"
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 derivative = "2.2.0"
@@ -28,24 +28,24 @@ log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
-postgres-types = "0.2.0"
+postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-regex = "1.4.3"
+regex = "1.4.5"
 repr = { path = "../repr" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
-rusqlite = { version = "0.24.0", features = ["bundled", "unlock_notify"] }
-serde = "1.0.123"
+rusqlite = { version = "0.25.0", features = ["bundled", "unlock_notify"] }
+serde = "1.0.125"
 serde_json = "1.0.64"
 sql = { path = "../sql" }
 sql-parser = { path = "../sql-parser" }
 storage = { path = "../storage" }
 symbiosis = { path = "../symbiosis" }
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = "1.2.0"
-tokio-postgres = "0.7"
-tokio-stream = "0.1.3"
+tokio = "1.4.0"
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-stream = "0.1.5"
 transform = { path = "../transform" }
 unicase = "2.6.0"
 url = "2.2.1"

@@ -32,7 +32,7 @@ from typing import (
     Iterable,
     cast,
 )
-from typing_extensions import Literal
+from typing_extensions import Literal, TypedDict
 import functools
 import os
 import pathlib
@@ -57,6 +57,14 @@ from materialize import ui
 T = TypeVar("T")
 say = ui.speaker("C> ")
 
+_BASHLIKE_ALT_VAR_PATTERN = re.compile(
+    r"""\$\{
+        (?P<var>[^:}]+):\+
+        (?P<alt_var>[^}]+)
+        \}""",
+    re.VERBOSE,
+)
+
 _BASHLIKE_ENV_VAR_PATTERN = re.compile(
     r"""\$\{
         (?P<var>[^:}]+)
@@ -67,7 +75,7 @@ _BASHLIKE_ENV_VAR_PATTERN = re.compile(
 
 
 LINT_CONFLUENT_PLATFORM_VERSION = "5.5.3"
-LINT_DEBEZIUM_VERSION = "1.4"
+LINT_DEBEZIUM_VERSIONS = ["1.4", "1.5"]
 
 
 class LintError:
@@ -103,7 +111,8 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
         errors.append(LintError(path, f'image {spec} depends on floating "latest" tag'))
 
     if repo == "confluentinc" and image.startswith("cp-"):
-        if tag != LINT_CONFLUENT_PLATFORM_VERSION:
+        # An '$XXX' environment variable may have been used to specify the version
+        if "$" not in tag and tag != LINT_CONFLUENT_PLATFORM_VERSION:
             errors.append(
                 LintError(
                     path,
@@ -113,12 +122,12 @@ def lint_image_name(path: Path, spec: str, errors: List[LintError]) -> None:
             )
 
     if repo == "debezium":
-        if tag != LINT_DEBEZIUM_VERSION:
+        if "$" not in tag and tag not in LINT_DEBEZIUM_VERSIONS:
             errors.append(
                 LintError(
                     path,
                     f"image {spec} depends on wrong version of Debezium "
-                    f"(want {LINT_DEBEZIUM_VERSION})",
+                    f"(want {LINT_DEBEZIUM_VERSIONS})",
                 )
             )
 
@@ -263,6 +272,9 @@ class Composition:
 
         built_steps = []
         for raw_step in workflow["steps"]:
+            # A step could be reused over several workflows, so operate on a copy
+            raw_step = raw_step.copy()
+
             step_name = raw_step.pop("step")
             step_ty = Steps.named(step_name)
             munged = {k.replace("-", "_"): v for k, v in raw_step.items()}
@@ -400,6 +412,12 @@ def _substitute_env_vars(val: T, env: Dict[str, str]) -> T:
         val = cast(
             T, _BASHLIKE_ENV_VAR_PATTERN.sub(functools.partial(_subst, env), val)
         )
+        val = cast(
+            T,
+            _BASHLIKE_ALT_VAR_PATTERN.sub(
+                functools.partial(_alt_subst, env), cast(str, val)
+            ),
+        )
     elif isinstance(val, dict):
         for k, v in val.items():
             val[k] = _substitute_env_vars(v, env)
@@ -424,6 +442,20 @@ def _subst(env: Dict[str, str], match: Match) -> str:
         env_val = default[2:]
     assert env_val is not None, "should be replaced correctly"
     return env_val
+
+
+def _alt_subst(env: Dict[str, str], match: Match) -> str:
+    var = match.group("var")
+    if var is None:
+        raise errors.BadSpec(f"Unable to parse environment variable {match.group(0)}")
+    # https://github.com/python/typeshed/issues/3902
+    altvar = cast(Optional[str], match.group("alt_var"))
+    assert altvar is not None, "alt var not captured by regex"
+
+    env_val = env.get(var)
+    if env_val is None:
+        return ""
+    return altvar
 
 
 class Workflows:
@@ -567,6 +599,35 @@ class StartServicesStep(WorkflowStep):
             raise errors.Failed(f"ERROR: services didn't come up cleanly: {services}")
 
 
+@Steps.register("kill-services")
+class KillServicesStep(WorkflowStep):
+    """
+    Params:
+      services: List of service names
+      signal: signal to send to the container (e.g. SIGINT)
+    """
+
+    def __init__(
+        self, *, services: Optional[List[str]] = None, signal: Optional[str] = None
+    ) -> None:
+        self._services = services if services is not None else []
+        if not isinstance(self._services, list):
+            raise errors.BadSpec(f"services should be a list, got: {self._services}")
+        self._signal = signal
+
+    def run(self, workflow: Workflow) -> None:
+        compose_cmd = ["kill"]
+        if self._signal:
+            compose_cmd.extend(["-s", self._signal])
+        compose_cmd.extend(self._services)
+
+        try:
+            workflow.run_compose(compose_cmd)
+        except subprocess.CalledProcessError:
+            services = ", ".join(self._services)
+            raise errors.Failed(f"ERROR: services didn't die cleanly: {services}")
+
+
 @Steps.register("restart-services")
 class RestartServicesStep(WorkflowStep):
     """
@@ -592,7 +653,7 @@ class RemoveServicesStep(WorkflowStep):
     """
     Params:
       services: List of service names
-      volumes: Boolean to indicate if the volumes should be removed as well
+      destroy_volumes: Boolean to indicate if the volumes should be removed as well
     """
 
     def __init__(
@@ -638,7 +699,7 @@ class WaitForPgStep(WorkflowStep):
         dbname: str,
         port: Optional[int] = None,
         host: str = "localhost",
-        timeout_secs: int = 30,
+        timeout_secs: int = 60,
         query: str = "SELECT 1",
         user: str = "postgres",
         password: str = "postgres",
@@ -692,7 +753,7 @@ class WaitForMzStep(WaitForPgStep):
         dbname: str = "materialize",
         host: str = "localhost",
         port: Optional[int] = None,
-        timeout_secs: int = 10,
+        timeout_secs: int = 60,
         query: str = "SELECT 1",
         expected: Union[Iterable[Any], Literal["any"]] = [[1]],
         print_result: bool = False,
@@ -729,7 +790,7 @@ class WaitForMysqlStep(WorkflowStep):
         password: str = "rootpw",
         host: str = "localhost",
         port: Optional[int] = None,
-        timeout_secs: int = 10,
+        timeout_secs: int = 60,
         service: str = "mysql",
     ) -> None:
         self._user = user
@@ -811,6 +872,14 @@ class RunMysql(WorkflowStep):
             cur.execute(self._query)
 
 
+class WaitDependency(TypedDict):
+    """For wait-for-tcp, specify additional items to check"""
+
+    host: str
+    port: int
+    hint: Optional[str]
+
+
 @Steps.register("wait-for-tcp")
 class WaitForTcpStep(WorkflowStep):
     """Wait for a tcp port to be open inside a container
@@ -819,47 +888,77 @@ class WaitForTcpStep(WorkflowStep):
         host: The host that is available inside the docker network
         port: the port to connect to
         timeout_secs: How long to wait (default: 30)
+
+        dependencies: A list of {host, port, hint} objects that must
+            continue to be up while checking this one. Immediately fail
+            the wait if these go down.
     """
 
     def __init__(
-        self, *, host: str = "localhost", port: int, timeout_secs: int = 30
+        self,
+        *,
+        host: str = "localhost",
+        port: int,
+        timeout_secs: int = 60,
+        dependencies: Optional[List[WaitDependency]] = None,
     ) -> None:
-
         self._host = host
         self._port = port
         self._timeout_secs = timeout_secs
+        self._dependencies = dependencies or []
 
     def run(self, workflow: Workflow) -> None:
         ui.progress(f"waiting for {self._host}:{self._port}", "C")
         for remaining in ui.timeout_loop(self._timeout_secs):
             cmd = f"docker run --rm -t --network {workflow.composition.name}_default ubuntu:bionic-20200403".split()
-            cmd.extend(
-                [
-                    "timeout",
-                    str(self._timeout_secs),
-                    "bash",
-                    "-c",
-                    f"cat < /dev/null > /dev/tcp/{self._host}/{self._port}",
-                ]
-            )
+
             try:
-                spawn.capture(cmd, unicode=True, stderr_too=True)
-            except subprocess.CalledProcessError as e:
-                ui.log_in_automation(
-                    "wait-for-tcp ({}:{}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
-                        self._host,
-                        self._port,
-                        ui.shell_quote(cmd),
-                        e,
-                        e.stdout,
-                        e.stderr,
-                    )
+                executed = _check_tcp(
+                    cmd[:], self._host, self._port, self._timeout_secs
                 )
+            except subprocess.CalledProcessError as e:
                 ui.progress(" {}".format(int(remaining)))
             else:
                 ui.progress(" success!", finish=True)
                 return
+
+            for dep in self._dependencies:
+                host, port = dep["host"], dep["port"]
+                try:
+                    _check_tcp(
+                        cmd[:], host, port, self._timeout_secs, kind="dependency "
+                    )
+                except subprocess.CalledProcessError as e:
+                    message = f"Dependency is down {host}:{port}"
+                    if "hint" in dep:
+                        message += f"\n    hint: {dep['hint']}"
+                    raise errors.Failed(message)
+
         raise errors.Failed(f"Unable to connect to {self._host}:{self._port}")
+
+
+def _check_tcp(
+    cmd: List[str], host: str, port: int, timeout_secs: int, kind: str = ""
+) -> List[str]:
+    cmd.extend(
+        [
+            "timeout",
+            str(timeout_secs),
+            "bash",
+            "-c",
+            f"cat < /dev/null > /dev/tcp/{host}/{port}",
+        ]
+    )
+    try:
+        spawn.capture(cmd, unicode=True, stderr_too=True)
+    except subprocess.CalledProcessError as e:
+        ui.log_in_automation(
+            "wait-for-tcp ({}{}:{}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
+                kind, host, port, ui.shell_quote(cmd), e, e.stdout, e.stderr
+            )
+        )
+        raise
+    return cmd
 
 
 @Steps.register("drop-kafka-topics")
@@ -883,11 +982,12 @@ class DropKafkaTopicsStep(WorkflowStep):
                     "localhost:9092",
                     "--topic",
                     self._topic_pattern,
-                ]
+                ],
+                capture_output=True,
             )
         except subprocess.CalledProcessError as e:
             # generally this is fine, it just means that the topics already don't exist
-            say(f"INFO: error purging topics: {e}")
+            ui.log_in_automation(f"DEBUG: error purging topics: {e}: {e.output}")
 
 
 @Steps.register("random-chaos")

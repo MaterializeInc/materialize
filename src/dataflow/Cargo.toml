@@ -6,13 +6,14 @@ edition = "2018"
 publish = false
 
 [dependencies]
-anyhow = "1.0.38"
-async-trait = "0.1.42"
+anyhow = "1.0.40"
+async-trait = "0.1.48"
 aws-util = { path = "../aws-util" }
 bincode = "1.3.1"
-byteorder = "1.4.2"
+byteorder = "1.4.3"
 ccsr = { path = "../ccsr" }
-crossbeam-channel = "0.5.0"
+crossbeam-channel = "0.5.1"
+chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 csv-core = "0.1.10"
 dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
@@ -30,21 +31,25 @@ log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
 pdqselect = "0.1.0"
+postgres-util = { path = "../postgres-util" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prometheus.git" }
 rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static", "zstd"] }
-regex = "1.4.3"
+regex = "1.4.5"
 repr = { path = "../repr" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_sqs = { git = "https://github.com/rusoto/rusoto.git" }
-serde = { version = "1.0.123", features = ["derive"] }
+serde = { version = "1.0.125", features = ["derive"] }
 serde_json = "1.0.64"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
-tokio = { version = "1.2.0", features = ["fs", "rt"] }
-tokio-util = { version = "0.6.3", features = ["codec"] }
+tokio = { version = "1.4.0", features = ["fs", "rt", "sync" ] }
+tokio-util = { version = "0.6.4", features = ["codec"] }
+pubnub-hyper = { git = "https://github.com/MaterializeInc/pubnub-rust" }
 url = { version = "2.2.1", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = [ "with-uuid-0_8", "with-chrono-0_4" ] }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }

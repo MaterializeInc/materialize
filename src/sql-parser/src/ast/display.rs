@@ -62,7 +62,7 @@ pub enum FormatMode {
     // Simple is the normal way of printing for human consumption. Identifiers are quoted only if
     // necessary.
     Simple,
-    // Stable prints out the AST in a form more suitable for persistance. All identifiers are
+    // Stable prints out the AST in a form more suitable for persistence. All identifiers are
     // quoted, even if not necessary. This mode is used when persisting table information to the
     // catalog.
     Stable,
@@ -117,6 +117,7 @@ pub trait AstDisplay {
 }
 
 // Derive a fmt::Display implementation for types implementing AstDisplay.
+#[macro_export]
 macro_rules! impl_display {
     ($name:ident) => {
         impl std::fmt::Display for $name {

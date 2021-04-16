@@ -8,21 +8,20 @@ Field | Value | Description
 
 ##### Permissions Required
 
-The IAM User or Role that `materialized` is operating as requires permission to perform different
-AWS actions depending on what what actions are required in order for `materialized` to discover
+The IAM User or Role used by `materialized` requires permission to perform different
+AWS actions depending on which actions are required to discover
 the list of objects to download.
 
-The **OBJECTS FROM** clause describes how `materialized` will load objects, and so its parameters
-will determine what permissions `materialized` requires.. For example, since the **SCAN** key name
-source (as in **OBJECTS FORM SCAN**) must perform repeated `ListObjects` actions to create a list
-of key names to download, specifying **OBJECTS FROM SCAN BUCKET** means that **MATERIALIZED** requires
-the `ListObjects` permission.
+The `DISCOVER OBJECTS USING` clause describes how Materialize will load objects, and so its parameters
+ determine which permissions `materialized` requires. For example, since the `SCAN` key name
+source (as in `DISCOVER OBJECTS USING BUCKET SCAN`) must perform repeated `ListObjects` actions to create a list
+of key names to download, you must grant the Materialize IAM User or Role the `ListObjects` permission before you specify `DISCOVER OBJECTS USING BUCKET SCAN`.
 
-| Key Name Source       | Permissions Required                                                                     |
+| Key name source       | Permissions required                                                                     |
 |-----------------------|------------------------------------------------------------------------------------------|
-| All                   | [`GetObject` permission][getobject] for the objects that they will download              |
-| **SCAN BUCKET**       | [`ListObject` permission][listobject] for the buckets it will scan                       |
-| **SQS NOTIFICATIONS** | `GetMessage`, `GetQueueUrl` [SQS Permissions][sqs-perms] for the queue it will listen to |
+| All                   | [`GetObject` permission][getobject] for the objects to be downloaded              |
+| **BUCKET SCAN**       | [`ListObject` permission][listobject] for the buckets to be scanned, **unless** the `MATCHING` pattern can only match a single object. In such cases, Materialize will perform only the necessary `GetObject` API call. |
+| **SQS NOTIFICATIONS** | `GetMessage`, `GetQueueUrl` [SQS Permissions][sqs-perms] for the queue Materialize will listen to |
 
 The root AWS documentation for S3 permissions is [available here][s3-permissions].
 

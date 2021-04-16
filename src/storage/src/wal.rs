@@ -564,7 +564,7 @@ fn read_message(buf: &[u8], mut offset: usize) -> Option<(Message, usize)> {
         }
         let row = rest[..len].to_vec();
 
-        let row = unsafe { Row::new(row) };
+        let row = unsafe { Row::from_bytes_unchecked(row) };
         // Update the offset to account for the data we just read
         offset = offset + 24 + len;
         Some((

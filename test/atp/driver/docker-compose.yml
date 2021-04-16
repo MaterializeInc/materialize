@@ -1,0 +1,98 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+services:
+  kafka:
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: '1'
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+    image: confluentinc/cp-kafka:5.5.3
+  materialized:
+    command:
+      --data-directory=/share/mzdata
+      --workers 1
+      --experimental
+      --cache-max-pending-records 1
+      --timestamp-frequency 100ms
+      --disable-telemetry
+    environment:
+      AWS_ACCESS_KEY_ID: null
+      AWS_SECRET_ACCESS_KEY: null
+      AWS_SECURITY_TOKEN: null
+      AWS_SESSION_TOKEN: null
+      MZ_DEV: '1'
+      MZ_LOG: null
+    image: materialized
+    ports:
+      - target: 6875
+    volumes:
+      - mzdata:/share/mzdata:rw
+      - tmp:/share/tmp:rw
+  schema-registry:
+    depends_on:
+      kafka:
+        condition: service_started
+      zookeeper:
+        condition: service_started
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: localhost
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+    image: cp-schema-registry
+  atp-testdrive:
+    depends_on:
+      kafka:
+        condition: service_started
+      materialized:
+        condition: service_started
+      schema-registry:
+        condition: service_started
+      zookeeper:
+        condition: service_started
+    entrypoint:
+      - bash
+      - -O
+      - extglob
+      - -c
+      # We skip tests that deal with services that are not available, such as S3 and Kinesis
+      - >-
+        wait-for-it --timeout=30 kafka:9092 &&
+        wait-for-it --timeout=30 schema-registry:8081 &&
+        wait-for-it --timeout=30 materialized:6875 &&
+        while testdrive
+        --kafka-addr=kafka:9092
+        --schema-registry-url=http://schema-registry:8081
+        --materialized-url=postgres://materialize@materialized:6875
+        --validate-catalog=/share/mzdata/catalog
+        --default-timeout 300
+        !(*s3|kinesis*).td ;
+        do :; done
+      - bash
+    environment:
+      AWS_ACCESS_KEY_ID: null
+      AWS_SECRET_ACCESS_KEY: null
+      AWS_SECURITY_TOKEN: null
+      AWS_SESSION_TOKEN: null
+      MZ_LOG: null
+      TMPDIR: /share/tmp
+    image: atp-testdrive
+    init: true
+    user: 1000:1000
+    volumes:
+      - mzdata:/share/mzdata:rw
+      - tmp:/share/tmp:rw
+  zookeeper:
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    image: cp-zookeeper
+version: '3.7'
+volumes:
+  mzdata: {}
+  tmp: {}

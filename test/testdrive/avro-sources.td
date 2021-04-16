@@ -142,7 +142,7 @@ a  b  json                     c            d             e                   f
 ------------------------------------------------------------------------------------
 1  1  null                     True         False         "(42,86.5,)"        <null>
 2  3  "{\"hello\":\"world\"}"  False        FileNotFound  "(43,,\"(44,-1)\")" (45,-2)
--1  7 "[1.0,2.0,3.0]"          FileNotFound True          <null>              <null>
+-1  7 "[1,2,3]"                FileNotFound True          <null>              <null>
 
 > CREATE MATERIALIZED SOURCE fast_forwarded
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
@@ -153,7 +153,7 @@ a  b  json                     c            d             e                   f
 > SELECT a, b, json, c, d FROM fast_forwarded
 a  b  json            c            d
 ---------------------------------------
--1  7 "[1.0,2.0,3.0]" FileNotFound True
+-1  7 "[1,2,3]"       FileNotFound True
 
 # Check that repeated Debezium messages are skipped.
 $ kafka-ingest format=avro topic=data schema=${schema} timestamp=1
@@ -165,8 +165,8 @@ a  b  json                     c            d             e                   f
 ------------------------------------------------------------------------------------
 1  1  null                     True         False         "(42,86.5,)"        <null>
 2  3  "{\"hello\":\"world\"}"  False        FileNotFound  "(43,,\"(44,-1)\")" (45,-2)
--1  7 "[1.0,2.0,3.0]"          FileNotFound True          <null>              <null>
-42 19 "[4.0,5.0,6.0]"          FileNotFound True          <null>              <null>
+-1  7 "[1,2,3]"                FileNotFound True          <null>              <null>
+42 19 "[4,5,6]"                FileNotFound True          <null>              <null>
 
 # Create a source using a file schema. This should fail if the named schema file
 # does not exist.
@@ -195,8 +195,8 @@ a  b  json                     c            d
 --------------------------------------------------------
 1  1  null                     True         False
 2  3  "{\"hello\":\"world\"}"  False        FileNotFound
--1  7 "[1.0,2.0,3.0]"          FileNotFound True
-42 19 "[4.0,5.0,6.0]"          FileNotFound True
+-1  7 "[1,2,3]"                FileNotFound True
+42 19 "[4,5,6]"                FileNotFound True
 
 # Test an Avro source without a Debezium envelope.
 
@@ -226,6 +226,164 @@ a b
 1 2
 2 3
 
+# Test an Avro source without a Debezium envelope starting at specified partition offsets.
+
+$ kafka-create-topic topic=non-dbz-data-multi-partition partitions=2
+
+$ kafka-ingest format=avro topic=non-dbz-data-multi-partition schema=${non-dbz-schema} timestamp=1 partition=1
+{"a": 4, "b": 1}
+
+$ kafka-ingest format=avro topic=non-dbz-data-multi-partition schema=${non-dbz-schema} timestamp=1 partition=0
+{"a": 1, "b": 2}
+
+> CREATE MATERIALIZED SOURCE non_dbz_data_multi_partition
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
+  WITH (start_offset=1)
+  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
+  ENVELOPE NONE
+
+> SELECT * FROM non_dbz_data_multi_partition
+a  b
+-----
+4  1
+
+> CREATE MATERIALIZED SOURCE non_dbz_data_multi_partition_2
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
+  WITH (start_offset=[0,0])
+  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
+  ENVELOPE NONE
+
+> SELECT * FROM non_dbz_data_multi_partition_2
+a  b
+-----
+1  2
+4  1
+
+> CREATE MATERIALIZED SOURCE non_dbz_data_multi_partition_fast_forwarded
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
+  WITH (start_offset=[0,1])
+  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
+  ENVELOPE NONE
+
+> SELECT * FROM non_dbz_data_multi_partition_fast_forwarded
+a  b
+----
+1  2
+
+> CREATE MATERIALIZED SOURCE non_dbz_data_multi_partition_fast_forwarded_2
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-multi-partition-${testdrive.seed}'
+  WITH (start_offset=[1,0])
+  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
+  ENVELOPE NONE
+
+> SELECT * FROM non_dbz_data_multi_partition_fast_forwarded_2
+a  b
+----
+4  1
+
+# Test an Avro source without a Debezium envelope with specified offsets and varying partition numbers.
+
+$ kafka-create-topic topic=non-dbz-data-varying-partition partitions=1
+
+$ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz-schema} timestamp=1 partition=0
+{"a": 5, "b": 6}
+
+> CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
+  WITH (start_offset=1)
+  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
+  ENVELOPE NONE
+
+> SELECT * FROM non_dbz_data_varying_partition
+
+# Erroneously adds start_offsets for non-existent partitions.
+> CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition_2
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
+  WITH (start_offset=[0,1])
+  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
+  ENVELOPE NONE
+
+> SELECT * FROM non_dbz_data_varying_partition_2
+a  b
+----
+5  6
+
+$ kafka-add-partitions topic=non-dbz-data-varying-partition total-partitions=2
+
+# Reading data that's ingested to a new partition takes longer than the default timeout.
+$ set-sql-timeout duration=60s
+
+$ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz-schema} timestamp=1 partition=1
+{"a": 7, "b": 8}
+{"a": 9, "b": 10}
+
+# Because the start offset for any new partitions will be 0, the first record sent to the new
+# partition will be included.
+> SELECT * FROM non_dbz_data_varying_partition
+a  b
+-----
+7  8
+9  10
+
+# Because the start offsets erronously included an offset for partition 1 (which didn't exist at the time),
+# the first record ingested into partition 1 will be ignored.
+> SELECT * FROM non_dbz_data_varying_partition_2
+a  b
+-----
+5  6
+9  10
+
+# There should be two partitions for the last created source / consumer (non_dbz_data_varying_partition_2)
+> SELECT count(*) FROM mz_kafka_consumer_partitions GROUP BY consumer_name;
+count
+-----
+1
+1
+1
+1
+2
+2
+2
+2
+2
+2
+
+> CREATE MATERIALIZED SOURCE non_dbz_data_varying_partition_3
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-non-dbz-data-varying-partition-${testdrive.seed}'
+  WITH (start_offset=[1,1])
+  FORMAT AVRO USING SCHEMA '${non-dbz-schema}'
+  ENVELOPE NONE
+
+$ kafka-add-partitions topic=non-dbz-data-varying-partition total-partitions=3
+
+$ kafka-ingest format=avro topic=non-dbz-data-varying-partition schema=${non-dbz-schema} timestamp=1 partition=2
+{"a": 11, "b": 12}
+
+# Because the start offset for any new partitions will be 0, the first record sent to the new
+# partition will be included.
+> SELECT * FROM non_dbz_data_varying_partition_3
+a  b
+-----
+9  10
+11 12
+
+# There should three partitions for the last three sources / consumers (non_dbz_data_varying_partition_[123])
+> SELECT count(*) FROM mz_kafka_consumer_partitions GROUP BY consumer_name;
+count
+-----
+1
+1
+1
+1
+2
+2
+2
+2
+3
+3
+3
+
+$ set-sql-timeout duration=12.7s
 
 # Source with new-style three-valued "snapshot".
 $ set new-dbz-schema={

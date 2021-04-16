@@ -133,7 +133,7 @@ mod tests {
 
     use anyhow::{anyhow, bail, Error};
 
-    use expr::explain::Explanation;
+    use expr::explain::ViewExplanation;
     use expr::{
         DummyHumanizer, ExprHumanizer, GlobalId, Id, JoinImplementation, LocalId, MirRelationExpr,
         MirScalarExpr,
@@ -318,7 +318,6 @@ mod tests {
             // (constant [<rows>] [<types>])
             "constant" => {
                 // TODO(justin): ...fix this.
-                let mut row_packer = repr::RowPacker::new();
                 let rows: Vec<(Row, isize)> = try_list(nth(&s, 1)?)?
                     .into_iter()
                     .map(try_list)
@@ -332,8 +331,8 @@ mod tests {
                     .collect::<Result<Vec<Vec<MirScalarExpr>>, Error>>()?
                     .iter()
                     .map(move |exprs| {
-                        Ok(row_packer.pack(
-                            exprs
+                        Ok(Row::pack_slice(
+                            &exprs
                                 .iter()
                                 .map(|e| match e {
                                     MirScalarExpr::Literal(r, _) => {
@@ -502,7 +501,7 @@ mod tests {
         cat: &TestCatalog,
         format: Option<&Vec<String>>,
     ) -> String {
-        let mut explanation = Explanation::new(rel, cat);
+        let mut explanation = ViewExplanation::new(rel, cat);
         if let Some(format) = format {
             if format.contains(&"types".to_string()) {
                 explanation.explain_types();
@@ -646,7 +645,12 @@ mod tests {
                         }
                     }
                     "build" => match run_testcase(&s.input, &catalog, &s.args, TestType::Build) {
-                        Ok(msg) => msg,
+                        // Generally, explanations for fully optimized queries
+                        // are not allowed to have whitespace at the end;
+                        // however, a partially optimized query can.
+                        // Since clippy rejects test results with trailing
+                        // whitespace, remove whitespace before comparing results.
+                        Ok(msg) => format!("{}\n", msg.trim_end().to_string()),
                         Err(err) => format!("error: {}\n", err),
                     },
                     "opt" => match run_testcase(&s.input, &catalog, &s.args, TestType::Opt) {

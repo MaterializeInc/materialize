@@ -23,7 +23,7 @@ use serde_protobuf::value::Value as ProtoValue;
 use serde_value::Value as SerdeValue;
 
 use repr::adt::decimal::Significand;
-use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, RowPacker, ScalarType};
+use repr::{ColumnType, Datum, DatumList, RelationDesc, RelationType, Row, ScalarType};
 
 fn proto_message_name(message_name: &str) -> String {
     // Prepend a . (following the serde-protobuf naming scheme to list root paths
@@ -171,7 +171,7 @@ pub fn validate_descriptors(message_name: &str, descriptors: &Descriptors) -> Re
 pub struct Decoder {
     descriptors: Descriptors,
     message_name: String,
-    packer: RowPacker,
+    packer: Row,
 }
 
 impl Decoder {
@@ -184,7 +184,7 @@ impl Decoder {
         Decoder {
             descriptors,
             message_name: proto_message_name(message_name),
-            packer: RowPacker::new(),
+            packer: Row::default(),
         }
     }
 
@@ -220,7 +220,7 @@ fn extract_row_into(
     deserialized_message: SerdeValue,
     descriptors: &Descriptors,
     message_descriptors: &MessageDescriptor,
-    packer: &mut RowPacker,
+    packer: &mut Row,
 ) -> Result<()> {
     let deserialized_message = match deserialized_message {
         SerdeValue::Map(deserialized_message) => deserialized_message,
@@ -360,7 +360,7 @@ fn default_datum_from_field_nested<'a>(
 /// type, all numeric types will be converted to f64s (issue #1476)
 fn json_from_serde_value(
     val: &SerdeValue,
-    packer: &mut RowPacker,
+    packer: &mut Row,
     f: &FieldDescriptor,
     descriptors: &Descriptors,
 ) -> Result<()> {
@@ -399,7 +399,7 @@ fn json_from_serde_value(
 
 fn json_nested_from_serde_value(
     val: &SerdeValue,
-    packer: &mut RowPacker,
+    packer: &mut Row,
     f: &FieldDescriptor,
     descriptors: &Descriptors,
 ) -> Result<()> {

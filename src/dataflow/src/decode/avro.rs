@@ -7,17 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use anyhow::Context;
 use futures::executor::block_on;
-use log::error;
 
-use interchange::avro::{DebeziumDeduplicationStrategy, Decoder, EnvelopeType};
-use repr::{Diff, Row, Timestamp};
+use dataflow_types::{DataflowError, DecodeError};
+use interchange::avro::{Decoder, EnvelopeType};
+use repr::Row;
 
-use super::{DecoderState, PushSession};
+use super::DecoderState;
 use crate::metrics::EVENTS_COUNTER;
 
 pub struct AvroDecoderState {
     decoder: Decoder,
+    key_decoder: Option<Decoder>,
     events_success: i64,
     events_error: i64,
 }
@@ -25,28 +27,37 @@ pub struct AvroDecoderState {
 impl AvroDecoderState {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        reader_schema: &str,
+        key_schema: Option<&str>,
+        value_schema: &str,
         schema_registry_config: Option<ccsr::ClientConfig>,
         envelope: EnvelopeType,
         reject_non_inserts: bool,
         debug_name: String,
-        worker_index: usize,
-        dedup_strat: Option<DebeziumDeduplicationStrategy>,
-        dbz_key_indices: Option<Vec<usize>>,
         confluent_wire_format: bool,
     ) -> Result<Self, anyhow::Error> {
+        let key_decoder = key_schema
+            .map(|key_schema| {
+                Decoder::new(
+                    key_schema,
+                    schema_registry_config.clone(),
+                    EnvelopeType::None,
+                    debug_name.clone(),
+                    confluent_wire_format,
+                    reject_non_inserts,
+                )
+            })
+            .transpose()
+            .context("Creating Kafka Avro Key decoder")?;
         Ok(AvroDecoderState {
             decoder: Decoder::new(
-                reader_schema,
+                value_schema,
                 schema_registry_config,
                 envelope,
                 debug_name,
-                worker_index,
-                dedup_strat,
-                dbz_key_indices,
                 confluent_wire_format,
                 reject_non_inserts,
             )?,
+            key_decoder,
             events_success: 0,
             events_error: 0,
         })
@@ -55,16 +66,18 @@ impl AvroDecoderState {
 
 impl DecoderState for AvroDecoderState {
     fn decode_key(&mut self, bytes: &[u8]) -> Result<Option<Row>, String> {
-        match block_on(self.decoder.decode(bytes, None, None)) {
-            Ok(Some(row)) => {
-                self.events_success += 1;
-                Ok(Some(row))
-            }
-            Ok(None) => Ok(None),
-            Err(err) => {
-                self.events_error += 1;
-                Err(format!("avro deserialization error: {}", err))
-            }
+        match self.key_decoder.as_mut() {
+            Some(key_decoder) => match block_on(key_decoder.decode(bytes, None, None)) {
+                Ok(row) => {
+                    self.events_success += 1;
+                    Ok(Some(row))
+                }
+                Err(err) => {
+                    self.events_error += 1;
+                    Err(format!("avro deserialization error: {}", err))
+                }
+            },
+            None => Err(format!("No key decoder configured")),
         }
     }
 
@@ -76,11 +89,10 @@ impl DecoderState for AvroDecoderState {
         upstream_time_millis: Option<i64>,
     ) -> Result<Option<Row>, String> {
         match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
-            Ok(Some(row)) => {
+            Ok(row) => {
                 self.events_success += 1;
                 Ok(Some(row))
             }
-            Ok(None) => Ok(None),
             Err(err) => {
                 self.events_error += 1;
                 Err(format!("avro deserialization error: {}", err))
@@ -89,23 +101,23 @@ impl DecoderState for AvroDecoderState {
     }
 
     /// give a session a plain value
-    fn give_value<'a>(
+    fn get_value(
         &mut self,
         bytes: &[u8],
         coord: Option<i64>,
         upstream_time_millis: Option<i64>,
-        session: &mut PushSession<'a, (Row, Timestamp, Diff)>,
-        time: Timestamp,
-    ) {
+    ) -> Option<Result<Row, DataflowError>> {
         match block_on(self.decoder.decode(bytes, coord, upstream_time_millis)) {
-            Ok(Some(row)) => {
+            Ok(row) => {
                 self.events_success += 1;
-                session.give((row, time, 1));
+                Some(Ok(row))
             }
-            Ok(None) => {}
             Err(err) => {
                 self.events_error += 1;
-                error!("avro deserialization error: {}", err)
+                Some(Err(DataflowError::DecodeError(DecodeError::Text(format!(
+                    "avro deserialization error: {}",
+                    err
+                )))))
             }
         }
     }

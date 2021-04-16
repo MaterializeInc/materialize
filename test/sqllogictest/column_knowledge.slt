@@ -1,0 +1,687 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+#
+# Test various cases of column knowledge propragation
+#
+
+mode cockroach
+
+statement ok
+CREATE TABLE t1 (f1 INTEGER PRIMARY KEY, f2 INTEGER);
+
+statement ok
+CREATE TABLE t2 (f1 INTEGER PRIMARY KEY, f2 INTEGER);
+
+statement ok
+CREATE TABLE t3 (f1 INTEGER PRIMARY KEY, f2 INTEGER);
+
+# No propagation for single tables
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = t1.f2
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = #1), (#0 = 123)
+
+EOF
+
+# Inner joins
+
+query T multiline
+EXPLAIN SELECT * FROM t1 , t2 WHERE t1.f1 = 123 AND t1.f1 = t2.f1
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+
+EOF
+
+# Outer joins
+
+query T multiline
+EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1) WHERE t1.f1 = 123;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+
+%3 = Let l1 =
+| Join %1 %2
+| | implementation = Differential %2 %1.()
+| | demand = (#0..#3)
+
+%4 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%5 =
+| Get %3 (l1)
+| Distinct group=(123)
+
+%6 =
+| Join %4 %5
+| | implementation = Differential %5 %4.()
+| | demand = (#0, #1)
+| Negate
+| Project (#0, #1)
+
+%7 =
+| Union %6 %0
+| Map null, null
+
+%8 =
+| Union %7 %3
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+
+%3 = Let l1 =
+| Join %1 %2
+| | implementation = Differential %2 %1.()
+| | demand = (#0, #1, #3)
+
+%4 =
+| Get %3 (l1)
+| Distinct group=(123, #1)
+| Negate
+
+%5 =
+| Get %0 (l0)
+| Distinct group=(123, #1)
+
+%6 =
+| Union %4 %5
+| ArrangeBy (#1)
+
+%7 =
+| Join %6 %0 (= #1 #3)
+| | implementation = Differential %0 %6.(#1)
+| | demand = (#0, #1)
+| Map null, null
+| Project (#0, #1, #4, #5)
+
+%8 =
+| Union %3 %7
+| Project (#0, #1, #3)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (TRUE) WHERE t1.f1 = t2.f1 AND t1.f1 = 123;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+
+EOF
+
+# Transitive application
+
+query T multiline
+EXPLAIN SELECT * FROM t1, t2, t3 WHERE t1.f1 = 123 AND t1.f1 = t2.f1 AND t2.f1 = t3.f1;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+| ArrangeBy ()
+
+%2 =
+| Get materialize.public.t3 (u5)
+| Filter (#0 = 123)
+
+%3 =
+| Join %0 %1 %2
+| | implementation = Differential %2 %0.() %1.()
+| | demand = (#0..#5)
+
+EOF
+
+# HAVING clause
+
+query T multiline
+EXPLAIN SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t2.f1 GROUP BY t1.f1 HAVING t1.f1 = 123;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0)
+| Project (#0)
+
+EOF
+
+#
+# Subqueries
+#
+
+query T multiline
+EXPLAIN SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 123;
+----
+%0 = Let l0 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+
+%1 = Let l1 =
+| Get %0 (l0)
+| Distinct group=(123)
+
+%2 =
+| Get %1 (l1)
+| ArrangeBy ()
+
+%3 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+
+%4 = Let l2 =
+| Join %2 %3
+| | implementation = Differential %3 %2.()
+| | demand = (#1)
+
+%5 =
+| Get %4 (l2)
+| Project (#0, #1)
+
+%6 =
+| Get %4 (l2)
+| Reduce group=(123)
+| | agg count(true)
+| Filter (#1 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#0, #2)
+
+%7 = Let l3 =
+| Union %5 %6
+
+%8 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%9 =
+| Get %7 (l3)
+| Distinct group=(123)
+| Negate
+
+%10 =
+| Union %9 %1
+| ArrangeBy ()
+
+%11 =
+| Join %10 %1
+| | implementation = Differential %1 %10.()
+| | demand = ()
+| Map null
+| Project (#0, #2)
+
+%12 =
+| Union %7 %11
+
+%13 =
+| Join %8 %12
+| | implementation = Differential %12 %8.()
+| | demand = (#3)
+| Project (#3)
+
+EOF
+
+# This case is currently not optimized
+query T multiline
+EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Project (#0)
+
+%1 =
+| Get materialize.public.t1 (u1)
+| Reduce group=()
+| | agg count(true)
+| Filter (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%2 = Let l0 =
+| Union %0 %1
+
+%3 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+| ArrangeBy ()
+
+%4 =
+| Get %2 (l0)
+| Distinct group=()
+| Negate
+
+%5 =
+| Constant ()
+
+%6 =
+| Union %4 %5
+| Map null
+
+%7 =
+| Union %2 %6
+
+%8 =
+| Join %3 %7
+| | implementation = Differential %7 %3.()
+| | demand = (#2)
+| Map (#2 = 123)
+| Project (#3)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2.f1 = t1.f1);
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Get %0 (l0)
+| Distinct group=(123)
+| ArrangeBy ()
+
+%3 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+
+%4 =
+| Join %1 %2 %3
+| | implementation = Differential %3 %1.() %2.()
+| | demand = (#0, #1)
+| Project (#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND EXISTS (SELECT * FROM t2 WHERE t2.f1 = t1.f1) AND EXISTS (SELECT * FROM t3 WHERE t3.f1 = t1.f1);
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Get %0 (l0)
+| Distinct group=(123)
+| ArrangeBy ()
+
+%3 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+
+%4 = Let l1 =
+| Join %1 %2 %3
+| | implementation = Differential %3 %1.() %2.()
+| | demand = (#0, #1)
+
+%5 =
+| Get %4 (l1)
+| ArrangeBy ()
+
+%6 =
+| Get %4 (l1)
+| Distinct group=(123)
+| ArrangeBy ()
+
+%7 =
+| Get materialize.public.t3 (u5)
+| Filter (#0 = 123)
+
+%8 =
+| Join %5 %6 %7
+| | implementation = Differential %7 %5.() %6.()
+| | demand = (#0, #1)
+| Project (#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1, (SELECT t2.f1 FROM t2) AS dt1 WHERE dt1.f1 = t1.f1 AND t1.f1 = 123;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#2)
+| Project (#0..#2)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE 123 = (SELECT t2.f1 FROM t2);
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+| Project (#0)
+
+%2 =
+| Get materialize.public.t2 (u3)
+| Reduce group=()
+| | agg count(true)
+| Filter (err: more than one record produced in subquery), (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%3 =
+| Union %1 %2
+
+%4 =
+| Join %0 %3
+| | implementation = Differential %3 %0.()
+| | demand = (#0, #1)
+| Project (#0, #1)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = (SELECT t2.f1 FROM t2);
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123)
+| Project (#0)
+
+%2 =
+| Get materialize.public.t2 (u3)
+| Reduce group=()
+| | agg count(true)
+| Filter (err: more than one record produced in subquery), (#0 > 1)
+| Map (err: more than one record produced in subquery)
+| Project (#1)
+
+%3 =
+| Union %1 %2
+
+%4 =
+| Join %0 %3
+| | implementation = Differential %3 %0.()
+| | demand = (#0, #1)
+| Project (#0, #1)
+
+EOF
+
+#
+# Multipart keys
+#
+
+
+statement ok
+CREATE TABLE t4 (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1, f2));
+
+query T multiline
+EXPLAIN SELECT * FROM t4 AS a1, t4 AS a2 WHERE a1.f1 = 123 AND a1.f2 = 234 AND a1.f1 = a2.f1 AND a1.f2 = a2.f2;
+----
+%0 =
+| Get materialize.public.t4 (u7)
+| Filter (#0 = 123), (#1 = 234)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t4 (u7)
+| Filter (#0 = 123), (#1 = 234)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a1.f2 = 234;
+----
+%0 = Let l0 =
+| Get materialize.public.t4 (u7)
+| Filter (#0 = 123), (#1 = 234)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Get materialize.public.t4 (u7)
+| Filter (#0 = 123), (#1 = 234)
+
+%3 = Let l1 =
+| Join %1 %2
+| | implementation = Differential %2 %1.()
+| | demand = (#0, #1)
+
+%4 =
+| Get %3 (l1)
+| Distinct group=(123, 234)
+| Negate
+
+%5 =
+| Get %0 (l0)
+| Distinct group=(123, 234)
+
+%6 =
+| Union %4 %5
+| ArrangeBy ()
+
+%7 =
+| Join %6 %0
+| | implementation = Differential %0 %6.()
+| | demand = (#0, #1)
+| Map null, null
+| Project (#0, #1, #4, #5)
+
+%8 =
+| Union %3 %7
+| Project (#0, #1)
+
+EOF
+
+#
+# Propagation in opposite direction
+#
+
+query T multiline
+EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a2.f2 = 234;
+----
+%0 = Let l0 =
+| Get materialize.public.t4 (u7)
+| Filter (#0 = 123), (#1 = 234)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Get materialize.public.t4 (u7)
+| Filter (#0 = 123), (#1 = 234)
+
+%3 = Let l1 =
+| Join %1 %2
+| | implementation = Differential %2 %1.()
+| | demand = (#0, #1)
+
+%4 =
+| Get %3 (l1)
+| Distinct group=(123, 234)
+| Negate
+
+%5 =
+| Get %0 (l0)
+| Distinct group=(123, 234)
+
+%6 =
+| Union %4 %5
+| ArrangeBy ()
+
+%7 =
+| Join %6 %0
+| | implementation = Differential %0 %6.()
+| | demand = (#0, #1)
+| Map null, null
+| Project (#0, #1, #4, #5)
+
+%8 =
+| Union %3 %7
+| Project (#0, #1)
+
+EOF
+
+#
+# Impossible conditions after propagation are currently not detected as such
+#
+
+query T multiline
+EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
+----
+%0 = Let l0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123), (#0 = 234)
+
+%1 =
+| Get %0 (l0)
+| ArrangeBy ()
+
+%2 =
+| Get materialize.public.t2 (u3)
+| Filter (#0 = 123), (#0 = 234)
+
+%3 = Let l1 =
+| Join %1 %2
+| | implementation = Differential %2 %1.()
+| | demand = (#0, #1, #3)
+
+%4 =
+| Get %3 (l1)
+| Distinct group=(123, #1)
+| Negate
+
+%5 =
+| Get %0 (l0)
+| Distinct group=(123, #1)
+
+%6 =
+| Union %4 %5
+| ArrangeBy (#1)
+
+%7 =
+| Join %6 %0 (= #1 #3)
+| | implementation = Differential %0 %6.(#1)
+| | demand = (#0, #1)
+| Map null, null
+| Project (#0, #1, #4, #5)
+
+%8 =
+| Union %3 %7
+| Project (#0, #1, #3)
+
+EOF
+
+# Inequality between columns
+
+query T multiline
+EXPLAIN SELECT * FROM t1, t2 WHERE t1.f1 = 123 AND t1.f1 > t2.f1;
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Filter (123 > #0)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#0..#3)
+
+EOF

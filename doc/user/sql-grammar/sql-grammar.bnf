@@ -54,7 +54,7 @@ create_source_avro_kafka ::=
   'FROM' 'KAFKA BROKER' host 'TOPIC' topic
   ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' format_spec
-  ('ENVELOPE' ('NONE'|'DEBEZIUM'| ('UPSERT' ('FORMAT' format_spec)?)))?
+  ('ENVELOPE' ('NONE'|'DEBEZIUM' ('UPSERT')?| ('UPSERT' ('FORMAT' format_spec)?)))?
 create_source ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
   ('(' (col_name) ( ( ',' col_name ) )* ')')?
@@ -109,17 +109,25 @@ create_source_protobuf_kinesis ::=
   'FROM' 'KINESIS ARN' arn ('WITH' '(' ( field '=' val ) ( ( ',' field '=' val ) )* ')')?
   'FORMAT' 'PROTOBUF MESSAGE' message_name
   'USING SCHEMA' ('FILE' schema_file_path | inline_schema)
+create_source_pubnub_text ::=
+  'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
+  ('(' (col_name) ( ( ',' col_name ) )* ')')?
+  'FROM' 'PUBNUB' 'SUBSCRIBE KEY' key 'CHANNEL' channel
+  'FORMAT' 'TEXT'
+  ('ENVELOPE' 'NONE')?
 create_source_s3_text ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  'FROM S3 OBJECTS FROM ' (
-      'SCAN BUCKET' bucket_name |
+  'FROM' 'S3' 'DISCOVER OBJECTS'
+  ('MATCHING' pattern)?
+  'USING' (
+      'BUCKET SCAN' bucket_name |
       'SQS NOTIFICATIONS' queue_name
   ) ( ',' (
-      'SCAN BUCKET' bucket_name |
+      'BUCKET SCAN' bucket_name |
       'SQS NOTIFICATIONS' queue_name
     )
   )*
-  ('MATCHING' pattern)?
+  ('COMPRESSION' ('NONE' | 'GZIP'))?
   'WITH' '('
       'region =' region
       aws_credentials?
@@ -131,15 +139,17 @@ create_source_s3_text ::=
   )
 create_source_s3_json ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')? src_name
-  'FROM S3 OBJECTS FROM ' (
-      'SCAN BUCKET' bucket_name |
+  'FROM' 'S3' 'DISCOVER OBJECTS'
+  ('MATCHING' pattern)?
+  'USING' (
+      'BUCKET SCAN' bucket_name |
       'SQS NOTIFICATIONS' queue_name
   ) ( ',' (
-      'SCAN BUCKET' bucket_name |
+      'BUCKET SCAN' bucket_name |
       'SQS NOTIFICATIONS' queue_name
     )
   )*
-  ('MATCHING' pattern)?
+  ('COMPRESSION' ('NONE' | 'GZIP'))?
   'WITH' '('
       'region =' region
       aws_credentials?
@@ -148,15 +158,17 @@ create_source_s3_json ::=
 create_source_s3_csv ::=
   'CREATE' 'MATERIALIZED'? 'SOURCE' ('IF NOT EXISTS')?
   src_name ( '(' col_name (',' col_name)* ')' )?
-  'FROM S3 OBJECTS FROM ' (
-      'SCAN BUCKET' bucket_name |
+  'FROM' 'S3' 'DISCOVER OBJECTS'
+  ('MATCHING' pattern)?
+  'USING' (
+      'BUCKET SCAN' bucket_name |
       'SQS NOTIFICATIONS' queue_name
   ) ( ',' (
-      'SCAN BUCKET' bucket_name |
+      'BUCKET SCAN' bucket_name |
       'SQS NOTIFICATIONS' queue_name
     )
   )*
-  ('MATCHING' pattern)?
+  ('COMPRESSION' ('NONE' | 'GZIP'))?
   'WITH' '('
       'region =' region
       aws_credentials?
@@ -215,21 +227,21 @@ discard ::=
 drop_database ::=
     'DROP' 'DATABASE' ('IF EXISTS')? database_name
 drop_index ::=
-    'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')
+    'DROP' 'INDEX' ('IF EXISTS')? index_name ('CASCADE' | 'RESTRICT')?
 drop_role ::=
     'DROP' 'ROLE' ('IF EXISTS')? role_name
 drop_schema ::=
-    'DROP' 'SCHEMA' ('IF EXISTS')? schema_name ('CASCADE' | 'RESTRICT')
+    'DROP' 'SCHEMA' ('IF EXISTS')? schema_name ('CASCADE' | 'RESTRICT')?
 drop_sink ::=
   'DROP' 'SINK' ('IF' 'EXISTS')? sink_name
 drop_source ::=
   'DROP' 'SOURCE' ('IF' 'EXISTS')? source_name ('RESTRICT' | 'CASCADE')?
+  drop_table ::=
+    'DROP' 'TABLE' ('IF' 'EXISTS')? table_name ('RESTRICT' | 'CASCADE')?
 drop_type ::=
   'DROP' 'TYPE' ('IF' 'EXISTS')? data_type_name ('RESTRICT' | 'CASCADE')?
 drop_view ::=
   'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
-drop_table ::=
-  'DROP' 'TABLE' ('IF' 'EXISTS')? table_name
 drop_user ::=
     'DROP' 'USER' ('IF EXISTS')? role_name
 explain ::=
@@ -261,6 +273,8 @@ format_spec ::=
   'CSV WITH' n 'COLUMNS' ('DELIMITED BY' char)? |
   'TEXT' |
   'BYTES'
+func_at_time_zone ::=
+    'SELECT' ( 'TIMESTAMP' | 'TIMESTAMPTZ' ) ('timestamp' | 'timestamptz') 'AT TIME ZONE' 'zone::type'
 func_cast ::=
   'CAST' '(' val 'AS' type ')'
 func_coalesce ::=
@@ -268,11 +282,13 @@ func_coalesce ::=
 func_date_trunc ::=
   'date_trunc' '(' "'" ( 'microseconds' | 'milliseconds' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year' | 'decade' | 'century' | 'millenium' ) "'" ',' ts_val ')'
 func_extract ::=
-  'EXTRACT' '(' ( 'YEAR' | 'MONTH' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'DOW' | 'EPOCH' ) 'FROM' val ')'
+  'EXTRACT' '(' ( 'EPOCH' | 'MILLENNIUM' | 'CENTURY' | 'DECADE' | 'YEAR' | 'QUARTER' | 'MONTH' | 'WEEK' | 'DAY' | 'HOUR' | 'MINUTE' | 'SECOND' | 'MICROSECOND' | 'MILLISECOND' | 'DOW' | 'ISODOW' | 'DOY' ) 'FROM' val ')'
 func_length ::=
   'length' '(' str (',' encoding_name)? ')'
 func_substring ::=
   'substring' '(' str ',' start_pos (',' len)? ')'
+func_timezone ::=
+    'TIMEZONE' '(' zone'::'type ',' ( 'timestamp' | 'timestamptz' ) ')'
 join_expr ::=
     select_pred ('CROSS' | 'NATURAL' join_type?) 'JOIN' table_ref select_post
 	| select_pred join_type 'JOIN' table_ref ( 'USING' '(' ( ( col_ref ) ( ( ',' col_ref ) )* ) ')' | 'ON' expression ) select_post
@@ -325,7 +341,7 @@ show_index ::=
 show_schemas ::=
     'SHOW' 'SCHEMAS' ('FROM' database_name)?
 show_sinks ::=
-   'SHOW' 'SINKS'
+   'SHOW' 'FULL'? 'SINKS' ('FROM' schema_name)?
 show_sources ::=
   'SHOW' 'FULL'? 'MATERIALIZED'? 'SOURCES' ('FROM' schema_name)?
 show_tables ::=

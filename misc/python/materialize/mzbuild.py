@@ -160,6 +160,40 @@ class PreImage:
         return ""
 
 
+class Copy(PreImage):
+    """A `PreImage` action which copies files from a directory.
+
+    The contents of the specified `source` directory are copied into the
+    `destination` directory. The `source` directory is relative to the
+    repository root. The `destination` directory is relative to the mzbuild
+    context. Files in the `source` directory are matched against the glob
+    specified by the `matching` argument.
+    """
+
+    def __init__(self, rd: RepositoryDetails, path: Path, config: Dict[str, Any]):
+        super().__init__(rd, path)
+
+        self.source = config.pop("source", None)
+        if self.source is None:
+            raise ValueError("mzbuild config is missing 'source' argument")
+
+        self.destination = config.pop("destination", None)
+        if self.destination is None:
+            raise ValueError("mzbuild config is missing 'destination' argument")
+
+        self.matching = config.pop("matching", "*")
+
+    def run(self) -> None:
+        super().run()
+        for src in self.inputs():
+            dst = self.path / self.destination / Path(src).relative_to(self.source)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(self.rd.root / src, dst)
+
+    def inputs(self) -> Set[str]:
+        return set(git.expand_globs(self.rd.root, f"{self.source}/{self.matching}"))
+
+
 class CargoPreImage(PreImage):
     """A `PreImage` action that uses Cargo."""
 
@@ -355,6 +389,8 @@ class Image:
                     self.pre_image = CargoBuild(self.rd, self.path, pre_image)
                 elif typ == "cargo-test":
                     self.pre_image = CargoTest(self.rd, self.path, pre_image)
+                elif typ == "copy":
+                    self.pre_image = Copy(self.rd, self.path, pre_image)
                 else:
                     raise ValueError(
                         f"mzbuild config in {self.path} has unknown pre-image type"

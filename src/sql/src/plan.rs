@@ -51,13 +51,13 @@ pub(crate) mod transform_ast;
 pub(crate) mod transform_expr;
 pub(crate) mod typeconv;
 
-pub use self::expr::HirRelationExpr;
+pub use self::expr::{HirRelationExpr, HirScalarExpr};
 pub use error::PlanError;
 pub use explain::Explanation;
 // This is used by sqllogictest to turn SQL values into `Datum`s.
 pub use query::{
-    plan_default_expr, resolve_names, resolve_names_data_type, scalar_type_from_sql,
-    unwrap_numeric_typ_mod, Aug, QueryContext, QueryLifetime,
+    plan_default_expr, resolve_names, resolve_names_data_type, resolve_names_stmt,
+    scalar_type_from_sql, unwrap_numeric_typ_mod, Aug, QueryContext, QueryLifetime,
 };
 pub use statement::{describe, plan, StatementContext, StatementDesc};
 
@@ -76,11 +76,9 @@ pub enum Plan {
     CreateRole {
         name: String,
     },
-    CreateSource {
-        name: FullName,
-        source: Source,
-        if_not_exists: bool,
-        materialized: bool,
+    CreateSource(CreateSourcePlan),
+    CreateSources {
+        sources: Vec<CreateSourcePlan>,
     },
     CreateSink {
         name: FullName,
@@ -204,6 +202,14 @@ pub enum Plan {
     Close {
         name: String,
     },
+}
+
+#[derive(Clone, Debug)]
+pub struct CreateSourcePlan {
+    pub name: FullName,
+    pub source: Source,
+    pub if_not_exists: bool,
+    pub materialized: bool,
 }
 
 #[derive(Clone, Debug)]

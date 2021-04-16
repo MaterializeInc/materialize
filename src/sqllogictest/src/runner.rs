@@ -212,15 +212,49 @@ impl ops::AddAssign<Outcomes> for Outcomes {
         }
     }
 }
+impl Outcomes {
+    pub fn any_failed(&self) -> bool {
+        self.0[SUCCESS_OUTCOME] < self.0.iter().sum::<usize>()
+    }
 
-impl fmt::Display for Outcomes {
+    pub fn as_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "unsupported": self.0[0],
+            "parse_failure": self.0[1],
+            "plan_failure": self.0[2],
+            "unexpected_plan_success": self.0[3],
+            "wrong_number_of_rows_affected": self.0[4],
+            "wrong_column_count": self.0[5],
+            "wrong_column_names": self.0[6],
+            "output_failure": self.0[7],
+            "bail": self.0[8],
+            "success": self.0[9],
+        })
+    }
+
+    pub fn display(&self, no_fail: bool) -> OutcomesDisplay<'_> {
+        OutcomesDisplay {
+            inner: self,
+            no_fail,
+        }
+    }
+}
+
+pub struct OutcomesDisplay<'a> {
+    inner: &'a Outcomes,
+    no_fail: bool,
+}
+
+impl<'a> fmt::Display for OutcomesDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let total: usize = self.0.iter().sum();
+        let total: usize = self.inner.0.iter().sum();
         write!(
             f,
             "{}:",
-            if self.0[SUCCESS_OUTCOME] == total {
+            if self.inner.0[SUCCESS_OUTCOME] == total {
                 "PASS"
+            } else if self.no_fail {
+                "FAIL-IGNORE"
             } else {
                 "FAIL"
             }
@@ -240,33 +274,12 @@ impl fmt::Display for Outcomes {
                 "total",
             ];
         }
-        for (i, n) in self.0.iter().enumerate() {
+        for (i, n) in self.inner.0.iter().enumerate() {
             if *n > 0 {
                 write!(f, " {}={}", NAMES[i], n)?;
             }
         }
         write!(f, " total={}", total)
-    }
-}
-
-impl Outcomes {
-    pub fn any_failed(&self) -> bool {
-        self.0[SUCCESS_OUTCOME] < self.0.iter().sum::<usize>()
-    }
-
-    pub fn as_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "unsupported": self.0[0],
-            "parse_failure": self.0[1],
-            "plan_failure": self.0[2],
-            "unexpected_plan_success": self.0[3],
-            "wrong_number_of_rows_affected": self.0[4],
-            "wrong_column_count": self.0[5],
-            "wrong_column_names": self.0[6],
-            "output_failure": self.0[7],
-            "bail": self.0[8],
-            "success": self.0[9],
-        })
     }
 }
 
@@ -503,7 +516,7 @@ impl Runner {
         let temp_dir = tempfile::tempdir()?;
         let mz_config = materialized::Config {
             logging: None,
-            timestamp_frequency: Duration::from_millis(10),
+            timestamp_frequency: Duration::from_secs(1),
             cache: None,
             persistence: None,
             logical_compaction_window: None,
@@ -514,6 +527,7 @@ impl Runner {
             listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
             tls: None,
             experimental_mode: true,
+            safe_mode: false,
             telemetry_url: None,
         };
         let server = materialized::serve(mz_config, config.runtime.clone()).await?;
@@ -636,13 +650,24 @@ impl Runner {
         // get statement
         let statements = match sql::parse::parse(sql) {
             Ok(statements) => statements,
-            Err(_) if output.is_err() => return Ok(Outcome::Success),
-            Err(e) => {
-                return Ok(Outcome::ParseFailure {
-                    error: e.into(),
-                    location,
-                })
-            }
+            Err(e) => match output {
+                Ok(_) => {
+                    return Ok(Outcome::ParseFailure {
+                        error: e.into(),
+                        location,
+                    });
+                }
+                Err(expected_error) => {
+                    if Regex::new(expected_error)?.is_match(&format!("{:#}", e)) {
+                        return Ok(Outcome::Success);
+                    } else {
+                        return Ok(Outcome::ParseFailure {
+                            error: e.into(),
+                            location,
+                        });
+                    }
+                }
+            },
         };
         let statement = match &*statements {
             [] => bail!("Got zero statements?"),
@@ -871,6 +896,7 @@ pub struct RunConfig<'a> {
     pub stderr: &'a dyn WriteFmt,
     pub verbosity: usize,
     pub workers: usize,
+    pub no_fail: bool,
 }
 
 fn print_record(config: &RunConfig<'_>, record: &Record) {

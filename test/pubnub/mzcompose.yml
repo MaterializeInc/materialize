@@ -1,0 +1,50 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+version: '3.7'
+
+mzworkflows:
+  pubnub:
+    steps:
+      - step: start-services
+        services: [materialized]
+
+      - step: wait-for-mz
+        service: materialized
+
+      - step: run
+        service: testdrive
+        command: --materialized-url=postgres://materialize@materialized:6875 test.td
+
+services:
+  testdrive:
+    mzbuild: testdrive
+    entrypoint: [testdrive]
+    volumes:
+    - .:/workdir
+    - tmp:/share/tmp
+    environment:
+    - TMPDIR=/share/tmp
+    propagate-uid-gid: true
+    init: true
+    depends_on: [materialized]
+
+  materialized:
+    mzbuild: materialized
+    command: --disable-telemetry
+    environment:
+    - MZ_DEV=1
+    ports:
+      - 6875
+    volumes:
+    - tmp:/share/tmp
+
+volumes:
+  mzdata:
+  tmp:

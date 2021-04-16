@@ -46,6 +46,7 @@ Cascade
 Case
 Cast
 Chain
+Channel
 Char
 Character
 Check
@@ -78,6 +79,7 @@ Delete
 Delimited
 Desc
 Discard
+Discover
 Distinct
 Double
 Drop
@@ -185,6 +187,7 @@ Precision
 Primary
 Protobuf
 Publication
+Pubnub
 Range
 Raw
 Read
@@ -229,6 +232,7 @@ Start
 Stdin
 Stdout
 String
+Subscribe
 Superuser
 Table
 Tables

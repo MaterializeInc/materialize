@@ -73,12 +73,12 @@ in order to ensure that escape string literals are always valid UTF-8.
 
 #### From `text`
 
-You can [cast](../../functions/cast) `text` to [all types](../). Casts from text
+You can [cast](../../functions/cast) `text` to [all types](../) except [`record`](../../types/record/). All casts are explicit. Casts from text
 will error if the string is not valid input for the destination type.
 
 #### To `text`
 
-You can [cast](../../functions/cast) [all types](../) to `text`.
+You can [cast](../../functions/cast) [all types](../) to `text`. All casts are by assignment.
 
 ## Examples
 

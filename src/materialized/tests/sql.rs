@@ -13,10 +13,11 @@
 //! scripts. The tests here are simply too complicated to be easily expressed
 //! in testdrive, e.g., because they depend on the current time.
 
-use std::env;
 use std::error::Error;
+use std::fs::File;
 use std::io::Write;
 use std::net::TcpListener;
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -25,20 +26,12 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use lazy_static::lazy_static;
 use log::info;
 use tempfile::NamedTempFile;
 
-use util::{MzTimestamp, PostgresErrorExt};
+use util::{MzTimestamp, PostgresErrorExt, KAFKA_ADDRS};
 
 pub mod util;
-
-lazy_static! {
-    pub static ref KAFKA_ADDRS: kafka_util::KafkaAddrs = match env::var("KAFKA_ADDRS") {
-        Ok(addr) => addr.parse().expect("unable to parse KAFKA_ADDRS"),
-        _ => "localhost:9092".parse().unwrap(),
-    };
-}
 
 #[test]
 fn test_no_block() -> Result<(), Box<dyn Error>> {
@@ -115,7 +108,7 @@ fn test_no_block() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
-fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
+fn test_time() -> Result<(), Box<dyn Error>> {
     ore::test::init_logging();
 
     let server = util::start_server(util::Config::default())?;
@@ -123,13 +116,13 @@ fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
 
     // Confirm that `now()` and `current_timestamp()` both return a
     // DateTime<Utc>, but don't assert specific times.
-    let row = &client.query_one("SELECT now(), current_timestamp()", &[])?;
+    let row = client.query_one("SELECT now(), current_timestamp()", &[])?;
     let _ = row.get::<_, DateTime<Utc>>(0);
     let _ = row.get::<_, DateTime<Utc>>(1);
 
     // Confirm calls to now() return the same DateTime<Utc> both inside and
     // outside of subqueries.
-    let row = &client.query_one("SELECT now(), (SELECT now())", &[])?;
+    let row = client.query_one("SELECT now(), (SELECT now())", &[])?;
     assert_eq!(
         row.get::<_, DateTime<Utc>>(0),
         row.get::<_, DateTime<Utc>>(1)
@@ -137,8 +130,18 @@ fn test_current_timestamp_and_now() -> Result<(), Box<dyn Error>> {
 
     // Ensure that EXPLAIN selects a timestamp for `now()` and
     // `current_timestamp()`, though we don't care what the timestamp is.
-    let rows = &client.query("EXPLAIN PLAN FOR SELECT now(), current_timestamp()", &[])?;
+    let rows = client.query("EXPLAIN PLAN FOR SELECT now(), current_timestamp()", &[])?;
     assert_eq!(1, rows.len());
+
+    // Test that `mz_sleep` causes a delay of at least the appropriate time.
+    let start = Instant::now();
+    client.batch_execute("SELECT mz_internal.mz_sleep(0.3)")?;
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(300),
+        "start.elapsed() = {:?}",
+        elapsed
+    );
 
     Ok(())
 }
@@ -344,6 +347,25 @@ fn test_tail_fetch_timeout() -> Result<(), Box<dyn Error>> {
     let rows = client.query("FETCH c WITH (TIMEOUT = '0s')", &[])?;
     assert_eq!(rows.len(), 0);
 
+    // Make a third cursor. Fetch should return immediately if there are enough
+    // rows, even with a really long timeout.
+    //
+    // Regression test for #6307
+    client.batch_execute(
+        "CLOSE c;
+        DECLARE c CURSOR FOR TAIL t",
+    )?;
+    let before = Instant::now();
+    // NB: This timeout is chosen such that the test will timeout if the bad
+    // behavior occurs.
+    let rows = client.query("FETCH 3 c WITH (TIMEOUT = '1h')", &[])?;
+    let duration = before.elapsed();
+    assert_eq!(rows.len(), expected.len());
+    assert!(duration < Duration::from_secs(10));
+    for i in 0..expected.len() {
+        assert_eq!(rows[i].get::<_, i64>(2), expected[i])
+    }
+
     Ok(())
 }
 
@@ -541,6 +563,102 @@ fn test_temporary_views() -> Result<(), Box<dyn Error>> {
 
     let err = client_b.query_one(query_temp_v, &[]).unwrap_db_error();
     assert_eq!(err.message(), "unknown catalog item \'temp_v\'");
+
+    Ok(())
+}
+
+// This test attempts to observe a linearizability violation by creating a set of
+// sources which are constantly being appended to, then creating a materialized
+// view of each of their sizes, then repeatedly reading from some subset of
+// those materialized views. If any of the sizes ever decrease from one read to
+// the next, linearizability has been violated.
+//
+// The sources are based off of n CSVs, each named in<i>.csv, a source for each
+// one named s<i> which tails the CSV, and a materialized view for each named
+// v<i>.
+//
+// N.B. this test currently fails and is ignored. TODO(justin): fix it.
+// N.B. this test also fails more reliably in release mode.
+#[test]
+#[ignore]
+fn test_linearizable() -> Result<(), Box<dyn Error>> {
+    ore::test::init_logging();
+    let config = util::Config::default();
+    config.logical_compaction_window(Duration::from_secs(60));
+    let server = util::start_server(util::Config::default())?;
+    let mut client = server.connect(postgres::NoTls)?;
+
+    const NUM_FILES: usize = 5;
+    const NUM_READS: usize = 1000;
+    const NUM_WRITES: usize = 100000;
+
+    let temp_dir = tempfile::tempdir()?;
+
+    // For each source we want to create, we spawn a thread that is constantly appending to a CSV,
+    // which we tail for the source.
+    for i in 0..NUM_FILES {
+        let path = Path::join(temp_dir.path(), format!("in{}.csv", i));
+        thread::spawn({
+            let mut file = File::create(&path)?;
+            move || {
+                for _ in 0..NUM_WRITES {
+                    file.write_all(b"a\n").unwrap();
+                    file.sync_all().unwrap();
+                }
+            }
+        });
+
+        sleep(Duration::from_secs(3));
+
+        client.batch_execute(&*format!(
+            "CREATE MATERIALIZED SOURCE s{} FROM FILE '{}' WITH (tail = true)
+         FORMAT CSV WITH 1 COLUMNS",
+            i,
+            path.display()
+        ))?;
+        client.batch_execute(&*format!(
+            "CREATE MATERIALIZED VIEW v{} AS SELECT count(*) AS c FROM s{}",
+            i, i
+        ))?;
+    }
+
+    // TODO(justin): kind of hacky.
+    sleep(Duration::from_secs(1));
+
+    // largest[i] tracks the highest value seen for v<i>.
+    let mut largest = Vec::new();
+    for _ in 0..NUM_FILES {
+        largest.push(-1);
+    }
+
+    for _ in 0..NUM_READS {
+        // Construct a query that reads from a random subset of the views.
+        let mut query = String::from("SELECT ");
+        for i in 0..NUM_FILES {
+            if i > 0 {
+                query.push_str(", ");
+            }
+            if rand::random() {
+                query.push_str(format!("(SELECT c FROM v{})", i).as_str());
+            } else {
+                // If we opt not to read from the view, just to keep things
+                // lined up, we put a dummy -1 value which we know to ignore.
+                query.push_str(format!("-1::int8").as_str());
+            }
+        }
+        let result = client.query_one(query.as_str(), &[])?;
+        for i in 0..NUM_FILES {
+            let size: i64 = result.get(i);
+            if size != -1 {
+                if largest[i] > size {
+                    // If we hit this, then a value we saw went backwards, which
+                    // should be impossible.
+                    panic!("linearizability violation: {} {} {}", i, largest[i], size);
+                }
+                largest[i] = size;
+            }
+        }
+    }
 
     Ok(())
 }

@@ -65,6 +65,20 @@ pub fn parse_expr(sql: &str) -> Result<Expr<Raw>, ParserError> {
     }
 }
 
+/// Parses a SQL string containing zero or more SQL columns.
+pub fn parse_columns(
+    sql: &str,
+) -> Result<(Vec<ColumnDef<Raw>>, Vec<TableConstraint<Raw>>), ParserError> {
+    let tokens = lexer::lex(sql)?;
+    let mut parser = Parser::new(sql, tokens);
+    let columns = parser.parse_columns(Optional)?;
+    if parser.next_token().is_some() {
+        parser_err!(parser, parser.peek_prev_pos(), "extra token after columns")
+    } else {
+        Ok(columns)
+    }
+}
+
 macro_rules! maybe {
     ($e:expr) => {{
         if let Some(v) = $e {
@@ -341,7 +355,29 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(id) => self.parse_qualified_identifier(id.into_ident()),
             Token::Ident(id) => self.parse_qualified_identifier(Ident::new(id)),
-            Token::Op(op) if op == "+" || op == "-" => Ok(Expr::Op {
+            Token::Op(op) if op == "-" => {
+                if let Some(Token::Number(n)) = self.peek_token() {
+                    let n = match n.parse::<f64>() {
+                        Ok(n) => n,
+                        Err(_) => {
+                            return Err(
+                                self.error(self.peek_prev_pos(), format!("invalid number {}", n))
+                            )
+                        }
+                    };
+                    if n != 0.0 {
+                        self.prev_token();
+                        return Ok(Expr::Value(self.parse_value()?));
+                    }
+                }
+
+                Ok(Expr::Op {
+                    op,
+                    expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
+                    expr2: None,
+                })
+            }
+            Token::Op(op) if op == "+" => Ok(Expr::Op {
                 op,
                 expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                 expr2: None,
@@ -725,22 +761,15 @@ impl<'a> Parser<'a> {
     // Parse calls to position(), which has the special form position('string' in 'string').
     fn parse_position_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
         self.expect_token(&Token::LParen)?;
-
-        let mut exprs = Vec::new();
-
         // we must be greater-equal the precedence of IN, which is Like to avoid
         // parsing away the IN as part of the sub expression
-        exprs.push(self.parse_subexpr(Precedence::Like)?);
-
+        let needle = self.parse_subexpr(Precedence::Like)?;
         self.expect_token(&Token::Keyword(IN))?;
-
-        exprs.push(self.parse_expr()?);
-
+        let haystack = self.parse_expr()?;
         self.expect_token(&Token::RParen)?;
-
         Ok(Expr::Function(Function {
             name: UnresolvedObjectName::unqualified("position"),
-            args: FunctionArgs::Args(exprs),
+            args: FunctionArgs::Args(vec![needle, haystack]),
             filter: None,
             over: None,
             distinct: false,
@@ -1214,9 +1243,14 @@ impl<'a> Parser<'a> {
         parser_err!(
             self,
             pos,
-            "Expected {}, found {}",
+            "Expected {}, found {}{}",
             expected,
-            found.as_ref().map(|t| t.name()).unwrap_or("EOF")
+            found.as_ref().map(|t| t.name()).unwrap_or("EOF"),
+            found
+                .as_ref()
+                .filter(|t| t.has_value())
+                .map(|t| format!(" '{}'", t.value()))
+                .unwrap_or_else(String::new)
         )
     }
 
@@ -1391,6 +1425,8 @@ impl<'a> Parser<'a> {
         } else if self.parse_keyword(SOURCE) {
             self.prev_token();
             self.parse_create_source()
+        } else if self.parse_keyword(SOURCES) {
+            self.parse_create_sources()
         } else if self.parse_keyword(SINK) {
             self.parse_create_sink()
         } else if self.parse_keyword(DEFAULT) {
@@ -1562,7 +1598,12 @@ impl<'a> Parser<'a> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
-            Envelope::Debezium
+            let debezium_mode = if self.parse_keyword(UPSERT) {
+                DbzMode::Upsert
+            } else {
+                DbzMode::Plain
+            };
+            Envelope::Debezium(debezium_mode)
         } else if self.parse_keyword(UPSERT) {
             let format = if self.parse_keyword(FORMAT) {
                 Some(self.parse_format()?)
@@ -1625,6 +1666,16 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_create_sources(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(FROM)?;
+        let connector = self.parse_multi_connector()?;
+
+        Ok(Statement::CreateSources(CreateSourcesStatement {
+            connector,
+            stmts: vec![],
+        }))
+    }
+
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
@@ -1676,7 +1727,18 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_connector(&mut self) -> Result<Connector<Raw>, ParserError> {
-        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES])? {
+        match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
+            PUBNUB => {
+                self.expect_keywords(&[SUBSCRIBE, KEY])?;
+                let subscribe_key = self.parse_literal_string()?;
+                self.expect_keyword(CHANNEL)?;
+                let channel = self.parse_literal_string()?;
+
+                Ok(Connector::PubNub {
+                    subscribe_key,
+                    channel,
+                })
+            }
             POSTGRES => {
                 self.expect_keyword(HOST)?;
                 let conn = self.parse_literal_string()?;
@@ -1687,13 +1749,13 @@ impl<'a> Parser<'a> {
                 self.expect_keyword(TABLE)?;
                 let table = self.parse_literal_string()?;
 
-                let (columns, constraints) = self.parse_columns()?;
+                let (columns, constraints) = self.parse_columns(Optional)?;
 
                 if !constraints.is_empty() {
                     return parser_err!(
                         self,
                         self.peek_prev_pos(),
-                        "Cannot specify constraints in postgres table definition"
+                        "Cannot specify constraints in Postgres table definition"
                     );
                 }
 
@@ -1737,15 +1799,22 @@ impl<'a> Parser<'a> {
                 Ok(Connector::AvroOcf { path })
             }
             S3 => {
-                // FROM S3 OBJECTS FROM
-                // (SCAN BUCKET '<bucket>' | SQS NOTIFICATIONS '<channel>')+
-                // MATCHING '<pattern>'
-                self.expect_keywords(&[OBJECTS, FROM])?;
+                // FROM S3 DISCOVER OBJECTS
+                // (MATCHING '<pattern>')?
+                // USING
+                // (BUCKET SCAN '<bucket>' | SQS NOTIFICATIONS '<channel>')+
+                self.expect_keywords(&[DISCOVER, OBJECTS])?;
+                let pattern = if self.parse_keyword(MATCHING) {
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
+                self.expect_keyword(USING)?;
                 let mut key_sources = Vec::new();
-                while let Some(keyword) = self.parse_one_of_keywords(&[SCAN, SQS]) {
+                while let Some(keyword) = self.parse_one_of_keywords(&[BUCKET, SQS]) {
                     match keyword {
-                        SCAN => {
-                            self.expect_keyword(BUCKET)?;
+                        BUCKET => {
+                            self.expect_keyword(SCAN)?;
                             let bucket = self.parse_literal_string()?;
                             key_sources.push(S3KeySource::Scan { bucket });
                         }
@@ -1754,20 +1823,48 @@ impl<'a> Parser<'a> {
                             let queue = self.parse_literal_string()?;
                             key_sources.push(S3KeySource::SqsNotifications { queue });
                         }
-                        key => unreachable!("Keyword {} is not expected after OBJECTS FROM", key),
+                        key => unreachable!(
+                            "Keyword {} is not expected after DISCOVER OBJECTS USING",
+                            key
+                        ),
                     }
                     if !self.consume_token(&Token::Comma) {
                         break;
                     }
                 }
-                let pattern = if self.parse_keyword(MATCHING) {
-                    Some(self.parse_literal_string()?)
+                let compression = if self.parse_keyword(COMPRESSION) {
+                    self.parse_compression()?
                 } else {
-                    None
+                    Compression::None
                 };
                 Ok(Connector::S3 {
                     key_sources,
                     pattern,
+                    compression,
+                })
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn parse_multi_connector(&mut self) -> Result<MultiConnector<Raw>, ParserError> {
+        match self.expect_one_of_keywords(&[POSTGRES])? {
+            POSTGRES => {
+                self.expect_keyword(HOST)?;
+                let conn = self.parse_literal_string()?;
+                self.expect_keyword(PUBLICATION)?;
+                let publication = self.parse_literal_string()?;
+                self.expect_keyword(NAMESPACE)?;
+                let namespace = self.parse_literal_string()?;
+                self.expect_keyword(TABLES)?;
+                self.expect_token(&Token::LParen)?;
+                let tables = self.parse_postgres_tables()?;
+
+                Ok(MultiConnector::Postgres {
+                    conn,
+                    publication,
+                    namespace,
+                    tables,
                 })
             }
             _ => unreachable!(),
@@ -1988,7 +2085,7 @@ impl<'a> Parser<'a> {
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_object_name()?;
         // parse optional column list (schema)
-        let (columns, constraints) = self.parse_columns()?;
+        let (columns, constraints) = self.parse_columns(Mandatory)?;
         let with_options = self.parse_opt_with_sql_options()?;
 
         Ok(Statement::CreateTable(CreateTableStatement {
@@ -2001,12 +2098,59 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_postgres_tables(&mut self) -> Result<Vec<PgTable<Raw>>, ParserError> {
+        let mut tables = vec![];
+        loop {
+            let name = self.parse_literal_string()?;
+            self.expect_keyword(AS)?;
+            let alias = RawName::Name(self.parse_object_name()?);
+            let (columns, constraints) = self.parse_columns(Optional)?;
+            if !constraints.is_empty() {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "Cannot specify constraints in Postgres table definition"
+                );
+            }
+            tables.push(PgTable {
+                name,
+                alias,
+                columns,
+            });
+
+            if self.consume_token(&Token::Comma) {
+                // Continue.
+            } else if self.consume_token(&Token::RParen) {
+                break;
+            } else {
+                return self.expected(
+                    self.peek_pos(),
+                    "',' or ')' after table definition",
+                    self.peek_token(),
+                );
+            }
+        }
+        Ok(tables)
+    }
+
     fn parse_columns(
         &mut self,
+        optional: IsOptional,
     ) -> Result<(Vec<ColumnDef<Raw>>, Vec<TableConstraint<Raw>>), ParserError> {
         let mut columns = vec![];
         let mut constraints = vec![];
-        self.expect_token(&Token::LParen)?;
+
+        if !self.consume_token(&Token::LParen) {
+            if optional == Optional {
+                return Ok((columns, constraints));
+            } else {
+                return self.expected(
+                    self.peek_pos(),
+                    "a list of columns in parentheses",
+                    self.peek_token(),
+                );
+            }
+        }
         if self.consume_token(&Token::RParen) {
             // Tables with zero columns are a PostgreSQL extension.
             return Ok((columns, constraints));
@@ -3410,7 +3554,7 @@ impl<'a> Parser<'a> {
             self.expect_keyword(AS)?;
             let name = self.parse_object_name()?;
             // TODO(justin): is there a more idiomatic way to detect a fully-qualified name?
-            if name.0.len() != 3 {
+            if name.0.len() < 2 {
                 return parser_err!(
                     self,
                     self.peek_prev_pos(),

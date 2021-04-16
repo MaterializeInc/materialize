@@ -5,11 +5,10 @@ menu:
   main:
     parent: 'create-source'
 ---
-{{< experimental >}}The S3 source type{{< /experimental >}}
-
 {{% create-source/intro %}}
-This document details how to connect Materialize to an S3 Bucket that contains text- or
-byte-encoded CSV-serialized objects.
+This document details how to connect Materialize to an S3 Bucket that contains
+multiple objects, and to listen for new object creation. Each S3 object can
+contain multiple records serialized as CSV, separated by newlines.
 {{% /create-source/intro %}}
 
 ## Syntax
@@ -41,7 +40,7 @@ We can load all these keys with the following command:
 
 ```sql
 CREATE MATERIALIZED SOURCE csv_example (user_id, status, usage)
-FROM S3 OBJECTS FROM SCAN BUCKET 'analytics' MATCHING '**/*.csv'
+FROM S3 DISCOVER OBJECTS MATCHING '**/*.csv' USING BUCKET SCAN 'analytics'
 WITH (region = 'us-east-2')
 FORMAT CSV WITH 3 COLUMNS;
 ```
@@ -62,7 +61,7 @@ instead write an unmaterialized source and parse columns in a view materializati
 
 ```sql
 CREATE SOURCE csv_source (user_id, status, usage)
-FROM S3 OBJECTS FROM SCAN BUCKET 'analytics' MATCHING '**/*.csv'
+FROM S3 DISCOVER OBJECTS MATCHING '**/*.csv' USING BUCKET SCAN 'analytics'
 WITH (region = 'us-east-2')
 FORMAT CSV WITH 3 COLUMNS;
 ```

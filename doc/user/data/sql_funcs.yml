@@ -27,6 +27,10 @@
     description: Aggregate values (including nulls) as a jsonb array.
     url: jsonb_agg
 
+  - signature: jsonb_object_agg(keys, values) -> jsonb
+    description: Aggregate keys and values (including nulls) as a jsonb object.
+    url: jsonb_object_agg
+
   - signature: 'max(x: T) -> T'
     description: Maximum value among `T`
 
@@ -136,6 +140,12 @@
 
   - signature: 'mod(x: N, y: N) -> N'
     description: "`x % y`"
+
+  - signature: 'pow(x: double precision, y: double precision) -> double precision'
+    description: "Alias of `power`"
+
+  - signature: 'pow(x: numeric, y: numeric) -> numeric'
+    description: "Alias of `power`"
 
   - signature: 'power(x: double precision, y: double precision) -> double precision'
     description: "`x` raised to the power of `y`"
@@ -256,8 +266,14 @@
       `needle`, in order. If `flags` is set to the string `i` matches
       case-insensitively.
 
+  - signature: 'repeat(s: str, n: int) -> str'
+    description: Replicate the string `n` times.
+
   - signature: 'replace(s: str, f: str, r: str) -> str'
     description: "`s` with all instances of `f` replaced with `r`"
+
+  - signature: 'right(s: str, n: int) -> str'
+    description: The last `n` characters of `s`. If `n` is negative, all but the first `|n|` characters of `s`.
 
   - signature: 'rtrim(s: str) -> str'
     description: Trim all spaces from the right side of `s`.
@@ -358,6 +374,22 @@
   - signature: now() -> timestamptz
     description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
       Users cannot define views with queries containing `now()`.'
+
+  - signature: timestamp AT TIME ZONE zone -> timestamptz
+    description: 'Converts `timestamp` to the specified time zone, expressed as an offset from UTC. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
+    url: timezone-and-at-time-zone
+
+  - signature: timestamptz AT TIME ZONE zone -> timestamp
+    description: 'Converts `timestamp with time zone` from UTC to the specified time zone, expressed as the local time. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
+    url: timezone-and-at-time-zone
+
+  - signature: timezone(zone, timestamp) -> timestamptz
+    description: 'Converts `timestamp` to specified time zone, expressed as an offset from UTC. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
+    url: timezone-and-at-time-zone
+
+  - signature: timezone(zone, timestamptz) -> timestamp
+    description: 'Converts `timestamp with time zone` from UTC to specified time zone, expressed as the local time. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
+    url: timezone-and-at-time-zone
 
   - signature: 'to_timestamp(val: double precision) -> timestamptz'
     description: Converts Unix epoch (seconds since 00:00:00 UTC on January 1, 1970)
@@ -464,8 +496,12 @@
 - type: System information
   description: Functions that return information about the system
   functions:
+  - signature: 'mz_uptime() -> interval'
+    description: Returns the length of time that the materialized process has been running.
   - signature: 'mz_version() -> text'
     description: Returns the server's version information as a human-readable string.
+  - signature: 'mz_workers() -> bigint'
+    description: Returns the number of workers in use by the server.
   - signature: 'format_type(oid: int, typemod: int) -> text'
     description: Returns the canonical SQL name for the type specified by `oid` with `typemod` applied.
   - signature: 'current_user() -> text'
@@ -493,5 +529,7 @@
     description: Returns the type of its input argument as a string.
   - signature: 'pg_encoding_to_char(encoding_id: integer) -> text'
     description: PostgreSQL compatibility shim. Not intended for direct use.
+  - signature: 'pg_postmaster_start_time() -> timestamptz'
+    description: Returns the time when the server started.
   - signature: 'version() -> text'
     description: Returns a PostgreSQL-compatible version string.

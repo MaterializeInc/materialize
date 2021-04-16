@@ -15,7 +15,7 @@ use md5::{Digest, Md5};
 use rand::Rng;
 use structopt::StructOpt;
 
-use ore::retry;
+use ore::retry::Retry;
 use test_util::{generator, kafka, mz_client};
 
 #[tokio::main]
@@ -64,10 +64,10 @@ async fn mysql_debezium_kafka(args: Args) -> Result<(), anyhow::Error> {
                            ENVELOPE DEBEZIUM;";
     log::info!("creating source=> {}", src_query);
     // Retry in case the topic has not been created yet.
-    retry::retry_for(Duration::from_secs(60), |_| {
-        mz_client.execute(&*src_query, &[])
-    })
-    .await?;
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| mz_client.execute(&*src_query, &[]))
+        .await?;
 
     // Create count materialized view.
     let count_query = "CREATE MATERIALIZED VIEW orderline_count AS
@@ -124,16 +124,18 @@ async fn bytes_to_kafka(args: Args) -> Result<(), anyhow::Error> {
         "materialize.chaos",
         &[("enable.idempotence", "true")],
     )?;
-    retry::retry_for(Duration::from_secs(60), |_| {
-        kafka_client.create_topic(
-            &topic,
-            args.kafka_partitions.unwrap_or(1),
-            1,
-            &[],
-            Some(Duration::from_secs(10)),
-        )
-    })
-    .await?;
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| {
+            kafka_client.create_topic(
+                &topic,
+                args.kafka_partitions.unwrap_or(1),
+                1,
+                &[],
+                Some(Duration::from_secs(10)),
+            )
+        })
+        .await?;
 
     let topic_name_copy = topic.clone();
     let kafka_task = tokio::spawn({

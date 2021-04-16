@@ -2,9 +2,9 @@
 `group_id_prefix` | `text` | Use the specified prefix in the consumer group ID. The resulting `group.id` looks like `<group_id_prefix>materialize-X-Y`, where `X` and `Y` are values that allow multiple concurrent Kafka consumers from the same topic.
 `cache` | `boolean` | Cache data from this source to local files. Requires [experimental mode](/cli/#experimental-mode).
 `security_protocol` | `text` | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberized-kafka-details), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
-`statistics_interval_ms` | `int` | `librdkafka` statistics emit interval in `ms`. Accepts values [0, 86400000]. The granularity is 1000ms. A value of 0 disables statistics.
+`statistics_interval_ms` | `int` | `librdkafka` statistics emit interval in `ms`. Accepts values [0, 86400000]. The granularity is 1000ms. A value of 0 disables statistics. Statistics can be queried using the `mz_kafka_consumer_partitions` system table.
 `ignore_source_keys` | `boolean` | Default: `false`. If `true`, do not perform optimizations assuming uniqueness of primary keys in schemas.
-`timestamp_frequency_ms`| `int` | Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently timestamps advance in the system. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
+`timestamp_frequency_ms`| `int` | Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently the source advances its timestamp. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
 `topic_metadata_refresh_interval_ms` | `int` | Default: `30000`. Sets the frequency in `ms` at which the system checks for new partitions. Accepts values [0,3600000].
 
 #### SSL `WITH` options
@@ -31,7 +31,7 @@ Field | Value | Description
 `sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0.
 `sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required for `sasl_plaintext`.
 `sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`.
-`sasl_mechanisms` | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanism is `'GSSAPI'`.
+`sasl_mechanisms` | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanisms are `'GSSAPI'` (the default) and `'PLAIN'`.
 
 #### Inline schema `WITH` options
 

@@ -183,6 +183,27 @@ impl MirScalarExpr {
         f(self);
     }
 
+    /// A generalization of `visit_mut`. The function `pre` runs on a
+    /// `MirScalarExpr` before it runs on any of the child `MirScalarExpr`s.
+    /// The function `post` runs on child `MirScalarExpr`s first before the
+    /// parent. Optionally, `pre` can return which child `MirScalarExpr`s, if
+    /// any, should be visited (default is to visit all children).
+    pub fn visit_mut_pre_post<F1, F2>(&mut self, pre: &mut F1, post: &mut F2)
+    where
+        F1: FnMut(&mut Self) -> Option<Vec<&mut MirScalarExpr>>,
+        F2: FnMut(&mut Self),
+    {
+        let to_visit = pre(self);
+        if let Some(to_visit) = to_visit {
+            for e in to_visit {
+                e.visit_mut_pre_post(pre, post);
+            }
+        } else {
+            self.visit1_mut(|e| e.visit_mut_pre_post(pre, post));
+        }
+        post(self);
+    }
+
     /// Rewrites column indices with their value in `permutation`.
     ///
     /// This method is applicable even when `permutation` is not a
@@ -480,6 +501,9 @@ impl MirScalarExpr {
                         *e = expr2.take();
                     } else if expr1 == expr2 {
                         *e = expr1.take();
+                    } else if expr2 < expr1 {
+                        // Canonically order elements so that deduplication works better.
+                        ::std::mem::swap(expr1, expr2);
                     }
                 } else if *func == BinaryFunc::Or {
                     // If we are here, not both inputs are literals.
@@ -489,19 +513,14 @@ impl MirScalarExpr {
                         *e = expr2.take();
                     } else if expr1 == expr2 {
                         *e = expr1.take();
+                    } else if expr2 < expr1 {
+                        // Canonically order elements so that deduplication works better.
+                        ::std::mem::swap(expr1, expr2);
                     }
                 } else if *func == BinaryFunc::Eq {
                     // Canonically order elements so that deduplication works better.
                     if expr2 < expr1 {
                         ::std::mem::swap(expr1, expr2);
-                    }
-
-                    // Comparison to self is always true unless the element is `Datum::Null`.
-                    if expr1 == expr2 {
-                        *e = expr1
-                            .clone()
-                            .call_unary(UnaryFunc::IsNull)
-                            .call_unary(UnaryFunc::Not);
                     }
                 }
             }
@@ -887,6 +906,10 @@ pub enum EvalError {
         byte_sequence: String,
         encoding_name: String,
     },
+    InvalidJsonbCast {
+        from: String,
+        to: String,
+    },
     InvalidRegex(String),
     InvalidRegexFlag(char),
     InvalidParameterValue(String),
@@ -900,6 +923,7 @@ pub enum EvalError {
     InfinityOutOfDomain(String),
     NegativeOutOfDomain(String),
     ZeroOutOfDomain(String),
+    MultipleRowsFromSubquery,
 }
 
 impl fmt::Display for EvalError {
@@ -922,6 +946,9 @@ impl fmt::Display for EvalError {
                 c.escape_default()
             ),
             EvalError::InvalidBase64EndSequence => f.write_str("invalid base64 end sequence"),
+            EvalError::InvalidJsonbCast { from, to } => {
+                write!(f, "cannot cast jsonb {} to type {}", from, to)
+            }
             EvalError::InvalidTimezone(tz) => write!(f, "invalid time zone '{}'", tz),
             EvalError::InvalidTimezoneInterval => {
                 f.write_str("timezone interval must not contain months or years")
@@ -965,6 +992,9 @@ impl fmt::Display for EvalError {
             }
             EvalError::ZeroOutOfDomain(s) => {
                 write!(f, "function {} is not defined for zero", s)
+            }
+            EvalError::MultipleRowsFromSubquery => {
+                write!(f, "more than one record produced in subquery")
             }
         }
     }

@@ -62,6 +62,9 @@ do_cargo() {
         export krb5_cv_attr_constructor_destructor=yes
         export ac_cv_func_regcomp=yes
         export ac_cv_printf_positional=yes
+        # The RUSTFLAGS recommendations in doc/developer/fast-compiles.md conflict with
+        # cross-compilation
+        unset RUSTFLAGS
     elif [[ ! "${MZ_DEV_CI_BUILDER:-}" ]]; then
         # Otherwise, build inside the CI builder image, unless we're already
         # inside of it.

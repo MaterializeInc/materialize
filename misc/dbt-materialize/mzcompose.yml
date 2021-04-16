@@ -19,7 +19,6 @@ services:
       - MZ_DEV=1
     ports:
       - *materialized
-    init: true
   dbt-test:
     mzbuild: dbt-materialize
 

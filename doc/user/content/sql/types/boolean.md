@@ -28,17 +28,18 @@ Detail | Info
 
 #### From `boolean`
 
-You can [cast](../../functions/cast) `boolean` to:
+You can [cast](../../functions/cast) from `boolean` to:
 
-- [`text`](../text)
-- [`int`](../int)
+- [`int`](../int) (explicitly)
+- [`text`](../text) (by assignment)
 
 #### To `boolean`
 
 You can [cast](../../functions/cast) the following types to `boolean`:
 
-- [`int`](../int)
-- [`text`](../text)
+- [`int`](../int) (explicitly)
+- [`jsonb`](../jsonb) (explicitly)
+- [`text`](../text) (explicitly)
 
 ## Examples
 

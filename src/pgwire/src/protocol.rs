@@ -924,6 +924,7 @@ where
             ExecuteResponse::CreatedSource { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "source")
             }
+            ExecuteResponse::CreatedSources => command_complete!("CREATE SOURCES"),
             ExecuteResponse::CreatedSink { existed } => {
                 created!(existed, SqlState::DUPLICATE_OBJECT, "sink")
             }
@@ -1024,7 +1025,16 @@ where
                 }
                 command_complete!("SET")
             }
-            ExecuteResponse::StartedTransaction => command_complete!("BEGIN"),
+            ExecuteResponse::StartedTransaction { duplicated } => {
+                if duplicated {
+                    let msg = ErrorResponse::warning(
+                        SqlState::ACTIVE_SQL_TRANSACTION,
+                        "there is already a transaction in progress",
+                    );
+                    self.conn.send(msg).await?;
+                }
+                command_complete!("BEGIN")
+            }
             ExecuteResponse::TransactionExited { tag, was_implicit } => {
                 // In Postgres, if a user sends a COMMIT or ROLLBACK in an implicit
                 // transaction, a notice is sent warning them. (The transaction is still closed
@@ -1148,7 +1158,7 @@ where
                 _ = canceled => FetchResult::Cancelled,
                 batch = rows.next() => FetchResult::Rows(batch),
             }
-        };
+        }
 
         let canceled = self.coord_client.canceled();
         let mut batch = fetch_batch(deadline, &mut rows, canceled).await;
@@ -1223,9 +1233,11 @@ where
                     total_sent_rows += drain_rows;
                     want_rows -= drain_rows;
                     // If we have sent the number of requested rows, put the remainder of the batch
-                    // back and stop sending.
-                    if want_rows == 0 && !batch_rows.is_empty() {
-                        rows = Box::new(stream::iter(vec![batch_rows]).chain(rows));
+                    // (if any) back and stop sending.
+                    if want_rows == 0 {
+                        if !batch_rows.is_empty() {
+                            rows = Box::new(stream::iter(vec![batch_rows]).chain(rows));
+                        }
                         break;
                     }
                     self.conn.flush().await?;

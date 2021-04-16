@@ -967,8 +967,8 @@ ORDER BY
 | | demand = (#5, #19..#21, #23)
 | Filter ((#23 = "MAIL") || (#23 = "SHIP")), (#19 < #20), (#20 < #21), (datetots(#21) < 1995-01-01 00:00:00), (#21 >= 1994-01-01)
 | Reduce group=(#23)
-| | agg sum(if ((#5 = "1-URGENT") || (#5 = "2-HIGH")) then {1} else {0})
-| | agg sum(if ((#5 != "1-URGENT") && (#5 != "2-HIGH")) then {1} else {0})
+| | agg sum(if ((#5 = "2-HIGH") || (#5 = "1-URGENT")) then {1} else {0})
+| | agg sum(if ((#5 != "2-HIGH") && (#5 != "1-URGENT")) then {1} else {0})
 
 Finish order_by=(#0 asc) limit=none offset=0 project=(#0..#2)
 
@@ -1128,23 +1128,29 @@ WHERE
 ORDER BY
     s_suppkey
 ----
-%0 =
+%0 = Let l0 =
+| Get materialize.public.lineitem (u21)
+| Filter (datetots(#10) < 1996-04-01 00:00:00), (#10 >= 1996-01-01)
+| Reduce group=(#2)
+| | agg sum((#5 * (100dec - #6)))
+
+%1 =
 | Get materialize.public.supplier (u8)
 | ArrangeBy (#0)
 
-%1 =
-| Get materialize.public.revenue (u27)
+%2 =
+| Get %0 (l0)
 | ArrangeBy (#0)
 
-%2 =
-| Get materialize.public.revenue (u27)
+%3 =
+| Get %0 (l0)
 | Reduce group=()
 | | agg max(#1)
 | ArrangeBy (#0)
 
-%3 =
-| Join %0 %1 %2 (= #0 #7) (= #8 #9)
-| | implementation = Differential %0.(#0) %1.(#0) %2.(#0)
+%4 =
+| Join %1 %2 %3 (= #0 #7) (= #8 #9)
+| | implementation = Differential %1.(#0) %2.(#0) %3.(#0)
 | | demand = (#0..#2, #4, #8)
 | Project (#0..#2, #4, #8)
 
@@ -1203,7 +1209,7 @@ ORDER BY
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#0)
 | | demand = (#1, #8..#10)
-| Filter !("^MEDIUM POLISHED.*$" ~(#9)), ((((((((#10 = 49) || (#10 = 14)) || (#10 = 23)) || (#10 = 45)) || (#10 = 19)) || (#10 = 3)) || (#10 = 36)) || (#10 = 9)), (#8 != "Brand#45")
+| Filter !("^MEDIUM POLISHED.*$" ~(#9)), ((((((((#10 = 14) || (#10 = 49)) || (#10 = 23)) || (#10 = 45)) || (#10 = 19)) || (#10 = 3)) || (#10 = 36)) || (#10 = 9)), (#8 != "Brand#45")
 
 %3 = Let l1 =
 | Get %2 (l0)
@@ -1470,7 +1476,7 @@ WHERE
 | |   delta %0 %1.(#0)
 | |   delta %1 %0.(#1)
 | | demand = (#4..#6, #13, #14, #19, #21, #22)
-| Filter (((((((#19 = "Brand#12") && ((((#22 = "SM CASE") || (#22 = "SM BOX")) || (#22 = "SM PACK")) || (#22 = "SM PKG"))) && (#4 >= 100dec)) && (#4 <= 1100dec)) && (#21 <= 5)) || (((((#19 = "Brand#23") && ((((#22 = "MED BAG") || (#22 = "MED BOX")) || (#22 = "MED PKG")) || (#22 = "MED PACK"))) && (#4 >= 1000dec)) && (#4 <= 2000dec)) && (#21 <= 10))) || (((((#19 = "Brand#34") && ((((#22 = "LG CASE") || (#22 = "LG BOX")) || (#22 = "LG PACK")) || (#22 = "LG PKG"))) && (#4 >= 2000dec)) && (#4 <= 3000dec)) && (#21 <= 15))), ((#14 = "AIR") || (#14 = "AIR REG")), (#13 = "DELIVER IN PERSON"), (#21 >= 1)
+| Filter (((((((((#22 = "LG BOX") || (#22 = "LG CASE")) || (#22 = "LG PACK")) || (#22 = "LG PKG")) && (#19 = "Brand#34")) && (#4 >= 2000dec)) && (#4 <= 3000dec)) && (#21 <= 15)) || (((((((((#22 = "SM BOX") || (#22 = "SM CASE")) || (#22 = "SM PACK")) || (#22 = "SM PKG")) && (#19 = "Brand#12")) && (#4 >= 100dec)) && (#4 <= 1100dec)) && (#21 <= 5)) || ((((((((#22 = "MED BAG") || (#22 = "MED BOX")) || (#22 = "MED PKG")) || (#22 = "MED PACK")) && (#19 = "Brand#23")) && (#4 >= 1000dec)) && (#4 <= 2000dec)) && (#21 <= 10)))), ((#14 = "AIR") || (#14 = "AIR REG")), (#13 = "DELIVER IN PERSON"), (#21 >= 1)
 | Reduce group=()
 | | agg sum((#5 * (100dec - #6)))
 

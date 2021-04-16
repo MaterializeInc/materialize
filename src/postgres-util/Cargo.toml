@@ -1,0 +1,12 @@
+[package]
+name = "postgres-util"
+description = "Internal postgres utility library for Materialize."
+version = "0.0.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+anyhow = "1.0.40"
+sql-parser = { path = "../sql-parser" }
+tokio = { version = "1.4.0", features = ["fs"] }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

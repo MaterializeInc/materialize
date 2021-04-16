@@ -16,7 +16,7 @@ To get everything you need to run dbt with Materialize, do the following:
    ```
 
 1. Install the `dbt-materialize` plugin. You may wish to do this within a Python virtual environment on your machine:
-    ```nofmt
+    ```bash
     python3 -m venv dbt-venv
     source dbt-venv/bin/activate
     pip install dbt-materialize
@@ -39,8 +39,22 @@ To get everything you need to run dbt with Materialize, do the following:
       target: dev
     ```
 
-1. Spin up a [Materialize instance](https://materialize.com/quickstart/). If your Materialize
-   instance is not running at `localhost:6875`, update your materialize dbt profile.
+1. Spin up a Materialize instance, [instructions are here](https://materialize.com/docs/install/). If your Materialize
+   instance is not running at `localhost:6875`, update your `profiles.yml` information accordingly.
+
+   If (and only if!) you're running Materialize via a Docker container, you will need to install `curl` on the
+   container before you can run the demo. Once your Materialized container is running, get the container id with the following:
+   ```bash
+   docker ps | grep materialize
+   ```
+
+   Using the output container id, install `curl`:
+   ```bash
+   docker exec -it [materialized container id] /bin/sh
+
+   apt-get update
+   apt-get install curl
+   ```
 
 Once you've completed these steps, you're ready to run dbt with Materialize!
 
@@ -54,7 +68,11 @@ To show off that capability, we're going to create [materialized views](https://
 on top of streaming Wikipedia data using dbt.
 
 1. To start, let's set up a stream of Wikipedia's recent changes, and simply write all the data we see
-   to a file. From a new shell, run:
+   to a file.
+
+   > If (and only if!) you are running Materialize via a Docker container, run `docker exec -it [materialized container id] /bin/sh` before `curl`-ing to create this file directly within the Materialize container.
+
+   From a new shell, run:
    ```nofmt
    while true; do
      curl --max-time 9999999 -N https://stream.wikimedia.org/v2/stream/recentchange >> wikirecent
@@ -62,7 +80,11 @@ on top of streaming Wikipedia data using dbt.
    ```
    Note the absolute path of the location of `wikirecent`, which we’ll need in the next step.
 
-1. [Connect to your Materialize instance](https://materialize.com/docs/connect/cli/) from your shell.
+1. [Connect to your Materialize instance](https://materialize.com/docs/connect/cli/) from your shell:
+   ```bash
+   psql -U materialize -h localhost -p 6875 materialize
+   ```
+
    Then, [create a source](https://materialize.com/docs/sql/create-source/text-file/#main) using your `wikirecent` file:
    ```nofmt
    CREATE SCHEMA wikimedia;
@@ -94,6 +116,9 @@ on top of streaming Wikipedia data using dbt.
    ```nofmt
    dbt run
    ```
+   > If the `profiles.yml` you're using for this project is not located in at `~/.dbt/`,
+     you will have to provide [additional information](https://docs.getdbt.com/dbt-cli/configure-your-profile#advanced-profile-configuration) to `dbt run`.
+
    This command generates executable SQL from our model files (found in the `models` directory
    of this project), and executes that SQL against the target database, creating
    our materialized views.
