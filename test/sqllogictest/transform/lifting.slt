@@ -108,3 +108,90 @@ select a, b from t where b = 1 group by a, b
 | Map 1
 
 EOF
+
+
+# Permute literals in Map operator so they can be lifted
+query T multiline
+explain
+select * from (select 1, a+1 from t), t;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Map (#0 + 1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t (u1)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#2..#4)
+| Map 1
+| Project (#5, #2..#4)
+
+EOF
+
+query T multiline
+explain
+select * from (select b+1, 2, 1, a+1 from t), t;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Map (#1 + 1), (#0 + 1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t (u1)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#2..#5)
+| Map 2, 1
+| Project (#2, #6, #7, #3..#5)
+
+EOF
+
+query T multiline
+explain
+select * from (select 3, b+1, 2, a+2, 1, a+1 from t), t;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Map (#1 + 1), (#0 + 2), (#0 + 1)
+| ArrangeBy ()
+
+%1 =
+| Get materialize.public.t (u1)
+
+%2 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
+| | demand = (#2..#6)
+| Map 3, 2, 1
+| Project (#7, #2, #8, #3, #9, #4..#6)
+
+EOF
+
+query T multiline
+explain
+select a+1 from (select 1 as a, b from t);
+----
+%0 =
+| Get materialize.public.t (u1)
+| Map 2
+| Project (#2)
+
+EOF
+
+query T multiline
+explain
+select z+1 from (select 2 as y, a, 1 as z, b from t);
+----
+%0 =
+| Get materialize.public.t (u1)
+| Map 2
+| Project (#2)
+
+EOF

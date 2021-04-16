@@ -181,10 +181,7 @@ impl LiteralLifting {
                 literals.extend(scalars.iter().cloned());
                 *scalars = literals;
 
-                // TODO(frank) propagate evaluation through expressions.
-
                 // Strip off literals at the end of `scalars`.
-                // TODO(frank) permute columns to put literals at end, hope project lifted.
                 let mut result = Vec::new();
                 while scalars.last().map(|e| e.is_literal()) == Some(true) {
                     result.push(scalars.pop().unwrap());
@@ -193,6 +190,42 @@ impl LiteralLifting {
 
                 if scalars.is_empty() {
                     *relation = input.take_dangerous();
+                } else {
+                    // Permute columns to put literals at end, if any, hope project lifted.
+                    let literal_count = scalars.iter().filter(|e| e.is_literal()).count();
+                    if literal_count != 0 {
+                        let input_arity = input.arity();
+                        let first_literal_id = input_arity + scalars.len() - literal_count;
+                        let mut new_scalars = Vec::new();
+                        let mut projected_literals = Vec::new();
+                        let mut projection = (0..input_arity).collect::<Vec<usize>>();
+                        let mut column_map = projection.clone();
+                        for scalar in scalars.iter_mut() {
+                            if scalar.is_literal() {
+                                projection.push(first_literal_id + projected_literals.len());
+                                projected_literals.push(scalar.clone());
+                            } else {
+                                let mut cloned_scalar = scalar.clone();
+                                // Propagate literals through expressions and remap columns.
+                                cloned_scalar.visit_mut(&mut |e| {
+                                    if let MirScalarExpr::Column(old_id) = e {
+                                        let new_id = column_map[*old_id];
+                                        if new_id >= first_literal_id {
+                                            *e = projected_literals[new_id - first_literal_id]
+                                                .clone();
+                                        } else {
+                                            *old_id = new_id;
+                                        }
+                                    }
+                                });
+                                projection.push(input_arity + new_scalars.len());
+                                new_scalars.push(cloned_scalar);
+                            }
+                            column_map.push(*projection.last().unwrap());
+                        }
+                        new_scalars.extend(projected_literals);
+                        *relation = input.take_dangerous().map(new_scalars).project(projection);
+                    }
                 }
 
                 result
