@@ -54,11 +54,6 @@ Wrap your release notes at the 80 character mark.
 - Add a new metric, `mz_log_message_total` that counts the number of log
   messages emitted per severity.
 
-- Add new system tables, `mz_metrics`, `mz_metric_histograms` and
-  `mz_metrics_meta`, which import metrics exposed via prometheus once per
-  second, retaining them for 5 minutes (governed by the new
-  [command-line option `--retain-prometheus-metrics`](/cli/#introspection-sources)).
-
 {{% version-header v0.7.2 %}}
 
 - Introduce the concept of [volatility](/overview/volatility) to describe
@@ -1038,8 +1033,6 @@ Wrap your release notes at the 80 character mark.
 
 - Provide the option to name columns in sources (e.g. [`CREATE SOURCE foo
   (col_foo, col_bar)...`](/sql/create-source/csv-file/#creating-a-source-from-a-dynamic-csv)).
-
-- Support [offsets](/sql/create-source/) for partitions on Kafka sources {{% gh 2169 %}}.
 
 - Improve conformance of the Avro parser, enabling support for
   a wider variety of Avro schemas in [Avro sources](/sql/create-source/avro-kafka).
