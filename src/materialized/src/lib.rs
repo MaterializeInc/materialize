@@ -292,4 +292,3 @@ impl Server {
         self.local_addr
     }
 }
-
