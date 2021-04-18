@@ -11,7 +11,7 @@ aws-util = { path = "../../../src/aws-util" }
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 env_logger = "0.8.3"
-futures = "0.3.13"
+futures = "0.3.14"
 futures-channel = "0.3.14"
 log = "0.4.13"
 ore = { path = "../../../src/ore" }

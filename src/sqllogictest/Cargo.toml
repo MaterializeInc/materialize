@@ -10,7 +10,7 @@ anyhow = "1.0.40"
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 expr = { path = "../expr" }
 fallible-iterator = "0.2.0"
-futures = "0.3.13"
+futures = "0.3.14"
 lazy_static = "1.0.0"
 materialized = { path = "../materialized" }
 md-5 = "0.9.0"
