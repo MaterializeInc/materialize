@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 async-compression = { version = "0.3.7", features = [ "tokio", "gzip" ] }
-async-trait = "0.1.48"
+async-trait = "0.1.50"
 atty = "0.2.0"
 aws-util = { path = "../aws-util" }
 byteorder = "1.4.3"
