@@ -356,7 +356,8 @@ class Composition:
             if md["Config"]["Labels"]["com.docker.compose.service"] == service:
                 for (name, port_entry) in md["NetworkSettings"]["Ports"].items():
                     for p in port_entry or []:
-                        ports.append(p["HostPort"])
+                        if p["HostPort"] not in ports:
+                            ports.append(p["HostPort"])
         return ports
 
     def get_container_id(self, service: str, running: bool = False) -> str:
