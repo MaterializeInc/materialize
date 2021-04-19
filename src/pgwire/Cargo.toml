@@ -26,7 +26,7 @@ postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 repr = { path = "../repr" }
 sql = { path = "../sql" }
-tokio = "1.4.0"
+tokio = "1.5.0"
 tokio-openssl = "0.6.1"
 tokio-stream = "0.1.5"
 tokio-util = { version = "0.6.6", features = ["codec"] }
