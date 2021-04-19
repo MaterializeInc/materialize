@@ -9,7 +9,7 @@ publish = false
 anyhow = "1.0.40"
 aws-util = { path = "../../../src/aws-util" }
 bytefmt = "0.1.7"
-futures = "0.3.13"
+futures = "0.3.14"
 indicatif = "0.15.0"
 ore = { path = "../../../src/ore" }
 rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }

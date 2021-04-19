@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.40"
-futures = "0.3.13"
+futures = "0.3.14"
 http-util = { path = "../http-util" }
 native-tls = "0.2.7"
 openssl = { version = "0.10.33", features = ["vendored"] }

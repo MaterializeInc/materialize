@@ -41,7 +41,7 @@ crossbeam-channel = "0.5.1"
 dataflow = { path = "../dataflow" }
 dataflow-types = { path = "../dataflow-types" }
 differential-dataflow = { git = "https://github.com/TimelyDataflow/differential-dataflow.git" }
-futures = "0.3.13"
+futures = "0.3.14"
 hex = "0.4.3"
 http-util = { path = "../http-util" }
 hyper = { version = "0.14.0", features = ["http1", "server"] }
