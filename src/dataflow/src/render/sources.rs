@@ -136,6 +136,7 @@ where
 
                 let source_config = SourceConfig {
                     name: format!("{}-{}", connector.name(), uid),
+                    upstream_name: connector.upstream_name().map(ToOwned::to_owned),
                     id: uid,
                     scope,
                     // Distribute read responsibility among workers.

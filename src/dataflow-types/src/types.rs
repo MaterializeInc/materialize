@@ -638,6 +638,25 @@ impl ExternalSourceConnector {
         }
     }
 
+    /// Optionally returns the name of the upstream resource this source corresponds to.
+    /// (Currently only implemented for Kafka and Kinesis, to match old-style behavior
+    ///  TODO: decide whether we want file paths and other upstream names to show up in metrics too.
+    pub fn upstream_name(&self) -> Option<&str> {
+        match self {
+            ExternalSourceConnector::Kafka(KafkaSourceConnector { topic, .. }) => {
+                Some(topic.as_str())
+            }
+            ExternalSourceConnector::Kinesis(KinesisSourceConnector { stream_name, .. }) => {
+                Some(stream_name.as_str())
+            }
+            ExternalSourceConnector::File(_) => None,
+            ExternalSourceConnector::AvroOcf(_) => None,
+            ExternalSourceConnector::S3(_) => None,
+            ExternalSourceConnector::Postgres(_) => None,
+            ExternalSourceConnector::PubNub(_) => None,
+        }
+    }
+
     /// Returns whether or not source caching is enabled for this connector
     pub fn caching_enabled(&self) -> bool {
         match self {
