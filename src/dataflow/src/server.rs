@@ -404,8 +404,6 @@ where
         while !shutdown {
             // Enable trace compaction.
             self.render_state.traces.maintenance();
-            // Compact timestamp bindings
-            self.compact_timestamp_bindings();
 
             // Ask Timely to execute a unit of work. If Timely decides there's
             // nothing to do, it will park the thread. We rely on another thread
@@ -830,15 +828,6 @@ where
                 if let Some(logger) = self.materialized_logger.as_mut() {
                     logger.log(MaterializedEvent::Peek(peek.as_log_event(), false));
                 }
-            }
-        }
-    }
-
-    /// Attempt to compact source timestamp bindings
-    fn compact_timestamp_bindings(&self) {
-        for (_, ts_history) in self.render_state.ts_histories.borrow().iter() {
-            if let TimestampDataUpdate::BringYourOwn(history) = ts_history {
-                history.compact();
             }
         }
     }

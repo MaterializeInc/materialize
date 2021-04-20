@@ -194,23 +194,17 @@ impl TimestampBindingRc {
         ret
     }
 
-    /// Set the compaction frontier to `new_frontier`.
+    /// Set the compaction frontier to `new_frontier` and compact all timestamp bindings at
+    /// timestamps less than the compaction frontier.
     ///
     /// Note that `new_frontier` must be in advance of the current compaction
-    /// frontier.
+    /// frontier. The source can be correctly replayed from any `as_of` in advance of
+    /// the compaction frontier after this operation.
     pub fn set_compaction_frontier(&mut self, new_frontier: AntichainRef<Timestamp>) {
         self.wrapper
             .borrow_mut()
             .adjust_compaction_frontier(self.compaction_frontier.borrow(), new_frontier);
         self.compaction_frontier = new_frontier.to_owned();
-    }
-
-    /// Compact all timestamp bindings at timestamps less than the current
-    /// compaction frontier.
-    ///
-    /// The source can be correctly replayed from any `as_of` in advance of
-    /// the compaction frontier after this operation.
-    pub fn compact(&self) {
         self.wrapper.borrow_mut().compact();
     }
 
