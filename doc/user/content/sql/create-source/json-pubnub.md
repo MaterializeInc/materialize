@@ -44,6 +44,6 @@ SELECT
     (text::jsonb)->>'order_quantity' AS order_quantity,
     (text::jsonb)->>'symbol' AS symbol,
     (text::jsonb)->>'trade_type' AS trade_type,
-    to_timestamp((text::jsonb)->'timestamp')::bigint) AS timestamp
+    to_timestamp(((text::jsonb)->'timestamp')::bigint) AS timestamp
 FROM market_orders_raw;
 ```
