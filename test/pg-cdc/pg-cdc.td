@@ -352,13 +352,13 @@ incorrect column specification: 3 columns were specified, upstream has 2: pk, f2
 # Basic sanity check that the timestamps are reasonable
 #
 
-> SELECT COUNT(*) > 0 FROM pk_table AS OF NOW();
+> SELECT COUNT(*) > 0 FROM pk_table;
 true
 
-> SELECT COUNT(*) > 0 FROM nonpk_table AS OF NOW();
+> SELECT COUNT(*) > 0 FROM nonpk_table;
 true
 
-> SELECT COUNT(*) > 0 FROM join_view AS OF NOW();
+> SELECT COUNT(*) > 0 FROM join_view;
 true
 
 #
@@ -450,13 +450,13 @@ UPDATE utf8_table SET f1 = f1 || f1 , f2 = f2 || f2;
 # Check that the timestamps continue to be reasonable in the face of incoming updates
 #
 
-> SELECT COUNT(*) > 0 FROM pk_table AS OF NOW();
+> SELECT COUNT(*) > 0 FROM pk_table;
 true
 
-> SELECT COUNT(*) > 0 FROM nonpk_table AS OF NOW();
+> SELECT COUNT(*) > 0 FROM nonpk_table;
 true
 
-> SELECT COUNT(*) > 0 FROM join_view AS OF NOW();
+> SELECT COUNT(*) > 0 FROM join_view;
 true
 
 #
