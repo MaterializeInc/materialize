@@ -30,6 +30,7 @@ We intend to frame an interface with sources that allow them to communicate back
 
 We do not intend to determine the policy for which operators should be communicated to sources and which should be held back.
 We expect a substantial amount of follow-up work on source implementations where we determine how best to apply these operators.
+We do not intend to communicate expressions over things other than `[Datum]` input (e.g. we are not directly expression JSON or Avro navigation).
 We could go further with the set of operations that we push in to sources, including e.g. `FlatMap`, `Negate`, or `Union` operators.
 
 ## Description
@@ -47,7 +48,8 @@ The sequence of expressions indicates a sequence of new columns to add to each r
 
 The `MirRelationExpr::Filter` operator contains a sequence of `MirScalarExpr` expressions.
 Each expression is a function that is applied to the existing columns, and which produces either `Datum::True` or not.
-Rows that produce `Datum::True` are retained in the output, and rows that do not are discarded.
+Rows that produce `Datum::True` for all expressions are retained in the output, and rows that produce `Datum::False` or `Datum::Null` for any expressions are discarded.
+The production of any other `Datum` variant is a type error.
 
 The `MirRelationExpr::Project` operator contains a sequence of integer column references.
 Each column reference indicates that the value found in that column should be copied to the output in place of the reference.
@@ -84,8 +86,41 @@ These two together allow sources to determine which of their announced columns n
 
 As an example, the `csv.rs` source provides the appearance of multiple columns of text.
 A `MapFilterProject` instance may only consult three of those columns, and ignore all of the others.
-Rather than form `Datum::String` instances for each input column, the source can only produce the three columns of interest and apply the re-written `MapFilterProject` directly to that smaller input.
-This is especially valuable in situations where input columns may be more complicated, for example Avro metadata, which can involve expensive decoding to prepare, but which can be entirely skipped if none of the contents are referenced.
+By default, the `csv.rs` source will form a `Datum::String` for each of the presented columns.
+The source implementation can
+1. use `mfp.demand()` to determine which columns are required by the `mfp` instance,
+2. use `mfp.permute()` to change the column references to point to a new, dense set of column identifiers, and then
+3. only assemble values for those referenced columns and apply `mfp` to the the result.
+
+This idiom is especially valuable in situations where input columns may be more complicated, for example Avro metadata, which can involve expensive decoding to prepare, but which can be entirely skipped if none of the contents are referenced.
+
+In the worst case, a `MapFilterProject` instance can be converted to a sequence of `Map`, `Filter`, and `Project` expressions with the `as_map_filter_project()` method.
+The resulting expressions can be manipulated and reassembled by users who need more precise control.
+
+For a more challenging example, navigation of JSON-structured data presents as field accesses.
+When selecting nested fields from such a structure,
+```
+SELECT
+    a::json->'Field1'->'Foo',
+    a::json->'Field1'->'Bar',
+    a::json->'Field2'->'Baz',
+    a::json->'Field2'->'Quux'->'Zorb'
+FROM x
+```
+The resulting `Map` and `Project` plans encode the navigation:
+```
+| Get materialize.public.x (u1)
+| Map strtojsonb(#0),
+|     (#2 -> "Field1"),
+|     (#3 -> "Foo"),
+|     (#3 -> "Bar"),
+|     (#2 -> "Field2"),
+|     (#6 -> "Baz"),
+|     ((#6 -> "Quux") -> "Zorb"),
+| Project (#4, #5, #7, #8)
+```
+The `MapFilterProject` instance wuold contain the `Map` and `Project` instructions, passed to what might be a source `x`.
+The expressions themselves do not themselves provide efficient navigation, but a sufficiently smart JSON navigator could follow them and avoid irrelevant fields.
 
 ### Planning for evaluation
 
