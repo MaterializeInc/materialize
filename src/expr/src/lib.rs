@@ -27,7 +27,11 @@ pub mod explain;
 pub use relation::canonicalize;
 
 pub use id::{GlobalId, Id, LocalId, PartitionId, SourceInstanceId};
-pub use linear::{memoize_expr, MapFilterProject};
+pub use linear::{
+    memoize_expr,
+    plan::{MfpPlan, SafeMfpPlan},
+    MapFilterProject,
+};
 pub use relation::func::{AggregateFunc, TableFunc};
 pub use relation::func::{AnalyzedRegex, CaptureGroupDesc};
 pub use relation::join_input_mapper::JoinInputMapper;

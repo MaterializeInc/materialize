@@ -2147,6 +2147,16 @@ impl Coordinator {
                 self.ship_dataflow(dataflow).await?;
             }
 
+            let mfp_plan = map_filter_project
+                .into_plan()
+                .map_err(|e| crate::error::CoordError::Unstructured(::anyhow::anyhow!(e)))?
+                .into_nontemporal()
+                .map_err(|_e| {
+                    crate::error::CoordError::Unstructured(::anyhow::anyhow!(
+                        "Extracted plan has temporal constraints"
+                    ))
+                })?;
+
             self.broadcast(SequencedCommand::Peek {
                 id: index_id,
                 key: literal_row,
@@ -2154,7 +2164,7 @@ impl Coordinator {
                 tx: rows_tx,
                 timestamp,
                 finishing: finishing.clone(),
-                map_filter_project,
+                map_filter_project: mfp_plan,
             });
 
             if !fast_path {
@@ -2681,15 +2691,13 @@ impl Coordinator {
         if let ExprPrepStyle::Static = style {
             let mut opt_expr = self.optimizer.optimize(expr, self.catalog.indexes())?;
             opt_expr.0.try_visit_mut(&mut |e| {
-                if let expr::MirRelationExpr::Filter {
-                    input: _,
-                    predicates,
-                } = &*e
-                {
-                    match dataflow::FilterPlan::create_from(predicates.iter().cloned()) {
+                if let expr::MirRelationExpr::Filter { input, predicates } = &*e {
+                    let mfp = expr::MapFilterProject::new(input.arity())
+                        .filter(predicates.iter().cloned());
+                    match mfp.into_plan() {
                         Err(e) => coord_bail!("{:?}", e),
                         Ok(plan) => {
-                            // If we are in experimenal mode permit temporal filters.
+                            // If we are in experimental mode permit temporal filters.
                             // TODO(mcsherry): remove this gating eventually.
                             if plan.non_temporal() || self.catalog.config().experimental_mode {
                                 Ok(())

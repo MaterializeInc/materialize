@@ -353,11 +353,15 @@ where
                         let predicates = std::mem::take(&mut operators.predicates);
                         // The predicates may be temporal, which requires the nuance
                         // of an explicit plan capable of evaluating the predicates.
-                        let filter_plan = crate::FilterPlan::create_from(predicates)
+                        let filter_plan = expr::MapFilterProject::new(source_type.arity())
+                            .filter(predicates)
+                            .into_plan()
                             .unwrap_or_else(|e| panic!("{}", e));
                         move |(input_row, time, diff)| {
+                            let arena = repr::RowArena::new();
                             let mut datums_local = datums.borrow_with(&input_row);
-                            let times_diffs = filter_plan.evaluate(&mut datums_local, time, diff);
+                            let times_diffs =
+                                filter_plan.evaluate(&mut datums_local, &arena, time, diff);
                             // Name the iterator, to capture total size and datums.
                             let iterator = position_or.iter().map(|pos_or| match pos_or {
                                 Some(index) => datums_local[*index],
@@ -369,7 +373,7 @@ where
                             // Each produced (time, diff) results in a copy of `output_row` in the output.
                             // TODO: It would be nice to avoid the `output_row.clone()` for the last output.
                             times_diffs.map(move |time_diff| {
-                                time_diff.map(|(t, d)| (output_row.clone(), t, d))
+                                time_diff.map_err(|(e, t, d)| (DataflowError::from(e), t, d))
                             })
                         }
                     });

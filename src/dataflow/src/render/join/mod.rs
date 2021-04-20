@@ -44,7 +44,7 @@ use repr::{Datum, Row, RowArena};
 #[derive(Debug)]
 struct JoinClosure {
     ready_equivalences: Vec<Vec<MirScalarExpr>>,
-    before: MapFilterProject,
+    before: expr::SafeMfpPlan,
 }
 
 impl JoinClosure {
@@ -187,7 +187,7 @@ impl JoinClosure {
         // Cons up an instance of the closure with the closed-over state.
         Self {
             ready_equivalences,
-            before,
+            before: before.into_plan().unwrap().into_nontemporal().unwrap(),
         }
     }
 
@@ -296,7 +296,7 @@ impl JoinBuildState {
 
         JoinClosure {
             ready_equivalences: equivalences,
-            before: mfp,
+            before: mfp.into_plan().unwrap().into_nontemporal().unwrap(),
         }
     }
 

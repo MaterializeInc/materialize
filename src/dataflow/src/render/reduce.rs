@@ -561,8 +561,10 @@ where
             }
             key_mfp.permute(&demand_map, demand_map.len());
             key_mfp.optimize();
+            let key_plan = key_mfp.into_plan().unwrap().into_nontemporal().unwrap();
             val_mfp.permute(&demand_map, demand_map.len());
             val_mfp.optimize();
+            let val_plan = val_mfp.into_plan().unwrap().into_nontemporal().unwrap();
 
             let skips = convert_indexes_to_skips(demand);
 
@@ -587,14 +589,14 @@ where
 
                         // Evaluate the key expressions.
                         row_packer.clear();
-                        let key = match key_mfp.evaluate(&mut datums_local, &temp_storage) {
+                        let key = match key_plan.evaluate(&mut datums_local, &temp_storage) {
                             Err(e) => return Some(Err(DataflowError::from(e))),
                             Ok(key) => key.expect("Row expected as no predicate was used"),
                         };
                         // Evaluate the value expressions.
                         // The prior evaluation may have left additional columns we should delete.
                         datums_local.truncate(skips.len());
-                        let val = match val_mfp.evaluate_iter(&mut datums_local, &temp_storage) {
+                        let val = match val_plan.evaluate_iter(&mut datums_local, &temp_storage) {
                             Err(e) => return Some(Err(DataflowError::from(e))),
                             Ok(val) => val.expect("Row expected as no predicate was used"),
                         };

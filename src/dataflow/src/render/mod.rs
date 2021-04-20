@@ -129,9 +129,9 @@ use crate::source::SourceToken;
 
 mod arrange_by;
 mod context;
-pub(crate) mod filter;
 mod flat_map;
 mod join;
+pub(crate) mod map_filter_project;
 mod reduce;
 mod sinks;
 mod sources;
@@ -352,9 +352,9 @@ where
 {
     /// Attempt to render a chain of map/filter/project operators on top of another operator.
     ///
-    /// Returns true if it was successful, and false otherwise. If this method returns false,
-    /// we should continue with the traditional individual render implementations of each
-    /// operator.
+    /// The rendered collection is bound to `relation_expr`, which the caller expects to find
+    /// bound if the result is `true`. If this method returns `false`, the caller should use
+    /// the traditional individual render implementations of each operator.
     fn try_render_map_filter_project(
         &mut self,
         relation_expr: &MirRelationExpr,
@@ -368,6 +368,12 @@ where
             MirRelationExpr::Get { .. } => {
                 // TODO: determine if `mfp` is no-op to simplify implementation.
                 let mfp2 = mfp.clone();
+                // Extract any temporal predicates, as these operators cannot natively handle them.
+                let mut temporal_mfp = mfp.extract_temporal();
+                mfp.optimize();
+                temporal_mfp.optimize();
+                let temporal_plan = temporal_mfp.into_plan().unwrap();
+                let mfp_plan = mfp.into_plan().unwrap().into_nontemporal().unwrap();
                 self.ensure_rendered(&input, scope, worker_index);
                 let (ok_collection, mut err_collection) = self
                     .flat_map_ref(&input, move |exprs| mfp2.literal_constraints(exprs), {
@@ -380,16 +386,17 @@ where
                                 datums_local.extend(row.iter());
                                 // Temporary assignment looks weird, but seems needed to convince
                                 // Rust that the lifetime of `evaluate_iter` does not escape.
-                                let result =
-                                    match mfp.evaluate_iter(&mut datums_local, &temp_storage) {
-                                        Ok(Some(iter)) => {
-                                            row_packer.clear();
-                                            row_packer.extend(iter);
-                                            Some(Ok(()))
-                                        }
-                                        Ok(None) => None,
-                                        Err(e) => Some(Err(e.into())),
-                                    };
+                                let result = match mfp_plan
+                                    .evaluate_iter(&mut datums_local, &temp_storage)
+                                {
+                                    Ok(Some(iter)) => {
+                                        row_packer.clear();
+                                        row_packer.extend(iter);
+                                        Some(Ok(()))
+                                    }
+                                    Ok(None) => None,
+                                    Err(e) => Some(Err(e.into())),
+                                };
                                 datums = ore::vec::repurpose_allocation(datums_local);
                                 result
                             };
@@ -417,15 +424,28 @@ where
                     Ok(x) => Ok((x, t, d)),
                     Err(x) => Err((x, t, d)),
                 });
-                err_collection = err_collection.concat(&errors.as_collection());
+
+                let mut oks = oks.as_collection();
+                let errors = errors.as_collection();
+
+                err_collection = err_collection.concat(&errors);
+
+                // If the temporal operator is non-trivial we need to install an operator.
+                if !temporal_plan.is_identity() {
+                    let (temp, errs) =
+                        crate::render::map_filter_project::build_mfp_operator(oks, temporal_plan);
+                    oks = temp;
+                    err_collection = err_collection.concat(&errs);
+                }
 
                 self.collections
-                    .insert(relation_expr.clone(), (oks.as_collection(), err_collection));
+                    .insert(relation_expr.clone(), (oks, err_collection));
                 true
             }
             MirRelationExpr::FlatMap { input: input2, .. } => {
                 self.ensure_rendered(&input2, scope, worker_index);
-                let (oks, err) = self.render_flat_map(input, Some(mfp));
+                let mfp_plan = mfp.into_plan().unwrap();
+                let (oks, err) = self.render_flat_map(input, Some(mfp_plan));
                 self.collections.insert(relation_expr.clone(), (oks, err));
                 true
             }
@@ -435,25 +455,39 @@ where
                 implementation,
                 ..
             } => {
+                // Extract any temporal predicates, as these operators cannot natively handle them.
+                let mut temporal_mfp = mfp.extract_temporal();
+                mfp.optimize();
+                temporal_mfp.optimize();
+                let temporal_plan = temporal_mfp.into_plan().unwrap();
+
                 for input in inputs {
                     self.ensure_rendered(input, scope, worker_index);
                 }
-                match implementation {
+                let (mut oks, mut err) = match implementation {
                     expr::JoinImplementation::Differential(_start, _order) => {
-                        let collection = self.render_join(input, mfp, scope);
-                        self.collections.insert(relation_expr.clone(), collection);
+                        self.render_join(input, mfp, scope)
                     }
                     expr::JoinImplementation::DeltaQuery(_orders) => {
-                        let collection =
-                            self.render_delta_join(input, mfp, scope, worker_index, |t| {
-                                t.saturating_sub(1)
-                            });
-                        self.collections.insert(relation_expr.clone(), collection);
+                        self.render_delta_join(input, mfp, scope, worker_index, |t| {
+                            t.saturating_sub(1)
+                        })
                     }
                     expr::JoinImplementation::Unimplemented => {
                         panic!("Attempt to render unimplemented join");
                     }
+                };
+
+                // If the temporal operator is non-trivial we need to install an operator.
+                if !temporal_plan.is_identity() {
+                    let (temp_oks, temp_errs) =
+                        crate::render::map_filter_project::build_mfp_operator(oks, temporal_plan);
+                    oks = temp_oks;
+                    err = err.concat(&temp_errs);
                 }
+
+                self.collections.insert(relation_expr.clone(), (oks, err));
+
                 true
             }
             _ => false,
@@ -592,10 +626,12 @@ where
                     self.collections.insert(relation_expr.clone(), (oks, err));
                 }
 
-                MirRelationExpr::Filter { input, .. } => {
+                MirRelationExpr::Filter { input, predicates } => {
                     if !self.try_render_map_filter_project(relation_expr, scope, worker_index) {
                         self.ensure_rendered(input, scope, worker_index);
-                        let collections = self.render_filter(relation_expr);
+                        let mfp = expr::MapFilterProject::new(input.arity())
+                            .filter(predicates.iter().cloned());
+                        let collections = self.render_mfp_after(mfp, input);
                         self.collections.insert(relation_expr.clone(), collections);
                     }
                 }

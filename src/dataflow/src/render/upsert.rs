@@ -119,7 +119,8 @@ where
             .collect::<Vec<_>>();
     }
     let temporal_plan = if !temporal.is_empty() {
-        Some(crate::FilterPlan::create_from(temporal).unwrap_or_else(|e| panic!("{}", e)))
+        let temporal_mfp = expr::MapFilterProject::new(source_arity).filter(temporal);
+        Some(temporal_mfp.into_plan().unwrap_or_else(|e| panic!("{}", e)))
     } else {
         None
     };
@@ -297,11 +298,14 @@ where
         let (oks2, errs2) = oks.flat_map_fallible({
             let mut datums = crate::render::datum_vec::DatumVec::new();
             move |(row, time, diff)| {
+                let arena = repr::RowArena::new();
                 let mut datums_local = datums.borrow_with(&row);
-                let time_diffs = plan.evaluate(&mut datums_local, time, diff);
+                let times_diffs = plan.evaluate(&mut datums_local, &arena, time, diff);
                 // Explicitly drop `datums_local` to release the borrow.
                 drop(datums_local);
-                time_diffs.map(move |time_diff| time_diff.map(|(t, d)| (row.clone(), t, d)))
+                times_diffs.map(move |time_diff| {
+                    time_diff.map_err(|(e, t, d)| (DataflowError::from(e), t, d))
+                })
             }
         });
 
