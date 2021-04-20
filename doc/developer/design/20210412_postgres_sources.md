@@ -36,41 +36,41 @@ In order to keep the initial scope manageable a few assumptions are made.
 Lifting those assumptions will be part of the goals for future work.
 
 * **The upstream database doesn't require complex authentication or TLS
-  connections.** After the MVP, simple TLS connections should be prioritized.
+  connections.** This constraint will be lifted shortly after the MVP. This
+  will involve adding syntax (possibly WITH options) in the connector syntax and
+  threading them through to the postgres driver.
 
 * **The schema will remain static for the duration of the source.** When
   creating a postgres source a list of upstream tables will be specified either
   explicitly by the user or by introspecting the upstream database. After that
   point no upstream schema changes will be supported. If such change is
   detected, materialize will put the relevant source in an errored state and
-  wait for an administrator to fix the problem.
+  wait for an administrator to fix the problem. In order to lift this constraint
+  materialize needs to gain support for DDLs (like ALTER TABLE). The replication
+  stream includes messages with the exact points where schema changes so the
+  mechanism could be based on that.
 
 * **All synced tables will be materialized.** Normally, sources in materialized
   can be instantiated on demand and each instance talks to external systems
   independently. This is a bad pattern for an upstream postgres database because
   each instance would have to create a replication slot, which is a scarce
   resource, and would receive data for all tables, blowing up the bandwidth
-  used.
-
-* **All columns will have types supported by materialize.** materialize
-  currently supports enough types to cover most use cases. If an upstream tables
-  uses an unsupported type source creation will not be allowed.
+  used. In order to lift this restrictions we need to implement the [Dynamic
+  Resource Sharing](https://github.com/MaterializeInc/materialize/pull/6450)
+  proposal.
 
 * **All tables will have `REPLICA IDENTITY` set to `FULL`.** This will force
   postgres to stream both the old and the new row data whenever there is an
   update. While this is a bit inefficient it makes for a much simpler source
-  implementation. Future optimization could lift this constraint.
+  implementation. This can be avoided with some `UPSERT`-like logic, if the
+  memory overhead is acceptable Future optimization could lift this constraint.
 
 * **no columns with TOASTed text**. TOAST is a way for postgres to store large
   amounts of text. However, these values are not present in the replication
   stream even when `REPLICA IDENTITY` is set to `FULL`. If a TOASTed value is
-  encountered the source will enter an errored state.
-
-* **The TCP connection to the upstream database will not drop**. Resuming a
-  replication slot is a bit complicated so the MVP will assume the initial
-  connection will remain open. Lifting this assumption should be prioritized
-  after the MVP.
-
+  encountered the source will enter an errored state. In order to lift this
+  restriction we'd have to use some sort of UPSERT logic that can recover the
+  current TOAST value and re-issue it in the dataflow to perform the UPDATE.
 
 ## Description
 
@@ -155,8 +155,10 @@ them and ensure that transaction boundaries are guaranteed.
 ### Adaptation to multiple tables
 
 If the sources naively applied the mechanism described above for every source
-instance they would very quickly exhaust the available replication slots from
-upstream and also multiply the bandwidth used by several times.
+instance they would [very quickly
+exhaust](https://www.postgresql.org/docs/13/runtime-config-replication.html#GUC-MAX-REPLICATION-SLOTS)
+the available replication slots from upstream and also multiply the bandwidth
+used by several times.
 
 In order to have one independent `SOURCE` object for each upstream table while
 also maintaining a single replication connection between them a new SQL syntax
@@ -173,38 +175,40 @@ instances will keep a read lock around to share the stream.
 The concrete syntax for `CREATE SOURCES` can be seen in
 https://github.com/MaterializeInc/materialize/pull/6299.
 
+### Testing strategy
+
+Testing this source properly will require simulating various network failures.
+At the time of writing there are existing happy path tests using mzcompose but
+all of them run on the stable network provided by docker-compose.
+
+In order to simulate network failures an intermediary container will be used
+that can manipulate the network on command. A good candidate for that is
+Spotify's [toxiproxy](https://github.com/Shopify/toxiproxy). Using mzcompose we
+can setup materialized to connect to postgres through toxiproxy which will be
+controlled using its HTTP API.
+
+In a parallel effort, support for issuing `curl` commands directly from
+testdrive [is being worked
+on](https://github.com/MaterializeInc/materialize/pull/6508). Together, these
+two will allow us to run testdrive tests that simulate flaky networks,
+connections drops, slow connections, etc.
+
 ## Open questions
 
-### Robust resume logic
+### Initial sync resume logic
 
-A strategy for handling connection disconnects is missing for both the initial
-syncing phase and the streaming phase.
+A strategy for handling connection disconnects is missing for the initial
+syncing phase. This isn't a huge problem as this only happens once at start up
+but having a solution would make the system more robust.
 
-The initial syncing phase is the most challenging one but also the least
-important one as this only happens on source startup. In order to handle
-disconnections during this phase the implementation needs to be able to issue a
-brand new COPY command at the same point as the interrupted transfer. Normally,
-a system could just flush its in-flight state and start anew, but since we're
-streaming data into a differential dataflow this isn't possible. In order for
-the source to start over it first needs to issue retractions for all the data,
-which is what we're trying to get to in the first place.
+When postgres itself encounters a disconnection as a read replica during the
+initial sync phase it can just throw away its intermediate results and start
+from the beginning. This however is not something we can do once we have issued
+data into the dataflow. Differential collections have no "truncate" operation
+and the only way to remove data from them is to issue the corresponding
+retractions.
 
-There exist subcases of this problem that make it easier. For example, upstream
-tables with an auto-increment primary key have a natural way of resuming form
-where we left off, just remember the last id. Finally, a naive implementation
-could buffer the initial snapshot in-memory, outside of the dafalow, and only
-issue the data into the dataflow once we've received a full snapshot.
-
-The streaming phase is quite a bit easier and the open question should be easily
-answerable with some digging around postgres source code. During replication our
-source needs to periodically send back to the upstream database the last WAL
-offset that it was received so that the upstream can clean up the segments. The
-tricky bit is that because we're using logical replication we don't receive data
-in WAL offset order. The consequence is that it is unclear of what LSN to
-provide in updates and what LSN to restart from in a case of disconnection. This
-could either be the LSN of the last BEGIN message, the LSN of the last COMMIT
-message or something else.
-
-Fortunately, when postgres replicates between its own nodes it has to solve the
-exact same problem so we should figure out what reconnection strategy is
-employed there and copy it.
+A naive implementation of resumption during initial sync would be to buffer all
+the rows of a table outside of the dataflow (e.g in a `Vec<Row>`) and issue them
+all at once when we are certain that no interruption occured. In the case of a
+disconnection the Vec can be discarded and start from the beginning.
