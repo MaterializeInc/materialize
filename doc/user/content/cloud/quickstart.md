@@ -24,11 +24,11 @@ Sign up at [https://cloud.materialize.com](https://cloud.materialize.com#signup)
 
 ## Create and connect to a Materialize Cloud deployment
 
-Once you sign up for Materialize Cloud and [log in](https://cloud.materialize.com), you use the [Deployments](https::/cloud.materialize.com/deployments) page to create, upgrade, or destroy deployments, and to obtain the TLS certificates you need to install on your local machine so you can connect to deployments.
+Once you sign up for Materialize Cloud and [log in](https://cloud.materialize.com), you use the [Deployments](https://cloud.materialize.com/deployments) page to create, upgrade, or destroy deployments, and to obtain the TLS certificates you need to install on your local machine so you can connect to deployments.
 
 By default, you can create up to two deployments. If you're interested in more, [let us know](../support).
 
-1. On the [Deployments](https::/cloud.materialize.com/deployments) page, click **Create deployment**. Materialize creates a deployment and assigns it a name and hostname.
+1. On the [Deployments](https://cloud.materialize.com/deployments) page, click **Create deployment**. Materialize creates a deployment and assigns it a name and hostname.
 
 {{% cloud-connection-details %}}
 
