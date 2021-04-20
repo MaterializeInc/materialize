@@ -12,19 +12,16 @@ If you've reviewed [API Components](../api-components/), you know that Materiali
 * **Non-materialized views**, which are simply queries saved under a name for reference, like traditional SQL views
 * **Materialized views**, which are incrementally updated views whose results are maintained in memory.
 
-Materialized views provide answers to queries amazingly fast, but they can consume a lot of memory. We call the mechanisms that maintain materialized views **arrangements**, and understanding them better can help you make decisions that will reduce memory usage while maintaining low-latency performance.
+Materialized views provide answers to queries amazingly fast, but they can consume a lot of memory. We call the mechanisms that maintain materialized views for Materialize dataflows **arrangements**, and understanding them better can help you make decisions that will reduce memory usage while maintaining performance.
 
-Arrangements in Materialize do a lot of the work that indexes do for traditional databases.
+<!-- Look up materialized sources -->
 
-## Arrangements and indexes
+## What is an arrangement?
 
-When you create a materialized view, you define a query and Materialize creates the indexes necessary to supply the answers.
+In the simplest terms, a materialized view is a non-materialized view plus at least one index. Materialize may create the necessary indexes for you, as when you use the [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/) or [`CREATE MATERIALIZED SOURCE`](/sql/create-materialized-source/) commands, or you may define them yourself with [`CREATE INDEX`](/sql/create-index). The indexes maintain the embedded query's result in memory and are incrementally updated as new data arrives.
 
-<!-- image here -->
+Materialize accomplishes incremental updates by creating a set of persistent transformations—known as a “dataflow”—that represent the query’s output. Each dataflow is updated by one or more **arrangements**, streams of update triples composed of data, time, and diff. The indexes for materialized views or sources
 
-Materialize makes its best guess.
-
-An arrangement represents a stream of update triples (data, time, diff): records them and indexes them by data. Index maintains the current accumulation of diff for each (data, time). Commonly published by creation of indexes, materialized sources, and materialized views.
 
 
 Each materialized view has at least one index that
@@ -34,20 +31,37 @@ last operator and simply stores the query's output in memory. In more complex
 cases, arrangements let Materialize perform more sophisticated aggregations like `JOINS` more
 quickly.
 
+<!-- image here -->
+
+Materialize makes its best guess.
+
+An arrangement represents a stream of update triples (data, time, diff): records them and indexes them by data. Index maintains the current accumulation of diff for each (data, time). Commonly published by creation of indexes, materialized sources, and materialized views.
+
+Data is assumed to have a (key, val) structure. Index is by key, which determines when indexes can be shared and reused. Mz attempts to choose a key to ensure data is well-distributed. Associated memory footprint determined by sizes of arranged collections. We blank out any fields not required in a query.
 
 We build them for you. Users can cause arrangements to occur, but the contents are determined by the data or the query.
-
 
 Any number of dataflows can reuse the same arrangement; the cost of each query is determined only by the new work it introduces. Multiple worker threads cooperate to execute and maintain multiple dataflows. Each worker thread knows about all dataflows, and can perform the logic for any of the operators; the routing of data to individual workers determines where the work actually occurs and where state is held.
 
 New dataflows can reuse arrangements for materializations, improving overall system performance and reducing resource usage.
 
-
 Background compaction process for historical info reduces memory usage
 
+## Indexes in Materialize vs. traditional indexes
+
+An index in Materialize
+
+## Arrangements and indexes
+
+Arrangements in Materialize do a lot of the work that indexes do for traditional databases.
 
 
-Data is assumed to have a (key, val) structure. Index is by key, which determines when indexes can be shared and reused. Mz attempts to choose a key to ensure data is well-distributed. Associated memory footprint determined by sizes of arranged collections. We blank out any fields not required in a query.
+
+
+
+
+
+
 
 Materialize indexes and rdbms indexes
 
@@ -92,7 +106,7 @@ In trad dbs: people often have secondary indexes: userID+userSegment, but if you
 
 
 
-Humans can CREATE INDEX/DROP INDEX: Look at joins blog post for examples -- if it’s pre-built, it’s faster. Table may only have a few columns you care about -- each of the indexes will increase memory consumption but reusing them costs basically nothing. Don’t build an index that you’ll only use once -- creating a key.
+
 
 
 Index benefit - speed; drawback - memory.
@@ -111,7 +125,7 @@ Delta joins - avoid intermediate arrangements if all collections have arrangemen
 
 Memory visualizer - /memory - will show you the dataflow graph and the number of records that  are associated with each arrangement (number will be 0 for arrangements are borrowed). If you type CREATE INDEX, we will create an arrangement and leave it in the catalog as a thing future queries will use; CREATE MATERIALIZED * will also create index and leave behind arrangements.
 
-
+To investigate existing arrangements, query mz_arrangement_sizes logging source. Diagnostic views in mz_catalog connect to this information to operator names and group it by dataflow.
 
 ### Sharing
 
@@ -119,8 +133,9 @@ Mz_arrangement_sharing reports the number of times each arrangement is shared. A
 
 Mz_arrangements_sharing tells you how many times arrangements are being reused; only useful for posthoc analysis, doesn’t identify opportunities for sharing.
 
-
 ## Recommendations
+
+Humans can CREATE INDEX/DROP INDEX: Look at joins blog post for examples -- if it’s pre-built, it’s faster. Table may only have a few columns you care about -- each of the indexes will increase memory consumption but reusing them costs basically nothing. Don’t build an index that you’ll only use once -- creating a key.
 
 If Mz can figure out your primary key, it will use that as the index; if you select *, Mz will use all columns. Setting up keys is helpful in reducing memory.
 
@@ -131,8 +146,6 @@ customerID (32-bit integer) that you want to combine with a 64-bit integer - jus
 Anti-pattern: If you have a query that ends in a GROUP BY, we will have to build an arrangement for you anyway.
 
 JOIN blog post -- storytelling: bad, better, best. Some magical things happen if you have a large set of arrangements: look up blog post
-
-To investigate existing arrangements, query mz_arrangement_sizes logging source. Diagnostic views in mz_catalog connect to this information to operator names and group it by dataflow.
 
 Arrangements house materialized sources and views, but also many internal operators. Ex - differential dataflow join and reduce both require input and output to be arrangements. These are the basis for Mz’s relational operators (the operators in the explain plan for queries). TopK builds a sequence of 16 reduce operators.
 

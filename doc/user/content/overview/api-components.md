@@ -93,7 +93,7 @@ Materialize offers the following types of views:
 Type | Use
 -----|-----
 **Materialized views** | Incrementally updated views whose results are maintained in memory
-**Non-materialized views** | Similar to the traditional SQL view
+**Non-materialized views** | Queries saved under a name for reference, like traditional SQL views
 
 All views in Materialize are built by reading data from sources and other views.
 
@@ -145,9 +145,9 @@ materialized view, and starts incrementally updating the results of its embedded
 
 ### Interaction with materialized views
 
-Each materialized view has at least one index that
-maintains the embedded query's result in memory; these are known as
-"arrangements" within Materialize's dataflows. <!-- Double-check the next sentence --> In the simplest case, the arrangement is the
+As we mentioned before, each materialized view has at least one index that
+maintains the embedded query's result in memory; the continually updated indexes are known as
+"arrangements" within Materialize's dataflows.  In the simplest case, the arrangement is the
 last operator and simply stores the query's output in memory. In more complex
 cases, arrangements let Materialize perform more sophisticated aggregations like `JOINS` more
 quickly.
