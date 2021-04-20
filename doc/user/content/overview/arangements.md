@@ -9,41 +9,36 @@ menu:
 
 If you've reviewed [API Components](../api-components/), you know that Materialize provides two types of views:
 
-* **Non-materialized views**, which are simply queries saved under a name for reference, like traditional SQL views
-* **Materialized views**, which are incrementally updated views whose results are maintained in memory.
+Type | Use
+-----|-----
+**Materialized views** | Incrementally updated views whose results are maintained in memory
+**Non-materialized views** | Queries saved under a name for reference, like traditional SQL views
 
 Materialized views provide answers to queries amazingly fast, but they can consume a lot of memory. We call the mechanisms that maintain materialized views for Materialize dataflows **arrangements**, and understanding them better can help you make decisions that will reduce memory usage while maintaining performance.
 
-<!-- Look up materialized sources -->
-
 ## What is an arrangement?
 
-In the simplest terms, a materialized view is a non-materialized view plus at least one index. Materialize may create the necessary indexes for you, as when you use the [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/) or [`CREATE MATERIALIZED SOURCE`](/sql/create-materialized-source/) commands, or you may define them yourself with [`CREATE INDEX`](/sql/create-index). The indexes maintain the embedded query's result in memory and are incrementally updated as new data arrives.
+In the simplest terms, a materialized view is a non-materialized view plus at least one index. Materialize may create the necessary indexes for you, as when you use the [`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view/) or [`CREATE MATERIALIZED SOURCE`](/sql/create-source/) commands, or you may define them yourself with [`CREATE INDEX`](/sql/create-index). The indexes maintain the embedded query's result in memory and are incrementally updated as new data arrives.
 
-Materialize accomplishes incremental updates by creating a set of persistent transformations—known as a “dataflow”—that represent the query’s output. Each dataflow is updated by one or more **arrangements**, streams of update triples composed of data, time, and diff. The indexes for materialized views or sources
+When Materialize creates an index to support a materialization, it attempts to choose a key that will ensure that data is well distributed. If there is a primary key, that will be used; if there are source fields not required by the query, they are not included in the index.
+
+Materialize accomplishes incremental updates by creating a set of persistent transformations&emdash;known as  **dataflows**&emdash;that represent the query’s output. Each dataflow is updated by one or more **arrangements**, streams of update triples <!-- Should this be tuples? --> composed of `(data, time, diff)`. `data` is structured as a key-value pair, and arrangements are indexed on the `data` keys. An arrangement records all updates, but an index only maintains the current accumulation of `diff` for each `(data, time)` pair.
+
+New dataflows can reuse arrangements for materializations, improving overall system performance and reducing resource usage.
+
+Any number of dataflows can reuse the same arrangement; the cost of each query is determined only by the new work it introduces.
 
 
-
-Each materialized view has at least one index that
-maintains the embedded query's result in memory; these are known as
-"arrangements" within Materialize's dataflows. <!-- Double-check the next sentence --> In the simplest case, the arrangement is the
-last operator and simply stores the query's output in memory. In more complex
-cases, arrangements let Materialize perform more sophisticated aggregations like `JOINS` more
-quickly.
-
-<!-- image here -->
 
 Materialize makes its best guess.
 
-An arrangement represents a stream of update triples (data, time, diff): records them and indexes them by data. Index maintains the current accumulation of diff for each (data, time). Commonly published by creation of indexes, materialized sources, and materialized views.
-
-Data is assumed to have a (key, val) structure. Index is by key, which determines when indexes can be shared and reused. Mz attempts to choose a key to ensure data is well-distributed. Associated memory footprint determined by sizes of arranged collections. We blank out any fields not required in a query.
+ Associated memory footprint determined by sizes of arranged collections.
 
 We build them for you. Users can cause arrangements to occur, but the contents are determined by the data or the query.
 
-Any number of dataflows can reuse the same arrangement; the cost of each query is determined only by the new work it introduces. Multiple worker threads cooperate to execute and maintain multiple dataflows. Each worker thread knows about all dataflows, and can perform the logic for any of the operators; the routing of data to individual workers determines where the work actually occurs and where state is held.
 
-New dataflows can reuse arrangements for materializations, improving overall system performance and reducing resource usage.
+
+
 
 Background compaction process for historical info reduces memory usage
 
@@ -51,17 +46,11 @@ Background compaction process for historical info reduces memory usage
 
 An index in Materialize
 
+An index in Materialize doesn't do everything that an index does in traditional databases
+
 ## Arrangements and indexes
 
 Arrangements in Materialize do a lot of the work that indexes do for traditional databases.
-
-
-
-
-
-
-
-
 
 Materialize indexes and rdbms indexes
 
@@ -78,6 +67,9 @@ COUNT operator  will have two arrangements: one by input (arrangement by key)  a
 ### Example: Three-way join
 
 Most exciting place for arrangements is JOINS. Sales events + customer ids, product ids. I just got a  new record -- what needs to be updated?
+
+<!-- image here -->
+
 
 Create a materialized view: 3-way join group by fields 1,2,3  - Mz creates arrangements
 
