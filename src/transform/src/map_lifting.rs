@@ -206,18 +206,34 @@ impl LiteralLifting {
                 // reach a fixed point under the transformations.
                 let mut literals = self.action(input, gets);
                 if !literals.is_empty() {
+                    // Discard literals that are not projected
                     let input_arity = input.arity();
-                    if let Some(project_max) = outputs.iter().max() {
-                        // Discard literals that are not projected.
-                        // TODO(frank): this could also discard intermediate
-                        // literals that are not projected, with more thought.
-                        while *project_max + 1 < input_arity + literals.len()
-                            && !literals.is_empty()
-                        {
-                            literals.pop();
+                    let mut used_literals = vec![false; literals.len()];
+                    for i in 0..outputs.len() {
+                        if outputs[i] >= input_arity {
+                            used_literals[outputs[i] - input_arity] = true;
                         }
-                    } else {
-                        literals.clear();
+                    }
+                    if used_literals.iter().filter(|x| !*x).count() > 0 {
+                        let mut skipped_literals = 0;
+                        let mut new_literals = Vec::new();
+                        let mut literal_map = vec![0; literals.len()];
+                        for i in 0..literals.len() {
+                            if used_literals[i] {
+                                new_literals.push(literals[i].clone());
+                                literal_map[i] = i - skipped_literals;
+                            } else {
+                                skipped_literals += 1;
+                            }
+                        }
+                        literals = new_literals;
+
+                        // Remap remaining projected literals
+                        for i in 0..outputs.len() {
+                            if outputs[i] >= input_arity {
+                                outputs[i] = input_arity + literal_map[outputs[i] - input_arity];
+                            }
+                        }
                     }
                     // If the literals need to be re-interleaved,
                     // we don't have much choice but to install a
