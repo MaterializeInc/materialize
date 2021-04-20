@@ -247,6 +247,18 @@ impl Clone for TimestampBindingRc {
     }
 }
 
+impl Drop for TimestampBindingRc {
+    fn drop(&mut self) {
+        // Decrement the reference count for the current frontier
+        self.wrapper.borrow_mut().adjust_compaction_frontier(
+            self.compaction_frontier.borrow(),
+            Antichain::new().borrow(),
+        );
+
+        self.compaction_frontier = Antichain::new();
+    }
+}
+
 /// A type wrapper for a timestamp update
 pub enum TimestampDataUpdate {
     /// RT sources see the current set of partitions known to the source.
