@@ -122,13 +122,37 @@ impl TimestampBindingBox {
 
         let entries = self.partitions.get(partition).expect("known to exist");
 
-        for (ts, max_offset) in entries {
-            if offset <= *max_offset {
-                return Some((*ts, *max_offset));
-            }
+        // Rust's binary search is inconvenient so let's roll our own.
+        // Maintain the invariants that the offset at lo (entries[lo].1) is always less
+        // than the requested offset, and n is > 1. Check for violations of that before we
+        // start the main loop.
+        if entries.is_empty() {
+            return None;
         }
 
-        return None;
+        if entries[0].1 >= offset {
+            return Some(entries[0]);
+        }
+
+        let mut n = entries.len();
+        let mut lo = 0;
+
+        while n > 1 {
+            let half = n / 2;
+
+            // Advance lo if a later element has an offset lower than the one requested.
+            if entries[lo + half].1 < offset {
+                lo += half;
+            }
+
+            n -= half;
+        }
+
+        if lo + 1 < entries.len() {
+            return Some(entries[lo + 1]);
+        }
+
+        None
     }
 
     fn read_upper(&self, target: &mut Antichain<Timestamp>) {
@@ -205,8 +229,6 @@ impl TimestampBindingRc {
     ///
     /// This function returns the timestamp and the maximum offset for which it is
     /// valid.
-    /// TODO: this function does a linear scan through the set of timestamp bindings
-    /// but it should do a binary search.
     pub fn get_binding(
         &self,
         partition: &PartitionId,
