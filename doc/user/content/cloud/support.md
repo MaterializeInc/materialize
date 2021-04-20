@@ -1,5 +1,5 @@
 ---
-title: "Support"
+title: "Cloud Support"
 description: "Get help for Materialize Cloud"
 menu:
   main:

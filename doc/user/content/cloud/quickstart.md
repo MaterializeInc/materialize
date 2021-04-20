@@ -24,25 +24,26 @@ Sign up at [https://cloud.materialize.com](https://cloud.materialize.com#signup)
 
 ## Create and connect to a Materialize Cloud deployment
 
-Once you sign up for Materialize Cloud and [log in](https://cloud.materialize.com), you use the [Deployments](https::/cloud.materialize.com/deployments) page to create, upgrade, or destroy deployments, and to obtain the TLS certificates you need to install on your local machine so you can connect to deployments.
+Once you sign up for Materialize Cloud and [log in](https://cloud.materialize.com), you use the [Deployments](https://cloud.materialize.com/deployments) page to create, upgrade, or destroy deployments, and to obtain the TLS certificates you need to install on your local machine so you can connect to deployments.
 
 By default, you can create up to two deployments. If you're interested in more, [let us know](../support).
 
-1. On the [Deployments](https::/cloud.materialize.com/deployments) page, click **Create deployment**. Materialize creates a deployment and assigns it a name and hostname.
+1. On the [Deployments](https://cloud.materialize.com/deployments) page, click **Create deployment**. Materialize creates a deployment and assigns it a name and hostname.
 
 {{% cloud-connection-details %}}
 
 ## Connect to a real-time stream and a create materialized view
 
-For this example, we'll walk you through connecting to a [PubNub stream](https://www.pubnub.com/developers/realtime-data-streams/) as a data source. Note that PubNub demo streams should only be used for testing, since they do not meet the consistency and durability requirements necessary for Materialize to guarantee correctness over time.
+For this example, we'll walk you through connecting to a [PubNub stream](https://www.pubnub.com/developers/realtime-data-streams/) as a data source. Note that PubNub demo streams should only be used for testing, since they are [volatile sources](/overview/volatility) that do not meet the consistency and durability requirements necessary for Materialize to guarantee correctness over time.
 
-1. From your shell, create a source (connect to the PubNub market orders stream):
+1. From your shell, create a source (connect to the PubNub market orders stream with a subscribe key):
 
     ```sql
     CREATE SOURCE market_orders_raw FROM PUBNUB
       SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
       CHANNEL 'pubnub-market-orders';
     ```
+
     This streams data as a single text column containing JSON.
 2. Extract the JSON fields for each order's stock symbol and the bid price:
 
@@ -71,6 +72,14 @@ For this example, we'll walk you through connecting to a [PubNub stream](https:/
     Linen Cloth | 254.34273792647863
     ```
     Wait a few moments and issue `SELECT * FROM avg_bid;` again to get an updated result based on the latest data streamed in.
+
+4. Use `TAIL` see the channel as a stream:
+    ```
+    copy (tail avg_bid) to stdout;
+    ```
+    To cancel out of the stream, press **CTRL+C**.
+
+You can now experiment with the PubNub source using any supported [SQL commands](/sql/).
 
 ## Related topics
 
