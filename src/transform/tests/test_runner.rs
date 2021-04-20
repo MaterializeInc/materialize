@@ -620,6 +620,7 @@ mod tests {
         match name {
             "LiteralLifting" => Ok(Box::new(transform::map_lifting::LiteralLifting)),
             "PredicatePushdown" => Ok(Box::new(transform::predicate_pushdown::PredicatePushdown)),
+            "ProjectionLifting" => Ok(Box::new(transform::projection_lifting::ProjectionLifting)),
             _ => Err(anyhow!(
                 "no transform named {} (you might have to add it to get_transform)",
                 name
