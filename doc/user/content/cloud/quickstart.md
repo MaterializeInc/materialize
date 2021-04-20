@@ -36,19 +36,16 @@ By default, you can create up to two deployments. If you're interested in more, 
 
 For this example, we'll walk you through connecting to a [PubNub stream](https://www.pubnub.com/developers/realtime-data-streams/) as a data source. Note that PubNub demo streams should only be used for testing, since they are [volatile sources](/overview/volatility) that do not meet the consistency and durability requirements necessary for Materialize to guarantee correctness over time.
 
-1. If you don't already have a PubNub account, [create one](https://dashboard.pubnub.com/signup) to obtain a subscribe key. (This is free.)
-
-2. From your shell, create a source (connect to the PubNub market orders stream):
+1. From your shell, create a source (connect to the PubNub market orders stream with a subscribe key):
 
     ```sql
     CREATE SOURCE market_orders_raw FROM PUBNUB
-      SUBSCRIBE KEY 'subscribe-key'
+      SUBSCRIBE KEY 'sub-c-4377ab04-f100-11e3-bffd-02ee2ddab7fe'
       CHANNEL 'pubnub-market-orders';
     ```
-    Replace `subscribe-key` with the subscribe key for your PubNub account.
 
     This streams data as a single text column containing JSON.
-3. Extract the JSON fields for each order's stock symbol and the bid price:
+2. Extract the JSON fields for each order's stock symbol and the bid price:
 
     ```sql
     CREATE VIEW market_orders AS
@@ -57,7 +54,7 @@ For this example, we'll walk you through connecting to a [PubNub stream](https:/
         (val->'bid_price')::float AS bid_price
       FROM (SELECT text::jsonb AS val FROM market_orders_raw);
     ```
-4. Create a materialized view that determines the average bid price, then return the average:
+3. Create a materialized view that determines the average bid price, then return the average:
 
     ```sql
     CREATE MATERIALIZED VIEW avg_bid AS
@@ -76,7 +73,7 @@ For this example, we'll walk you through connecting to a [PubNub stream](https:/
     ```
     Wait a few moments and issue `SELECT * FROM avg_bid;` again to get an updated result based on the latest data streamed in.
 
-5. Use `TAIL` see the channel as a stream:
+4. Use `TAIL` see the channel as a stream:
     ```
     copy (tail avg_bid) to stdout;
     ```
