@@ -15,6 +15,7 @@ from typing_extensions import NoReturn
 import argparse
 import json
 import os
+import subprocess
 import sys
 import webbrowser
 
@@ -33,7 +34,19 @@ MIN_COMPOSE_VERSION = (1, 24, 0)
 
 def main(argv: List[str]) -> int:
     # Lightly parse the arguments so we know what to do.
-    args, unknown_args = ArgumentParser().parse_known_args(argv)
+    parser = ArgumentParser()
+    args, unknown_args = parser.parse_known_args(argv)
+    if args.help:
+        parser.print_help()
+        print()
+        print(
+            "Additionally, mzcompose is a thin wrapper around docker-compose,\n"
+            "All of the following arguments will be forwarded:"
+        )
+        print()
+        subprocess.run(["docker-compose", "--help"])
+        return 0
+
     if args.file:
         raise errors.MzConfigurationError("-f/--file option not supported")
     elif args.project_directory:
@@ -223,13 +236,22 @@ class ArgumentParser(argparse.ArgumentParser):
     def __init__(self) -> None:
         super().__init__(add_help=False)
         self.add_argument("--mz-quiet", action="store_true", default=None)
-        self.add_argument("--mz-find")
-        self.add_argument("--mz-build-mode", default="release")
-        self.add_argument("-f", "--file")
+        self.add_argument("--mz-find", help="Find a composition by directory name")
+        self.add_argument(
+            "--mz-build-mode", default="release", choices=["dev", "release"]
+        )
+        self.add_argument("-f", "--file", help="Explicitly disallowed, use --mz-find")
         self.add_argument("--project-directory")
-        self.add_argument("command", nargs="?")
-        self.add_argument("first_command_arg", nargs="?")
-        self.add_argument("remainder", nargs=argparse.REMAINDER)
+        self.add_argument(
+            "command",
+            nargs="?",
+            help="All docker-compose commands, plus: web, lint, list-compositions",
+        )
+        # arguments are required to be distinguished to make spawning work well, but are not
+        # particularly useful in the help text, so provide them in a more generic way
+        self.add_argument("first_command_arg", nargs="?", metavar="ARG...")
+        self.add_argument("remainder", nargs=argparse.REMAINDER, metavar="ARG...")
+        self.add_argument("--help", action="store_true", default=False)
 
     def parse_known_args(
         self,
@@ -242,6 +264,10 @@ class ArgumentParser(argparse.ArgumentParser):
             if pargs.mz_build_mode not in ["dev", "release"]:
                 raise errors.BadSpec(
                     f'unknown build mode {pargs.mz_build_mode!r} (expected "dev" or "release")'
+                )
+            if "--mz-build-mode" in pargs.remainder:
+                raise errors.BadSpec(
+                    f"--mz-build-mode must be provided before the command: '{pargs.command}'"
                 )
             return (pargs, unknown_args)
         except ValueError:
