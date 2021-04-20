@@ -12,6 +12,11 @@ cat
 ----
 ok
 
+cat
+(defsource y [int64 int64])
+----
+ok
+
 # Discard literals that are not projected.
 build apply=LiteralLifting
 (project
@@ -87,3 +92,104 @@ build apply=LiteralLifting
 | Map 1
 | Project (#1, #0)
 | Map 3
+
+# Union: literals in the suffix in all branches are lifted...
+build apply=LiteralLifting
+(union
+  [(project
+     (map (get x) [2 1])
+     [#0 #3 #2])
+   (project
+     (map (get x) [1 2])
+     [#0 #2 #3])])
+----
+----
+%0 =
+| Get x (u0)
+| Map 2, 1
+| Project (#0, #3, #2)
+
+%1 =
+| Get x (u0)
+| Map 1, 2
+| Project (#0, #2, #3)
+
+%2 =
+| Union %0 %1
+----
+----
+
+# .. but other common literals are not lifted by LiteralLifting...
+build apply=LiteralLifting
+(union
+  [(project
+     (map (get x) [1])
+     [#2 #0])
+   (project
+     (map (get x) [1])
+     [#2 #0])])
+----
+----
+%0 =
+| Get x (u0)
+| Map 1
+| Project (#2, #0)
+
+%1 =
+| Get x (u0)
+| Map 1
+| Project (#2, #0)
+
+%2 =
+| Union %0 %1
+----
+----
+
+# ... however, they eventually get lifted as a result of the following transformations
+build apply=(ProjectionLifting,LiteralLifting)
+(union
+  [(project
+     (map (get x) [1])
+     [#2 #0])
+   (project
+     (map (get x) [1])
+     [#2 #0])])
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Union %0 %1
+| Map 1
+| Project (#2, #0)
+----
+----
+
+opt
+(union
+  [(project
+     (map (get y) [1])
+     [#2 #0])
+   (project
+     (map (get y) [1])
+     [#2 #1])])
+----
+----
+%0 =
+| Get y (u1)
+| Map 1
+| Project (#2, #0)
+
+%1 =
+| Get y (u1)
+| Map 1
+| Project (#2, #1)
+
+%2 =
+| Union %0 %1
+----
+----
