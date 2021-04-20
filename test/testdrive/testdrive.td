@@ -85,3 +85,8 @@ INSERT INTO postgres_execute VALUES (123);
 
 > SELECT * FROM postgres_execute;
 123
+
+# Execute shell commands, in particular curl
+
+$ shell-execute
+curl --version

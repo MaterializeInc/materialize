@@ -40,6 +40,7 @@ mod kafka;
 mod kinesis;
 mod postgres;
 mod s3;
+mod shell;
 mod sleep;
 mod sql;
 
@@ -464,6 +465,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                         vars.extend(builtin.args);
                         continue;
                     }
+                    "shell-execute" => Box::new(shell::build_execute(builtin).map_err(wrap_err)?),
                     _ => {
                         return Err(InputError {
                             msg: format!("unknown built-in command {}", builtin.name),
