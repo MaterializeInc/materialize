@@ -519,6 +519,11 @@ impl LiteralLifting {
                     // The new group key without literals
                     *group_key = new_group_key;
 
+                    // Add the aggregates to the final projection
+                    for i in 0..aggregates.len() {
+                        projection.push(non_literal_keys + i);
+                    }
+
                     *relation = relation
                         .take_dangerous()
                         .map(projected_literals)
