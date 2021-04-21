@@ -36,6 +36,7 @@ use crate::util;
 
 mod avro_ocf;
 mod file;
+mod http;
 mod kafka;
 mod kinesis;
 mod postgres;
@@ -405,6 +406,7 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     }
                     "file-append" => Box::new(file::build_append(builtin).map_err(wrap_err)?),
                     "file-delete" => Box::new(file::build_delete(builtin).map_err(wrap_err)?),
+                    "http-request" => Box::new(http::build_request(builtin).map_err(wrap_err)?),
                     "kafka-add-partitions" => {
                         Box::new(kafka::build_add_partitions(builtin).map_err(wrap_err)?)
                     }

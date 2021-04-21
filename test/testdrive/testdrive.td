@@ -85,3 +85,7 @@ INSERT INTO postgres_execute VALUES (123);
 
 > SELECT * FROM postgres_execute;
 123
+
+# http-request
+
+$ http-request method=GET url=${testdrive.schema-registry-url}schemas/types
