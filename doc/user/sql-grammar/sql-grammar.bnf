@@ -279,6 +279,8 @@ func_cast ::=
   'CAST' '(' val 'AS' type ')'
 func_coalesce ::=
   'coalesce' '(' val ( ',' val )* ')'
+func_csv_extract ::=
+  'csv_extract' '(' num_csv_col ',' col_name ')'
 func_date_trunc ::=
   'date_trunc' '(' "'" ( 'microseconds' | 'milliseconds' | 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'quarter' | 'year' | 'decade' | 'century' | 'millenium' ) "'" ',' ts_val ')'
 func_extract ::=
