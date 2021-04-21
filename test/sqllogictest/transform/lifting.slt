@@ -296,4 +296,3 @@ explain select * from (select 1 as a from t), generate_series(a+1, 4);
 | Project (#3, #2)
 
 EOF
-
