@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "demo/billing",
+    "demo/debezium/loadgen",
     "fuzz",
     "play/mbta",
     "src/avro",
