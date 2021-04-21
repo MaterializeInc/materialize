@@ -25,6 +25,7 @@ mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
 parse_duration = "2.1.1"
 pgrepr = { path = "../pgrepr" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4", "with-uuid-0_8"] }
 postgres-util = { path = "../postgres-util" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
@@ -40,7 +41,6 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 unicase = "2.6.0"
 url = "2.2.1"
 uuid = { version = "0.8.2", features = ["serde", "v4"] }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 
 [dev-dependencies]
 datadriven = "0.5.0"

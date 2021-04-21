@@ -13,15 +13,15 @@ csv = "1.1.6"
 dec = "0.3.3"
 encoding = "0.2.0"
 enum-iterator = "0.6.0"
+hex = "0.4.3"
 hmac = "0.10.0"
 itertools = "0.9.0"
-hex = "0.4.3"
 md-5 = "0.9.0"
 num_enum = "0.5.1"
 ordered-float = { version = "2.1.1", features = ["serde"] }
 ore = { path = "../ore" }
-pgrepr = { path = "../pgrepr"}
 pdqselect = "0.1.0"
+pgrepr = { path = "../pgrepr" }
 regex = "1.4.5"
 regex-syntax = "0.6.23"
 repr = { path = "../repr" }
