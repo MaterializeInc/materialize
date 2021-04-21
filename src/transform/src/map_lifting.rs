@@ -59,10 +59,9 @@ impl LiteralLifting {
     /// expressions as it goes.
     ///
     /// In several cases, we only manage to extract literals from the final
-    /// columns. This could be improved using permutations to move all of
-    /// the literals to the final columns, and then rely on projection
-    /// hoisting to allow the these literals to move up the AST.
-    // TODO(frank): Fix this.
+    /// columns. But in those cases where it is possible, permutations are
+    /// used to move all of the literals to the final columns, and then rely
+    /// on projection hoisting to allow the these literals to move up the AST.
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
