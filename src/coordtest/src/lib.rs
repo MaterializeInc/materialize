@@ -129,7 +129,6 @@ impl CoordTest {
         let data_directory = tempfile::tempdir()?;
         let (coord_handle, coord_client) = coord::serve(coord::Config {
             dataflow_client: dataflow_client.clone(),
-            symbiosis_url: None,
             data_directory: data_directory.path(),
             logging: None,
             logical_compaction_window: None,

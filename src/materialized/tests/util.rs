@@ -132,7 +132,6 @@ pub fn start_server(config: Config) -> Result<Server, anyhow::Error> {
         workers: config.workers,
         timely_worker: timely::WorkerConfig::default(),
         data_directory,
-        symbiosis_url: None,
         listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
         tls: config.tls,
         experimental_mode: config.experimental_mode,

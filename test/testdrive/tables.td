@@ -235,9 +235,6 @@ name
 
 > SELECT * FROM t;
 
-! CREATE TABLE s (a int primary key);
-CREATE TABLE with column constraint: PRIMARY KEY
-
 > CREATE VIEW view AS SELECT 1
 ! INSERT INTO view VALUES (1)
 cannot insert into view 'materialize.public.view'

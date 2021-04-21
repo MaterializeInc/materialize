@@ -172,35 +172,6 @@ manually.
 When the confluent local services are running, they can be examined via a web
 UI which defaults to `localhost:9021`.
 
-## Symbiosis mode
-
-For the convenience of developers, Materialize has a semi-secret "symbiosis"
-mode that turns Materialize into a full HTAP system, rather than an OLAP system
-that must sit atop a OLTP system via a CDC pipeline. In other words, where
-you would normally need to plug MySQL into Debezium into Kafka into Materialize,
-and run all the Confluent services that that entails, you can instead run:
-
-    $ materialized --symbiosis postgres://localhost:5432
-
-When symbiosis mode is active, all DDL statements and all writes will be routed
-to the specified PostgreSQL server. `CREATE TABLE`, for example, will create
-both a table in PostgreSQL and a source in Materialize that mirrors that table.
-`INSERT`, `UPDATE`, and `DELETE` statements that target that table will be
-reflected in Materialize for the next `SELECT` statement.
-
-Symbiosis mode is not suitable for production use, as its implementation is
-very inefficient. It is, however, excellent for manually taking Materialize
-for a spin without the hassle of setting up various Kafka topics and Avro
-schemas. It also powers our sqllogictest runner.
-
-See the [symbiosis crate documentation](https://dev.materialize.com/api/rust/symbiosis) for
-more details.
-
-**Note:** As of August 2020, we're laying the groundwork to phase out symbiosis
-mode with [tables](https://materialize.com/docs/sql/create-table). But we're
-stuck with symbiosis mode until tables support `UPDATE` and `DELETE`—at the time
-of writing they only support [`INSERT`](https://materialize.com/docs/sql/insert).
-
 ## Web UI
 
 Materialize embeds a web UI, which it serves from port 6875. If you're running

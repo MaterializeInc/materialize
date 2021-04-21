@@ -53,8 +53,8 @@ use crate::ast::{
     CreateViewsStatement, CsrConnectorAvro, CsrConnectorProto, CsrSeedCompiled, CsvColumns,
     DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident,
     IfExistsBehavior, KafkaConsistency, KeyConstraint, ObjectType, ProtobufSchema, Raw,
-    SourceIncludeMetadataType, SqlOption, Statement, UnresolvedObjectName, Value, ViewDefinition,
-    WithOption,
+    SourceIncludeMetadataType, SqlOption, Statement, TableConstraint, UnresolvedObjectName, Value,
+    ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -150,9 +150,6 @@ pub fn plan_create_table(
     if !with_options.is_empty() {
         bail_unsupported!("WITH options");
     }
-    if !constraints.is_empty() {
-        bail_unsupported!("CREATE TABLE with constraints")
-    }
 
     let names: Vec<_> = columns
         .iter()
@@ -168,8 +165,9 @@ pub fn plan_create_table(
     let mut column_types = Vec::with_capacity(columns.len());
     let mut defaults = Vec::with_capacity(columns.len());
     let mut depends_on = Vec::new();
+    let mut keys = Vec::new();
 
-    for c in columns {
+    for (i, c) in columns.into_iter().enumerate() {
         let (aug_data_type, ids) = resolve_names_data_type(scx, c.data_type.clone())?;
         let ty = plan::scalar_type_from_sql(scx, &aug_data_type)?;
         let mut nullable = true;
@@ -184,6 +182,12 @@ pub fn plan_create_table(
                     depends_on.extend(expr_depends_on);
                     default = expr.clone();
                 }
+                ColumnOption::Unique { is_primary } => {
+                    keys.push(vec![i]);
+                    if *is_primary {
+                        nullable = false;
+                    }
+                }
                 other => {
                     bail_unsupported!(format!("CREATE TABLE with column constraint: {}", other))
                 }
@@ -194,7 +198,48 @@ pub fn plan_create_table(
         depends_on.extend(ids);
     }
 
-    let typ = RelationType::new(column_types);
+    for constraint in constraints {
+        match constraint {
+            TableConstraint::Unique {
+                name: _,
+                columns,
+                is_primary,
+            } => {
+                let mut key = vec![];
+                for column in columns {
+                    let column = normalize::column_name(column.clone());
+                    match names.iter().position(|name| *name == column) {
+                        None => bail!("unknown column in constraint: {}", column),
+                        Some(i) => {
+                            key.push(i);
+                            if *is_primary {
+                                column_types[i].nullable = false;
+                            }
+                        }
+                    }
+                }
+                keys.push(key);
+            }
+            TableConstraint::ForeignKey { .. } => {
+                // Foreign key constraints are not presently enforced. We allow
+                // them in experimental mode for sqllogictest's sake.
+                scx.require_experimental_mode("CREATE TABLE with a foreign key")?
+            }
+            TableConstraint::Check { .. } => {
+                // Check constraints are not presently enforced. We allow them
+                // in experimental mode for sqllogictest's sake.
+                scx.require_experimental_mode("CREATE TABLE with a check constraint")?
+            }
+        }
+    }
+
+    if !keys.is_empty() {
+        // Unique constraints are not presently enforced. We allow them in
+        // experimental mode for sqllogictest's sake.
+        scx.require_experimental_mode("CREATE TABLE with a primary key or unique constraint")?;
+    }
+
+    let typ = RelationType::new(column_types).with_keys(keys);
 
     let temporary = *temporary;
     let name = if temporary {

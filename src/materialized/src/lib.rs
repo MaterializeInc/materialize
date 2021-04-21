@@ -117,9 +117,6 @@ pub struct Config {
     pub data_directory: PathBuf,
 
     // === Mode switches. ===
-    /// An optional symbiosis endpoint. See the
-    /// [`symbiosis`](../symbiosis/index.html) crate for details.
-    pub symbiosis_url: Option<String>,
     /// Whether to permit usage of experimental features.
     pub experimental_mode: bool,
     /// Whether to enable catalog-only mode.
@@ -239,7 +236,6 @@ pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     // Initialize coordinator.
     let (coord_handle, coord_client) = coord::serve(coord::Config {
         dataflow_client,
-        symbiosis_url: config.symbiosis_url.as_deref(),
         logging: config.logging,
         data_directory: &config.data_directory,
         timestamp_frequency: config.timestamp_frequency,

@@ -128,8 +128,7 @@ use repr::adt::numeric;
 use repr::{Datum, Diff, RelationDesc, Row, RowArena, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
-    ConnectorType, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, DropObjectsStatement, ExplainStage,
+    ConnectorType, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement, ExplainStage,
     FetchStatement, Ident, InsertSource, ObjectType, Query, Raw, SetExpr, Statement,
 };
 use sql::catalog::{CatalogError, SessionCatalog as _};
@@ -257,7 +256,6 @@ where
     C: dataflow_types::client::Client,
 {
     pub dataflow_client: C,
-    pub symbiosis_url: Option<&'a str>,
     pub logging: Option<LoggingConfig>,
     pub data_directory: &'a Path,
     pub timestamp_frequency: Duration,
@@ -282,7 +280,6 @@ where
     /// Optimizer instance for logical optimization of views.
     view_optimizer: Optimizer,
     catalog: Catalog,
-    symbiosis: Option<symbiosis::Postgres>,
     /// Maps (global Id of arrangement) -> (frontier information). This tracks the
     /// `upper` and computed `since` of the indexes. The `since` is the time at
     /// which we are willing to compact up to. `determine_timestamp()` uses this as
@@ -1439,52 +1436,8 @@ where
         params: &sql::plan::Params,
     ) -> Result<sql::plan::Plan, CoordError> {
         let pcx = session.pcx();
-
-        // When symbiosis mode is enabled, use symbiosis planning for:
-        //  - CREATE TABLE
-        //  - CREATE SCHEMA
-        //  - DROP TABLE
-        //  - INSERT
-        //  - UPDATE
-        //  - DELETE
-        // When these statements are routed through symbiosis, table information
-        // is created and maintained locally, which is required for other statements
-        // to be executed correctly.
-        if let Statement::CreateTable(CreateTableStatement { .. })
-        | Statement::DropObjects(DropObjectsStatement {
-            object_type: ObjectType::Table,
-            ..
-        })
-        | Statement::CreateSchema(CreateSchemaStatement { .. })
-        | Statement::Update { .. }
-        | Statement::Delete { .. }
-        | Statement::Insert { .. } = &stmt
-        {
-            if let Some(ref mut postgres) = self.symbiosis {
-                let plan = postgres
-                    .execute(&pcx, &self.catalog.for_session(session), &stmt)
-                    .await?;
-                return Ok(plan);
-            }
-        }
-
-        match sql::plan::plan(
-            Some(&pcx),
-            &self.catalog.for_session(session),
-            stmt.clone(),
-            params,
-        ) {
-            Ok(plan) => Ok(plan),
-            Err(err) => match self.symbiosis {
-                Some(ref mut postgres) if postgres.can_handle(&stmt) => {
-                    let plan = postgres
-                        .execute(&pcx, &self.catalog.for_session(session), &stmt)
-                        .await?;
-                    Ok(plan)
-                }
-                _ => Err(err.into()),
-            },
-        }
+        let plan = sql::plan::plan(Some(&pcx), &self.catalog.for_session(session), stmt, params)?;
+        Ok(plan)
     }
 
     fn handle_declare(
@@ -1494,8 +1447,6 @@ where
         stmt: Statement<Raw>,
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<(), CoordError> {
-        // handle_describe cares about symbiosis mode here. Declared cursors are
-        // perhaps rare enough we can ignore that worry and just error instead.
         let desc = describe(&self.catalog, stmt.clone(), &param_types, session)?;
         let params = vec![];
         let result_formats = vec![pgrepr::Format::Text; desc.arity()];
@@ -1525,20 +1476,7 @@ where
         param_types: Vec<Option<pgrepr::Type>>,
     ) -> Result<StatementDesc, CoordError> {
         if let Some(stmt) = stmt {
-            // Pre-compute this to avoid cloning stmt.
-            let postgres_can_handle = match self.symbiosis {
-                Some(ref postgres) => postgres.can_handle(&stmt),
-                None => false,
-            };
-            match describe(&self.catalog, stmt, &param_types, session) {
-                Ok(desc) => Ok(desc),
-                // Describing the query failed. If we're running in symbiosis with
-                // Postgres, see if Postgres can handle it. Note that Postgres
-                // only handles commands that do not return rows, so the
-                // `StatementDesc` is constructed accordingly.
-                Err(_) if postgres_can_handle => Ok(StatementDesc::new(None)),
-                Err(err) => Err(err),
-            }
+            describe(&self.catalog, stmt, &param_types, session)
         } else {
             Ok(StatementDesc::new(None))
         }
@@ -4348,7 +4286,6 @@ where
 pub async fn serve<C>(
     Config {
         dataflow_client,
-        symbiosis_url,
         logging,
         data_directory,
         timestamp_frequency,
@@ -4367,12 +4304,6 @@ where
 {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
-
-    let symbiosis = if let Some(symbiosis_url) = symbiosis_url {
-        Some(symbiosis::Postgres::open_and_erase(symbiosis_url).await?)
-    } else {
-        None
-    };
 
     let path = data_directory.join("catalog");
     let (catalog, builtin_table_updates, persister) = Catalog::open(&catalog::Config {
@@ -4424,7 +4355,6 @@ where
                 dataflow_client,
                 view_optimizer: Optimizer::logical_optimizer(),
                 catalog,
-                symbiosis,
                 indexes: ArrangementFrontiers::default(),
                 sources: ArrangementFrontiers::default(),
                 logical_compaction_window_ms: logical_compaction_window
