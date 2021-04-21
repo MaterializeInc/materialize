@@ -19,6 +19,100 @@ use dataflow_types::MzOffset;
 use expr::{GlobalId, PartitionId};
 use repr::Timestamp;
 
+/// This struct holds per partition timestamp binding state.
+pub struct PartitionTimestamps {
+    bindings: Vec<(Timestamp, MzOffset)>,
+}
+
+impl PartitionTimestamps {
+    fn new() -> Self {
+        Self {
+            bindings: Vec::new(),
+        }
+    }
+
+    fn compact(&mut self, frontier: AntichainRef<Timestamp>) {
+        if self.bindings.is_empty() {
+            return;
+        }
+
+        // First, let's advance all times not in advance of the frontier to the frontier
+        // to the frontier
+        for (time, _) in self.bindings.iter_mut() {
+            if !frontier.less_equal(time) {
+                *time = *frontier.first().expect("known to exist");
+            }
+        }
+
+        let mut new_bindings = Vec::with_capacity(self.bindings.len());
+        // Now let's only keep the largest binding for each offset
+        for i in 0..(self.bindings.len() - 1) {
+            if self.bindings[i].0 != self.bindings[i + 1].0 {
+                new_bindings.push(self.bindings[i]);
+            }
+        }
+
+        // We always keep the last binding around.
+        new_bindings.push(*self.bindings.last().expect("known to exist"));
+        self.bindings = new_bindings;
+    }
+
+    fn add_binding(&mut self, timestamp: Timestamp, offset: MzOffset) {
+        let (last_ts, last_offset) = self.bindings.last().unwrap_or(&(0, MzOffset { offset: 0 }));
+        assert!(
+            offset >= *last_offset,
+            "offset should not go backwards, but {} < {}",
+            offset,
+            last_offset
+        );
+        assert!(
+            timestamp > *last_ts,
+            "timestamp should move forwards, but {} <= {}",
+            timestamp,
+            last_ts
+        );
+        self.bindings.push((timestamp, offset));
+    }
+
+    fn get_binding(&self, offset: MzOffset) -> Option<(Timestamp, MzOffset)> {
+        // Rust's binary search is inconvenient so let's roll our own.
+        // Maintain the invariants that the offset at lo (entries[lo].1) is always less
+        // than the requested offset, and n is > 1. Check for violations of that before we
+        // start the main loop.
+        if self.bindings.is_empty() {
+            return None;
+        }
+
+        if self.bindings[0].1 >= offset {
+            return Some(self.bindings[0]);
+        }
+
+        let mut n = self.bindings.len();
+        let mut lo = 0;
+
+        while n > 1 {
+            let half = n / 2;
+
+            // Advance lo if a later element has an offset lower than the one requested.
+            if self.bindings[lo + half].1 < offset {
+                lo += half;
+            }
+
+            n -= half;
+        }
+
+        if lo + 1 < self.bindings.len() {
+            return Some(self.bindings[lo + 1]);
+        }
+
+        None
+    }
+
+    fn upper(&self) -> Option<Timestamp> {
+        self.bindings.last().map(|(time, _)| *time)
+    }
+}
+
 /// This struct holds per-source timestamp state in a way that can be shared across
 /// different source instances and allow different source instances to indicate
 /// how far they have read up to.
@@ -30,7 +124,7 @@ pub struct TimestampBindingBox {
     /// by timestamp and offset and each `(time, offset)` entry indicates that offsets <=
     /// `offset` should be assigned `time` as their timestamp. Consecutive entries form
     /// an interval of offsets.
-    partitions: HashMap<PartitionId, Vec<(Timestamp, MzOffset)>>,
+    partitions: HashMap<PartitionId, PartitionTimestamps>,
     /// Indicates the lowest timestamp across all partitions that we retain bindings for.
     /// This frontier can be held back by other entities holding the shared
     /// `TimestampBindingRc`.
@@ -66,49 +160,17 @@ impl TimestampBindingBox {
             return;
         }
 
-        for (_, entries) in self.partitions.iter_mut() {
-            if entries.is_empty() {
-                continue;
-            }
-
-            // First, let's advance all times not in advance of the frontier to the frontier
-            // to the frontier
-            for (time, _) in entries.iter_mut() {
-                if !frontier.less_equal(time) {
-                    *time = *frontier.first().expect("known to exist");
-                }
-            }
-
-            let mut new_entries = Vec::with_capacity(entries.len());
-            // Now let's only keep the largest binding for each offset
-            for i in 0..(entries.len() - 1) {
-                if entries[i].0 != entries[i + 1].0 {
-                    new_entries.push(entries[i]);
-                }
-            }
-
-            // We always keep the last binding around.
-            new_entries.push(*entries.last().expect("known to exist"));
-            *entries = new_entries;
+        for (_, partition) in self.partitions.iter_mut() {
+            partition.compact(frontier);
         }
     }
 
     fn add_binding(&mut self, partition: PartitionId, timestamp: Timestamp, offset: MzOffset) {
-        let entry = self.partitions.entry(partition).or_insert_with(Vec::new);
-        let (last_ts, last_offset) = entry.last().unwrap_or(&(0, MzOffset { offset: 0 }));
-        assert!(
-            offset >= *last_offset,
-            "offset should not go backwards, but {} < {}",
-            offset,
-            last_offset
-        );
-        assert!(
-            timestamp > *last_ts,
-            "timestamp should move forwards, but {} <= {}",
-            timestamp,
-            last_ts
-        );
-        entry.push((timestamp, offset));
+        let partition = self
+            .partitions
+            .entry(partition)
+            .or_insert_with(PartitionTimestamps::new);
+        partition.add_binding(timestamp, offset);
     }
 
     fn get_binding(
@@ -120,23 +182,16 @@ impl TimestampBindingBox {
             return None;
         }
 
-        let entries = self.partitions.get(partition).expect("known to exist");
-
-        for (ts, max_offset) in entries {
-            if offset <= *max_offset {
-                return Some((*ts, *max_offset));
-            }
-        }
-
-        return None;
+        let partition = self.partitions.get(partition).expect("known to exist");
+        partition.get_binding(offset)
     }
 
     fn read_upper(&self, target: &mut Antichain<Timestamp>) {
         target.clear();
 
-        for (_, entries) in self.partitions.iter() {
-            if let Some((timestamp, _)) = entries.last() {
-                target.insert(*timestamp);
+        for (_, partition) in self.partitions.iter() {
+            if let Some(timestamp) = partition.upper() {
+                target.insert(timestamp);
             }
         }
     }
@@ -170,23 +225,17 @@ impl TimestampBindingRc {
         ret
     }
 
-    /// Set the compaction frontier to `new_frontier`.
+    /// Set the compaction frontier to `new_frontier` and compact all timestamp bindings at
+    /// timestamps less than the compaction frontier.
     ///
     /// Note that `new_frontier` must be in advance of the current compaction
-    /// frontier.
+    /// frontier. The source can be correctly replayed from any `as_of` in advance of
+    /// the compaction frontier after this operation.
     pub fn set_compaction_frontier(&mut self, new_frontier: AntichainRef<Timestamp>) {
         self.wrapper
             .borrow_mut()
             .adjust_compaction_frontier(self.compaction_frontier.borrow(), new_frontier);
         self.compaction_frontier = new_frontier.to_owned();
-    }
-
-    /// Compact all timestamp bindings at timestamps less than the current
-    /// compaction frontier.
-    ///
-    /// The source can be correctly replayed from any `as_of` in advance of
-    /// the compaction frontier after this operation.
-    pub fn compact(&self) {
         self.wrapper.borrow_mut().compact();
     }
 
@@ -205,8 +254,6 @@ impl TimestampBindingRc {
     ///
     /// This function returns the timestamp and the maximum offset for which it is
     /// valid.
-    /// TODO: this function does a linear scan through the set of timestamp bindings
-    /// but it should do a binary search.
     pub fn get_binding(
         &self,
         partition: &PartitionId,
@@ -244,6 +291,18 @@ impl Clone for TimestampBindingRc {
             wrapper: self.wrapper.clone(),
             compaction_frontier: self.compaction_frontier.clone(),
         }
+    }
+}
+
+impl Drop for TimestampBindingRc {
+    fn drop(&mut self) {
+        // Decrement the reference count for the current frontier
+        self.wrapper.borrow_mut().adjust_compaction_frontier(
+            self.compaction_frontier.borrow(),
+            Antichain::new().borrow(),
+        );
+
+        self.compaction_frontier = Antichain::new();
     }
 }
 
