@@ -283,3 +283,17 @@ select c.* from (select f2, f1, f3 from (select f3, f2, f1 from generate_series(
 | | keys = ()
 
 EOF
+
+# Permute the literals around the columns added by FlatMap
+query T multiline
+explain select * from (select 1 as a from t), generate_series(a+1, 4);
+----
+%0 =
+| Get materialize.public.t (u1)
+| FlatMap generate_series(2, 4)
+| | demand = (#2)
+| Map 1
+| Project (#3, #2)
+
+EOF
+

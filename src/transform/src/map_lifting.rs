@@ -316,7 +316,7 @@ impl LiteralLifting {
             }
             MirRelationExpr::FlatMap {
                 input,
-                func: _,
+                func,
                 exprs,
                 demand: _,
             } => {
@@ -332,10 +332,13 @@ impl LiteralLifting {
                             }
                         });
                     }
-                    // We need to re-install literals, as we don't know what flatmap does.
-                    // TODO(frank): We could permute the literals around the columns
-                    // added by FlatMap.
-                    **input = input.take_dangerous().map(literals);
+                    // Permute the literals around the columns added by FlatMap
+                    let mut projection = (0..input_arity).collect::<Vec<usize>>();
+                    let func_arity = func.output_arity();
+                    projection.extend((0..literals.len()).map(|x| input_arity + func_arity + x));
+                    projection.extend((0..func_arity).map(|x| input_arity + x));
+
+                    *relation = relation.take_dangerous().map(literals).project(projection);
                 }
                 Vec::new()
             }
