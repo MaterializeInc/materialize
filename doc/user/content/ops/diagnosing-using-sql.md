@@ -1,5 +1,5 @@
 ---
-title: "Troubleshooting"
+title: "Diagnosing Using SQL"
 description: "Use the SQL Interface to troubleshoot performance issues."
 menu:
   main:
