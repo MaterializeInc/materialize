@@ -20,4 +20,4 @@ url = { version = "2.2.1", features = ["serde"] }
 tracing = { version = "0.1.0", features = ["log"] }
 hyper = { version = "0.14.5", features = ["server"] }
 lazy_static = "1.4.0"
-tokio = { version = "1.4.0", features = ["macros"] }
+tokio = { version = "1.5.0", features = ["macros"] }

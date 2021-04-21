@@ -16,4 +16,4 @@ rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_sqs = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_sts = { git = "https://github.com/rusoto/rusoto.git" }
 serde = { version = "1.0.125", features = ["derive"] }
-tokio = "1.4.0"
+tokio = "1.5.0"
