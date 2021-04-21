@@ -20,7 +20,6 @@ skip = [
 
     # Waiting on:
     #   - Upgrade to rand v0.8.
-    #   - https://github.com/Alexhuszagh/rust-lexical/pull/54
     { name = "cfg-if", version = "0.1.0" },
 
     # Waiting on phf to upgrade to rand v0.8.

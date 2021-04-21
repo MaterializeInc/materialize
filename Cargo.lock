@@ -287,21 +287,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bit-set"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e11e16035ea35e4e5997b393eacbf6f63983188f7a2ad25bfb13465f5ad59de"
-dependencies = [
- "bit-vec",
-]
-
-[[package]]
-name = "bit-vec"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb"
-
-[[package]]
 name = "bitflags"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1000,12 +985,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "downcast"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bb454f0228b18c7f4c3b0ebbee346ed9c52e7443b0999cd543ff3571205701d"
-
-[[package]]
 name = "duct"
 version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1285,12 +1264,6 @@ dependencies = [
  "matches",
  "percent-encoding",
 ]
-
-[[package]]
-name = "fragile"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69a039c3498dc930fe810151a34ba0c1c70b02b8625035592e74432f678591f2"
 
 [[package]]
 name = "fs_extra"
@@ -1996,13 +1969,13 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "lexical-core"
-version = "0.7.4"
+version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db65c6da02e61f55dae90a0ae427b2a5f6b3e8db09f58d10efab23af92592616"
+checksum = "21f866863575d0e1d654fbeeabdc927292fdf862873dc3c96c6f753357e13374"
 dependencies = [
  "arrayvec",
  "bitflags",
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "ryu",
  "static_assertions",
 ]
@@ -2286,33 +2259,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9f1c5b025cda876f66ef43a113f91ebc9f4ccef34843000e0adf6ebbab84e21"
 dependencies = [
  "winapi",
-]
-
-[[package]]
-name = "mockall"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01458f8a19b10cb28195290942e3149161c75acf67ebc8fbf714ab67a2b943bc"
-dependencies = [
- "cfg-if 0.1.10",
- "downcast",
- "fragile",
- "lazy_static",
- "mockall_derive",
- "predicates",
- "predicates-tree",
-]
-
-[[package]]
-name = "mockall_derive"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a673cb441f78cd9af4f5919c28576a3cc325fb6b54e42f7047dacce3c718c17b"
-dependencies = [
- "cfg-if 0.1.10",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -3179,22 +3125,19 @@ dependencies = [
 
 [[package]]
 name = "proptest"
-version = "0.10.1"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12e6c80c1139113c28ee4670dc50cc42915228b51f56a9e407f0ec60f966646f"
+checksum = "1e0d9cc07f18492d879586c92b485def06bc850da3118075cd45d50e9c95b0e5"
 dependencies = [
- "bit-set",
  "bitflags",
  "byteorder",
  "lazy_static",
  "num-traits",
  "quick-error",
- "rand 0.7.3",
- "rand_chacha 0.2.2",
+ "rand 0.8.3",
+ "rand_chacha 0.3.0",
  "rand_xorshift",
  "regex-syntax",
- "rusty-fork",
- "tempfile",
 ]
 
 [[package]]
@@ -3251,7 +3194,7 @@ dependencies = [
 [[package]]
 name = "pubnub-core"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/pubnub-rust#d51e28438b8ccc14e7b9d714653f62d98059351f"
+source = "git+https://github.com/MaterializeInc/pubnub-rust#f299ef9971e292853ac95882ef8047f1f589790b"
 dependencies = [
  "async-trait",
  "bitflags",
@@ -3261,7 +3204,6 @@ dependencies = [
  "futures-util",
  "json",
  "log",
- "mockall",
  "percent-encoding",
  "thiserror",
  "uuid",
@@ -3270,7 +3212,7 @@ dependencies = [
 [[package]]
 name = "pubnub-hyper"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/pubnub-rust#d51e28438b8ccc14e7b9d714653f62d98059351f"
+source = "git+https://github.com/MaterializeInc/pubnub-rust#f299ef9971e292853ac95882ef8047f1f589790b"
 dependencies = [
  "async-trait",
  "derive_builder",
@@ -3290,7 +3232,7 @@ dependencies = [
 [[package]]
 name = "pubnub-util"
 version = "0.1.0"
-source = "git+https://github.com/MaterializeInc/pubnub-rust#d51e28438b8ccc14e7b9d714653f62d98059351f"
+source = "git+https://github.com/MaterializeInc/pubnub-rust#f299ef9971e292853ac95882ef8047f1f589790b"
 dependencies = [
  "base64",
  "hmac",
@@ -3300,9 +3242,9 @@ dependencies = [
 
 [[package]]
 name = "quick-error"
-version = "1.2.3"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
+checksum = "3ac73b1112776fc109b2e61909bc46c7e1bf0d7f690ffb1676553acce16d5cda"
 
 [[package]]
 name = "quote"
@@ -3422,11 +3364,11 @@ dependencies = [
 
 [[package]]
 name = "rand_xorshift"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77d416b86801d23dde1aa643023b775c3a462efc0ed96443add11546cdf1dca8"
+checksum = "d25bf25ec5ae4a3f1b92f929810509a2f53d7dca2f50b794ff57e3face536c8f"
 dependencies = [
- "rand_core 0.5.1",
+ "rand_core 0.6.2",
 ]
 
 [[package]]
@@ -3759,18 +3701,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65c94201b44764d6d1f7e37c15a8289ed55e546c1762c7f1d57f616966e0c181"
 dependencies = [
  "semver",
-]
-
-[[package]]
-name = "rusty-fork"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb3dcc6e454c328bb824492db107ab7c0ae8fcffe4ad210136ef014458c1bc4f"
-dependencies = [
- "fnv",
- "quick-error",
- "tempfile",
- "wait-timeout",
 ]
 
 [[package]]
