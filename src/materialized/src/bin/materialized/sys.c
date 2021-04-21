@@ -7,16 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::env;
+// System support functions that need to be written in C.
 
-mod npm;
-
-fn main() -> Result<(), anyhow::Error> {
-    println!("cargo:rustc-env=TARGET_TRIPLE={}", env::var("TARGET")?);
-
-    cc::Build::new()
-        .file("src/bin/materialized/sys.c")
-        .compile("materialized_sys");
-
-    npm::ensure()
+// When LLVM source-code based code coverage is active, it provides a strong
+// version of this symbol that actually writes the code coverage information
+// to disk.
+__attribute__((weak))
+int __llvm_profile_write_file() {
+    return 0;
 }

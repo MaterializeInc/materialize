@@ -10,6 +10,7 @@
 //! System support functions.
 
 use std::alloc::{self, Layout};
+use std::convert::TryInto;
 use std::io::{self, Write};
 use std::process;
 use std::ptr;
@@ -161,7 +162,6 @@ pub fn enable_sigbus_sigsegv_backtraces() -> Result<(), anyhow::Error> {
         .context("failed to install SIGBUS handler")?;
     unsafe { signal::sigaction(signal::SIGSEGV, &action) }
         .context("failed to install SIGSEGV handler")?;
-
     Ok(())
 }
 
@@ -193,5 +193,50 @@ extern "C" fn handle_sigbus_sigsegv(_: i32) {
             let _ = io::stderr().write_all(b"(maybe a stack overflow while allocating?)\n");
             process::abort();
         }
+    }
+}
+
+pub fn enable_termination_signal_cleanup() -> Result<(), anyhow::Error> {
+    let action = signal::SigAction::new(
+        signal::SigHandler::Handler(handle_termination_signal),
+        signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+        signal::SigSet::empty(),
+    );
+
+    for signum in &[
+        signal::SIGHUP,
+        signal::SIGINT,
+        signal::SIGPIPE,
+        signal::SIGALRM,
+        signal::SIGTERM,
+        signal::SIGUSR1,
+        signal::SIGUSR2,
+    ] {
+        unsafe { signal::sigaction(*signum, &action) }
+            .with_context(|| format!("failed to install handler for {}", signum))?;
+    }
+
+    Ok(())
+}
+
+extern "C" {
+    fn __llvm_profile_write_file() -> libc::c_int;
+}
+
+extern "C" fn handle_termination_signal(signum: i32) {
+    let _ = unsafe { __llvm_profile_write_file() };
+
+    let action = signal::SigAction::new(
+        signal::SigHandler::SigDfl,
+        signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+        signal::SigSet::empty(),
+    );
+    unsafe { signal::sigaction(signum.try_into().unwrap(), &action) }
+        .unwrap_or_else(|_| panic!("failed to uninstall handler for {}", signum));
+
+    let ret = unsafe { libc::raise(signum) };
+    if ret == -1 {
+        let errno = errno::from_i32(errno::errno());
+        panic!("failed to re-raise signal {}: {}", signum, errno);
     }
 }
