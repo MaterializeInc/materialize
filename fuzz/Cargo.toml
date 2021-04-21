@@ -1,13 +1,8 @@
 [package]
 name = "fuzz"
 version = "0.0.1"
-publish = false
 edition = "2018"
-
-[dependencies]
-honggfuzz = "0.5"
-repr = { path = "../src/repr" }
-sql-parser = { path = "../src/sql-parser" }
+publish = false
 
 [[bin]]
 name = "fuzz_parse_statements"
@@ -16,3 +11,8 @@ path = "fuzz_targets/fuzz_parse_statements.rs"
 [[bin]]
 name = "fuzz_parse_time"
 path = "fuzz_targets/fuzz_parse_time.rs"
+
+[dependencies]
+honggfuzz = "0.5.0"
+repr = { path = "../src/repr" }
+sql-parser = { path = "../src/sql-parser" }
