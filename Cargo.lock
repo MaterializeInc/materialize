@@ -2098,6 +2098,7 @@ dependencies = [
  "backtrace",
  "build-info",
  "bytes",
+ "cc",
  "cfg-if 1.0.0",
  "chrono",
  "clap",
