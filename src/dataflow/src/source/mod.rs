@@ -81,6 +81,9 @@ static YIELD_INTERVAL_MS: u128 = 10;
 pub struct SourceConfig<'a, G> {
     /// The name to attach to the underlying timely operator.
     pub name: String,
+    /// The name of the upstream resource this source corresponds to
+    /// (For example, a Kafka topic)
+    pub upstream_name: Option<String>,
     /// The ID of this instantiation of this source.
     pub id: SourceInstanceId,
     /// The timely scope in which to build the source.
@@ -521,7 +524,7 @@ pub struct ConsistencyInfo {
 impl ConsistencyInfo {
     fn new(
         active: bool,
-        source_name: String,
+        metrics_name: String,
         source_id: SourceInstanceId,
         worker_id: usize,
         worker_count: usize,
@@ -536,7 +539,7 @@ impl ConsistencyInfo {
             partition_metadata: HashMap::new(),
             source_type: consistency,
             source_metrics: SourceMetrics::new(
-                &source_name,
+                &metrics_name,
                 source_id,
                 &worker_id.to_string(),
                 logger,
@@ -1241,6 +1244,7 @@ where
 {
     let SourceConfig {
         name,
+        upstream_name,
         id,
         scope,
         timestamp_histories,
@@ -1261,7 +1265,7 @@ where
         // Create control plane information (Consistency-related information)
         let mut consistency_info = ConsistencyInfo::new(
             active,
-            name.clone(),
+            upstream_name.unwrap_or_else(|| name.clone()),
             id,
             worker_id,
             worker_count,
