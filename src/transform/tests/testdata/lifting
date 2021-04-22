@@ -122,6 +122,24 @@ build apply=LiteralLifting
 | Project (#1, #0)
 | Map 3
 
+build apply=LiteralLifting
+(union
+  [(constant [[1 2 3] [2 4 3]] [int32 int64 int32])
+   (constant [[3 2 3] [4 4 3]] [int32 int64 int32])])
+----
+----
+%0 =
+| Constant (1, 2) (2, 4)
+
+%1 =
+| Constant (3, 2) (4, 4)
+
+%2 =
+| Union %0 %1
+| Map 3
+----
+----
+
 # Union: literals in the suffix in all branches are lifted...
 build apply=LiteralLifting
 (union
