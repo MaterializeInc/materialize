@@ -334,7 +334,7 @@
     description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
       to `expression` and any value of `s` evaluates to `true`"
 
-  - signature: 'Query, csv_extract(num_csv_col: int, col_name: string) -> col1: string, ... coln: string'
+  - signature: 'csv_extract(num_csv_col: int, col_name: string) -> col1: string, ... coln: string'
     description: Extracts separated values from a column containing a CSV file formatted as a string.
     url: csv_extract
 

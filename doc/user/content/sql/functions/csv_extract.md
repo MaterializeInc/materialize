@@ -28,7 +28,7 @@ Create a table where one column is in CSV format and insert some rows:
 ```sql
 CREATE TABLE t (id int, data string);
 INSERT INTO t
-  VALUES (1, 'some,data'), (2, 'more,data'), (2, 'also,data');
+  VALUES (1, 'some,data'), (2, 'more,data'), (3, 'also,data');
 ```
 
 Extract the component columns from the table column which is a CSV string, sorted by column `id`:
@@ -38,7 +38,6 @@ SELECT csv.* FROM t, csv_extract (2, csv) csv
   ORDER BY t.id;
 ```
 ```nofmt
-SELECT csv.* FROM t, csv_extract (2, csv) csv;
  column1 | column2
 ---------+---------
  also    | data
