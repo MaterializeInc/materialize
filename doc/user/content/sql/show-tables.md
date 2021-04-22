@@ -16,7 +16,8 @@ instances.
 Field | Use
 ------|-----
 _schema&lowbar;name_ | The schema to show tables from. Defaults to `public` in the current database. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
-`EXTENDED` | Returns system tables as well as user-created tables. By default, only user-created tables are returned.
+**EXTENDED** | Returns system tables as well as user-created tables. By default, only user-created tables are returned.
+**FULL**  | Returns table type (`system`, `user`, or `temp`).
 
 ## Details
 
@@ -30,6 +31,16 @@ The output column is renamed from `TABLES` to `name`.
 
 ## Examples
 
+### Show user-created tables
+```sql
+SHOW TABLES;
+```
+```nofmt
+my_table
+my_other_table
+```
+
+### Show tables from specified schema
 ```sql
 SHOW SCHEMAS;
 ```
@@ -43,12 +54,22 @@ SHOW TABLES FROM public;
 my_table
 my_other_table
 ```
+
+### Show all tables and include table type
+
 ```sql
-SHOW TABLES;
+SHOW EXTENDED FULL TABLES;
 ```
 ```nofmt
-my_table
-my_other_table
+name                  |  type
+----------------------+--------
+ mz_array_types       | system
+ mz_avro_ocf_sinks    | system
+ mz_base_types        | system
+ ...
+ my_table             | user
+ my_other_table       | user
+(23 rows)
 ```
 
 ## Related pages
