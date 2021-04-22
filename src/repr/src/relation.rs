@@ -176,8 +176,8 @@ impl From<&ColumnName> for ColumnName {
 /// use repr::{ColumnType, RelationDesc, ScalarType};
 ///
 /// let desc = RelationDesc::empty()
-///     .with_column("id", ScalarType::Int64.nullable(false))
-///     .with_column("price", ScalarType::Float64.nullable(true));
+///     .with_named_column("id", ScalarType::Int64.nullable(false))
+///     .with_named_column("price", ScalarType::Float64.nullable(true));
 /// ```
 ///
 /// In more complicated cases, like when constructing a `RelationDesc` in
