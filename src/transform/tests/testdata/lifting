@@ -28,6 +28,35 @@ build apply=LiteralLifting
 | Map 2, 4
 | Project (#3, #2)
 
+build
+(project
+  (map (get x) [1 2 3])
+  [#3 #3])
+----
+%0 =
+| Get x (u0)
+| Map 1, 2, 3
+| Project (#3, #3)
+
+build apply=LiteralLifting
+(project
+  (map (get x) [1 2 3])
+  [#3 #3])
+----
+%0 =
+| Get x (u0)
+| Map 2
+| Project (#2, #2)
+
+build apply=LiteralLifting
+(project
+  (map (get x) [1 2 3])
+  [#3 #4 #3])
+----
+%0 =
+| Get x (u0)
+| Map 2, 3
+| Project (#2, #3, #2)
 
 # Merge nested Map operators within a Project
 build apply=LiteralLifting
