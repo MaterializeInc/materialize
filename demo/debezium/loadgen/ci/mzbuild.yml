@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 name: debezium-mysql-gen
+publish: false
 pre-image:
   type: cargo-build
   bin: debezium-mysql-gen
