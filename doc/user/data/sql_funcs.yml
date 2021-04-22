@@ -333,6 +333,11 @@
   - signature: 'expression bool_op ANY(s: Query) -> bool'
     description: "`s` must return exactly one column; `true` if applying [bool_op](#boolean)
       to `expression` and any value of `s` evaluates to `true`"
+
+  - signature: 'csv_extract(num_csv_col: int, col_name: string) -> col1: string, ... coln: string'
+    description: Extracts separated values from a column containing a CSV file formatted as a string.
+    url: csv_extract
+
   - signature: 'EXISTS(s: Query) -> bool'
     description: "`true` if `s` returns at least one row"
 
