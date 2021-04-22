@@ -95,7 +95,6 @@ impl LiteralLifting {
                     let remaining_common_literals = the_same.iter().filter(|e| **e).count();
                     if remaining_common_literals > 0 {
                         let final_arity = the_same.len() - remaining_common_literals;
-                        let data = row.unpack();
                         let mut projected_literals = Vec::new();
                         let mut projection = Vec::new();
                         let mut new_column_types = Vec::new();
