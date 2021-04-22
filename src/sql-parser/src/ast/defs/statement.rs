@@ -403,12 +403,17 @@ impl_display_t!(CreateSourceStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSourcesStatement<T: AstInfo> {
     pub connector: MultiConnector<T>,
+    pub materialized: bool,
     pub stmts: Vec<CreateSourceStatement<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourcesStatement<T> {
     fn fmt(&self, f: &mut AstFormatter) {
-        f.write_str("CREATE SOURCES FROM ");
+        f.write_str("CREATE ");
+        if self.materialized {
+            f.write_str("MATERIALIZED ");
+        }
+        f.write_str("SOURCES FROM ");
         f.write_node(&self.connector);
     }
 }

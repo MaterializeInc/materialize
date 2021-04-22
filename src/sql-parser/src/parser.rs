@@ -1415,10 +1415,14 @@ impl<'a> Parser<'a> {
                 self.prev_token();
                 self.prev_token();
                 self.parse_create_source()
+            } else if self.parse_keyword(SOURCES) {
+                self.prev_token();
+                self.prev_token();
+                self.parse_create_sources()
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "VIEW or SOURCE after CREATE MATERIALIZED",
+                    "VIEW, SOURCE, or SOURCES after CREATE MATERIALIZED",
                     self.peek_token(),
                 )
             }
@@ -1426,6 +1430,7 @@ impl<'a> Parser<'a> {
             self.prev_token();
             self.parse_create_source()
         } else if self.parse_keyword(SOURCES) {
+            self.prev_token();
             self.parse_create_sources()
         } else if self.parse_keyword(SINK) {
             self.parse_create_sink()
@@ -1667,11 +1672,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_sources(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let materialized = self.parse_keyword(MATERIALIZED);
+        self.expect_keyword(SOURCES)?;
         self.expect_keyword(FROM)?;
         let connector = self.parse_multi_connector()?;
 
         Ok(Statement::CreateSources(CreateSourcesStatement {
             connector,
+            materialized,
             stmts: vec![],
         }))
     }
