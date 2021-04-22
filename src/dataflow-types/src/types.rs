@@ -910,6 +910,7 @@ pub struct KafkaSinkConnector {
     pub addrs: KafkaAddrs,
     pub topic: String,
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    pub relation_key_indices: Option<Vec<usize>>,
     pub value_desc: RelationDesc,
     pub key_schema_id: Option<i32>,
     pub value_schema_id: i32,
@@ -942,6 +943,14 @@ impl SinkConnector {
                 .key_desc_and_indices
                 .as_ref()
                 .map(|(_desc, indices)| indices.as_slice()),
+            SinkConnector::Tail(_) => None,
+            SinkConnector::AvroOcf(_) => None,
+        }
+    }
+
+    pub fn get_relation_key_indices(&self) -> Option<&[usize]> {
+        match self {
+            SinkConnector::Kafka(k) => k.relation_key_indices.as_deref(),
             SinkConnector::Tail(_) => None,
             SinkConnector::AvroOcf(_) => None,
         }
@@ -984,6 +993,9 @@ pub struct KafkaSinkConnectorBuilder {
     pub schema_registry_url: Url,
     pub key_schema: Option<String>,
     pub value_schema: String,
+    /// A natural key of the sinked relation (view or source).
+    pub relation_key_indices: Option<Vec<usize>>,
+    /// The user-specified key for the sink.
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub value_desc: RelationDesc,
     pub topic_prefix: String,

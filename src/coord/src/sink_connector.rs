@@ -454,6 +454,7 @@ async fn build_kafka(
         value_schema_id,
         topic,
         addrs: builder.broker_addrs,
+        relation_key_indices: builder.relation_key_indices,
         key_desc_and_indices: builder.key_desc_and_indices,
         value_desc: builder.value_desc,
         consistency,
