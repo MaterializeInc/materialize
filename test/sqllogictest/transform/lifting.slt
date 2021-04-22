@@ -296,3 +296,247 @@ explain select * from (select 1 as a from t), generate_series(a+1, 4);
 | Project (#3, #2)
 
 EOF
+
+# Make sure that grouping/distinct is handled correctly in the face of derived tables
+# We want the proper interleaving between Map and Distinct to be preserved
+
+# With literals only
+
+query T multiline
+explain select 123 from (select 234 from t);
+----
+%0 =
+| Get materialize.public.t (u1)
+| Map 123
+| Project (#2)
+
+EOF
+
+query T multiline
+explain select 123 from (select distinct 234 from t);
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=()
+| Map 123
+
+EOF
+
+query T multiline
+explain select distinct 123 from (select 234 from t);
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=()
+| Map 123
+
+EOF
+
+query T multiline
+explain select distinct 123 from (select distinct 234 from t);
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=()
+| Map 123
+
+EOF
+
+# With a single literal
+
+query T multiline
+explain select * from (select distinct 123 from t);
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=()
+| Map 123
+
+EOF
+
+query T multiline
+explain select distinct * from (select 123 from t);
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=()
+| Map 123
+
+EOF
+
+# With a literal in the outer query and a column in the derived table
+
+query T multiline
+explain select 123 from (select a from t);
+----
+%0 =
+| Get materialize.public.t (u1)
+| Map 123
+| Project (#2)
+
+EOF
+
+query T multiline
+explain select 123 from (select distinct a from t);
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=(#0)
+| Map 123
+| Project (#1)
+
+EOF
+
+query T multiline
+explain select distinct 123 from (select a from t);
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=()
+| Map 123
+
+EOF
+
+query T multiline
+explain select distinct 123 from (select distinct a from t);
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=(#0)
+| Distinct group=()
+| Map 123
+
+EOF
+
+# With a literal and a column in the derived table
+
+query T multiline
+explain select distinct a1.a, a1.literal from (select a, 123 as literal from t) as a1;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=(#0)
+| Map 123
+
+EOF
+
+query T multiline
+explain select a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=(#0)
+| Map 123
+
+EOF
+
+query T multiline
+explain select a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=(#0)
+| Map 123
+
+EOF
+
+query T multiline
+explain select distinct a1.a, a1.literal from (select distinct a, 123 as literal from t) as a1;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=(#0)
+| Map 123
+
+EOF
+
+# With a literal and a column in the outer query
+
+query T multiline
+explain select distinct a1.a, 123 from (select a from t) as a1;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=(#0)
+| Map 123
+
+EOF
+
+query T multiline
+explain select distinct a1.a, 123 from (select distinct a from t) as a1;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=(#0)
+| Map 123
+
+EOF
+
+# With expressions
+query T multiline
+explain select distinct a1.a+2 from (select distinct a+1 as a, 123 as literal from t) as a1;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=((#0 + 1))
+| Distinct group=((#0 + 2))
+
+EOF
+
+query T multiline
+explain select distinct a1.a, 123 from (select distinct a+1 as a, 234 as literal from t) as a1;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=((#0 + 1))
+| Map 123
+
+EOF
+
+query T multiline
+explain select distinct a1.a+2, a1.literal from (select distinct a+1 as a, 123 as literal from t) as a1;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=((#0 + 1))
+| Distinct group=((#0 + 2))
+| Map 123
+
+EOF
+
+
+query T multiline
+explain select distinct a1.a, a1.literal + 1 from (select distinct a, 123 as literal from t) as a1;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Distinct group=(#0)
+| Map 124
+
+EOF
+
+# Check that literals do not interfere with table elimination
+
+statement ok
+create table t_pk (
+  a int primary key,
+  b int
+)
+
+query T multiline
+explain select a1.*, 123 from t_pk as a1, t_pk as a2 WHERE a1.a = a2.a;
+----
+%0 =
+| Get materialize.public.t_pk (u3)
+| Map 123
+
+EOF
+
+query T multiline
+explain select distinct a1.*, 123 from t_pk as a1, t_pk as a2 WHERE a1.a = a2.a;
+----
+%0 =
+| Get materialize.public.t_pk (u3)
+| Map 123
+
+EOF
