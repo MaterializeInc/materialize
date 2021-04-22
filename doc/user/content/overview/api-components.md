@@ -8,7 +8,8 @@ menu:
 ---
 
 Materialize is a streaming database with a SQL API. However, despite the fact
-that Materialize uses SQL idioms and can process data from databases, it actually has very little in common with "databases" as most users think of them.
+that Materialize uses SQL idioms and can process data from databases, it actually has 
+very little in common with "databases" as most users think of them.
 
 In this document, we'll sketch a conceptual framework expressed by Materialize's
 API components, which might help you develop a mental model of how to work with
