@@ -155,7 +155,12 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             }
         }
     }
-    if let Statement::CreateSources(CreateSourcesStatement { connector, stmts }) = &mut stmt {
+    if let Statement::CreateSources(CreateSourcesStatement {
+        connector,
+        stmts,
+        materialized,
+    }) = &mut stmt
+    {
         match connector {
             MultiConnector::Postgres {
                 conn,
@@ -190,7 +195,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                         with_options: vec![],
                         envelope: Envelope::None,
                         if_not_exists: false,
-                        materialized: false,
+                        materialized: *materialized,
                     });
                 }
                 *stmts = create_stmts;
