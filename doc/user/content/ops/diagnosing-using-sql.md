@@ -1,16 +1,23 @@
 ---
 title: "Diagnosing Using SQL"
-description: "Use the SQL Interface to troubleshoot performance issues."
+description: "Use the SQL Interface to understand performance defects"
 menu:
   main:
     parent: operations
 ---
 
-You can use the queries below for spot debugging, but it may also be helpful to make them more permanent tools by creating them as views for `TAIL`ing or materialized views to read more efficiently. Obviously, the existence of these additional views may itself affect performance.
+## Diagnostic queries that can help understand apparent performance defects.
+
+Sections are meant to be thematically related based on what problems are experienced.
+
+The queries may be useful for spot debugging, but it may also be smart
+to create them as views and TAIL them, or as materialized views to read
+them more efficiently (understand that any of these have the potential
+to impact the system itself).
 
 ### Are my sources loading data in a reasonable fashion?
 
-You can count the number of records accepted in a materialized source or view.
+Count the number of records accepted in a materialized source or view.
 Note that this makes less sense for a non-materialized source or view,
 as invoking it will create a new dataflow and run it to the point that
 it is caught up with its sources; that elapsed time may be informative,
@@ -30,10 +37,12 @@ volume of data, but how closely the contents track source timestamps.
 select * from mz_materialization_frontiers;
 ```
 
-### Why is Materialize running so slowly?
+### It seems like things aren't getting done as fast as I would like!
 
 Materialize spends time in various dataflow operators maintaining
-materialized views. If Materialize is taking more time to update results than you expect, you can identify which operators
+materialized views. The amount of time may be more than one expects,
+either because Materialize is behaving badly or because expectations
+aren't aligned with reality. These queries reveal which operators
 take the largest total amount of time.
 
 ```sql
@@ -59,7 +68,7 @@ group by mdo.id, mdo.name
 order by elapsed_ns desc;
 ```
 
-### Why is Materialize unresponsive for seconds at a time?
+### Materialize becomes unresponsive for seconds at a time!
 
 What causes Materialize to take control away for seconds
 at a time? Materialize operators get scheduled and try to
@@ -93,13 +102,13 @@ group by mdo.id, mdo.name, msh.duration_ns
 order by msh.duration_ns desc;
 ```
 
-### Why is Materialize is using so much memory?
+### Materialize is using lots of memory! What gives?
 
-The majority of Materialize's memory use is taken up by "arrangements", which
+The majority of Materialize's memory live in "arrangements", which
 are differential dataflow structures that maintain indexes for data
-as it changes. These queries extract the numbers of records and
+as they change. These queries extract the numbers of records and
 batches backing each of the arrangements. The reported records may
-exceed the number of logical records; the report reflects the uncompacted
+exceed the number of logical records, as they reflect un-compacted
 state. The number of batches should be logarithmic-ish in this
 number, and anything significantly larger is probably a bug.
 
@@ -127,21 +136,20 @@ order by sum(mas.records) desc;
 ```
 
 We've also bundled a [memory usage visualization tool](https://materialize.com/docs/ops/monitoring/#memory-usage-visualization)
-to aid in debugging. The SQL queries above show all arrangements in Materialize
+to aid in debugging. The sql queries above show all arrangements in Materialize
 (including system arrangements), whereas the memory visualization tool shows
-only user-created arrangements, grouped by dataflow. The amount of
+only user-created arrangements, and it shows them by dataflow. The amount of
 memory used by Materialize should correlate with the number of arrangement
-records that are displayed by either the visual interface or the SQL queries.
+records that are displayed by either the visual interface or the sql queries.
 
-### Is work distributed equally across workers?
+### How can I check whether work is distributed equally across workers?
 
 Work is distributed across workers by the hash of their keys. Thus, work can
 become skewed if situations arise where Materialize needs to use arrangements
 with very few or no keys. Example situations include:
-
-* Views that maintain order by/limit/offset
-* Cross joins
-* Joins where the join columns have very few unique values
+* views that maintain order by/limit/offset
+* cross joins
+* joins where the join columns have very few unique values.
 
 Additionally, the operators that implement data sources may demonstrate skew, as
 they (currently) have a granularity determined by the source itself. For
@@ -180,22 +188,20 @@ where
 order by ratio desc;
 ```
 
-### I found a problematic operator. Where did it come from?
+### I found a problematic operator! How do I find where it came from?
 
 Look up the operator in `mz_dataflow_operator_addresses`. If an operator has
-value `x` in slot `n`, then it is part of the `x` subregion of the region
-defined by slots `0..n-1`. The example SQL query and result below shows an
+value `x` at position `n`, then it is part of the `x` subregion of the region
+defined by positions `0..n-1`. The example SQL query and result below shows an
 operator whose id is 515 that belongs to "subregion 5 of region 1 of dataflow
 21".
 ```sql
 select * from mz_dataflow_operator_addresses where id=515 and worker=0;
 ```
 ```
- id  | worker | slot | value
------+--------+------+-------
- 515 |      0 |    0 |    21
- 515 |      0 |    1 |     1
- 515 |      0 |    2 |     5
+ id  | worker | address
+-----+--------+----------
+ 515 |      0 | {21,1,5}
 ```
 
 Usually, it is only important to know the name of the dataflow a problematic
@@ -203,7 +209,7 @@ operator comes from. Once the name is known, the dataflow can be correlated to
 an index or view in Materialize.
 
 Each dataflow has an operator representing the entire dataflow. The address of
-said operator has only a single slot. For the example operator 515 above, you
+said operator has only a single entry. For the example operator 515 above, you
 can find the name of the dataflow if you can find the name of the operator whose
 address is just "dataflow 21."
 
@@ -220,21 +226,16 @@ FROM
     -- view containing operators representing entire dataflows
     (SELECT
       mdoa.id as dataflow_operator,
-      sum(mdoa.value) as dataflow_value
+      mdoa.address[1] as dataflow_address
     FROM
       mz_dataflow_operator_addresses mdoa
     WHERE
       mdoa.worker = 0
-    GROUP BY
-      mdoa.id,
-      mdoa.worker
-    HAVING
-      count(*) = 1) dataflows
+      AND list_length(mdoa.address) = 1) dataflows
 WHERE
-    mdoa.slot = 0
-    AND mdoa.worker = 0
+    mdoa.worker = 0
     AND mdoa.id = <problematic_operator_id>
-    AND mdoa.value = dataflows.dataflow_value
+    AND mdoa.address[1] = dataflows.dataflow_address
     AND mdo.id = dataflows.dataflow_operator
-    AND mdo.worker = 0
+    AND mdo.worker = 0;
 ```

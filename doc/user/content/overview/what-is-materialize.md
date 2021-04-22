@@ -51,7 +51,7 @@ One such destination you can use for CDC is a **stream** like Apache Kafka. As y
 
 ### Engine
 
-To maintain materialized views using a stream of data, you need an engine to subscribe to the CDC streams, and then perform the computations for and maintenance of the materialized view.
+To maintain materialized views using a stream of data, you need an engine to subscribe to the CDC streams, and then perform the computations for and maintenance of the materialized view.  
 
 One approach to this is using a dataflow **engine**, which is a set of computations that work over streams of data; they take a stream as their input, transform it, and output their own stream. If you think of dataflows in similar terms as functional programming, you can see that they can complete arbitrarily complex tasks.
 
@@ -77,23 +77,23 @@ with this data in Materialize as if it were in a SQL table.
 
 Using these sources, you can define "views". Views represent those queries to which
 you continually want an up-to-date answer. Your view definitions are transformed by
-our query engine to create [Differential dataflows](https://github.com/frankmcsherry/differential-dataflow).
+our query engine to create Differential dataflows.
 
-A dataflow is a set of connected operators that each
+Like we mentioned above, a dataflow is a set of connected operators that each
 both consume and produce streams of data, creating a network of computation that
-can respond to streams of input data from sources. Differential dataflows
+can respond to streams of input data that sources supply. Differential dataflows
 are special, though, in that they can easily perform incremental updates at each
 step of the dataflow.
 
-As data streams in from your sources, your dataflows determine which data is
-relevant and update their result sets only if they need to, for example, when there are new
-rows or the values used in dataflow computations have changed.
+As data streams in from your sources, your dataflows determine which data are
+relevant and update their result sets only if it needs to, e.g. there are new
+rows or values they care about have changed.
 
 When you query one of your views, Materialize can simply return the dataflow's
 result set from memory, which should always be faster than computing the answer
 from scratch.
 
-## Materialize vs. other methodologies
+## Materialize vs. Other Methodologies
 
 ### Batch processing
 

@@ -4,7 +4,7 @@ description: "Understand volatility in Materialize."
 menu:
   main:
     parent: 'overview'
-    weight: 5
+    weight: 3
 ---
 
 Materialize strives to be a correct, deterministic system. But because
@@ -18,8 +18,7 @@ We call a source that cannot uphold this guarantee a *volatile* source. Many
 common sources of streaming data are volatile. For example, [Amazon
 Kinesis](https://aws.amazon.com/kinesis/) streams are volatile, because (by
 default) data is only retained for 24 hours. If Materialize restarts after
-reading a Kinesis stream for 25 hours, it will be unable to recover the first
-hour of data.
+reading a Kinesis stream for 25 hours, it will be unable to recover the first hour of data.
 
 While it is possible to connect to volatile sources in Materialize, the system
 internally tracks the volatility. Forthcoming features that rely on
