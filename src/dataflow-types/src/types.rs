@@ -762,6 +762,7 @@ pub struct PostgresSourceConnector {
     pub namespace: String,
     pub table: String,
     pub cast_exprs: Vec<MirScalarExpr>,
+    pub slot_name: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

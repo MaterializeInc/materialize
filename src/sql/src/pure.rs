@@ -19,6 +19,7 @@ use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
 use tokio::time::Duration;
+use uuid::Uuid;
 
 use repr::strconv;
 use sql_parser::ast::{display::AstDisplay, UnresolvedObjectName};
@@ -111,8 +112,17 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 namespace,
                 table,
                 columns,
+                slot,
                 ..
-            } => purify_postgres_table(conn, namespace, table, columns).await?,
+            } => {
+                slot.get_or_insert_with(|| {
+                    format!(
+                        "materialize_{}",
+                        Uuid::new_v4().to_string().replace('-', "")
+                    )
+                });
+                purify_postgres_table(conn, namespace, table, columns).await?;
+            }
             Connector::PubNub { .. } => (),
         }
 
@@ -150,9 +160,17 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             MultiConnector::Postgres {
                 conn,
                 publication,
+                slot,
                 namespace,
                 tables,
             } => {
+                slot.get_or_insert_with(|| {
+                    format!(
+                        "materialize_{}",
+                        Uuid::new_v4().to_string().replace('-', "")
+                    )
+                });
+
                 let mut create_stmts = Vec::with_capacity(tables.len());
                 for table in tables.into_iter() {
                     purify_postgres_table(&conn, &namespace, &table.name, &mut table.columns)
@@ -163,6 +181,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                         connector: Connector::Postgres {
                             conn: conn.to_owned(),
                             publication: publication.to_owned(),
+                            slot: slot.clone(),
                             namespace: namespace.to_owned(),
                             table: table.name.to_owned(),
                             columns: table.columns.clone(),

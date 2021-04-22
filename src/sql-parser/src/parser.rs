@@ -1744,6 +1744,11 @@ impl<'a> Parser<'a> {
                 let conn = self.parse_literal_string()?;
                 self.expect_keyword(PUBLICATION)?;
                 let publication = self.parse_literal_string()?;
+                let slot = if self.parse_keyword(SLOT) {
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
                 self.expect_keyword(NAMESPACE)?;
                 let namespace = self.parse_literal_string()?;
                 self.expect_keyword(TABLE)?;
@@ -1762,6 +1767,7 @@ impl<'a> Parser<'a> {
                 Ok(Connector::Postgres {
                     conn,
                     publication,
+                    slot,
                     namespace,
                     table,
                     columns,
@@ -1854,6 +1860,11 @@ impl<'a> Parser<'a> {
                 let conn = self.parse_literal_string()?;
                 self.expect_keyword(PUBLICATION)?;
                 let publication = self.parse_literal_string()?;
+                let slot = if self.parse_keyword(SLOT) {
+                    Some(self.parse_literal_string()?)
+                } else {
+                    None
+                };
                 self.expect_keyword(NAMESPACE)?;
                 let namespace = self.parse_literal_string()?;
                 self.expect_keyword(TABLES)?;
@@ -1863,6 +1874,7 @@ impl<'a> Parser<'a> {
                 Ok(MultiConnector::Postgres {
                     conn,
                     publication,
+                    slot,
                     namespace,
                     tables,
                 })

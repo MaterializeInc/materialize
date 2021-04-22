@@ -304,6 +304,8 @@ pub enum Connector<T: AstInfo> {
         conn: String,
         /// The name of the publication to sync
         publication: String,
+        /// The replication slot name that will be created upstream
+        slot: Option<String>,
         /// The namespace the synced table belongs to
         namespace: String,
         /// The name of the table to sync
@@ -378,11 +380,16 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                 namespace,
                 table,
                 columns,
+                slot,
             } => {
                 f.write_str("POSTGRES HOST '");
                 f.write_str(&display::escape_single_quote_string(conn));
                 f.write_str("' PUBLICATION '");
                 f.write_str(&display::escape_single_quote_string(publication));
+                if let Some(slot) = slot {
+                    f.write_str("' SLOT '");
+                    f.write_str(&display::escape_single_quote_string(slot));
+                }
                 f.write_str("' NAMESPACE '");
                 f.write_str(&display::escape_single_quote_string(namespace));
                 f.write_str("' TABLE '");
@@ -413,6 +420,8 @@ pub enum MultiConnector<T: AstInfo> {
         conn: String,
         /// The name of the publication to sync
         publication: String,
+        /// The replication slot name that will be created upstream
+        slot: Option<String>,
         /// The namespace the synced table belongs to
         namespace: String,
         /// The tables to sync
@@ -426,6 +435,7 @@ impl<T: AstInfo> AstDisplay for MultiConnector<T> {
             MultiConnector::Postgres {
                 conn,
                 publication,
+                slot,
                 namespace,
                 tables,
             } => {
@@ -433,6 +443,10 @@ impl<T: AstInfo> AstDisplay for MultiConnector<T> {
                 f.write_str(&display::escape_single_quote_string(conn));
                 f.write_str("' PUBLICATION '");
                 f.write_str(&display::escape_single_quote_string(publication));
+                if let Some(slot) = slot {
+                    f.write_str("' SLOT '");
+                    f.write_str(&display::escape_single_quote_string(slot));
+                }
                 f.write_str("' NAMESPACE '");
                 f.write_str(&display::escape_single_quote_string(namespace));
                 f.write_str("' TABLES (");
