@@ -8,7 +8,8 @@ menu:
 ---
 
 Everything in Materialize is currently handled by the `materialized` process
-(pronounced _materialize-dee_; the "`d`" is for daemon), which interacts with the outside world by interfacing with:
+(pronounced _materialize-dee_; the "`d`" is for daemon), which interacts with 
+the outside world by interfacing with:
 
 - **SQL shells** for interacting with clients, including defining sources,
   creating views, and querying data.
