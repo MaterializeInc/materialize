@@ -16,19 +16,43 @@ use mysql_async::{Pool, TxOpts};
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng};
 use std::time::Duration;
+use structopt::StructOpt;
+
+#[derive(Clone, Debug, StructOpt)]
+pub struct Args {
+    #[structopt(long, default_value = "10", value_name = "MAX_DELAY")]
+    pub max_delay: u64,
+    #[structopt(long, default_value = "7", value_name = "MAX_STATEMENTS")]
+    pub max_statements: u32,
+    #[structopt(long, default_value = "4", value_name = "MIN_DELAY")]
+    pub min_delay: u64,
+    #[structopt(long, default_value = "4", value_name = "MIN_STATEMENTS")]
+    pub min_statements: u32,
+    #[structopt(
+        long,
+        default_value = "mysql://mysqluser:mysqlpw@mysql:3306/inventory",
+        value_name = "MYSQL_URL"
+    )]
+    pub mysql_url: String,
+    #[structopt(short = "t", long, default_value = "8", value_name = "THREADS")]
+    pub num_threads: u32,
+    #[structopt(long, default_value = "10", value_name = "NUM_TRANSACTIONS")]
+    pub num_transactions: u32,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     ore::panic::set_abort_on_panic();
     ore::test::init_logging();
 
+    let args: Args = ore::cli::parse_args();
+
     info!("startup!");
 
-    let mysql_url = "mysql://mysqluser:mysqlpw@mysql:3306/inventory";
-    let pool = Pool::new(mysql_url);
+    let pool = Pool::new(args.mysql_url.clone());
 
     alter_constraints(&pool).await?;
-    issue_random_queries(&pool).await?;
+    issue_random_queries(&pool, args).await?;
     pool.disconnect().await?;
     Ok(())
 }
@@ -56,7 +80,7 @@ async fn alter_constraints(pool: &Pool) -> Result<(), Error> {
     Ok(())
 }
 
-async fn issue_random_queries(pool: &Pool) -> Result<(), Error> {
+async fn issue_random_queries(pool: &Pool, args: Args) -> Result<(), Error> {
     let random_transactions = vec![
         vec![r#"INSERT INTO orders (order_date, purchaser, quantity, product_id)
                 SELECT date(now()), customers.id, 1, products_on_hand.product_id
@@ -101,17 +125,17 @@ async fn issue_random_queries(pool: &Pool) -> Result<(), Error> {
                    '10001',
                    'SHIPPING'
                   )"#,],
-        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('alex', 'materialize', 'am@materialize.com')",],
-        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('cameron', 'materialize', 'cm@materialize.com')",],
-        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('frankie', 'materialize', 'fm@materialize.com')",],
-        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('jaime', 'materialize', 'jm@materialize.com')",],
-        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('kyle', 'materialize', 'km@materialize.com')",],
-        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('mattie', 'materialize', 'mm@materialize.com')",],
-        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('nicky', 'materialize', 'nm@materialize.com')",],
-        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('pat', 'materialize', 'pm@materialize.com')",],
-        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('quinn', 'materialize', 'qm@materialize.com')",],
-        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('riley', 'materialize', 'rm@materialize.com')",],
-        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('taylor', 'materialize', 'tm@materialize.com')",],
+        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('alex', 'materialize', 'am@materialize.io')",],
+        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('cameron', 'materialize', 'cm@materialize.io')",],
+        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('frankie', 'materialize', 'fm@materialize.io')",],
+        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('jaime', 'materialize', 'jm@materialize.io')",],
+        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('kyle', 'materialize', 'km@materialize.io')",],
+        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('mattie', 'materialize', 'mm@materialize.io')",],
+        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('nicky', 'materialize', 'nm@materialize.io')",],
+        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('pat', 'materialize', 'pm@materialize.io')",],
+        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('quinn', 'materialize', 'qm@materialize.io')",],
+        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('riley', 'materialize', 'rm@materialize.io')",],
+        vec!["INSERT IGNORE INTO customers (first_name, last_name, email) VALUES ('taylor', 'materialize', 'tm@materialize.io')",],
         vec![r#"INSERT INTO products (name, description, weight)
                 VALUES ('kitchen sink', 'something with everything', '2000.0')"#,
          "INSERT INTO products_on_hand (product_id, quantity) VALUES (LAST_INSERT_ID(), rand()*25 + rand()*25)"],
@@ -131,10 +155,11 @@ async fn issue_random_queries(pool: &Pool) -> Result<(), Error> {
         vec!["DELETE FROM products_on_hand ORDER BY rand() LIMIT 1",],
     ];
 
-    let tasks = (0..8)
+    let tasks = (0..args.num_threads)
         .map(|i| {
             let pool = pool.clone();
             let queries = random_transactions.clone();
+            let args = args.clone();
 
             tokio::spawn(async move {
                 let mut conn = pool.get_conn().await?;
@@ -142,13 +167,14 @@ async fn issue_random_queries(pool: &Pool) -> Result<(), Error> {
                 let mut successes = 0;
                 let mut failures = 0;
 
-                for _ in 0..10 {
+                for _ in 0..args.num_transactions {
                     // Grab random set of queries and execute them. Ignore errors
                     let mut tx = conn.start_transaction(TxOpts::default()).await?;
 
                     let mut commit = true;
 
-                    let num_statements = thread_rng().gen_range(4..=8);
+                    let num_statements =
+                        thread_rng().gen_range(args.min_statements..=args.max_statements);
                     // Randomly join multiple statements into the same transaction
                     'transaction: for _ in 0..num_statements {
                         let tx_queries = queries
@@ -174,8 +200,9 @@ async fn issue_random_queries(pool: &Pool) -> Result<(), Error> {
                             }
 
                             // Random jigger to encourage transaction conflicts
-                            let sleep_duration =
-                                Duration::from_millis(thread_rng().gen_range(4..=7));
+                            let sleep_duration = Duration::from_millis(
+                                thread_rng().gen_range(args.min_delay..=args.max_delay),
+                            );
                             tokio::time::sleep(sleep_duration).await;
                         }
                     }
@@ -189,7 +216,7 @@ async fn issue_random_queries(pool: &Pool) -> Result<(), Error> {
                     }
                 }
 
-                Ok::<(i32, i32, i32), Error>((i, successes, failures))
+                Ok::<(u32, u32, u32), Error>((i, successes, failures))
             })
         })
         .collect::<Vec<_>>();

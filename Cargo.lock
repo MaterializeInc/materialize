@@ -879,6 +879,7 @@ dependencies = [
  "mysql_async",
  "ore",
  "rand 0.8.3",
+ "structopt",
  "tokio",
 ]
 
