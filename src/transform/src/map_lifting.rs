@@ -281,7 +281,6 @@ impl LiteralLifting {
                         let mut new_scalars = Vec::new();
                         let mut projected_literals = Vec::new();
                         let mut projection = (0..input_arity).collect::<Vec<usize>>();
-                        let mut column_map = projection.clone();
                         for scalar in scalars.iter_mut() {
                             if scalar.is_literal() {
                                 projection.push(first_literal_id + projected_literals.len());
@@ -291,7 +290,7 @@ impl LiteralLifting {
                                 // Propagate literals through expressions and remap columns.
                                 cloned_scalar.visit_mut(&mut |e| {
                                     if let MirScalarExpr::Column(old_id) = e {
-                                        let new_id = column_map[*old_id];
+                                        let new_id = projection[*old_id];
                                         if new_id >= first_literal_id {
                                             *e = projected_literals[new_id - first_literal_id]
                                                 .clone();
@@ -303,7 +302,6 @@ impl LiteralLifting {
                                 projection.push(input_arity + new_scalars.len());
                                 new_scalars.push(cloned_scalar);
                             }
-                            column_map.push(*projection.last().unwrap());
                         }
                         new_scalars.extend(projected_literals);
                         *relation = input.take_dangerous().map(new_scalars).project(projection);
