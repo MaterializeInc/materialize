@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::convert::TryInto;
+use std::error::Error;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
@@ -22,6 +23,7 @@ use postgres_protocol::message::backend::{
 };
 use tokio_postgres::binary_copy::BinaryCopyOutStream;
 use tokio_postgres::config::{Config, ReplicationMode};
+use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::{PgLsn, Type as PgType};
 use tokio_postgres::{Client, NoTls, SimpleQueryMessage};
@@ -312,7 +314,35 @@ impl PostgresSourceReader {
                         );
                     }
                 }
-                Err(err) => return Err(Recoverable(err.into())),
+                Err(err) => {
+                    let recoverable = match err.source() {
+                        Some(err) => {
+                            match err.downcast_ref::<DbError>() {
+                                Some(db_err) => {
+                                    use Severity::*;
+                                    // Connection and non-fatal errors
+                                    db_err.code() == &SqlState::CONNECTION_EXCEPTION
+                                        || db_err.code() == &SqlState::CONNECTION_DOES_NOT_EXIST
+                                        || db_err.code() == &SqlState::CONNECTION_FAILURE
+                                        || !matches!(
+                                            db_err.parsed_severity(),
+                                            Some(Error) | Some(Fatal) | Some(Panic)
+                                        )
+                                }
+                                // IO errors
+                                None => err.is::<std::io::Error>(),
+                            }
+                        }
+                        // Closed connection error
+                        None => err.is_closed(),
+                    };
+
+                    if recoverable {
+                        return Err(Recoverable(err.into()));
+                    } else {
+                        return Err(Fatal(err.into()));
+                    }
+                }
                 // The enum is marked non_exaustive, better be conservative
                 _ => return Err(Fatal(anyhow!("Unexpected replication message"))),
             }
