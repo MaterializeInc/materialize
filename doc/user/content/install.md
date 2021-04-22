@@ -26,7 +26,7 @@ We provide the `materialize/materialized` image in Docker Hub. If you already ha
 way. For example:
 
 ```shell
-docker run -p 6875:6875 materialize/materialized:{{< version >}} --workers 1
+docker run -p 6875:6875 materialize/materialized:{{< version >}}  --name materialized --workers 1
 ```
 
 [docker-start]: https://www.docker.com/get-started
