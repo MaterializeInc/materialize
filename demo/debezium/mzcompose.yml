@@ -199,5 +199,9 @@ mzworkflows:
     steps:
     - step: workflow
       workflow: bring-up-mysql-kafka
+    # Without this sleep, our mysql generator will grab locks that prevent the initial replication
+    # from debezium
+    - step: sleep
+      duration: 15
     - step: run
       service: debezium-mysql-gen
