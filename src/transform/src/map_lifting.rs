@@ -205,9 +205,9 @@ impl LiteralLifting {
                     // Discard literals that are not projected
                     let input_arity = input.arity();
                     let mut used_literals = vec![false; literals.len()];
-                    for i in 0..outputs.len() {
-                        if outputs[i] >= input_arity {
-                            used_literals[outputs[i] - input_arity] = true;
+                    for output in outputs.iter() {
+                        if *output >= input_arity {
+                            used_literals[*output - input_arity] = true;
                         }
                     }
                     if used_literals.iter().filter(|x| !*x).count() > 0 {
