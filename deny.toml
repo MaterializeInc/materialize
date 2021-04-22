@@ -30,6 +30,19 @@ skip = [
     { name = "rand_hc", version = "0.2.0" },
     { name = "wasi", version = "0.10.0+wasi-snapshot-preview1" },
 
+    # Introduced by mysql_async (need time 0.3.0 to remove stdweb dependency)
+    # = semver-parser v0.7.0
+    #   └── semver v0.9.0
+    #       └── rustc_version v0.2.3
+    #           └── (build) stdweb v0.4.20
+    #               └── time v0.2.26
+    #                   └── mysql_common v0.26.0
+    #                       └── mysql_async v0.27.1
+    #                           └── debezium-mysql-gen v0.0.0
+    { name = "semver", version = "0.9.0"},
+    { name = "semver-parser", version = "0.7.0"},
+    { name = "rustc_version", version = "0.3.0"},
+
     # Waiting on parse_duration.
     { name = "num-bigint", version = "0.2.6" },
 

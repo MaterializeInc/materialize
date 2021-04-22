@@ -104,6 +104,8 @@ services:
       CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
     depends_on: [kafka, schema-registry]
+  debezium-mysql-gen:
+    mzbuild: debezium-mysql-gen
   simple-mysql-connector:
     build: simple-mysql-connector
     depends_on: [connect]
@@ -190,3 +192,12 @@ mzworkflows:
       port: 6875
     - step: workflow
       workflow: bring-up-mysql-kafka
+
+  # Start a worfklow that attempts to test various invariants about Debezium's replication of
+  # MySQL via Kafka
+  test-invariants:
+    steps:
+    - step: workflow
+      workflow: bring-up-mysql-kafka
+    - step: run
+      service: debezium-mysql-gen
