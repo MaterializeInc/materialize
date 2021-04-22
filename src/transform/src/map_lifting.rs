@@ -501,16 +501,14 @@ impl LiteralLifting {
                     let first_projected_literal: usize = non_literal_keys + aggregates.len();
                     let mut projection = Vec::new();
                     let mut projected_literals = Vec::new();
-                    let mut new_key_pos: usize = 0;
                     let mut new_group_key = Vec::new();
-                    for key in group_key.iter() {
+                    for (old_pos, key) in group_key.iter().enumerate() {
                         if key.is_literal() {
                             projection.push(first_projected_literal + projected_literals.len());
                             projected_literals.push(key.clone());
                         } else {
+                            projection.push(old_pos - projected_literals.len());
                             new_group_key.push(key.clone());
-                            projection.push(new_key_pos);
-                            new_key_pos += 1;
                         }
                     }
                     // The new group key without literals
