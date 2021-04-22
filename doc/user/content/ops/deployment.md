@@ -6,7 +6,8 @@ menu:
     parent: operations
 ---
 
-_This page is a work in progress and will have more detail in the coming months. If you have specific questions, feel free to [file a GitHub
+_This page is a work in progress and will have more detail in the coming months. 
+If you have specific questions, feel free to [file a GitHub
 issue](https://github.com/MaterializeInc/materialize/issues/new?labels=C-feature&template=feature.md)._
 
 ## Memory
