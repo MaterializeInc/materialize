@@ -60,11 +60,12 @@ pub fn describe_show_variable(
 ) -> Result<StatementDesc, anyhow::Error> {
     let desc = if variable.as_str() == unicase::Ascii::new("ALL") {
         RelationDesc::empty()
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("setting", ScalarType::String.nullable(false))
-            .with_column("description", ScalarType::String.nullable(false))
+            .with_named_column("name", ScalarType::String.nullable(false))
+            .with_named_column("setting", ScalarType::String.nullable(false))
+            .with_named_column("description", ScalarType::String.nullable(false))
     } else {
-        RelationDesc::empty().with_column(variable.as_str(), ScalarType::String.nullable(false))
+        RelationDesc::empty()
+            .with_named_column(variable.as_str(), ScalarType::String.nullable(false))
     };
     Ok(StatementDesc::new(Some(desc)))
 }

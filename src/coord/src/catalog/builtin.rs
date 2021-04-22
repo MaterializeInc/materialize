@@ -575,9 +575,9 @@ lazy_static! {
         name: "mz_view_keys",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("global_id", ScalarType::String.nullable(false))
-            .with_column("column", ScalarType::Int64.nullable(false))
-            .with_column("key_group", ScalarType::Int64.nullable(false)),
+            .with_named_column("global_id", ScalarType::String.nullable(false))
+            .with_named_column("column", ScalarType::Int64.nullable(false))
+            .with_named_column("key_group", ScalarType::Int64.nullable(false)),
         id: GlobalId::System(4001),
         index_id: GlobalId::System(4002),
     };
@@ -585,11 +585,11 @@ lazy_static! {
         name: "mz_view_foreign_keys",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("child_id", ScalarType::String.nullable(false))
-            .with_column("child_column", ScalarType::Int64.nullable(false))
-            .with_column("parent_id", ScalarType::String.nullable(false))
-            .with_column("parent_column", ScalarType::Int64.nullable(false))
-            .with_column("key_group", ScalarType::Int64.nullable(false))
+            .with_named_column("child_id", ScalarType::String.nullable(false))
+            .with_named_column("child_column", ScalarType::Int64.nullable(false))
+            .with_named_column("parent_id", ScalarType::String.nullable(false))
+            .with_named_column("parent_column", ScalarType::Int64.nullable(false))
+            .with_named_column("key_group", ScalarType::Int64.nullable(false))
             .with_key(vec![0, 1, 4]), // TODO: explain why this is a key.
         id: GlobalId::System(4003),
         index_id: GlobalId::System(4004),
@@ -598,8 +598,8 @@ lazy_static! {
         name: "mz_kafka_sinks",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("sink_id", ScalarType::String.nullable(false))
-            .with_column("topic", ScalarType::String.nullable(false))
+            .with_named_column("sink_id", ScalarType::String.nullable(false))
+            .with_named_column("topic", ScalarType::String.nullable(false))
             .with_key(vec![0]),
         id: GlobalId::System(4005),
         index_id: GlobalId::System(4006),
@@ -608,8 +608,8 @@ lazy_static! {
         name: "mz_avro_ocf_sinks",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("sink_id", ScalarType::String.nullable(false))
-            .with_column("path", ScalarType::Bytes.nullable(false))
+            .with_named_column("sink_id", ScalarType::String.nullable(false))
+            .with_named_column("path", ScalarType::Bytes.nullable(false))
             .with_key(vec![0]),
         id: GlobalId::System(4007),
         index_id: GlobalId::System(4008),
@@ -618,9 +618,9 @@ lazy_static! {
         name: "mz_databases",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("id", ScalarType::Int64.nullable(false))
-            .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
+            .with_named_column("id", ScalarType::Int64.nullable(false))
+            .with_named_column("oid", ScalarType::Oid.nullable(false))
+            .with_named_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4009),
         index_id: GlobalId::System(4010),
     };
@@ -628,10 +628,10 @@ lazy_static! {
         name: "mz_schemas",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("id", ScalarType::Int64.nullable(false))
-            .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("database_id", ScalarType::Int64.nullable(true))
-            .with_column("name", ScalarType::String.nullable(false)),
+            .with_named_column("id", ScalarType::Int64.nullable(false))
+            .with_named_column("oid", ScalarType::Oid.nullable(false))
+            .with_named_column("database_id", ScalarType::Int64.nullable(true))
+            .with_named_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4011),
         index_id: GlobalId::System(4012),
     };
@@ -639,11 +639,11 @@ lazy_static! {
         name: "mz_columns",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("id", ScalarType::String.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("position", ScalarType::Int64.nullable(false))
-            .with_column("nullable", ScalarType::Bool.nullable(false))
-            .with_column("type", ScalarType::String.nullable(false)),
+            .with_named_column("id", ScalarType::String.nullable(false))
+            .with_named_column("name", ScalarType::String.nullable(false))
+            .with_named_column("position", ScalarType::Int64.nullable(false))
+            .with_named_column("nullable", ScalarType::Bool.nullable(false))
+            .with_named_column("type", ScalarType::String.nullable(false)),
         id: GlobalId::System(4013),
         index_id: GlobalId::System(4014),
     };
@@ -651,11 +651,11 @@ lazy_static! {
         name: "mz_indexes",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("id", ScalarType::String.nullable(false))
-            .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("on_id", ScalarType::String.nullable(false))
-            .with_column("volatility", ScalarType::String.nullable(false)),
+            .with_named_column("id", ScalarType::String.nullable(false))
+            .with_named_column("oid", ScalarType::Oid.nullable(false))
+            .with_named_column("name", ScalarType::String.nullable(false))
+            .with_named_column("on_id", ScalarType::String.nullable(false))
+            .with_named_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4015),
         index_id: GlobalId::System(4016),
     };
@@ -663,11 +663,11 @@ lazy_static! {
         name: "mz_index_columns",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("index_id", ScalarType::String.nullable(false))
-            .with_column("index_position", ScalarType::Int64.nullable(false))
-            .with_column("on_position", ScalarType::Int64.nullable(true))
-            .with_column("on_expression", ScalarType::String.nullable(true))
-            .with_column("nullable", ScalarType::Bool.nullable(false)),
+            .with_named_column("index_id", ScalarType::String.nullable(false))
+            .with_named_column("index_position", ScalarType::Int64.nullable(false))
+            .with_named_column("on_position", ScalarType::Int64.nullable(true))
+            .with_named_column("on_expression", ScalarType::String.nullable(true))
+            .with_named_column("nullable", ScalarType::Bool.nullable(false)),
         id: GlobalId::System(4017),
         index_id: GlobalId::System(4018),
     };
@@ -675,10 +675,10 @@ lazy_static! {
         name: "mz_tables",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("id", ScalarType::String.nullable(false))
-            .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
+            .with_named_column("id", ScalarType::String.nullable(false))
+            .with_named_column("oid", ScalarType::Oid.nullable(false))
+            .with_named_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_named_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4019),
         index_id: GlobalId::System(4020),
     };
@@ -686,11 +686,11 @@ lazy_static! {
         name: "mz_sources",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("id", ScalarType::String.nullable(false))
-            .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("volatility", ScalarType::String.nullable(false)),
+            .with_named_column("id", ScalarType::String.nullable(false))
+            .with_named_column("oid", ScalarType::Oid.nullable(false))
+            .with_named_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_named_column("name", ScalarType::String.nullable(false))
+            .with_named_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4021),
         index_id: GlobalId::System(4022),
     };
@@ -698,11 +698,11 @@ lazy_static! {
         name: "mz_sinks",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("id", ScalarType::String.nullable(false))
-            .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("volatility", ScalarType::String.nullable(false)),
+            .with_named_column("id", ScalarType::String.nullable(false))
+            .with_named_column("oid", ScalarType::Oid.nullable(false))
+            .with_named_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_named_column("name", ScalarType::String.nullable(false))
+            .with_named_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4023),
         index_id: GlobalId::System(4024),
     };
@@ -710,11 +710,11 @@ lazy_static! {
         name: "mz_views",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("id", ScalarType::String.nullable(false))
-            .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("volatility", ScalarType::String.nullable(false)),
+            .with_named_column("id", ScalarType::String.nullable(false))
+            .with_named_column("oid", ScalarType::Oid.nullable(false))
+            .with_named_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_named_column("name", ScalarType::String.nullable(false))
+            .with_named_column("volatility", ScalarType::String.nullable(false)),
         id: GlobalId::System(4025),
         index_id: GlobalId::System(4026),
     };
@@ -722,10 +722,10 @@ lazy_static! {
         name: "mz_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("id", ScalarType::String.nullable(false))
-            .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
+            .with_named_column("id", ScalarType::String.nullable(false))
+            .with_named_column("oid", ScalarType::Oid.nullable(false))
+            .with_named_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_named_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4027),
         index_id: GlobalId::System(4028),
     };
@@ -733,8 +733,8 @@ lazy_static! {
         name: "mz_array_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("type_id", ScalarType::String.nullable(false))
-            .with_column("element_id", ScalarType::String.nullable(false)),
+            .with_named_column("type_id", ScalarType::String.nullable(false))
+            .with_named_column("element_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4029),
             index_id: GlobalId::System(4030),
     };
@@ -742,7 +742,7 @@ lazy_static! {
         name: "mz_base_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("type_id", ScalarType::String.nullable(false)),
+            .with_named_column("type_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4031),
             index_id: GlobalId::System(4032),
     };
@@ -750,8 +750,8 @@ lazy_static! {
         name: "mz_list_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("type_id", ScalarType::String.nullable(false))
-            .with_column("element_id", ScalarType::String.nullable(false)),
+            .with_named_column("type_id", ScalarType::String.nullable(false))
+            .with_named_column("element_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4033),
             index_id: GlobalId::System(4034),
     };
@@ -759,9 +759,9 @@ lazy_static! {
         name: "mz_map_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("type_id", ScalarType::String.nullable(false))
-            .with_column("key_id", ScalarType::String.nullable(false))
-            .with_column("value_id", ScalarType::String.nullable(false)),
+            .with_named_column("type_id", ScalarType::String.nullable(false))
+            .with_named_column("key_id", ScalarType::String.nullable(false))
+            .with_named_column("value_id", ScalarType::String.nullable(false)),
             id: GlobalId::System(4035),
             index_id: GlobalId::System(4036),
     };
@@ -769,9 +769,9 @@ lazy_static! {
         name: "mz_roles",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("id", ScalarType::Int64.nullable(false))
-            .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false)),
+            .with_named_column("id", ScalarType::Int64.nullable(false))
+            .with_named_column("oid", ScalarType::Oid.nullable(false))
+            .with_named_column("name", ScalarType::String.nullable(false)),
         id: GlobalId::System(4037),
         index_id: GlobalId::System(4038),
     };
@@ -779,7 +779,7 @@ lazy_static! {
         name: "mz_pseudo_types",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("type_id", ScalarType::String.nullable(false)),
+            .with_named_column("type_id", ScalarType::String.nullable(false)),
         id: GlobalId::System(4039),
         index_id: GlobalId::System(4040),
     };
@@ -787,12 +787,12 @@ lazy_static! {
         name: "mz_functions",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-            .with_column("id", ScalarType::String.nullable(false))
-            .with_column("oid", ScalarType::Oid.nullable(false))
-            .with_column("schema_id", ScalarType::Int64.nullable(false))
-            .with_column("name", ScalarType::String.nullable(false))
-            .with_column("arg_ids", ScalarType::Array(Box::new(ScalarType::String)).nullable(false))
-            .with_column("variadic_id", ScalarType::String.nullable(true)),
+            .with_named_column("id", ScalarType::String.nullable(false))
+            .with_named_column("oid", ScalarType::Oid.nullable(false))
+            .with_named_column("schema_id", ScalarType::Int64.nullable(false))
+            .with_named_column("name", ScalarType::String.nullable(false))
+            .with_named_column("arg_ids", ScalarType::Array(Box::new(ScalarType::String)).nullable(false))
+            .with_named_column("variadic_id", ScalarType::String.nullable(true)),
         id: GlobalId::System(4041),
         index_id: GlobalId::System(4042),
     };
@@ -800,10 +800,10 @@ lazy_static! {
         name: "mz_metrics",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-                .with_column("metric", ScalarType::String.nullable(false))
-                .with_column("time", ScalarType::Timestamp.nullable(false))
-                .with_column("labels", ScalarType::Jsonb.nullable(false))
-                .with_column("value", ScalarType::Float64.nullable(false))
+                .with_named_column("metric", ScalarType::String.nullable(false))
+                .with_named_column("time", ScalarType::Timestamp.nullable(false))
+                .with_named_column("labels", ScalarType::Jsonb.nullable(false))
+                .with_named_column("value", ScalarType::Float64.nullable(false))
                 .with_key(vec![0, 1, 2]),
         id: GlobalId::System(4043),
         index_id: GlobalId::System(4044),
@@ -812,9 +812,9 @@ lazy_static! {
         name: "mz_metrics_meta",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-                .with_column("metric", ScalarType::String.nullable(false))
-                .with_column("type", ScalarType::String.nullable(false))
-                .with_column("help", ScalarType::String.nullable(false))
+                .with_named_column("metric", ScalarType::String.nullable(false))
+                .with_named_column("type", ScalarType::String.nullable(false))
+                .with_named_column("help", ScalarType::String.nullable(false))
                 .with_key(vec![0]),
         id: GlobalId::System(4045),
         index_id: GlobalId::System(4046),
@@ -823,11 +823,11 @@ lazy_static! {
         name: "mz_metric_histograms",
         schema: MZ_CATALOG_SCHEMA,
         desc: RelationDesc::empty()
-                .with_column("metric", ScalarType::String.nullable(false))
-                .with_column("time", ScalarType::Timestamp.nullable(false))
-                .with_column("labels", ScalarType::Jsonb.nullable(false))
-                .with_column("bound", ScalarType::Float64.nullable(false))
-                .with_column("count", ScalarType::Int64.nullable(false))
+                .with_named_column("metric", ScalarType::String.nullable(false))
+                .with_named_column("time", ScalarType::Timestamp.nullable(false))
+                .with_named_column("labels", ScalarType::Jsonb.nullable(false))
+                .with_named_column("bound", ScalarType::Float64.nullable(false))
+                .with_named_column("count", ScalarType::Int64.nullable(false))
                 .with_key(vec![0, 1, 2]),
         id: GlobalId::System(4047),
         index_id: GlobalId::System(4048),
