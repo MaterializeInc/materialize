@@ -140,6 +140,132 @@ build apply=LiteralLifting
 ----
 ----
 
+build apply=LiteralLifting
+(union
+  [(constant [[1 2 3] [1 4 3]] [int32 int64 int32])
+   (constant [[1 2 3] [1 4 3]] [int32 int64 int32])])
+----
+----
+%0 =
+| Constant (2) (4)
+| Map 1
+| Project (#1, #0)
+
+%1 =
+| Constant (2) (4)
+| Map 1
+| Project (#1, #0)
+
+%2 =
+| Union %0 %1
+| Map 3
+----
+----
+
+build apply=(LiteralLifting,ProjectionLifting,LiteralLifting)
+(union
+  [(constant [[1 2 3] [1 4 3]] [int32 int64 int32])
+   (constant [[1 2 3] [1 4 3]] [int32 int64 int32])])
+----
+----
+%0 =
+| Constant (2) (4)
+
+%1 =
+| Constant (2) (4)
+
+%2 =
+| Union %0 %1
+| Map 1, 3
+| Project (#1, #0, #2)
+----
+----
+
+build apply=LiteralLifting
+(union
+  [(constant [[1 2 3] [1 4 3]] [int32 int64 int32])
+   (constant [[2 2 3] [2 4 3]] [int32 int64 int32])])
+----
+----
+%0 =
+| Constant (2) (4)
+| Map 1
+| Project (#1, #0)
+
+%1 =
+| Constant (2) (4)
+| Map 2
+| Project (#1, #0)
+
+%2 =
+| Union %0 %1
+| Map 3
+----
+----
+
+build apply=(LiteralLifting,ProjectionLifting,LiteralLifting)
+(union
+  [(constant [[1 2 3] [1 4 3]] [int64 int64 int64])
+   (constant [[2 2 3] [2 4 3]] [int64 int64 int64])])
+----
+----
+%0 =
+| Constant (2) (4)
+| Map 1
+
+%1 =
+| Constant (2) (4)
+| Map 2
+
+%2 =
+| Union %0 %1
+| Map 3
+| Project (#1, #0, #2)
+----
+----
+
+build apply=(LiteralLifting)
+(union
+  [(constant [[1 2 3] [2 2 3]] [int64 int64 int64])
+   (constant [[4 3 3] [4 5 3]] [int64 int64 int64])])
+----
+----
+%0 =
+| Constant (1) (2)
+| Map 2
+
+%1 =
+| Constant (3) (5)
+| Map 4
+| Project (#1, #0)
+
+%2 =
+| Union %0 %1
+| Map 3
+----
+----
+
+build apply=(LiteralLifting,ProjectionLifting,LiteralLifting)
+(union
+  [(constant [[1 2 3] [2 2 3]] [int64 int64 int64])
+   (constant [[4 3 3] [4 5 3]] [int64 int64 int64])])
+----
+----
+%0 =
+| Constant (1) (2)
+| Map 2
+
+%1 =
+| Constant (3) (5)
+| Map 4
+| Project (#1, #0)
+
+%2 =
+| Union %0 %1
+| Map 3
+----
+----
+
 # Union: literals in the suffix in all branches are lifted...
 build apply=LiteralLifting
 (union
