@@ -51,7 +51,7 @@ One such destination you can use for CDC is a **stream** like Apache Kafka. As y
 
 ### Engine
 
-To maintain materialized views using a stream of data, you need an engine to subscribe to the CDC streams, and then perform the computations for and maintenance of the materialized view.  
+To maintain materialized views using a stream of data, you need an engine to subscribe to the CDC streams, and then perform the computations for and maintenance of the materialized view.
 
 One approach to this is using a dataflow **engine**, which is a set of computations that work over streams of data; they take a stream as their input, transform it, and output their own stream. If you think of dataflows in similar terms as functional programming, you can see that they can complete arbitrarily complex tasks.
 
