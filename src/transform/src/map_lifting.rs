@@ -202,35 +202,37 @@ impl LiteralLifting {
                 // reach a fixed point under the transformations.
                 let mut literals = self.action(input, gets);
                 if !literals.is_empty() {
-                    // Discard literals that are not projected
                     let input_arity = input.arity();
-                    let mut used_literals = vec![false; literals.len()];
-                    for output in outputs.iter() {
-                        if *output >= input_arity {
-                            used_literals[*output - input_arity] = true;
-                        }
-                    }
-                    if used_literals.iter().filter(|x| !*x).count() > 0 {
-                        let mut skipped_literals = 0;
-                        let mut new_literals = Vec::new();
-                        let mut literal_map = vec![0; literals.len()];
-                        for i in 0..literals.len() {
-                            if used_literals[i] {
-                                new_literals.push(literals[i].clone());
-                                literal_map[i] = i - skipped_literals;
-                            } else {
-                                skipped_literals += 1;
-                            }
-                        }
+                    // For each input literal contains a vector with the `output` positions
+                    // that references it.
+                    let used_literals = outputs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, x)| **x >= input_arity)
+                        .map(|(out_col, old_in_col)| (old_in_col - input_arity, out_col))
+                        .into_group_map();
+                    if used_literals.len() != literals.len() {
+                        // Discard literals that are not projected
+                        let new_literals = literals
+                            .iter()
+                            .enumerate()
+                            .filter(|(old_in_col, _)| used_literals.contains_key(old_in_col))
+                            .map(|(_, l)| l.clone())
+                            .collect();
+                        literals
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(old_in_col, _)| used_literals.get(&old_in_col))
+                            .enumerate() // adds positions in `new_literals`
+                            .for_each(|(new_in_col, out_cols)| {
+                                // update the references to the literal in `output`
+                                for out_col in out_cols {
+                                    outputs[*out_col] = input_arity + new_in_col;
+                                }
+                            });
                         literals = new_literals;
-
-                        // Remap remaining projected literals
-                        for i in 0..outputs.len() {
-                            if outputs[i] >= input_arity {
-                                outputs[i] = input_arity + literal_map[outputs[i] - input_arity];
-                            }
-                        }
                     }
+
                     // If the literals need to be re-interleaved,
                     // we don't have much choice but to install a
                     // Map operator to do that under the project.
