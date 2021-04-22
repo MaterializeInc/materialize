@@ -98,17 +98,15 @@ impl LiteralLifting {
                         let mut projected_literals = Vec::new();
                         let mut projection = Vec::new();
                         let mut new_column_types = Vec::new();
-                        let mut new_constant_pos = vec![0; the_same.len()];
-                        for i in 0..the_same.len() {
-                            if the_same[i] {
+                        for (i, sameness) in the_same.iter().enumerate() {
+                            if *sameness {
                                 projection.push(final_arity + projected_literals.len());
                                 projected_literals.push(MirScalarExpr::literal_ok(
                                     data[i],
                                     typ.column_types[i].scalar_type.clone(),
                                 ));
                             } else {
-                                new_constant_pos[i] = new_column_types.len();
-                                projection.push(i - projected_literals.len());
+                                projection.push(new_column_types.len());
                                 new_column_types.push(typ.column_types[i].clone());
                             }
                         }
@@ -119,7 +117,7 @@ impl LiteralLifting {
                             *key = key
                                 .iter()
                                 .filter(|x| !the_same[**x])
-                                .map(|x| new_constant_pos[*x])
+                                .map(|x| projection[*x])
                                 .collect::<Vec<usize>>();
                         }
                         typ.keys.sort();
