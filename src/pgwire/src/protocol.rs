@@ -1146,51 +1146,6 @@ where
             }
             ExecuteTimeout::WaitOnce => (true, None),
         };
-        // fetch_batch is a helper function that fetches the next row batch and
-        // implements timeout deadlines if they were requested.
-        async fn fetch_batch(
-            deadline: Option<Instant>,
-            rows: &mut RowBatchStream,
-            canceled: impl Future<Output = ()>,
-        ) -> FetchResult {
-            tokio::select! {
-                _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
-                _ = canceled => FetchResult::Cancelled,
-                batch = rows.next() => FetchResult::Rows(batch),
-            }
-        }
-
-        let canceled = self.coord_client.canceled();
-        let mut batch = fetch_batch(deadline, &mut rows, canceled).await;
-        if let Some([row, ..]) = batch.as_rows() {
-            let datums = row.unpack();
-            let col_types = &row_desc.typ().column_types;
-            if datums.len() != col_types.len() {
-                return self
-                    .error(ErrorResponse::error(
-                        SqlState::INTERNAL_ERROR,
-                        format!(
-                            "internal error: row descriptor has {} columns but row has {} columns",
-                            col_types.len(),
-                            datums.len(),
-                        ),
-                    ))
-                    .await;
-            }
-            for (i, (d, t)) in datums.iter().zip(col_types).enumerate() {
-                if !d.is_instance_of(&t) {
-                    return self
-                        .error(ErrorResponse::error(
-                            SqlState::INTERNAL_ERROR,
-                            format!(
-                                "internal error: column {} is not of expected type {:?}: {:?}",
-                                i, t, d
-                            ),
-                        ))
-                        .await;
-                }
-            }
-        }
 
         self.conn.set_encode_state(
             row_desc
@@ -1211,9 +1166,50 @@ where
 
         // Send rows while the client still wants them and there are still rows to send.
         loop {
+            // Fetch next batch of rows, waiting for a possible requested timeout or
+            // cancellation.
+            let batch = tokio::select! {
+                _ = time::sleep_until(deadline.unwrap_or_else(time::Instant::now)), if deadline.is_some() => FetchResult::Rows(None),
+                _ = self.coord_client.canceled() => FetchResult::Cancelled,
+                batch = rows.next() => FetchResult::Rows(batch),
+            };
+
             match batch {
                 FetchResult::Rows(None) => break,
                 FetchResult::Rows(Some(mut batch_rows)) => {
+                    // Verify the first row is of the expected type. This is often good enough to
+                    // find problems. Notably it failed to find #6304 when "FETCH 2" was used in a
+                    // test, instead we had to use "FETCH 1" twice.
+                    if let [row, ..] = batch_rows.as_slice() {
+                        let datums = row.unpack();
+                        let col_types = &row_desc.typ().column_types;
+                        if datums.len() != col_types.len() {
+                            return self
+                                .error(ErrorResponse::error(
+                                    SqlState::INTERNAL_ERROR,
+                                    format!(
+                                        "internal error: row descriptor has {} columns but row has {} columns",
+                                        col_types.len(),
+                                        datums.len(),
+                                    ),
+                                ))
+                                .await;
+                        }
+                        for (i, (d, t)) in datums.iter().zip(col_types).enumerate() {
+                            if !d.is_instance_of(&t) {
+                                return self
+                                    .error(ErrorResponse::error(
+                                        SqlState::INTERNAL_ERROR,
+                                            format!(
+                                            "internal error: column {} is not of expected type {:?}: {:?}",
+                                            i, t, d
+                                        ),
+                                    ))
+                                    .await;
+                            }
+                        }
+                    }
+
                     // If wait_once is true: the first time this fn is called it blocks (same as
                     // deadline == None). The second time this fn is called it should behave the
                     // same a 0s timeout.
@@ -1241,8 +1237,6 @@ where
                         break;
                     }
                     self.conn.flush().await?;
-                    let canceled = self.coord_client.canceled();
-                    batch = fetch_batch(deadline, &mut rows, canceled).await;
                 }
                 FetchResult::Cancelled => {
                     return self
@@ -1536,13 +1530,4 @@ fn is_txn_exit_stmt(stmt: Option<&Statement<Raw>>) -> bool {
 enum FetchResult {
     Rows(Option<Vec<Row>>),
     Cancelled,
-}
-
-impl FetchResult {
-    fn as_rows(&self) -> Option<&[Row]> {
-        match self {
-            FetchResult::Rows(rows) => rows.as_deref(),
-            _ => None,
-        }
-    }
 }
