@@ -191,6 +191,15 @@ steps:
           run: ci
     timeout_in_minutes: 10
 
+  - id: kafka-sink-avro-debezium-benchmark
+    label: "kafka sink (avro debezium) benchmark sanity check"
+    depends_on: build
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: kafka-sink-avro-debezium
+          run: ci
+    timeout_in_minutes: 10
+
   - id: tb
     label: tb
     depends_on: build
