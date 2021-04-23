@@ -1025,7 +1025,7 @@ pub fn plan_create_source(
         (DataEncoding::Avro { .. }, _) | (_, SourceEnvelope::Debezium(_, _)) => (),
         _ => {
             for (name, ty) in external_connector.metadata_columns() {
-                bare_desc = bare_desc.with_column(name, ty);
+                bare_desc = bare_desc.with_named_column(name, ty);
             }
         }
     }

@@ -134,27 +134,29 @@ pub fn describe_explain(
         stage, explainee, ..
     }: ExplainStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    Ok(StatementDesc::new(Some(RelationDesc::empty().with_column(
-        match stage {
-            ExplainStage::RawPlan => "Raw Plan",
-            ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
-            ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
-        },
-        ScalarType::String.nullable(false),
-    )))
-    .with_pgrepr_params(match explainee {
-        Explainee::Query(q) => {
-            describe_select(
-                scx,
-                SelectStatement {
-                    query: q,
-                    as_of: None,
-                },
-            )?
-            .param_types
-        }
-        _ => vec![],
-    }))
+    Ok(
+        StatementDesc::new(Some(RelationDesc::empty().with_named_column(
+            match stage {
+                ExplainStage::RawPlan => "Raw Plan",
+                ExplainStage::DecorrelatedPlan => "Decorrelated Plan",
+                ExplainStage::OptimizedPlan { .. } => "Optimized Plan",
+            },
+            ScalarType::String.nullable(false),
+        )))
+        .with_pgrepr_params(match explainee {
+            Explainee::Query(q) => {
+                describe_select(
+                    scx,
+                    SelectStatement {
+                        query: q,
+                        as_of: None,
+                    },
+                )?
+                .param_types
+            }
+            _ => vec![],
+        }),
+    )
 }
 
 pub fn plan_explain(
@@ -253,17 +255,23 @@ pub fn describe_tail(
 ) -> Result<StatementDesc, anyhow::Error> {
     let sql_object = scx.resolve_item(name)?;
     let options = TailOptions::try_from(options)?;
+    let progress = options.progress.unwrap_or(false);
     const MAX_U64_DIGITS: u8 = 20;
-    let mut desc = RelationDesc::empty().with_column(
+    let mut desc = RelationDesc::empty().with_named_column(
         "timestamp",
         ScalarType::Decimal(MAX_U64_DIGITS, 0).nullable(false),
     );
-    if options.progress.unwrap_or(false) {
-        desc = desc.with_column("progressed", ScalarType::Bool.nullable(false));
+    if progress {
+        desc = desc.with_named_column("progressed", ScalarType::Bool.nullable(false));
     }
-    let desc = desc
-        .with_column("diff", ScalarType::Int64.nullable(true))
-        .concat(sql_object.desc()?.clone());
+    desc = desc.with_named_column("diff", ScalarType::Int64.nullable(true));
+    for (name, ty) in sql_object.desc()?.iter() {
+        let mut ty = ty.clone();
+        if progress {
+            ty.nullable = true;
+        }
+        desc = desc.with_column(name.clone(), ty);
+    }
     Ok(StatementDesc::new(Some(desc)))
 }
 

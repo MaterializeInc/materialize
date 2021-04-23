@@ -266,8 +266,8 @@ mod tests {
     #[test]
     fn test_roundtrip() {
         let desc = RelationDesc::empty()
-            .with_column("id", ScalarType::Int64.nullable(false))
-            .with_column("price", ScalarType::Float64.nullable(true));
+            .with_named_column("id", ScalarType::Int64.nullable(false))
+            .with_named_column("price", ScalarType::Float64.nullable(true));
 
         let encoder = Encoder::new(desc.clone());
         let row_schema = build_row_schema_json(&crate::avro::column_names_and_types(desc), "data");

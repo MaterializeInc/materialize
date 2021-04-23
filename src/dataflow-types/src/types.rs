@@ -341,7 +341,9 @@ impl DataEncoding {
 
         // Add columns for the data, based on the encoding format.
         Ok(match self {
-            DataEncoding::Bytes => key_desc.with_column("data", ScalarType::Bytes.nullable(false)),
+            DataEncoding::Bytes => {
+                key_desc.with_named_column("data", ScalarType::Bytes.nullable(false))
+            }
             DataEncoding::AvroOcf(AvroOcfEncoding { .. })
             | DataEncoding::Avro(AvroEncoding { .. }) => {
                 let (value_schema, key_schema) = match self {
@@ -366,9 +368,9 @@ impl DataEncoding {
                     // the first two columns ("before" and "after"), and uses the information in the other ones itself
                     columns.truncate(2);
                 }
-                let desc = columns
-                    .into_iter()
-                    .fold(key_desc, |desc, (name, ty)| desc.with_column(name, ty));
+                let desc = columns.into_iter().fold(key_desc, |desc, (name, ty)| {
+                    desc.with_named_column(name, ty)
+                });
                 let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
                     avro::validate_key_schema(key_schema, &desc)
                         .map(Some)
@@ -395,7 +397,7 @@ impl DataEncoding {
                 validate_descriptors(message_name, &d)?
                     .into_iter()
                     .fold(key_desc, |desc, (name, ty)| {
-                        desc.with_column(name.unwrap(), ty)
+                        desc.with_named_column(name.unwrap(), ty)
                     })
             }
             DataEncoding::Regex(RegexEncoding { regex }) => regex
@@ -412,14 +414,19 @@ impl DataEncoding {
                         Some(name) => name.to_owned(),
                     };
                     let ty = ScalarType::String.nullable(true);
-                    desc.with_column(name, ty)
+                    desc.with_named_column(name, ty)
                 }),
             DataEncoding::Csv(CsvEncoding { n_cols, .. }) => {
                 (1..=*n_cols).fold(key_desc, |desc, i| {
-                    desc.with_column(format!("column{}", i), ScalarType::String.nullable(false))
+                    desc.with_named_column(
+                        format!("column{}", i),
+                        ScalarType::String.nullable(false),
+                    )
                 })
             }
-            DataEncoding::Text => key_desc.with_column("text", ScalarType::String.nullable(false)),
+            DataEncoding::Text => {
+                key_desc.with_named_column("text", ScalarType::String.nullable(false))
+            }
             DataEncoding::Postgres(desc) => desc.clone(),
         })
     }
