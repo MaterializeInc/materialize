@@ -50,7 +50,16 @@ content:
 
 ### Example TEXT format
 
-First we'll create a source that just ingests all these logs, so that we can execute some
+First we'll create a source that ingests a single file:
+
+```sql
+CREATE MATERIALIZED SOURCE single_object
+FROM S3 DISCOVER OBJECTS MATCHING 'logs/2020/12/31/frontend.log' USING BUCKET SCAN 'frontend'
+WITH (region = 'us-east-2', access_key_id='<IAM key>', secret_access_key='<IAM secret>')
+FORMAT TEXT;
+```
+
+Next we'll create a source that ingests all these logs, so that we can execute some
 quick and dirty analysis:
 
 ```sql
