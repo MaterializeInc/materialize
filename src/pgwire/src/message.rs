@@ -17,7 +17,7 @@ use itertools::Itertools;
 use postgres::error::SqlState;
 
 use coord::session::TransactionStatus as CoordTransactionStatus;
-use repr::{ColumnName, RelationDesc, RelationType, Row, ScalarType};
+use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowArena, ScalarType};
 
 // Pgwire protocol versions are represented as 32-bit integers, where the
 // high 16 bits represent the major version and the low 16 bits represent the
@@ -168,15 +168,25 @@ pub enum FrontendMessage {
     /// Close the named statement.
     ///
     /// This command is part of the extended query flow.
-    CloseStatement { name: String },
+    CloseStatement {
+        name: String,
+    },
 
     /// Close the named portal.
     ///
     // This command is part of the extended query flow.
-    ClosePortal { name: String },
+    ClosePortal {
+        name: String,
+    },
 
     /// Terminate a connection.
     Terminate,
+
+    CopyData(Vec<u8>),
+
+    CopyDone,
+
+    CopyFail(String),
 }
 
 impl FrontendMessage {
@@ -193,6 +203,9 @@ impl FrontendMessage {
             FrontendMessage::CloseStatement { .. } => "close_statement",
             FrontendMessage::ClosePortal { .. } => "close_portal",
             FrontendMessage::Terminate => "terminate",
+            FrontendMessage::CopyData(_) => "copy_data",
+            FrontendMessage::CopyDone => "copy_done",
+            FrontendMessage::CopyFail(_) => "copy_fail",
         }
     }
 }
@@ -222,6 +235,10 @@ pub enum BackendMessage {
     BindComplete,
     CloseComplete,
     ErrorResponse(ErrorResponse),
+    CopyInResponse {
+        overall_format: pgrepr::Format,
+        column_formats: Vec<pgrepr::Format>,
+    },
     CopyOutResponse {
         overall_format: pgrepr::Format,
         column_formats: Vec<pgrepr::Format>,
@@ -494,6 +511,149 @@ pub fn encode_copy_row_text(
     }
     out.push(b'\n');
     Ok(())
+}
+
+struct RowTextParser<'a> {
+    data: &'a [u8],
+    position: usize,
+    column_delimiter: char,
+    null_string: String,
+}
+
+impl<'a> RowTextParser<'a> {
+    fn new(data: &'a [u8], column_delimiter: char, null_string: String) -> Self {
+        Self {
+            data,
+            position: 0,
+            column_delimiter,
+            null_string,
+        }
+    }
+
+    fn is_eof(&self) -> bool {
+        self.position >= self.data.len()
+    }
+
+    fn is_end_of_line(&self) -> bool {
+        self.is_eof() || self.data[self.position] as char == '\n'
+    }
+
+    fn expect_end_of_line(&mut self) -> Result<(), io::Error> {
+        if self.is_end_of_line() {
+            self.position += 1;
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "extra data after last expected column",
+            ))
+        }
+    }
+
+    fn is_column_delimiter(&self) -> bool {
+        !self.is_eof() && self.data[self.position] as char == self.column_delimiter
+    }
+
+    fn expect_column_delimiter(&mut self) -> Result<(), io::Error> {
+        if self.is_column_delimiter() {
+            self.position += 1;
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "missing data for column",
+            ))
+        }
+    }
+
+    fn consume_null_string(&mut self) -> bool {
+        let bytes = self.null_string.as_bytes();
+        let remaining_bytes = self.data.len() - self.position;
+        if remaining_bytes >= bytes.len()
+            && self.data[self.position..]
+                .iter()
+                .zip(bytes.iter())
+                .all(|(x, y)| x == y)
+        {
+            self.position += bytes.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn consume_escaped_char(&mut self) -> Option<u8> {
+        if self.position + 1 < self.data.len() && self.data[self.position] as char == '\\' {
+            match self.data[self.position + 1] as char {
+                'r' => {
+                    self.position += 2;
+                    Some('\r' as u8)
+                }
+                'n' => {
+                    self.position += 2;
+                    Some('\n' as u8)
+                }
+                't' => {
+                    self.position += 2;
+                    Some('\t' as u8)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    fn consume_raw_value(&mut self) -> Result<Option<Vec<u8>>, io::Error> {
+        if self.consume_null_string() {
+            return Ok(None);
+        }
+        let mut raw_value = Vec::new();
+        while !self.is_eof() {
+            if self.is_end_of_line() || self.is_column_delimiter() {
+                break;
+            }
+            if let Some(c) = self.consume_escaped_char() {
+                raw_value.push(c);
+            } else {
+                raw_value.push(self.data[self.position]);
+                self.position += 1;
+            }
+        }
+        Ok(Some(raw_value))
+    }
+}
+
+pub fn decode_row_text(
+    data: &[u8],
+    column_types: &Vec<pgrepr::Type>,
+) -> Result<Vec<Row>, io::Error> {
+    let mut rows = Vec::new();
+    let mut parser = RowTextParser::new(data, '\t', "\\N".to_string());
+    while !parser.is_eof() {
+        let mut row = Vec::new();
+        let buf = RowArena::new();
+        for (col, typ) in column_types.iter().enumerate() {
+            if col > 0 {
+                parser.expect_column_delimiter()?;
+            }
+            let raw_value = parser.consume_raw_value()?;
+            if let Some(raw_value) = raw_value {
+                match pgrepr::Value::decode_text(&typ, &raw_value) {
+                    Ok(value) => row.push(value.into_datum(&buf, &typ).0),
+                    Err(err) => {
+                        let msg = format!("unable to decode column: {}", err);
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, msg));
+                    }
+                }
+            } else {
+                row.push(Datum::Null);
+            }
+        }
+        parser.expect_end_of_line()?;
+        rows.push(Row::pack(row));
+    }
+    Ok(rows)
 }
 
 pub fn encode_row_description(

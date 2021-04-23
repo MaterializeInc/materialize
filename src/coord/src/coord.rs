@@ -1302,6 +1302,16 @@ impl Coordinator {
             Plan::SendRows(plan) => {
                 tx.send(Ok(send_immediate_rows(plan.rows)), session);
             }
+
+            Plan::CopyFrom(plan) => {
+                tx.send(
+                    Ok(ExecuteResponse::CopyFrom {
+                        id: plan.id,
+                        format: plan.copy_from,
+                    }),
+                    session,
+                );
+            }
             Plan::Explain(plan) => {
                 tx.send(self.sequence_explain(&session, plan), session);
             }

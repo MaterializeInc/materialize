@@ -406,7 +406,7 @@ pub fn plan_insert_query(
     table_name: UnresolvedObjectName,
     columns: Vec<Ident>,
     source: InsertSource<Raw>,
-) -> Result<(GlobalId, HirRelationExpr), anyhow::Error> {
+) -> Result<(GlobalId, HirRelationExpr, RelationDesc), anyhow::Error> {
     let mut qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     let table = scx.resolve_item(table_name)?;
 
@@ -547,7 +547,12 @@ pub fn plan_insert_query(
         }
     }
 
-    Ok((table.id(), expr.map(map_exprs).project(project_key)))
+    Ok((
+        table.id(),
+        expr.map(map_exprs).project(project_key),
+        // TODO(asenac) return only the columns requested in the order requested
+        desc.clone(),
+    ))
 }
 
 struct CastRelationError {

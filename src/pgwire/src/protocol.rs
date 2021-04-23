@@ -15,11 +15,13 @@ use std::iter;
 use std::mem;
 
 use byteorder::{ByteOrder, NetworkEndian};
+use expr::GlobalId;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::{self, StreamExt};
 use itertools::izip;
 use lazy_static::lazy_static;
 use log::debug;
+use message::decode_row_text;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_uint_counter};
@@ -28,7 +30,8 @@ use tokio::time::{self, Duration, Instant};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use coord::session::{
-    EndTransactionAction, Portal, PortalState, RowBatchStream, Session, TransactionStatus,
+    EndTransactionAction, Portal, PortalState, RowBatchStream, Session, TransactionOps,
+    TransactionStatus, WriteOp,
 };
 use coord::ExecuteResponse;
 use dataflow_types::PeekResponse;
@@ -305,6 +308,10 @@ where
             Some(FrontendMessage::Flush) => self.flush().await?,
             Some(FrontendMessage::Sync) => self.sync().await?,
             Some(FrontendMessage::Terminate) => State::Done,
+
+            Some(FrontendMessage::CopyData(_))
+            | Some(FrontendMessage::CopyDone)
+            | Some(FrontendMessage::CopyFail(_)) => State::Drain,
             None => State::Done,
         };
 
@@ -1107,6 +1114,11 @@ where
                 };
                 self.copy_rows(format, row_desc, rows).await
             }
+            ExecuteResponse::CopyFrom { id, format } => {
+                let row_desc =
+                    row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
+                self.read_rows(id, format, row_desc).await
+            }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
             ExecuteResponse::AlteredIndexLogicalCompaction => command_complete!("ALTER INDEX"),
@@ -1384,6 +1396,94 @@ where
             .send(BackendMessage::CommandComplete { tag })
             .await?;
         Ok(State::Ready)
+    }
+
+    async fn read_rows(
+        &mut self,
+        id: GlobalId,
+        format: CopyFormat,
+        row_desc: RelationDesc,
+    ) -> Result<State, io::Error> {
+        let encode_format: pgrepr::Format = match format {
+            CopyFormat::Text => pgrepr::Format::Text,
+            // CopyFormat::Binary => pgrepr::Format::Binary,
+            _ => {
+                return self
+                    .error(ErrorResponse::error(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        format!("COPY FROM format {:?} not supported", format),
+                    ))
+                    .await
+            }
+        };
+
+        let typ = row_desc.typ();
+        let column_formats = iter::repeat(encode_format)
+            .take(typ.column_types.len())
+            .collect::<Vec<pgrepr::Format>>();
+        self.conn
+            .send(BackendMessage::CopyInResponse {
+                overall_format: encode_format,
+                column_formats: column_formats.clone(),
+            })
+            .await?;
+        self.conn.flush().await?;
+
+        let mut data = Vec::new();
+        let mut next_state = State::Ready;
+        loop {
+            let message = self.conn.recv().await?;
+            match message {
+                Some(FrontendMessage::CopyData(buf)) => data.extend(buf),
+                Some(FrontendMessage::CopyDone) => break,
+                _ => {
+                    next_state = State::Done;
+                    break;
+                }
+            }
+        }
+
+        let column_types = typ
+            .column_types
+            .iter()
+            .map(|x| &x.scalar_type)
+            .map(pgrepr::Type::from)
+            .collect::<Vec<pgrepr::Type>>();
+
+        if let State::Ready = next_state {
+            let mut rows = match decode_row_text(&data, &column_types) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::INVALID_PARAMETER_VALUE,
+                            format!("{}", e),
+                        ))
+                        .await
+                }
+            };
+            let rows = rows.drain(..).map(|row| (row, 1)).collect::<Vec<_>>();
+            let count = rows.len();
+            match self
+                .coord_client
+                .session()
+                .add_transaction_ops(TransactionOps::Writes(vec![WriteOp { id, rows }]))
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    return self
+                        .error(ErrorResponse::from_coord(Severity::Error, e))
+                        .await;
+                }
+            }
+
+            let tag = format!("COPY {}", count);
+            self.conn
+                .send(BackendMessage::CommandComplete { tag })
+                .await?;
+        }
+
+        Ok(next_state)
     }
 
     async fn error(&mut self, err: ErrorResponse) -> Result<State, io::Error> {

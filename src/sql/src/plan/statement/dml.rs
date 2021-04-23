@@ -23,15 +23,16 @@ use repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
     CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
-    ExplainStage, ExplainStatement, Explainee, InsertStatement, Query, Raw, SelectStatement,
-    Statement, TailStatement, UpdateStatement, ViewDefinition,
+    ExplainStage, ExplainStatement, Explainee, Ident, InsertSource, InsertStatement, Query, Raw,
+    SelectStatement, Statement, TailStatement, UnresolvedObjectName, UpdateStatement,
+    ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::plan::query;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    CopyFormat, ExplainPlan, InsertPlan, Params, PeekPlan, PeekWhen, Plan, TailPlan,
+    CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, Params, PeekPlan, PeekWhen, Plan, TailPlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -62,7 +63,7 @@ pub fn plan_insert(
     }: InsertStatement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
+    let (id, mut expr, _) = query::plan_insert_query(scx, table_name, columns, source)?;
     expr.bind_parameters(&params)?;
     let expr = expr.lower();
 
@@ -317,6 +318,16 @@ pub fn plan_tail(
     }
 }
 
+pub fn describe_table(
+    scx: &StatementContext,
+    table_name: UnresolvedObjectName,
+    columns: Vec<Ident>,
+) -> Result<StatementDesc, anyhow::Error> {
+    let source = InsertSource::DefaultValues;
+    let (_, _, desc) = query::plan_insert_query(scx, table_name, columns, source)?;
+    Ok(StatementDesc::new(Some(desc)))
+}
+
 with_options! {
     struct CopyOptions {
         format: String,
@@ -328,11 +339,22 @@ pub fn describe_copy(
     CopyStatement { relation, .. }: CopyStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(match relation {
-        CopyRelation::Table { .. } => bail!("unsupported COPY relation {:?}", relation),
+        CopyRelation::Table { name, columns } => describe_table(scx, name, columns)?,
         CopyRelation::Select(stmt) => describe_select(scx, stmt)?,
         CopyRelation::Tail(stmt) => describe_tail(scx, stmt)?,
     }
     .with_is_copy())
+}
+
+fn plan_copy_from(
+    scx: &StatementContext,
+    table_name: UnresolvedObjectName,
+    columns: Vec<Ident>,
+    copy_from: CopyFormat,
+) -> Result<Plan, anyhow::Error> {
+    let source = InsertSource::DefaultValues;
+    let (id, _, _) = query::plan_insert_query(scx, table_name, columns, source)?;
+    Ok(Plan::CopyFrom(CopyFromPlan { id, copy_from }))
 }
 
 pub fn plan_copy(
@@ -362,6 +384,10 @@ pub fn plan_copy(
                 Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
             }
             CopyRelation::Tail(stmt) => Ok(plan_tail(scx, stmt, Some(format))?),
+        },
+        (CopyDirection::From, CopyTarget::Stdin) => match relation {
+            CopyRelation::Table { name, columns } => plan_copy_from(scx, name, columns, format),
+            _ => bail!("COPY FROM {} not supported", target),
         },
         _ => bail!("COPY {} {} not supported", direction, target),
     }

@@ -90,6 +90,7 @@ pub enum Plan {
     Peek(PeekPlan),
     Tail(TailPlan),
     SendRows(SendRowsPlan),
+    CopyFrom(CopyFromPlan),
     Explain(ExplainPlan),
     SendDiffs(SendDiffsPlan),
     Insert(InsertPlan),
@@ -232,6 +233,12 @@ pub struct TailPlan {
 #[derive(Debug)]
 pub struct SendRowsPlan {
     pub rows: Vec<Row>,
+}
+
+#[derive(Debug)]
+pub struct CopyFromPlan {
+    pub id: GlobalId,
+    pub copy_from: CopyFormat,
 }
 
 #[derive(Debug)]

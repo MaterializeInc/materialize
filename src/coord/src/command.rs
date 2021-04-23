@@ -17,6 +17,7 @@ use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 
 use dataflow_types::PeekResponse;
+use expr::GlobalId;
 use ore::str::StrExt;
 use repr::Row;
 use sql::ast::{FetchDirection, ObjectType, Raw, Statement};
@@ -148,6 +149,10 @@ pub enum ExecuteResponse {
     CopyTo {
         format: sql::plan::CopyFormat,
         resp: Box<ExecuteResponse>,
+    },
+    CopyFrom {
+        id: GlobalId,
+        format: sql::plan::CopyFormat,
     },
     /// The requested database was created.
     CreatedDatabase {
