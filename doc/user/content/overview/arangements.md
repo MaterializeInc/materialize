@@ -74,8 +74,14 @@ We call the indexed update stream an **arrangement**.
 <!-- "Arrangement structure" section is still a work in progress. Do not review." -->
 <!-- need example of what data key-value pair looks like -->
 
-`data` is structured as a key-value pair, and arrangements are indexed on the `data` keys. An arrangement records all updates, but an index only maintains the current accumulation of `diff` for each `(data, time)` pair.
+`data` is structured as a key-value pair, and arrangements are indexed on the `data` keys. An arrangement records all updates, but an index only maintains the current accumulation of `diff` for each `(data, time)` pair. 
 
+```nofmt
+("data":("id":5,"price":("int":10)),"time":5,"diff":1)
+("data":("id":5,"price":("int":12)),"time":4,"diff":1)
+("data":("id":5,"price":("int":12)),"time":5,"diff":-1)
+("data":("id":5,"price":("int":10)),"time":6,"diff":-1)
+```
 <!-- Add example -->
 
 When Materialize creates an arrangement, it attempts to choose a key that will ensure that data is well distributed. If there is a primary key, that will be used; if there are source fields not required by the query, they are not included. <!-- If we’re lucky, we can get Primary key info from schema (Confluent, Kafka). -->
@@ -84,7 +90,7 @@ New dataflows can reuse arrangements for materializations, improving overall sys
 
 ### Arrangement size
 
-The size of an arrangement is related to the size of its accumulated updates, but not directly proportional to them. Instead, an arrangement's size is roughly equivalent to its number of distinct `(data, time)` pairs, which can be small even if the number of records is large. As an illustration, consider a histogram of taxi rides grouped by the number of riders and the fare amount, the number of `(rider, fare)` pairs will be much smaller than the number of total rides that take place.
+The size of an arrangement is related to the size of its accumulated updates, but not directly proportional to them. Instead, an arrangement's size is roughly equivalent to its number of distinct `(data, time)` pairs, which can be small even if the number of records is large. As an illustration, consider a histogram of taxi rides grouped by the number of riders and the fare amount. The number of `(rider, fare)` pairs will be much smaller than the number of total rides that take place.
 
 The size of the arrangement is then further reduced by background [compaction](/ops/deployment/#compaction) of historical data.
 
