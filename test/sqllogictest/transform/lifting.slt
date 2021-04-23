@@ -540,3 +540,44 @@ explain select distinct a1.*, 123 from t_pk as a1, t_pk as a2 WHERE a1.a = a2.a;
 | Map 123
 
 EOF
+
+# Reduce
+query T multiline
+explain
+select a, b, max(2), count(*) from t where b = 1 group by a, b;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Filter (#1 = 1)
+| Reduce group=(#0)
+| | agg dummy(dummy)
+| Map 1, 2
+| Project (#0, #2, #3, #0)
+
+EOF
+
+query T multiline
+explain
+select a, b, count(*), max(2) from t where b = 1 group by a, b;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Filter (#1 = 1)
+| Reduce group=(#0)
+| | agg dummy(dummy)
+| Map 1, 2
+| Project (#0, #2, #0, #3)
+
+EOF
+
+query T multiline
+explain
+select a, b, min(2), max(3) from t where b = 1 group by a, b;
+----
+%0 =
+| Get materialize.public.t (u1)
+| Filter (#1 = 1)
+| Distinct group=(#0)
+| Map 1, 2, 3
+
+EOF

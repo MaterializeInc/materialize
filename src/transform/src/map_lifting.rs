@@ -462,29 +462,28 @@ impl LiteralLifting {
                     }
                 }
 
-                // The only literals we think we can lift are those that are
-                // independent of the number of records; things like `Any`, `All`,
-                // `Min`, and `Max`.
-                // TODO(frank): extract non-terminal literals.
-                let mut result = Vec::new();
-                while aggregates.last().map(|a| {
-                    (a.func == expr::AggregateFunc::Any || a.func == expr::AggregateFunc::All)
-                        && a.expr.is_literal_ok()
-                }) == Some(true)
-                {
-                    let aggr = aggregates.pop().unwrap();
+                let eval_constant_aggr = |aggr: &expr::AggregateExpr| {
                     let temp = repr::RowArena::new();
                     let eval = aggr
                         .func
                         .eval(Some(aggr.expr.eval(&[], &temp).unwrap()), &temp);
-                    result.push(MirScalarExpr::literal_ok(
+                    MirScalarExpr::literal_ok(
                         eval,
                         // This type information should be available in the `a.expr` literal,
                         // but extracting it with pattern matching seems awkward.
                         aggr.func
                             .output_type(aggr.expr.typ(&repr::RelationType::empty()))
                             .scalar_type,
-                    ));
+                    )
+                };
+
+                // The only literals we think we can lift are those that are
+                // independent of the number of records; things like `Any`, `All`,
+                // `Min`, and `Max`.
+                let mut result = Vec::new();
+                while aggregates.last().map(|a| a.is_constant()) == Some(true) {
+                    let aggr = aggregates.pop().unwrap();
+                    result.push(eval_constant_aggr(&aggr));
                 }
                 if aggregates.is_empty() {
                     while group_key.last().map(|k| k.is_literal()) == Some(true) {
@@ -497,27 +496,37 @@ impl LiteralLifting {
                 // Add a Map operator with the remaining literals so that they are lifted in
                 // the next invocation of this transform.
                 let non_literal_keys = group_key.iter().filter(|x| !x.is_literal()).count();
-                if non_literal_keys != group_key.len() {
-                    let first_projected_literal: usize = non_literal_keys + aggregates.len();
+                let non_constant_aggr = aggregates.iter().filter(|x| !x.is_constant()).count();
+                if non_literal_keys != group_key.len() || non_constant_aggr != aggregates.len() {
+                    let first_projected_literal: usize = non_literal_keys + non_constant_aggr;
                     let mut projection = Vec::new();
                     let mut projected_literals = Vec::new();
+
                     let mut new_group_key = Vec::new();
-                    for (old_pos, key) in group_key.iter().enumerate() {
+                    for (old_pos, key) in group_key.drain(..).enumerate() {
                         if key.is_literal() {
                             projection.push(first_projected_literal + projected_literals.len());
-                            projected_literals.push(key.clone());
+                            projected_literals.push(key);
                         } else {
                             projection.push(old_pos - projected_literals.len());
-                            new_group_key.push(key.clone());
+                            new_group_key.push(key);
                         }
                     }
                     // The new group key without literals
                     *group_key = new_group_key;
 
-                    // Add the aggregates to the final projection
-                    for i in 0..aggregates.len() {
-                        projection.push(non_literal_keys + i);
+                    let mut new_aggregates = Vec::new();
+                    for (old_pos, aggr) in aggregates.drain(..).enumerate() {
+                        if aggr.is_constant() {
+                            projection.push(first_projected_literal + projected_literals.len());
+                            projected_literals.push(eval_constant_aggr(&aggr));
+                        } else {
+                            projection.push(group_key.len() + old_pos - projected_literals.len());
+                            new_aggregates.push(aggr);
+                        }
                     }
+                    // The new aggregates without constant ones
+                    *aggregates = new_aggregates;
 
                     *relation = relation
                         .take_dangerous()
