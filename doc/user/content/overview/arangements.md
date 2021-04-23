@@ -74,11 +74,12 @@ We call the indexed update stream an **arrangement**.
 <!-- "Arrangement structure" section is still a work in progress. Do not review." -->
 <!-- need example of what data key-value pair looks like -->
 
-`data` is structured as a key-value pair, and arrangements are indexed on the `data` keys. An arrangement records all updates, but an index only maintains the current accumulation of `diff` for each `(data, time)` pair. 
+`data` is structured as a key-value pair, and arrangements are indexed on the `data` keys. An arrangement records all updates, but an index only maintains the current accumulation of `diff` for each `(data, time)` pair.
+
+`(data:updated record),time, diff)`
 
 ```nofmt
-("data":("id":5,"price":("int":10)),"time":5,"diff":1)
-("data":("id":5,"price":("int":12)),"time":4,"diff":1)
+"data":(("id":5,"price":("int":12))),timestamp,"diff":1)
 ("data":("id":5,"price":("int":12)),"time":5,"diff":-1)
 ("data":("id":5,"price":("int":10)),"time":6,"diff":-1)
 ```
