@@ -204,33 +204,33 @@ impl LiteralLifting {
                 if !literals.is_empty() {
                     let input_arity = input.arity();
                     // For each input literal contains a vector with the `output` positions
-                    // that references it.
-                    let used_literals = outputs
+                    // that references it. By putting data into a Vec and sorting, we
+                    // guarantee a reliable order.
+                    let mut used_literals = outputs
                         .iter()
                         .enumerate()
                         .filter(|(_, x)| **x >= input_arity)
                         .map(|(out_col, old_in_col)| (old_in_col - input_arity, out_col))
-                        .into_group_map();
+                        // group them to avoid adding duplicated literals
+                        .into_group_map()
+                        .drain()
+                        .collect::<Vec<_>>();
+
                     if used_literals.len() != literals.len() {
+                        used_literals.sort();
                         // Discard literals that are not projected
-                        let new_literals = literals
+                        literals = used_literals
                             .iter()
-                            .enumerate()
-                            .filter(|(old_in_col, _)| used_literals.contains_key(old_in_col))
-                            .map(|(_, l)| l.clone())
-                            .collect();
-                        literals
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(old_in_col, _)| used_literals.get(&old_in_col))
-                            .enumerate() // adds positions in `new_literals`
-                            .for_each(|(new_in_col, out_cols)| {
-                                // update the references to the literal in `output`
-                                for out_col in out_cols {
-                                    outputs[*out_col] = input_arity + new_in_col;
-                                }
-                            });
-                        literals = new_literals;
+                            .map(|(old_in_col, _)| literals[*old_in_col].clone())
+                            .collect::<Vec<_>>();
+                        // Update the references to the literal in `output`
+                        for (new_in_col, (_old_in_col, out_cols)) in
+                            used_literals.iter().enumerate()
+                        {
+                            for out_col in out_cols {
+                                outputs[*out_col] = input_arity + new_in_col;
+                            }
+                        }
                     }
 
                     // If the literals need to be re-interleaved,
