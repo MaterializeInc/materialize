@@ -21,6 +21,7 @@ pub struct PgColumn {
     pub name: String,
     pub scalar_type: PgType,
     pub nullable: bool,
+    pub primary_key: bool,
 }
 
 impl AstDisplay for PgColumn {
@@ -28,11 +29,13 @@ impl AstDisplay for PgColumn {
         f.write_str(&self.name);
         f.write_str(" ");
         f.write_str(&self.scalar_type);
-        f.write_str(" ");
+        if self.primary_key {
+            f.write_str(" PRIMARY KEY");
+        }
         if self.nullable {
-            f.write_str("NULL");
+            f.write_str(" NULL");
         } else {
-            f.write_str("NOT NULL");
+            f.write_str(" NOT NULL");
         }
     }
 }
@@ -78,8 +81,16 @@ pub async fn table_info(
 
     let schema = client
         .query(
-            "SELECT a.attname, a.atttypid, a.attnotnull
+            "SELECT
+                    a.attname,
+                    a.atttypid,
+                    a.attnotnull,
+                    b.oid IS NOT NULL
                 FROM pg_catalog.pg_attribute a
+                LEFT JOIN pg_catalog.pg_constraint b
+                    ON a.attrelid = b.conrelid
+                    AND b.contype = 'p'
+                    AND a.attnum = ANY (b.conkey)
                 WHERE a.attnum > 0::pg_catalog.int2
                     AND NOT a.attisdropped
                     AND a.attrelid = $1
@@ -94,10 +105,12 @@ pub async fn table_info(
             let scalar_type =
                 PgType::from_oid(oid).ok_or_else(|| anyhow!("unknown type OID: {}", oid))?;
             let nullable = !row.get::<_, bool>(2);
+            let primary_key = row.get(3);
             Ok(PgColumn {
                 name,
                 scalar_type,
                 nullable,
+                primary_key,
             })
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?;
