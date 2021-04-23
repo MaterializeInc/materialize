@@ -124,7 +124,7 @@ impl LiteralLifting {
                         typ.keys.dedup();
 
                         let remove_extracted_literals = |row: &mut Row| {
-                            let mut new_row = Row::with_capacity(final_arity);
+                            let mut new_row = Row::default();
                             let data = row.unpack();
                             for i in 0..the_same.len() {
                                 if !the_same[i] {
