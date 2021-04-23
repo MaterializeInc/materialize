@@ -1,0 +1,36 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+#
+# Test that adding a primary key as a completely new column does not mess things up
+# Currently rejected by the schema registry on the Debezium side. Replication stops
+#
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+CREATE TABLE alter_add_column_primary_key (f1 INTEGER);
+INSERT INTO alter_add_column_primary_key VALUES (123);
+
+> CREATE MATERIALIZED SOURCE alter_add_column_primary_key
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_add_column_primary_key'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE DEBEZIUM;
+
+> SELECT * FROM alter_add_column_primary_key;
+123
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+CREATE SEQUENCE pk_sequence;
+ALTER TABLE alter_add_column_primary_key ADD COLUMN pk_column INTEGER PRIMARY KEY DEFAULT nextval('pk_sequence');
+INSERT INTO alter_add_column_primary_key VALUES (123,2);
+
+UPDATE alter_add_column_primary_key SET f1 = f1 * 10 WHERE pk_column = 1;
+UPDATE alter_add_column_primary_key SET f1 = f1 * 100 WHERE pk_column = 2;
+
+> SELECT * FROM alter_add_column_primary_key;
+123
