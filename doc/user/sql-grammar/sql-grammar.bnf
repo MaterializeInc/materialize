@@ -347,9 +347,9 @@ show_sinks ::=
 show_sources ::=
   'SHOW' 'FULL'? 'MATERIALIZED'? 'SOURCES' ('FROM' schema_name)?
 show_tables ::=
-  'SHOW' 'TABLES' ('FROM' schema_name)?
+  'SHOW' 'EXTENDED'? 'FULL'? 'TABLES' ('FROM' schema_name)?
 show_types ::=
-    'SHOW' 'EXTENDED'? 'FULL'?
+  'SHOW' 'EXTENDED'? 'FULL'?
 show_views ::=
   'SHOW' 'FULL'? 'MATERIALIZED'? 'VIEWS' ('FROM' schema_name)?
 show_objects ::=
