@@ -108,13 +108,13 @@ opt
 
 # Extract common values in all rows in Constant operator
 build
-(constant [[1 2 3] [1 4 3]] [int32 int64 int32])
+(constant [[1 2 3] [1 4 3]] [int64 int64 int64])
 ----
 %0 =
 | Constant (1, 2, 3) (1, 4, 3)
 
 build apply=LiteralLifting
-(constant [[1 2 3] [1 4 3]] [int32 int64 int32])
+(constant [[1 2 3] [1 4 3]] [int64 int64 int64])
 ----
 %0 =
 | Constant (2) (4)
@@ -124,8 +124,8 @@ build apply=LiteralLifting
 
 build apply=LiteralLifting
 (union
-  [(constant [[1 2 3] [2 4 3]] [int32 int64 int32])
-   (constant [[3 2 3] [4 4 3]] [int32 int64 int32])])
+  [(constant [[1 2 3] [2 4 3]] [int64 int64 int64])
+   (constant [[3 2 3] [4 4 3]] [int64 int64 int64])])
 ----
 ----
 %0 =
@@ -142,8 +142,8 @@ build apply=LiteralLifting
 
 build apply=LiteralLifting
 (union
-  [(constant [[1 2 3] [1 4 3]] [int32 int64 int32])
-   (constant [[1 2 3] [1 4 3]] [int32 int64 int32])])
+  [(constant [[1 2 3] [1 4 3]] [int64 int64 int64])
+   (constant [[1 2 3] [1 4 3]] [int64 int64 int64])])
 ----
 ----
 %0 =
@@ -164,8 +164,8 @@ build apply=LiteralLifting
 
 build apply=(LiteralLifting,ProjectionLifting,LiteralLifting)
 (union
-  [(constant [[1 2 3] [1 4 3]] [int32 int64 int32])
-   (constant [[1 2 3] [1 4 3]] [int32 int64 int32])])
+  [(constant [[1 2 3] [1 4 3]] [int64 int64 int64])
+   (constant [[1 2 3] [1 4 3]] [int64 int64 int64])])
 ----
 ----
 %0 =
@@ -183,8 +183,8 @@ build apply=(LiteralLifting,ProjectionLifting,LiteralLifting)
 
 build apply=LiteralLifting
 (union
-  [(constant [[1 2 3] [1 4 3]] [int32 int64 int32])
-   (constant [[2 2 3] [2 4 3]] [int32 int64 int32])])
+  [(constant [[1 2 3] [1 4 3]] [int64 int64 int64])
+   (constant [[2 2 3] [2 4 3]] [int64 int64 int64])])
 ----
 ----
 %0 =
