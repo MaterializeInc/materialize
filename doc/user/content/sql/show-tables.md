@@ -56,6 +56,8 @@ my_other_table
 
 ### Show all tables and include table type
 
+`EXTENDED` lists system tables as well as user-created tables; `FULL` adds the `type` column that specifies whether the table was created by a user or a temp process or is a system table.
+
 ```sql
 SHOW EXTENDED FULL TABLES;
 ```
