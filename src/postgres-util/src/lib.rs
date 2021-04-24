@@ -52,30 +52,22 @@ pub struct TableInfo {
 }
 
 /// Fetches column information from an upstream Postgres source, given
-/// a connection string, a namespace, and a target table.
+/// a connection string and a target table.
 ///
 /// # Errors
 ///
 /// - Invalid connection string, user information, or user permissions.
 /// - Upstream table does not exist or contains invalid values.
-pub async fn table_info(
-    conn: &str,
-    namespace: &str,
-    table: &str,
-) -> Result<TableInfo, anyhow::Error> {
+pub async fn table_info(conn: &str, ast_table: &String) -> Result<TableInfo, anyhow::Error> {
     let (client, connection) = tokio_postgres::connect(&conn, NoTls).await?;
     tokio::spawn(connection);
 
     let rel_id: u32 = client
-        .query(
-            "SELECT c.oid
-                FROM pg_catalog.pg_class c
-                INNER JOIN pg_catalog.pg_namespace n
-                    ON (c.relnamespace = n.oid)
-                WHERE n.nspname = $1
-                    AND c.relname = $2;",
-            &[&namespace, &table],
-        )
+        // The "::regclass::oid" thing converts its LHS to an OID, so this gets
+        // us the OID of a specified table (which can optionally include a schema
+        // namespace). The "::text" is to appease the rust postgres driver since we are
+        // passing a string, not a regclass.
+        .query("SELECT $1::text::regclass::oid", &[ast_table])
         .await?
         .get(0)
         .ok_or_else(|| anyhow!("table not found in the upstream catalog"))?

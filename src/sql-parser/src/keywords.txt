@@ -154,7 +154,6 @@ Minute
 Minutes
 Month
 Months
-Namespace
 Natural
 Next
 No

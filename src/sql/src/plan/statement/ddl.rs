@@ -712,7 +712,6 @@ pub fn plan_create_source(
         Connector::Postgres {
             conn,
             publication,
-            namespace,
             table,
             columns,
             slot,
@@ -788,8 +787,7 @@ pub fn plan_create_source(
             let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
                 conn: conn.clone(),
                 publication: publication.clone(),
-                namespace: namespace.clone(),
-                table: table.clone(),
+                ast_table: table.to_ast_string(),
                 cast_exprs,
                 slot_name: slot_name.clone(),
             });

@@ -1757,10 +1757,8 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                self.expect_keyword(NAMESPACE)?;
-                let namespace = self.parse_literal_string()?;
                 self.expect_keyword(TABLE)?;
-                let table = self.parse_literal_string()?;
+                let table = self.parse_object_name()?;
 
                 let (columns, constraints) = self.parse_columns(Optional)?;
 
@@ -1776,7 +1774,6 @@ impl<'a> Parser<'a> {
                     conn,
                     publication,
                     slot,
-                    namespace,
                     table,
                     columns,
                 })
@@ -1873,8 +1870,6 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                self.expect_keyword(NAMESPACE)?;
-                let namespace = self.parse_literal_string()?;
                 self.expect_keyword(TABLES)?;
                 self.expect_token(&Token::LParen)?;
                 let tables = self.parse_postgres_tables()?;
@@ -1883,7 +1878,6 @@ impl<'a> Parser<'a> {
                     conn,
                     publication,
                     slot,
-                    namespace,
                     tables,
                 })
             }
@@ -2121,7 +2115,7 @@ impl<'a> Parser<'a> {
     fn parse_postgres_tables(&mut self) -> Result<Vec<PgTable<Raw>>, ParserError> {
         let mut tables = vec![];
         loop {
-            let name = self.parse_literal_string()?;
+            let name = self.parse_object_name()?;
             self.expect_keyword(AS)?;
             let alias = RawName::Name(self.parse_object_name()?);
             let (columns, constraints) = self.parse_columns(Optional)?;

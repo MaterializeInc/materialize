@@ -75,30 +75,26 @@ INSERT INTO no_replica_identity VALUES (1), (2);
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLE 'numbers';
+    TABLE numbers;
 
 > CREATE SOURCE "empty_schema2"
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLE 'numbers' ();
+    TABLE numbers ();
 # TODO: This should be an error
 
 > CREATE SOURCE "correct_schema_explicit_null"
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLE 'numbers' (number int PRIMARY KEY, is_prime bool NULL, name text NULL)
+    TABLE numbers (number int PRIMARY KEY, is_prime bool NULL, name text NULL)
 
 > CREATE MATERIALIZED SOURCE "correct_schema"
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLE 'numbers' (number int PRIMARY KEY NOT NULL, is_prime bool, name text)
+    TABLE numbers (number int PRIMARY KEY NOT NULL, is_prime bool, name text)
 
 ## CREATE SOURCE with incorrect information should fail purification.
 
@@ -106,40 +102,35 @@ INSERT INTO no_replica_identity VALUES (1), (2);
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLE 'numbers' (number int NOT NULL)
+    TABLE numbers (number int NOT NULL)
 incorrect column specification: 1 columns were specified, upstream has 3: number, is_prime, name
 
 ! CREATE MATERIALIZED SOURCE "numbers"
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLE 'numbers' (number int NOT NULL, is_prime bool null, name text, extra numeric NULL)
+    TABLE numbers (number int NOT NULL, is_prime bool null, name text, extra numeric NULL)
 incorrect column specification: 4 columns were specified, upstream has 3: number, is_prime, name
 
 ! CREATE MATERIALIZED SOURCE "numbers"
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLE 'numbers' (number int NOT NULL, is_prime int, name text)
+    TABLE numbers (number int NOT NULL, is_prime int, name text)
 incorrect column specification: specified column modifiers do not match upstream source, specified: number int4 NOT NULL, upstream: number int4 PRIMARY KEY NOT NULL
 
 ! CREATE MATERIALIZED SOURCE "numbers"
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLE 'numbers' (number int NULL, is_prime bool null, name text)
+    TABLE numbers (number int NULL, is_prime bool null, name text)
 incorrect column specification: specified column modifiers do not match upstream source, specified: number int4 NULL, upstream: number int4 PRIMARY KEY NOT NULL
 
 ! CREATE MATERIALIZED SOURCE "numbers"
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLE 'numbers' (number int PRIMARY KEY, is_prime bool, name text NOT NULL)
+    TABLE numbers (number int PRIMARY KEY, is_prime bool, name text NOT NULL)
 incorrect column specification: specified column modifiers do not match upstream source, specified: name text NOT NULL, upstream: name text NULL
 
 ## CREATE SOURCES with correct information should pass purification and fail afterwards.
@@ -148,16 +139,14 @@ incorrect column specification: specified column modifiers do not match upstream
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLES ('numbers' AS "numbers")
+    TABLES (numbers AS "numbers")
 CREATE SOURCES not yet supported
 
 ! CREATE SOURCES
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLES ('numbers' AS "numbers", 'numbers' AS "second_numbers" (number int PRIMARY KEY, is_prime bool NULL, name text NULL))
+    TABLES (numbers AS "numbers", numbers AS "second_numbers" (number int PRIMARY KEY, is_prime bool NULL, name text NULL))
 CREATE SOURCES not yet supported
 
 ## CREATE SOURCES with incorrect information should fail purification.
@@ -166,16 +155,14 @@ CREATE SOURCES not yet supported
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLES ('numbers' AS "numbers" (number int NULL))
+    TABLES (numbers AS "numbers" (number int NULL))
 incorrect column specification: 1 columns were specified, upstream has 3: number, is_prime, name
 
 ! CREATE SOURCES
   FROM POSTGRES
     HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
     PUBLICATION 'mz_source'
-    NAMESPACE 'public'
-    TABLES ('numbers' AS "numbers" (number int NULL, is_prime bool NULL, name text))
+    TABLES (numbers AS "numbers" (number int NULL, is_prime bool NULL, name text))
 incorrect column specification: specified column modifiers do not match upstream source, specified: number int4 NULL, upstream: number int4 PRIMARY KEY NOT NULL
 
 #
@@ -184,72 +171,72 @@ incorrect column specification: specified column modifiers do not match upstream
 
 ! CREATE SOURCE "no_such_host"
   FROM POSTGRES HOST 'host=no_such_postgres.mtrlz.com port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (pk INTEGER NOT NULL, f2 TEXT);
+  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER NOT NULL, f2 TEXT);
 error connecting to server: failed to lookup address information: Name or service not known
 
 ! CREATE SOURCE "no_such_port"
   FROM POSTGRES HOST 'host=postgres port=65534 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (pk INTEGER NOT NULL, f2 TEXT);
+  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER NOT NULL, f2 TEXT);
 error connecting to server: Connection refused (os error 111)
 
 ! CREATE SOURCE "no_such_user"
   FROM POSTGRES HOST 'host=postgres port=5432 user=no_such_user password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (pk INTEGER NOT NULL, f2 TEXT);
+  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER NOT NULL, f2 TEXT);
 db error: FATAL: role "no_such_user" does not exist
 
 > CREATE SOURCE "no_such_password"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=no_such_password dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (pk INTEGER PRIMARY KEY NOT NULL, f2 TEXT);
+  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER PRIMARY KEY NOT NULL, f2 TEXT);
 # TODO: This should produce an error
 
-> CREATE SOURCE "no_replication"
+! CREATE SOURCE "no_replication"
   FROM POSTGRES HOST 'host=postgres port=5432 user=no_replication password=no_replication dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (pk INTEGER PRIMARY KEY, f2 TEXT);
-# TODO: This should produce an error
+  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
+db error: ERROR: relation "pk_table" does not exist
 
 ! CREATE SOURCE "no_such_dbname"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=no_such_dbname'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (pk INTEGER PRIMARY KEY, f2 TEXT);
+  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
 db error: FATAL: database "no_such_dbname" does not exist
 
 > CREATE SOURCE "no_such_publication"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'no_such_publication' NAMESPACE 'public' TABLE 'pk_table' (pk INTEGER PRIMARY KEY NOT NULL, f2 TEXT);
+  PUBLICATION 'no_such_publication' TABLE pk_table (pk INTEGER PRIMARY KEY NOT NULL, f2 TEXT);
 # TODO: This should produce an error
 
 ! CREATE SOURCE "no_such_namespace"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'no_such_namespace' TABLE 'pk_table' (pk INTEGER PRIMARY KEY NOT NULL, f2 TEXT);
-table not found in the upstream catalog
+  PUBLICATION 'mz_source' TABLE no_such_namespace.pk_table (pk INTEGER PRIMARY KEY NOT NULL, f2 TEXT);
+schema "no_such_namespace" does not exist
 
 ! CREATE SOURCE "no_such_table"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'no_such_table' (pk INTEGER PRIMARY KEY, f2 TEXT);
-table not found in the upstream catalog
+  PUBLICATION 'mz_source' TABLE no_such_table (pk INTEGER PRIMARY KEY, f2 TEXT);
+relation "no_such_table" does not exist
 
 ! CREATE SOURCE "no_such_column"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (no_such_column INTEGER, f2 TEXT);
+  PUBLICATION 'mz_source' TABLE pk_table (no_such_column INTEGER, f2 TEXT);
 column does not match upstream source, specified: no_such_column int4, upstream: pk int4 PRIMARY KEY NOT NULL
 
 ! CREATE SOURCE "column_type_mismatch"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (f1 TIMESTAMP, f2 TEXT);
+  PUBLICATION 'mz_source' TABLE pk_table (f1 TIMESTAMP, f2 TEXT);
 column does not match upstream source, specified: f1 timestamp, upstream: pk int4 PRIMARY KEY NOT NULL
 
 ! CREATE SOURCE "missing_column"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (pk INTEGER NOT NULL);
+  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER NOT NULL);
 incorrect column specification: 1 columns were specified, upstream has 2: pk, f2
 
 ! CREATE SOURCE "extra_column"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (pk INTEGER NOT NULL, f2 TEXT, f3 INTEGER);
+  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER NOT NULL, f2 TEXT, f3 INTEGER);
 incorrect column specification: 3 columns were specified, upstream has 2: pk, f2
 
 > CREATE MATERIALIZED SOURCE "no_replica_identity"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'no_replica_identity' (f1 INTEGER);
+  PUBLICATION 'mz_source' TABLE no_replica_identity (f1 INTEGER);
 # TODO: This should produce an error
 
 #
@@ -266,39 +253,39 @@ incorrect column specification: 3 columns were specified, upstream has 2: pk, f2
 
 > CREATE MATERIALIZED SOURCE "pk_table"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'pk_table' (pk INTEGER PRIMARY KEY, f2 TEXT);
+  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
 
 > CREATE MATERIALIZED SOURCE "nonpk_table"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'nonpk_table' (f1 INTEGER, f2 INTEGER);
+  PUBLICATION 'mz_source' TABLE nonpk_table (f1 INTEGER, f2 INTEGER);
 
 > CREATE MATERIALIZED SOURCE "types_table"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'types_table' (date_col DATE, time_col TIME, timestamp_col TIMESTAMP, uuid_col UUID, double_col DOUBLE PRECISION);
+  PUBLICATION 'mz_source' TABLE types_table (date_col DATE, time_col TIME, timestamp_col TIMESTAMP, uuid_col UUID, double_col DOUBLE PRECISION);
 
 > CREATE MATERIALIZED SOURCE "large_text"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'large_text' (f1 TEXT);
+  PUBLICATION 'mz_source' TABLE large_text (f1 TEXT);
 
 > CREATE MATERIALIZED SOURCE "trailing_space_pk"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'trailing_space_pk' (f1 TEXT PRIMARY KEY);
+  PUBLICATION 'mz_source' TABLE trailing_space_pk (f1 TEXT PRIMARY KEY);
 
 > CREATE MATERIALIZED SOURCE "trailing_space_nopk"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'trailing_space_nopk' (f1 TEXT);
+  PUBLICATION 'mz_source' TABLE trailing_space_nopk (f1 TEXT);
 
 > CREATE MATERIALIZED SOURCE "multipart_pk"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'multipart_pk' (f1 INTEGER PRIMARY KEY, f2 TEXT PRIMARY KEY NOT NULL, f3 TEXT);
+  PUBLICATION 'mz_source' TABLE multipart_pk (f1 INTEGER PRIMARY KEY, f2 TEXT PRIMARY KEY NOT NULL, f3 TEXT);
 
 > CREATE MATERIALIZED SOURCE "nulls_table"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'nulls_table' (f1 TEXT, f2 INTEGER);
+  PUBLICATION 'mz_source' TABLE nulls_table (f1 TEXT, f2 INTEGER);
 
 > CREATE MATERIALIZED SOURCE "utf8_table"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' NAMESPACE 'public' TABLE 'utf8_table' (f1 TEXT PRIMARY KEY, f2 TEXT);
+  PUBLICATION 'mz_source' TABLE utf8_table (f1 TEXT PRIMARY KEY, f2 TEXT);
 
 #
 # Perform sanity checks of the initial snapshot
