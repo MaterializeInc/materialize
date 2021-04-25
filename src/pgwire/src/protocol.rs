@@ -831,15 +831,22 @@ where
                 ExecuteCount::Count(usize::cast_from(count))
             }
         };
-        let cursor_name = name.to_string();
-        self.execute(
-            cursor_name,
-            count,
-            fetch_message,
-            fetch_portal_name,
-            timeout,
-        )
-        .await
+        match count {
+            ExecuteCount::Count(0) => {
+                Ok(State::Ready)
+            },
+            _ => {
+                let cursor_name = name.to_string();
+                self.execute(
+                    cursor_name,
+                    count,
+                    fetch_message,
+                    fetch_portal_name,
+                    timeout,
+                )
+                .await
+            }
+        }
     }
 
     async fn flush(&mut self) -> Result<State, io::Error> {
