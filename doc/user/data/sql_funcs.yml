@@ -208,7 +208,7 @@
     description: Number of code points in `s`
 
   - signature: 'convert_from(b: bytea, src_encoding: text) -> text'
-    description: Convert data `b` from original encoding specified by `src_encoding` into text with current database encoding. 
+    description: Convert data `b` from original encoding specified by `src_encoding` into text with current database encoding.
 
   - signature: 'decode(s: text, format: text) -> bytea'
     description: Decode `s` using the specified textual representation.
