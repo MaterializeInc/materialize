@@ -12,6 +12,7 @@
 //! This module houses the handlers for statements that manipulate data, like
 //! `INSERT`, `SELECT`, `TAIL`, and `COPY`.
 
+use std::collections::HashMap;
 use std::convert::TryFrom;
 
 use anyhow::bail;
@@ -21,17 +22,18 @@ use ore::collections::CollectionExt;
 use repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
-    CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
-    ExplainStage, ExplainStatement, Explainee, Ident, InsertStatement, Query, Raw, SelectStatement,
-    Statement, TailStatement, UnresolvedObjectName, UpdateStatement, ViewDefinition,
+    Assignment, CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement,
+    DeleteStatement, ExplainStage, ExplainStatement, Explainee, Expr, Ident, InsertStatement,
+    Query, Raw, SelectStatement, Statement, TailStatement, UnresolvedObjectName, UpdateStatement,
+    ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::plan::query;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, Params, PeekPlan, PeekWhen,
-    Plan, TailPlan,
+    CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, MutationKind, Params, PeekPlan,
+    PeekWhen, Plan, ReadThenWritePlan, TailPlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -69,34 +71,100 @@ pub fn plan_insert(
     Ok(Plan::Insert(InsertPlan { id, values: expr }))
 }
 
-pub fn describe_update(
-    _: &StatementContext,
-    _: UpdateStatement<Raw>,
-) -> Result<StatementDesc, anyhow::Error> {
-    bail_unsupported!("UPDATE statements")
-}
-
-pub fn plan_update(
-    _: &StatementContext,
-    _: UpdateStatement<Raw>,
-    _: &Params,
-) -> Result<Plan, anyhow::Error> {
-    bail_unsupported!("UPDATE statements")
-}
-
 pub fn describe_delete(
-    _: &StatementContext,
-    _: DeleteStatement<Raw>,
+    scx: &StatementContext,
+    DeleteStatement {
+        table_name,
+        selection,
+    }: DeleteStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    bail_unsupported!("DELETE statements")
+    query::plan_mutation_query(scx, table_name, selection, None)?;
+    Ok(StatementDesc::new(None))
 }
 
 pub fn plan_delete(
-    _: &StatementContext,
-    _: DeleteStatement<Raw>,
-    _: &Params,
+    scx: &StatementContext,
+    DeleteStatement {
+        table_name,
+        selection,
+    }: DeleteStatement<Raw>,
+    params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    bail_unsupported!("DELETE statements")
+    plan_read_then_write(
+        scx,
+        MutationKind::Delete,
+        params,
+        table_name,
+        selection,
+        None,
+    )
+}
+
+pub fn describe_update(
+    scx: &StatementContext,
+    UpdateStatement {
+        table_name,
+        assignments,
+        selection,
+    }: UpdateStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    query::plan_mutation_query(scx, table_name, selection, Some(assignments))?;
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_update(
+    scx: &StatementContext,
+    UpdateStatement {
+        table_name,
+        selection,
+        assignments,
+    }: UpdateStatement<Raw>,
+    params: &Params,
+) -> Result<Plan, anyhow::Error> {
+    plan_read_then_write(
+        scx,
+        MutationKind::Update,
+        params,
+        table_name,
+        selection,
+        Some(assignments),
+    )
+}
+
+pub fn plan_read_then_write(
+    scx: &StatementContext,
+    kind: MutationKind,
+    params: &Params,
+    table_name: UnresolvedObjectName,
+    selection: Option<Expr<Raw>>,
+    assignments: Option<Vec<Assignment<Raw>>>,
+) -> Result<Plan, anyhow::Error> {
+    let query::ReadThenWritePlan {
+        id,
+        mut selection,
+        finishing,
+        assignments,
+    } = query::plan_mutation_query(scx, table_name, selection, assignments)?;
+    selection.bind_parameters(&params)?;
+    let selection = selection.lower();
+    let assignments = if let Some(sets) = assignments {
+        let mut assignments = HashMap::new();
+        for (idx, mut set) in sets {
+            set.bind_parameters(&params)?;
+            let set = set.lower_uncorrelated()?;
+            assignments.insert(idx, set);
+        }
+        Some(assignments)
+    } else {
+        None
+    };
+    Ok(Plan::ReadThenWrite(ReadThenWritePlan {
+        id,
+        selection,
+        finishing,
+        assignments,
+        kind,
+    }))
 }
 
 pub fn describe_select(

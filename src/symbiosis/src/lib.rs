@@ -297,11 +297,9 @@ END $$;
                 for row in self.run_query(table.name(), sql, 0).await? {
                     updates.push((row, -1));
                 }
-                let affected_rows = updates.len();
                 Plan::SendDiffs(SendDiffsPlan {
                     id: table.id(),
                     updates,
-                    affected_rows,
                     kind: MutationKind::Delete,
                 })
             }
@@ -316,11 +314,9 @@ END $$;
                 for row in self.run_query(table.name(), sql, 1).await? {
                     updates.push((row, 1));
                 }
-                let affected_rows = updates.len();
                 Plan::SendDiffs(SendDiffsPlan {
                     id: table.id(),
                     updates,
-                    affected_rows,
                     kind: MutationKind::Insert,
                 })
             }
@@ -338,16 +334,13 @@ END $$;
                 for row in self.run_query(table.name(), sql, 0).await? {
                     updates.push((row, -1))
                 }
-                let affected_rows = updates.len();
                 let sql = format!("{} RETURNING *", stmt.to_string());
                 for row in self.run_query(table.name(), sql, 0).await? {
                     updates.push((row, 1));
                 }
-                assert_eq!(affected_rows * 2, updates.len());
                 Plan::SendDiffs(SendDiffsPlan {
                     id: table.id(),
                     updates,
-                    affected_rows,
                     kind: MutationKind::Update,
                 })
             }

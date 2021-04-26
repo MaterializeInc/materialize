@@ -37,7 +37,7 @@
 
 use std::cell::RefCell;
 use std::cmp;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::future::Future;
 use std::path::Path;
@@ -75,13 +75,14 @@ use expr::{
     EvalError, ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
     OptimizedMirRelationExpr,
 };
+use ore::cast::CastFrom;
 use ore::metrics::MetricsRegistry;
 use ore::now::{system_time, to_datetime, EpochMillis, NowFn};
 use ore::retry::Retry;
 use ore::str::StrExt;
 use ore::thread::{JoinHandleExt as _, JoinOnDropHandle};
 use repr::adt::numeric;
-use repr::{ColumnName, Datum, Diff, RelationDesc, Row, Timestamp};
+use repr::{ColumnName, Datum, Diff, RelationDesc, Row, RowArena, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     ConnectorType, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
@@ -96,7 +97,7 @@ use sql::plan::{
     CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan,
     CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan,
     FetchPlan, IndexOption, IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen,
-    Plan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
+    Plan, ReadThenWritePlan, SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
 use sql::plan::{StatementDesc, View};
 use transform::Optimizer;
@@ -113,7 +114,8 @@ use crate::coord::antichain::AntichainToken;
 use crate::error::CoordError;
 use crate::persistcfg::PersistConfig;
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, TransactionOps, TransactionStatus, WriteOp,
+    EndTransactionAction, PreparedStatement, Session, Transaction, TransactionOps,
+    TransactionStatus, WriteOp,
 };
 use crate::sink_connector;
 use crate::timestamp::{TimestampMessage, Timestamper};
@@ -132,7 +134,20 @@ pub enum Message {
     StatementReady(StatementReady),
     SinkConnectorReady(SinkConnectorReady),
     ScrapeMetrics,
+    SendDiffs(SendDiffs),
+    PlanReady(PlanReady),
     Shutdown,
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct SendDiffs {
+    session: Session,
+    #[derivative(Debug = "ignore")]
+    tx: ClientTransmitter<ExecuteResponse>,
+    pub id: GlobalId,
+    pub diffs: Result<Vec<(Row, Diff)>, CoordError>,
+    pub kind: MutationKind,
 }
 
 #[derive(Debug)]
@@ -149,6 +164,15 @@ pub struct StatementReady {
     pub tx: ClientTransmitter<ExecuteResponse>,
     pub result: Result<sql::ast::Statement<Raw>, CoordError>,
     pub params: Params,
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct PlanReady {
+    #[derivative(Debug = "ignore")]
+    pub tx: ClientTransmitter<ExecuteResponse>,
+    pub session: Session,
+    pub plan: Plan,
 }
 
 #[derive(Derivative)]
@@ -253,6 +277,13 @@ pub struct Coordinator {
     ///
     /// The responses have the form `Vec<Row>` but should perhaps become `TailResponse`.
     pending_tails: HashMap<GlobalId, mpsc::UnboundedSender<Vec<Row>>>,
+
+    // The connection id of a transaction that has started a write.
+    write_inprogress: Option<u32>,
+    // Queued writes that must be processed as soon as any in progress write is
+    // completed. Any plan that may write (INSERT, DELETE, UPDATE) must be
+    // processed in order by the coordinator to provide serializability.
+    serialized_writes: VecDeque<PlanReady>,
 }
 
 /// Metadata about an active connection.
@@ -524,6 +555,10 @@ impl Coordinator {
                 Message::Worker(worker) => self.message_worker(worker),
                 Message::StatementReady(ready) => self.message_statement_ready(ready).await,
                 Message::SinkConnectorReady(ready) => self.message_sink_connector_ready(ready),
+                Message::PlanReady(ready) => {
+                    self.sequence_plan(ready.tx, ready.session, ready.plan)
+                }
+                Message::SendDiffs(diffs) => self.message_send_diffs(diffs),
                 Message::AdvanceSourceTimestamp(advance) => {
                     self.message_advance_source_timestamp(advance)
                 }
@@ -778,6 +813,36 @@ impl Coordinator {
     fn message_shutdown(&mut self) {
         self.ts_tx.send(TimestampMessage::Shutdown).unwrap();
         self.broadcast(dataflow::Command::Shutdown);
+    }
+
+    fn message_send_diffs(
+        &mut self,
+        SendDiffs {
+            mut session,
+            tx,
+            id,
+            diffs,
+            kind,
+        }: SendDiffs,
+    ) {
+        match diffs {
+            Ok(diffs) => {
+                tx.send(
+                    self.sequence_send_diffs(
+                        &mut session,
+                        SendDiffsPlan {
+                            id,
+                            updates: diffs,
+                            kind,
+                        },
+                    ),
+                    session,
+                );
+            }
+            Err(e) => {
+                tx.send(Err(e), session);
+            }
+        }
     }
 
     fn message_advance_source_timestamp(
@@ -1278,6 +1343,8 @@ impl Coordinator {
         //  - CREATE SCHEMA
         //  - DROP TABLE
         //  - INSERT
+        //  - UPDATE
+        //  - DELETE
         // When these statements are routed through symbiosis, table information
         // is created and maintained locally, which is required for other statements
         // to be executed correctly.
@@ -1287,6 +1354,8 @@ impl Coordinator {
             ..
         })
         | Statement::CreateSchema(CreateSchemaStatement { .. })
+        | Statement::Update { .. }
+        | Statement::Delete { .. }
         | Statement::Insert { .. } = &stmt
         {
             if let Some(ref mut postgres) = self.symbiosis {
@@ -1594,6 +1663,9 @@ impl Coordinator {
             }
             Plan::Insert(plan) => {
                 tx.send(self.sequence_insert(&mut session, plan), session);
+            }
+            Plan::ReadThenWrite(plan) => {
+                self.sequence_read_then_write(tx, session, plan);
             }
             Plan::AlterNoop(plan) => {
                 tx.send(
@@ -2290,6 +2362,44 @@ impl Coordinator {
         mut session: Session,
         mut action: EndTransactionAction,
     ) {
+        // If we are trying to commit a write transaction but another connection has a
+        // write in progress, queue ourselves.
+        if EndTransactionAction::Commit == action
+            && self.write_inprogress != None
+            && self.write_inprogress != Some(session.conn_id())
+        {
+            let txn = session
+                .transaction()
+                .inner()
+                .expect("must be in a transaction");
+            if let Transaction {
+                ops: TransactionOps::Writes(_),
+                ..
+            } = txn
+            {
+                self.serialized_writes.push_back(PlanReady {
+                    tx,
+                    session,
+                    plan: Plan::CommitTransaction,
+                });
+                return;
+            }
+        }
+
+        // If this transaction blocked other writes, allow them to proceed.
+        // TODO: This might need to go somewhere else due to the tokio spawn below.
+        if self.write_inprogress == Some(session.conn_id()) {
+            self.write_inprogress = None;
+            if let Some(ready) = self.serialized_writes.pop_front() {
+                let internal_cmd_tx = self.internal_cmd_tx.clone();
+                tokio::spawn(async move {
+                    internal_cmd_tx
+                        .send(Message::PlanReady(ready))
+                        .expect("sending to internal_cmd_tx cannot fail");
+                });
+            }
+        }
+
         // If the transaction has failed, we can only rollback.
         if let (EndTransactionAction::Commit, TransactionStatus::Failed(_)) =
             (&action, session.transaction())
@@ -2354,6 +2464,10 @@ impl Coordinator {
                                         id.to_string(),
                                     ))
                                 })?;
+                            // This can be empty if, say, a DELETE's WHERE clause had 0 results.
+                            if rows.is_empty() {
+                                continue;
+                            }
                             match catalog_entry.item() {
                                 CatalogItem::Table(Table {
                                     persist: Some(persist),
@@ -3069,20 +3183,42 @@ impl Coordinator {
         session: &mut Session,
         plan: SendDiffsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
-            id: plan.id,
-            rows: plan.updates,
-        }]))?;
+        // Take a detour through ChangeBatch so we can consolidate updates. Useful
+        // especially for UPDATE where a row shouldn't change.
+        let mut rows = ChangeBatch::with_capacity(plan.updates.len());
+        rows.extend(
+            plan.updates
+                .into_iter()
+                .map(|(v, sz)| (v, i64::cast_from(sz))),
+        );
+
+        // The number of affected rows is not the number of rows we see, but the
+        // sum of the abs of their diffs, i.e. we see `INSERT INTO t VALUES (1),
+        // (1)` as a row with a value of 1 and a diff of +2.
+        let mut affected_rows = 0isize;
+        let rows = rows
+            .into_inner()
+            .into_iter()
+            .map(|(v, sz)| {
+                let diff = isize::cast_from(sz);
+                affected_rows += diff.abs();
+                (v, diff)
+            })
+            .collect();
+
+        let affected_rows = usize::try_from(affected_rows).expect("positive isize must fit");
+
+        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp { id: plan.id, rows }]))?;
         Ok(match plan.kind {
-            MutationKind::Delete => ExecuteResponse::Deleted(plan.affected_rows),
+            MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
             MutationKind::Insert => {
                 if self.catalog.config().disable_user_indexes {
                     self.catalog.ensure_default_index_enabled(plan.id)?;
                 }
 
-                ExecuteResponse::Inserted(plan.affected_rows)
+                ExecuteResponse::Inserted(affected_rows)
             }
-            MutationKind::Update => ExecuteResponse::Updated(plan.affected_rows),
+            MutationKind::Update => ExecuteResponse::Updated(affected_rows / 2),
         })
     }
 
@@ -3097,9 +3233,17 @@ impl Coordinator {
         {
             MirRelationExpr::Constant { rows, typ: _ } => {
                 let rows = rows?;
-                let desc = self.catalog.get_by_id(&plan.id).desc()?;
-                let mut affected_rows: usize = 0;
-                for (row, diff) in &rows {
+                // Insert can be queued, so we need to re-verify the id exists.
+                let table = match self.catalog.try_get_by_id(plan.id) {
+                    Some(table) => table,
+                    None => {
+                        return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                            plan.id.to_string(),
+                        )))
+                    }
+                };
+                let desc = table.desc()?;
+                for (row, _) in &rows {
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
                         if datum == &Datum::Null && !typ.nullable {
                             coord_bail!(
@@ -3110,15 +3254,9 @@ impl Coordinator {
                             )
                         }
                     }
-                    // repeat_rows could cause diff to be negative. In that (already non-standard
-                    // case), still report the total number of diffs, not the sum of diffs. We have
-                    // to send a u32 over the wire anyway, so it wouldn't make sense to even try to
-                    // sum them and send that.
-                    affected_rows += usize::try_from(diff.abs()).expect("positive isize must fit");
                 }
                 let diffs_plan = SendDiffsPlan {
                     id: plan.id,
-                    affected_rows,
                     updates: rows,
                     kind: MutationKind::Insert,
                 };
@@ -3149,6 +3287,125 @@ impl Coordinator {
             values: values.lower(),
         };
         self.sequence_insert(session, plan)
+    }
+
+    // ReadThenWrite is a plan whose writes depend on the results of a
+    // read. This works by doing a Peek then queuing a SendDiffs. No writes
+    // or read-then-writes can occur between the Peek and SendDiff otherwise a
+    // serializability violation could occur.
+    fn sequence_read_then_write(
+        &mut self,
+        tx: ClientTransmitter<ExecuteResponse>,
+        mut session: Session,
+        plan: ReadThenWritePlan,
+    ) {
+        // Serialize writes by queueing write plans if there's one in progress. This is
+        // needed because ReadThenWrite needs to ensure that no writes happen between
+        // its read and write phases which happen at different timestamps. They happen
+        // at different timestamps because tables use system time writes, so we are not
+        // able to hold on to a specific time at which we will write.
+        match self.write_inprogress {
+            None => self.write_inprogress = Some(session.conn_id()),
+            Some(conn_id) => {
+                // ReadThenWrite is not allowed in transactions, so we should never encounter
+                // ourselves.
+                assert!(conn_id != session.conn_id());
+                self.serialized_writes.push_back(PlanReady {
+                    tx,
+                    session,
+                    plan: Plan::ReadThenWrite(plan),
+                });
+                return;
+            }
+        };
+
+        let ReadThenWritePlan {
+            id,
+            kind,
+            selection,
+            assignments,
+            finishing,
+        } = plan;
+
+        // Delete can be queued, so re-verify the id exists.
+        if self.catalog.try_get_by_id(id).is_none() {
+            tx.send(
+                Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                    id.to_string(),
+                ))),
+                session,
+            );
+            return;
+        }
+
+        let ts = self.get_read_ts();
+        let peek_response = match self.sequence_peek(
+            &mut session,
+            PeekPlan {
+                source: selection,
+                when: PeekWhen::AtTimestamp(ts),
+                finishing,
+                copy_to: None,
+            },
+        ) {
+            Ok(resp) => resp,
+            Err(e) => {
+                tx.send(Err(e.into()), session);
+                return;
+            }
+        };
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        tokio::spawn(async move {
+            let arena = RowArena::new();
+            let diffs = match peek_response {
+                ExecuteResponse::SendingRows(batch) => match batch.await {
+                    PeekResponse::Rows(rows) => {
+                        |rows: Vec<Row>| -> Result<Vec<(Row, Diff)>, CoordError> {
+                            // Use 2x row len incase there's some assignments.
+                            let mut diffs = Vec::with_capacity(rows.len() * 2);
+                            for row in rows {
+                                if let Some(ref assignments) = assignments {
+                                    let mut datums = row.unpack();
+                                    let mut updates = vec![];
+                                    for (idx, expr) in assignments {
+                                        let updated = match expr.eval(&datums, &arena) {
+                                            Ok(updated) => updated,
+                                            Err(e) => {
+                                                return Err(CoordError::Unstructured(anyhow!(e)))
+                                            }
+                                        };
+                                        updates.push((*idx, updated));
+                                    }
+                                    for (idx, new_value) in updates {
+                                        datums[idx] = new_value;
+                                    }
+                                    let updated = Row::pack_slice(&datums);
+                                    diffs.push((updated, 1));
+                                }
+                                // Any read is either being deleted or updated, so always remove one row.
+                                diffs.push((row, -1));
+                            }
+                            Ok(diffs)
+                        }(rows)
+                    }
+                    PeekResponse::Canceled => {
+                        Err(CoordError::Unstructured(anyhow!("execution canceled")))
+                    }
+                    PeekResponse::Error(e) => Err(CoordError::Unstructured(anyhow!(e))),
+                },
+                _ => Err(CoordError::Unstructured(anyhow!("expected SendingRows"))),
+            };
+            internal_cmd_tx
+                .send(Message::SendDiffs(SendDiffs {
+                    session,
+                    tx,
+                    id,
+                    diffs,
+                    kind,
+                }))
+                .expect("sending to internal_cmd_tx cannot fail");
+        });
     }
 
     fn sequence_alter_item_rename(
@@ -3797,6 +4054,8 @@ pub async fn serve(
                 now,
                 pending_peeks: HashMap::new(),
                 pending_tails: HashMap::new(),
+                write_inprogress: None,
+                serialized_writes: VecDeque::new(),
             };
             if let Some(config) = &logging {
                 coord.broadcast(dataflow::Command::EnableLogging(DataflowLoggingConfig {
@@ -3957,6 +4216,8 @@ pub fn serve_debug(
             now: get_debug_timestamp,
             pending_peeks: HashMap::new(),
             pending_tails: HashMap::new(),
+            serialized_writes: VecDeque::new(),
+            write_inprogress: None,
         };
         let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
         bootstrap_tx.send(bootstrap).unwrap();

@@ -9,12 +9,6 @@
 
 $ set-sql-timeout duration=125ms
 
-! UPDATE foo SET x = 1
-UPDATE statements not yet supported
-
-! DELETE FROM foo
-DELETE statements not yet supported
-
 # DROP MATERIALIZED <anything> is not allowed
 ! DROP MATERIALIZED VIEW foo
 DROP MATERIALIZED VIEW is not allowed, use DROP VIEW

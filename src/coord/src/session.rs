@@ -471,7 +471,7 @@ pub struct WriteOp {
 }
 
 /// The action to take during end_transaction.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum EndTransactionAction {
     /// Commit the transaction.
     Commit,
