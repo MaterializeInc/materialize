@@ -1075,12 +1075,15 @@ pub fn plan_create_sources(
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("Postgres Sources")?;
     let CreateSourcesStatement { stmts, .. } = stmt;
-    let mut planned = vec![];
+    let mut sources = vec![];
     for stmt in stmts {
-        planned.push(plan_create_source(scx, stmt)?);
+        match plan_create_source(scx, stmt)? {
+            Plan::CreateSource(plan) => sources.push(plan),
+            _ => unreachable!("non-create source plan"),
+        }
     }
 
-    unsupported!("CREATE SOURCES");
+    Ok(Plan::CreateSources { sources })
 }
 
 pub fn describe_create_view(
