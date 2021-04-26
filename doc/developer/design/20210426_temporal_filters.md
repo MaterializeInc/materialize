@@ -30,7 +30,7 @@ Understanding what Materialize does do may help you understand the behavior of a
 // Enumerate the concrete goals that are in scope for the project.
 -->
 
-Allow users to allow users to express constraints between their data and Materialize's logical time, and thereby enable more efficient implementation.
+To allow users to express constraints between their data and Materialize's logical time, and thereby enable more efficient implementation.
 
 ## Non-goals
 
