@@ -18,6 +18,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
 use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
@@ -173,7 +174,7 @@ pub enum Expr<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for Expr<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Expr::Identifier(s) => f.write_node(&display::separated(s, ".")),
             Expr::QualifiedWildcard(q) => {
@@ -546,7 +547,7 @@ pub struct SubscriptPosition<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for SubscriptPosition<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         if let Some(start) = &self.start {
             f.write_node(start);
         }
@@ -567,7 +568,7 @@ pub struct WindowSpec<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for WindowSpec<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         let mut delim = "";
         if !self.partition_by.is_empty() {
             delim = " ";
@@ -623,7 +624,7 @@ pub enum WindowFrameUnits {
 }
 
 impl AstDisplay for WindowFrameUnits {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             WindowFrameUnits::Rows => "ROWS",
             WindowFrameUnits::Range => "RANGE",
@@ -645,7 +646,7 @@ pub enum WindowFrameBound {
 }
 
 impl AstDisplay for WindowFrameBound {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             WindowFrameBound::CurrentRow => f.write_str("CURRENT ROW"),
             WindowFrameBound::Preceding(None) => f.write_str("UNBOUNDED PRECEDING"),
@@ -676,7 +677,7 @@ pub struct Function<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for Function<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
         f.write_str("(");
         if self.distinct {
@@ -708,7 +709,7 @@ pub enum FunctionArgs<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for FunctionArgs<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             FunctionArgs::Star => f.write_str("*"),
             FunctionArgs::Args(args) => f.write_node(&display::comma_separated(&args)),

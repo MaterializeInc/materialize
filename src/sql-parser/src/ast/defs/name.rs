@@ -18,6 +18,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
+
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::keywords::Keyword;
 
@@ -75,7 +77,7 @@ impl From<&str> for Ident {
 ///
 /// Quotation is forced when printing in Stable mode.
 impl AstDisplay for Ident {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         if self.can_be_printed_bare() && !f.stable() {
             f.write_str(&self.0);
         } else {
@@ -120,14 +122,14 @@ impl UnresolvedObjectName {
 }
 
 impl AstDisplay for UnresolvedObjectName {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         display::separated(&self.0, ".").fmt(f);
     }
 }
 impl_display!(UnresolvedObjectName);
 
 impl AstDisplay for &UnresolvedObjectName {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         display::separated(&self.0, ".").fmt(f);
     }
 }

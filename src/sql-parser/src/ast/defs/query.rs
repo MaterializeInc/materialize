@@ -18,10 +18,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::mem;
-
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::hash::Hash;
+use std::mem;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{Expr, FunctionArgs, Ident, SqlOption, UnresolvedObjectName};
@@ -67,7 +66,7 @@ impl RawName {
 }
 
 impl AstDisplay for RawName {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             RawName::Name(o) => f.write_node(o),
             RawName::Id(id, o) => {
@@ -103,7 +102,7 @@ pub struct Query<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for Query<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         if !self.ctes.is_empty() {
             f.write_str("WITH ");
             f.write_node(&display::comma_separated(&self.ctes));
@@ -115,7 +114,7 @@ impl<T: AstInfo> AstDisplay for Query<T> {
             f.write_node(&display::comma_separated(&self.order_by));
         }
 
-        let write_offset = |f: &mut AstFormatter| {
+        let write_offset = |f: &mut AstFormatter<W>| {
             if let Some(offset) = &self.offset {
                 f.write_str(" OFFSET ");
                 f.write_node(offset);
@@ -186,7 +185,7 @@ pub enum SetExpr<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for SetExpr<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             SetExpr::Select(s) => f.write_node(s),
             SetExpr::Query(q) => {
@@ -223,7 +222,7 @@ pub enum SetOperator {
 }
 
 impl AstDisplay for SetOperator {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(match self {
             SetOperator::Union => "UNION",
             SetOperator::Except => "EXCEPT",
@@ -254,7 +253,7 @@ pub struct Select<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for Select<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("SELECT");
         if let Some(distinct) = &self.distinct {
             f.write_str(" ");
@@ -314,7 +313,7 @@ pub enum Distinct<T: AstInfo> {
 impl_display_t!(Distinct);
 
 impl<T: AstInfo> AstDisplay for Distinct<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Distinct::EntireRow => f.write_str("DISTINCT"),
             Distinct::On(cols) => {
@@ -338,7 +337,7 @@ pub struct Cte<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for Cte<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.alias);
         f.write_str(" AS (");
         f.write_node(&self.query);
@@ -357,7 +356,7 @@ pub enum SelectItem<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for SelectItem<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match &self {
             SelectItem::Expr { expr, alias } => {
                 f.write_node(expr);
@@ -379,7 +378,7 @@ pub struct TableWithJoins<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for TableWithJoins<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.relation);
         for join in &self.joins {
             f.write_node(join)
@@ -429,7 +428,7 @@ pub enum TableFactor<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for TableFactor<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             TableFactor::Table { name, alias } => {
                 f.write_node(name);
@@ -491,7 +490,7 @@ pub struct TableAlias {
 }
 
 impl AstDisplay for TableAlias {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.name);
         if !self.columns.is_empty() {
             f.write_str(" (");
@@ -509,7 +508,7 @@ pub struct Join<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for Join<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         fn prefix<T: AstInfo>(constraint: &JoinConstraint<T>) -> &'static str {
             match constraint {
                 JoinConstraint::Natural => "NATURAL ",
@@ -519,7 +518,10 @@ impl<T: AstInfo> AstDisplay for Join<T> {
         fn suffix<'a, T: AstInfo>(constraint: &'a JoinConstraint<T>) -> impl AstDisplay + 'a {
             struct Suffix<'a, T: AstInfo>(&'a JoinConstraint<T>);
             impl<'a, T: AstInfo> AstDisplay for Suffix<'a, T> {
-                fn fmt(&self, f: &mut AstFormatter) {
+                fn fmt<W>(&self, f: &mut AstFormatter<W>)
+                where
+                    W: fmt::Write,
+                {
                     match self.0 {
                         JoinConstraint::On(expr) => {
                             f.write_str(" ON ");
@@ -598,7 +600,7 @@ pub struct OrderByExpr<T: AstInfo> {
 }
 
 impl<T: AstInfo> AstDisplay for OrderByExpr<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_node(&self.expr);
         match self.asc {
             Some(true) => f.write_str(" ASC"),
@@ -619,7 +621,7 @@ pub struct Limit<T: AstInfo> {
 pub struct Values<T: AstInfo>(pub Vec<Vec<Expr<T>>>);
 
 impl<T: AstInfo> AstDisplay for Values<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("VALUES ");
         let mut delim = "";
         for row in &self.0 {
