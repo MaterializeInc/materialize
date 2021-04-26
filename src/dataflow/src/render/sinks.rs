@@ -13,11 +13,9 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::Consolidate;
 use differential_dataflow::AsCollection;
-use timely::dataflow::operators::exchange::Exchange;
 use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
@@ -78,13 +76,6 @@ where
             });
             (key, row)
         });
-
-        // Each partition needs to be handled by its own worker, so that we can write messages in order.
-        // For now, we only support single-partition sinks.
-        let keyed = keyed
-            .inner
-            .exchange(move |_| sink_id.hashed())
-            .as_collection();
 
         // Apply the envelope.
         // * "Debezium" consolidates the stream, sorts it by time, and produces DiffPairs from it.
