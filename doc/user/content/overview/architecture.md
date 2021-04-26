@@ -119,7 +119,7 @@ existing dataflow.'
 For Materialize to ingest data, it must read it from a source, of which there
 are two varieties:
 
-- Streaming sources, like Kakfa
+- Streaming sources, like Kafka
 - File sources, like `.csv` or generic log files
 
 File sources are more straightforward, so we'll focus on streaming sources.
