@@ -43,6 +43,14 @@ Then, tell Rust to use lld by setting the following environment variable:
 export RUSTFLAGS="-C link-arg=-fuse-ld=lld"
 ```
 
+### Disable debug info
+
+The fastest known way to compile on Linux is with lld and disabling debug info:
+
+```shell
+export RUSTFLAGS="-C link-arg=-fuse-ld=lld -C debuginfo=0"
+```
+
 Ideally, set that in your `~/.bashrc` or equivalent so that it applies
 permanently.
 
