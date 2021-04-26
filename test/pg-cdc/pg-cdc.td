@@ -69,6 +69,19 @@ ALTER TABLE utf8_table REPLICA IDENTITY FULL;
 CREATE TABLE no_replica_identity (f1 INTEGER);
 INSERT INTO no_replica_identity VALUES (1), (2);
 
+CREATE TABLE "таблица" ("колона" TEXT);
+ALTER TABLE "таблица" REPLICA IDENTITY FULL;
+INSERT INTO "таблица" VALUES ('стойност');
+
+CREATE TABLE conflict_table (f1 INTEGER);
+ALTER TABLE conflict_table REPLICA IDENTITY FULL;
+INSERT INTO conflict_table VALUES (123);
+
+CREATE SCHEMA conflict_schema;
+CREATE TABLE conflict_schema.conflict_table (f1 TEXT);
+ALTER TABLE conflict_schema.conflict_table REPLICA IDENTITY FULL;
+INSERT INTO conflict_schema.conflict_table VALUES ('234');
+
 ## CREATE SOURCE with correct information should pass purification and fail afterwards.
 
 > CREATE SOURCE "schema_omitted"
@@ -247,6 +260,11 @@ incorrect column specification: 3 columns were specified, upstream has 2: pk, f2
 1
 2
 
+! CREATE MATERIALIZED SOURCE "conflict_table"
+  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+  PUBLICATION 'mz_source' TABLE conflict_table (f1 TEXT)
+incorrect column specification: specified column does not match upstream source
+
 #
 # Establish direct replication
 #
@@ -287,6 +305,14 @@ incorrect column specification: 3 columns were specified, upstream has 2: pk, f2
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
   PUBLICATION 'mz_source' TABLE utf8_table (f1 TEXT PRIMARY KEY, f2 TEXT);
 
+> CREATE MATERIALIZED SOURCE "таблица"
+  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+  PUBLICATION 'mz_source' TABLE "таблица" ("колона" TEXT);
+
+> CREATE MATERIALIZED SOURCE "conflict_table"
+  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+  PUBLICATION 'mz_source' TABLE conflict_schema.conflict_table
+
 #
 # Perform sanity checks of the initial snapshot
 #
@@ -322,6 +348,12 @@ incorrect column specification: 3 columns were specified, upstream has 2: pk, f2
 
 > SELECT * FROM utf8_table;
 "това е текст" "това \'е\' \"текст\""
+
+> SELECT * FROM "таблица";
+стойност
+
+> SELECT * FROM conflict_table;
+234
 
 #
 # Confirm that the new sources can be used to build upon
@@ -386,6 +418,7 @@ UPDATE nulls_table SET f2 = NULL WHERE f2 = 2;
 INSERT INTO utf8_table VALUES ('това е текст 2', 'това ''е'' "текст" 2');
 UPDATE utf8_table SET f1 = f1 || f1 , f2 = f2 || f2;
 
+INSERT INTO "таблица" SELECT * FROM "таблица";
 #
 # Check the updated data on the Materialize side
 #
@@ -429,6 +462,10 @@ UPDATE utf8_table SET f1 = f1 || f1 , f2 = f2 || f2;
 "това е текст 2това е текст 2" "това \'е\' \"текст\" 2това \'е\' \"текст\" 2"
 "това е тексттова е текст" "това \'е\' \"текст\"това \'е\' \"текст\""
 
+> SELECT * FROM "таблица";
+стойност
+стойност
+
 > SELECT * FROM join_view;
 "2" "two_two" "2" "2"
 "2" "two_two" "2" "2"
@@ -459,6 +496,8 @@ DELETE FROM trailing_space_nopk;
 DELETE FROM multipart_pk;
 DELETE FROM nulls_table;
 DELETE FROM utf8_table;
+DELETE FROM "таблица";
+DELETE FROM conflict_schema.conflict_table;
 
 #
 # Check that all data sources empty out on the Materialize side
@@ -489,6 +528,12 @@ true
 true
 
 > SELECT COUNT(*) = 0 FROM join_view;
+true
+
+> SELECT COUNT(*) = 0 FROM "таблица";
+true
+
+> SELECT COUNT(*) = 0 FROM conflict_table;
 true
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
