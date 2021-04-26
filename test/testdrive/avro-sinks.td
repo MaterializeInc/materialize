@@ -170,17 +170,29 @@ a  b
 4  2
 1  7
 
-$ kafka-verify format=avro sink=materialize.public.input_sink
+# Compare sorted messages within each transaction. We know that messages of one
+# transaction appear together as one "bundle" in the output. But there is no
+# guarantee on the order within a transaction.
+
+$ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
 {"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
 {"a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+
+$ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
 {"a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
 {"a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+
+$ kafka-verify format=avro sink=materialize.public.input_sink sort-messages=true
+{"a": 1} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
 
 $ kafka-verify format=avro sink=materialize.public.input_sink consistency=debezium
 {"id": "1", "status": "BEGIN", "event_count": null}
 {"id": "1", "status": "END", "event_count": {"long": 2}}
 {"id": "2", "status": "BEGIN", "event_count": null}
 {"id": "2", "status": "END", "event_count": {"long": 2}}
+{"id": "3", "status": "BEGIN", "event_count": null}
+{"id": "3", "status": "END", "event_count": {"long": 1}}
+
 ! CREATE SINK bad_sink FROM input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a, a)
   FORMAT AVRO
@@ -195,11 +207,18 @@ Repeated column name in sink key: a
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 Ambiguous column: a
 
-$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys
+# Again, compare split by transaction. See comment just above.
+
+$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
 {"b": 1, "a": 1} {"before": null, "after": {"row": {"a": 1, "b": 1}}, "transaction": {"id": "1"}}
 {"b": 2, "a": 2} {"before": null, "after": {"row": {"a": 2, "b": 2}}, "transaction": {"id": "1"}}
+
+$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
 {"b": 1, "a": 3} {"before": null, "after": {"row": {"a": 3, "b": 1}}, "transaction": {"id": "2"}}
 {"b": 2, "a": 4} {"before": null, "after": {"row": {"a": 4, "b": 2}}, "transaction": {"id": "2"}}
+
+$ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
+{"b": 7, "a": 1} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
 
 > CREATE VIEW json_data (a, b) AS VALUES ('{"a":1, "b":2}'::jsonb, 2)
 
