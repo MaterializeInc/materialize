@@ -188,7 +188,12 @@ impl Decoder {
         }
     }
 
-    pub fn decode(&mut self, bytes: &[u8], position: Option<i64>) -> Result<Option<Row>> {
+    pub fn decode(
+        &mut self,
+        bytes: &[u8],
+        position: Option<i64>,
+        push_metadata: bool,
+    ) -> Result<Option<Row>> {
         let input_stream = protobuf::CodedInputStream::from_bytes(bytes);
         let mut deserializer =
             Deserializer::for_named_message(&self.descriptors, &self.message_name, input_stream)
@@ -209,8 +214,8 @@ impl Decoder {
             })?,
             &mut packer,
         )?;
-        if let Some(pos) = position {
-            packer.push(Datum::from(pos))
+        if let (Some(pos), true) = (position, push_metadata) {
+            packer.push(Datum::from(pos));
         };
         Ok(Some(packer.finish_and_reuse()))
     }
@@ -648,7 +653,7 @@ mod tests {
 
         let mut decoder = get_decoder(".TestRecord");
         let row = decoder
-            .decode(&bytes, None)
+            .decode(&bytes, None, false)
             .expect("deserialize protobuf into a row")
             .unwrap();
         let datums = row.iter().collect::<Vec<_>>();
@@ -678,7 +683,7 @@ mod tests {
 
         let mut decoder = get_decoder(".TestRecord");
         let row = decoder
-            .decode(&bytes, None)
+            .decode(&bytes, None, false)
             .expect("deserialize protobuf into a row")
             .unwrap();
         let datums = row.iter().collect::<Vec<_>>();
@@ -707,7 +712,7 @@ mod tests {
 
         let mut decoder = get_decoder(".TestRepeatedRecord");
         let row = decoder
-            .decode(&bytes, None)
+            .decode(&bytes, None, false)
             .expect("deserialize protobuf into a row")
             .unwrap();
         let datums = row.iter().collect::<Vec<_>>();
@@ -748,7 +753,7 @@ mod tests {
 
         let mut decoder = get_decoder(".TestNestedRecord");
         let row = decoder
-            .decode(&bytes, None)
+            .decode(&bytes, None, false)
             .expect("deserialize protobuf into a row")
             .unwrap();
         let datums = row.iter().collect::<Vec<_>>();
@@ -787,7 +792,7 @@ mod tests {
             .expect("test failed to serialize to bytes");
 
         let row2 = decoder
-            .decode(&bytes, None)
+            .decode(&bytes, None, false)
             .expect("deserialize protobuf into a row")
             .unwrap();
         let datums = row2.iter().collect::<Vec<_>>();
@@ -841,7 +846,7 @@ mod tests {
 
         let mut decoder = get_decoder(".TestRepeatedNestedRecord");
         let row = decoder
-            .decode(&bytes, None)
+            .decode(&bytes, None, false)
             .expect("deserialize protobuf into a row")
             .unwrap();
         let datums = row.iter().collect::<Vec<_>>();

@@ -155,11 +155,12 @@ impl Decoder {
     // * For plain avro data it will just be `Row(after-row)`
     pub async fn decode(
         &mut self,
-        bytes: &[u8],
+        bytes: &mut &[u8],
         coord: Option<i64>,
         upstream_time_millis: Option<i64>,
     ) -> anyhow::Result<Row> {
-        let (mut bytes, resolved_schema) = self.csr_avro.resolve(bytes).await?;
+        let (bytes2, resolved_schema) = self.csr_avro.resolve(bytes).await?;
+        *bytes = bytes2;
         let result = if self.envelope == EnvelopeType::Debezium {
             let dec = AvroDebeziumDecoder {
                 packer: &mut self.packer,
@@ -170,7 +171,7 @@ impl Decoder {
             let dsr = GeneralDeserializer {
                 schema: resolved_schema.top_node(),
             };
-            let coords = dsr.deserialize(&mut bytes, dec)?;
+            let coords = dsr.deserialize(bytes, dec)?;
             if let Err(()) = push_coords(coords, &mut self.packer) {
                 if !self.warned_on_unknown {
                     self.warned_on_unknown = true;
@@ -203,7 +204,7 @@ impl Decoder {
             let dsr = GeneralDeserializer {
                 schema: resolved_schema.top_node(),
             };
-            dsr.deserialize(&mut bytes, dec)?;
+            dsr.deserialize(bytes, dec)?;
             self.packer.finish_and_reuse()
         };
         log::trace!(

@@ -325,6 +325,7 @@ fn plan_source_envelope(
     envelope: &SourceEnvelope,
     post_transform_key: Option<Vec<usize>>,
 ) -> Result<(MirRelationExpr, Vec<Option<ColumnName>>), anyhow::Error> {
+    println!("bare desc in planner: {:?}", bare_desc);
     let get_expr = HirRelationExpr::Get {
         id: expr::Id::LocalBareSource,
         typ: bare_desc.typ().clone(),
@@ -370,7 +371,11 @@ fn plan_source_envelope(
             bare_desc.iter_names().map(|name| name.cloned()).collect(),
         )
     };
+
+    println!("envelope expr:\n{}", hir_expr.pretty());
+
     let mir_expr = hir_expr.lower();
+    println!("envelope MIR expr:\n{}", mir_expr.pretty());
 
     Ok((mir_expr, column_names))
 }

@@ -9,6 +9,7 @@
 
 //! Types related to the creation of dataflow sources.
 
+use dataflow_types::DataflowError;
 use mz_avro::types::Value;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
@@ -134,7 +135,7 @@ where
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub(crate) struct SourceData {
     /// The actual value
-    pub(crate) value: Vec<u8>,
+    pub(crate) value: Option<Result<Row, DataflowError>>,
     /// The source's reported position for this record
     ///
     /// e.g. kafka offset or file location
@@ -144,6 +145,17 @@ pub(crate) struct SourceData {
     ///
     /// Currently only applies to Kafka
     pub(crate) upstream_time_millis: Option<i64>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+/// The output of the decoding operator
+pub struct DecodeResult {
+    /// The decoded key
+    pub key: Option<Result<Row, DataflowError>>,
+    /// The decoded value
+    pub value: Option<Result<Row, DataflowError>>,
+    /// The index of the decoded value in the stream
+    pub position: Option<i64>,
 }
 
 impl<K, V> SourceOutput<K, V>

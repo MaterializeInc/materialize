@@ -93,6 +93,7 @@ impl std::error::Error for ParseSchemaError {}
 /// Represents an Avro schema fingerprint
 /// More information about Avro schema fingerprints can be found in the
 /// [Avro Schema Fingerprint documentation](https://avro.apache.org/docs/current/spec.html#schema_fingerprints)
+#[derive(Debug)]
 pub struct SchemaFingerprint {
     pub bytes: Vec<u8>,
 }

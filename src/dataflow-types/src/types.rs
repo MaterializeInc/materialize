@@ -495,7 +495,7 @@ impl DataEncoding {
         })
     }
 
-    pub fn op_name(&self) -> &str {
+    pub fn op_name(&self) -> &'static str {
         match self {
             DataEncoding::Bytes => "Bytes",
             DataEncoding::AvroOcf { .. } => "AvroOcf",
@@ -736,6 +736,18 @@ impl ExternalSourceConnector {
         match self {
             ExternalSourceConnector::Kafka(k) => k.enable_caching,
             _ => false,
+        }
+    }
+
+    pub fn is_delimited(&self) -> bool {
+        match self {
+            ExternalSourceConnector::Kafka(_) => true,
+            ExternalSourceConnector::Kinesis(_) => true,
+            ExternalSourceConnector::File(_) => false,
+            ExternalSourceConnector::AvroOcf(_) => false,
+            ExternalSourceConnector::S3(_) => false,
+            ExternalSourceConnector::Postgres(_) => true,
+            ExternalSourceConnector::PubNub(_) => true,
         }
     }
 }

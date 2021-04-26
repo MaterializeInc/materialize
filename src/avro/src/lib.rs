@@ -327,7 +327,7 @@ pub use crate::decode::{
     ValueOrReader,
 };
 pub use crate::encode::encode as encode_unchecked;
-pub use crate::reader::{from_avro_datum, Reader};
+pub use crate::reader::{from_avro_datum, Block, BlockIter, Reader};
 pub use crate::schema::{ParseSchemaError, Schema};
 pub use crate::types::SchemaResolutionError;
 pub use crate::util::max_allocation_bytes;
