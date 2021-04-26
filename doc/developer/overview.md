@@ -37,7 +37,7 @@ In particular we aim to provide the property of [linearizability](https://en.wik
 The underlying computation engine, [differential dataflow](https://github.com/TimelyDataflow/differential-dataflow), can compute and then maintain correct answers to queries at various times.
 One central role of the coordinator is then to determine which times to use for queries made by users, to provide the experience of collections of data that continually and consistently advance through time.
 
-<TBD: @justinj>
+<TBD: @mjibson>
 
 ### Frontier tracking
 
@@ -85,6 +85,14 @@ Differential dataflow creates dataflow topologies of deterministic operators, ea
 These topologies are static, determined at dataflow construction time.
 It is important that the operators be deterministic, as determinism is the basis for "incremental recomputation" as a function of changed inputs.
 Several of the operators will hold back updates until they have received all of their updates for a given timestamp (primarily the "stateful" operators that record their input and want to await potential cancellation).
+
+### Determinism
+
+Operator logic should be deterministic.
+For example, the `Filter` operator will use a predicate to retain or discard updates; if the predicate produces different results on the insertion than it does on the deletion, the operator no longer correctly implements the `Filter` operator.
+The `Map`operator
+Imagine an expression that consults the current time, or a random number generator; repeated evaluation of the expression may produce different results that do not result in
+All expressions provided to the dataflow layer should correspond to deterministic expressions.
 
 ### Asynchronous / cooperative scheduling
 
