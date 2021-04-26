@@ -2031,9 +2031,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.93"
+version = "0.2.94"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9385f66bf6105b241aa65a61cb923ef20efc665cb9f9bb50ac2f0c4b7f378d41"
+checksum = "18794a8ad5b29321f790b55d93dfba91e125cb1a9edbd4f8e3150acc771c1a5e"
 
 [[package]]
 name = "libm"
@@ -2043,9 +2043,9 @@ checksum = "c7d73b3f436185384286bd8098d17ec07c9a7d2388a6599f824d8502b529702a"
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.22.0"
+version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f6332d94daa84478d55a6aa9dbb3b305ed6500fb0cb9400cb9e1525d0e0e188"
+checksum = "19cb1effde5f834799ac5e5ef0e40d45027cd74f271b1de786ba8abb30e2164d"
 dependencies = [
  "cc",
  "pkg-config",
@@ -3814,9 +3814,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.25.0"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48381bf52627e7b0e02c4c0e4c0c88fc1cf2228a2eb7461d9499b1372399f1da"
+checksum = "fbc783b7ddae608338003bac1fa00b6786a75a9675fbd8e87243ecfdea3f6ed2"
 dependencies = [
  "bitflags",
  "fallible-iterator",
