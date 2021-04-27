@@ -87,6 +87,11 @@ impl Postgres {
             }
         });
 
+        // Some postgres servers (or clients?) don't default to UTC, which is the
+        // only value materialize supports. Enforce that here because otherwise the
+        // sqllogictest results can change when dealing with timestamptz types.
+        client.execute("SET TIMEZONE TO UTC", &[]).await?;
+
         // drop all tables
         client
             .execute(
