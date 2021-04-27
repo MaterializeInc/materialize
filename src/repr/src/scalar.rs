@@ -449,7 +449,7 @@ impl<'a> Datum<'a> {
                     (Datum::JsonNull, _) => false,
                     (Datum::Numeric(_), ScalarType::Numeric { .. }) => true,
                     (Datum::Numeric(_), _) => false,
-                    (Datum::APD(_), ScalarType::APD) => true,
+                    (Datum::APD(_), ScalarType::APD { .. }) => true,
                     (Datum::APD(_), _) => false,
                 }
             }
@@ -776,7 +776,9 @@ pub enum ScalarType {
     Numeric {
         scale: Option<u8>,
     },
-    APD,
+    APD {
+        scale: Option<u8>,
+    },
 }
 
 impl<'a> ScalarType {
@@ -801,6 +803,18 @@ impl<'a> ScalarType {
         match self {
             ScalarType::Numeric { scale } => *scale,
             _ => panic!("ScalarType::unwrap_numeric_scale called on {:?}", self),
+        }
+    }
+
+    /// Returns the contained decimal scale.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the scalar type is not [`ScalarType::APD`].
+    pub fn unwrap_apd_scale(&self) -> Option<u8> {
+        match self {
+            ScalarType::APD { scale } => *scale,
+            _ => panic!("ScalarType::unwrap_apd_scale called on {:?}", self),
         }
     }
 
@@ -915,7 +929,7 @@ impl PartialEq for ScalarType {
             | (Jsonb, Jsonb)
             | (Oid, Oid)
             | (Numeric { .. }, Numeric { .. })
-            | (APD, APD) => true,
+            | (APD { .. }, APD { .. }) => true,
             (
                 List {
                     element_type: element_l,
@@ -972,7 +986,7 @@ impl PartialEq for ScalarType {
             | (Oid, _)
             | (Map { .. }, _)
             | (Numeric { .. }, _)
-            | (APD, _) => false,
+            | (APD { .. }, _) => false,
         }
     }
 }
@@ -1033,7 +1047,7 @@ impl Hash for ScalarType {
                 custom_oid.hash(state);
             }
             Numeric { .. } => state.write_u8(19),
-            APD => state.write_u8(20),
+            APD { .. } => state.write_u8(20),
         }
     }
 }

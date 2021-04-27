@@ -461,7 +461,7 @@ fn push_column(
                             // want to get to `significand2 * 10^desired_scale`
                             // so `significand2 = significand * 10^(current_scale - desired_scale)`
                             let scale_correction =
-                                (d.0.scale() as isize) - (desired_scale as isize);
+                                (d.0.scale() as isize) - (desired_scale.unwrap_or(0) as isize);
                             if scale_correction > 0 {
                                 significand /= 10i128.pow(scale_correction.try_into()?);
                             } else {

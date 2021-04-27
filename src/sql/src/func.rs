@@ -102,7 +102,7 @@ impl TypeCategory {
             | ScalarType::Int64
             | ScalarType::Numeric { .. }
             | ScalarType::Oid
-            | ScalarType::APD => Self::Numeric,
+            | ScalarType::APD { .. } => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
             ScalarType::String => Self::String,
@@ -1802,7 +1802,7 @@ lazy_static! {
                 params!(Float32) => AggregateFunc::SumFloat32, 2110;
                 params!(Float64) => AggregateFunc::SumFloat64, 2111;
                 params!(DecimalAny) => AggregateFunc::SumDecimal, 2114;
-                params!(APD) => AggregateFunc::SumAPD, 21140;
+                params!(APD { scale: None }) => AggregateFunc::SumAPD, 21140;
                 params!(Interval) => Operation::unary(|_ecx, _e| {
                     // Explicitly providing this unsupported overload
                     // prevents `sum(NULL)` from choosing the `Float64`
@@ -2216,7 +2216,7 @@ lazy_static! {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
                 }, 1849;
                 params!(Numeric{scale: None}, Numeric{scale: None}) => AddNumeric, 17580;
-                params!(APD, APD) => AddAPD, 17581;
+                params!(APD{scale:None}, APD{scale:None}) => AddAPD, 17581;
             },
             "-" => Scalar {
                 params!(Int32) => UnaryFunc::NegInt32, 558;

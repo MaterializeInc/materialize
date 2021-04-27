@@ -15,7 +15,7 @@ use chrono::Timelike;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use repr::adt::jsonb::JsonbRef;
-use repr::adt::rdn;
+use repr::adt::{apd, rdn};
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use serde_json::json;
 
@@ -326,7 +326,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         scale: rdn::get_scale(&s),
                     })
                 }
-                ScalarType::APD => unreachable!(),
+                ScalarType::APD { .. } => unreachable!(),
             };
             if typ.nullable {
                 val = Value::Union {
@@ -457,11 +457,11 @@ pub(super) fn build_row_schema_fields<F: FnMut() -> String>(
                 "precision": rdn::RDN_MAX_PRECISION,
                 "scale": scale.unwrap_or(8),
             }),
-            ScalarType::APD => json!({
+            ScalarType::APD { scale } => json!({
                 "type": "bytes",
                 "logicalType": "decimal",
-                "precision": 39,
-                "scale": 0,
+                "precision": apd::APD_MAX_PRECISION,
+                "scale": scale.unwrap_or(8),
             }),
         };
         if typ.nullable {

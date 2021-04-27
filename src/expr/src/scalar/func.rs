@@ -36,6 +36,7 @@ use ore::fmt::FormatBuffer;
 use ore::result::ResultExt;
 use ore::str::StrExt;
 use pgrepr::Type;
+use repr::adt::apd;
 use repr::adt::array::ArrayDimension;
 use repr::adt::datetime::{DateTimeUnits, Timezone};
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
@@ -413,8 +414,13 @@ fn cast_string_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'
     Ok(Datum::from(d))
 }
 
-fn cast_string_to_apd<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let d = strconv::parse_apd(a.unwrap_str())?;
+fn cast_string_to_apd<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'a>, EvalError> {
+    let mut d = strconv::parse_apd(a.unwrap_str())?;
+    if let Some(scale) = scale {
+        if apd::rescale(&mut d, scale).is_err() {
+            return Err(EvalError::NumericFieldOverflow);
+        }
+    }
     Ok(Datum::APD(d))
 }
 
@@ -1429,6 +1435,14 @@ fn sleep<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     let duration = std::time::Duration::from_secs_f64(a.unwrap_float64());
     thread::sleep(duration);
     Ok(Datum::Null)
+}
+
+fn rescale_apd<'a>(a: Datum<'a>, scale: u8) -> Result<Datum<'a>, EvalError> {
+    let mut d = a.unwrap_apd();
+    if apd::rescale(&mut d, scale).is_err() {
+        return Err(EvalError::NumericFieldOverflow);
+    };
+    Ok(Datum::APD(d))
 }
 
 fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -2614,7 +2628,7 @@ impl BinaryFunc {
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
             AddNumeric | DivNumeric => ScalarType::Numeric { scale: None }.nullable(in_nullable),
-            AddAPD => ScalarType::APD.nullable(in_nullable),
+            AddAPD => ScalarType::APD { scale: None }.nullable(in_nullable),
 
             // TODO(benesch): we correctly compute types for decimal scale, but
             // not decimal precision... because nothing actually cares about
@@ -3145,7 +3159,7 @@ pub enum UnaryFunc {
     CastStringToInterval,
     CastStringToDecimal(u8),
     CastStringToNumeric(Option<u8>),
-    CastStringToAPD,
+    CastStringToAPD(Option<u8>),
     CastStringToUuid,
     CastDateToTimestamp,
     CastDateToTimestampTz,
@@ -3243,6 +3257,7 @@ pub enum UnaryFunc {
     Exp,
     ExpDecimal(u8),
     Sleep,
+    RescaleAPD(u8),
 }
 
 impl UnaryFunc {
@@ -3310,7 +3325,7 @@ impl UnaryFunc {
             UnaryFunc::CastStringToFloat64 => cast_string_to_float64(a),
             UnaryFunc::CastStringToDecimal(scale) => cast_string_to_decimal(a, *scale),
             UnaryFunc::CastStringToNumeric(scale) => cast_string_to_numeric(a, *scale),
-            UnaryFunc::CastStringToAPD => cast_string_to_apd(a),
+            UnaryFunc::CastStringToAPD(scale) => cast_string_to_apd(a, *scale),
             UnaryFunc::CastStringToDate => cast_string_to_date(a),
             UnaryFunc::CastStringToList {
                 cast_expr,
@@ -3428,6 +3443,7 @@ impl UnaryFunc {
             UnaryFunc::Exp => exp(a),
             UnaryFunc::ExpDecimal(scale) => exp_dec(a, *scale),
             UnaryFunc::Sleep => sleep(a),
+            UnaryFunc::RescaleAPD(scale) => rescale_apd(a, *scale),
         }
     }
 
@@ -3452,7 +3468,7 @@ impl UnaryFunc {
                 ScalarType::Decimal(MAX_DECIMAL_PRECISION, *scale).nullable(true)
             }
             CastStringToNumeric(scale) => ScalarType::Numeric { scale: *scale }.nullable(true),
-            CastStringToAPD => ScalarType::APD.nullable(true),
+            CastStringToAPD(scale) => ScalarType::APD { scale: *scale }.nullable(true),
             CastStringToDate => ScalarType::Date.nullable(true),
             CastStringToTime => ScalarType::Time.nullable(true),
             CastStringToTimestamp => ScalarType::Timestamp.nullable(true),
@@ -3601,6 +3617,10 @@ impl UnaryFunc {
             Log10 | Ln | Exp => ScalarType::Float64.nullable(in_nullable),
             Log10Decimal(_) | LnDecimal(_) | ExpDecimal(_) => input_type,
             Sleep => ScalarType::TimestampTz.nullable(true),
+            RescaleAPD(scale) => ScalarType::APD {
+                scale: Some(*scale),
+            }
+            .nullable(true),
         }
     }
 
@@ -3698,7 +3718,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::CastStringToFloat64 => f.write_str("strtof64"),
             UnaryFunc::CastStringToDecimal(_) => f.write_str("strtodec"),
             UnaryFunc::CastStringToNumeric(_) => f.write_str("strtonumeric"),
-            UnaryFunc::CastStringToAPD => f.write_str("strtoapd"),
+            UnaryFunc::CastStringToAPD(_) => f.write_str("strtoapd"),
             UnaryFunc::CastStringToDate => f.write_str("strtodate"),
             UnaryFunc::CastStringToList { .. } => f.write_str("strtolist"),
             UnaryFunc::CastStringToMap { .. } => f.write_str("strtomap"),
@@ -3791,6 +3811,7 @@ impl fmt::Display for UnaryFunc {
             UnaryFunc::ExpDecimal(_) => f.write_str("expdec"),
             UnaryFunc::Exp => f.write_str("expf64"),
             UnaryFunc::Sleep => f.write_str("mz_sleep"),
+            UnaryFunc::RescaleAPD(..) => f.write_str("rescale_apd"),
         }
     }
 }
@@ -4282,7 +4303,14 @@ where
             }
             strconv::format_numeric(buf, &s)
         }
-        APD => strconv::format_apd(buf, &d.unwrap_apd()),
+        APD { scale } => {
+            let mut d = d.unwrap_apd();
+            if let Some(scale) = scale {
+                apd::rescale(&mut d, *scale).unwrap();
+            }
+
+            strconv::format_apd(buf, &d)
+        }
         Date => strconv::format_date(buf, d.unwrap_date()),
         Time => strconv::format_time(buf, d.unwrap_time()),
         Timestamp => strconv::format_timestamp(buf, d.unwrap_timestamp()),

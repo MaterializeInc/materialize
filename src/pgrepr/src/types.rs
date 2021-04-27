@@ -292,7 +292,7 @@ impl Type {
             Type::TimestampTz => ScalarType::TimestampTz,
             Type::Uuid => ScalarType::Uuid,
             Type::RDN => ScalarType::Numeric { scale: None },
-            Type::APD => ScalarType::APD,
+            Type::APD => ScalarType::APD { scale: None },
         }
     }
 }
@@ -330,7 +330,7 @@ impl From<&ScalarType> for Type {
             ScalarType::TimestampTz => Type::TimestampTz,
             ScalarType::Uuid => Type::Uuid,
             ScalarType::Numeric { .. } => Type::RDN,
-            ScalarType::APD => Type::RDN,
+            ScalarType::APD { .. } => Type::RDN,
         }
     }
 }

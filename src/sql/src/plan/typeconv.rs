@@ -239,7 +239,10 @@ lazy_static! {
                 let s = to_type.unwrap_numeric_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(s)))
             }),
-            (String, APD) =>  Explicit: CastStringToAPD,
+            (String, APD) =>  Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_apd_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToAPD(s)))
+            }),
             (String, Date) => Explicit: CastStringToDate,
             (String, Time) => Explicit: CastStringToTime,
             (String, Timestamp) => Explicit: CastStringToTimestamp,
@@ -320,7 +323,17 @@ lazy_static! {
             (Numeric, String) => Assignment: CastNumericToString,
 
             // APD
-            (APD, String) => Assignment: CastAPDToString
+            (APD, String) => Assignment: CastAPDToString,
+            (APD, APD) => Implicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let scale = to_type.unwrap_apd_scale();
+                Some(move |e: HirScalarExpr| {
+                    if let Some(scale) = scale {
+                        e.call_unary(RescaleAPD(scale))
+                    } else {
+                        e
+                    }
+                })
+            })
         }
     };
 }
@@ -353,19 +366,25 @@ fn get_cast(
         }
     }
 
-    if from == to {
-        return Some(Box::new(|expr| expr));
-    }
+    match to {
+        // Do not use equality match if `to` has specified scale
+        ScalarType::APD { scale: Some(..) } => {}
+        _ => {
+            if from == to {
+                return Some(Box::new(|expr| expr));
+            }
 
-    // If types structurally equivalent, we only need to change `from`'s OID.
-    if structural_equality(from, to) {
-        // CastInPlace allowed if going between custom and anonymous or if cast
-        // explicitly requested.
-        if from.is_custom_type() ^ to.is_custom_type() || ccx == CastContext::Explicit {
-            let return_ty = to.clone();
-            return Some(Box::new(move |expr| {
-                expr.call_unary(UnaryFunc::CastInPlace { return_ty })
-            }));
+            // If types structurally equivalent, we only need to change `from`'s OID.
+            if structural_equality(from, to) {
+                // CastInPlace allowed if going between custom and anonymous or if cast
+                // explicitly requested.
+                if from.is_custom_type() ^ to.is_custom_type() || ccx == CastContext::Explicit {
+                    let return_ty = to.clone();
+                    return Some(Box::new(move |expr| {
+                        expr.call_unary(UnaryFunc::CastInPlace { return_ty })
+                    }));
+                }
+            }
         }
     }
 
