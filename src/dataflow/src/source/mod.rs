@@ -27,7 +27,9 @@ use timely::dataflow::{
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use dataflow_types::{Consistency, DataEncoding, ExternalSourceConnector, MzOffset, SourceError};
+use dataflow_types::{
+    Consistency, ExternalSourceConnector, MzOffset, SourceDataEncoding, SourceError,
+};
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
 use log::{debug, error, trace};
@@ -104,7 +106,7 @@ pub struct SourceConfig<'a, G> {
     /// Whether this worker has been chosen to actually receive data.
     pub active: bool,
     /// Data encoding
-    pub encoding: DataEncoding,
+    pub encoding: SourceDataEncoding,
     /// Channel to send source caching information to cacher thread
     pub caching_tx: Option<mpsc::UnboundedSender<CacheMessage>>,
     /// Timely worker logger for source events
@@ -287,7 +289,7 @@ pub(crate) trait SourceReader<Out> {
         worker_id: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        encoding: DataEncoding,
+        encoding: SourceDataEncoding,
         logger: Option<Logger>,
     ) -> Result<(Self, Option<PartitionId>), anyhow::Error>
     where

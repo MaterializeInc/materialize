@@ -21,6 +21,7 @@ use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
     AvroOcfEncoding, Compression, DataEncoding, ExternalSourceConnector, MzOffset,
+    SourceDataEncoding,
 };
 use expr::{PartitionId, SourceInstanceId};
 use mz_avro::types::Value;
@@ -63,9 +64,10 @@ impl SourceReader<Value> for FileSourceReader<Value> {
         _: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        encoding: DataEncoding,
+        encoding: SourceDataEncoding,
         _: Option<Logger>,
     ) -> Result<(FileSourceReader<Value>, Option<PartitionId>), anyhow::Error> {
+        let encoding = encoding.single("File source")?;
         let receiver = match connector {
             ExternalSourceConnector::AvroOcf(oc) => {
                 let reader_schema = match &encoding {
@@ -140,7 +142,7 @@ impl SourceReader<Vec<u8>> for FileSourceReader<Vec<u8>> {
         worker_id: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        _: DataEncoding,
+        _: SourceDataEncoding,
         _: Option<Logger>,
     ) -> Result<(FileSourceReader<Vec<u8>>, Option<PartitionId>), anyhow::Error> {
         let receiver = match connector {

@@ -21,7 +21,9 @@ use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
 
-use dataflow_types::{DataEncoding, ExternalSourceConnector, KafkaOffset, KafkaSourceConnector};
+use dataflow_types::{
+    ExternalSourceConnector, KafkaOffset, KafkaSourceConnector, SourceDataEncoding,
+};
 use expr::{PartitionId, SourceInstanceId};
 use kafka_util::KafkaAddrs;
 use log::{error, info, log_enabled, warn};
@@ -226,7 +228,7 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
         worker_id: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        _: DataEncoding,
+        _: SourceDataEncoding,
         logger: Option<Logger>,
     ) -> Result<(KafkaSourceReader, Option<PartitionId>), anyhow::Error> {
         match connector {

@@ -22,8 +22,8 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, Connector, DataType, Envelope, Expr, Format, Ident, MultiConnector, Query,
-    TableConstraint, UnresolvedObjectName, Value,
+    AstInfo, ColumnDef, Connector, CreateSourceFormat, DataType, Envelope, Expr, Format, Ident,
+    MultiConnector, Query, TableConstraint, UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -356,8 +356,8 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub col_names: Vec<Ident>,
     pub connector: Connector<T>,
     pub with_options: Vec<SqlOption<T>>,
-    pub format: Option<Format<T>>,
-    pub envelope: Envelope<T>,
+    pub format: CreateSourceFormat<T>,
+    pub envelope: Envelope,
     pub if_not_exists: bool,
     pub materialized: bool,
 }
@@ -386,10 +386,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
-        if let Some(format) = &self.format {
-            f.write_str(" FORMAT ");
-            f.write_node(format);
-        }
+        f.write_node(&self.format);
         match self.envelope {
             Envelope::None => (),
             _ => {
@@ -429,7 +426,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub connector: Connector<T>,
     pub with_options: Vec<SqlOption<T>>,
     pub format: Option<Format<T>>,
-    pub envelope: Option<Envelope<T>>,
+    pub envelope: Option<Envelope>,
     pub with_snapshot: bool,
     pub as_of: Option<Expr<T>>,
     pub if_not_exists: bool,

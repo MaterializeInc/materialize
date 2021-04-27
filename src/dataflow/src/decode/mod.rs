@@ -11,7 +11,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::{any::Any, cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use differential_dataflow::capture::YieldingIter;
 use differential_dataflow::{AsCollection, Collection};
 use expr::SourceInstanceId;
@@ -24,7 +24,9 @@ use timely::dataflow::{Scope, Stream};
 use timely::scheduling::SyncActivator;
 
 use ::mz_avro::{types::Value, Schema};
-use dataflow_types::{DataEncoding, DebeziumMode, DecodeError, RegexEncoding, SourceEnvelope};
+use dataflow_types::{
+    DataEncoding, DebeziumMode, DecodeError, RegexEncoding, SourceDataEncoding, SourceEnvelope,
+};
 use dataflow_types::{DataflowError, LinearOperator};
 use interchange::avro::{extract_row, ConfluentAvroResolver, DebeziumDecodeState};
 use log::error;
@@ -32,12 +34,14 @@ use repr::Datum;
 use repr::{Diff, Row, Timestamp};
 
 use self::csv::csv;
+use self::key_value::KeyValueDecoder;
 use self::regex::regex as regex_fn;
 use crate::operator::StreamExt;
 use crate::source::SourceOutput;
 
 mod avro;
 mod csv;
+mod key_value;
 mod metrics;
 mod protobuf;
 mod regex;
@@ -97,7 +101,7 @@ where
                         ))
                     }
                 }
-                SourceEnvelope::Upsert(_) => unreachable!("Upsert is not supported for AvroOCF"),
+                SourceEnvelope::Upsert => unreachable!("Upsert is not supported for AvroOCF"),
                 SourceEnvelope::CdcV2 => unreachable!("CDC envelope is not supported for AvroOCF"),
             }
             .unwrap_or_else(|e| {
@@ -198,110 +202,50 @@ where
 /// Note that for code simplicity, this uses dynamic dispatch, which is said to
 /// be slower than using templates. The use of dynamic dispatch has not been
 /// observed to noticeably impact upsert performance at the time of this writing.
+///
 /// TODO (wangandi): reimplement in terms of generics. DataEncoding could be a
 /// trait that returns a corresponding DecoderState.
-pub(crate) fn get_decoder(encoding: DataEncoding, debug_name: &str) -> Box<dyn DecoderState> {
-    let avro_err = "Failed to create Avro decoder";
-    match encoding {
+pub(crate) fn get_decoder(
+    key_encoding: DataEncoding,
+    value_encoding: DataEncoding,
+    envelope: &SourceEnvelope,
+) -> Result<KeyValueDecoder, anyhow::Error> {
+    let key = get_decoder_inner(key_encoding, &SourceEnvelope::None)?;
+    let value = get_decoder_inner(value_encoding, envelope)?;
+    Ok(key_value::KeyValueDecoder::new(key, value))
+}
+
+fn get_decoder_inner(
+    encoding: DataEncoding,
+    envelope: &SourceEnvelope,
+) -> Result<Box<dyn DecoderState>, anyhow::Error> {
+    Ok(match encoding {
         DataEncoding::Protobuf(enc) => Box::new(protobuf::ProtobufDecoderState::new(
             &enc.descriptors,
             &enc.message_name,
         )),
         DataEncoding::Avro(enc) => Box::new(
             avro::AvroDecoderState::new(
-                enc.key_schema.as_deref(),
-                &enc.value_schema,
+                &enc.schema,
                 enc.schema_registry_config,
-                interchange::avro::EnvelopeType::Upsert,
+                envelope.get_avro_envelope_type(),
                 false,
-                format!("{}-values", debug_name),
+                "Avro".to_string(), // op_name().to_string() can't be called because of double-borrow
                 enc.confluent_wire_format,
             )
-            .expect(avro_err),
+            .expect("Failed to create Avro decoder"),
         ),
         DataEncoding::Bytes => Box::new(OffsetDecoderState::from(bytes_to_datum)),
         DataEncoding::Text => Box::new(OffsetDecoderState::from(text_to_datum)),
-        _ => unreachable!("Unsupported encoding combination"),
-    }
-}
 
-fn decode_values_inner<G, V, C>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
-    mut decoder_state: V,
-    op_name: &str,
-    source_id: SourceInstanceId,
-    contract: C,
-    upsert_debezium: bool,
-) -> (
-    Collection<G, Row, Diff>,
-    Option<Collection<G, dataflow_types::DataflowError, Diff>>,
-)
-where
-    G: Scope<Timestamp = Timestamp>,
-    V: DecoderState + 'static,
-    C: ParallelizationContract<Timestamp, SourceOutput<Vec<u8>, Vec<u8>>>,
-{
-    let stream = stream.unary(contract, &op_name, move |_, _| {
-        let mut trackstate = if upsert_debezium {
-            Some((
-                HashMap::new(),
-                metrics::DEBEZIUM_UPSERT_COUNT.with_label_values(&[
-                    &source_id.source_id.to_string(),
-                    &source_id.dataflow_id.to_string(),
-                ]),
-            ))
-        } else {
-            None
-        };
-        move |input, output| {
-            input.for_each(|cap, data| {
-                let mut session = output.session(&cap);
-                for SourceOutput {
-                    key,
-                    value: payload,
-                    position: aux_num,
-                    upstream_time_millis,
-                } in data.iter()
-                {
-                    if !payload.is_empty() {
-                        let val =
-                            decoder_state.get_value(payload, *aux_num, *upstream_time_millis);
-
-                        if let Some(val) = val {
-                            let val = if let Some((keys, metrics)) = trackstate.as_mut() {
-                                match decoder_state.decode_key(key) {
-                                    Ok(Some(decoded_key)) => {
-                                        rewrite_for_upsert(val, keys, decoded_key, metrics)
-                                    }
-                                    Ok(None) => Err(DecodeError::Text(format!(
-                                        "[customer-data] All upsert keys should decode to a value: {:?}",
-                                        key
-                                    ))
-                                    .into()),
-                                    Err(e) => {
-                                        Err(DecodeError::Text(format!("Error decoding key: {}", e))
-                                            .into())
-                                    }
-                                }
-                            } else {
-                                val
-                            };
-
-                            session.give((val, *cap.time(), 1))
-                        }
-                    }
-                }
-            });
-            decoder_state.log_error_count();
-        }
-    });
-
-    let (oks, errs) = stream.ok_err(|(data, time, diff)| match data {
-        Ok(data) => Ok((data, time, diff)),
-        Err(err) => Err((err, time, diff)),
-    });
-
-    (oks.as_collection(), Some(errs.as_collection()))
+        DataEncoding::AvroOcf(_)
+        | DataEncoding::Csv(_)
+        | DataEncoding::Regex(_)
+        | DataEncoding::Postgres(_) => bail!(
+            "Unsupported encoder for key/value encoding: {}",
+            encoding.op_name()
+        ),
+    })
 }
 
 /// Update row to blank out retractions of rows that we have never seen
@@ -442,6 +386,63 @@ fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
 /// (if it isn't automatically stopped by the upstream operator stopping)
 pub fn decode_values<G>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
+    encoding: SourceDataEncoding,
+    debug_name: &str,
+    envelope: &SourceEnvelope,
+    // Information about optional transformations that can be eagerly done.
+    // If the decoding elects to perform them, it should replace this with
+    // `None`.
+    operators: &mut Option<LinearOperator>,
+    fast_forwarded: bool,
+    source_id: SourceInstanceId,
+) -> (
+    (
+        Collection<G, Row, Diff>,
+        Option<Collection<G, dataflow_types::DataflowError, Diff>>,
+    ),
+    Option<Box<dyn Any>>,
+)
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    match encoding {
+        SourceDataEncoding::Single(encoding) => decode_values_single(
+            stream,
+            encoding,
+            debug_name,
+            envelope,
+            operators,
+            fast_forwarded,
+            source_id,
+        ),
+        SourceDataEncoding::KeyValue { key, value } => {
+            let op_name = format!("Key{}Value{}Decode", key.op_name(), value.op_name());
+
+            // XXX: if the value is CDCv2 should we bail here, since that is the only thing that can
+            // return a token in decode_values_single?
+            let decoder = get_decoder(key, value, &envelope).expect("decoder previously validated");
+            let key_contract = matches!(
+                envelope,
+                SourceEnvelope::Debezium(_, _) | SourceEnvelope::Upsert
+            );
+            let dbz_upsert = matches!(envelope, SourceEnvelope::Debezium(_, DebeziumMode::Upsert));
+            let stream = if key_contract {
+                let contract = SourceOutput::<Vec<u8>, Vec<u8>>::key_contract();
+                decode_values_inner(stream, decoder, &op_name, source_id, contract, dbz_upsert)
+            } else {
+                let contract = SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract();
+                decode_values_inner(stream, decoder, &op_name, source_id, contract, dbz_upsert)
+            };
+            (stream, None)
+        }
+    }
+}
+
+/// Decode values specified by SourceDataEncoding::Single
+///
+/// This implementations uses generics to optimize various decode pipelines
+pub fn decode_values_single<G>(
+    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     encoding: DataEncoding,
     debug_name: &str,
     envelope: &SourceEnvelope,
@@ -462,9 +463,10 @@ where
     G: Scope<Timestamp = Timestamp>,
 {
     let op_name = format!("{}Decode", encoding.op_name());
+
     match (encoding, envelope) {
-        (_, SourceEnvelope::Upsert(_)) => {
-            unreachable!("Internal error: Upsert is not supported yet on non-Kafka sources.")
+        (_, SourceEnvelope::Upsert) => {
+            unreachable!("Internal error: Upsert is not supported on non-KeyValue sources.")
         }
         (DataEncoding::Csv(enc), SourceEnvelope::None) => (
             csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators),
@@ -472,7 +474,7 @@ where
         ),
         (DataEncoding::Avro(enc), SourceEnvelope::CdcV2) => decode_cdcv2(
             stream,
-            &enc.value_schema,
+            &enc.schema,
             enc.schema_registry_config,
             enc.confluent_wire_format,
         ),
@@ -483,8 +485,7 @@ where
             decode_values_inner(
                 stream,
                 avro::AvroDecoderState::new(
-                    enc.key_schema.as_deref(),
-                    &enc.value_schema,
+                    &enc.schema,
                     enc.schema_registry_config,
                     envelope.get_avro_envelope_type(),
                     fast_forwarded && !matches!(mode, DebeziumMode::Upsert), // `start_offset` should work fine for `DEBEZIUM UPSERT`.
@@ -503,8 +504,7 @@ where
             decode_values_inner(
                 stream,
                 avro::AvroDecoderState::new(
-                    enc.key_schema.as_deref(),
-                    &enc.value_schema,
+                    &enc.schema,
                     enc.schema_registry_config,
                     envelope.get_avro_envelope_type(),
                     fast_forwarded,
@@ -565,4 +565,87 @@ where
             unreachable!("Internal error: postgres sources are never decoded");
         }
     }
+}
+
+/// Decode the items in a stream
+///
+/// Note that not all code paths in [`decode_values_single`] go through this function.
+fn decode_values_inner<G, V, C>(
+    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
+    mut decoder_state: V,
+    op_name: &str,
+    source_id: SourceInstanceId,
+    contract: C,
+    upsert_debezium: bool,
+) -> (
+    Collection<G, Row, Diff>,
+    Option<Collection<G, dataflow_types::DataflowError, Diff>>,
+)
+where
+    G: Scope<Timestamp = Timestamp>,
+    V: DecoderState + 'static,
+    C: ParallelizationContract<Timestamp, SourceOutput<Vec<u8>, Vec<u8>>>,
+{
+    let stream = stream.unary(contract, &op_name, move |_, _| {
+        let mut trackstate = if upsert_debezium {
+            Some((
+                HashMap::new(),
+                metrics::DEBEZIUM_UPSERT_COUNT.with_label_values(&[
+                    &source_id.source_id.to_string(),
+                    &source_id.dataflow_id.to_string(),
+                ]),
+            ))
+        } else {
+            None
+        };
+
+        move |input, output| {
+            input.for_each(|cap, data| {
+                let mut session = output.session(&cap);
+                for SourceOutput {
+                    key,
+                    value: payload,
+                    position: aux_num,
+                    upstream_time_millis,
+                } in data.iter()
+                {
+                    if !payload.is_empty() {
+                        let val =
+                            decoder_state.get_value(payload, *aux_num, *upstream_time_millis);
+
+                        if let Some(val) = val {
+                            let val = if let Some((keys, metrics)) = trackstate.as_mut() {
+                                match decoder_state.decode_key(key) {
+                                    Ok(Some(decoded_key)) => {
+                                        rewrite_for_upsert(val, keys, decoded_key, metrics)
+                                    }
+                                    Ok(None) => Err(DecodeError::Text(format!(
+                                        "[customer-data] All upsert keys should decode to a value: {:?}",
+                                        key
+                                    ))
+                                    .into()),
+                                    Err(e) => {
+                                        Err(DecodeError::Text(format!("Error decoding key: {}", e))
+                                            .into())
+                                    }
+                                }
+                            } else {
+                                val
+                            };
+
+                            session.give((val, *cap.time(), 1))
+                        }
+                    }
+                }
+            });
+            decoder_state.log_error_count();
+        }
+    });
+
+    let (oks, errs) = stream.ok_err(|(data, time, diff)| match data {
+        Ok(data) => Ok((data, time, diff)),
+        Err(err) => Err((err, time, diff)),
+    });
+
+    (oks.as_collection(), Some(errs.as_collection()))
 }
