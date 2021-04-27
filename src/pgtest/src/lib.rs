@@ -218,6 +218,17 @@ impl PgTest {
                                 .unwrap(),
                         })?,
                     ),
+                    Message::CopyInResponse(body) => (
+                        "CopyIn",
+                        serde_json::to_string(&CopyOut {
+                            format: format_name(body.format()),
+                            column_formats: body
+                                .column_formats()
+                                .map(|format| Ok(format_name(format as u8)))
+                                .collect()
+                                .unwrap(),
+                        })?,
+                    ),
                     Message::CopyData(body) => (
                         "CopyData",
                         serde_json::to_string(
@@ -410,6 +421,13 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: 
                                 buf,
                             )
                             .unwrap();
+                        }
+                        "CopyData" => {
+                            let v: String = serde_json::from_str(args).unwrap();
+                            frontend::CopyData::new(v.as_bytes()).unwrap().write(buf);
+                        }
+                        "CopyDone" => {
+                            frontend::copy_done(buf);
                         }
                         _ => panic!("unknown message type {}", typ),
                     })
