@@ -108,7 +108,6 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             }
             Connector::Postgres {
                 conn,
-                namespace,
                 table,
                 columns,
                 slot,
@@ -120,7 +119,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                         Uuid::new_v4().to_string().replace('-', "")
                     )
                 });
-                purify_postgres_table(conn, namespace, table, columns).await?;
+                purify_postgres_table(conn, table, columns).await?;
             }
             Connector::PubNub { .. } => (),
         }
@@ -165,7 +164,6 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 conn,
                 publication,
                 slot,
-                namespace,
                 tables,
             } => {
                 slot.get_or_insert_with(|| {
@@ -177,16 +175,14 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 
                 let mut create_stmts = Vec::with_capacity(tables.len());
                 for table in tables.into_iter() {
-                    purify_postgres_table(&conn, &namespace, &table.name, &mut table.columns)
-                        .await?;
+                    purify_postgres_table(&conn, &table.name, &mut table.columns).await?;
                     create_stmts.push(CreateSourceStatement {
-                        name: UnresolvedObjectName(vec![Ident::from(table.name.as_str())]),
+                        name: UnresolvedObjectName(vec![table.name.0.last().unwrap().clone()]),
                         col_names: table.columns.iter().map(|c| c.name.clone()).collect(),
                         connector: Connector::Postgres {
                             conn: conn.to_owned(),
                             publication: publication.to_owned(),
                             slot: slot.clone(),
-                            namespace: namespace.to_owned(),
                             table: table.name.to_owned(),
                             columns: table.columns.clone(),
                         },
@@ -206,11 +202,10 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 
 async fn purify_postgres_table(
     conn: &str,
-    namespace: &str,
-    table: &str,
+    table: &UnresolvedObjectName,
     columns: &mut Vec<ColumnDef<Raw>>,
 ) -> Result<(), anyhow::Error> {
-    let fetched_columns = postgres_util::table_info(conn, namespace, table)
+    let fetched_columns = postgres_util::table_info(conn, &table.to_ast_string())
         .await?
         .schema
         .iter()

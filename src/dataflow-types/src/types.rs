@@ -766,8 +766,9 @@ pub struct FileSourceConnector {
 pub struct PostgresSourceConnector {
     pub conn: String,
     pub publication: String,
-    pub namespace: String,
-    pub table: String,
+    // The table's UnresolvedObjectName.to_ast_string(), for use in literal SQL
+    // strings.
+    pub ast_table: String,
     pub cast_exprs: Vec<MirScalarExpr>,
     pub slot_name: String,
 }

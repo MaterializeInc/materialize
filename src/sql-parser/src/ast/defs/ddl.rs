@@ -307,10 +307,8 @@ pub enum Connector<T: AstInfo> {
         publication: String,
         /// The replication slot name that will be created upstream
         slot: Option<String>,
-        /// The namespace the synced table belongs to
-        namespace: String,
         /// The name of the table to sync
-        table: String,
+        table: UnresolvedObjectName,
         /// The expected column schema of the synced table
         columns: Vec<ColumnDef<T>>,
     },
@@ -378,7 +376,6 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
             Connector::Postgres {
                 conn,
                 publication,
-                namespace,
                 table,
                 columns,
                 slot,
@@ -391,11 +388,9 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                     f.write_str("' SLOT '");
                     f.write_str(&display::escape_single_quote_string(slot));
                 }
-                f.write_str("' NAMESPACE '");
-                f.write_str(&display::escape_single_quote_string(namespace));
-                f.write_str("' TABLE '");
-                f.write_str(&display::escape_single_quote_string(table));
-                f.write_str("' (");
+                f.write_str("' TABLE ");
+                f.write_node(table);
+                f.write_str(" (");
                 f.write_node(&display::comma_separated(columns));
                 f.write_str(")");
             }
@@ -423,8 +418,6 @@ pub enum MultiConnector<T: AstInfo> {
         publication: String,
         /// The replication slot name that will be created upstream
         slot: Option<String>,
-        /// The namespace the synced table belongs to
-        namespace: String,
         /// The tables to sync
         tables: Vec<PgTable<T>>,
     },
@@ -437,7 +430,6 @@ impl<T: AstInfo> AstDisplay for MultiConnector<T> {
                 conn,
                 publication,
                 slot,
-                namespace,
                 tables,
             } => {
                 f.write_str("POSTGRES HOST '");
@@ -448,8 +440,6 @@ impl<T: AstInfo> AstDisplay for MultiConnector<T> {
                     f.write_str("' SLOT '");
                     f.write_str(&display::escape_single_quote_string(slot));
                 }
-                f.write_str("' NAMESPACE '");
-                f.write_str(&display::escape_single_quote_string(namespace));
                 f.write_str("' TABLES (");
                 f.write_node(&display::comma_separated(tables));
                 f.write_str(")");
@@ -463,7 +453,7 @@ impl_display_t!(MultiConnector);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PgTable<T: AstInfo> {
     /// The name of the table to sync
-    pub name: String,
+    pub name: UnresolvedObjectName,
     /// The name for the table in Materialize
     pub alias: T::ObjectName,
     /// The expected column schema of the synced table
@@ -472,9 +462,7 @@ pub struct PgTable<T: AstInfo> {
 
 impl<T: AstInfo> AstDisplay for PgTable<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("'");
-        f.write_str(&display::escape_single_quote_string(&self.name));
-        f.write_str("'");
+        f.write_node(&self.name);
         f.write_str(" AS ");
         f.write_str(self.alias.to_ast_string());
         if !self.columns.is_empty() {
