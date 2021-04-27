@@ -33,7 +33,7 @@ $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestam
 
 > DECLARE c CURSOR FOR SELECT * FROM fetch_during_ingest;
 
-> FETCH 1 c WITH (timeout='2s');
+> FETCH 1 c WITH (timeout='60s');
 123
 
 $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestamp=2
@@ -58,6 +58,6 @@ $ kafka-ingest format=avro topic=tail-fetch-during-ingest schema=${int} timestam
 
 > DECLARE c CURSOR FOR SELECT * FROM fetch_during_ingest;
 
-> FETCH 2 c WITH (timeout='2s');
+> FETCH 2 c WITH (timeout='60s');
 123
 234

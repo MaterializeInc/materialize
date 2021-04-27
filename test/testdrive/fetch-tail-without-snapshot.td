@@ -40,5 +40,5 @@ $ kafka-ingest format=avro topic=tail-without-snapshot schema=${int} timestamp=1
 $ kafka-ingest format=avro topic=tail-without-snapshot schema=${int} timestamp=1
 {"f1": 567}
 
-> FETCH 1 FROM c WITH (timeout = '2s')
+> FETCH 1 FROM c WITH (timeout = '60s')
 <TIMESTAMP> 1 567
