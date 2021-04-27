@@ -10,7 +10,7 @@
 //! Insert random data into MySQL, assuming the Debezium demo database
 
 use anyhow::Error;
-use log::{error, info};
+use log::{debug, error, info};
 use mysql_async::prelude::Queryable;
 use mysql_async::{Pool, TxOpts};
 use rand::seq::SliceRandom;
@@ -168,6 +168,7 @@ async fn issue_random_queries(pool: &Pool, args: Args) -> Result<(), Error> {
                 let mut failures = 0;
 
                 for _ in 0..args.num_transactions {
+                    debug!("{}: start tx", i);
                     // Grab random set of queries and execute them. Ignore errors
                     let mut tx = conn.start_transaction(TxOpts::default()).await?;
 
@@ -182,21 +183,38 @@ async fn issue_random_queries(pool: &Pool, args: Args) -> Result<(), Error> {
                             .expect("can select random query");
 
                         for query in tx_queries {
-                            // info!("[{}]: {}", i, query);
-                            match tx.query_drop(query).await {
-                                Ok(_) => (),
-                                Err(mysql_async::Error::Server(mysql_async::ServerError {
-                                    code: 1213,
-                                    ..
-                                })) => {
-                                    commit = false;
-                                    break 'transaction;
+                            let mut retries = 0;
+                            'query: loop {
+                                match tx.query_drop(query).await {
+                                    Ok(_) => {
+                                        debug!("{}: query succeeded, retries: {}", i, retries);
+                                        break 'query;
+                                    }
+                                    Err(mysql_async::Error::Server(mysql_async::ServerError {
+                                        code: 1213,
+                                        ..
+                                    })) => {
+                                        // 50/50 coin flip to retry the query
+                                        if thread_rng().gen_range(0..2) == 1 {
+                                            debug!("{}: rollback query, retries: {}", i, retries);
+                                            commit = false;
+                                            break 'transaction;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("Error! {:#?}", e);
+                                        commit = false;
+                                        break 'transaction;
+                                    }
                                 }
-                                Err(e) => {
-                                    error!("Error! {:#?}", e);
-                                    commit = false;
-                                    break 'transaction;
-                                }
+
+                                // Sleep before retrying, to give the other transaction time to
+                                // (maybe) rollback their conflicting transaction
+                                retries += 1;
+                                let sleep_duration = Duration::from_millis(
+                                    thread_rng().gen_range(args.min_delay..=args.max_delay),
+                                );
+                                tokio::time::sleep(sleep_duration).await;
                             }
 
                             // Random jigger to encourage transaction conflicts
@@ -208,9 +226,11 @@ async fn issue_random_queries(pool: &Pool, args: Args) -> Result<(), Error> {
                     }
 
                     if commit {
+                        debug!("{}: commit tx", i);
                         successes += 1;
                         tx.commit().await?;
                     } else {
+                        debug!("{}: rollback tx", i);
                         failures += 1;
                         tx.rollback().await?;
                     }
