@@ -1,0 +1,18 @@
+[package]
+name = "validate-debezium-topics"
+description = "Utilty to validate Kafka topics written by debezium"
+version = "0.0.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+anyhow = "1.0.40"
+ccsr = { path = "../../../src/ccsr" }
+futures = "0.3.14"
+log = "0.4.13"
+mz-avro = { path = "../../../src/avro" }
+ore = { path = "../../../src/ore" }
+rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
+structopt = "0.3.21"
+tokio = "1.5.0"
+url = "2.2.1"

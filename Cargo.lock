@@ -5145,6 +5145,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "validate-debezium-topics"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "ccsr",
+ "futures",
+ "log",
+ "mz-avro",
+ "ore",
+ "rdkafka",
+ "structopt",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "vcpkg"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

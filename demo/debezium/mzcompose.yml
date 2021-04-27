@@ -106,6 +106,8 @@ services:
     depends_on: [kafka, schema-registry]
   debezium-mysql-gen:
     mzbuild: debezium-mysql-gen
+  validate-debezium-topics:
+    mzbuild: validate-debezium-topics
   simple-mysql-connector:
     build: simple-mysql-connector
     depends_on: [connect]
@@ -205,3 +207,8 @@ mzworkflows:
       duration: 15
     - step: run
       service: debezium-mysql-gen
+
+  validate-topics:
+    steps:
+    - step: run
+      service: validate-debezium-topics
