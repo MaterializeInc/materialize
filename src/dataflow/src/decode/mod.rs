@@ -418,9 +418,14 @@ where
         SourceDataEncoding::KeyValue { key, value } => {
             let op_name = format!("Key{}Value{}Decode", key.op_name(), value.op_name());
 
-            // XXX: if the value is CDCv2 should we bail here, since that is the only thing that can
-            // return a token in decode_values_single?
             let decoder = get_decoder(key, value, &envelope).expect("decoder previously validated");
+            if matches!(envelope, SourceEnvelope::CdcV2) {
+                // it's not clear what this would even mean, since we don't track the keys
+                //
+                // if we wanted to support it we'd need to call the cdcv2 method instead of decode_values_inner
+                panic!("CDCv2 does not support key/value decoding");
+            }
+
             let key_contract = matches!(
                 envelope,
                 SourceEnvelope::Debezium(_, _) | SourceEnvelope::Upsert
@@ -428,10 +433,10 @@ where
             let dbz_upsert = matches!(envelope, SourceEnvelope::Debezium(_, DebeziumMode::Upsert));
             let stream = if key_contract {
                 let contract = SourceOutput::<Vec<u8>, Vec<u8>>::key_contract();
-                decode_values_inner(stream, decoder, &op_name, source_id, contract, dbz_upsert)
+                decode_values_decoder(stream, decoder, &op_name, source_id, contract, dbz_upsert)
             } else {
                 let contract = SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract();
-                decode_values_inner(stream, decoder, &op_name, source_id, contract, dbz_upsert)
+                decode_values_decoder(stream, decoder, &op_name, source_id, contract, dbz_upsert)
             };
             (stream, None)
         }
@@ -465,8 +470,9 @@ where
     let op_name = format!("{}Decode", encoding.op_name());
 
     match (encoding, envelope) {
-        (_, SourceEnvelope::Upsert) => {
-            unreachable!("Internal error: Upsert is not supported on non-KeyValue sources.")
+        // these first few decodings have their own custom processing, they don't use a decoder type
+        (DataEncoding::Regex(RegexEncoding { regex }), SourceEnvelope::None) => {
+            (regex_fn(stream, regex, debug_name), None)
         }
         (DataEncoding::Csv(enc), SourceEnvelope::None) => (
             csv(stream, enc.header_row, enc.n_cols, enc.delimiter, operators),
@@ -478,11 +484,15 @@ where
             enc.schema_registry_config,
             enc.confluent_wire_format,
         ),
+        (_, SourceEnvelope::Upsert) => {
+            unreachable!("Internal error: Upsert is not supported on non-KeyValue sources.")
+        }
         (_, SourceEnvelope::CdcV2) => {
             unreachable!("Internal error: CDCv2 is not supported yet on non-Avro sources.")
         }
+        // the remainder all use decoders
         (DataEncoding::Avro(enc), SourceEnvelope::Debezium(_ds, mode)) => (
-            decode_values_inner(
+            decode_values_decoder(
                 stream,
                 avro::AvroDecoderState::new(
                     &enc.schema,
@@ -501,7 +511,7 @@ where
             None,
         ),
         (DataEncoding::Avro(enc), envelope) => (
-            decode_values_inner(
+            decode_values_decoder(
                 stream,
                 avro::AvroDecoderState::new(
                     &enc.schema,
@@ -525,11 +535,8 @@ where
         (_, SourceEnvelope::Debezium(_, _)) => unreachable!(
             "Internal error: A non-Avro Debezium-envelope source should not have been created."
         ),
-        (DataEncoding::Regex(RegexEncoding { regex }), SourceEnvelope::None) => {
-            (regex_fn(stream, regex, debug_name), None)
-        }
         (DataEncoding::Protobuf(enc), SourceEnvelope::None) => (
-            decode_values_inner(
+            decode_values_decoder(
                 stream,
                 protobuf::ProtobufDecoderState::new(&enc.descriptors, &enc.message_name),
                 &op_name,
@@ -540,7 +547,7 @@ where
             None,
         ),
         (DataEncoding::Bytes, SourceEnvelope::None) => (
-            decode_values_inner(
+            decode_values_decoder(
                 stream,
                 OffsetDecoderState::from(bytes_to_datum),
                 &op_name,
@@ -551,7 +558,7 @@ where
             None,
         ),
         (DataEncoding::Text, SourceEnvelope::None) => (
-            decode_values_inner(
+            decode_values_decoder(
                 stream,
                 OffsetDecoderState::from(text_to_datum),
                 &op_name,
@@ -567,10 +574,11 @@ where
     }
 }
 
-/// Decode the items in a stream
+/// Decode the items in a stream using the passed-in decoder
 ///
-/// Note that not all code paths in [`decode_values_single`] go through this function.
-fn decode_values_inner<G, V, C>(
+/// Note that not all code paths in [`decode_values_single`] go through this function, some have
+/// implementations that don't use a decoder type.
+fn decode_values_decoder<G, V, C>(
     stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
     mut decoder_state: V,
     op_name: &str,
