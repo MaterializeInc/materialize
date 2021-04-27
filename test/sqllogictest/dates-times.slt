@@ -455,10 +455,10 @@ VALUES
 query T rowsort
 SELECT * FROM timestampwithtzish
 ----
-1999-12-31 06:00:00
-1999-12-31 07:11:01
-1999-12-31 13:46:01
-2000-01-01 08:00:00
+1999-12-31 01:00:00
+1999-12-31 02:11:01
+1999-12-31 08:46:01
+2000-01-01 03:00:00
 
 statement ok
 CREATE TABLE timestamptzish (

@@ -249,8 +249,8 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 
 | Get %4 (l2)
 | Reduce group=(123)
 | | agg count(true)
-| Filter (#1 > 1)
-| Map (err: more than one record produced in subquery)
+| Filter if (#1 > 1) then {(err: more than one record produced in subquery)} else {false}
+| Map null
 | Project (#0, #2)
 
 %7 = Let l3 =
@@ -299,8 +299,8 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1) = t2.f1 FROM t2 WHERE t2.f1 = 123;
 | Get materialize.public.t1 (u1)
 | Reduce group=()
 | | agg count(true)
-| Filter (#0 > 1)
-| Map (err: more than one record produced in subquery)
+| Filter if (#0 > 1) then {(err: more than one record produced in subquery)} else {false}
+| Map null
 | Project (#1)
 
 %2 = Let l0 =
@@ -439,22 +439,10 @@ EXPLAIN SELECT * FROM t1 WHERE 123 = (SELECT t2.f1 FROM t2);
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
-| Project (#0)
 
 %2 =
-| Get materialize.public.t2 (u3)
-| Reduce group=()
-| | agg count(true)
-| Filter (err: more than one record produced in subquery), (#0 > 1)
-| Map (err: more than one record produced in subquery)
-| Project (#1)
-
-%3 =
-| Union %1 %2
-
-%4 =
-| Join %0 %3
-| | implementation = Differential %3 %0.()
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 | | demand = (#0, #1)
 | Project (#0, #1)
 
@@ -471,22 +459,10 @@ EXPLAIN SELECT * FROM t1 WHERE t1.f1 = 123 AND t1.f1 = (SELECT t2.f1 FROM t2);
 %1 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
-| Project (#0)
 
 %2 =
-| Get materialize.public.t2 (u3)
-| Reduce group=()
-| | agg count(true)
-| Filter (err: more than one record produced in subquery), (#0 > 1)
-| Map (err: more than one record produced in subquery)
-| Project (#1)
-
-%3 =
-| Union %1 %2
-
-%4 =
-| Join %0 %3
-| | implementation = Differential %3 %0.()
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 | | demand = (#0, #1)
 | Project (#0, #1)
 

@@ -684,18 +684,28 @@ impl HirScalarExpr {
                                 }],
                                 None,
                             );
-                            // Errors should result from counts > 1.
+                            // Error for counts > 1, and discard other results.
                             let errors = counts
-                                .filter(vec![expr::MirScalarExpr::Column(inner_arity).call_binary(
-                                    expr::MirScalarExpr::literal_ok(
-                                        Datum::Int64(1),
-                                        ScalarType::Int64,
-                                    ),
-                                    expr::BinaryFunc::Gt,
-                                )])
+                                .filter(vec![expr::MirScalarExpr::Column(inner_arity)
+                                    .call_binary(
+                                        expr::MirScalarExpr::literal_ok(
+                                            Datum::Int64(1),
+                                            ScalarType::Int64,
+                                        ),
+                                        expr::BinaryFunc::Gt,
+                                    )
+                                    .if_then_else(
+                                        expr::MirScalarExpr::literal(
+                                            Err(expr::EvalError::MultipleRowsFromSubquery),
+                                            ScalarType::Bool,
+                                        ),
+                                        expr::MirScalarExpr::literal_ok(
+                                            Datum::False,
+                                            ScalarType::Bool,
+                                        ),
+                                    )])
                                 .project((0..inner_arity).collect::<Vec<_>>())
-                                .map(vec![expr::MirScalarExpr::literal(
-                                    Err(expr::EvalError::MultipleRowsFromSubquery),
+                                .map(vec![expr::MirScalarExpr::literal_null(
                                     col_type.clone().scalar_type,
                                 )]);
                             // Return `get_select` and any errors added in.
