@@ -503,12 +503,12 @@ impl LiteralLifting {
                     let mut projected_literals = Vec::new();
 
                     let mut new_group_key = Vec::new();
-                    for (old_pos, key) in group_key.drain(..).enumerate() {
+                    for key in group_key.drain(..) {
                         if key.is_literal() {
                             projection.push(first_projected_literal + projected_literals.len());
                             projected_literals.push(key);
                         } else {
-                            projection.push(old_pos - projected_literals.len());
+                            projection.push(new_group_key.len());
                             new_group_key.push(key);
                         }
                     }
@@ -516,12 +516,12 @@ impl LiteralLifting {
                     *group_key = new_group_key;
 
                     let mut new_aggregates = Vec::new();
-                    for (old_pos, aggr) in aggregates.drain(..).enumerate() {
+                    for aggr in aggregates.drain(..) {
                         if aggr.is_constant() {
                             projection.push(first_projected_literal + projected_literals.len());
                             projected_literals.push(eval_constant_aggr(&aggr));
                         } else {
-                            projection.push(group_key.len() + old_pos - projected_literals.len());
+                            projection.push(group_key.len() + new_aggregates.len());
                             new_aggregates.push(aggr);
                         }
                     }
