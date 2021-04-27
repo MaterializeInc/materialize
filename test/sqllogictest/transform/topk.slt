@@ -78,3 +78,18 @@ EXPLAIN PLAN FOR SELECT * FROM test1 UNION ALL SELECT * FROM test1 UNION ALL SEL
 | Union %0 %1 %2
 
 EOF
+
+# Test that `limit 0` results in an empty constant with () as the keys
+
+statement ok
+CREATE TABLE with_primary_key(a int primary key, b int)
+
+query T multiline
+explain typed plan for select * from (select * from with_primary_key limit 0);
+----
+%0 =
+| Constant
+| | types = (integer, integer)
+| | keys = (())
+
+EOF
