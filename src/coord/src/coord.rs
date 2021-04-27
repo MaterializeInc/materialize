@@ -46,6 +46,7 @@ use dataflow_types::{
     DataflowDesc, IndexDesc, PeekResponse, SinkConnector, SourceConnector, TailSinkConnector,
     TimestampSourceUpdate, Update,
 };
+use dataflow_types::{ExternalSourceConnector, PostgresSourceConnector};
 use dataflow_types::{SinkAsOf, SinkEnvelope};
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
@@ -53,6 +54,7 @@ use expr::{
 };
 use ore::str::StrExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
+use postgres_util::drop_replication_slots;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
@@ -2602,9 +2604,13 @@ impl Coordinator {
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
 
+        // External state to handle on DROP.
+        let mut slots_to_drop: HashMap<String, Vec<String>> = HashMap::new();
+
         for op in &ops {
             if let catalog::Op::DropItem(id) = op {
-                match self.catalog.get_by_id(id).item() {
+                let item = self.catalog.get_by_id(id).item();
+                match item {
                     CatalogItem::Table(_) | CatalogItem::Source(_) => {
                         sources_to_drop.push(*id);
                     }
@@ -2618,6 +2624,24 @@ impl Coordinator {
                         indexes_to_drop.push(*id);
                     }
                     _ => (),
+                }
+
+                if let CatalogItem::Source(source) = item {
+                    if let SourceConnector::External {
+                        connector:
+                            ExternalSourceConnector::Postgres(PostgresSourceConnector {
+                                conn,
+                                slot_name,
+                                ..
+                            }),
+                        ..
+                    } = &source.connector
+                    {
+                        slots_to_drop
+                            .entry(conn.clone())
+                            .or_default()
+                            .push(slot_name.clone());
+                    }
                 }
             }
         }
@@ -2645,6 +2669,12 @@ impl Coordinator {
         }
         if !indexes_to_drop.is_empty() {
             self.drop_indexes(indexes_to_drop).await;
+        }
+
+        if !slots_to_drop.is_empty() {
+            for (conn, slots) in slots_to_drop {
+                drop_replication_slots(&conn, &slots).await?
+            }
         }
 
         Ok(())

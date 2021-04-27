@@ -551,6 +551,7 @@ dependencies = [
  "ore",
  "pgrepr",
  "postgres-types",
+ "postgres-util",
  "prometheus",
  "rand 0.8.3",
  "rdkafka",
@@ -3087,6 +3088,7 @@ name = "postgres-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "log",
  "sql-parser",
  "tokio",
  "tokio-postgres",

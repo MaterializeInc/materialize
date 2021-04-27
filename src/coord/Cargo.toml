@@ -29,6 +29,7 @@ mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-util = { path = "../postgres-util" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }

@@ -12,8 +12,9 @@
 use std::fmt;
 
 use anyhow::anyhow;
+use log::info;
 use tokio_postgres::types::Type as PgType;
-use tokio_postgres::NoTls;
+use tokio_postgres::{Client, NoTls};
 
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::impl_display;
@@ -110,4 +111,42 @@ pub async fn table_info(conn: &str, ast_table: &String) -> Result<TableInfo, any
         .collect::<Result<Vec<_>, anyhow::Error>>()?;
 
     Ok(TableInfo { rel_id, schema })
+}
+
+pub async fn drop_replication_slots(conn: &str, slots: &[String]) -> Result<(), anyhow::Error> {
+    let (client, connection) = tokio_postgres::connect(&conn, NoTls).await?;
+    tokio::spawn(connection);
+
+    for slot in slots {
+        let (active, active_pid) = query_pg_replication_slots(&client, slot).await?;
+        if active {
+            client
+                .query(
+                    "SELECT pg_terminate_backend($1)",
+                    &[&active_pid.expect("active backend task without pid")],
+                )
+                .await?;
+        }
+        client
+            .query("SELECT pg_drop_replication_slot($1)", &[&slot])
+            .await?;
+        info!("drop Postgres replication slot {}", slot);
+    }
+
+    Ok(())
+}
+
+pub async fn query_pg_replication_slots(
+    client: &Client,
+    slot: &str,
+) -> Result<(bool, Option<i32>), anyhow::Error> {
+    let row = client
+        .query_one(
+            "SELECT active, active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
+            &[&slot],
+        )
+        .await?;
+    let active: bool = row.get(0);
+    let active_pid: Option<i32> = row.get(1);
+    Ok((active, active_pid))
 }
