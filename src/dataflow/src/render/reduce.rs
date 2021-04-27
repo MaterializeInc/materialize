@@ -61,7 +61,6 @@
 //! return the output arrangement directly and avoid the extra collation arrangement.
 
 use std::collections::BTreeMap;
-use std::convert::TryInto;
 
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::difference::Multiply;
@@ -79,7 +78,7 @@ use timely::dataflow::Scope;
 use timely::progress::{timestamp::Refines, Timestamp};
 
 use dataflow_types::DataflowError;
-use dec::{Context as DecCx, Decimal as DecNum, Decimal128, OrderedDecimal};
+use dec::{Context as DecCx, Decimal as DecNum, OrderedDecimal};
 use expr::{AggregateExpr, AggregateFunc, MirRelationExpr};
 use ore::cast::CastFrom;
 use repr::{Datum, DatumList, Row, RowArena};
@@ -1208,14 +1207,21 @@ impl Multiply<isize> for AccumInner {
                 neg_infs,
                 nans,
                 non_nulls,
-            } => AccumInner::APD {
-                // Sloppy, but simplest way to multiply by an isize.
-                accum: accum * DecNum::<27>::from(Decimal128::from(factor)),
-                pos_infs: pos_infs * factor,
-                neg_infs: neg_infs * factor,
-                nans: nans * factor,
-                non_nulls: non_nulls * factor,
-            },
+            } => {
+                let mut cx = DecCx::<DecNum<27>>::default();
+                let mut accum_receiver = DecNum::<27>::from(factor);
+                cx.mul(&mut accum_receiver, &accum.0);
+                assert!(!cx.status().any());
+
+                AccumInner::APD {
+                    // Sloppy, but simplest way to multiply by an isize.
+                    accum: OrderedDecimal(accum_receiver),
+                    pos_infs: pos_infs * factor,
+                    neg_infs: neg_infs * factor,
+                    nans: nans * factor,
+                    non_nulls: non_nulls * factor,
+                }
+            }
         }
     }
 }
@@ -1552,16 +1558,14 @@ where
                                     non_nulls,
                                 },
                             ) => {
-                                println!("reduce_abelian accum {:?}", accum.0);
                                 let mut cx_w = DecCx::<DecNum<27>>::default();
                                 cx_w.set_max_exponent(27 * 3 - 1).unwrap();
                                 cx_w.set_min_exponent(-27 * 3 + 1).unwrap();
-                                let mut d = accum.0.clone();
+                                let d = accum.0.clone();
                                 let mut cx_n = DecCx::<DecNum<13>>::default();
                                 cx_n.set_max_exponent(13 * 3 - 1).unwrap();
                                 cx_n.set_min_exponent(-13 * 3 + 1).unwrap();
                                 let d = cx_n.to_width(d);
-                                println!("reduce_abelian d {:?}", d);
                                 // Take a wide DecNum (accumulator) into a
                                 // narrow DecNum (datum). If this operation
                                 // overflows the narrow DecNum, this new value

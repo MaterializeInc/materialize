@@ -414,7 +414,7 @@ fn cast_string_to_numeric<'a>(a: Datum<'a>, scale: Option<u8>) -> Result<Datum<'
 }
 
 fn cast_string_to_apd<'a>(a: Datum<'a>) -> Result<Datum<'a>, EvalError> {
-    let mut d = strconv::parse_apd(a.unwrap_str())?;
+    let d = strconv::parse_apd(a.unwrap_str())?;
     Ok(Datum::APD(d))
 }
 
@@ -1046,7 +1046,10 @@ fn add_numeric<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
 }
 
 fn add_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::APD(OrderedDecimal(a.unwrap_apd().0 + b.unwrap_apd().0))
+    let mut cx = dec::Context::<dec::Decimal<13>>::default();
+    let mut a = a.unwrap_apd().0;
+    cx.add(&mut a, &b.unwrap_apd().0);
+    Datum::APD(OrderedDecimal(a))
 }
 
 fn add_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {

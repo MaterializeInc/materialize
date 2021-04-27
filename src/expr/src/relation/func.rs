@@ -345,11 +345,16 @@ fn sum_apd<'a, I>(datums: I) -> Datum<'a>
 where
     I: IntoIterator<Item = Datum<'a>>,
 {
-    let mut datums = datums.into_iter().filter(|d| !d.is_null()).peekable();
-    if datums.peek().is_none() {
+    let datums = datums
+        .into_iter()
+        .filter(|d| !d.is_null())
+        .map(|d| d.unwrap_apd().0)
+        .collect::<Vec<_>>();
+    if datums.is_empty() {
         Datum::Null
     } else {
-        let sum: dec::Decimal<13> = datums.map(|d| d.unwrap_apd().0).sum();
+        let mut cx = dec::Context::<dec::Decimal<13>>::default();
+        let sum = cx.sum(datums.iter());
         Datum::APD(OrderedDecimal(sum))
     }
 }

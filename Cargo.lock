@@ -895,7 +895,7 @@ dependencies = [
 [[package]]
 name = "dec"
 version = "0.3.3"
-source = "git+https://github.com/MaterializeInc/rust-dec?rev=3874836#3874836e858b389699db41c3ec99ec276d5dd7fe"
+source = "git+https://github.com/MaterializeInc/rust-dec?rev=c101061#c101061fafe41d39485feecec1d473f35b063829"
 dependencies = [
  "decnumber-sys",
  "libc",
@@ -906,7 +906,7 @@ dependencies = [
 [[package]]
 name = "decnumber-sys"
 version = "0.1.5"
-source = "git+https://github.com/MaterializeInc/rust-dec?rev=3874836#3874836e858b389699db41c3ec99ec276d5dd7fe"
+source = "git+https://github.com/MaterializeInc/rust-dec?rev=c101061#c101061fafe41d39485feecec1d473f35b063829"
 dependencies = [
  "cc",
  "libc",
