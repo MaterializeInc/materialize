@@ -17,6 +17,8 @@ connector_spec ::=
 copy_to ::=
   'COPY' '(' query ')' 'TO' 'STDOUT'
   ( 'WITH'? '(' option ( ',' option )* ')' )?
+copy_from ::=
+  'COPY' table_name 'FROM' 'STDIN'
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=
