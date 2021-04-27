@@ -146,22 +146,6 @@ incorrect column specification: specified column modifiers do not match upstream
     TABLE numbers (number int PRIMARY KEY, is_prime bool, name text NOT NULL)
 incorrect column specification: specified column modifiers do not match upstream source, specified: name text NOT NULL, upstream: name text NULL
 
-## CREATE SOURCES with correct information should pass purification and fail afterwards.
-
-! CREATE SOURCES
-  FROM POSTGRES
-    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-    PUBLICATION 'mz_source'
-    TABLES (numbers AS "numbers")
-CREATE SOURCES not yet supported
-
-! CREATE SOURCES
-  FROM POSTGRES
-    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-    PUBLICATION 'mz_source'
-    TABLES (numbers AS "numbers", numbers AS "second_numbers" (number int PRIMARY KEY, is_prime bool NULL, name text NULL))
-CREATE SOURCES not yet supported
-
 ## CREATE SOURCES with incorrect information should fail purification.
 
 ! CREATE SOURCES
@@ -177,6 +161,21 @@ incorrect column specification: 1 columns were specified, upstream has 3: number
     PUBLICATION 'mz_source'
     TABLES (numbers AS "numbers" (number int NULL, is_prime bool NULL, name text))
 incorrect column specification: specified column modifiers do not match upstream source, specified: number int4 NULL, upstream: number int4 PRIMARY KEY NOT NULL
+
+! CREATE SOURCES
+  FROM POSTGRES
+    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+    PUBLICATION 'mz_source'
+    TABLES ()
+Expected identifier, found right parenthesis
+
+## CREATE SOURCES
+
+> CREATE MATERIALIZED SOURCES
+  FROM POSTGRES
+    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+    PUBLICATION 'mz_source'
+    TABLES (numbers AS "numbers_from_sources", numbers AS "second_numbers_from_sources" (number int PRIMARY KEY, is_prime bool, name text))
 
 #
 # Error checking
@@ -354,6 +353,21 @@ incorrect column specification: specified column does not match upstream source
 
 > SELECT * FROM conflict_table;
 234
+
+> SELECT * FROM numbers_from_sources;
+5 true five
+
+> SELECT * FROM second_numbers_from_sources;
+5 true five
+
+#
+# Confirm that we can independently DROP individual sources created via CREATE SOURCES
+#
+
+> DROP SOURCE numbers_from_sources;
+
+> SELECT COUNT(*) = 1 FROM second_numbers_from_sources;
+true
 
 #
 # Confirm that the new sources can be used to build upon
