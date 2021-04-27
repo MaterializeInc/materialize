@@ -1886,6 +1886,63 @@ SELECT LIST[1] || '{2}'::text
 query error no overload for f32 list || f64 list: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
 SELECT '{1}'::float4 list || '{2}'::float8 list
 
+# 🔬🔬 equality (=)
+
+# 🔬🔬🔬 list = list
+
+query T
+SELECT LIST[1, 2] = LIST[1, 2]
+----
+true
+
+query T
+SELECT LIST[1, 2] = LIST[1, 3]
+----
+false
+
+query T
+SELECT LIST[[1], [2]] = LIST[[1], [2]]
+----
+true
+
+query T
+SELECT LIST[[1], [2]] = LIST[[1], [3]]
+----
+false
+
+# Equality properly casts text to appropriate list type
+query T
+SELECT LIST[1] = '{1}'
+----
+true
+
+query T
+SELECT LIST[1] = '{2}'
+----
+false
+
+# 🔬🔬🔬 errors
+
+query error no overload for integer list = text list: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT LIST[1] = LIST['a']
+
+query error no overload for text list = integer list: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT LIST[NULL] = LIST[1]
+
+query error no overload for text list list = integer list: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT LIST[[NULL]] = LIST[1]
+
+query error no overload for integer list list list = integer list: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT LIST[[[1]]] = LIST[2]
+
+# Literal text cannot be implicitly cast to list
+query error no overload for integer list = text: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT LIST[1] = '{2}'::text
+
+# Two lists containing implicitly castable element types are not implicitly castable to one another
+query error no overload for real list = double precision list: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT '{1}'::float4 list = '{2}'::float8 list
+
 # 🔬 CREATE TYPE .. AS LIST
 
 query error element_type must be of class type, but received pg_catalog.pg_enum which is of class view
