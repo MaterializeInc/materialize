@@ -426,6 +426,9 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     "postgres-execute" => {
                         Box::new(postgres::build_execute(builtin).map_err(wrap_err)?)
                     }
+                    "postgres-verify-slot" => {
+                        Box::new(postgres::build_verify_slot(builtin).map_err(wrap_err)?)
+                    }
                     "random-sleep" => {
                         Box::new(sleep::build_random_sleep(builtin).map_err(wrap_err)?)
                     }

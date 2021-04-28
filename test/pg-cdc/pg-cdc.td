@@ -498,6 +498,24 @@ true
 true
 
 #
+# Test that slots created for replication sources are deleted on DROP
+#
+$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=test_slot exists=false
+
+> CREATE MATERIALIZED SOURCE "test_slot_source"
+  FROM POSTGRES
+    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+    PUBLICATION 'mz_source'
+    SLOT 'test_slot'
+    TABLE numbers;
+
+$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=test_slot exists=true
+
+> DROP SOURCE test_slot_source
+
+$ postgres-verify-slot connection=postgres://postgres:postgres@postgres slot=test_slot exists=false
+
+#
 # Remove all data on the Postgres side
 #
 

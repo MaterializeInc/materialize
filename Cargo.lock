@@ -4660,6 +4660,7 @@ dependencies = [
  "ore",
  "parse_duration",
  "pgrepr",
+ "postgres-util",
  "postgres_array",
  "predicates",
  "protobuf",
