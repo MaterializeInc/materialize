@@ -227,6 +227,14 @@ steps:
           composition: dbt-materialize
           run: ci
 
+  - id: debezium-avro
+    label: "Debezium Avro test"
+    depends_on: build
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: debezium-avro
+          run: debezium-avro
+
   - id: pg-cdc
     label: "Postgres CDC test"
     depends_on: build
