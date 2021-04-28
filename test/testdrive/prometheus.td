@@ -10,6 +10,13 @@
 # This test validates that prometheus logs make it to testdrive, and that they get retained
 # correctly.
 
+# Some prometheus metrics should always exist
+
+$ prometheus-verify metric-name=mz_server_metadata_seconds labels=os value-gt=0
+$ prometheus-verify metric-name=mz_arrangement_maintenance_active_info
+$ prometheus-verify metric-name=mz_worker_command_queue_size
+$ prometheus-verify metric-name=mz_worker_pending_peeks_queue_size value-eq=0
+
 # Ensure we retain metrics:
 > CREATE MATERIALIZED VIEW metric_stats AS SELECT count(*) as total, max(time) as youngest, min(time) as oldest FROM mz_metrics;
 > SELECT oldest<=youngest FROM metric_stats;

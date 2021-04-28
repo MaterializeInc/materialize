@@ -102,6 +102,9 @@ count
 -----
 1
 
+$ prometheus-verify metric-name=mz_kafka_partition_offset_max labels=topic=testdrive-data-${testdrive.seed}
+$ prometheus-verify metric-name=mz_partition_offset_received labels=topic=testdrive-data-${testdrive.seed} value-eq=4
+
 # Drop the sources and verify that metrics have been removed
 > DROP VIEW test1
 

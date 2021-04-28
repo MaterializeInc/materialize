@@ -40,6 +40,7 @@ mod http;
 mod kafka;
 mod kinesis;
 mod postgres;
+mod prometheus;
 mod s3;
 mod sleep;
 mod sql;
@@ -425,6 +426,9 @@ pub fn build(cmds: Vec<PosCommand>, state: &State) -> Result<Vec<PosAction>, Err
                     "kinesis-verify" => Box::new(kinesis::build_verify(builtin).map_err(wrap_err)?),
                     "postgres-execute" => {
                         Box::new(postgres::build_execute(builtin).map_err(wrap_err)?)
+                    }
+                    "prometheus-verify" => {
+                        Box::new(prometheus::build_verify(builtin).map_err(wrap_err)?)
                     }
                     "random-sleep" => {
                         Box::new(sleep::build_random_sleep(builtin).map_err(wrap_err)?)
