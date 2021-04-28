@@ -62,6 +62,47 @@ impl LiteralLifting {
     /// columns. But in those cases where it is possible, permutations are
     /// used to move all of the literals to the final columns, and then rely
     /// on projection hoisting to allow the these literals to move up the AST.
+    ///
+    /// TODO: The literals from the final columns are returned as the result
+    /// of this method, whereas literals in intermediate columns are extracted
+    /// using permutations. The reason for this different treatment is that in
+    /// some cases it is not possible to remove the projection of the
+    /// permutation, preventing the lifting of a literal that could otherwise
+    /// be lifted, the following example being of them:
+    ///
+    /// %0 =
+    /// | Constant (1, 2, 3) (2, 2, 3)
+    ///
+    /// %1 =
+    /// | Constant (4, 3, 3) (4, 5, 3)
+    ///
+    /// %2 =
+    /// | Union %0 %1
+    ///
+    /// If final literals weren't treated differently, the example above would
+    /// lead to the following transformed plan:
+    ///
+    /// %0 =
+    /// | Constant (1) (2)
+    /// | Map 2, 3
+    /// | Project (#0..#2)
+    ///
+    /// %1 =
+    /// | Constant (3) (5)
+    /// | Map 4, 3
+    /// | Project (#1, #0, #2)
+    ///
+    /// %2 =
+    /// | Union %0 %1
+    ///
+    /// Since the union branches have different projections, they cannot be
+    /// removed, preventing literal 3 from being lifted further.
+    ///
+    /// In theory, all literals could be treated in the same way if this method
+    /// returned both a list of literals and a projection vector, making the
+    /// caller have to deal with the reshuffling.
+    /// (see https://github.com/MaterializeInc/materialize/issues/6598)
+    ///
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
