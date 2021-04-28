@@ -56,19 +56,17 @@ do_cargo() {
         export TARGET_CPP=x86_64-unknown-linux-gnu-cpp
         export TARGET_LD=x86_64-unknown-linux-gnu-ld
         export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=$TARGET_CC
+        export RUSTFLAGS=${XCOMPILE_RUSTFLAGS:-}
         # Explicitly tell libkrb5 about features available in the cross
         # toolchain that its configure script cannot auto-detect when cross
         # compiling.
         export krb5_cv_attr_constructor_destructor=yes
         export ac_cv_func_regcomp=yes
         export ac_cv_printf_positional=yes
-        # The RUSTFLAGS recommendations in doc/developer/fast-compiles.md conflict with
-        # cross-compilation
-        unset RUSTFLAGS
     elif [[ ! "${MZ_DEV_CI_BUILDER:-}" ]]; then
         # Otherwise, build inside the CI builder image, unless we're already
         # inside of it.
-        command+=("$root"/bin/ci-builder run stable)
+        command+=("$root"/bin/ci-builder run stable env "RUSTFLAGS=${XCOMPILE_RUSTFLAGS:-}")
     fi
 
     subcommand="$1"

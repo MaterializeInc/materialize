@@ -7,5 +7,17 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-name: atp-driver
+name: antithesis-materialized
 publish: false
+pre-image:
+  type: cargo-build
+  bin: materialized
+  strip: false
+  rustflags: >-
+    -Cpasses=sancov
+    -Cllvm-args=-sanitizer-coverage-level=3
+    -Cllvm-args=-sanitizer-coverage-trace-pc-guard
+    -Ccodegen-units=1
+    -Clink-arg=-Wl,--allow-shlib-undefined
+    -L/usr/local/lib
+    -lvoidstar

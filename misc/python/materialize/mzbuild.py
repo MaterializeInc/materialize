@@ -222,6 +222,7 @@ class CargoBuild(CargoPreImage):
         self.bin = config.pop("bin", None)
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
+        self.rustflags = config.pop("rustflags", "")
         if self.bin is None:
             raise ValueError("mzbuild config is missing pre-build target")
 
@@ -229,7 +230,11 @@ class CargoBuild(CargoPreImage):
         cargo_build = [self.rd.xcargo(), "build", "--bin", self.bin]
         if self.rd.release_mode:
             cargo_build.append("--release")
-        spawn.runv(cargo_build, cwd=self.rd.root)
+        spawn.runv(
+            cargo_build,
+            cwd=self.rd.root,
+            env=dict(os.environ, XCOMPILE_RUSTFLAGS=self.rustflags),
+        )
         cargo_profile = "release" if self.rd.release_mode else "debug"
         shutil.copy(self.rd.xcargo_target_dir() / cargo_profile / self.bin, self.path)
         if self.strip:
