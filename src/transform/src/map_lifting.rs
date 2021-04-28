@@ -239,18 +239,7 @@ impl LiteralLifting {
                     // Ideally this doesn't happen much, as projects
                     // get lifted too.
                     if !literals.is_empty() {
-                        let mut scalars = literals;
-                        // Merge nested Map operators.
-                        while let MirRelationExpr::Map {
-                            input: inner_input,
-                            scalars: inner_scalars,
-                        } = &mut **input
-                        {
-                            inner_scalars.extend(scalars.clone());
-                            scalars = inner_scalars.clone();
-                            **input = inner_input.take_dangerous();
-                        }
-                        **input = input.take_dangerous().map(scalars);
+                        **input = input.take_dangerous().map(literals);
                     }
                 }
                 // Policy: Do not lift literals around projects.
