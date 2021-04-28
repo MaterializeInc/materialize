@@ -24,9 +24,10 @@ use uuid::Uuid;
 use repr::strconv;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
-    AvroSchema, ColumnDef, ColumnOption, Connector, CreateSourceStatement, CreateSourcesStatement,
-    CsrSeed, DbzMode, Envelope, Format, Ident, MultiConnector, Raw, Statement,
-    UnresolvedObjectName,
+    AvroSchema, ColumnOption, Connector, CreateSourceStatement, CreateSourcesStatement,
+    CreateViewStatement, CsrSeed, DbzMode, Envelope, Expr, Format, Ident, IfExistsBehavior,
+    MultiConnector, PgTable, Query, Raw, RawName, Select, SelectItem, SetExpr, Statement,
+    TableFactor, TableWithJoins, UnresolvedObjectName, Value,
 };
 use sql_parser::parser::parse_columns;
 
@@ -147,177 +148,100 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             }
         }
     }
-    if let Statement::CreateSources(CreateSourcesStatement { connector, .. }) = &mut stmt {
-        match connector {
-            MultiConnector::Postgres {
-                conn: _,
-                publication: _,
-                slot: _,
-                tables: _,
+    if let Statement::CreateSources(CreateSourcesStatement {
+        materialized,
+        source_stmt,
+        view_stmts,
+    }) = &mut stmt
+    {
+        match &mut source_stmt.connector {
+            Connector::Postgres {
+                conn,
+                publication,
+                slot,
             } => {
-                // TODO: cast code to be used to generate materialized views. moved from its
-                // previous location
-                //
-                // let qcx = QueryContext::root(scx, QueryLifetime::Static);
-                // let cast_desc = RelationDesc::empty();
-                // let ecx = ExprContext {
-                //     qcx: &qcx,
-                //     name: "postgres column cast",
-                //     scope: &Scope::empty(None),
-                //     relation_type: &cast_desc.typ(),
-                //     allow_aggregates: false,
-                //     allow_subqueries: true,
-                // };
+                slot.get_or_insert_with(|| {
+                    format!(
+                        "materialize_{}",
+                        // postgres names cannot contain dashes
+                        Uuid::new_v4().to_string().replace('-', "")
+                    )
+                });
 
-                // // Build the expected relation description
-                // let col_names: Vec<_> = columns
-                //     .iter()
-                //     .map(|c| Some(normalize::column_name(c.name.clone())))
-                //     .collect();
+                let publication_info = postgres_util::publication_info(&conn, publication).await?;
+                *view_stmts = Vec::with_capacity(publication_info.len());
+                for table_info in publication_info {
+                    let col_schema = table_info
+                        .schema
+                        .iter()
+                        .map(|c| c.to_ast_string())
+                        .collect::<Vec<String>>()
+                        .join(", ");
+                    let (columns, _constraints) = parse_columns(&format!("({})", col_schema))?;
 
-                // let mut col_types = vec![];
-                // let mut key_cols = vec![];
-                // let mut cast_exprs = vec![];
-                // for (i, c) in columns.iter().enumerate() {
-                //     if let Some(collation) = &c.collation {
-                //         unsupported!(format!(
-                //             "CREATE SOURCE FROM POSTGRES with column collation: {}",
-                //             collation
-                //         ));
-                //     }
+                    let mut projection = vec![];
+                    for (i, column) in columns.iter().enumerate() {
+                        projection.push(SelectItem::Expr {
+                            expr: Expr::Cast {
+                                expr: Box::new(Expr::SubscriptIndex {
+                                    expr: Box::new(Expr::Identifier(vec![Ident::new("row_data")])),
+                                    subscript: Box::new(Expr::Value(Value::Number(
+                                        // LIST is one based
+                                        (i + 1).to_string(),
+                                    ))),
+                                }),
+                                data_type: column.data_type.clone(),
+                            },
+                            alias: Some(column.name.clone()),
+                        });
+                    }
 
-                //     let (aug_data_type, _ids) = resolve_names_data_type(scx, c.data_type.clone())?;
-                //     let scalar_ty = plan::scalar_type_from_sql(scx, &aug_data_type)?;
+                    let query = Query {
+                        ctes: vec![],
+                        body: SetExpr::Select(Box::new(Select {
+                            distinct: None,
+                            projection,
+                            from: vec![TableWithJoins {
+                                relation: TableFactor::Table {
+                                    name: RawName::Name(UnresolvedObjectName::unqualified(
+                                        &source_stmt.name.to_string(),
+                                    )),
+                                    alias: None,
+                                },
+                                joins: vec![],
+                            }],
+                            selection: Some(Expr::Op {
+                                op: "=".to_string(),
+                                expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
+                                expr2: Some(Box::new(Expr::Value(Value::Number(
+                                    table_info.rel_id.to_string(),
+                                )))),
+                            }),
+                            group_by: vec![],
+                            having: None,
+                            options: vec![],
+                        })),
+                        order_by: vec![],
+                        limit: None,
+                        offset: None,
+                    };
 
-                //     let mut nullable = true;
-                //     for option in &c.options {
-                //         match &option.option {
-                //             ColumnOption::Null => (),
-                //             ColumnOption::NotNull => nullable = false,
-                //             ColumnOption::Unique { is_primary: true } => key_cols.push(i),
-                //             other => unsupported!(format!(
-                //                 "CREATE SOURCE FROM POSTGRES with column constraint: {}",
-                //                 other
-                //             )),
-                //         }
-                //     }
-
-                //     let cast_expr = plan_hypothetical_cast(
-                //         &ecx,
-                //         CastContext::Explicit,
-                //         &ScalarType::String,
-                //         &scalar_ty,
-                //     )
-                //     .unwrap();
-
-                //     col_types.push(scalar_ty.nullable(nullable));
-                //     cast_exprs.push(cast_expr);
-                // }
-
-                // let typ = if key_cols.is_empty() {
-                //     RelationType::new(col_types)
-                // } else {
-                //     RelationType::new(col_types).with_key(key_cols)
-                // };
-                // let desc = RelationDesc::new(typ, col_names);ostgres-util = { path = "../postgres-util" }
-
-                // let mut create_stmts = Vec::with_capacity(tables.len());
-                // for table in tables.into_iter() {
-                //     purify_postgres_table(&conn, &table.name, &mut table.columns).await?;
-                //     let table_slot = slot.clone().or_else(|| {
-                //         Some(format!(
-                //             "materialize_{}",
-                //             Uuid::new_v4().to_string().replace('-', "")
-                //         ))
-                //     });
-                //     create_stmts.push(CreateSourceStatement {
-                //         name: table.alias.name().clone(),
-                //         col_names: table.columns.iter().map(|c| c.name.clone()).collect(),
-                //         connector: Connector::Postgres {
-                //             conn: conn.to_owned(),
-                //             publication: publication.to_owned(),
-                //             slot: table_slot,
-                //             table: table.name.to_owned(),
-                //             columns: table.columns.clone(),
-                //         },
-                //         format: None,
-                //         with_options: vec![],
-                //         envelope: Envelope::None,
-                //         if_not_exists: false,
-                //         materialized: *materialized,
-                //     });
-                // }
-                // *stmts = create_stmts;
-
-                todo!("create materialized views");
+                    view_stmts.push(CreateViewStatement {
+                        name: UnresolvedObjectName::unqualified(&table_info.name),
+                        columns: columns.iter().map(|c| c.name.clone()).collect(),
+                        with_options: vec![],
+                        query: query,
+                        if_exists: IfExistsBehavior::Error,
+                        temporary: false,
+                        materialized: *materialized,
+                    });
+                }
+                println!("{:#?}", view_stmts);
             }
+            _ => (),
         }
     }
     Ok(stmt)
-}
-
-async fn purify_postgres_table(
-    conn: &str,
-    table: &UnresolvedObjectName,
-    columns: &mut Vec<ColumnDef<Raw>>,
-) -> Result<(), anyhow::Error> {
-    let fetched_columns = postgres_util::table_info(conn, &table.to_ast_string())
-        .await?
-        .schema
-        .iter()
-        .map(|c| c.to_ast_string())
-        .collect::<Vec<String>>()
-        .join(", ");
-    let (upstream_columns, _constraints) = parse_columns(&format!("({})", fetched_columns))?;
-    if columns.is_empty() {
-        *columns = upstream_columns;
-    } else {
-        if columns != &upstream_columns {
-            if columns.len() != upstream_columns.len() {
-                bail!(
-                    "incorrect column specification: {} columns were specified, upstream has {}: {}",
-                    columns.len(),
-                    upstream_columns.len(),
-                    upstream_columns
-                        .iter()
-                        .map(|u| u.name.to_string())
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                )
-            }
-            for (column, upstream_column) in columns.into_iter().zip(upstream_columns) {
-                if column != &upstream_column {
-                    if column.name != upstream_column.name
-                        || column.data_type != upstream_column.data_type
-                        || column.collation != upstream_column.collation
-                    {
-                        bail!("incorrect column specification: specified column does not match upstream source, specified: {}, upstream: {}", column, upstream_column);
-                    }
-
-                    // Some column modifiers can be omitted by the user. Add any potentially omitted column
-                    // options, and compare again.
-                    let mut cols: HashSet<&ColumnOption<Raw>> =
-                        column.options.iter().map(|o| &o.option).collect();
-                    let has_null = cols.contains(&ColumnOption::Null);
-                    let has_not_null = cols.contains(&ColumnOption::NotNull);
-                    let has_primary_key = cols.contains(&ColumnOption::Unique { is_primary: true });
-
-                    if !has_null && !has_not_null && !has_primary_key {
-                        cols.insert(&ColumnOption::Null);
-                    } else if has_primary_key && !has_not_null {
-                        cols.insert(&ColumnOption::NotNull);
-                    }
-                    let upstream_cols = upstream_column.options.iter().map(|o| &o.option).collect();
-                    if cols != upstream_cols {
-                        bail!("incorrect column specification: specified column modifiers do not match upstream source, specified: {}, upstream: {}", column, upstream_column);
-                    }
-                }
-            }
-        }
-    }
-    //TODO(petrosagg): attempt to connect with a replication connection and create a temporary
-    //                 logical replication slot to ensure the server has the correct WAL settings
-    Ok(())
 }
 
 async fn purify_format(

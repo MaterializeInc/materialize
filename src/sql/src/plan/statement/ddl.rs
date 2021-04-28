@@ -1006,16 +1006,22 @@ pub fn plan_create_sources(
     stmt: CreateSourcesStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("Postgres Sources")?;
-    let CreateSourcesStatement { stmts, .. } = stmt;
-    let mut sources = vec![];
-    for stmt in stmts {
-        match plan_create_source(scx, stmt)? {
-            Plan::CreateSource(plan) => sources.push(plan),
-            _ => unreachable!("non-create source plan"),
+    let CreateSourcesStatement { source_stmt, view_stmts, .. } = stmt;
+
+    let source = match plan_create_source(scx, source_stmt)? {
+        Plan::CreateSource(plan) => plan,
+        _ => unreachable!("non-create source plan"),
+    };
+
+    let mut views = vec![];
+    for view_stmt in view_stmts {
+        match plan_create_view(scx, view_stmt, &Params::empty())? {
+            plan @ Plan::CreateView { .. } => views.push(plan),
+            _ => unreachable!("non-create view plan"),
         }
     }
 
-    Ok(Plan::CreateSources { sources })
+    Ok(Plan::CreateSources { source, views })
 }
 
 pub fn describe_create_view(

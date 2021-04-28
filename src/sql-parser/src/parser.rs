@@ -1674,13 +1674,35 @@ impl<'a> Parser<'a> {
     fn parse_create_sources(&mut self) -> Result<Statement<Raw>, ParserError> {
         let materialized = self.parse_keyword(MATERIALIZED);
         self.expect_keyword(SOURCES)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_object_name()?;
         self.expect_keyword(FROM)?;
-        let connector = self.parse_multi_connector()?;
+        let connector = self.parse_connector()?;
+        let with_options = self.parse_opt_with_sql_options()?;
+        let format = if self.parse_keyword(FORMAT) {
+            Some(self.parse_format()?)
+        } else {
+            None
+        };
+        let envelope = if self.parse_keyword(ENVELOPE) {
+            self.parse_envelope()?
+        } else {
+            Default::default()
+        };
 
         Ok(Statement::CreateSources(CreateSourcesStatement {
-            connector,
             materialized,
-            stmts: vec![],
+            source_stmt: CreateSourceStatement {
+                name,
+                col_names: vec![],
+                connector,
+                with_options,
+                format,
+                envelope,
+                if_not_exists,
+                materialized: false,
+            },
+            view_stmts: vec![],
         }))
     }
 
@@ -2114,6 +2136,8 @@ impl<'a> Parser<'a> {
             }
             tables.push(PgTable {
                 name,
+                // TODO(petrosagg): properly store this in AST
+                oid: 0,
                 alias,
                 columns,
             });

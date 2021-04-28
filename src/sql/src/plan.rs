@@ -78,7 +78,8 @@ pub enum Plan {
     },
     CreateSource(CreateSourcePlan),
     CreateSources {
-        sources: Vec<CreateSourcePlan>,
+        source: CreateSourcePlan,
+        views: Vec<Plan>,
     },
     CreateSink {
         name: FullName,

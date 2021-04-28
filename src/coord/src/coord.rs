@@ -1199,8 +1199,8 @@ impl Coordinator {
                 tx.send(self.sequence_create_source(pcx, source).await, session)
             }
 
-            Plan::CreateSources { sources } => {
-                tx.send(self.sequence_create_sources(pcx, sources).await, session)
+            Plan::CreateSources { source, views } => {
+                tx.send(self.sequence_create_sources(pcx, session.conn_id(), source, views).await, session)
             }
 
             Plan::CreateSink {
@@ -1593,16 +1593,38 @@ impl Coordinator {
     async fn sequence_create_sources(
         &mut self,
         pcx: PlanContext,
-        sources: Vec<CreateSourcePlan>,
+        conn_id: u32,
+        source: CreateSourcePlan,
+        views: Vec<Plan>,
     ) -> Result<ExecuteResponse, CoordError> {
-        let (metadata, ops) = self.generate_create_source_ops(pcx, sources)?;
-        match self.catalog_transact(ops).await {
-            Ok(()) => {
-                self.ship_sources(metadata).await?;
-                Ok(ExecuteResponse::CreatedSources)
+        self.sequence_create_source(pcx.clone(), source).await?;
+
+        for view_plan in views {
+            match view_plan {
+                Plan::CreateView {
+                    name,
+                    view,
+                    replace,
+                    materialize,
+                    if_not_exists,
+                    depends_on,
+                } => {
+                    self.sequence_create_view(
+                        pcx.clone(),
+                        name,
+                        view,
+                        replace,
+                        conn_id,
+                        materialize,
+                        if_not_exists,
+                        depends_on,
+                    )
+                    .await?;
+                }
+                _ => unreachable!(),
             }
-            Err(err) => Err(err),
         }
+        Ok(ExecuteResponse::CreatedSource { existed: false })
     }
 
     async fn ship_sources(

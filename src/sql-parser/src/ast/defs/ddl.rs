@@ -444,6 +444,8 @@ impl_display_t!(MultiConnector);
 pub struct PgTable<T: AstInfo> {
     /// The name of the table to sync
     pub name: UnresolvedObjectName,
+    /// The OID of the table to sync
+    pub oid: u32,
     /// The name for the table in Materialize
     pub alias: T::ObjectName,
     /// The expected column schema of the synced table

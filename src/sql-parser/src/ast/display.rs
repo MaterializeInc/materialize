@@ -165,6 +165,13 @@ impl AstDisplay for u64 {
     }
 }
 
+// u32 used directly to represent, e.g., postgres oids
+impl AstDisplay for u32 {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(self);
+    }
+}
+
 pub struct EscapeSingleQuoteString<'a>(&'a str);
 
 impl<'a> AstDisplay for EscapeSingleQuoteString<'a> {
