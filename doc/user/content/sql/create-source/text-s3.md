@@ -104,7 +104,7 @@ for all the lines that have `/updates` as their exact path:
 
 ### Example Single Object
 
-By creating a source that ingests a single object, we only require the `ListObject` 
+When creating a source that ingests a single object, we only require the `ListObject` 
 [permission](https://materialize.com/docs/sql/create-source/text-s3/#permissions-required):
 
 ```sql
