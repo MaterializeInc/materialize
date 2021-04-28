@@ -305,6 +305,8 @@ impl Coordinator {
                         self.indexes
                             .insert(entry.id(), Frontiers::new(self.num_workers(), Some(1_000)));
                     } else {
+                        // TODO(petrosagg): group all indexes that use the same sources in a single
+                        // DataflowDesc
                         let df = self.dataflow_builder().build_index_dataflow(entry.id());
                         self.ship_dataflow(df).await?;
                     }

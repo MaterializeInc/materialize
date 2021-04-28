@@ -813,7 +813,6 @@ dependencies = [
  "ore",
  "pdqselect",
  "postgres-protocol",
- "postgres-util",
  "prometheus",
  "prometheus-static-metric",
  "pubnub-hyper",

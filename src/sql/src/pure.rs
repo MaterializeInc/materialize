@@ -107,20 +107,13 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                     normalize::aws_connect_info(&mut with_options_map, Some(region.into()))?;
                 aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
             }
-            Connector::Postgres {
-                conn,
-                table,
-                columns,
-                slot,
-                ..
-            } => {
+            Connector::Postgres { slot, .. } => {
                 slot.get_or_insert_with(|| {
                     format!(
                         "materialize_{}",
                         Uuid::new_v4().to_string().replace('-', "")
                     )
                 });
-                purify_postgres_table(conn, table, columns).await?;
             }
             Connector::PubNub { .. } => (),
         }
@@ -154,46 +147,109 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             }
         }
     }
-    if let Statement::CreateSources(CreateSourcesStatement {
-        connector,
-        stmts,
-        materialized,
-    }) = &mut stmt
-    {
+    if let Statement::CreateSources(CreateSourcesStatement { connector, .. }) = &mut stmt {
         match connector {
             MultiConnector::Postgres {
-                conn,
-                publication,
-                slot,
-                tables,
+                conn: _,
+                publication: _,
+                slot: _,
+                tables: _,
             } => {
-                let mut create_stmts = Vec::with_capacity(tables.len());
-                for table in tables.into_iter() {
-                    purify_postgres_table(&conn, &table.name, &mut table.columns).await?;
-                    let table_slot = slot.clone().or_else(|| {
-                        Some(format!(
-                            "materialize_{}",
-                            Uuid::new_v4().to_string().replace('-', "")
-                        ))
-                    });
-                    create_stmts.push(CreateSourceStatement {
-                        name: table.alias.name().clone(),
-                        col_names: table.columns.iter().map(|c| c.name.clone()).collect(),
-                        connector: Connector::Postgres {
-                            conn: conn.to_owned(),
-                            publication: publication.to_owned(),
-                            slot: table_slot,
-                            table: table.name.to_owned(),
-                            columns: table.columns.clone(),
-                        },
-                        format: None,
-                        with_options: vec![],
-                        envelope: Envelope::None,
-                        if_not_exists: false,
-                        materialized: *materialized,
-                    });
-                }
-                *stmts = create_stmts;
+                // TODO: cast code to be used to generate materialized views. moved from its
+                // previous location
+                //
+                // let qcx = QueryContext::root(scx, QueryLifetime::Static);
+                // let cast_desc = RelationDesc::empty();
+                // let ecx = ExprContext {
+                //     qcx: &qcx,
+                //     name: "postgres column cast",
+                //     scope: &Scope::empty(None),
+                //     relation_type: &cast_desc.typ(),
+                //     allow_aggregates: false,
+                //     allow_subqueries: true,
+                // };
+
+                // // Build the expected relation description
+                // let col_names: Vec<_> = columns
+                //     .iter()
+                //     .map(|c| Some(normalize::column_name(c.name.clone())))
+                //     .collect();
+
+                // let mut col_types = vec![];
+                // let mut key_cols = vec![];
+                // let mut cast_exprs = vec![];
+                // for (i, c) in columns.iter().enumerate() {
+                //     if let Some(collation) = &c.collation {
+                //         unsupported!(format!(
+                //             "CREATE SOURCE FROM POSTGRES with column collation: {}",
+                //             collation
+                //         ));
+                //     }
+
+                //     let (aug_data_type, _ids) = resolve_names_data_type(scx, c.data_type.clone())?;
+                //     let scalar_ty = plan::scalar_type_from_sql(scx, &aug_data_type)?;
+
+                //     let mut nullable = true;
+                //     for option in &c.options {
+                //         match &option.option {
+                //             ColumnOption::Null => (),
+                //             ColumnOption::NotNull => nullable = false,
+                //             ColumnOption::Unique { is_primary: true } => key_cols.push(i),
+                //             other => unsupported!(format!(
+                //                 "CREATE SOURCE FROM POSTGRES with column constraint: {}",
+                //                 other
+                //             )),
+                //         }
+                //     }
+
+                //     let cast_expr = plan_hypothetical_cast(
+                //         &ecx,
+                //         CastContext::Explicit,
+                //         &ScalarType::String,
+                //         &scalar_ty,
+                //     )
+                //     .unwrap();
+
+                //     col_types.push(scalar_ty.nullable(nullable));
+                //     cast_exprs.push(cast_expr);
+                // }
+
+                // let typ = if key_cols.is_empty() {
+                //     RelationType::new(col_types)
+                // } else {
+                //     RelationType::new(col_types).with_key(key_cols)
+                // };
+                // let desc = RelationDesc::new(typ, col_names);ostgres-util = { path = "../postgres-util" }
+
+                // let mut create_stmts = Vec::with_capacity(tables.len());
+                // for table in tables.into_iter() {
+                //     purify_postgres_table(&conn, &table.name, &mut table.columns).await?;
+                //     let table_slot = slot.clone().or_else(|| {
+                //         Some(format!(
+                //             "materialize_{}",
+                //             Uuid::new_v4().to_string().replace('-', "")
+                //         ))
+                //     });
+                //     create_stmts.push(CreateSourceStatement {
+                //         name: table.alias.name().clone(),
+                //         col_names: table.columns.iter().map(|c| c.name.clone()).collect(),
+                //         connector: Connector::Postgres {
+                //             conn: conn.to_owned(),
+                //             publication: publication.to_owned(),
+                //             slot: table_slot,
+                //             table: table.name.to_owned(),
+                //             columns: table.columns.clone(),
+                //         },
+                //         format: None,
+                //         with_options: vec![],
+                //         envelope: Envelope::None,
+                //         if_not_exists: false,
+                //         materialized: *materialized,
+                //     });
+                // }
+                // *stmts = create_stmts;
+
+                todo!("create materialized views");
             }
         }
     }
@@ -266,7 +322,7 @@ async fn purify_postgres_table(
 
 async fn purify_format(
     format: &mut Option<Format<Raw>>,
-    connector: &mut Connector<Raw>,
+    connector: &mut Connector,
     envelope: &Envelope<Raw>,
     col_names: &mut Vec<Ident>,
     file: Option<File>,

@@ -354,7 +354,7 @@ impl_display!(CreateSchemaStatement);
 pub struct CreateSourceStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub col_names: Vec<Ident>,
-    pub connector: Connector<T>,
+    pub connector: Connector,
     pub with_options: Vec<SqlOption<T>>,
     pub format: Option<Format<T>>,
     pub envelope: Envelope<T>,
@@ -426,7 +426,7 @@ impl_display_t!(CreateSourcesStatement);
 pub struct CreateSinkStatement<T: AstInfo> {
     pub name: UnresolvedObjectName,
     pub from: UnresolvedObjectName,
-    pub connector: Connector<T>,
+    pub connector: Connector,
     pub with_options: Vec<SqlOption<T>>,
     pub format: Option<Format<T>>,
     pub envelope: Option<Envelope<T>>,

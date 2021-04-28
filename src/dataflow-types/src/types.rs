@@ -306,7 +306,7 @@ pub enum DataEncoding {
     Protobuf(ProtobufEncoding),
     Csv(CsvEncoding),
     Regex(RegexEncoding),
-    Postgres(RelationDesc),
+    Postgres,
     Bytes,
     Text,
 }
@@ -427,7 +427,16 @@ impl DataEncoding {
             DataEncoding::Text => {
                 key_desc.with_named_column("text", ScalarType::String.nullable(false))
             }
-            DataEncoding::Postgres(desc) => desc.clone(),
+            DataEncoding::Postgres => key_desc
+                .with_named_column("oid", ScalarType::Int32.nullable(false))
+                .with_named_column(
+                    "row",
+                    ScalarType::List {
+                        element_type: Box::new(ScalarType::String),
+                        custom_oid: None,
+                    }
+                    .nullable(false),
+                ),
         })
     }
 
@@ -440,7 +449,7 @@ impl DataEncoding {
             DataEncoding::Regex { .. } => "Regex",
             DataEncoding::Csv(_) => "Csv",
             DataEncoding::Text => "Text",
-            DataEncoding::Postgres(_) => "Postgres",
+            DataEncoding::Postgres => "Postgres",
         }
     }
 }
@@ -766,10 +775,6 @@ pub struct FileSourceConnector {
 pub struct PostgresSourceConnector {
     pub conn: String,
     pub publication: String,
-    // The table's UnresolvedObjectName.to_ast_string(), for use in literal SQL
-    // strings.
-    pub ast_table: String,
-    pub cast_exprs: Vec<MirScalarExpr>,
     pub slot_name: String,
 }
 
