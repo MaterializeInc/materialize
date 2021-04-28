@@ -46,8 +46,6 @@ Term | Definition
 
 Both inputs and outputs are expressed as collections.
 
-<!-- One of the key design decisions in Differential is that it only sends diffs of data. When there are no changes, nothing happens, which makes for a very efficient computational model that can deal with bursts of data, react to the changes in low latency, and then free up resources. Thinking in terms of diffs is one of the reasons that Differential is able to support arbitrary updates and deletes in the input streams. For those following closely along, this need is why we require our sources to provide an envelope for their data in order for us to be able to handle updates or deletes. -->
-
 ## Arrangements
 
 To transform an input into an output, operators
@@ -59,6 +57,8 @@ We call the indexed update stream an **arrangement**.
 
 In the `(data, time, diff)` triples that make up the update stream, `data` is structured as a key-value pair.  Arrangements are indexed on the `data` keys.
 
+<!-- More on how this index differs from the index you can create manually? -->
+
 When Materialize creates an arrangement, it attempts to choose a key that will ensure that data is well distributed. If there is a primary key, that will be used; if there are source fields not required by the query, they are not included. Often Materialize can pull primary key info from a Confluent or Kafka schema.
 
 ### Arrangement size
@@ -67,21 +67,23 @@ The size of an arrangement is related to the size of its accumulated updates, bu
 
 The size of the arrangement is then further reduced by background [compaction](/ops/deployment/#compaction) of historical data.
 
-### Arrangement examples
+### Example arrangements
 
-A few of examples to demonstrate how arrangements relate to operators, views, and queries:
+Let's take a look at some of the arrangements that Materialize creates for different circumstances.
 
 #### `COUNT`
 
+The simplest arrangements are those for Differential Dataflow operators.
+
 COUNT operator  will have two arrangements: one by input (arrangement by key)  and then one for the output (the results). COUNT reads from input but doesn’t write to it; both reads and writes to output.
 
-<!-- image -->
+![Diagram of arrangements for COUNT](/images/arrangements-count.png)
 
 #### Three-way join
 
 Most exciting place for arrangements is JOINS.
 
-<!-- image here -->
+![Diagram of arrangements for a three-way join](/images/arrangements-3-way-join.png)
 
 
 Create a materialized view: 3-way join group by fields 1,2,3  - Mz creates arrangements
@@ -153,3 +155,4 @@ Arrangements house materialized sources and views, but also many internal operat
 * [Joins in Materialize](https://materialize.com/joins-in-materialize/)
 * [Diagnosing Using SQL](/ops/diagnosing-using-sql/)
 * [Deployment](/ops/deployment/)
+*
