@@ -6,6 +6,8 @@
 `statistics_interval_ms` | `int` | `librdkafka` statistics emit interval in `ms`. Accepts values [0, 86400000]. The granularity is 1000ms. A value of 0 disables statistics. Statistics can be queried using the `mz_kafka_consumer_partitions` system table.`start_offset`| `int` | Read partitions from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Values must be zero or positive integers. See [Kafka source details](#partition-offsets) for important warnings for this feature.
 `timestamp_frequency_ms`| `int` | Default: `1000`. Sets the timestamping frequency in `ms`. Reflects how frequently the source advances its timestamp. This measure reflects how stale data in views will be. Lower values result in more-up-to-date views but may reduce throughput.
 `topic_metadata_refresh_interval_ms` | `int` | Default: `30000`. Sets the frequency in `ms` at which the system checks for new partitions. Accepts values [0,3600000].
+`acks` | `text`| Specifies the number of replicas whose acknowledgement Kafka requires before returning to the client. Accepts values [-1,1000].
+`enable_auto_commit` | `boolean`| Default: `true`. Controls whether or not Materialize commits read offsets back into Kafka. This is purely for progress monitoring and does not cause Materialize to resume reading from where it left off across restarts.
 
 #### SSL `WITH` options
 
@@ -26,12 +28,14 @@ cluster. For more detail, see [Kerberized Kafka details](#kerberized-kafka-detai
 
 Field | Value | Description
 ------|-------|------------
-`sasl_kerberos_keytab` | `text` | The absolute path to your keytab.
-`sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket.
-`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0.
-`sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required for `sasl_plaintext`.
-`sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`.
 `sasl_mechanisms` | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanisms are `GSSAPI` (the default) and `PLAIN`.
+`sasl_username` | `text` | Username required if `sasl_mechanisms` is `PLAIN`.
+`sasl_password` | `text` | Password required if `sasl_mechanisms` is `PLAIN`.
+`sasl_kerberos_keytab` | `text` | The absolute path to your keytab. Required if `sasl_mechanisms` is `GSSAPI`.
+`sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket. Required if `sasl_mechanisms` is `GSSAPI`.
+`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0. Required if `sasl_mechanisms` is `GSSAPI`.
+`sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required if `sasl_mechanisms` is `GSSAPI`.
+`sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`. Required if `sasl_mechanisms` is `GSSAPI`.
 
 #### Inline schema `WITH` options
 
