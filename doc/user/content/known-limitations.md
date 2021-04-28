@@ -37,7 +37,7 @@ tag](https://github.com/MaterializeInc/materialize/issues?q=is%3Aopen+is%3Aissue
   gh 4867 %}}
 - `WITH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
 
-## Sources & Sinks
+## Sources & sinks
 
 ### Kafka
 
@@ -69,7 +69,7 @@ None right now!
 
 - Hostnames that resolve to multiple addresses are not supported {{% gh 502 %}}
 
-### Monitoring & Debugging
+### Monitoring & debugging
 
 - No report exists to show memory usage for indexes {{% gh 1532 %}}
 

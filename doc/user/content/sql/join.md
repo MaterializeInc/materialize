@@ -9,7 +9,7 @@ menu:
 `JOIN` lets you combine two more more table expressions into a single table
 expression.
 
-## Conceptual Framework
+## Conceptual framework
 
 Much like an RDBMS, Materialize can join together any two table expressions (in
 our case, either [sources](../create-source) or [views](../create-view)) into
@@ -134,7 +134,7 @@ In this table:
 - `Arjun` and `Frank` do not have managers.
 - `Frank` is a manager but has no reports.
 
-### Inner Join
+### Inner join
 
 Inner joins return all tuples from both tables where the join condition is
 valid.
@@ -155,7 +155,7 @@ INNER JOIN managers ON employees.id = managers.manages;
  Nikhil   | Cuong
 ```
 
-### Left Outer Join
+### Left outer join
 
 Left outer joins (also known as left joins) return all tuples from the
 left-hand-side table, and all tuples from the right-hand-side table that match
@@ -181,7 +181,7 @@ LEFT OUTER JOIN managers ON employees.id = managers.manages;
  Frank    |
  ```
 
-### Right Outer Join
+### Right outer join
 
 Right outer joins (also known as right joins) are simply the right-hand-side
 equivalent of left outer joins.
@@ -208,7 +208,7 @@ RIGHT OUTER JOIN managers ON employees.id = managers.manages;
           | Frank
  ```
 
-### Full Outer Join
+### Full outer join
 
 Full outer joins perform both a left outer join and a right outer join. They
 return all tuples from both tables, and join them together where the join
@@ -236,7 +236,7 @@ FULL OUTER JOIN managers ON employees.id = managers.manages;
  Frank    |
 ```
 
-### Cross Join
+### Cross join
 
 Cross joins return the [Cartesian
 product](https://en.wikipedia.org/wiki/Cartesian_product) of the two tables,
