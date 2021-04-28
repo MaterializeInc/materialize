@@ -50,7 +50,8 @@ content:
 
 ### Example TEXT format
 
-First we'll create a source that ingests a single file:
+First we'll create a source that ingests a single file. Because we're only ingesting a
+single file, we only require the `ListObject` [permission](https://materialize.com/docs/sql/create-source/text-s3/#permissions-required):
 
 ```sql
 CREATE MATERIALIZED SOURCE single_object
