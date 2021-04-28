@@ -516,12 +516,12 @@ pub fn encode_copy_row_text(
 struct RowTextParser<'a> {
     data: &'a [u8],
     position: usize,
-    column_delimiter: char,
-    null_string: String,
+    column_delimiter: &'a str,
+    null_string: &'a str,
 }
 
 impl<'a> RowTextParser<'a> {
-    fn new(data: &'a [u8], column_delimiter: char, null_string: String) -> Self {
+    fn new(data: &'a [u8], column_delimiter: &'a str, null_string: &'a str) -> Self {
         Self {
             data,
             position: 0,
@@ -530,17 +530,32 @@ impl<'a> RowTextParser<'a> {
         }
     }
 
+    fn peek(&self) -> Option<u8> {
+        if self.position < self.data.len() {
+            Some(self.data[self.position])
+        } else {
+            None
+        }
+    }
+
+    fn consume_n(&mut self, n: usize) {
+        self.position += n;
+    }
+
     fn is_eof(&self) -> bool {
-        self.position >= self.data.len()
+        self.peek().is_none()
     }
 
     fn is_end_of_line(&self) -> bool {
-        self.is_eof() || self.data[self.position] as char == '\n'
+        match self.peek() {
+            Some(b'\n') | None => true,
+            _ => false,
+        }
     }
 
     fn expect_end_of_line(&mut self) -> Result<(), io::Error> {
         if self.is_end_of_line() {
-            self.position += 1;
+            self.consume_n(1);
             Ok(())
         } else {
             Err(io::Error::new(
@@ -551,12 +566,11 @@ impl<'a> RowTextParser<'a> {
     }
 
     fn is_column_delimiter(&self) -> bool {
-        !self.is_eof() && self.data[self.position] as char == self.column_delimiter
+        self.check_bytes(self.column_delimiter.as_bytes())
     }
 
     fn expect_column_delimiter(&mut self) -> Result<(), io::Error> {
-        if self.is_column_delimiter() {
-            self.position += 1;
+        if self.consume_bytes(self.column_delimiter.as_bytes()) {
             Ok(())
         } else {
             Err(io::Error::new(
@@ -566,42 +580,26 @@ impl<'a> RowTextParser<'a> {
         }
     }
 
-    fn consume_null_string(&mut self) -> bool {
-        let bytes = self.null_string.as_bytes();
+    fn check_bytes(&self, bytes: &[u8]) -> bool {
         let remaining_bytes = self.data.len() - self.position;
-        if remaining_bytes >= bytes.len()
+        remaining_bytes >= bytes.len()
             && self.data[self.position..]
                 .iter()
                 .zip(bytes.iter())
                 .all(|(x, y)| x == y)
-        {
-            self.position += bytes.len();
+    }
+
+    fn consume_bytes(&mut self, bytes: &[u8]) -> bool {
+        if self.check_bytes(bytes) {
+            self.consume_n(bytes.len());
             true
         } else {
             false
         }
     }
 
-    fn consume_escaped_char(&mut self) -> Option<u8> {
-        if self.position + 1 < self.data.len() && self.data[self.position] as char == '\\' {
-            match self.data[self.position + 1] as char {
-                'r' => {
-                    self.position += 2;
-                    Some('\r' as u8)
-                }
-                'n' => {
-                    self.position += 2;
-                    Some('\n' as u8)
-                }
-                't' => {
-                    self.position += 2;
-                    Some('\t' as u8)
-                }
-                _ => None,
-            }
-        } else {
-            None
-        }
+    fn consume_null_string(&mut self) -> bool {
+        self.consume_bytes(self.null_string.as_bytes())
     }
 
     fn consume_raw_value(&mut self) -> Result<Option<Vec<u8>>, io::Error> {
@@ -613,11 +611,87 @@ impl<'a> RowTextParser<'a> {
             if self.is_end_of_line() || self.is_column_delimiter() {
                 break;
             }
-            if let Some(c) = self.consume_escaped_char() {
-                raw_value.push(c);
-            } else {
-                raw_value.push(self.data[self.position]);
-                self.position += 1;
+            match self.peek() {
+                Some(b'\\') => {
+                    self.consume_n(1);
+                    match self.peek() {
+                        Some(b'b') => {
+                            self.consume_n(1);
+                            raw_value.push(8);
+                        }
+                        Some(b'f') => {
+                            self.consume_n(1);
+                            raw_value.push(12);
+                        }
+                        Some(b'n') => {
+                            self.consume_n(1);
+                            raw_value.push(b'\n');
+                        }
+                        Some(b'r') => {
+                            self.consume_n(1);
+                            raw_value.push(b'\r');
+                        }
+                        Some(b't') => {
+                            self.consume_n(1);
+                            raw_value.push(b'\t');
+                        }
+                        Some(b'v') => {
+                            self.consume_n(1);
+                            raw_value.push(11);
+                        }
+                        Some(b'x') => {
+                            self.consume_n(1);
+                            match self.peek() {
+                                Some(_c @ b'0'..=b'9')
+                                | Some(_c @ b'A'..=b'F')
+                                | Some(_c @ b'a'..=b'f') => {
+                                    let mut value: u8 = 0;
+                                    let decode_nibble = |b| match b {
+                                        Some(c @ b'a'..=b'f') => Some(c - b'a' + 10),
+                                        Some(c @ b'A'..=b'F') => Some(c - b'A' + 10),
+                                        Some(c @ b'0'..=b'9') => Some(c - b'0'),
+                                        _ => None,
+                                    };
+                                    for _ in 0..2 {
+                                        match decode_nibble(self.peek()) {
+                                            Some(c) => {
+                                                self.consume_n(1);
+                                                value = value << 4 | c;
+                                            }
+                                            _ => break,
+                                        }
+                                    }
+                                    raw_value.push(value);
+                                }
+                                _ => {
+                                    raw_value.push(b'x');
+                                }
+                            }
+                        }
+                        Some(_c @ b'0'..=b'7') => {
+                            let mut value: u8 = 0;
+                            for _ in 0..3 {
+                                match self.peek() {
+                                    Some(c @ b'0'..=b'7') => {
+                                        self.consume_n(1);
+                                        value = value << 3 | (c - b'0');
+                                    }
+                                    _ => break,
+                                }
+                            }
+                            raw_value.push(value);
+                        }
+                        _ => {
+                            raw_value.push(b'\\');
+                            continue;
+                        }
+                    }
+                }
+                Some(c) => {
+                    self.consume_n(1);
+                    raw_value.push(c);
+                }
+                None => {}
             }
         }
         Ok(Some(raw_value))
@@ -629,7 +703,7 @@ pub fn decode_row_text(
     column_types: &Vec<pgrepr::Type>,
 ) -> Result<Vec<Row>, io::Error> {
     let mut rows = Vec::new();
-    let mut parser = RowTextParser::new(data, '\t', "\\N".to_string());
+    let mut parser = RowTextParser::new(data, "\t", "\\N");
     while !parser.is_eof() {
         let mut row = Vec::new();
         let buf = RowArena::new();
@@ -685,4 +759,57 @@ pub fn encode_row_description(
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_row_text_parser() {
+        let text = "\t\\nt e\t\\N\t\n\\x60\\xA\\x7D\\x4a\n\\44\\044\\123".as_bytes();
+        let mut parser = RowTextParser::new(text, "\t", "\\N");
+        assert!(parser.is_column_delimiter());
+        parser
+            .expect_column_delimiter()
+            .expect("expected column delimiter");
+        assert_eq!(
+            parser
+                .consume_raw_value()
+                .expect("unexpected error")
+                .expect("unexpected empty result"),
+            "\nt e".as_bytes()
+        );
+        parser
+            .expect_column_delimiter()
+            .expect("expected column delimiter");
+        // null value
+        assert!(parser
+            .consume_raw_value()
+            .expect("unexpected error")
+            .is_none());
+        parser
+            .expect_column_delimiter()
+            .expect("expected column delimiter");
+        assert!(parser.is_end_of_line());
+        parser.expect_end_of_line().expect("expected eol");
+        // hex value
+        assert_eq!(
+            parser
+                .consume_raw_value()
+                .expect("unexpected error")
+                .expect("unexpected empty result"),
+            "`\n}J".as_bytes()
+        );
+        parser.expect_end_of_line().expect("expected eol");
+        // octal value
+        assert_eq!(
+            parser
+                .consume_raw_value()
+                .expect("unexpected error")
+                .expect("unexpected empty result"),
+            "$$S".as_bytes()
+        );
+        assert!(parser.is_eof());
+    }
 }
