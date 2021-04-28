@@ -9,30 +9,35 @@
 
 //! Provides convenience functions for working with upstream Postgres sources from the `sql` package.
 
+use std::fmt;
+
 use anyhow::anyhow;
+use tokio_postgres::types::Type as PgType;
+use tokio_postgres::NoTls;
 
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::impl_display;
-use tokio_postgres::types::Type as PgType;
-use tokio_postgres::NoTls;
 
 /// The schema of a single column
 pub struct PgColumn {
     pub name: String,
     pub scalar_type: PgType,
     pub nullable: bool,
+    pub primary_key: bool,
 }
 
 impl AstDisplay for PgColumn {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(&self.name);
         f.write_str(" ");
         f.write_str(&self.scalar_type);
-        f.write_str(" ");
+        if self.primary_key {
+            f.write_str(" PRIMARY KEY");
+        }
         if self.nullable {
-            f.write_str("NULL");
+            f.write_str(" NULL");
         } else {
-            f.write_str("NOT NULL");
+            f.write_str(" NOT NULL");
         }
     }
 }
@@ -47,30 +52,22 @@ pub struct TableInfo {
 }
 
 /// Fetches column information from an upstream Postgres source, given
-/// a connection string, a namespace, and a target table.
+/// a connection string and a target table.
 ///
 /// # Errors
 ///
 /// - Invalid connection string, user information, or user permissions.
 /// - Upstream table does not exist or contains invalid values.
-pub async fn table_info(
-    conn: &str,
-    namespace: &str,
-    table: &str,
-) -> Result<TableInfo, anyhow::Error> {
+pub async fn table_info(conn: &str, ast_table: &String) -> Result<TableInfo, anyhow::Error> {
     let (client, connection) = tokio_postgres::connect(&conn, NoTls).await?;
     tokio::spawn(connection);
 
     let rel_id: u32 = client
-        .query(
-            "SELECT c.oid
-                FROM pg_catalog.pg_class c
-                INNER JOIN pg_catalog.pg_namespace n
-                    ON (c.relnamespace = n.oid)
-                WHERE n.nspname = $1
-                    AND c.relname = $2;",
-            &[&namespace, &table],
-        )
+        // The "::regclass::oid" thing converts its LHS to an OID, so this gets
+        // us the OID of a specified table (which can optionally include a schema
+        // namespace). The "::text" is to appease the rust postgres driver since we are
+        // passing a string, not a regclass.
+        .query("SELECT $1::text::regclass::oid", &[ast_table])
         .await?
         .get(0)
         .ok_or_else(|| anyhow!("table not found in the upstream catalog"))?
@@ -78,8 +75,16 @@ pub async fn table_info(
 
     let schema = client
         .query(
-            "SELECT a.attname, a.atttypid, a.attnotnull
+            "SELECT
+                    a.attname,
+                    a.atttypid,
+                    a.attnotnull,
+                    b.oid IS NOT NULL
                 FROM pg_catalog.pg_attribute a
+                LEFT JOIN pg_catalog.pg_constraint b
+                    ON a.attrelid = b.conrelid
+                    AND b.contype = 'p'
+                    AND a.attnum = ANY (b.conkey)
                 WHERE a.attnum > 0::pg_catalog.int2
                     AND NOT a.attisdropped
                     AND a.attrelid = $1
@@ -94,10 +99,12 @@ pub async fn table_info(
             let scalar_type =
                 PgType::from_oid(oid).ok_or_else(|| anyhow!("unknown type OID: {}", oid))?;
             let nullable = !row.get::<_, bool>(2);
+            let primary_key = row.get(3);
             Ok(PgColumn {
                 name,
                 scalar_type,
                 nullable,
+                primary_key,
             })
         })
         .collect::<Result<Vec<_>, anyhow::Error>>()?;

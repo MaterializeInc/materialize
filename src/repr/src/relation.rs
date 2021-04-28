@@ -176,8 +176,8 @@ impl From<&ColumnName> for ColumnName {
 /// use repr::{ColumnType, RelationDesc, ScalarType};
 ///
 /// let desc = RelationDesc::empty()
-///     .with_column("id", ScalarType::Int64.nullable(false))
-///     .with_column("price", ScalarType::Float64.nullable(true));
+///     .with_named_column("id", ScalarType::Int64.nullable(false))
+///     .with_named_column("price", ScalarType::Float64.nullable(true));
 /// ```
 ///
 /// In more complicated cases, like when constructing a `RelationDesc` in
@@ -253,14 +253,22 @@ impl RelationDesc {
         self
     }
 
-    /// Appends a named column with the specified column type.
-    pub fn with_column<N>(mut self, name: N, column_type: ColumnType) -> Self
+    /// Appends an optionally named column with the specified column type.
+    pub fn with_column<N>(mut self, name: Option<N>, column_type: ColumnType) -> Self
     where
         N: Into<ColumnName>,
     {
         self.typ.column_types.push(column_type);
-        self.names.push(Some(name.into()));
+        self.names.push(name.map(|n| n.into()));
         self
+    }
+
+    /// Appends a named column with the specified column type.
+    pub fn with_named_column<N>(self, name: N, column_type: ColumnType) -> Self
+    where
+        N: Into<ColumnName>,
+    {
+        self.with_column(Some(name), column_type)
     }
 
     /// Adds a new key for the relation.

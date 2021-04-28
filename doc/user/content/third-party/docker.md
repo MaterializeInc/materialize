@@ -19,7 +19,7 @@ Follow the official instructions to install Docker and Docker Compose:
 * [Install Docker](https://docs.docker.com/get-docker/)
 * [Install Docker Compose](https://docs.docker.com/compose/install/)
 
-### Increase Docker Resources
+### Increase Docker resources
 
 Because many of our Docker-based demos leverage a large number of pieces of
 infrastructure, we recommend running Docker with at least **2 CPUs** and

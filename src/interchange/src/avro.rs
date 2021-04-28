@@ -147,7 +147,7 @@ mod tests {
             ),
         ];
         for (typ, datum, expected) in valid_pairings {
-            let desc = RelationDesc::empty().with_column("column1", typ.nullable(false));
+            let desc = RelationDesc::empty().with_named_column("column1", typ.nullable(false));
             let encoder = Encoder::new(None, desc, false);
             let avro_value = encode_datums_as_avro(std::iter::once(datum), encoder.value_columns());
             assert_eq!(

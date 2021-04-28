@@ -51,7 +51,7 @@ copyright_files=$(grep -vE \
     -e '^rustfmt\.toml$' \
     -e '(^|/)yarn\.lock$' \
     -e '(^|/)requirements.*\.txt$' \
-    -e '\.(md|json|asc|png|jpe?g|svg|avro|avsc|pb|ico|html)$' \
+    -e '\.(md|json|asc|png|jpe?g|svg|avro|avsc|pb|ico|html|so)$' \
     -e '^doc/user/.*(\.scss|\.bnf|\.toml|\.yml)$' \
     -e '^ci/builder/(ssh_known_hosts|stable.stamp|nightly.stamp|crosstool.defconfig)$' \
     -e '^ci/www/public/_redirects$' \
@@ -65,7 +65,7 @@ copyright_files=$(grep -vE \
 # Only binary files are permitted to omit a trailing newline. If you're here to
 # exclude a text file that is missing its trailing newline, like an SVG, add
 # a trailing newline to the text file instead.
-newline_files=$(grep -vE '\.(png|jpe?g|pb|avro|ico)$' <<< "$files")
+newline_files=$(grep -vE '\.(png|jpe?g|pb|avro|ico|so)$' <<< "$files")
 
 shell_files=$(sort -u <(git_files '*.sh' '*.bash') <(git grep -l '#!.*bash' -- ':!*.*'))
 

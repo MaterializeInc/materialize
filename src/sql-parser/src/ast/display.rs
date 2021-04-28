@@ -32,7 +32,7 @@ impl<'a, T> AstDisplay for DisplaySeparated<'a, T>
 where
     T: AstDisplay,
 {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         let mut delim = "";
         for t in self.slice {
             f.write_str(delim);
@@ -69,12 +69,15 @@ pub enum FormatMode {
 }
 
 #[derive(Debug)]
-pub struct AstFormatter {
+pub struct AstFormatter<W> {
+    buf: W,
     mode: FormatMode,
-    buf: String,
 }
 
-impl AstFormatter {
+impl<W> AstFormatter<W>
+where
+    W: fmt::Write,
+{
     pub fn write_node<T: AstDisplay>(&mut self, s: &T) {
         s.fmt(self);
     }
@@ -82,7 +85,7 @@ impl AstFormatter {
     // TODO(justin): make this only accept a &str so that we don't accidentally pass an AstDisplay
     // to it.
     pub fn write_str<T: fmt::Display>(&mut self, s: T) {
-        self.buf.push_str(&s.to_string());
+        write!(self.buf, "{}", s).expect("unexpected error in fmt::Display implementation");
     }
 
     // Whether the AST should be optimized for persistence.
@@ -90,29 +93,30 @@ impl AstFormatter {
         self.mode == FormatMode::Stable
     }
 
-    pub fn new(mode: FormatMode) -> Self {
-        AstFormatter {
-            mode,
-            buf: String::new(),
-        }
+    pub fn new(buf: W, mode: FormatMode) -> Self {
+        AstFormatter { buf, mode }
     }
 }
 
 // AstDisplay is an alternative to fmt::Display to be used for formatting ASTs. It permits
 // configuration global to a printing of a given AST.
 pub trait AstDisplay {
-    fn fmt(&self, f: &mut AstFormatter);
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write;
 
     fn to_ast_string(&self) -> String {
-        let mut f = AstFormatter::new(FormatMode::Simple);
+        let mut buf = String::new();
+        let mut f = AstFormatter::new(&mut buf, FormatMode::Simple);
         self.fmt(&mut f);
-        f.buf
+        buf
     }
 
     fn to_ast_string_stable(&self) -> String {
-        let mut f = AstFormatter::new(FormatMode::Stable);
+        let mut buf = String::new();
+        let mut f = AstFormatter::new(&mut buf, FormatMode::Stable);
         self.fmt(&mut f);
-        f.buf
+        buf
     }
 }
 
@@ -122,7 +126,9 @@ macro_rules! impl_display {
     ($name:ident) => {
         impl std::fmt::Display for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(self.to_ast_string().as_str())
+                use $crate::ast::display::{AstFormatter, FormatMode};
+                AstFormatter::new(f, FormatMode::Simple).write_node(self);
+                Ok(())
             }
         }
     };
@@ -132,27 +138,29 @@ macro_rules! impl_display_t {
     ($name:ident) => {
         impl<T: AstInfo> std::fmt::Display for $name<T> {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(self.to_ast_string().as_str())
+                use crate::ast::display::{AstFormatter, FormatMode};
+                AstFormatter::new(f, FormatMode::Simple).write_node(self);
+                Ok(())
             }
         }
     };
 }
 
 impl<T: AstDisplay> AstDisplay for &Box<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         (*self).fmt(f);
     }
 }
 
 impl<T: AstDisplay> AstDisplay for Box<T> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         (**self).fmt(f);
     }
 }
 
 // u64 used directly to represent, e.g., type modifiers
 impl AstDisplay for u64 {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str(self);
     }
 }
@@ -160,7 +168,7 @@ impl AstDisplay for u64 {
 pub struct EscapeSingleQuoteString<'a>(&'a str);
 
 impl<'a> AstDisplay for EscapeSingleQuoteString<'a> {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         for c in self.0.chars() {
             if c == '\'' {
                 f.write_str("\'\'");

@@ -14,34 +14,24 @@ from pathlib import Path
 from materialize import mzbuild
 from materialize import spawn
 
-MZIMAGES = [
-    "materialized",
-    "atp-testdrive",
-    "atp-driver",
-]
-
 IMAGES = [
-    "confluentinc/cp-zookeeper:5.5.3",
-    "confluentinc/cp-kafka:5.5.3",
-    "confluentinc/cp-schema-registry:5.5.3",
+    "antithesis-cp-combined",
+    "antithesis-materialized",
+    "antithesis-testdrive",
+    "antithesis-driver",
 ]
 
-REGISTRY = "REGISTRYHOST:5000"
+REGISTRY = "us-central1-docker.pkg.dev/molten-verve-216720/materialize-repository"
 
 
 def main() -> None:
     root = Path(os.environ["MZ_ROOT"])
     repo = mzbuild.Repository(root)
-    deps = repo.resolve_dependencies([repo.images[name] for name in MZIMAGES])
+    deps = repo.resolve_dependencies([repo.images[name] for name in IMAGES])
     deps.acquire()
-    for image in IMAGES:
-        spawn.runv(["docker", "pull", image])
-    for mzimage in MZIMAGES:
+    for mzimage in IMAGES:
         spawn.runv(["docker", "tag", deps[mzimage].spec(), f"{REGISTRY}/{mzimage}"])
-    for image in IMAGES:
-        spawn.runv(["docker", "tag", image, f"{REGISTRY}/{image}"])
-    for image in itertools.chain(MZIMAGES, IMAGES):
-        spawn.runv(["docker", "push", f"{REGISTRY}/{image}"])
+        spawn.runv(["docker", "push", f"{REGISTRY}/{mzimage}"])
 
 
 if __name__ == "__main__":

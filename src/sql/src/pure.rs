@@ -11,7 +11,7 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use anyhow::{anyhow, bail, Context};
 use aws_arn::ARN;
@@ -22,11 +22,11 @@ use tokio::time::Duration;
 use uuid::Uuid;
 
 use repr::strconv;
-use sql_parser::ast::{display::AstDisplay, UnresolvedObjectName};
+use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
-    AvroSchema, ColumnDef, ColumnOption, ColumnOptionDef, Connector, CreateSourceStatement,
-    CreateSourcesStatement, CsrSeed, DbzMode, Envelope, Format, Ident, MultiConnector, Raw,
-    Statement,
+    AvroSchema, ColumnDef, ColumnOption, Connector, CreateSourceStatement, CreateSourcesStatement,
+    CsrSeed, DbzMode, Envelope, Format, Ident, MultiConnector, Raw, Statement,
+    UnresolvedObjectName,
 };
 use sql_parser::parser::parse_columns;
 
@@ -109,7 +109,6 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             }
             Connector::Postgres {
                 conn,
-                namespace,
                 table,
                 columns,
                 slot,
@@ -121,7 +120,7 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                         Uuid::new_v4().to_string().replace('-', "")
                     )
                 });
-                purify_postgres_table(conn, namespace, table, columns).await?;
+                purify_postgres_table(conn, table, columns).await?;
             }
             Connector::PubNub { .. } => (),
         }
@@ -166,28 +165,24 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                 conn,
                 publication,
                 slot,
-                namespace,
                 tables,
             } => {
-                slot.get_or_insert_with(|| {
-                    format!(
-                        "materialize_{}",
-                        Uuid::new_v4().to_string().replace('-', "")
-                    )
-                });
-
                 let mut create_stmts = Vec::with_capacity(tables.len());
                 for table in tables.into_iter() {
-                    purify_postgres_table(&conn, &namespace, &table.name, &mut table.columns)
-                        .await?;
+                    purify_postgres_table(&conn, &table.name, &mut table.columns).await?;
+                    let table_slot = slot.clone().or_else(|| {
+                        Some(format!(
+                            "materialize_{}",
+                            Uuid::new_v4().to_string().replace('-', "")
+                        ))
+                    });
                     create_stmts.push(CreateSourceStatement {
-                        name: UnresolvedObjectName(vec![Ident::from(table.name.as_str())]),
+                        name: table.alias.name().clone(),
                         col_names: table.columns.iter().map(|c| c.name.clone()).collect(),
                         connector: Connector::Postgres {
                             conn: conn.to_owned(),
                             publication: publication.to_owned(),
-                            slot: slot.clone(),
-                            namespace: namespace.to_owned(),
+                            slot: table_slot,
                             table: table.name.to_owned(),
                             columns: table.columns.clone(),
                         },
@@ -207,11 +202,10 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 
 async fn purify_postgres_table(
     conn: &str,
-    namespace: &str,
-    table: &str,
+    table: &UnresolvedObjectName,
     columns: &mut Vec<ColumnDef<Raw>>,
 ) -> Result<(), anyhow::Error> {
-    let fetched_columns = postgres_util::table_info(conn, namespace, table)
+    let fetched_columns = postgres_util::table_info(conn, &table.to_ast_string())
         .await?
         .schema
         .iter()
@@ -235,29 +229,32 @@ async fn purify_postgres_table(
                         .join(", ")
                 )
             }
-            for (c, u) in columns.into_iter().zip(upstream_columns) {
-                // By default, Postgres columns are nullable. This means that both
-                // of the following column definitions are nullable:
-                //     example_col bool
-                //     example_col bool NULL
-                // Fetched upstream column information, on the other hand, will always
-                // include NULL if a column is nullable. In order to compare the user-provided
-                // columns with the fetched columns, we need to append a NULL constraint
-                // to any user-provided columns that are implicitly NULL.
-                if !c.options.contains(&ColumnOptionDef {
-                    name: None,
-                    option: ColumnOption::NotNull,
-                }) && !c.options.contains(&ColumnOptionDef {
-                    name: None,
-                    option: ColumnOption::Null,
-                }) {
-                    c.options.push(ColumnOptionDef {
-                        name: None,
-                        option: ColumnOption::Null,
-                    });
-                }
-                if c != &u {
-                    bail!("incorrect column specification: specified column does not match upstream source, specified: {}, upstream: {}", c, u);
+            for (column, upstream_column) in columns.into_iter().zip(upstream_columns) {
+                if column != &upstream_column {
+                    if column.name != upstream_column.name
+                        || column.data_type != upstream_column.data_type
+                        || column.collation != upstream_column.collation
+                    {
+                        bail!("incorrect column specification: specified column does not match upstream source, specified: {}, upstream: {}", column, upstream_column);
+                    }
+
+                    // Some column modifiers can be omitted by the user. Add any potentially omitted column
+                    // options, and compare again.
+                    let mut cols: HashSet<&ColumnOption<Raw>> =
+                        column.options.iter().map(|o| &o.option).collect();
+                    let has_null = cols.contains(&ColumnOption::Null);
+                    let has_not_null = cols.contains(&ColumnOption::NotNull);
+                    let has_primary_key = cols.contains(&ColumnOption::Unique { is_primary: true });
+
+                    if !has_null && !has_not_null && !has_primary_key {
+                        cols.insert(&ColumnOption::Null);
+                    } else if has_primary_key && !has_not_null {
+                        cols.insert(&ColumnOption::NotNull);
+                    }
+                    let upstream_cols = upstream_column.options.iter().map(|o| &o.option).collect();
+                    if cols != upstream_cols {
+                        bail!("incorrect column specification: specified column modifiers do not match upstream source, specified: {}, upstream: {}", column, upstream_column);
+                    }
                 }
             }
         }

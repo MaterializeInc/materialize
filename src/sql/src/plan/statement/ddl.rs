@@ -712,7 +712,6 @@ pub fn plan_create_source(
         Connector::Postgres {
             conn,
             publication,
-            namespace,
             table,
             columns,
             slot,
@@ -741,8 +740,9 @@ pub fn plan_create_source(
                 .collect();
 
             let mut col_types = vec![];
+            let mut key_cols = vec![];
             let mut cast_exprs = vec![];
-            for c in columns {
+            for (i, c) in columns.iter().enumerate() {
                 if let Some(collation) = &c.collation {
                     unsupported!(format!(
                         "CREATE SOURCE FROM POSTGRES with column collation: {}",
@@ -758,6 +758,7 @@ pub fn plan_create_source(
                     match &option.option {
                         ColumnOption::Null => (),
                         ColumnOption::NotNull => nullable = false,
+                        ColumnOption::Unique { is_primary: true } => key_cols.push(i),
                         other => unsupported!(format!(
                             "CREATE SOURCE FROM POSTGRES with column constraint: {}",
                             other
@@ -777,13 +778,16 @@ pub fn plan_create_source(
                 cast_exprs.push(cast_expr);
             }
 
-            let desc = RelationDesc::new(RelationType::new(col_types), col_names);
-
+            let typ = if key_cols.is_empty() {
+                RelationType::new(col_types)
+            } else {
+                RelationType::new(col_types).with_key(key_cols)
+            };
+            let desc = RelationDesc::new(typ, col_names);
             let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
                 conn: conn.clone(),
                 publication: publication.clone(),
-                namespace: namespace.clone(),
-                table: table.clone(),
+                ast_table: table.to_ast_string(),
                 cast_exprs,
                 slot_name: slot_name.clone(),
             });
@@ -1025,7 +1029,7 @@ pub fn plan_create_source(
         (DataEncoding::Avro { .. }, _) | (_, SourceEnvelope::Debezium(_, _)) => (),
         _ => {
             for (name, ty) in external_connector.metadata_columns() {
-                bare_desc = bare_desc.with_column(name, ty);
+                bare_desc = bare_desc.with_named_column(name, ty);
             }
         }
     }
@@ -1071,12 +1075,15 @@ pub fn plan_create_sources(
 ) -> Result<Plan, anyhow::Error> {
     scx.require_experimental_mode("Postgres Sources")?;
     let CreateSourcesStatement { stmts, .. } = stmt;
-    let mut planned = vec![];
+    let mut sources = vec![];
     for stmt in stmts {
-        planned.push(plan_create_source(scx, stmt)?);
+        match plan_create_source(scx, stmt)? {
+            Plan::CreateSource(plan) => sources.push(plan),
+            _ => unreachable!("non-create source plan"),
+        }
     }
 
-    unsupported!("CREATE SOURCES");
+    Ok(Plan::CreateSources { sources })
 }
 
 pub fn describe_create_view(

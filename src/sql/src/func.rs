@@ -1564,6 +1564,10 @@ lazy_static! {
             "position" => Scalar {
                 params!(String, String) => BinaryFunc::Position, 849;
             },
+            "pow" => Scalar {
+                params!(Float64, Float64) => Operation::nullary(|_ecx| catalog_name_only!("pow")), 1346;
+                params!(DecimalAny, DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("pow")), 1738;
+            },
             "power" => Scalar {
                 params!(Float64, Float64) => BinaryFunc::Power, 1368;
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
@@ -2542,6 +2546,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::Eq, 1955;
                 params!(String, String) => BinaryFunc::Eq, 98;
                 params!(Jsonb, Jsonb) => BinaryFunc::Eq, 3240;
+                params!(ListAny, ListAny) => BinaryFunc::Eq, oid::FUNC_LIST_EQ_OID;
             },
             "<>" => Scalar {
                 params!(DecimalAny, DecimalAny) => {

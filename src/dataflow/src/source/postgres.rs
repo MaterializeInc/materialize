@@ -139,8 +139,8 @@ impl PostgresSourceReader {
             .or_else(|_| Err(anyhow!("invalid lsn")))?;
 
         let copy_query = format!(
-            r#"COPY "{}"."{}" TO STDOUT WITH (FORMAT binary);"#,
-            &self.connector.namespace, &self.connector.table
+            r#"COPY {} TO STDOUT WITH (FORMAT binary);"#,
+            self.connector.ast_table,
         );
 
         let stream = client.copy_out_simple(&copy_query).await?;
@@ -355,13 +355,9 @@ impl PostgresSourceReader {
 impl SimpleSource for PostgresSourceReader {
     /// The top-level control of the state machine and retry logic
     async fn start(mut self, timestamper: &Timestamper) -> Result<(), SourceError> {
-        let table_info = postgres_util::table_info(
-            &self.connector.conn,
-            &self.connector.namespace,
-            &self.connector.table,
-        )
-        .await
-        .map_err(|e| SourceError::FileIO(e.to_string()))?;
+        let table_info = postgres_util::table_info(&self.connector.conn, &self.connector.ast_table)
+            .await
+            .map_err(|e| SourceError::FileIO(e.to_string()))?;
 
         // The initial snapshot has no easy way of retrying it in case of connection failures
         self.produce_snapshot(&table_info, timestamper)

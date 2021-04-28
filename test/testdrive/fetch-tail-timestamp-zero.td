@@ -27,10 +27,10 @@
 
 > DECLARE c2 CURSOR FOR TAIL v2 WITH (PROGRESS = TRUE);
 
-> FETCH 2 FROM c1 WITH (timeout = '3s')
+> FETCH 2 FROM c1 WITH (timeout = '60s')
 0 false 1 123
 
-> FETCH 2 FROM c2 WITH (timeout = '3s')
+> FETCH 2 FROM c2 WITH (timeout = '60s')
 0 false 1 123
 
 > COMMIT;

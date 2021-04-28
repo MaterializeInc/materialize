@@ -64,3 +64,4 @@ pub const FUNC_MZ_SESSION_ID_OID: u32 = 16_435;
 pub const FUNC_MZ_UPTIME_OID: u32 = 16_436;
 pub const FUNC_MZ_WORKERS_OID: u32 = 16_437;
 pub const TYPE_RDN_OID: u32 = 16_438;
+pub const FUNC_LIST_EQ_OID: u32 = 16_439;

@@ -40,8 +40,8 @@ pub fn describe_show_create_view(
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("View", ScalarType::String.nullable(false))
-            .with_column("Create View", ScalarType::String.nullable(false)),
+            .with_named_column("View", ScalarType::String.nullable(false))
+            .with_named_column("Create View", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -94,8 +94,8 @@ pub fn describe_show_create_table(
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Table", ScalarType::String.nullable(false))
-            .with_column("Create Table", ScalarType::String.nullable(false)),
+            .with_named_column("Table", ScalarType::String.nullable(false))
+            .with_named_column("Create Table", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -120,8 +120,8 @@ pub fn describe_show_create_source(
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Source", ScalarType::String.nullable(false))
-            .with_column("Create Source", ScalarType::String.nullable(false)),
+            .with_named_column("Source", ScalarType::String.nullable(false))
+            .with_named_column("Create Source", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -146,8 +146,8 @@ pub fn describe_show_create_sink(
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Sink", ScalarType::String.nullable(false))
-            .with_column("Create Sink", ScalarType::String.nullable(false)),
+            .with_named_column("Sink", ScalarType::String.nullable(false))
+            .with_named_column("Create Sink", ScalarType::String.nullable(false)),
     )))
 }
 
@@ -172,8 +172,8 @@ pub fn describe_show_create_index(
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(Some(
         RelationDesc::empty()
-            .with_column("Index", ScalarType::String.nullable(false))
-            .with_column("Create Index", ScalarType::String.nullable(false)),
+            .with_named_column("Index", ScalarType::String.nullable(false))
+            .with_named_column("Create Index", ScalarType::String.nullable(false)),
     )))
 }
 

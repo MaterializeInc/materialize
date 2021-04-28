@@ -23,6 +23,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
+use std::fmt;
 use std::iter;
 use std::mem;
 
@@ -80,7 +81,7 @@ pub struct ResolvedObjectName {
 }
 
 impl AstDisplay for ResolvedObjectName {
-    fn fmt(&self, f: &mut AstFormatter) {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         if self.print_id {
             f.write_str(format!("[{} AS ", self.id));
         }

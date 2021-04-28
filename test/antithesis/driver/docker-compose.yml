@@ -1,0 +1,91 @@
+# Copyright Materialize, Inc. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+version: '3.7'
+services:
+  cp-combined:
+    hostname: cp-combined
+    container_name: cp-combined
+    fault_injector_block: true
+    networks:
+      antithesis-net:
+        ipv4_address: 10.0.0.11
+    image: antithesis-cp-combined
+  materialized:
+    hostname: materialized
+    container_name: materialized
+    fault_injector_block: true
+    networks:
+      antithesis-net:
+        ipv4_address: 10.0.0.12
+    command:
+      --data-directory=/share/mzdata
+      --workers 1
+      --experimental
+      --cache-max-pending-records 1
+      --timestamp-frequency 100ms
+      --disable-telemetry
+      --retain-prometheus-metrics 1s
+    image: antithesis-materialized
+    volumes:
+      - mzdata:/share/mzdata:rw
+      - tmp:/share/tmp:rw
+  atp-testdrive:
+    hostname: atp-testdrive
+    container_name: atp-testdrive
+    fault_injector_block: false
+    networks:
+      antithesis-net:
+        ipv4_address: 10.0.0.80
+    depends_on:
+      cp-combined:
+        condition: service_started
+      materialized:
+        condition: service_started
+    entrypoint:
+      - /bin/bash
+      - -O
+      - extglob
+      - -c
+      # We set the timeout below to 120 seconds rather than the original 30 seconds.
+      - >-
+        wait-for-it --timeout=120 cp-combined:9092 &&
+        wait-for-it --timeout=120 cp-combined:8081 &&
+        wait-for-it --timeout=120 materialized:6875 &&
+        while testdrive
+        --kafka-addr=cp-combined:9092
+        --schema-registry-url=http://cp-combined:8081
+        --materialized-url=postgres://materialize@materialized:6875
+        --validate-catalog=/share/mzdata/catalog
+        --default-timeout 300
+        !(*s3|kinesis*).td ;
+        do :; done
+      - bash
+    environment:
+      TMPDIR: /share/tmp
+    image: antithesis-testdrive
+    init: true
+    volumes:
+      - mzdata:/share/mzdata:rw
+      - tmp:/share/tmp:rw
+
+volumes:
+  mzdata: {}
+  tmp: {}
+
+networks:
+  antithesis-net:
+    driver: bridge
+    ipam:
+      config:
+      - subnet: 10.0.0.0/25
+
+fault_injector:
+  blocked: 10.0.0.0/26
+  unblocked: 10.0.0.65/26

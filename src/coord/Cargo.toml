@@ -8,8 +8,8 @@ publish = false
 [dependencies]
 anyhow = "1.0.40"
 aws-util = { path = "../aws-util" }
-backtrace = "0.3.56"
-bincode = { version = "1.3.0", optional = true }
+backtrace = "0.3.57"
+bincode = { version = "1.3.3", optional = true }
 build-info = { path = "../build-info" }
 byteorder = "1.4.3"
 ccsr = { path = "../ccsr" }
@@ -32,10 +32,10 @@ postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
-regex = "1.4.5"
+regex = "1.4.6"
 repr = { path = "../repr" }
 rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
-rusqlite = { version = "0.25.0", features = ["bundled", "unlock_notify"] }
+rusqlite = { version = "0.25.1", features = ["bundled", "unlock_notify"] }
 serde = "1.0.125"
 serde_json = "1.0.64"
 sql = { path = "../sql" }

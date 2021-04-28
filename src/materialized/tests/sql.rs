@@ -250,16 +250,16 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
     let mut client_writes = server.connect(postgres::NoTls)?;
     let mut client_reads = server.connect(postgres::NoTls)?;
 
-    client_writes.batch_execute("CREATE TABLE t (data text)")?;
+    client_writes.batch_execute("CREATE TABLE t1 (data text)")?;
     client_reads.batch_execute(
         "BEGIN;
-         DECLARE c CURSOR FOR TAIL t WITH (PROGRESS);",
+         DECLARE c1 CURSOR FOR TAIL t1 WITH (PROGRESS);",
     )?;
 
     for i in 1..=3 {
         let data = format!("line {}", i);
-        client_writes.execute("INSERT INTO t VALUES ($1)", &[&data])?;
-        match client_reads.query("FETCH ALL c", &[])?.as_slice() {
+        client_writes.execute("INSERT INTO t1 VALUES ($1)", &[&data])?;
+        match client_reads.query("FETCH ALL c1", &[])?.as_slice() {
             [data_row, progress_row] => {
                 assert_eq!(data_row.get::<_, bool>("progressed"), false);
                 assert_eq!(data_row.get::<_, i64>("diff"), 1);
@@ -275,6 +275,25 @@ fn test_tail_progress() -> Result<(), Box<dyn Error>> {
             }
             _ => panic!("wrong number of rows returned"),
         }
+    }
+
+    // Test that tailing non-nullable columns with progress information
+    // turn sthem into nullable columns. See #6304.
+    {
+        client_writes.batch_execute("CREATE TABLE t2 (data text NOT NULL)")?;
+        client_writes.batch_execute("INSERT INTO t2 VALUES ('data')")?;
+        client_reads.batch_execute(
+            "BEGIN;
+            DECLARE c2 CURSOR FOR TAIL t2 WITH (PROGRESS);",
+        )?;
+        let data_row = client_reads.query_one("FETCH 1 c2", &[])?;
+        assert_eq!(data_row.get::<_, bool>("progressed"), false);
+        assert_eq!(data_row.get::<_, i64>("diff"), 1);
+        assert_eq!(data_row.get::<_, String>("data"), "data");
+        let progress_row = client_reads.query_one("FETCH 1 c2", &[])?;
+        assert_eq!(progress_row.get::<_, bool>("progressed"), true);
+        assert_eq!(progress_row.get::<_, Option<i64>>("diff"), None);
+        assert_eq!(progress_row.get::<_, Option<String>>("data"), None);
     }
 
     Ok(())
