@@ -50,17 +50,7 @@ content:
 
 ### Example TEXT format
 
-First we'll create a source that ingests a single file. Because we're only ingesting a
-single file, we only require the `ListObject` [permission](https://materialize.com/docs/sql/create-source/text-s3/#permissions-required):
-
-```sql
-CREATE MATERIALIZED SOURCE single_object
-FROM S3 DISCOVER OBJECTS MATCHING 'logs/2020/12/31/frontend.log' USING BUCKET SCAN 'frontend'
-WITH (region = 'us-east-2', access_key_id='<IAM key>', secret_access_key='<IAM secret>')
-FORMAT TEXT;
-```
-
-Next we'll create a source that ingests all these logs, so that we can execute some
+We'll create a source that ingests all these logs, so that we can execute some
 quick and dirty analysis:
 
 ```sql
@@ -111,6 +101,19 @@ for all the lines that have `/updates` as their exact path:
 12/31/2020:23:55:52 | 37.26.93.214   | Go 1.1 package http
 12/31/2020:23:55:59 | 99.99.44.44    | Python/Requests 22
 ```
+
+### Example Single Object
+
+By creating a source that ingests a single file, we only require the `ListObject` 
+[permission](https://materialize.com/docs/sql/create-source/text-s3/#permissions-required):
+
+```sql
+CREATE MATERIALIZED SOURCE single_object
+FROM S3 DISCOVER OBJECTS MATCHING 'logs/2020/12/31/frontend.log' USING BUCKET SCAN 'frontend'
+WITH (region = 'us-east-2')
+FORMAT TEXT;
+```
+
 
 ## Related Pages
 
