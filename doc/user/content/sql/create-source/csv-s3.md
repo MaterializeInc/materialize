@@ -75,7 +75,7 @@ This creates a view that has the same properties as above, except it:
 * Has two columns (one *integer*, one *interval*)
 * Does not store the string data in memory after it has been parsed
 
-## Related Pages
+## Related pages
 
 - S3 with [`TEXT`](../text-s3)/[`JSON`](../json-s3) encoded data
 - [`CREATE SOURCE`](../)

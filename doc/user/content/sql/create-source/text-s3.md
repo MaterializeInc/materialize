@@ -102,7 +102,7 @@ for all the lines that have `/updates` as their exact path:
 12/31/2020:23:55:59 | 99.99.44.44    | Python/Requests 22
 ```
 
-## Related Pages
+## Related pages
 
 - S3 with [`CSV`](../csv-s3)/[`JSON`](../json-s3) encoded data
 - [`CREATE SOURCE`](../)

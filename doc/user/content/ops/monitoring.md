@@ -146,7 +146,7 @@ Materialize broadly publishes the following types of data there:
   averaged over 10 second windows.
 - Standard process metrics with a `process_*` prefix. For exmple, `process_cpu`.
 
-## System Catalog SQL Interface
+## System catalog SQL interface
 
 The `mz_catalog` SQL interface provides a variety of ways to introspect Materialize. An
 introduction to this catalog is available as part of our [SQL

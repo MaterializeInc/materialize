@@ -31,7 +31,7 @@ In contrast to the traditional approach, Materialize let teams continually updat
 
 "A streaming SQL materialized view engine" is difficult to wade through, so let's take the terms piece-by-piece.
 
-### SQL & Views
+### SQL & views
 
 One way to consider the answer to one of the aforementioned analytical queries is as a "view" of your data. There is some defined query that you want to execute, that results in giving you an answer that contains some subsets and computations of your data.
 
@@ -93,7 +93,7 @@ When you query one of your views, Materialize can simply return the dataflow's
 result set from memory, which should always be faster than computing the answer
 from scratch.
 
-## Materialize vs. Other Methodologies
+## Materialize vs. other methodologies
 
 ### Batch processing
 

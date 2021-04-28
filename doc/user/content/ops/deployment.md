@@ -144,7 +144,7 @@ enable it quite easily with the following steps.
      cat '/swapfile none swap sw 0 0' >> /etc/fstab
      ```
 
-## Source Caching
+## Source caching
 
 {{< experimental v0.4.2 />}}
 

@@ -188,7 +188,7 @@ SELECT INTERVAL '1 day 2-3 4' MINUTE AS interval_w;
  2 years 3 months 1 day 00:04:00
 ```
 
-### Interaction with Timestamps
+### Interaction with timestamps
 
 ```sql
 SELECT TIMESTAMP '2020-01-01 8:00:00' + INTERVAL '1' DAY AS ts_interaction;

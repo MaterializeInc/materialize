@@ -70,7 +70,7 @@ This creates a source that...
 - Has three *double* columns (`user_id`, `disks_used`, and `cpu_used_minutes`)
 - Is immediately materialized, so will be cached in memory and is immediately queryable
 
-## Related Pages
+## Related pages
 
 - S3 with [`CSV`](../csv-s3)/[`TEXT`](../text-s3) encoded data
 - [`CREATE SOURCE`](../)
