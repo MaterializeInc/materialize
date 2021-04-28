@@ -154,8 +154,6 @@ b  c
 2  1
 
 > SELECT c+b from test5
-?column?
---------
 4
 3
 
@@ -180,8 +178,6 @@ b  c
 2  1
 
 > SELECT c-b from test5
-?column?
---------
 2
 -1
 
@@ -342,8 +338,6 @@ mat_data user  unknown
 > DROP INDEX mat_data_primary_idx
 
 > SELECT a+b from mat_data
-?column?
---------
 -1
 0
 7

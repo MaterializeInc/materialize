@@ -68,6 +68,7 @@ pub fn parse(line_reader: &mut LineReader) -> Result<Vec<PosCommand>, InputError
         let command = match line.chars().next() {
             Some('$') => Command::Builtin(parse_builtin(line_reader)?),
             Some('>') => Command::Sql(parse_sql(line_reader)?),
+            Some('?') => Command::Sql(parse_explain_sql(line_reader)?),
             Some('!') => Command::FailSql(parse_fail_sql(line_reader)?),
             Some('#') => {
                 // Comment line.
@@ -189,6 +190,29 @@ fn parse_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
     })
 }
 
+fn parse_explain_sql(line_reader: &mut LineReader) -> Result<SqlCommand, InputError> {
+    let (_, line1) = line_reader.next().unwrap();
+    // This is a bit of a hack to extract the next chunk of the file with
+    // blank lines intact. Ideally the `LineReader` would expose the API we
+    // need directly, but that would require a large refactor.
+    let mut expected_output: String = line_reader
+        .inner
+        .chars()
+        .take_while(|c| !is_sigil(Some(*c)))
+        .collect();
+    slurp_all(line_reader);
+    while expected_output.ends_with("\n\n") {
+        expected_output.pop();
+    }
+    Ok(SqlCommand {
+        query: line1[1..].trim().to_owned(),
+        expected_output: SqlOutput::Full {
+            column_names: None,
+            expected_rows: vec![vec![expected_output]],
+        },
+    })
+}
+
 fn parse_fail_sql(line_reader: &mut LineReader) -> Result<FailSqlCommand, InputError> {
     let (pos, line1) = line_reader.next().unwrap();
     let line2 = slurp_one(line_reader);
@@ -268,7 +292,7 @@ fn slurp_one(line_reader: &mut LineReader) -> Option<(usize, String)> {
                 // Comment line. Skip.
                 let _ = line_reader.next();
             }
-            Some('$') | Some('>') | Some('!') => return None,
+            Some('$') | Some('>') | Some('!') | Some('?') => return None,
             Some('\\') => {
                 return line_reader.next().map(|(pos, mut line)| {
                     line.remove(0);
@@ -329,7 +353,7 @@ impl<'a> Iterator for LineReader<'a> {
         if self.inner.is_empty() {
             return None;
         }
-        let mut fold_newlines = should_fold(self.inner.chars().next());
+        let mut fold_newlines = is_sigil(self.inner.chars().next());
         let mut line = String::new();
         let mut chars = self.inner.char_indices().fuse().peekable();
         while let Some((i, c)) = chars.next() {
@@ -348,7 +372,7 @@ impl<'a> Iterator for LineReader<'a> {
                     continue;
                 } else if line.chars().all(char::is_whitespace) {
                     line.clear();
-                    fold_newlines = should_fold(chars.peek().map(|c| c.1));
+                    fold_newlines = is_sigil(chars.peek().map(|c| c.1));
                     self.pos_map.insert(self.pos, (self.src_line, 1));
                     continue;
                 }
@@ -369,8 +393,8 @@ impl<'a> Iterator for LineReader<'a> {
     }
 }
 
-fn should_fold(c: Option<char>) -> bool {
-    matches!(c, Some('$') | Some('>') | Some('!'))
+fn is_sigil(c: Option<char>) -> bool {
+    matches!(c, Some('$') | Some('>') | Some('!') | Some('?'))
 }
 
 struct BuiltinReader<'a> {
