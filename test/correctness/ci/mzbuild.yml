@@ -9,5 +9,5 @@
 
 name: test-correctness
 pre-image:
-  type: cargo-build
-  bin: test-correctness
+  - type: cargo-build
+    bin: test-correctness

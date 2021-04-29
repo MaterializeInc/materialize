@@ -9,5 +9,5 @@
 
 name: billing-demo
 pre-image:
-  type: cargo-build
-  bin: billing-demo
+  - type: cargo-build
+    bin: billing-demo

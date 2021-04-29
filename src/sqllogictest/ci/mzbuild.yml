@@ -9,5 +9,5 @@
 
 name: sqllogictest
 pre-image:
-  type: cargo-build
-  bin: sqllogictest
+  - type: cargo-build
+    bin: sqllogictest

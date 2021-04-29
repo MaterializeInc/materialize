@@ -9,4 +9,4 @@
 
 name: ci-cargo-test
 pre-image:
-  type: cargo-test
+  - type: cargo-test
