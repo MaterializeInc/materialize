@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
@@ -346,9 +346,7 @@ fn generate_ts_updates_from_debezium(
 /// A debezium record contains a set of update counts for each topic that the transaction
 /// updated. This function extracts the set of (topic, update_count) as a vector if
 /// processing an END message. It returns NONE otherwise.
-fn parse_debezium(
-    record: Vec<(String, Value)>,
-) -> Result<Option<Vec<(String, i64)>>, anyhow::Error> {
+fn parse_debezium(record: Vec<(String, Value)>) -> anyhow::Result<Option<Vec<(String, i64)>>> {
     let mut result = vec![];
     for (key, value) in record {
         if key == "status" {
@@ -357,17 +355,17 @@ fn parse_debezium(
                     "BEGIN" => return Ok(None),
                     "END" => (),
                     _ => {
-                        return Err(anyhow!(
+                        bail!(
                             "Failed to parse Debezium transaction message. Invalid status '{}'",
                             status
-                        ))
+                        )
                     }
                 }
             } else {
-                return Err(anyhow!(
+                bail!(
                         "Failed to parse Debezium transaction message. Expected String for field 'status', got {:?}",
                         value
-                    ));
+                    );
             }
         } else if key == "data_collections" {
             if let Value::Union { inner: value, .. } = value {
@@ -381,56 +379,53 @@ fn parse_debezium(
                                     if let Value::String(data) = v {
                                         value = Some(data);
                                     } else {
-                                        return Err(anyhow!(
+                                        bail!(
                                             "Failed to parse Debezium transaction message. Expected string for 'data_collection', got {:?}",
                                             v
-                                        ));
+                                        );
                                     }
                                 } else if k == "event_count" {
                                     if let Value::Long(e) = v {
                                         write_count = Some(e);
                                     } else {
-                                        return Err(anyhow!(
+                                        bail!(
                                             "Failed to parse Debezium transaction message. Expected long for 'event_count', got {:?}",
                                             v
-                                        ));
+                                        );
                                     }
                                 }
                             }
                             match (value, write_count) {
                                 (Some(v), Some(c)) => result.push((v, c)),
                                 (v, c) => {
-                                    return Err(anyhow!(
+                                    bail!(
                                         "Failed to parse Debezium transaction message. Missing count or collection name. Parsed: collection={:?}, count={:?}",
-                                        v, c)
-                                    );
+                                        v, c);
                                 }
                             }
                         } else {
-                            return Err(anyhow!(
+                            bail!(
                                 "Failed to parse Debezium transaction message. Record expected, got {:?}",
                                 v
-                            ));
+                            );
                         }
                     }
                 } else {
-                    return Err(anyhow!(
+                    bail!(
                         "Failed to parse Debezium transaction message. Array expected, got {:?}",
                         value
-                    ));
+                    );
                 }
             } else {
-                return Err(anyhow!(
+                bail!(
                     "Failed to parse Debezium transaction message. Union of Null/Array expected, got {:?}",
                     value
-                ));
+                );
             }
         }
     }
     if result.is_empty() {
-        return Err(anyhow!(
-            "Failed to parse Debezium transaction message. No collections found"
-        ));
+        bail!("Failed to parse Debezium transaction message. No collections found");
     }
     Ok(Some(result))
 }
