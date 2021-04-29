@@ -389,10 +389,10 @@ pub fn plan_create_source(
         col_names,
         connector,
         with_options,
-        format,
         envelope,
         if_not_exists,
         materialized,
+        format,
     } = &stmt;
 
     // TODO(bwm): use the normalized with_options in all the helper methods
@@ -949,7 +949,7 @@ fn get_encoding(
     with_options: &Vec<SqlOption<Raw>>,
     col_names: &Vec<Ident>,
 ) -> Result<SourceDataEncoding, anyhow::Error> {
-    // TODO(bwm): move single -> keyvalue rewriting to purify
+    // TODO(bwm): move single -> keyvalue rewriting to purify?
     let encoding = match format {
         CreateSourceFormat::None => bail!("Source format must be specified"),
         CreateSourceFormat::Bare(format) => get_encoding_inner(format, with_options, col_names)?,

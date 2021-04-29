@@ -149,7 +149,7 @@ impl<T: AstInfo + PartialEq> CreateSourceFormat<T> {
     }
 
     /// The value portion of a `KeyValue` format, or the only format in `Bare`
-    pub fn value(self) -> Option<Format<T>> {
+    pub fn value(&self) -> Option<&Format<T>> {
         match self {
             CreateSourceFormat::None => None,
             CreateSourceFormat::Bare(f) => Some(f),

@@ -253,6 +253,32 @@ async fn purify_format(
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
+    if matches!(format, CreateSourceFormat::KeyValue { .. })
+        && !matches!(connector, Connector::Kafka { .. })
+    {
+        bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
+    }
+
+    // the existing semantics of Upsert is that specifying a simple bare format
+    // duplicates the format into the key.
+    //
+    // TODO(bwm): We should either make this the semantics everywhere, or deprecate
+    // this.
+    if matches!(connector, Connector::Kafka { .. })
+        && matches!(envelope, Envelope::Upsert)
+        && format.is_simple()
+    {
+        let value = format.value().map(|f| f.clone());
+        if let Some(value) = value {
+            *format = CreateSourceFormat::KeyValue {
+                key: value.clone(),
+                value,
+            }
+        } else {
+            bail!("Upsert requires either a VALUE FORMAT or a bare TEXT or BYTES format");
+        };
+    }
+
     match format {
         CreateSourceFormat::None => {}
         CreateSourceFormat::Bare(format) => {

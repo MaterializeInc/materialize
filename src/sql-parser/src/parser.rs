@@ -1645,24 +1645,17 @@ impl<'a> Parser<'a> {
         let with_options = self.parse_opt_with_sql_options()?;
         // legacy upsert format syntax allows setting the key format after the keyword UPSERT, so we
         // may mutate this variable in the next block
-        let mut format = if matches!(connector, Connector::Kafka { .. }) {
-            // pure.rs asserts that KeyValue formats only make sense for Kafka
-            match self.parse_one_of_keywords(&[KEY, FORMAT]) {
-                Some(KEY) => {
-                    self.expect_keyword(FORMAT)?;
-                    let key = self.parse_format()?;
-                    self.expect_keywords(&[VALUE, FORMAT])?;
-                    let value = self.parse_format()?;
-                    CreateSourceFormat::KeyValue { key, value }
-                }
-                Some(FORMAT) => CreateSourceFormat::Bare(self.parse_format()?),
-                Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
-                None => CreateSourceFormat::None,
+        let mut format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
+            Some(KEY) => {
+                self.expect_keyword(FORMAT)?;
+                let key = self.parse_format()?;
+                self.expect_keywords(&[VALUE, FORMAT])?;
+                let value = self.parse_format()?;
+                CreateSourceFormat::KeyValue { key, value }
             }
-        } else if self.parse_keyword(FORMAT) {
-            CreateSourceFormat::Bare(self.parse_format()?)
-        } else {
-            CreateSourceFormat::None
+            Some(FORMAT) => CreateSourceFormat::Bare(self.parse_format()?),
+            Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
+            None => CreateSourceFormat::None,
         };
         let envelope = if self.parse_keyword(ENVELOPE) {
             let envelope = self.parse_envelope()?;
@@ -1676,28 +1669,9 @@ impl<'a> Parser<'a> {
                     } else {
                         self.error(
                             self.index,
-                            "Key/Value format specified multiple times".into(),
+                            "ENVELOPE UPSERT FORMAT conflicts with earlier KEY FORMAT specification".into(),
                         );
                     }
-                } else if format.is_simple() {
-                    // the existing semantics of Upsert is that specifying a simple bare format
-                    // duplicates the format into the key.
-                    //
-                    // TODO(bwm): We should either make this the semantics everywhere, or deprecate
-                    // this.
-                    let value = format.value();
-                    if let Some(value) = value {
-                        format = CreateSourceFormat::KeyValue {
-                            key: value.clone(),
-                            value,
-                        }
-                    } else {
-                        return parser_err!(
-                            self,
-                            self.peek_pos(),
-                            "Upsert requires a value format"
-                        );
-                    };
                 }
             }
             envelope
@@ -1751,8 +1725,7 @@ impl<'a> Parser<'a> {
             None
         };
         let envelope = if self.parse_keyword(ENVELOPE) {
-            let envelope = self.parse_envelope()?;
-            Some(envelope)
+            Some(self.parse_envelope()?)
         } else {
             None
         };
@@ -1842,9 +1815,9 @@ impl<'a> Parser<'a> {
                 // one token of lookahead:
                 // * `KEY (` means we're parsing a list of columns for the key
                 // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
-                let is_key_format = (matches!(self.peek_keyword(), Some(KEY))
-                    && matches!(self.peek_nth_token(1), Some(Token::Keyword(FORMAT))));
-                let key = if !is_key_format && self.peek_keyword() == Some(KEY) {
+                let key = if self.peek_keyword() == Some(KEY)
+                    && self.peek_nth_token(1) != Some(Token::Keyword(FORMAT))
+                {
                     let _ = self.expect_keyword(KEY);
                     Some(self.parse_parenthesized_column_list(Mandatory)?)
                 } else {
