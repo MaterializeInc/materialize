@@ -1,5 +1,5 @@
 {
-  "name": "upsertavrotest",
+  "name": "testrecord",
   "type": "record",
   "namespace": "com.acme.avro",
   "fields": [
