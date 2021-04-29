@@ -149,7 +149,7 @@ class PreImage:
 
     def run(self) -> None:
         """Perform the action."""
-        spawn.runv(["git", "clean", "-ffdX", self.path])
+        pass
 
     def inputs(self) -> Set[str]:
         """Return the files which are considered inputs to the action."""
@@ -373,7 +373,7 @@ class Image:
         root: The path to the root of the associated `Repository`.
         path: The path to the directory containing the `mzbuild.yml`
             configuration file.
-        pre_image: An optional action to perform before running `docker build`.
+        pre_images: Optional actions to perform before running `docker build`.
         build_args: An optional list of --build-arg to pass to the dockerfile
     """
 
@@ -382,20 +382,19 @@ class Image:
     def __init__(self, rd: RepositoryDetails, path: Path):
         self.rd = rd
         self.path = path
-        self.pre_image: Optional[PreImage] = None
+        self.pre_images: List[PreImage] = []
         with open(self.path / "mzbuild.yml") as f:
             data = yaml.safe_load(f)
             self.name: str = data.pop("name")
             self.publish: bool = data.pop("publish", True)
-            pre_image = data.pop("pre-image", None)
-            if pre_image is not None:
+            for pre_image in data.pop("pre-image", []):
                 typ = pre_image.pop("type", None)
                 if typ == "cargo-build":
-                    self.pre_image = CargoBuild(self.rd, self.path, pre_image)
+                    self.pre_images.append(CargoBuild(self.rd, self.path, pre_image))
                 elif typ == "cargo-test":
-                    self.pre_image = CargoTest(self.rd, self.path, pre_image)
+                    self.pre_images.append(CargoTest(self.rd, self.path, pre_image))
                 elif typ == "copy":
-                    self.pre_image = Copy(self.rd, self.path, pre_image)
+                    self.pre_images.append(Copy(self.rd, self.path, pre_image))
                 else:
                     raise ValueError(
                         f"mzbuild config in {self.path} has unknown pre-image type"
@@ -483,8 +482,9 @@ class ResolvedImage:
 
     def build(self) -> None:
         """Build the image from source."""
-        if self.image.pre_image is not None:
-            self.image.pre_image.run()
+        spawn.runv(["git", "clean", "-ffdX", self.image.path])
+        for pre_image in self.image.pre_images:
+            pre_image.run()
         f = self.write_dockerfile()
         cmd: Sequence[str] = [
             "docker",
@@ -572,8 +572,8 @@ class ResolvedImage:
             raise AssertionError(
                 f"{self.image.name} mzbuild exists but its files are unknown to git"
             )
-        if self.image.pre_image is not None:
-            paths |= self.image.pre_image.inputs()
+        for pre_image in self.image.pre_images:
+            paths |= pre_image.inputs()
         if transitive:
             for dep in self.dependencies.values():
                 paths |= dep.inputs(transitive)
@@ -613,8 +613,8 @@ class ResolvedImage:
             self_hash.update(file_hash.digest())
             self_hash.update(b"\0")
 
-        if self.image.pre_image is not None:
-            self_hash.update(self.image.pre_image.extra().encode())
+        for pre_image in self.image.pre_images:
+            self_hash.update(pre_image.extra().encode())
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())

@@ -9,5 +9,5 @@
 
 name: chaos
 pre-image:
-  type: cargo-build
-  bin: chaos
+  - type: cargo-build
+    bin: chaos

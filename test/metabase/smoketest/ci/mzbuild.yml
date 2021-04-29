@@ -9,5 +9,5 @@
 
 name: ci-metabase-smoketest
 pre-image:
-  type: cargo-build
-  bin: metabase-smoketest
+  - type: cargo-build
+    bin: metabase-smoketest

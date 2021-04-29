@@ -384,9 +384,9 @@ The directory containing a `mzbuild.yml` file is called the "mzbuild context."
 ```yml
 name: materialized
 pre-image:
-  type: cargo-build
-  bin: materialized
-  strip: false
+  - type: cargo-build
+    bin: materialized
+    strip: false
 publish: true
 ```
 
@@ -396,8 +396,9 @@ publish: true
   within the repository. If the image is publishable, it will be published to
   Docker Hub as `materialize/<name>`.
 
-* `pre-image` (map) specifies a plugin to run *before* invoking `docker build`.
-  This is where the magic happens for Rust code.
+* `pre-image` (list of maps) specifies plugins to run *before* invoking `docker
+  build`. The plugins are run in order. This is where the magic happens for
+  Rust code.
 
   At the moment `pre-image` only supports three plugins:
 

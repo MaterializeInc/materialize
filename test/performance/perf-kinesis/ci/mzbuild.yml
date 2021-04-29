@@ -9,5 +9,5 @@
 
 name: perf-kinesis
 pre-image:
-  type: cargo-build
-  bin: perf-kinesis
+  - type: cargo-build
+    bin: perf-kinesis

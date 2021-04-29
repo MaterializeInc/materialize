@@ -11,7 +11,7 @@ name: antithesis-testdrive
 publish: false
 
 pre-image:
-  type: copy
-  source: test/testdrive
-  destination: tests
-  matching: "*.td"
+  - type: copy
+    source: test/testdrive
+    destination: tests
+    matching: "*.td"

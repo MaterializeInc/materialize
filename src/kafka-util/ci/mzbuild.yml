@@ -9,5 +9,5 @@
 
 name: kgen
 pre-image:
-  type: cargo-build
-  bin: kgen
+  - type: cargo-build
+    bin: kgen

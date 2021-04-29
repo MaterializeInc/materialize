@@ -9,5 +9,5 @@
 
 name: mbta-demo
 pre-image:
-  type: cargo-build
-  bin: mbta-to-mtrlz
+  - type: cargo-build
+    bin: mbta-to-mtrlz

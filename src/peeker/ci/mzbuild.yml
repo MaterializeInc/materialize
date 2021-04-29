@@ -9,5 +9,5 @@
 
 name: peeker
 pre-image:
-  type: cargo-build
-  bin: peeker
+  - type: cargo-build
+    bin: peeker

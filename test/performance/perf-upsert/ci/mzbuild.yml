@@ -9,5 +9,5 @@
 
 name: perf-upsert
 pre-image:
-  type: cargo-build
-  bin: perf-upsert
+  - type: cargo-build
+    bin: perf-upsert

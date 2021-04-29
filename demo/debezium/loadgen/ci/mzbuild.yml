@@ -10,5 +10,5 @@
 name: debezium-mysql-gen
 publish: false
 pre-image:
-  type: cargo-build
-  bin: debezium-mysql-gen
+  - type: cargo-build
+    bin: debezium-mysql-gen

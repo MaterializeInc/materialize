@@ -9,5 +9,5 @@
 
 name: smith-fuzz
 pre-image:
-  type: cargo-build
-  bin: smith-fuzz
+  - type: cargo-build
+    bin: smith-fuzz

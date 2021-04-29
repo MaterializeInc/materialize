@@ -9,10 +9,10 @@
 
 name: materialized
 pre-image:
-  type: cargo-build
-  bin: materialized
-  strip: false
-  extract:
-    krb5-src:
-      - install/bin/kinit
-      - install/bin/kdestroy
+  - type: cargo-build
+    bin: materialized
+    strip: false
+    extract:
+      krb5-src:
+        - install/bin/kinit
+        - install/bin/kdestroy
