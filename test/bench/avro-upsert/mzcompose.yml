@@ -171,6 +171,7 @@ mzworkflows:
         --parallelism=${UPSERT_GENERATOR_PARALLELISM}
         --num-records=${UPSERT_GENERATOR_NUM_RECORDS}
         --distribution=${UPSERT_GENERATOR_DISTRIBUTION}
+        --topic=upsertavrotest
 
   run-benchmark:
     env:

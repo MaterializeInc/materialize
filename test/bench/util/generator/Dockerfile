@@ -16,5 +16,5 @@ COPY --from=0 /usr/local/bin/kgen /usr/local/bin
 RUN mkdir -p /usr/share/generator/distributions
 COPY distributions /usr/share/generator/distributions
 
-COPY generate_upserts /usr/local/bin
-ENTRYPOINT ["generate_upserts"]
+COPY generate_records /usr/local/bin
+ENTRYPOINT ["generate_records"]
