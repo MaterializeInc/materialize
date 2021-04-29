@@ -17,7 +17,6 @@ use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
 use rdkafka::error::KafkaError;
 use rdkafka::message::BorrowedMessage;
-use rdkafka::statistics::Window;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
 use timely::scheduling::activate::SyncActivator;
@@ -34,8 +33,7 @@ use crate::source::{NextMessage, SourceMessage, SourceReader};
 /// Values recorded from the last rdkafka statistics callback, used to generate a
 /// diff of values for logging
 #[derive(Default)]
-pub struct PreviousStats {
-    consumer_name: Option<String>,
+pub struct PartitionStats {
     rxmsgs: i64,
     rxbytes: i64,
     txmsgs: i64,
@@ -47,7 +45,68 @@ pub struct PreviousStats {
     consumer_lag: i64,
 }
 
-#[derive(Clone, Copy, Default)]
+impl PartitionStats {
+    /// Return the value required to negate the last value recorded for this partition
+    fn negate(
+        &self,
+        consumer_name: String,
+        source_id: SourceInstanceId,
+        partition_id: String,
+    ) -> MaterializedEvent {
+        MaterializedEvent::KafkaConsumerPartition {
+            consumer_name,
+            source_id,
+            partition_id,
+            rxmsgs: -self.rxmsgs,
+            rxbytes: -self.rxbytes,
+            txmsgs: -self.txmsgs,
+            txbytes: -self.txbytes,
+            lo_offset: -self.lo_offset,
+            hi_offset: -self.hi_offset,
+            ls_offset: -self.ls_offset,
+            app_offset: -self.app_offset,
+            consumer_lag: -self.consumer_lag,
+        }
+    }
+    /// Update the value for this partition, returning a MaterializedEvent that represents the
+    /// difference between the previous values and the new values
+    fn update(
+        &mut self,
+        consumer_name: String,
+        source_id: SourceInstanceId,
+        partition_id: String,
+        stats: &rdkafka::statistics::Partition,
+    ) -> MaterializedEvent {
+        let event = MaterializedEvent::KafkaConsumerPartition {
+            consumer_name,
+            source_id,
+            partition_id,
+            rxmsgs: stats.rxmsgs - self.rxmsgs,
+            rxbytes: stats.rxbytes - self.rxbytes,
+            txmsgs: stats.txmsgs - self.txmsgs,
+            txbytes: stats.txbytes - self.txbytes,
+            lo_offset: stats.lo_offset - self.lo_offset,
+            hi_offset: stats.hi_offset - self.hi_offset,
+            ls_offset: stats.ls_offset - self.ls_offset,
+            app_offset: stats.app_offset - self.app_offset,
+            consumer_lag: stats.consumer_lag - self.consumer_lag,
+        };
+
+        self.rxmsgs = stats.rxmsgs;
+        self.rxbytes = stats.rxbytes;
+        self.txmsgs = stats.txmsgs;
+        self.txbytes = stats.txbytes;
+        self.lo_offset = stats.lo_offset;
+        self.hi_offset = stats.hi_offset;
+        self.ls_offset = stats.ls_offset;
+        self.app_offset = stats.app_offset;
+        self.consumer_lag = stats.consumer_lag;
+
+        event
+    }
+}
+
+#[derive(Default)]
 pub struct BrokerRTTWindow {
     min: i64,
     max: i64,
@@ -66,7 +125,7 @@ pub struct BrokerRTTWindow {
 impl BrokerRTTWindow {
     /// Return the value required to negate the last value recorded for this window
     fn negate(
-        self,
+        &self,
         consumer_name: String,
         source_id: SourceInstanceId,
         broker_name: String,
@@ -96,7 +155,7 @@ impl BrokerRTTWindow {
         consumer_name: String,
         source_id: SourceInstanceId,
         broker_name: String,
-        stats: &Window,
+        stats: &rdkafka::statistics::Window,
     ) -> MaterializedEvent {
         let event = MaterializedEvent::KafkaBrokerRtt {
             consumer_name,
@@ -229,14 +288,7 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
         // Read any statistics objects generated via the GlueConsumerContext::stats callback
         while let Ok(statistics) = self.stats_rx.try_recv() {
             if let Some(logger) = self.logger.as_mut() {
-                for mut part in self.partition_consumers.iter_mut() {
-                    // If this is the first callback, initialize our consumer name
-                    // so that we can later retract this when the source is dropped
-                    match part.previous_stats.consumer_name {
-                        None => part.previous_stats.consumer_name = Some(statistics.name.clone()),
-                        _ => (),
-                    }
-
+                for part in self.partition_consumers.iter_mut() {
                     for (broker, stats) in &statistics.brokers {
                         match &stats.rtt {
                             Some(rtt) => {
@@ -256,41 +308,25 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
                         }
                     }
 
-                    let topic_stats = match statistics.topics.get(self.topic_name.as_str()) {
-                        Some(t) => t,
+                    let new_stats = match statistics.topics.get(self.topic_name.as_str()) {
+                        Some(t) => match t.partitions.get(&part.pid) {
+                            Some(p) => p,
+                            None => continue,
+                        },
                         None => continue,
                     };
 
-                    let partition_stats = match topic_stats.partitions.get(&part.pid) {
-                        Some(p) => p,
-                        None => continue,
-                    };
+                    let (consumer_name, part_stats) =
+                        part.partition_stats.get_or_insert_with(|| {
+                            (statistics.name.clone(), PartitionStats::default())
+                        });
 
-                    logger.log(MaterializedEvent::KafkaConsumerPartition {
-                        consumer_name: statistics.name.to_string(),
-                        source_id: self.id,
-                        partition_id: partition_stats.partition.to_string(),
-                        rxmsgs: partition_stats.rxmsgs - part.previous_stats.rxmsgs,
-                        rxbytes: partition_stats.rxbytes - part.previous_stats.rxbytes,
-                        txmsgs: partition_stats.txmsgs - part.previous_stats.txmsgs,
-                        txbytes: partition_stats.txbytes - part.previous_stats.txbytes,
-                        lo_offset: partition_stats.lo_offset - part.previous_stats.lo_offset,
-                        hi_offset: partition_stats.hi_offset - part.previous_stats.hi_offset,
-                        ls_offset: partition_stats.ls_offset - part.previous_stats.ls_offset,
-                        app_offset: partition_stats.app_offset - part.previous_stats.app_offset,
-                        consumer_lag: partition_stats.consumer_lag
-                            - part.previous_stats.consumer_lag,
-                    });
-
-                    part.previous_stats.rxmsgs = partition_stats.rxmsgs;
-                    part.previous_stats.rxbytes = partition_stats.rxbytes;
-                    part.previous_stats.txmsgs = partition_stats.txmsgs;
-                    part.previous_stats.txbytes = partition_stats.txbytes;
-                    part.previous_stats.lo_offset = partition_stats.lo_offset;
-                    part.previous_stats.hi_offset = partition_stats.hi_offset;
-                    part.previous_stats.ls_offset = partition_stats.ls_offset;
-                    part.previous_stats.app_offset = partition_stats.app_offset;
-                    part.previous_stats.consumer_lag = partition_stats.consumer_lag;
+                    logger.log(part_stats.update(
+                        consumer_name.to_string(),
+                        self.id,
+                        part.pid.to_string(),
+                        &new_stats,
+                    ));
                 }
             }
         }
@@ -534,21 +570,12 @@ impl Drop for KafkaSourceReader {
         // Retract any metrics logged for this source
         if let Some(logger) = self.logger.as_mut() {
             for part in self.partition_consumers.iter_mut() {
-                if let Some(consumer_name) = part.previous_stats.consumer_name.as_ref() {
-                    logger.log(MaterializedEvent::KafkaConsumerPartition {
-                        consumer_name: consumer_name.to_string(),
-                        source_id: self.id,
-                        partition_id: part.pid.to_string(),
-                        rxmsgs: -part.previous_stats.rxmsgs,
-                        rxbytes: -part.previous_stats.rxbytes,
-                        txmsgs: -part.previous_stats.txmsgs,
-                        txbytes: -part.previous_stats.txbytes,
-                        lo_offset: -part.previous_stats.lo_offset,
-                        hi_offset: -part.previous_stats.hi_offset,
-                        ls_offset: -part.previous_stats.ls_offset,
-                        app_offset: -part.previous_stats.app_offset,
-                        consumer_lag: -part.previous_stats.consumer_lag,
-                    });
+                if let Some((consumer_name, partition_stats)) = part.partition_stats.as_ref() {
+                    logger.log(partition_stats.negate(
+                        consumer_name.to_string(),
+                        self.id,
+                        part.pid.to_string(),
+                    ));
                     for (broker, window) in part.broker_windows.iter() {
                         logger.log(window.negate(
                             consumer_name.to_string(),
@@ -658,8 +685,8 @@ struct PartitionConsumer {
     pid: i32,
     /// The underlying Kafka partition queue
     partition_queue: PartitionQueue<GlueConsumerContext>,
-    /// Memoized Statistics for a partition consumer
-    previous_stats: PreviousStats,
+    /// Memoized Consumer Name and Statistics for a partition consumer
+    partition_stats: Option<(String, PartitionStats)>,
     /// Memoized Statistics for brokers
     broker_windows: HashMap<String, BrokerRTTWindow>,
 }
@@ -670,7 +697,7 @@ impl PartitionConsumer {
         PartitionConsumer {
             pid,
             partition_queue,
-            previous_stats: PreviousStats::default(),
+            partition_stats: None,
             broker_windows: HashMap::new(),
         }
     }
