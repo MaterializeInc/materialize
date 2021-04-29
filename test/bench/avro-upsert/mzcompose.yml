@@ -100,8 +100,8 @@ services:
      - SCHEMA_REGISTRY_HOST_NAME=schema-registry
      - SCHEMA_REGISTRY_LISTENERS=http://schema-registry:8081,http://localhost:8081
     depends_on: [zookeeper, kafka]
-  avro-upsert-generator:
-    mzbuild: avro-upsert-generator
+  kafka-avro-generator:
+    mzbuild: kafka-avro-generator
   metric-verifier:
     mzbuild: metric-verifier
     environment:
@@ -166,7 +166,7 @@ mzworkflows:
     - step: workflow
       workflow: start-services
     - step: run
-      service: avro-upsert-generator
+      service: kafka-avro-generator
       command: >-
         --parallelism=${UPSERT_GENERATOR_PARALLELISM}
         --num-records=${UPSERT_GENERATOR_NUM_RECORDS}
@@ -292,7 +292,7 @@ mzworkflows:
     - step: workflow
       workflow: start-services
     - step: run
-      service: avro-upsert-generator
+      service: kafka-avro-generator
       command: >-
         --parallelism=40
 
@@ -325,7 +325,7 @@ mzworkflows:
   run-generator:
     steps:
     - step: run
-      service: avro-upsert-generator
+      service: kafka-avro-generator
 
   rerun-benchmark:
     steps:
