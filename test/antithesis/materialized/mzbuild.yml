@@ -21,3 +21,7 @@ pre-image:
       -Clink-arg=-Wl,--allow-shlib-undefined
       -L/usr/local/lib
       -lvoidstar
+  - type: copy
+    source: ci/builder
+    destination: .
+    matching: libvoidstar.so

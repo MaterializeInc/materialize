@@ -11,6 +11,9 @@ FROM ubuntu:bionic-20200403
 
 RUN apt-get update && apt-get -qy install ca-certificates
 
+COPY libvoidstar.so /usr/local/lib
+RUN ldconfig
+
 COPY materialized /usr/local/bin/
 
 ENTRYPOINT ["materialized", "--log-file=stderr"]
