@@ -50,7 +50,7 @@ content:
 
 ### Example TEXT format
 
-First we'll create a source that just ingests all these logs, so that we can execute some
+We'll create a source that ingests all these logs, so that we can execute some
 quick and dirty analysis:
 
 ```sql
@@ -102,7 +102,20 @@ for all the lines that have `/updates` as their exact path:
 12/31/2020:23:55:59 | 99.99.44.44    | Python/Requests 22
 ```
 
-## Related pages
+### Example Single Object
+
+When creating a source that ingests a single object, we only require the `ListObject`
+[permission](https://materialize.com/docs/sql/create-source/text-s3/#permissions-required):
+
+```sql
+CREATE MATERIALIZED SOURCE single_object
+FROM S3 DISCOVER OBJECTS MATCHING 'logs/2020/12/31/frontend.log' USING BUCKET SCAN 'frontend'
+WITH (region = 'us-east-2')
+FORMAT TEXT;
+```
+
+
+## Related Pages
 
 - S3 with [`CSV`](../csv-s3)/[`JSON`](../json-s3) encoded data
 - [`CREATE SOURCE`](../)
