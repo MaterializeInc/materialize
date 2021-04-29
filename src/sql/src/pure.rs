@@ -27,6 +27,7 @@ use sql_parser::ast::{
     Format, Ident, Raw, Statement,
 };
 
+use crate::catalog::Catalog;
 use crate::kafka_util;
 use crate::normalize;
 
@@ -39,102 +40,107 @@ use crate::normalize;
 /// time to complete. As a result purification does *not* have access to a
 /// [`Catalog`](crate::catalog::Catalog), as that would require locking access
 /// to the catalog for an unbounded amount of time.
-pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::Error> {
-    if let Statement::CreateSource(CreateSourceStatement {
-        col_names,
-        connector,
-        format,
-        with_options,
-        envelope,
-        ..
-    }) = &mut stmt
-    {
-        let mut with_options_map = normalize::options(with_options);
-        let mut config_options = BTreeMap::new();
-
-        let mut file = None;
-        match connector {
-            Connector::Kafka { broker, topic, .. } => {
-                if !broker.contains(':') {
-                    *broker += ":9092";
-                }
-
-                // Verify that the provided security options are valid and then test them.
-                config_options = kafka_util::extract_config(&mut with_options_map)?;
-                kafka_util::test_config(&broker, &topic, &config_options).await?;
-            }
-            Connector::AvroOcf { path, .. } => {
-                let path = path.clone();
-                task::block_in_place(|| {
-                    // mz_avro::Reader has no async equivalent, so we're stuck
-                    // using blocking calls here.
-                    let f = std::fs::File::open(path)?;
-                    let r = mz_avro::Reader::new(f)?;
-                    if !with_options_map.contains_key("reader_schema") {
-                        let schema = serde_json::to_string(r.writer_schema()).unwrap();
-                        with_options.push(sql_parser::ast::SqlOption::Value {
-                            name: sql_parser::ast::Ident::new("reader_schema"),
-                            value: sql_parser::ast::Value::String(schema),
-                        });
-                    }
-                    Ok::<_, anyhow::Error>(())
-                })?;
-            }
-            // Report an error if a file cannot be opened, or if it is a directory.
-            Connector::File { path, .. } => {
-                let f = File::open(&path).await?;
-                if f.metadata().await?.is_dir() {
-                    bail!("Expected a regular file, but {} is a directory.", path);
-                }
-                file = Some(f);
-            }
-            Connector::S3 { .. } => {
-                let aws_info = normalize::aws_connect_info(&mut with_options_map, None)?;
-                aws_util::aws::validate_credentials(aws_info.clone(), Duration::from_secs(1))
-                    .await?;
-            }
-            Connector::Kinesis { arn } => {
-                let region = arn
-                    .parse::<ARN>()
-                    .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?
-                    .region
-                    .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
-
-                let aws_info =
-                    normalize::aws_connect_info(&mut with_options_map, Some(region.into()))?;
-                aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
-            }
-            Connector::Postgres {
-                conn,
-                publication,
-                slot,
-            } => {
-                slot.get_or_insert_with(|| {
-                    format!(
-                        "materialize_{}",
-                        Uuid::new_v4().to_string().replace('-', "")
-                    )
-                });
-
-                // verify that we can connect upstream
-                // TODO(petrosagg): store this info along with the source for better error
-                // detection
-                let _ = postgres_util::publication_info(&conn, &publication).await?;
-            }
-            Connector::PubNub { .. } => (),
-        }
-
-        purify_format(
-            format,
-            connector,
-            &envelope,
+pub fn purify(
+    _catalog: &dyn Catalog,
+    mut stmt: Statement<Raw>,
+) -> impl Future<Output = Result<Statement<Raw>, anyhow::Error>> {
+    async {
+        if let Statement::CreateSource(CreateSourceStatement {
             col_names,
-            file,
-            &config_options,
-        )
-        .await?;
+            connector,
+            format,
+            with_options,
+            envelope,
+            ..
+        }) = &mut stmt
+        {
+            let mut with_options_map = normalize::options(with_options);
+            let mut config_options = BTreeMap::new();
+
+            let mut file = None;
+            match connector {
+                Connector::Kafka { broker, topic, .. } => {
+                    if !broker.contains(':') {
+                        *broker += ":9092";
+                    }
+
+                    // Verify that the provided security options are valid and then test them.
+                    config_options = kafka_util::extract_config(&mut with_options_map)?;
+                    kafka_util::test_config(&broker, &topic, &config_options).await?;
+                }
+                Connector::AvroOcf { path, .. } => {
+                    let path = path.clone();
+                    task::block_in_place(|| {
+                        // mz_avro::Reader has no async equivalent, so we're stuck
+                        // using blocking calls here.
+                        let f = std::fs::File::open(path)?;
+                        let r = mz_avro::Reader::new(f)?;
+                        if !with_options_map.contains_key("reader_schema") {
+                            let schema = serde_json::to_string(r.writer_schema()).unwrap();
+                            with_options.push(sql_parser::ast::SqlOption::Value {
+                                name: sql_parser::ast::Ident::new("reader_schema"),
+                                value: sql_parser::ast::Value::String(schema),
+                            });
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    })?;
+                }
+                // Report an error if a file cannot be opened, or if it is a directory.
+                Connector::File { path, .. } => {
+                    let f = File::open(&path).await?;
+                    if f.metadata().await?.is_dir() {
+                        bail!("Expected a regular file, but {} is a directory.", path);
+                    }
+                    file = Some(f);
+                }
+                Connector::S3 { .. } => {
+                    let aws_info = normalize::aws_connect_info(&mut with_options_map, None)?;
+                    aws_util::aws::validate_credentials(aws_info.clone(), Duration::from_secs(1))
+                        .await?;
+                }
+                Connector::Kinesis { arn } => {
+                    let region = arn
+                        .parse::<ARN>()
+                        .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?
+                        .region
+                        .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
+
+                    let aws_info =
+                        normalize::aws_connect_info(&mut with_options_map, Some(region.into()))?;
+                    aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
+                }
+                Connector::Postgres {
+                    conn,
+                    publication,
+                    slot,
+                } => {
+                    slot.get_or_insert_with(|| {
+                        format!(
+                            "materialize_{}",
+                            Uuid::new_v4().to_string().replace('-', "")
+                        )
+                    });
+
+                    // verify that we can connect upstream
+                    // TODO(petrosagg): store this info along with the source for better error
+                    // detection
+                    let _ = postgres_util::publication_info(&conn, &publication).await?;
+                }
+                Connector::PubNub { .. } => (),
+            }
+
+            purify_format(
+                format,
+                connector,
+                &envelope,
+                col_names,
+                file,
+                &config_options,
+            )
+            .await?;
+        }
+        Ok(stmt)
     }
-    Ok(stmt)
 }
 
 async fn purify_format(

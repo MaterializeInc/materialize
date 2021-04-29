@@ -860,8 +860,10 @@ impl Coordinator {
                         }
 
                         let internal_cmd_tx = self.internal_cmd_tx.clone();
+                        let catalog = self.catalog.for_session(&session);
+                        let purify_fut = sql::pure::purify(&catalog, stmt);
                         tokio::spawn(async move {
-                            let result = sql::pure::purify(stmt).await.map_err(|e| e.into());
+                            let result = purify_fut.await.map_err(|e| e.into());
                             internal_cmd_tx
                                 .send(Message::StatementReady(StatementReady {
                                     session,
