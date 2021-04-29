@@ -1349,6 +1349,35 @@ impl AggregateExpr {
     pub fn typ(&self, relation_type: &RelationType) -> ColumnType {
         self.func.output_type(self.expr.typ(relation_type))
     }
+
+    /// Returns whether the expression has a constant result.
+    pub fn is_constant(&self) -> bool {
+        match self.func {
+            AggregateFunc::MaxInt32
+            | AggregateFunc::MaxInt64
+            | AggregateFunc::MaxFloat32
+            | AggregateFunc::MaxFloat64
+            | AggregateFunc::MaxDecimal
+            | AggregateFunc::MaxBool
+            | AggregateFunc::MaxString
+            | AggregateFunc::MaxDate
+            | AggregateFunc::MaxTimestamp
+            | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MinInt32
+            | AggregateFunc::MinInt64
+            | AggregateFunc::MinFloat32
+            | AggregateFunc::MinFloat64
+            | AggregateFunc::MinDecimal
+            | AggregateFunc::MinBool
+            | AggregateFunc::MinString
+            | AggregateFunc::MinDate
+            | AggregateFunc::MinTimestamp
+            | AggregateFunc::MinTimestampTz
+            | AggregateFunc::Any
+            | AggregateFunc::All => self.expr.is_literal(),
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for AggregateExpr {

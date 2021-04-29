@@ -26,6 +26,8 @@ use itertools::Itertools;
 
 use expr::{Id, JoinInputMapper, MirRelationExpr, MirScalarExpr};
 
+use repr::Row;
+
 use crate::TransformArgs;
 
 /// Hoist literal values from maps wherever possible.
@@ -57,10 +59,50 @@ impl LiteralLifting {
     /// expressions as it goes.
     ///
     /// In several cases, we only manage to extract literals from the final
-    /// columns. This could be improved using permutations to move all of
-    /// the literals to the final columns, and then rely on projection
-    /// hoisting to allow the these literals to move up the AST.
-    // TODO(frank): Fix this.
+    /// columns. But in those cases where it is possible, permutations are
+    /// used to move all of the literals to the final columns, and then rely
+    /// on projection hoisting to allow the these literals to move up the AST.
+    ///
+    /// TODO: The literals from the final columns are returned as the result
+    /// of this method, whereas literals in intermediate columns are extracted
+    /// using permutations. The reason for this different treatment is that in
+    /// some cases it is not possible to remove the projection of the
+    /// permutation, preventing the lifting of a literal that could otherwise
+    /// be lifted, the following example being of them:
+    ///
+    /// %0 =
+    /// | Constant (1, 2, 3) (2, 2, 3)
+    ///
+    /// %1 =
+    /// | Constant (4, 3, 3) (4, 5, 3)
+    ///
+    /// %2 =
+    /// | Union %0 %1
+    ///
+    /// If final literals weren't treated differently, the example above would
+    /// lead to the following transformed plan:
+    ///
+    /// %0 =
+    /// | Constant (1) (2)
+    /// | Map 2, 3
+    /// | Project (#0..#2)
+    ///
+    /// %1 =
+    /// | Constant (3) (5)
+    /// | Map 4, 3
+    /// | Project (#1, #0, #2)
+    ///
+    /// %2 =
+    /// | Union %0 %1
+    ///
+    /// Since the union branches have different projections, they cannot be
+    /// removed, preventing literal 3 from being lifted further.
+    ///
+    /// In theory, all literals could be treated in the same way if this method
+    /// returned both a list of literals and a projection vector, making the
+    /// caller have to deal with the reshuffling.
+    /// (see https://github.com/MaterializeInc/materialize/issues/6598)
+    ///
     pub fn action(
         &self,
         relation: &mut MirRelationExpr,
@@ -70,7 +112,6 @@ impl LiteralLifting {
         match relation {
             MirRelationExpr::Constant { rows, typ } => {
                 // From the back to the front, check if all values are identical.
-                // TODO(frank): any subset of constant values can be extracted with a permute.
                 let mut the_same = vec![true; typ.arity()];
                 if let Ok([(row, _cnt), rows @ ..]) = rows.as_deref_mut() {
                     let mut data = row.unpack();
@@ -91,7 +132,59 @@ impl LiteralLifting {
                     }
                     literals.reverse();
 
-                    if !literals.is_empty() {
+                    // Any subset of constant values can be extracted with a permute.
+                    let remaining_common_literals = the_same.iter().filter(|e| **e).count();
+                    if remaining_common_literals > 0 {
+                        let final_arity = the_same.len() - remaining_common_literals;
+                        let mut projected_literals = Vec::new();
+                        let mut projection = Vec::new();
+                        let mut new_column_types = Vec::new();
+                        for (i, sameness) in the_same.iter().enumerate() {
+                            if *sameness {
+                                projection.push(final_arity + projected_literals.len());
+                                projected_literals.push(MirScalarExpr::literal_ok(
+                                    data[i],
+                                    typ.column_types[i].scalar_type.clone(),
+                                ));
+                            } else {
+                                projection.push(new_column_types.len());
+                                new_column_types.push(typ.column_types[i].clone());
+                            }
+                        }
+                        typ.column_types = new_column_types;
+
+                        // Tidy up the type information of `relation`.
+                        for key in typ.keys.iter_mut() {
+                            *key = key
+                                .iter()
+                                .filter(|x| !the_same[**x])
+                                .map(|x| projection[*x])
+                                .collect::<Vec<usize>>();
+                        }
+                        typ.keys.sort();
+                        typ.keys.dedup();
+
+                        let remove_extracted_literals = |row: &mut Row| {
+                            let mut new_row = Row::default();
+                            let data = row.unpack();
+                            for i in 0..the_same.len() {
+                                if !the_same[i] {
+                                    new_row.push(data[i]);
+                                }
+                            }
+                            *row = new_row;
+                        };
+
+                        remove_extracted_literals(row);
+                        for (row, _cnt) in rows.iter_mut() {
+                            remove_extracted_literals(row);
+                        }
+
+                        *relation = relation
+                            .take_dangerous()
+                            .map(projected_literals)
+                            .project(projection);
+                    } else if !literals.is_empty() {
                         // Tidy up the type information of `relation`.
                         for key in typ.keys.iter_mut() {
                             key.retain(|k| k < &data.len());
@@ -104,6 +197,7 @@ impl LiteralLifting {
                             row.truncate_datums(typ.arity());
                         }
                     }
+
                     literals
                 } else {
                     Vec::new()
@@ -150,16 +244,36 @@ impl LiteralLifting {
                 let mut literals = self.action(input, gets);
                 if !literals.is_empty() {
                     let input_arity = input.arity();
-                    if let Some(project_max) = outputs.iter().max() {
-                        // Discard literals that are not projected.
-                        // TODO(frank): this could also discard intermediate
-                        // literals that are not projected, with more thought.
-                        while *project_max + 1 < input_arity + literals.len()
-                            && !literals.is_empty()
+                    // For each input literal contains a vector with the `output` positions
+                    // that references it. By putting data into a Vec and sorting, we
+                    // guarantee a reliable order.
+                    let mut used_literals = outputs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, x)| **x >= input_arity)
+                        .map(|(out_col, old_in_col)| (old_in_col - input_arity, out_col))
+                        // group them to avoid adding duplicated literals
+                        .into_group_map()
+                        .drain()
+                        .collect::<Vec<_>>();
+
+                    if used_literals.len() != literals.len() {
+                        used_literals.sort();
+                        // Discard literals that are not projected
+                        literals = used_literals
+                            .iter()
+                            .map(|(old_in_col, _)| literals[*old_in_col].clone())
+                            .collect::<Vec<_>>();
+                        // Update the references to the literal in `output`
+                        for (new_in_col, (_old_in_col, out_cols)) in
+                            used_literals.iter().enumerate()
                         {
-                            literals.pop();
+                            for out_col in out_cols {
+                                outputs[*out_col] = input_arity + new_in_col;
+                            }
                         }
                     }
+
                     // If the literals need to be re-interleaved,
                     // we don't have much choice but to install a
                     // Map operator to do that under the project.
@@ -179,10 +293,7 @@ impl LiteralLifting {
                 literals.extend(scalars.iter().cloned());
                 *scalars = literals;
 
-                // TODO(frank) propagate evaluation through expressions.
-
                 // Strip off literals at the end of `scalars`.
-                // TODO(frank) permute columns to put literals at end, hope project lifted.
                 let mut result = Vec::new();
                 while scalars.last().map(|e| e.is_literal()) == Some(true) {
                     result.push(scalars.pop().unwrap());
@@ -191,13 +302,47 @@ impl LiteralLifting {
 
                 if scalars.is_empty() {
                     *relation = input.take_dangerous();
+                } else {
+                    // Permute columns to put literals at end, if any, hope project lifted.
+                    let literal_count = scalars.iter().filter(|e| e.is_literal()).count();
+                    if literal_count != 0 {
+                        let input_arity = input.arity();
+                        let first_literal_id = input_arity + scalars.len() - literal_count;
+                        let mut new_scalars = Vec::new();
+                        let mut projected_literals = Vec::new();
+                        let mut projection = (0..input_arity).collect::<Vec<usize>>();
+                        for scalar in scalars.iter_mut() {
+                            if scalar.is_literal() {
+                                projection.push(first_literal_id + projected_literals.len());
+                                projected_literals.push(scalar.clone());
+                            } else {
+                                let mut cloned_scalar = scalar.clone();
+                                // Propagate literals through expressions and remap columns.
+                                cloned_scalar.visit_mut(&mut |e| {
+                                    if let MirScalarExpr::Column(old_id) = e {
+                                        let new_id = projection[*old_id];
+                                        if new_id >= first_literal_id {
+                                            *e = projected_literals[new_id - first_literal_id]
+                                                .clone();
+                                        } else {
+                                            *old_id = new_id;
+                                        }
+                                    }
+                                });
+                                projection.push(input_arity + new_scalars.len());
+                                new_scalars.push(cloned_scalar);
+                            }
+                        }
+                        new_scalars.extend(projected_literals);
+                        *relation = input.take_dangerous().map(new_scalars).project(projection);
+                    }
                 }
 
                 result
             }
             MirRelationExpr::FlatMap {
                 input,
-                func: _,
+                func,
                 exprs,
                 demand: _,
             } => {
@@ -213,10 +358,13 @@ impl LiteralLifting {
                             }
                         });
                     }
-                    // We need to re-install literals, as we don't know what flatmap does.
-                    // TODO(frank): We could permute the literals around the columns
-                    // added by FlatMap.
-                    **input = input.take_dangerous().map(literals);
+                    // Permute the literals around the columns added by FlatMap
+                    let mut projection = (0..input_arity).collect::<Vec<usize>>();
+                    let func_arity = func.output_arity();
+                    projection.extend((0..literals.len()).map(|x| input_arity + func_arity + x));
+                    projection.extend((0..func_arity).map(|x| input_arity + x));
+
+                    *relation = relation.take_dangerous().map(literals).project(projection);
                 }
                 Vec::new()
             }
@@ -344,31 +492,77 @@ impl LiteralLifting {
                     }
                 }
 
-                // The only literals we think we can lift are those that are
-                // independent of the number of records; things like `Any`, `All`,
-                // `Min`, and `Max`.
-                // TODO(frank): extract non-terminal literals.
-                let mut result = Vec::new();
-                while aggregates.last().map(|a| {
-                    (a.func == expr::AggregateFunc::Any || a.func == expr::AggregateFunc::All)
-                        && a.expr.is_literal_ok()
-                }) == Some(true)
-                {
-                    let aggr = aggregates.pop().unwrap();
+                let eval_constant_aggr = |aggr: &expr::AggregateExpr| {
                     let temp = repr::RowArena::new();
                     let eval = aggr
                         .func
                         .eval(Some(aggr.expr.eval(&[], &temp).unwrap()), &temp);
-                    result.push(MirScalarExpr::literal_ok(
+                    MirScalarExpr::literal_ok(
                         eval,
                         // This type information should be available in the `a.expr` literal,
                         // but extracting it with pattern matching seems awkward.
                         aggr.func
                             .output_type(aggr.expr.typ(&repr::RelationType::empty()))
                             .scalar_type,
-                    ));
+                    )
+                };
+
+                // The only literals we think we can lift are those that are
+                // independent of the number of records; things like `Any`, `All`,
+                // `Min`, and `Max`.
+                let mut result = Vec::new();
+                while aggregates.last().map(|a| a.is_constant()) == Some(true) {
+                    let aggr = aggregates.pop().unwrap();
+                    result.push(eval_constant_aggr(&aggr));
+                }
+                if aggregates.is_empty() {
+                    while group_key.last().map(|k| k.is_literal()) == Some(true) {
+                        let key = group_key.pop().unwrap();
+                        result.push(key);
+                    }
                 }
                 result.reverse();
+
+                // Add a Map operator with the remaining literals so that they are lifted in
+                // the next invocation of this transform.
+                let non_literal_keys = group_key.iter().filter(|x| !x.is_literal()).count();
+                let non_constant_aggr = aggregates.iter().filter(|x| !x.is_constant()).count();
+                if non_literal_keys != group_key.len() || non_constant_aggr != aggregates.len() {
+                    let first_projected_literal: usize = non_literal_keys + non_constant_aggr;
+                    let mut projection = Vec::new();
+                    let mut projected_literals = Vec::new();
+
+                    let mut new_group_key = Vec::new();
+                    for key in group_key.drain(..) {
+                        if key.is_literal() {
+                            projection.push(first_projected_literal + projected_literals.len());
+                            projected_literals.push(key);
+                        } else {
+                            projection.push(new_group_key.len());
+                            new_group_key.push(key);
+                        }
+                    }
+                    // The new group key without literals
+                    *group_key = new_group_key;
+
+                    let mut new_aggregates = Vec::new();
+                    for aggr in aggregates.drain(..) {
+                        if aggr.is_constant() {
+                            projection.push(first_projected_literal + projected_literals.len());
+                            projected_literals.push(eval_constant_aggr(&aggr));
+                        } else {
+                            projection.push(group_key.len() + new_aggregates.len());
+                            new_aggregates.push(aggr);
+                        }
+                    }
+                    // The new aggregates without constant ones
+                    *aggregates = new_aggregates;
+
+                    *relation = relation
+                        .take_dangerous()
+                        .map(projected_literals)
+                        .project(projection);
+                }
                 result
             }
             MirRelationExpr::TopK {

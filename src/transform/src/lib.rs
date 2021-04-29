@@ -238,6 +238,7 @@ impl Default for Optimizer {
                     Box::new(crate::fusion::filter::Filter),
                     Box::new(crate::demand::Demand),
                     Box::new(crate::map_lifting::LiteralLifting),
+                    Box::new(crate::fusion::map::Map),
                 ],
             }),
             Box::new(crate::reduction_pushdown::ReductionPushdown),

@@ -263,8 +263,8 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 
 | Join %8 %9
 | | implementation = Differential %8 %9.()
 | | demand = ()
-| Map 123, null
-| Project (#0, #4)
+| Map null
+| Project (#0, #3)
 
 %11 =
 | Union %5 %10
