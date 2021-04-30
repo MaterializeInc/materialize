@@ -58,6 +58,9 @@ Wrap your release notes at the 80 character mark.
   date from the other. Previously, the interval between the two dates would be
   returned. The new behavior matches the behavior in PostgreSQL.
 
+- **Breaking change.** Change the default for the `enable_auto_commit` option
+  on [Kafka sources](/sql/create-source/avro-kafka) to `false`.
+
 {{% version-header v0.7.2 %}}
 
 - Introduce the concept of [volatility](/overview/volatility) to describe
