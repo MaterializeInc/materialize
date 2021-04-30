@@ -1451,3 +1451,101 @@ impl BUILTINS {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use tokio_postgres::NoTls;
+
+    use super::*;
+
+    // Connect to a running Postgres server and verify that our builtin functions
+    // match it, in addition to some other things. Ignored because we don't have a
+    // postgres server running during normal tests.
+    #[tokio::test]
+    #[ignore]
+    async fn verify_function_sanity() -> Result<(), anyhow::Error> {
+        // Verify that all builtin functions:
+        // - have a unique OID
+        // - if they have a postgres counterpart (same oid) then they have matching
+        //   name and volatility.
+        // Note: Use Postgres 13 when testing because older version don't have all
+        // functions.
+
+        let (client, connection) =
+            tokio_postgres::connect("host=localhost user=postgres", NoTls).await?;
+
+        // The connection object performs the actual communication with the database,
+        // so spawn it off to run on its own.
+        tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
+
+        let rows = client
+            .query("SELECT oid, proname, provolatile::text FROM pg_proc", &[])
+            .await?;
+
+        struct PgProc {
+            name: String,
+            volatility: String,
+        }
+
+        let mut pg_proc = HashMap::new();
+        for row in rows {
+            let oid: u32 = row.get("oid");
+            pg_proc.insert(
+                oid,
+                PgProc {
+                    name: row.get("proname"),
+                    volatility: row.get("provolatile"),
+                },
+            );
+        }
+
+        let mut oids = HashSet::new();
+
+        for builtin in BUILTINS.values() {
+            if let Builtin::Func(func) = builtin {
+                for imp in func.inner.func_impls() {
+                    // Verify that all function OIDs are unique.
+                    assert!(
+                        oids.insert(imp.oid) == true,
+                        "{} reused oid {}",
+                        func.name,
+                        imp.oid
+                    );
+
+                    if imp.oid > 16_000 {
+                        // High OIDS are reserved in materialize and don't have postgres counterparts.
+                        continue;
+                    }
+
+                    // For functions that have a postgres counterpart, verify that the name, oid,
+                    // and volatility match.
+                    let pg_fn = pg_proc.get(&imp.oid).unwrap_or_else(|| {
+                        panic!("pg_proc missing function {}: oid {}", func.name, imp.oid)
+                    });
+                    assert_eq!(
+                        func.name, pg_fn.name,
+                        "funcs with oid {} don't match names: {} in mz, {} in pg",
+                        imp.oid, func.name, pg_fn.name
+                    );
+                    assert_eq!(
+                        imp.volatility.to_string(),
+                        pg_fn.volatility,
+                        "for func {} oid {}, mz volatility is {}, pg volatility is {}",
+                        func.name,
+                        imp.oid,
+                        imp.volatility,
+                        pg_fn.volatility
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+}

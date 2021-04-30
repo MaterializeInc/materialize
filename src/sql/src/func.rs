@@ -289,6 +289,32 @@ pub struct FuncImpl<R> {
     oid: u32,
     params: ParamList,
     op: Operation<R>,
+    volatility: Volatility,
+}
+
+/// See: https://www.postgresql.org/docs/current/xfunc-volatility.html
+#[derive(Copy, Clone, Debug)]
+pub enum Volatility {
+    /// A `Stable` function cannot modify the database and is guaranteed to return
+    /// the same results given the same arguments for all rows within a single
+    /// statement.
+    Stable,
+    /// An `Immutable` function cannot modify the database and is guaranteed to
+    /// return the same results given the same arguments forever.
+    Immutable,
+    /// A `Volatile` function can do anything, including modifying the database. It
+    /// can return different results on successive calls with the same arguments.
+    Volatile,
+}
+
+impl fmt::Display for Volatility {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Volatility::Immutable => "i",
+            Volatility::Stable => "s",
+            Volatility::Volatile => "v",
+        })
+    }
 }
 
 /// Describes how each implementation should be represented in the catalog.
@@ -297,6 +323,7 @@ pub struct FuncImplCatalogDetails {
     pub oid: u32,
     pub arg_oids: Vec<u32>,
     pub variadic_oid: Option<u32>,
+    pub volatility: Volatility,
 }
 
 impl<R> FuncImpl<R> {
@@ -305,6 +332,7 @@ impl<R> FuncImpl<R> {
             oid: self.oid,
             arg_oids: self.params.arg_oids(),
             variadic_oid: self.params.variadic_oid(),
+            volatility: self.volatility,
         }
     }
 }
@@ -1203,7 +1231,7 @@ macro_rules! builtins {
     {
         $(
             $name:expr => $ty:ident {
-                $($params:expr => $op:expr, $oid:expr;)+
+                $($params:expr => $op:expr, $oid:expr, $volatility:expr;)+
             }
         ),+
     } => {{
@@ -1214,6 +1242,7 @@ macro_rules! builtins {
                     oid: $oid,
                     params: $params.into(),
                     op: $op.into(),
+                    volatility: $volatility,
                 },)+
             ];
             let old = builtins.insert($name, Func::$ty(impls));
@@ -1277,57 +1306,57 @@ lazy_static! {
 
             // Scalars.
             "abs" => Scalar {
-                params!(Int32) => UnaryFunc::AbsInt32, 1397;
-                params!(Int64) => UnaryFunc::AbsInt64, 1395;
-                params!(DecimalAny) => UnaryFunc::AbsDecimal, 1398;
-                params!(Float32) => UnaryFunc::AbsFloat32, 1394;
-                params!(Float64) => UnaryFunc::AbsFloat64, 1395;
+                params!(Int32) => UnaryFunc::AbsInt32, 1397, Volatility::Immutable;
+                params!(Int64) => UnaryFunc::AbsInt64, 1396, Volatility::Immutable;
+                params!(DecimalAny) => UnaryFunc::AbsDecimal, 1398, Volatility::Immutable;
+                params!(Float32) => UnaryFunc::AbsFloat32, 1394, Volatility::Immutable;
+                params!(Float64) => UnaryFunc::AbsFloat64, 1395, Volatility::Immutable;
             },
             "array_length" => Scalar {
-                params![ArrayAny, Int64] => BinaryFunc::ArrayLength, 2176;
+                params![ArrayAny, Int64] => BinaryFunc::ArrayLength, 2176, Volatility::Immutable;
             },
             "array_lower" => Scalar {
-                params!(ArrayAny, Int64) => BinaryFunc::ArrayLower, 2091;
+                params!(ArrayAny, Int64) => BinaryFunc::ArrayLower, 2091, Volatility::Immutable;
             },
             "array_to_string" => Scalar {
-                params!(ArrayAny, String) => Operation::variadic(array_to_string), 395;
-                params!(ArrayAny, String, String) => Operation::variadic(array_to_string), 384;
+                params!(ArrayAny, String) => Operation::variadic(array_to_string), 395, Volatility::Stable;
+                params!(ArrayAny, String, String) => Operation::variadic(array_to_string), 384, Volatility::Stable;
             },
             "array_upper" => Scalar {
-                params!(ArrayAny, Int64) => BinaryFunc::ArrayUpper, 2092;
+                params!(ArrayAny, Int64) => BinaryFunc::ArrayUpper, 2092, Volatility::Immutable;
             },
             "ascii" => Scalar {
-                params!(String) => UnaryFunc::Ascii, 1620;
+                params!(String) => UnaryFunc::Ascii, 1620, Volatility::Immutable;
             },
             "avg" => Scalar {
-                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2100;
-                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2101;
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2103;
-                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2104;
-                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2105;
-                params!(Interval) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2105;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2100, Volatility::Immutable;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2101, Volatility::Immutable;
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2103, Volatility::Immutable;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2104, Volatility::Immutable;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2105, Volatility::Immutable;
+                params!(Interval) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2106, Volatility::Immutable;
             },
             "bit_length" => Scalar {
-                params!(Bytes) => UnaryFunc::BitLengthBytes, 1810;
-                params!(String) => UnaryFunc::BitLengthString, 1811;
+                params!(Bytes) => UnaryFunc::BitLengthBytes, 1810, Volatility::Immutable;
+                params!(String) => UnaryFunc::BitLengthString, 1811, Volatility::Immutable;
             },
             "btrim" => Scalar {
-                params!(String) => UnaryFunc::TrimWhitespace, 885;
-                params!(String, String) => BinaryFunc::Trim, 884;
+                params!(String) => UnaryFunc::TrimWhitespace, 885, Volatility::Immutable;
+                params!(String, String) => BinaryFunc::Trim, 884, Volatility::Immutable;
             },
             "cbrt" => Scalar {
-                params!(Float64) => UnaryFunc::CbrtFloat64, 1345;
+                params!(Float64) => UnaryFunc::CbrtFloat64, 1345, Volatility::Immutable;
             },
             "ceil" => Scalar {
-                params!(Float32) => UnaryFunc::CeilFloat32, oid::FUNC_CEIL_F32_OID;
-                params!(Float64) => UnaryFunc::CeilFloat64, 2308;
+                params!(Float32) => UnaryFunc::CeilFloat32, oid::FUNC_CEIL_F32_OID, Volatility::Immutable;
+                params!(Float64) => UnaryFunc::CeilFloat64, 2308, Volatility::Immutable;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::CeilDecimal(s)))
-                }), 1711;
+                }), 1711, Volatility::Immutable;
             },
             "char_length" => Scalar {
-                params!(String) => UnaryFunc::CharLength, 1381;
+                params!(String) => UnaryFunc::CharLength, 1381, Volatility::Immutable;
             },
             "concat" => Scalar {
                 params!(Any...) => Operation::variadic(|ecx, cexprs| {
@@ -1346,22 +1375,22 @@ lazy_static! {
                         }
                     }
                     Ok(HirScalarExpr::CallVariadic { func: VariadicFunc::Concat, exprs })
-                }), 3058;
+                }), 3058, Volatility::Stable;
             },
             "convert_from" => Scalar {
-                params!(Bytes, String) => BinaryFunc::ConvertFrom, 1714;
+                params!(Bytes, String) => BinaryFunc::ConvertFrom, 1714, Volatility::Stable;
             },
             "cos" => Scalar {
-                params!(Float64) => UnaryFunc::Cos, 1605;
+                params!(Float64) => UnaryFunc::Cos, 1605, Volatility::Immutable;
             },
             "cosh" => Scalar {
-                params!(Float64) => UnaryFunc::Cosh, 2463;
+                params!(Float64) => UnaryFunc::Cosh, 2463, Volatility::Immutable;
             },
             "cot" => Scalar {
-                params!(Float64) => UnaryFunc::Cot, 1607;
+                params!(Float64) => UnaryFunc::Cot, 1607, Volatility::Immutable;
             },
             "current_schema" => Scalar {
-                params!() => sql_op!("current_schemas(false)[1]"), 1402;
+                params!() => sql_op!("current_schemas(false)[1]"), 1402, Volatility::Stable;
             },
             "current_schemas" => Scalar {
                 params!(Bool) => Operation::unary(|ecx, e| {
@@ -1376,41 +1405,41 @@ lazy_static! {
                         then: Box::new(with_sys),
                         els: Box::new(without_sys),
                     })
-                }), 1403;
+                }), 1403, Volatility::Stable;
             },
             "current_user" => Scalar {
                 params!() => Operation::nullary(|ecx| {
                     let datum = Datum::String(ecx.qcx.scx.catalog.user());
                     Ok(HirScalarExpr::literal(datum, ScalarType::String))
-                }), 745;
+                }), 745, Volatility::Stable;
             },
             "date_part" => Scalar {
-                params!(String, Interval) => BinaryFunc::DatePartInterval, 1172;
-                params!(String, Timestamp) => BinaryFunc::DatePartTimestamp, 2021;
-                params!(String, TimestampTz) => BinaryFunc::DatePartTimestampTz, 1171;
+                params!(String, Interval) => BinaryFunc::DatePartInterval, 1172, Volatility::Immutable;
+                params!(String, Timestamp) => BinaryFunc::DatePartTimestamp, 2021, Volatility::Immutable;
+                params!(String, TimestampTz) => BinaryFunc::DatePartTimestampTz, 1171, Volatility::Stable;
             },
             "date_trunc" => Scalar {
-                params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp, 2020;
-                params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz, 1217;
+                params!(String, Timestamp) => BinaryFunc::DateTruncTimestamp, 2020, Volatility::Immutable;
+                params!(String, TimestampTz) => BinaryFunc::DateTruncTimestampTz, 1217, Volatility::Stable;
             },
             "digest" => Scalar {
-                params!(String, String) => BinaryFunc::DigestString, 44154;
-                params!(Bytes, String) => BinaryFunc::DigestBytes, 44155;
+                params!(String, String) => BinaryFunc::DigestString, 44154, Volatility::Immutable;
+                params!(Bytes, String) => BinaryFunc::DigestBytes, 44155, Volatility::Immutable;
             },
             "exp" => Scalar {
-                params!(Float64) => UnaryFunc::Exp, 1346;
+                params!(Float64) => UnaryFunc::Exp, 1347, Volatility::Immutable;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::ExpDecimal(s)))
-                }), 1732;
+                }), 1732, Volatility::Immutable;
             },
             "floor" => Scalar {
-                params!(Float32) => UnaryFunc::FloorFloat32, oid::FUNC_FLOOR_F32_OID;
-                params!(Float64) => UnaryFunc::FloorFloat64, 2309;
+                params!(Float32) => UnaryFunc::FloorFloat32, oid::FUNC_FLOOR_F32_OID, Volatility::Immutable;
+                params!(Float64) => UnaryFunc::FloorFloat64, 2309, Volatility::Immutable;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::FloorDecimal(s)))
-                }), 1712;
+                }), 1712, Volatility::Immutable;
             },
             "format_type" => Scalar {
                 params!(Oid, Int32) => sql_op!(
@@ -1418,24 +1447,24 @@ lazy_static! {
                         WHEN $1 IS NULL THEN NULL
                         ELSE coalesce((SELECT concat(name, mz_internal.mz_render_typemod($1, $2)) FROM mz_catalog.mz_types WHERE oid = $1), '???')
                     END"
-                ), 1081;
+                ), 1081, Volatility::Stable;
             },
             "hmac" => Scalar {
-                params!(String, String, String) => VariadicFunc::HmacString, 44156;
-                params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes, 44157;
+                params!(String, String, String) => VariadicFunc::HmacString, 44156, Volatility::Immutable;
+                params!(Bytes, Bytes, String) => VariadicFunc::HmacBytes, 44157, Volatility::Immutable;
             },
             "jsonb_array_length" => Scalar {
-                params!(Jsonb) => UnaryFunc::JsonbArrayLength, 3207;
+                params!(Jsonb) => UnaryFunc::JsonbArrayLength, 3207, Volatility::Immutable;
             },
             "jsonb_build_array" => Scalar {
-                params!() => VariadicFunc::JsonbBuildArray, 3272;
+                params!() => VariadicFunc::JsonbBuildArray, 3272, Volatility::Stable;
                 params!(Any...) => Operation::variadic(|ecx, exprs| Ok(HirScalarExpr::CallVariadic {
                     func: VariadicFunc::JsonbBuildArray,
                     exprs: exprs.into_iter().map(|e| typeconv::to_jsonb(ecx, e)).collect(),
-                })), 3271;
+                })), 3271, Volatility::Stable;
             },
             "jsonb_build_object" => Scalar {
-                params!() => VariadicFunc::JsonbBuildObject, 3274;
+                params!() => VariadicFunc::JsonbBuildObject, 3274, Volatility::Stable;
                 params!(Any...) => Operation::variadic(|ecx, exprs| {
                     if exprs.len() % 2 != 0 {
                         bail!("argument list must have even number of elements")
@@ -1448,72 +1477,72 @@ lazy_static! {
                             vec![key, val]
                         }).flatten().collect(),
                     })
-                }), 3273;
+                }), 3273, Volatility::Stable;
             },
             "jsonb_pretty" => Scalar {
-                params!(Jsonb) => UnaryFunc::JsonbPretty, 3306;
+                params!(Jsonb) => UnaryFunc::JsonbPretty, 3306, Volatility::Immutable;
             },
             "jsonb_strip_nulls" => Scalar {
-                params!(Jsonb) => UnaryFunc::JsonbStripNulls, 3262;
+                params!(Jsonb) => UnaryFunc::JsonbStripNulls, 3262, Volatility::Immutable;
             },
             "jsonb_typeof" => Scalar {
-                params!(Jsonb) => UnaryFunc::JsonbTypeof, 3210;
+                params!(Jsonb) => UnaryFunc::JsonbTypeof, 3210, Volatility::Immutable;
             },
             "length" => Scalar {
-                params!(Bytes) => UnaryFunc::ByteLengthBytes, 2010;
-                params!(String) => UnaryFunc::CharLength, 1317;
-                params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength, 1713;
+                params!(Bytes) => UnaryFunc::ByteLengthBytes, 2010, Volatility::Immutable;
+                params!(String) => UnaryFunc::CharLength, 1317, Volatility::Immutable;
+                params!(Bytes, String) => BinaryFunc::EncodedBytesCharLength, 1713, Volatility::Stable;
             },
             "ln" => Scalar {
-                params!(Float64) => UnaryFunc::Ln, 1341;
+                params!(Float64) => UnaryFunc::Ln, 1341, Volatility::Immutable;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::LnDecimal(s)))
-                }), 1734;
+                }), 1734, Volatility::Immutable;
             },
             "log10" => Scalar {
-                params!(Float64) => UnaryFunc::Log10, 1194;
+                params!(Float64) => UnaryFunc::Log10, 1194, Volatility::Immutable;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::Log10Decimal(s)))
-                }), 1481;
+                }), 1481, Volatility::Immutable;
             },
             "log" => Scalar {
-                params!(Float64) => UnaryFunc::Log10, 1340;
+                params!(Float64) => UnaryFunc::Log10, 1340, Volatility::Immutable;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::Log10Decimal(s)))
-                }), 1340;
+                }), 1741, Volatility::Immutable;
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     Ok(lhs.call_binary(rhs, BinaryFunc::LogDecimal(s)))
-                }), 1736;
+                }), 1736, Volatility::Immutable;
             },
             "lower" => Scalar {
-                params!(String) => UnaryFunc::Lower, 870;
+                params!(String) => UnaryFunc::Lower, 870, Volatility::Immutable;
             },
             "lpad" => Scalar {
-                params!(String, Int64) => VariadicFunc::PadLeading, 879;
-                params!(String, Int64, String) => VariadicFunc::PadLeading, 873;
+                params!(String, Int64) => VariadicFunc::PadLeading, 879, Volatility::Immutable;
+                params!(String, Int64, String) => VariadicFunc::PadLeading, 873, Volatility::Immutable;
             },
             "ltrim" => Scalar {
-                params!(String) => UnaryFunc::TrimLeadingWhitespace, 881;
-                params!(String, String) => BinaryFunc::TrimLeading, 875;
+                params!(String) => UnaryFunc::TrimLeadingWhitespace, 881, Volatility::Immutable;
+                params!(String, String) => BinaryFunc::TrimLeading, 875, Volatility::Immutable;
             },
             "make_timestamp" => Scalar {
-                params!(Int64, Int64, Int64, Int64, Int64, Float64) => VariadicFunc::MakeTimestamp, 3461;
+                params!(Int64, Int64, Int64, Int64, Int64, Float64) => VariadicFunc::MakeTimestamp, 3461, Volatility::Immutable;
             },
             "mod" => Scalar {
-                params!(DecimalAny, DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 1728;
-                params!(Int32, Int32) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 941;
-                params!(Int64, Int64) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 947;
+                params!(DecimalAny, DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 1728, Volatility::Immutable;
+                params!(Int32, Int32) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 941, Volatility::Immutable;
+                params!(Int64, Int64) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 947, Volatility::Immutable;
             },
             "now" => Scalar {
-                params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "now")), 1299;
+                params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "now")), 1299, Volatility::Stable;
             },
             "octet_length" => Scalar {
-                params!(Bytes) => UnaryFunc::ByteLengthBytes, 720;
-                params!(String) => UnaryFunc::ByteLengthString, 1374;
+                params!(Bytes) => UnaryFunc::ByteLengthBytes, 720, Volatility::Immutable;
+                params!(String) => UnaryFunc::ByteLengthString, 1374, Volatility::Immutable;
             },
             "obj_description" => Scalar {
                 params!(Oid, String) => Operation::binary(|_ecx, _oid, _catalog| {
@@ -1521,25 +1550,25 @@ lazy_static! {
                     // database object, but we don't presently support comments,
                     // so stubbed out out to always return NULL.
                     Ok(HirScalarExpr::literal_null(ScalarType::String))
-                }), 1215;
+                }), 1215, Volatility::Stable;
             },
             "pg_encoding_to_char" => Scalar {
                 // Materialize only supports UT8-encoded databases. Return 'UTF8' if Postgres'
                 // encoding id for UTF8 (6) is provided, otherwise return 'NULL'.
-                params!(Int64) => sql_op!("CASE WHEN $1 = 6 THEN 'UTF8' ELSE NULL END"), 1597;
+                params!(Int64) => sql_op!("CASE WHEN $1 = 6 THEN 'UTF8' ELSE NULL END"), 1597, Volatility::Stable;
             },
             "pg_get_userbyid" => Scalar {
-                params!(Oid) => sql_op!("'unknown (OID=' || $1 || ')'"), 1642;
+                params!(Oid) => sql_op!("'unknown (OID=' || $1 || ')'"), 1642, Volatility::Stable;
             },
             "pg_postmaster_start_time" => Scalar {
-                params!() => Operation::nullary(pg_postmaster_start_time), 2560;
+                params!() => Operation::nullary(pg_postmaster_start_time), 2560, Volatility::Stable;
             },
             "pg_table_is_visible" => Scalar {
                 params!(Oid) => sql_op!(
                     "(SELECT s.name = ANY(current_schemas(true))
                      FROM mz_catalog.mz_objects o JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
                      WHERE o.oid = $1)"
-                ), 2079;
+                ), 2079, Volatility::Stable;
             },
             "pg_typeof" => Scalar {
                 params!(Any) => Operation::new(|ecx, spec, exprs, params| {
@@ -1559,115 +1588,115 @@ lazy_static! {
                     // at that point. For now, it's useful enough to have this
                     // halfway version that returns a string.
                     Ok(HirScalarExpr::literal(Datum::String(&name), ScalarType::String))
-                }), 1619;
+                }), 1619, Volatility::Stable;
             },
             "position" => Scalar {
-                params!(String, String) => BinaryFunc::Position, 849;
+                params!(String, String) => BinaryFunc::Position, 849, Volatility::Immutable;
             },
             "pow" => Scalar {
-                params!(Float64, Float64) => Operation::nullary(|_ecx| catalog_name_only!("pow")), 1346;
-                params!(DecimalAny, DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("pow")), 1738;
+                params!(Float64, Float64) => Operation::nullary(|_ecx| catalog_name_only!("pow")), 1346, Volatility::Immutable;
+                params!(DecimalAny, DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("pow")), 1738, Volatility::Immutable;
             },
             "power" => Scalar {
-                params!(Float64, Float64) => BinaryFunc::Power, 1368;
+                params!(Float64, Float64) => BinaryFunc::Power, 1368, Volatility::Immutable;
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     Ok(lhs.call_binary(rhs, BinaryFunc::PowerDecimal(s)))
-                }), 2169;
+                }), 2169, Volatility::Immutable;
             },
             "repeat" => Scalar {
-                params!(String, Int32) => BinaryFunc::RepeatString, 1622;
+                params!(String, Int32) => BinaryFunc::RepeatString, 1622, Volatility::Immutable;
             },
             "regexp_match" => Scalar {
-                params!(String, String) => VariadicFunc::RegexpMatch, 3396;
-                params!(String, String, String) => VariadicFunc::RegexpMatch, 3397;
+                params!(String, String) => VariadicFunc::RegexpMatch, 3396, Volatility::Immutable;
+                params!(String, String, String) => VariadicFunc::RegexpMatch, 3397, Volatility::Immutable;
             },
             "replace" => Scalar {
-                params!(String, String, String) => VariadicFunc::Replace, 2087;
+                params!(String, String, String) => VariadicFunc::Replace, 2087, Volatility::Immutable;
             },
             "right" => Scalar {
-                params!(String, Int32) => BinaryFunc::Right, 3061;
+                params!(String, Int32) => BinaryFunc::Right, 3061, Volatility::Immutable;
             },
             "round" => Scalar {
-                params!(Float32) => UnaryFunc::RoundFloat32, oid::FUNC_ROUND_F32_OID;
-                params!(Float64) => UnaryFunc::RoundFloat64, 1342;
+                params!(Float32) => UnaryFunc::RoundFloat32, oid::FUNC_ROUND_F32_OID, Volatility::Immutable;
+                params!(Float64) => UnaryFunc::RoundFloat64, 1342, Volatility::Immutable;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::RoundDecimal(s)))
-                }), 1708;
+                }), 1708, Volatility::Immutable;
                 params!(DecimalAny, Int64) => Operation::binary(|ecx, lhs, rhs| {
                     let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     Ok(lhs.call_binary(rhs, BinaryFunc::RoundDecimal(s)))
-                }), 1707;
+                }), 1707, Volatility::Immutable;
             },
             "rtrim" => Scalar {
-                params!(String) => UnaryFunc::TrimTrailingWhitespace, 882;
-                params!(String, String) => BinaryFunc::TrimTrailing, 876;
+                params!(String) => UnaryFunc::TrimTrailingWhitespace, 882, Volatility::Immutable;
+                params!(String, String) => BinaryFunc::TrimTrailing, 876, Volatility::Immutable;
             },
             "sin" => Scalar {
-                params!(Float64) => UnaryFunc::Sin, 1604;
+                params!(Float64) => UnaryFunc::Sin, 1604, Volatility::Immutable;
             },
             "sinh" => Scalar {
-                params!(Float64) => UnaryFunc::Sinh, 2462;
+                params!(Float64) => UnaryFunc::Sinh, 2462, Volatility::Immutable;
             },
             "split_part" => Scalar {
-                params!(String, String, Int64) => VariadicFunc::SplitPart, 2088;
+                params!(String, String, Int64) => VariadicFunc::SplitPart, 2088, Volatility::Immutable;
             },
             "stddev" => Scalar {
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2159;
-                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2157;
-                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2158;
-                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2155;
-                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2154;
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2159, Volatility::Immutable;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2157, Volatility::Immutable;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2158, Volatility::Immutable;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2155, Volatility::Immutable;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev")), 2154, Volatility::Immutable;
             },
             "stddev_pop" => Scalar {
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2729;
-                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2727;
-                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2728;
-                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2725;
-                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2724;
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2729, Volatility::Immutable;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2727, Volatility::Immutable;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2728, Volatility::Immutable;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2725, Volatility::Immutable;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_pop")), 2724, Volatility::Immutable;
             },
             "stddev_samp" => Scalar {
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2717;
-                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2715;
-                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2716;
-                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2713;
-                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2712;
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2717, Volatility::Immutable;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2715, Volatility::Immutable;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2716, Volatility::Immutable;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2713, Volatility::Immutable;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("stddev_samp")), 2712, Volatility::Immutable;
             },
             "substr" => Scalar {
-                params!(String, Int64) => VariadicFunc::Substr, 883;
-                params!(String, Int64, Int64) => VariadicFunc::Substr, 877;
+                params!(String, Int64) => VariadicFunc::Substr, 883, Volatility::Immutable;
+                params!(String, Int64, Int64) => VariadicFunc::Substr, 877, Volatility::Immutable;
             },
             "substring" => Scalar {
-                params!(String, Int64) => VariadicFunc::Substr, 937;
-                params!(String, Int64, Int64) => VariadicFunc::Substr, 936;
+                params!(String, Int64) => VariadicFunc::Substr, 937, Volatility::Immutable;
+                params!(String, Int64, Int64) => VariadicFunc::Substr, 936, Volatility::Immutable;
             },
             "sqrt" => Scalar {
-                params!(Float64) => UnaryFunc::SqrtFloat64, 1344;
+                params!(Float64) => UnaryFunc::SqrtFloat64, 1344, Volatility::Immutable;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::SqrtDec(s)))
-                }), 1730;
+                }), 1730, Volatility::Immutable;
             },
             "tan" => Scalar {
-                params!(Float64) => UnaryFunc::Tan, 1606;
+                params!(Float64) => UnaryFunc::Tan, 1606, Volatility::Immutable;
             },
             "tanh" => Scalar {
-                params!(Float64) => UnaryFunc::Tanh, 246;
+                params!(Float64) => UnaryFunc::Tanh, 2464, Volatility::Immutable;
             },
             "timezone" => Scalar {
-                params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp, 2069;
-                params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz, 1159;
+                params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp, 2069, Volatility::Immutable;
+                params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz, 1159, Volatility::Immutable;
                 // PG defines this as `text timetz`
-                params!(String, Time) => BinaryFunc::TimezoneTime, 2037;
-                params!(Interval, Timestamp) => BinaryFunc::TimezoneIntervalTimestamp, 1026;
-                params!(Interval, TimestampTz) => BinaryFunc::TimezoneIntervalTimestampTz, 1026;
+                params!(String, Time) => BinaryFunc::TimezoneTime, 2037, Volatility::Volatile;
+                params!(Interval, Timestamp) => BinaryFunc::TimezoneIntervalTimestamp, 2070, Volatility::Immutable;
+                params!(Interval, TimestampTz) => BinaryFunc::TimezoneIntervalTimestampTz, 1026, Volatility::Immutable;
                 // PG defines this as `interval timetz`
-                params!(Interval, Time) => BinaryFunc::TimezoneIntervalTime, 2038;
+                params!(Interval, Time) => BinaryFunc::TimezoneIntervalTime, 2038, Volatility::Immutable;
             },
             "to_char" => Scalar {
-                params!(Timestamp, String) => BinaryFunc::ToCharTimestamp, 2049;
-                params!(TimestampTz, String) => BinaryFunc::ToCharTimestampTz, 1770;
+                params!(Timestamp, String) => BinaryFunc::ToCharTimestamp, 2049, Volatility::Stable;
+                params!(TimestampTz, String) => BinaryFunc::ToCharTimestampTz, 1770, Volatility::Stable;
             },
             // > Returns the value as json or jsonb. Arrays and composites
             // > are converted (recursively) to arrays and objects;
@@ -1680,34 +1709,34 @@ lazy_static! {
             //
             // https://www.postgresql.org/docs/current/functions-json.html
             "to_jsonb" => Scalar {
-                params!(Any) => Operation::unary(|ecx, e| Ok(typeconv::to_jsonb(ecx, e))), 3787;
+                params!(Any) => Operation::unary(|ecx, e| Ok(typeconv::to_jsonb(ecx, e))), 3787, Volatility::Stable;
             },
             "to_timestamp" => Scalar {
-                params!(Float64) => UnaryFunc::ToTimestamp, 1158;
+                params!(Float64) => UnaryFunc::ToTimestamp, 1158, Volatility::Immutable;
             },
             "upper" => Scalar {
-                params!(String) => UnaryFunc::Upper, 871;
+                params!(String) => UnaryFunc::Upper, 871, Volatility::Immutable;
             },
             "variance" => Scalar {
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2153;
-                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2151;
-                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2152;
-                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2149;
-                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2148;
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2153, Volatility::Immutable;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2151, Volatility::Immutable;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2152, Volatility::Immutable;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2149, Volatility::Immutable;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("variance")), 2148, Volatility::Immutable;
             },
             "var_pop" => Scalar {
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2723;
-                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2721;
-                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2722;
-                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2719;
-                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2718;
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2723, Volatility::Immutable;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2721, Volatility::Immutable;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2722, Volatility::Immutable;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2719, Volatility::Immutable;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("var_pop")), 2718, Volatility::Immutable;
             },
             "var_samp" => Scalar {
-                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2646;
-                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2644;
-                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2645;
-                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2642;
-                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2641;
+                params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2646, Volatility::Immutable;
+                params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2644, Volatility::Immutable;
+                params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2645, Volatility::Immutable;
+                params!(Int32) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2642, Volatility::Immutable;
+                params!(Int64) => Operation::nullary(|_ecx| catalog_name_only!("var_samp")), 2641, Volatility::Immutable;
             },
             "version" => Scalar {
                 params!() => Operation::nullary(|ecx| {
@@ -1717,52 +1746,52 @@ lazy_static! {
                         build_info.target_triple, build_info.version,
                     );
                     Ok(HirScalarExpr::literal(Datum::String(&version), ScalarType::String))
-                }), 89;
+                }), 89, Volatility::Stable;
             },
 
             // Aggregates.
             "array_agg" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("array_agg")), 4053;
+                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("array_agg")), 4053, Volatility::Immutable;
             },
             "bool_and" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("bool_and")), 2517;
+                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("bool_and")), 2517, Volatility::Immutable;
             },
             "bool_or" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("bool_or")), 2518;
+                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("bool_or")), 2518, Volatility::Immutable;
             },
             "count" => Aggregate {
                 params!() => Operation::nullary(|_ecx| {
                     // COUNT(*) is equivalent to COUNT(true).
                     Ok((HirScalarExpr::literal_true(), AggregateFunc::Count))
-                }), 2803;
-                params!(Any) => AggregateFunc::Count, 2147;
+                }), 2803, Volatility::Immutable;
+                params!(Any) => AggregateFunc::Count, 2147, Volatility::Immutable;
             },
             "max" => Aggregate {
-                params!(Bool) => AggregateFunc::MaxBool, oid::FUNC_MAX_BOOL_OID;
-                params!(Int32) => AggregateFunc::MaxInt32, 2116;
-                params!(Int64) => AggregateFunc::MaxInt64, 2115;
-                params!(Float32) => AggregateFunc::MaxFloat32, 2119;
-                params!(Float64) => AggregateFunc::MaxFloat64, 2120;
-                params!(DecimalAny) => AggregateFunc::MaxDecimal, 2130;
-                params!(String) => AggregateFunc::MaxString, 2129;
-                params!(Date) => AggregateFunc::MaxDate, 2122;
-                params!(Timestamp) => AggregateFunc::MaxTimestamp, 2126;
-                params!(TimestampTz) => AggregateFunc::MaxTimestampTz, 2127;
+                params!(Bool) => AggregateFunc::MaxBool, oid::FUNC_MAX_BOOL_OID, Volatility::Immutable;
+                params!(Int32) => AggregateFunc::MaxInt32, 2116, Volatility::Immutable;
+                params!(Int64) => AggregateFunc::MaxInt64, 2115, Volatility::Immutable;
+                params!(Float32) => AggregateFunc::MaxFloat32, 2119, Volatility::Immutable;
+                params!(Float64) => AggregateFunc::MaxFloat64, 2120, Volatility::Immutable;
+                params!(DecimalAny) => AggregateFunc::MaxDecimal, 2130, Volatility::Immutable;
+                params!(String) => AggregateFunc::MaxString, 2129, Volatility::Immutable;
+                params!(Date) => AggregateFunc::MaxDate, 2122, Volatility::Immutable;
+                params!(Timestamp) => AggregateFunc::MaxTimestamp, 2126, Volatility::Immutable;
+                params!(TimestampTz) => AggregateFunc::MaxTimestampTz, 2127, Volatility::Immutable;
             },
             "min" => Aggregate {
-                params!(Bool) => AggregateFunc::MinBool, oid::FUNC_MIN_BOOL_OID;
-                params!(Int32) => AggregateFunc::MinInt32, 2132;
-                params!(Int64) => AggregateFunc::MinInt64, 2131;
-                params!(Float32) => AggregateFunc::MinFloat32, 2135;
-                params!(Float64) => AggregateFunc::MinFloat64, 2136;
-                params!(DecimalAny) => AggregateFunc::MinDecimal, 2146;
-                params!(String) => AggregateFunc::MinString, 2145;
-                params!(Date) => AggregateFunc::MinDate, 2138;
-                params!(Timestamp) => AggregateFunc::MinTimestamp, 2142;
-                params!(TimestampTz) => AggregateFunc::MinTimestampTz, 2143;
+                params!(Bool) => AggregateFunc::MinBool, oid::FUNC_MIN_BOOL_OID, Volatility::Immutable;
+                params!(Int32) => AggregateFunc::MinInt32, 2132, Volatility::Immutable;
+                params!(Int64) => AggregateFunc::MinInt64, 2131, Volatility::Immutable;
+                params!(Float32) => AggregateFunc::MinFloat32, 2135, Volatility::Immutable;
+                params!(Float64) => AggregateFunc::MinFloat64, 2136, Volatility::Immutable;
+                params!(DecimalAny) => AggregateFunc::MinDecimal, 2146, Volatility::Immutable;
+                params!(String) => AggregateFunc::MinString, 2145, Volatility::Immutable;
+                params!(Date) => AggregateFunc::MinDate, 2138, Volatility::Immutable;
+                params!(Timestamp) => AggregateFunc::MinTimestamp, 2142, Volatility::Immutable;
+                params!(TimestampTz) => AggregateFunc::MinTimestampTz, 2143, Volatility::Immutable;
             },
             "json_agg" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("json_agg")), 3175;
+                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("json_agg")), 3175, Volatility::Stable;
             },
             "jsonb_agg" => Aggregate {
                 params!(Any) => Operation::unary(|ecx, e| {
@@ -1777,7 +1806,7 @@ lazy_static! {
                         exprs: vec![typeconv::to_jsonb(ecx, e), json_null],
                     };
                     Ok((e, AggregateFunc::JsonbAgg))
-                }), 3267;
+                }), 3267, Volatility::Stable;
             },
             "jsonb_object_agg" => Aggregate {
                 params!(Any, Any) => Operation::binary(|ecx, key, val| {
@@ -1790,24 +1819,24 @@ lazy_static! {
                         exprs: vec![key, val],
                     };
                     Ok((e, AggregateFunc::JsonbObjectAgg))
-                }), 3267;
+                }), 3270, Volatility::Immutable;
             },
             "string_agg" => Aggregate {
-                params!(Any, String) => Operation::binary(|_ecx, _lhs, _rhs| unsupported!("string_agg")), 3538;
+                params!(Any, String) => Operation::binary(|_ecx, _lhs, _rhs| unsupported!("string_agg")), 3538, Volatility::Immutable;
             },
             "sum" => Aggregate {
-                params!(Int32) => AggregateFunc::SumInt32, 2108;
-                params!(Int64) => AggregateFunc::SumInt64, 2107;
-                params!(Float32) => AggregateFunc::SumFloat32, 2110;
-                params!(Float64) => AggregateFunc::SumFloat64, 2111;
-                params!(DecimalAny) => AggregateFunc::SumDecimal, 2114;
+                params!(Int32) => AggregateFunc::SumInt32, 2108, Volatility::Immutable;
+                params!(Int64) => AggregateFunc::SumInt64, 2107, Volatility::Immutable;
+                params!(Float32) => AggregateFunc::SumFloat32, 2110, Volatility::Immutable;
+                params!(Float64) => AggregateFunc::SumFloat64, 2111, Volatility::Immutable;
+                params!(DecimalAny) => AggregateFunc::SumDecimal, 2114, Volatility::Immutable;
                 params!(Interval) => Operation::unary(|_ecx, _e| {
                     // Explicitly providing this unsupported overload
                     // prevents `sum(NULL)` from choosing the `Float64`
                     // implementation, so that we match PostgreSQL's behavior.
                     // Plus we will one day want to support this overload.
                     unsupported!("sum(interval)");
-                }), 2113;
+                }), 2113, Volatility::Immutable;
             },
 
             // Table functions.
@@ -1818,14 +1847,14 @@ lazy_static! {
                         exprs: vec![start, stop],
                         column_names: vec![Some("generate_series".into())],
                     })
-                }), 1067;
+                }), 1067, Volatility::Immutable;
                 params!(Int64, Int64) => Operation::binary(move |_ecx, start, stop| {
                     Ok(TableFuncPlan {
                         func: TableFunc::GenerateSeriesInt64,
                         exprs: vec![start, stop],
                         column_names: vec![Some("generate_series".into())],
                     })
-                }), 1069;
+                }), 1069, Volatility::Immutable;
             },
             "jsonb_array_elements" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
@@ -1834,7 +1863,7 @@ lazy_static! {
                         exprs: vec![jsonb],
                         column_names: vec![Some("value".into())],
                     })
-                }), 3219;
+                }), 3219, Volatility::Immutable;
             },
             "jsonb_array_elements_text" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
@@ -1843,7 +1872,7 @@ lazy_static! {
                         exprs: vec![jsonb],
                         column_names: vec![Some("value".into())],
                     })
-                }), 3465;
+                }), 3465, Volatility::Immutable;
             },
             "jsonb_each" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
@@ -1852,7 +1881,7 @@ lazy_static! {
                         exprs: vec![jsonb],
                         column_names: vec![Some("key".into()), Some("value".into())],
                     })
-                }), 3208;
+                }), 3208, Volatility::Immutable;
             },
             "jsonb_each_text" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
@@ -1861,7 +1890,7 @@ lazy_static! {
                         exprs: vec![jsonb],
                         column_names: vec![Some("key".into()), Some("value".into())],
                     })
-                }), 3932;
+                }), 3932, Volatility::Immutable;
             },
             "jsonb_object_keys" => Table {
                 params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
@@ -1870,13 +1899,13 @@ lazy_static! {
                         exprs: vec![jsonb],
                         column_names: vec![Some("jsonb_object_keys".into())],
                     })
-                }), 3931;
+                }), 3931, Volatility::Immutable;
             },
             "encode" => Scalar {
-                params!(Bytes, String) => BinaryFunc::Encode, 1946;
+                params!(Bytes, String) => BinaryFunc::Encode, 1946, Volatility::Immutable;
             },
             "decode" => Scalar {
-                params!(String, String) => BinaryFunc::Decode, 1947;
+                params!(String, String) => BinaryFunc::Decode, 1947, Volatility::Immutable;
             }
         }
     };
@@ -1899,13 +1928,13 @@ lazy_static! {
                         exprs: vec![input],
                         column_names: (1..=ncols).map(|i| Some(format!("column{}", i).into())).collect(),
                     })
-                }), oid::FUNC_CSV_EXTRACT_OID;
+                }), oid::FUNC_CSV_EXTRACT_OID, Volatility::Immutable;
             },
             "concat_agg" => Aggregate {
-                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("concat_agg")), oid::FUNC_CONCAT_AGG_OID;
+                params!(Any) => Operation::unary(|_ecx, _e| unsupported!("concat_agg")), oid::FUNC_CONCAT_AGG_OID, Volatility::Immutable;
             },
             "current_timestamp" => Scalar {
-                params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "current_timestamp")), oid::FUNC_CURRENT_TIMESTAMP_OID;
+                params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "current_timestamp")), oid::FUNC_CURRENT_TIMESTAMP_OID, Volatility::Volatile;
             },
             "internal_read_cached_data" => Table {
                 params!(String) => Operation::unary(move |ecx, source| {
@@ -1930,51 +1959,51 @@ lazy_static! {
                         exprs: vec![],
                         column_names: vec!["filename", "offset", "key", "value"].iter().map(|c| Some(ColumnName::from(*c))).collect(),
                     })
-                }), oid::FUNC_INTERNAL_READ_CACHED_DATA_OID;
+                }), oid::FUNC_INTERNAL_READ_CACHED_DATA_OID, Volatility::Stable;
             },
             "list_append" => Scalar {
-                vec![ListAny, ListElementAny] => BinaryFunc::ListElementConcat, oid::FUNC_LIST_APPEND_OID;
+                vec![ListAny, ListElementAny] => BinaryFunc::ListElementConcat, oid::FUNC_LIST_APPEND_OID, Volatility::Immutable;
             },
             "list_cat" => Scalar {
-                vec![ListAny, ListAny] =>  BinaryFunc::ListListConcat, oid::FUNC_LIST_CAT_OID;
+                vec![ListAny, ListAny] =>  BinaryFunc::ListListConcat, oid::FUNC_LIST_CAT_OID, Volatility::Immutable;
             },
             "list_ndims" => Scalar {
                 vec![ListAny] => Operation::unary(|ecx, e| {
                     ecx.require_experimental_mode("list_ndims")?;
                     let d = ecx.scalar_type(&e).unwrap_list_n_dims();
                     Ok(HirScalarExpr::literal(Datum::Int32(d as i32), ScalarType::Int32))
-                }), oid::FUNC_LIST_NDIMS_OID;
+                }), oid::FUNC_LIST_NDIMS_OID, Volatility::Immutable;
             },
             "list_length" => Scalar {
-                vec![ListAny] => UnaryFunc::ListLength, oid::FUNC_LIST_LENGTH_OID;
+                vec![ListAny] => UnaryFunc::ListLength, oid::FUNC_LIST_LENGTH_OID, Volatility::Immutable;
             },
             "list_length_max" => Scalar {
                 vec![ListAny, Plain(Int64)] => Operation::binary(|ecx, lhs, rhs| {
                     ecx.require_experimental_mode("list_length_max")?;
                     let max_dim = ecx.scalar_type(&lhs).unwrap_list_n_dims();
                     Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax{ max_dim }))
-                }), oid::FUNC_LIST_LENGTH_MAX_OID;
+                }), oid::FUNC_LIST_LENGTH_MAX_OID, Volatility::Immutable;
             },
             "list_prepend" => Scalar {
-                vec![ListElementAny, ListAny] => BinaryFunc::ElementListConcat, oid::FUNC_LIST_PREPEND_OID;
+                vec![ListElementAny, ListAny] => BinaryFunc::ElementListConcat, oid::FUNC_LIST_PREPEND_OID, Volatility::Immutable;
             },
             "mz_cluster_id" => Scalar {
-                params!() => Operation::nullary(mz_cluster_id), oid::FUNC_MZ_CLUSTER_ID_OID;
+                params!() => Operation::nullary(mz_cluster_id), oid::FUNC_MZ_CLUSTER_ID_OID, Volatility::Immutable;
             },
             "mz_logical_timestamp" => Scalar {
-                params!() => NullaryFunc::MzLogicalTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID;
+                params!() => NullaryFunc::MzLogicalTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID, Volatility::Stable;
             },
             "mz_uptime" => Scalar {
-                params!() => Operation::nullary(mz_uptime), oid::FUNC_MZ_UPTIME_OID;
+                params!() => Operation::nullary(mz_uptime), oid::FUNC_MZ_UPTIME_OID, Volatility::Volatile;
             },
             "mz_version" => Scalar {
                 params!() => Operation::nullary(|ecx| {
                     let version = ecx.catalog().config().build_info.human_version();
                     Ok(HirScalarExpr::literal(Datum::String(&version), ScalarType::String))
-                }), oid::FUNC_MZ_VERSION_OID;
+                }), oid::FUNC_MZ_VERSION_OID, Volatility::Stable;
             },
             "mz_workers" => Scalar {
-                params!() => Operation::nullary(mz_workers), oid::FUNC_MZ_WORKERS_OID;
+                params!() => Operation::nullary(mz_workers), oid::FUNC_MZ_WORKERS_OID, Volatility::Stable;
             },
             "regexp_extract" => Table {
                 params!(String, String) => Operation::binary(move |_ecx, regex, haystack| {
@@ -1994,7 +2023,7 @@ lazy_static! {
                         exprs: vec![haystack],
                         column_names,
                     })
-                }), oid::FUNC_REGEXP_EXTRACT_OID;
+                }), oid::FUNC_REGEXP_EXTRACT_OID, Volatility::Immutable;
             },
             "repeat_row" => Table {
                 params!(Int64) => Operation::unary(move |ecx, n| {
@@ -2004,7 +2033,7 @@ lazy_static! {
                         exprs: vec![n],
                         column_names: vec![]
                     })
-                }), oid::FUNC_REPEAT_OID;
+                }), oid::FUNC_REPEAT_OID, Volatility::Immutable;
             },
             "unnest" => Table {
                 vec![ArrayAny] => Operation::unary(move |ecx, e| {
@@ -2014,7 +2043,7 @@ lazy_static! {
                         exprs: vec![e],
                         column_names: vec![Some("unnest".into())],
                     })
-                }), 2331;
+                }), 2331, Volatility::Immutable;
                 vec![ListAny] => Operation::unary(move |ecx, e| {
                     let el_typ =  ecx.scalar_type(&e).unwrap_list_element_type().clone();
                     Ok(TableFuncPlan {
@@ -2022,7 +2051,7 @@ lazy_static! {
                         exprs: vec![e],
                         column_names: vec![Some("unnest".into())],
                     })
-                }), oid::FUNC_UNNEST_LIST_OID;
+                }), oid::FUNC_UNNEST_LIST_OID, Volatility::Immutable;
             }
         }
     };
@@ -2033,10 +2062,10 @@ lazy_static! {
         use ScalarType::*;
         builtins! {
             "mz_all" => Aggregate {
-                params!(Any) => AggregateFunc::All, oid::FUNC_MZ_ALL_OID;
+                params!(Any) => AggregateFunc::All, oid::FUNC_MZ_ALL_OID, Volatility::Immutable;
             },
             "mz_any" => Aggregate {
-                params!(Any) => AggregateFunc::Any, oid::FUNC_MZ_ANY_OID;
+                params!(Any) => AggregateFunc::Any, oid::FUNC_MZ_ANY_OID, Volatility::Immutable;
             },
             "mz_avg_promotion" => Scalar {
                 // Promotes a numeric type to the smallest fractional type that
@@ -2044,15 +2073,15 @@ lazy_static! {
                 // aggregate function, so that the avg of an integer column does
                 // not get truncated to an integer, which would be surprising to
                 // users (#549).
-                params!(Float32) => Operation::identity(), oid::FUNC_MZ_AVG_PROMOTION_F32_OID;
-                params!(Float64) => Operation::identity(), oid::FUNC_MZ_AVG_PROMOTION_F64_OID;
-                params!(DecimalAny) => Operation::identity(), oid::FUNC_MZ_AVG_PROMOTION_DECIMAL_OID;
+                params!(Float32) => Operation::identity(), oid::FUNC_MZ_AVG_PROMOTION_F32_OID, Volatility::Immutable;
+                params!(Float64) => Operation::identity(), oid::FUNC_MZ_AVG_PROMOTION_F64_OID, Volatility::Immutable;
+                params!(DecimalAny) => Operation::identity(), oid::FUNC_MZ_AVG_PROMOTION_DECIMAL_OID, Volatility::Immutable;
                 params!(Int32) => Operation::unary(|ecx, e| {
                       typeconv::plan_cast(
                           "internal.avg_promotion", ecx, CastContext::Explicit,
                           e, &ScalarType::Decimal(10, 0),
                       )
-                }), oid::FUNC_MZ_AVG_PROMOTION_I32_OID;
+                }), oid::FUNC_MZ_AVG_PROMOTION_I32_OID, Volatility::Immutable;
             },
             "mz_classify_object_id" => Scalar {
                 params!(String) => sql_op!(
@@ -2061,23 +2090,23 @@ lazy_static! {
                         WHEN $1 LIKE 's%' THEN 'system'
                         WHEN $1 like 't%' THEN 'temp'
                     END"
-                ), oid::FUNC_MZ_CLASSIFY_OBJECT_ID_OID;
+                ), oid::FUNC_MZ_CLASSIFY_OBJECT_ID_OID, Volatility::Immutable;
             },
             "mz_is_materialized" => Scalar {
                 params!(String) => sql_op!("EXISTS (SELECT 1 FROM mz_indexes WHERE on_id = $1)"),
-                    oid::FUNC_MZ_IS_MATERIALIZED_OID;
+                    oid::FUNC_MZ_IS_MATERIALIZED_OID, Volatility::Immutable;
             },
             "mz_render_typemod" => Scalar {
-                params!(Oid, Int32) => BinaryFunc::MzRenderTypemod, oid::FUNC_MZ_RENDER_TYPEMOD_OID;
+                params!(Oid, Int32) => BinaryFunc::MzRenderTypemod, oid::FUNC_MZ_RENDER_TYPEMOD_OID, Volatility::Immutable;
             },
             // This ought to be exposed in `mz_catalog`, but its name is rather
             // confusing. It does not identify the SQL session, but the
             // invocation of this `materialized` process.
             "mz_session_id" => Scalar {
-                params!() => Operation::nullary(mz_session_id), oid::FUNC_MZ_SESSION_ID_OID;
+                params!() => Operation::nullary(mz_session_id), oid::FUNC_MZ_SESSION_ID_OID, Volatility::Stable;
             },
             "mz_sleep" => Scalar {
-                params!(Float64) => UnaryFunc::Sleep, oid::FUNC_MZ_SLEEP_OID;
+                params!(Float64) => UnaryFunc::Sleep, oid::FUNC_MZ_SLEEP_OID, Volatility::Volatile;
             }
         }
     };
@@ -2181,78 +2210,78 @@ lazy_static! {
                     // we accept explicitly-typed arguments of any type, but try
                     // to coerce unknown-type arguments as `Float64`.
                     typeconv::plan_coerce(ecx, exprs.into_element(), &ScalarType::Float64)
-                }), oid::OP_UNARY_PLUS_OID;
-                params!(Int32, Int32) => AddInt32, 551;
-                params!(Int64, Int64) => AddInt64, 684;
-                params!(Float32, Float32) => AddFloat32, 586;
-                params!(Float64, Float64) => AddFloat64, 591;
+                }), oid::OP_UNARY_PLUS_OID, Volatility::Immutable;
+                params!(Int32, Int32) => AddInt32, 551, Volatility::Immutable;
+                params!(Int64, Int64) => AddInt64, 684, Volatility::Immutable;
+                params!(Float32, Float32) => AddFloat32, 586, Volatility::Immutable;
+                params!(Float64, Float64) => AddFloat64, 591, Volatility::Immutable;
                 params!(DecimalAny, DecimalAny) => {
                     Operation::binary(|ecx, lhs, rhs| {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, AddDecimal))
                     })
-                }, 1758;
-                params!(Interval, Interval) => AddInterval, 1337;
-                params!(Timestamp, Interval) => AddTimestampInterval, 2066;
+                }, 1758, Volatility::Immutable;
+                params!(Interval, Interval) => AddInterval, 1337, Volatility::Immutable;
+                params!(Timestamp, Interval) => AddTimestampInterval, 2066, Volatility::Immutable;
                 params!(Interval, Timestamp) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampInterval)))
-                }, 2066;
-                params!(TimestampTz, Interval) => AddTimestampTzInterval, 1327;
+                }, 2066, Volatility::Immutable;
+                params!(TimestampTz, Interval) => AddTimestampTzInterval, 1327, Volatility::Immutable;
                 params!(Interval, TimestampTz) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimestampTzInterval)))
-                }, 2554;
-                params!(Date, Interval) => AddDateInterval, 1076;
+                }, 2554, Volatility::Immutable;
+                params!(Date, Interval) => AddDateInterval, 1076, Volatility::Immutable;
                 params!(Interval, Date) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddDateInterval)))
-                }, 2551;
-                params!(Date, Time) => AddDateTime, 1360;
+                }, 2551, Volatility::Immutable;
+                params!(Date, Time) => AddDateTime, 1360, Volatility::Immutable;
                 params!(Time, Date) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddDateTime)))
-                }, 1363;
-                params!(Time, Interval) => AddTimeInterval, 1800;
+                }, 1363, Volatility::Immutable;
+                params!(Time, Interval) => AddTimeInterval, 1800, Volatility::Immutable;
                 params!(Interval, Time) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
-                }, 1849;
-                params!(Numeric{scale: None}, Numeric{scale: None}) => AddNumeric, 17580;
+                }, 1849, Volatility::Immutable;
+                params!(Numeric{scale: None}, Numeric{scale: None}) => AddNumeric, 17580, Volatility::Immutable;
             },
             "-" => Scalar {
-                params!(Int32) => UnaryFunc::NegInt32, 558;
-                params!(Int64) => UnaryFunc::NegInt64, 484;
-                params!(Float32) => UnaryFunc::NegFloat32, 584;
-                params!(Float64) => UnaryFunc::NegFloat64, 585;
-                params!(DecimalAny) => UnaryFunc::NegDecimal, 1751;
-                params!(Interval) => UnaryFunc::NegInterval, 1336;
-                params!(Int32, Int32) => SubInt32, 555;
-                params!(Int64, Int64) => SubInt64, 685;
-                params!(Float32, Float32) => SubFloat32, 587;
-                params!(Float64, Float64) => SubFloat64, 592;
+                params!(Int32) => UnaryFunc::NegInt32, 558, Volatility::Immutable;
+                params!(Int64) => UnaryFunc::NegInt64, 484, Volatility::Immutable;
+                params!(Float32) => UnaryFunc::NegFloat32, 584, Volatility::Immutable;
+                params!(Float64) => UnaryFunc::NegFloat64, 585, Volatility::Immutable;
+                params!(DecimalAny) => UnaryFunc::NegDecimal, 1751, Volatility::Immutable;
+                params!(Interval) => UnaryFunc::NegInterval, 1336, Volatility::Immutable;
+                params!(Int32, Int32) => SubInt32, 555, Volatility::Immutable;
+                params!(Int64, Int64) => SubInt64, 685, Volatility::Immutable;
+                params!(Float32, Float32) => SubFloat32, 587, Volatility::Immutable;
+                params!(Float64, Float64) => SubFloat64, 592, Volatility::Immutable;
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                     Ok(lexpr.call_binary(rexpr, SubDecimal))
-                }), 1759;
-                params!(Interval, Interval) => SubInterval, 1338;
-                params!(Timestamp, Timestamp) => SubTimestamp, 2067;
-                params!(TimestampTz, TimestampTz) => SubTimestampTz, 1328;
-                params!(Timestamp, Interval) => SubTimestampInterval, 2068;
-                params!(TimestampTz, Interval) => SubTimestampTzInterval, 1329;
-                params!(Date, Date) => SubDate, 1099;
-                params!(Date, Interval) => SubDateInterval, 1077;
-                params!(Time, Time) => SubTime, 1399;
-                params!(Time, Interval) => SubTimeInterval, 1801;
-                params!(Jsonb, Int64) => JsonbDeleteInt64, 3286;
-                params!(Jsonb, String) => JsonbDeleteString, 3285;
+                }), 1759, Volatility::Immutable;
+                params!(Interval, Interval) => SubInterval, 1338, Volatility::Immutable;
+                params!(Timestamp, Timestamp) => SubTimestamp, 2067, Volatility::Immutable;
+                params!(TimestampTz, TimestampTz) => SubTimestampTz, 1328, Volatility::Immutable;
+                params!(Timestamp, Interval) => SubTimestampInterval, 2068, Volatility::Immutable;
+                params!(TimestampTz, Interval) => SubTimestampTzInterval, 1329, Volatility::Immutable;
+                params!(Date, Date) => SubDate, 1099, Volatility::Immutable;
+                params!(Date, Interval) => SubDateInterval, 1077, Volatility::Immutable;
+                params!(Time, Time) => SubTime, 1399, Volatility::Immutable;
+                params!(Time, Interval) => SubTimeInterval, 1801, Volatility::Immutable;
+                params!(Jsonb, Int64) => JsonbDeleteInt64, 3286, Volatility::Immutable;
+                params!(Jsonb, String) => JsonbDeleteString, 3285, Volatility::Immutable;
                 // TODO(jamii) there should be corresponding overloads for
                 // Array(Int64) and Array(String)
             },
             "*" => Scalar {
-                params!(Int32, Int32) => MulInt32, 514;
-                params!(Int64, Int64) => MulInt64, 686;
-                params!(Float32, Float32) => MulFloat32, 589;
-                params!(Float64, Float64) => MulFloat64, 594;
-                params!(Interval, Float64) => MulInterval, 1583;
+                params!(Int32, Int32) => MulInt32, 514, Volatility::Immutable;
+                params!(Int64, Int64) => MulInt64, 686, Volatility::Immutable;
+                params!(Float32, Float32) => MulFloat32, 589, Volatility::Immutable;
+                params!(Float64, Float64) => MulFloat64, 594, Volatility::Immutable;
+                params!(Interval, Float64) => MulInterval, 1583, Volatility::Immutable;
                 params!(Float64, Interval) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, MulInterval)))
-                }, 1584;
+                }, 1584, Volatility::Immutable;
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     use std::cmp::*;
                     let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
@@ -2261,14 +2290,14 @@ lazy_static! {
                     let si = s1 + s2;
                     let expr = lhs.call_binary(rhs, MulDecimal);
                     Ok(rescale_decimal(expr, si, so))
-                }), 1760;
+                }), 1760, Volatility::Immutable;
             },
             "/" => Scalar {
-                params!(Int32, Int32) => DivInt32, 528;
-                params!(Int64, Int64) => DivInt64, 687;
-                params!(Float32, Float32) => DivFloat32, 588;
-                params!(Float64, Float64) => DivFloat64, 593;
-                params!(Interval, Float64) => DivInterval, 1585;
+                params!(Int32, Int32) => DivInt32, 528, Volatility::Immutable;
+                params!(Int64, Int64) => DivInt64, 687, Volatility::Immutable;
+                params!(Float32, Float32) => DivFloat32, 588, Volatility::Immutable;
+                params!(Float64, Float64) => DivFloat64, 593, Volatility::Immutable;
+                params!(Interval, Float64) => DivInterval, 1585, Volatility::Immutable;
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     use std::cmp::*;
                     let (_, s1) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
@@ -2281,67 +2310,67 @@ lazy_static! {
                     let lhs = rescale_decimal(lhs, s1, si);
                     let expr = lhs.call_binary(rhs, DivDecimal);
                     Ok(rescale_decimal(expr, si - s2, s))
-                }), 1761;
-                params!(Numeric{scale: None}, Numeric{scale: None}) => DivNumeric, 17610;
+                }), 1761, Volatility::Immutable;
+                params!(Numeric{scale: None}, Numeric{scale: None}) => DivNumeric, 17610, Volatility::Immutable;
             },
             "%" => Scalar {
-                params!(Int32, Int32) => ModInt32, 530;
-                params!(Int64, Int64) => ModInt64, 439;
-                params!(Float32, Float32) => ModFloat32, oid::OP_MOD_F32_OID;
-                params!(Float64, Float64) => ModFloat64, oid::OP_MOD_F64_OID;
+                params!(Int32, Int32) => ModInt32, 530, Volatility::Immutable;
+                params!(Int64, Int64) => ModInt64, 439, Volatility::Immutable;
+                params!(Float32, Float32) => ModFloat32, oid::OP_MOD_F32_OID, Volatility::Immutable;
+                params!(Float64, Float64) => ModFloat64, oid::OP_MOD_F64_OID, Volatility::Immutable;
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                     Ok(lexpr.call_binary(rexpr, ModDecimal))
-                }), 1762;
+                }), 1762, Volatility::Immutable;
             },
 
             // ILIKE
             "~~*" => Scalar {
-                params!(String, String) => IsLikePatternMatch { case_insensitive: true }, 1627;
+                params!(String, String) => IsLikePatternMatch { case_insensitive: true }, 1627, Volatility::Immutable;
             },
             "!~~*" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: true })
                         .call_unary(UnaryFunc::Not))
-                }), 1628;
+                }), 1628, Volatility::Immutable;
             },
 
 
             // LIKE
             "~~" => Scalar {
-                params!(String, String) => IsLikePatternMatch { case_insensitive: false }, 1209;
+                params!(String, String) => IsLikePatternMatch { case_insensitive: false }, 1209, Volatility::Immutable;
             },
             "!~~" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
                         .call_binary(rhs, IsLikePatternMatch { case_insensitive: false })
                         .call_unary(UnaryFunc::Not))
-                }), 1210;
+                }), 1210, Volatility::Immutable;
             },
 
             // REGEX
             "~" => Scalar {
-                params!(String, String) => IsRegexpMatch { case_insensitive: false }, 641;
+                params!(String, String) => IsRegexpMatch { case_insensitive: false }, 641, Volatility::Immutable;
             },
             "~*" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs.call_binary(rhs, IsRegexpMatch { case_insensitive: true }))
-                }), 1228;
+                }), 1228, Volatility::Immutable;
             },
             "!~" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: false })
                         .call_unary(UnaryFunc::Not))
-                }), 642;
+                }), 642, Volatility::Immutable;
             },
             "!~*" => Scalar {
                 params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs
                         .call_binary(rhs, IsRegexpMatch { case_insensitive: true })
                         .call_unary(UnaryFunc::Not))
-                }), 1229;
+                }), 1229, Volatility::Immutable;
             },
 
             // CONCAT
@@ -2355,7 +2384,7 @@ lazy_static! {
                         &ScalarType::String,
                     )?;
                     Ok(lhs.call_binary(rhs, TextConcat))
-                }), 2779;
+                }), 2779, Volatility::Immutable;
                 vec![NonVecAny, Plain(String)] =>  Operation::binary(|ecx, lhs, rhs| {
                     let lhs = typeconv::plan_cast(
                         "text_concat",
@@ -2365,38 +2394,38 @@ lazy_static! {
                         &ScalarType::String,
                     )?;
                     Ok(lhs.call_binary(rhs, TextConcat))
-                }), 2780;
-                params!(String, String) => TextConcat, 654;
-                params!(Jsonb, Jsonb) => JsonbConcat, 3284;
-                params!(ListAny, ListAny) => ListListConcat, oid::OP_CONCAT_LIST_LIST_OID;
-                params!(ListAny, ListElementAny) => ListElementConcat, oid::OP_CONCAT_LIST_ELEMENT_OID;
-                params!(ListElementAny, ListAny) => ElementListConcat, oid::OP_CONCAT_ELEMENY_LIST_OID;
+                }), 2780, Volatility::Immutable;
+                params!(String, String) => TextConcat, 654, Volatility::Immutable;
+                params!(Jsonb, Jsonb) => JsonbConcat, 3284, Volatility::Immutable;
+                params!(ListAny, ListAny) => ListListConcat, oid::OP_CONCAT_LIST_LIST_OID, Volatility::Immutable;
+                params!(ListAny, ListElementAny) => ListElementConcat, oid::OP_CONCAT_LIST_ELEMENT_OID, Volatility::Immutable;
+                params!(ListElementAny, ListAny) => ElementListConcat, oid::OP_CONCAT_ELEMENY_LIST_OID, Volatility::Immutable;
             },
 
             //JSON and MAP
             "->" => Scalar {
-                params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false }, 3212;
-                params!(Jsonb, String) => JsonbGetString { stringify: false }, 3211;
-                params!(MapAny, String) => MapGetValue, oid::OP_GET_VALUE_MAP_OID;
-                params!(MapAny, Plain(Array(Box::new(String)))) => MapGetValues, oid::OP_GET_VALUES_MAP_OID;
+                params!(Jsonb, Int64) => JsonbGetInt64 { stringify: false }, 3212, Volatility::Immutable;
+                params!(Jsonb, String) => JsonbGetString { stringify: false }, 3211, Volatility::Immutable;
+                params!(MapAny, String) => MapGetValue, oid::OP_GET_VALUE_MAP_OID, Volatility::Immutable;
+                params!(MapAny, Plain(Array(Box::new(String)))) => MapGetValues, oid::OP_GET_VALUES_MAP_OID, Volatility::Immutable;
             },
             "->>" => Scalar {
-                params!(Jsonb, Int64) => JsonbGetInt64 { stringify: true }, 3481;
-                params!(Jsonb, String) => JsonbGetString { stringify: true }, 3477;
+                params!(Jsonb, Int64) => JsonbGetInt64 { stringify: true }, 3481, Volatility::Immutable;
+                params!(Jsonb, String) => JsonbGetString { stringify: true }, 3477, Volatility::Immutable;
             },
             "@>" => Scalar {
-                params!(Jsonb, Jsonb) => JsonbContainsJsonb, 3246;
+                params!(Jsonb, Jsonb) => JsonbContainsJsonb, 3246, Volatility::Immutable;
                 params!(Jsonb, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs.call_binary(
                         rhs.call_unary(UnaryFunc::CastStringToJsonb),
                         JsonbContainsJsonb,
                     ))
-                }), oid::OP_CONTAINS_JSONB_STRING_OID;
+                }), oid::OP_CONTAINS_JSONB_STRING_OID, Volatility::Immutable;
                 params!(String, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(lhs.call_unary(UnaryFunc::CastStringToJsonb)
                           .call_binary(rhs, JsonbContainsJsonb))
-                }), oid::OP_CONTAINS_STRING_JSONB_OID;
-                params!(MapAny, MapAny) => MapContainsMap, oid::OP_CONTAINS_MAP_MAP_OID;
+                }), oid::OP_CONTAINS_STRING_JSONB_OID, Volatility::Immutable;
+                params!(MapAny, MapAny) => MapContainsMap, oid::OP_CONTAINS_MAP_MAP_OID, Volatility::Immutable;
             },
             "<@" => Scalar {
                 params!(Jsonb, Jsonb) =>  Operation::binary(|_ecx, lhs, rhs| {
@@ -2404,30 +2433,30 @@ lazy_static! {
                         lhs,
                         JsonbContainsJsonb
                     ))
-                }), 3246;
+                }), 3246, Volatility::Immutable;
                 params!(Jsonb, String) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(rhs.call_unary(UnaryFunc::CastStringToJsonb)
                           .call_binary(lhs, BinaryFunc::JsonbContainsJsonb))
-                }), oid::OP_CONTAINED_JSONB_STRING_OID;
+                }), oid::OP_CONTAINED_JSONB_STRING_OID, Volatility::Immutable;
                 params!(String, Jsonb) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(rhs.call_binary(
                         lhs.call_unary(UnaryFunc::CastStringToJsonb),
                         BinaryFunc::JsonbContainsJsonb,
                     ))
-                }), oid::OP_CONTAINED_STRING_JSONB_OID;
+                }), oid::OP_CONTAINED_STRING_JSONB_OID, Volatility::Immutable;
                 params!(MapAny, MapAny) => Operation::binary(|_ecx, lhs, rhs| {
                     Ok(rhs.call_binary(lhs, MapContainsMap))
-                }), oid::OP_CONTAINED_MAP_MAP_OID;
+                }), oid::OP_CONTAINED_MAP_MAP_OID, Volatility::Immutable;
             },
             "?" => Scalar {
-                params!(Jsonb, String) => JsonbContainsString, 3247;
-                params!(MapAny, String) => MapContainsKey, oid::OP_CONTAINS_KEY_MAP_OID;
+                params!(Jsonb, String) => JsonbContainsString, 3247, Volatility::Immutable;
+                params!(MapAny, String) => MapContainsKey, oid::OP_CONTAINS_KEY_MAP_OID, Volatility::Immutable;
             },
             "?&" => Scalar {
-                params!(MapAny, Plain(Array(Box::new(String)))) => MapContainsAllKeys, oid::OP_CONTAINS_ALL_KEYS_MAP_OID;
+                params!(MapAny, Plain(Array(Box::new(String)))) => MapContainsAllKeys, oid::OP_CONTAINS_ALL_KEYS_MAP_OID, Volatility::Immutable;
             },
             "?|" => Scalar {
-                params!(MapAny, Plain(Array(Box::new(String)))) => MapContainsAnyKeys, oid::OP_CONTAINS_ANY_KEYS_MAP_OID;
+                params!(MapAny, Plain(Array(Box::new(String)))) => MapContainsAnyKeys, oid::OP_CONTAINS_ANY_KEYS_MAP_OID, Volatility::Immutable;
             },
             // COMPARISON OPS
             // n.b. Decimal impls are separated from other types because they
@@ -2438,22 +2467,22 @@ lazy_static! {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Lt))
                     })
-                }, 1754;
-                params!(Bool, Bool) => BinaryFunc::Lt, 58;
-                params!(Int32, Int32) => BinaryFunc::Lt, 97;
-                params!(Int64, Int64) => BinaryFunc::Lt, 412;
-                params!(Float32, Float32) => BinaryFunc::Lt, 622;
-                params!(Float64, Float64) => BinaryFunc::Lt, 672;
-                params!(Oid, Oid) => BinaryFunc::Lt, 609;
-                params!(Date, Date) => BinaryFunc::Lt, 1095;
-                params!(Time, Time) => BinaryFunc::Lt, 1110;
-                params!(Timestamp, Timestamp) => BinaryFunc::Lt, 2062;
-                params!(TimestampTz, TimestampTz) => BinaryFunc::Lt, 1322;
-                params!(Uuid, Uuid) => BinaryFunc::Lt, 2974;
-                params!(Interval, Interval) => BinaryFunc::Lt, 1332;
-                params!(Bytes, Bytes) => BinaryFunc::Lt, 1957;
-                params!(String, String) => BinaryFunc::Lt, 664;
-                params!(Jsonb, Jsonb) => BinaryFunc::Lt, 3242;
+                }, 1754, Volatility::Immutable;
+                params!(Bool, Bool) => BinaryFunc::Lt, 58, Volatility::Immutable;
+                params!(Int32, Int32) => BinaryFunc::Lt, 97, Volatility::Immutable;
+                params!(Int64, Int64) => BinaryFunc::Lt, 412, Volatility::Immutable;
+                params!(Float32, Float32) => BinaryFunc::Lt, 622, Volatility::Immutable;
+                params!(Float64, Float64) => BinaryFunc::Lt, 672, Volatility::Immutable;
+                params!(Oid, Oid) => BinaryFunc::Lt, 609, Volatility::Immutable;
+                params!(Date, Date) => BinaryFunc::Lt, 1095, Volatility::Immutable;
+                params!(Time, Time) => BinaryFunc::Lt, 1110, Volatility::Immutable;
+                params!(Timestamp, Timestamp) => BinaryFunc::Lt, 2062, Volatility::Immutable;
+                params!(TimestampTz, TimestampTz) => BinaryFunc::Lt, 1322, Volatility::Immutable;
+                params!(Uuid, Uuid) => BinaryFunc::Lt, 2974, Volatility::Immutable;
+                params!(Interval, Interval) => BinaryFunc::Lt, 1332, Volatility::Immutable;
+                params!(Bytes, Bytes) => BinaryFunc::Lt, 1957, Volatility::Immutable;
+                params!(String, String) => BinaryFunc::Lt, 664, Volatility::Immutable;
+                params!(Jsonb, Jsonb) => BinaryFunc::Lt, 3242, Volatility::Immutable;
             },
             "<=" => Scalar {
                 params!(DecimalAny, DecimalAny) => {
@@ -2461,22 +2490,22 @@ lazy_static! {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Lte))
                     })
-                }, 1755;
-                params!(Bool, Bool) => BinaryFunc::Lte, 1694;
-                params!(Int32, Int32) => BinaryFunc::Lte, 523;
-                params!(Int64, Int64) => BinaryFunc::Lte, 414;
-                params!(Float32, Float32) => BinaryFunc::Lte, 624;
-                params!(Float64, Float64) => BinaryFunc::Lte, 673;
-                params!(Oid, Oid) => BinaryFunc::Lte, 611;
-                params!(Date, Date) => BinaryFunc::Lte, 1096;
-                params!(Time, Time) => BinaryFunc::Lte, 1111;
-                params!(Timestamp, Timestamp) => BinaryFunc::Lte, 2063;
-                params!(TimestampTz, TimestampTz) => BinaryFunc::Lte, 1323;
-                params!(Uuid, Uuid) => BinaryFunc::Lte, 2976;
-                params!(Interval, Interval) => BinaryFunc::Lte, 1333;
-                params!(Bytes, Bytes) => BinaryFunc::Lte, 1958;
-                params!(String, String) => BinaryFunc::Lte, 665;
-                params!(Jsonb, Jsonb) => BinaryFunc::Lte, 3244;
+                }, 1755, Volatility::Immutable;
+                params!(Bool, Bool) => BinaryFunc::Lte, 1694, Volatility::Immutable;
+                params!(Int32, Int32) => BinaryFunc::Lte, 523, Volatility::Immutable;
+                params!(Int64, Int64) => BinaryFunc::Lte, 414, Volatility::Immutable;
+                params!(Float32, Float32) => BinaryFunc::Lte, 624, Volatility::Immutable;
+                params!(Float64, Float64) => BinaryFunc::Lte, 673, Volatility::Immutable;
+                params!(Oid, Oid) => BinaryFunc::Lte, 611, Volatility::Immutable;
+                params!(Date, Date) => BinaryFunc::Lte, 1096, Volatility::Immutable;
+                params!(Time, Time) => BinaryFunc::Lte, 1111, Volatility::Immutable;
+                params!(Timestamp, Timestamp) => BinaryFunc::Lte, 2063, Volatility::Immutable;
+                params!(TimestampTz, TimestampTz) => BinaryFunc::Lte, 1323, Volatility::Immutable;
+                params!(Uuid, Uuid) => BinaryFunc::Lte, 2976, Volatility::Immutable;
+                params!(Interval, Interval) => BinaryFunc::Lte, 1333, Volatility::Immutable;
+                params!(Bytes, Bytes) => BinaryFunc::Lte, 1958, Volatility::Immutable;
+                params!(String, String) => BinaryFunc::Lte, 665, Volatility::Immutable;
+                params!(Jsonb, Jsonb) => BinaryFunc::Lte, 3244, Volatility::Immutable;
             },
             ">" => Scalar {
                 params!(DecimalAny, DecimalAny) => {
@@ -2484,22 +2513,22 @@ lazy_static! {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Gt))
                     })
-                }, 1756;
-                params!(Bool, Bool) => BinaryFunc::Gt, 59;
-                params!(Int32, Int32) => BinaryFunc::Gt, 521;
-                params!(Int64, Int64) => BinaryFunc::Gt, 413;
-                params!(Float32, Float32) => BinaryFunc::Gt, 623;
-                params!(Float64, Float64) => BinaryFunc::Gt, 674;
-                params!(Oid, Oid) => BinaryFunc::Gt, 610;
-                params!(Date, Date) => BinaryFunc::Gt, 1097;
-                params!(Time, Time) => BinaryFunc::Gt, 1112;
-                params!(Timestamp, Timestamp) => BinaryFunc::Gt, 2064;
-                params!(TimestampTz, TimestampTz) => BinaryFunc::Gt, 1324;
-                params!(Uuid, Uuid) => BinaryFunc::Gt, 2975;
-                params!(Interval, Interval) => BinaryFunc::Gt, 1334;
-                params!(Bytes, Bytes) => BinaryFunc::Gt, 1959;
-                params!(String, String) => BinaryFunc::Gt, 666;
-                params!(Jsonb, Jsonb) => BinaryFunc::Gt, 3243;
+                }, 1756, Volatility::Immutable;
+                params!(Bool, Bool) => BinaryFunc::Gt, 59, Volatility::Immutable;
+                params!(Int32, Int32) => BinaryFunc::Gt, 521, Volatility::Immutable;
+                params!(Int64, Int64) => BinaryFunc::Gt, 413, Volatility::Immutable;
+                params!(Float32, Float32) => BinaryFunc::Gt, 623, Volatility::Immutable;
+                params!(Float64, Float64) => BinaryFunc::Gt, 674, Volatility::Immutable;
+                params!(Oid, Oid) => BinaryFunc::Gt, 610, Volatility::Immutable;
+                params!(Date, Date) => BinaryFunc::Gt, 1097, Volatility::Immutable;
+                params!(Time, Time) => BinaryFunc::Gt, 1112, Volatility::Immutable;
+                params!(Timestamp, Timestamp) => BinaryFunc::Gt, 2064, Volatility::Immutable;
+                params!(TimestampTz, TimestampTz) => BinaryFunc::Gt, 1324, Volatility::Immutable;
+                params!(Uuid, Uuid) => BinaryFunc::Gt, 2975, Volatility::Immutable;
+                params!(Interval, Interval) => BinaryFunc::Gt, 1334, Volatility::Immutable;
+                params!(Bytes, Bytes) => BinaryFunc::Gt, 1959, Volatility::Immutable;
+                params!(String, String) => BinaryFunc::Gt, 666, Volatility::Immutable;
+                params!(Jsonb, Jsonb) => BinaryFunc::Gt, 3243, Volatility::Immutable;
             },
             ">=" => Scalar {
                 params!(DecimalAny, DecimalAny) => {
@@ -2507,22 +2536,22 @@ lazy_static! {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Gte))
                     })
-                }, 1757;
-                params!(Bool, Bool) => BinaryFunc::Gte, 1695;
-                params!(Int32, Int32) => BinaryFunc::Gte, 525;
-                params!(Int64, Int64) => BinaryFunc::Gte, 415;
-                params!(Float32, Float32) => BinaryFunc::Gte, 625;
-                params!(Float64, Float64) => BinaryFunc::Gte, 675;
-                params!(Oid, Oid) => BinaryFunc::Gte, 612;
-                params!(Date, Date) => BinaryFunc::Gte, 1098;
-                params!(Time, Time) => BinaryFunc::Gte, 1113;
-                params!(Timestamp, Timestamp) => BinaryFunc::Gte, 2065;
-                params!(TimestampTz, TimestampTz) => BinaryFunc::Gte, 1325;
-                params!(Uuid, Uuid) => BinaryFunc::Gte, 2977;
-                params!(Interval, Interval) => BinaryFunc::Gte, 1335;
-                params!(Bytes, Bytes) => BinaryFunc::Gte, 1960;
-                params!(String, String) => BinaryFunc::Gte, 667;
-                params!(Jsonb, Jsonb) => BinaryFunc::Gte, 3245;
+                }, 1757, Volatility::Immutable;
+                params!(Bool, Bool) => BinaryFunc::Gte, 1695, Volatility::Immutable;
+                params!(Int32, Int32) => BinaryFunc::Gte, 525, Volatility::Immutable;
+                params!(Int64, Int64) => BinaryFunc::Gte, 415, Volatility::Immutable;
+                params!(Float32, Float32) => BinaryFunc::Gte, 625, Volatility::Immutable;
+                params!(Float64, Float64) => BinaryFunc::Gte, 675, Volatility::Immutable;
+                params!(Oid, Oid) => BinaryFunc::Gte, 612, Volatility::Immutable;
+                params!(Date, Date) => BinaryFunc::Gte, 1098, Volatility::Immutable;
+                params!(Time, Time) => BinaryFunc::Gte, 1113, Volatility::Immutable;
+                params!(Timestamp, Timestamp) => BinaryFunc::Gte, 2065, Volatility::Immutable;
+                params!(TimestampTz, TimestampTz) => BinaryFunc::Gte, 1325, Volatility::Immutable;
+                params!(Uuid, Uuid) => BinaryFunc::Gte, 2977, Volatility::Immutable;
+                params!(Interval, Interval) => BinaryFunc::Gte, 1335, Volatility::Immutable;
+                params!(Bytes, Bytes) => BinaryFunc::Gte, 1960, Volatility::Immutable;
+                params!(String, String) => BinaryFunc::Gte, 667, Volatility::Immutable;
+                params!(Jsonb, Jsonb) => BinaryFunc::Gte, 3245, Volatility::Immutable;
             },
             "=" => Scalar {
                 params!(DecimalAny, DecimalAny) => {
@@ -2530,23 +2559,23 @@ lazy_static! {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Eq))
                     })
-                }, 1752;
-                params!(Bool, Bool) => BinaryFunc::Eq, 91;
-                params!(Int32, Int32) => BinaryFunc::Eq, 96;
-                params!(Int64, Int64) => BinaryFunc::Eq, 410;
-                params!(Float32, Float32) => BinaryFunc::Eq, 620;
-                params!(Float64, Float64) => BinaryFunc::Eq, 670;
-                params!(Oid, Oid) => BinaryFunc::Eq, 607;
-                params!(Date, Date) => BinaryFunc::Eq, 1093;
-                params!(Time, Time) => BinaryFunc::Eq, 1108;
-                params!(Timestamp, Timestamp) => BinaryFunc::Eq, 2060;
-                params!(TimestampTz, TimestampTz) => BinaryFunc::Eq, 1320;
-                params!(Uuid, Uuid) => BinaryFunc::Eq, 2972;
-                params!(Interval, Interval) => BinaryFunc::Eq, 1330;
-                params!(Bytes, Bytes) => BinaryFunc::Eq, 1955;
-                params!(String, String) => BinaryFunc::Eq, 98;
-                params!(Jsonb, Jsonb) => BinaryFunc::Eq, 3240;
-                params!(ListAny, ListAny) => BinaryFunc::Eq, oid::FUNC_LIST_EQ_OID;
+                }, 1752, Volatility::Immutable;
+                params!(Bool, Bool) => BinaryFunc::Eq, 91, Volatility::Immutable;
+                params!(Int32, Int32) => BinaryFunc::Eq, 96, Volatility::Immutable;
+                params!(Int64, Int64) => BinaryFunc::Eq, 410, Volatility::Immutable;
+                params!(Float32, Float32) => BinaryFunc::Eq, 620, Volatility::Immutable;
+                params!(Float64, Float64) => BinaryFunc::Eq, 670, Volatility::Immutable;
+                params!(Oid, Oid) => BinaryFunc::Eq, 607, Volatility::Immutable;
+                params!(Date, Date) => BinaryFunc::Eq, 1093, Volatility::Immutable;
+                params!(Time, Time) => BinaryFunc::Eq, 1108, Volatility::Immutable;
+                params!(Timestamp, Timestamp) => BinaryFunc::Eq, 2060, Volatility::Immutable;
+                params!(TimestampTz, TimestampTz) => BinaryFunc::Eq, 1320, Volatility::Immutable;
+                params!(Uuid, Uuid) => BinaryFunc::Eq, 2972, Volatility::Immutable;
+                params!(Interval, Interval) => BinaryFunc::Eq, 1330, Volatility::Immutable;
+                params!(Bytes, Bytes) => BinaryFunc::Eq, 1955, Volatility::Immutable;
+                params!(String, String) => BinaryFunc::Eq, 98, Volatility::Immutable;
+                params!(Jsonb, Jsonb) => BinaryFunc::Eq, 3240, Volatility::Immutable;
+                params!(ListAny, ListAny) => BinaryFunc::Eq, oid::FUNC_LIST_EQ_OID, Volatility::Immutable;
             },
             "<>" => Scalar {
                 params!(DecimalAny, DecimalAny) => {
@@ -2554,22 +2583,22 @@ lazy_static! {
                         let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::NotEq))
                     })
-                }, 1753;
-                params!(Bool, Bool) => BinaryFunc::NotEq, 85;
-                params!(Int32, Int32) => BinaryFunc::NotEq, 518;
-                params!(Int64, Int64) => BinaryFunc::NotEq, 411;
-                params!(Float32, Float32) => BinaryFunc::NotEq, 621;
-                params!(Float64, Float64) => BinaryFunc::NotEq, 671;
-                params!(Oid, Oid) => BinaryFunc::NotEq, 608;
-                params!(Date, Date) => BinaryFunc::NotEq, 1094;
-                params!(Time, Time) => BinaryFunc::NotEq, 1109;
-                params!(Timestamp, Timestamp) => BinaryFunc::NotEq, 2061;
-                params!(TimestampTz, TimestampTz) => BinaryFunc::NotEq, 1321;
-                params!(Uuid, Uuid) => BinaryFunc::NotEq, 2973;
-                params!(Interval, Interval) => BinaryFunc::NotEq, 1331;
-                params!(Bytes, Bytes) => BinaryFunc::NotEq, 1956;
-                params!(String, String) => BinaryFunc::NotEq, 531;
-                params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241;
+                }, 1753, Volatility::Immutable;
+                params!(Bool, Bool) => BinaryFunc::NotEq, 85, Volatility::Immutable;
+                params!(Int32, Int32) => BinaryFunc::NotEq, 518, Volatility::Immutable;
+                params!(Int64, Int64) => BinaryFunc::NotEq, 411, Volatility::Immutable;
+                params!(Float32, Float32) => BinaryFunc::NotEq, 621, Volatility::Immutable;
+                params!(Float64, Float64) => BinaryFunc::NotEq, 671, Volatility::Immutable;
+                params!(Oid, Oid) => BinaryFunc::NotEq, 608, Volatility::Immutable;
+                params!(Date, Date) => BinaryFunc::NotEq, 1094, Volatility::Immutable;
+                params!(Time, Time) => BinaryFunc::NotEq, 1109, Volatility::Immutable;
+                params!(Timestamp, Timestamp) => BinaryFunc::NotEq, 2061, Volatility::Immutable;
+                params!(TimestampTz, TimestampTz) => BinaryFunc::NotEq, 1321, Volatility::Immutable;
+                params!(Uuid, Uuid) => BinaryFunc::NotEq, 2973, Volatility::Immutable;
+                params!(Interval, Interval) => BinaryFunc::NotEq, 1331, Volatility::Immutable;
+                params!(Bytes, Bytes) => BinaryFunc::NotEq, 1956, Volatility::Immutable;
+                params!(String, String) => BinaryFunc::NotEq, 531, Volatility::Immutable;
+                params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241, Volatility::Immutable;
             }
         }
     };
