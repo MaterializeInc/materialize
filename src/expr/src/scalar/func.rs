@@ -1076,7 +1076,7 @@ fn sub_timestamptz<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
 }
 
 fn sub_date<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    Datum::from(a.unwrap_date() - b.unwrap_date())
+    Datum::from((a.unwrap_date() - b.unwrap_date()).num_days() as i32)
 }
 
 fn sub_time<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
@@ -2570,9 +2570,13 @@ impl BinaryFunc {
             ToCharTimestamp | ToCharTimestampTz | ConvertFrom | Right | Trim | TrimLeading
             | TrimTrailing => ScalarType::String.nullable(in_nullable),
 
-            AddInt32 | SubInt32 | MulInt32 | DivInt32 | ModInt32 | EncodedBytesCharLength => {
-                ScalarType::Int32.nullable(in_nullable || is_div_mod)
-            }
+            AddInt32
+            | SubInt32
+            | MulInt32
+            | DivInt32
+            | ModInt32
+            | EncodedBytesCharLength
+            | SubDate => ScalarType::Int32.nullable(in_nullable || is_div_mod),
 
             AddInt64 | SubInt64 | MulInt64 | DivInt64 | ModInt64 => {
                 ScalarType::Int64.nullable(in_nullable || is_div_mod)
@@ -2586,7 +2590,7 @@ impl BinaryFunc {
                 ScalarType::Float64.nullable(in_nullable || is_div_mod)
             }
 
-            AddInterval | SubInterval | SubTimestamp | SubTimestampTz | SubDate | MulInterval
+            AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
             AddNumeric | DivNumeric => ScalarType::Numeric { scale: None }.nullable(in_nullable),
