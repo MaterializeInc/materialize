@@ -155,4 +155,5 @@ Arrangements house materialized sources and views, but also many internal operat
 * [Joins in Materialize](https://materialize.com/joins-in-materialize/)
 * [Diagnosing Using SQL](/ops/diagnosing-using-sql/)
 * [Deployment](/ops/deployment/)
-*
+* [original paper]()
+* [Differential Dataflow]()
