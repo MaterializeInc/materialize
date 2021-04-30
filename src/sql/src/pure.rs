@@ -57,14 +57,14 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 
         let mut file = None;
         match connector {
-            Connector::Kafka { broker, .. } => {
+            Connector::Kafka { broker, topic, .. } => {
                 if !broker.contains(':') {
                     *broker += ":9092";
                 }
 
                 // Verify that the provided security options are valid and then test them.
                 config_options = kafka_util::extract_config(&mut with_options_map)?;
-                kafka_util::test_config(&broker, &config_options).await?;
+                kafka_util::test_config(&broker, &topic, &config_options).await?;
             }
             Connector::AvroOcf { path, .. } => {
                 let path = path.clone();
