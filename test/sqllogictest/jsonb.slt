@@ -1208,7 +1208,7 @@ SELECT jsonb_build_object('a',2,'b',4)
 query T
 SELECT jsonb_build_object(true,'val',1,0,1.3,2,date '2019-02-03' - date '2019-01-01',4)
 ----
-{"1":0,"1.3":2,"33 days":4,"true":"val"}
+{"1":0,"1.3":2,"33":4,"true":"val"}
 
 query T
 SELECT jsonb_build_object('a',1,'b',1.2::float,'c',true,'d',null,'e','{"x":3,"y":[1,2,3]}'::JSONB)
