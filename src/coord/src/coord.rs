@@ -1182,24 +1182,27 @@ impl Coordinator {
                 depends_on,
             } => tx.send(
                 self.sequence_create_table(
+                    &mut session,
                     pcx,
                     name,
                     table,
                     if_not_exists,
                     depends_on,
-                    session.conn_id(),
                 )
                 .await,
                 session,
             ),
 
-            Plan::CreateSource(source) => {
-                tx.send(self.sequence_create_source(pcx, source).await, session)
-            }
+            Plan::CreateSource(source) => tx.send(
+                self.sequence_create_source(&mut session, pcx, source).await,
+                session,
+            ),
 
-            Plan::CreateSources { sources } => {
-                tx.send(self.sequence_create_sources(pcx, sources).await, session)
-            }
+            Plan::CreateSources { sources } => tx.send(
+                self.sequence_create_sources(&mut session, pcx, sources)
+                    .await,
+                session,
+            ),
 
             Plan::CreateSink {
                 name,
@@ -1230,11 +1233,11 @@ impl Coordinator {
                 depends_on,
             } => tx.send(
                 self.sequence_create_view(
+                    &mut session,
                     pcx,
                     name,
                     view,
                     replace,
-                    session.conn_id(),
                     materialize,
                     if_not_exists,
                     depends_on,
@@ -1510,14 +1513,18 @@ impl Coordinator {
 
     async fn sequence_create_table(
         &mut self,
+        session: &mut Session,
         pcx: PlanContext,
         name: FullName,
         table: sql::plan::Table,
         if_not_exists: bool,
         depends_on: Vec<GlobalId>,
-        conn_id: u32,
     ) -> Result<ExecuteResponse, CoordError> {
-        let conn_id = if table.temporary { Some(conn_id) } else { None };
+        let conn_id = if table.temporary {
+            Some(session.conn_id())
+        } else {
+            None
+        };
         let table_id = self.catalog.allocate_id()?;
         let mut index_depends_on = depends_on.clone();
         index_depends_on.push(table_id);
@@ -1532,6 +1539,10 @@ impl Coordinator {
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
         index_name.item += "_primary_idx";
+        index_name = self
+            .catalog
+            .for_session(session)
+            .find_available_name(index_name);
         let index = auto_generate_primary_idx(
             index_name.item.clone(),
             name.clone(),
@@ -1574,10 +1585,11 @@ impl Coordinator {
 
     async fn sequence_create_source(
         &mut self,
+        session: &mut Session,
         pcx: PlanContext,
         plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let (metadata, ops) = self.generate_create_source_ops(pcx, vec![plan.clone()])?;
+        let (metadata, ops) = self.generate_create_source_ops(session, pcx, vec![plan.clone()])?;
         match self.catalog_transact(ops).await {
             Ok(()) => {
                 self.ship_sources(metadata).await?;
@@ -1590,10 +1602,11 @@ impl Coordinator {
 
     async fn sequence_create_sources(
         &mut self,
+        session: &mut Session,
         pcx: PlanContext,
         sources: Vec<CreateSourcePlan>,
     ) -> Result<ExecuteResponse, CoordError> {
-        let (metadata, ops) = self.generate_create_source_ops(pcx, sources)?;
+        let (metadata, ops) = self.generate_create_source_ops(session, pcx, sources)?;
         match self.catalog_transact(ops).await {
             Ok(()) => {
                 self.ship_sources(metadata).await?;
@@ -1620,6 +1633,7 @@ impl Coordinator {
 
     fn generate_create_source_ops(
         &mut self,
+        session: &mut Session,
         pcx: PlanContext,
         plans: Vec<CreateSourcePlan>,
     ) -> Result<(Vec<(GlobalId, Option<GlobalId>, bool)>, Vec<catalog::Op>), CoordError> {
@@ -1655,6 +1669,10 @@ impl Coordinator {
             let index_id = if materialized {
                 let mut index_name = name.clone();
                 index_name.item += "_primary_idx";
+                index_name = self
+                    .catalog
+                    .for_session(session)
+                    .find_available_name(index_name);
                 let index = auto_generate_primary_idx(
                     index_name.item.clone(),
                     name,
@@ -1760,11 +1778,11 @@ impl Coordinator {
     #[allow(clippy::too_many_arguments)]
     async fn sequence_create_view(
         &mut self,
+        session: &mut Session,
         pcx: PlanContext,
         name: FullName,
         view: sql::plan::View,
         replace: Option<GlobalId>,
-        conn_id: u32,
         materialize: bool,
         if_not_exists: bool,
         depends_on: Vec<GlobalId>,
@@ -1783,7 +1801,11 @@ impl Coordinator {
             plan_cx: pcx,
             optimized_expr,
             desc,
-            conn_id: if view.temporary { Some(conn_id) } else { None },
+            conn_id: if view.temporary {
+                Some(session.conn_id())
+            } else {
+                None
+            },
             depends_on,
         };
         ops.push(catalog::Op::CreateItem {
@@ -1795,6 +1817,10 @@ impl Coordinator {
         let index_id = if materialize {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
+            index_name = self
+                .catalog
+                .for_session(session)
+                .find_available_name(index_name);
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 name,
