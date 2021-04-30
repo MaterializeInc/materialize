@@ -55,6 +55,8 @@ Field                | Value type | Description
 `partition_count`    | `int`      | Set the sink Kafka topic's partition count. This defaults to -1 (use the broker default).
 `replication_factor` | `int`      | Set the sink Kafka topic's replication factor. This defaults to -1 (use the broker default).
 `consistency`        | `boolean`  | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. This defaults to false.
+`security_protocol` | `text` | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberos-with-options), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
+`acks` | `text`| Sets the number of kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
 
 #### SSL `WITH` options
 
@@ -76,14 +78,14 @@ For more detail, see [Kerberized Kafka details](/sql/create-source/avro-kafka/#k
 
 Field | Value | Description
 ------|-------|------------
-`sasl_mechanism` | `text` | The authentication method used for SASL connections. Required if `security_protocol` is `sasl_plain` or `sasl_ssl`. Supported mechanisms are `gssapi`, `plain`, `scram-sha-256`, `scram-sha-512`, `oauthbearer`.
-`sasl_username` | `text` | Your SASL username. Required if `sasl_mechanism` is `plain`, `scram-sha-256`, or `scram-sha-512`.
-`sasl_password` | `text` | Your SASL password. Required if `sasl_mechanism` is `plain`, `scram-sha-256`, or `scram-sha-512`.
-`sasl_kerberos_keytab` | `text` | The absolute path to your keytab. Required if `sasl_mechanism` is `gssapi`.
-`sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket. Required if `sasl_mechanism` is `gssapi`.
-`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0. Required if `sasl_mechanism` is `gssapi`.
-`sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required if `sasl_mechanism` is `gssapi`.
-`sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`. Required if `sasl_mechanism` is `gssapi`.
+`sasl_mechanisms` | `text` | The SASL mechanism to use for authentication. Currently, the only supported mechanisms are `GSSAPI` (the default) and `PLAIN`.
+`sasl_username` | `text` | Required if `sasl_mechanisms` is `PLAIN`.
+`sasl_password` | `text` | Required if `sasl_mechanisms` is `PLAIN`.
+`sasl_kerberos_keytab` | `text` | The absolute path to your keytab. Required if `sasl_mechanisms` is `GSSAPI`.
+`sasl_kerberos_kinit_cmd` | `text` | Shell command to refresh or acquire the client's Kerberos ticket. Required if `sasl_mechanisms` is `GSSAPI`.
+`sasl_kerberos_min_time_before_relogin` | `text` | Minimum time in milliseconds between key refresh attempts. Disable automatic key refresh by setting this property to 0. Required if `sasl_mechanisms` is `GSSAPI`.
+`sasl_kerberos_principal` | `text` | Materialize Kerberos principal name. Required if `sasl_mechanisms` is `GSSAPI`.
+`sasl_kerberos_service_name` | `text` | Kafka's service name on its host, i.e. the service principal name not including `/hostname@REALM`. Required if `sasl_mechanisms` is `GSSAPI`.
 
 ### `WITH SNAPSHOT` or `WITHOUT SNAPSHOT`
 
