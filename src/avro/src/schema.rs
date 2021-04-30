@@ -908,13 +908,10 @@ impl SchemaParser {
                     }
                 }
             }),
-            Some(&Value::Object(ref data)) => match data.get("type") {
-                Some(ref value) => self.parse_inner(default_namespace, value),
-                None => Err(
-                    ParseSchemaError::new(format!("Unknown complex type: {:?}", complex)).into(),
-                ),
-            },
-            _ => Err(ParseSchemaError::new("No `type` in complex type").into()),
+            Some(&Value::Object(ref data)) => self.parse_complex(default_namespace, data),
+            _ => Err(
+                ParseSchemaError::new(format!("No `type` in complex type {:?}", complex)).into(),
+            ),
         }
     }
 
@@ -2252,6 +2249,26 @@ mod tests {
                     position: 1,
                 },
             ],
+            lookup,
+        };
+
+        check_schema(schema, expected);
+    }
+
+    #[test]
+    fn test_nested_record_schema() {
+        let schema = r#"
+                {
+                    "name" : "test",
+                    "type" : {"type": "record", "name": "inner", "fields": []}
+                }
+        "#;
+
+        let lookup = HashMap::new();
+
+        let expected = SchemaPiece::Record {
+            doc: None,
+            fields: vec![],
             lookup,
         };
 
