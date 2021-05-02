@@ -817,8 +817,11 @@ impl Coordinator {
                         }
 
                         let internal_cmd_tx = self.internal_cmd_tx.clone();
+
+                        let catalog = Arc::clone(&self.catalog);
                         tokio::spawn(async move {
-                            let result = sql::pure::purify(stmt).await.map_err(|e| e.into());
+                            let proxy = Catalog::proxy_for_session(catalog, &session);
+                            let result = sql::pure::purify(proxy, stmt).await.map_err(|e| e.into());
                             internal_cmd_tx
                                 .send(Message::StatementReady(StatementReady {
                                     session,

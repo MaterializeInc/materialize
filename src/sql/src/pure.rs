@@ -30,6 +30,7 @@ use sql_parser::ast::{
 };
 use sql_parser::parser::parse_columns;
 
+use crate::catalog::CatalogProxy;
 use crate::kafka_util;
 use crate::normalize;
 
@@ -42,7 +43,10 @@ use crate::normalize;
 /// time to complete. As a result purification does *not* have access to a
 /// [`Catalog`](crate::catalog::Catalog), as that would require locking access
 /// to the catalog for an unbounded amount of time.
-pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::Error> {
+pub async fn purify<C: CatalogProxy>(
+    _catalog: C,
+    mut stmt: Statement<Raw>,
+) -> Result<Statement<Raw>, anyhow::Error> {
     if let Statement::CreateSource(CreateSourceStatement {
         col_names,
         connector,

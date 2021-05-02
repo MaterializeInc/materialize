@@ -318,7 +318,7 @@ pub enum PortalState {
 }
 
 /// A stream of batched rows.
-pub type RowBatchStream = Box<dyn Stream<Item = Vec<Row>> + Send + Unpin>;
+pub type RowBatchStream = Box<dyn Stream<Item = Vec<Row>> + Send + Sync + Unpin>;
 
 /// The transaction status of a session.
 ///

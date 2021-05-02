@@ -443,3 +443,13 @@ impl ExprHumanizer for DummyCatalog {
         DummyHumanizer.humanize_column_type(ty)
     }
 }
+
+/// A catalog proxy allows access to a catalog implementation only through a closure that is given a
+/// reference to the catalog. Its API is designed to ensure that references to catalog objects never
+/// escape the passed closure and therefore cannot be held across await points in async contexts.
+pub trait CatalogProxy {
+    /// Runs the given closure with the catalog
+    fn with<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&dyn Catalog) -> R;
+}

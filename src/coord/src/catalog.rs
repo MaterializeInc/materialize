@@ -120,6 +120,22 @@ impl ConnCatalog<'_> {
     }
 }
 
+pub struct ConnCatalogProxy<'a> {
+    catalog: Arc<Mutex<Catalog>>,
+    session: &'a Session,
+}
+
+impl sql::catalog::CatalogProxy for ConnCatalogProxy<'_> {
+    fn with<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&dyn SqlCatalog) -> R,
+    {
+        let catalog = self.catalog.lock().unwrap();
+        let catalog = catalog.for_session(&self.session);
+        f(&catalog)
+    }
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct Database {
     pub name: String,
@@ -826,6 +842,13 @@ impl Catalog {
             timestamp_frequency: Duration::from_secs(1),
         })?;
         Ok(catalog)
+    }
+
+    pub fn proxy_for_session<'a>(
+        catalog: Arc<Mutex<Self>>,
+        session: &'a Session,
+    ) -> ConnCatalogProxy<'a> {
+        ConnCatalogProxy { catalog, session }
     }
 
     pub fn for_session(&self, session: &Session) -> ConnCatalog {
