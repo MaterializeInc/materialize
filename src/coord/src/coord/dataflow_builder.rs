@@ -20,7 +20,7 @@ use super::*;
 
 /// Borrows of catalog and indexes sufficient to build dataflow descriptions.
 pub struct DataflowBuilder<'a> {
-    catalog: &'a Catalog,
+    catalog: &'a Mutex<Catalog>,
     indexes: &'a ArrangementFrontiers<Timestamp>,
     transient_id_counter: &'a mut u64,
 }
@@ -45,9 +45,10 @@ impl<'a> DataflowBuilder<'a> {
             return;
         }
 
+        let catalog = self.catalog.lock().unwrap();
         // A valid index is any index on `id` that is known to the dataflow
         // layer, as indicated by its presence in `self.indexes`.
-        let valid_index = self.catalog.indexes()[id]
+        let valid_index = catalog.indexes()[id]
             .iter()
             .find(|(id, _keys)| self.indexes.contains_key(*id));
         if let Some((index_id, keys)) = valid_index {
@@ -55,8 +56,7 @@ impl<'a> DataflowBuilder<'a> {
                 on_id: *id,
                 keys: keys.to_vec(),
             };
-            let desc = self
-                .catalog
+            let desc = catalog
                 .get_by_id(id)
                 .desc()
                 .expect("indexes can only be built on items with descs");
@@ -68,7 +68,7 @@ impl<'a> DataflowBuilder<'a> {
             *self.transient_id_counter = transient_id
                 .checked_add(1)
                 .expect("id counter overflows i64");
-            match self.catalog.get_by_id(id).item() {
+            match catalog.get_by_id(id).item() {
                 CatalogItem::Table(table) => {
                     dataflow.add_source_import(
                         *id,
@@ -81,13 +81,12 @@ impl<'a> DataflowBuilder<'a> {
                     // If Materialize has caching enabled, check to see if the source has any
                     // already cached data that can be reused, and if so, augment the source
                     // connector to use that data before importing it into the dataflow.
-                    let connector = if let Some(path) =
-                        self.catalog.config().cache_directory.as_deref()
+                    let connector = if let Some(path) = catalog.config().cache_directory.as_deref()
                     {
                         match crate::cache::augment_connector(
                             source.connector.clone(),
                             &path,
-                            self.catalog.config().cluster_id,
+                            catalog.config().cluster_id,
                             *id,
                         ) {
                             Ok(Some(connector)) => Some(connector),
@@ -169,7 +168,8 @@ impl<'a> DataflowBuilder<'a> {
                         // If the arrangement exists, import it. It may not exist, in which
                         // case we should import the source to be sure that we have access
                         // to the collection to arrange it ourselves.
-                        let indexes = &self.catalog.indexes()[on_id];
+                        let catalog = self.catalog.lock().unwrap();
+                        let indexes = &catalog.indexes()[on_id];
                         if let Some((id, _)) = indexes.iter().find(|(_id, keys)| keys == key_set) {
                             dataflow.add_index_import(*id, index_desc, typ.clone(), *view_id);
                         }
@@ -182,12 +182,13 @@ impl<'a> DataflowBuilder<'a> {
 
     /// Builds a dataflow description for the index with the specified ID.
     pub fn build_index_dataflow(&mut self, id: GlobalId) -> DataflowDesc {
-        let index_entry = self.catalog.get_by_id(&id);
+        let catalog = self.catalog.lock().unwrap();
+        let index_entry = catalog.get_by_id(&id);
         let index = match index_entry.item() {
             CatalogItem::Index(index) => index,
             _ => unreachable!("cannot create index dataflow on non-index"),
         };
-        let on_entry = self.catalog.get_by_id(&index.on);
+        let on_entry = catalog.get_by_id(&index.on);
         let on_type = on_entry.desc().unwrap().typ().clone();
         let mut dataflow = DataflowDesc::new(index_entry.name().to_string());
         let on_id = index.on;
@@ -212,7 +213,8 @@ impl<'a> DataflowBuilder<'a> {
         let mut dataflow = DataflowDesc::new(name);
         dataflow.set_as_of(as_of.frontier.clone());
         self.import_into_dataflow(&from, &mut dataflow);
-        let from_type = self.catalog.get_by_id(&from).desc().unwrap().clone();
+        let catalog = self.catalog.lock().unwrap();
+        let from_type = catalog.get_by_id(&from).desc().unwrap().clone();
         dataflow.add_sink_export(id, from, from_type, connector, envelope, as_of);
         dataflow
     }

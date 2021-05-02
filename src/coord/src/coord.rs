@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::mem;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -164,7 +164,7 @@ pub struct Coordinator {
     worker_guards: WorkerGuards<()>,
     worker_txs: Vec<crossbeam_channel::Sender<SequencedCommand>>,
     optimizer: Optimizer,
-    catalog: Catalog,
+    catalog: Arc<Mutex<Catalog>>,
     symbiosis: Option<symbiosis::Postgres>,
     /// Maps (global Id of arrangement) -> (frontier information)
     indexes: ArrangementFrontiers<Timestamp>,
@@ -271,7 +271,7 @@ impl Coordinator {
         &mut self,
         builtin_table_updates: Vec<BuiltinTableUpdate>,
     ) -> Result<(), CoordError> {
-        let entries: Vec<_> = self.catalog.entries().cloned().collect();
+        let entries: Vec<_> = self.catalog.lock().unwrap().entries().cloned().collect();
 
         // Sources and indexes may be depended upon by other catalog items,
         // insert them first.
@@ -569,7 +569,7 @@ impl Coordinator {
                 // connector, which means there is external state (like
                 // a Kafka topic) that's been created on our behalf. If
                 // we fail now, we'll leak that external state.
-                if self.catalog.try_get_by_id(id).is_some() {
+                if self.catalog.lock().unwrap().try_get_by_id(id).is_some() {
                     // TODO(benesch): this `expect` here is possibly scary, but
                     // no better solution presents itself. Possibly sinks should
                     // have an error bit, and an error here would set the error
@@ -617,7 +617,12 @@ impl Coordinator {
                 cancel_tx,
                 tx,
             } => {
-                if let Err(e) = self.catalog.create_temporary_schema(session.conn_id()) {
+                if let Err(e) = self
+                    .catalog
+                    .lock()
+                    .unwrap()
+                    .create_temporary_schema(session.conn_id())
+                {
                     let _ = tx.send(Response {
                         result: Err(e.into()),
                         session,
@@ -625,7 +630,8 @@ impl Coordinator {
                     return;
                 }
 
-                let catalog = self.catalog.for_session(&session);
+                let catalog = self.catalog.lock().unwrap();
+                let catalog = catalog.for_session(&session);
                 if catalog.resolve_role(session.user()).is_err() {
                     let _ = tx.send(Response {
                         result: Err(CoordError::UnknownLoginRole(session.user().into())),
@@ -800,7 +806,7 @@ impl Coordinator {
                             },
                         }
 
-                        if self.catalog.config().safe_mode {
+                        if self.catalog.lock().unwrap().config().safe_mode {
                             if let Err(e) = check_statement_safety(&stmt) {
                                 let _ = tx.send(Response {
                                     result: Err(e),
@@ -866,7 +872,7 @@ impl Coordinator {
                 // require superuser permissions.
 
                 let _ = tx.send(Response {
-                    result: Ok(self.catalog.dump()),
+                    result: Ok(self.catalog.lock().unwrap().dump()),
                     session,
                 });
             }
@@ -989,7 +995,11 @@ impl Coordinator {
         {
             if let Some(ref mut postgres) = self.symbiosis {
                 let plan = postgres
-                    .execute(&pcx, &self.catalog.for_session(session), &stmt)
+                    .execute(
+                        &pcx,
+                        &self.catalog.lock().unwrap().for_session(session),
+                        &stmt,
+                    )
                     .await?;
                 return Ok((pcx, plan));
             }
@@ -997,7 +1007,7 @@ impl Coordinator {
 
         match sql::plan::plan(
             &pcx,
-            &self.catalog.for_session(session),
+            &self.catalog.lock().unwrap().for_session(session),
             stmt.clone(),
             params,
         ) {
@@ -1005,7 +1015,11 @@ impl Coordinator {
             Err(err) => match self.symbiosis {
                 Some(ref mut postgres) if postgres.can_handle(&stmt) => {
                     let plan = postgres
-                        .execute(&pcx, &self.catalog.for_session(session), &stmt)
+                        .execute(
+                            &pcx,
+                            &self.catalog.lock().unwrap().for_session(session),
+                            &stmt,
+                        )
                         .await?;
                     Ok((pcx, plan))
                 }
@@ -1024,7 +1038,7 @@ impl Coordinator {
         // handle_describe cares about symbiosis mode here. Declared cursors are
         // perhaps rare enough we can ignore that worry and just error instead.
         let desc = describe(
-            &self.catalog.for_session(session),
+            &self.catalog.lock().unwrap().for_session(session),
             stmt.clone(),
             &param_types,
             Some(session),
@@ -1044,7 +1058,7 @@ impl Coordinator {
     ) -> Result<(), CoordError> {
         let desc = if let Some(stmt) = stmt.clone() {
             match describe(
-                &self.catalog.for_session(session),
+                &self.catalog.lock().unwrap().for_session(session),
                 stmt.clone(),
                 &param_types,
                 Some(session),
@@ -1094,6 +1108,8 @@ impl Coordinator {
 
         self.drop_temp_items(session.conn_id()).await;
         self.catalog
+            .lock()
+            .unwrap()
             .drop_temporary_schema(session.conn_id())
             .expect("unable to drop temporary schema");
         self.active_conns.remove(&session.conn_id());
@@ -1102,7 +1118,7 @@ impl Coordinator {
     // Removes all temporary items created by the specified connection, though
     // not the temporary schema itself.
     async fn drop_temp_items(&mut self, conn_id: u32) {
-        let ops = self.catalog.drop_temp_item_ops(conn_id);
+        let ops = self.catalog.lock().unwrap().drop_temp_item_ops(conn_id);
         self.catalog_transact(ops)
             .await
             .expect("unable to drop temporary items for conn_id");
@@ -1115,7 +1131,8 @@ impl Coordinator {
         connector: SinkConnector,
     ) -> Result<(), CoordError> {
         // Update catalog entry with sink connector.
-        let entry = self.catalog.get_by_id(&id);
+        let catalog = self.catalog.lock().unwrap();
+        let entry = catalog.get_by_id(&id);
         let name = entry.name().clone();
         let mut sink = match entry.item() {
             CatalogItem::Sink(sink) => sink.clone(),
@@ -1131,6 +1148,7 @@ impl Coordinator {
                 item: CatalogItem::Sink(sink.clone()),
             },
         ];
+        drop(catalog);
         self.catalog_transact(ops).await?;
         let as_of = SinkAsOf {
             frontier: self.determine_frontier(sink.from),
@@ -1461,8 +1479,8 @@ impl Coordinator {
         name: String,
         if_not_exists: bool,
     ) -> Result<ExecuteResponse, CoordError> {
-        let db_oid = self.catalog.allocate_oid()?;
-        let schema_oid = self.catalog.allocate_oid()?;
+        let db_oid = self.catalog.lock().unwrap().allocate_oid()?;
+        let schema_oid = self.catalog.lock().unwrap().allocate_oid()?;
         let ops = vec![
             catalog::Op::CreateDatabase {
                 name: name.clone(),
@@ -1487,7 +1505,7 @@ impl Coordinator {
         schema_name: String,
         if_not_exists: bool,
     ) -> Result<ExecuteResponse, CoordError> {
-        let oid = self.catalog.allocate_oid()?;
+        let oid = self.catalog.lock().unwrap().allocate_oid()?;
         let op = catalog::Op::CreateSchema {
             database_name,
             schema_name,
@@ -1501,7 +1519,7 @@ impl Coordinator {
     }
 
     async fn sequence_create_role(&mut self, name: String) -> Result<ExecuteResponse, CoordError> {
-        let oid = self.catalog.allocate_oid()?;
+        let oid = self.catalog.lock().unwrap().allocate_oid()?;
         let op = catalog::Op::CreateRole { name, oid };
         self.catalog_transact(vec![op])
             .await
@@ -1518,7 +1536,7 @@ impl Coordinator {
         conn_id: u32,
     ) -> Result<ExecuteResponse, CoordError> {
         let conn_id = if table.temporary { Some(conn_id) } else { None };
-        let table_id = self.catalog.allocate_id()?;
+        let table_id = self.catalog.lock().unwrap().allocate_id()?;
         let mut index_depends_on = depends_on.clone();
         index_depends_on.push(table_id);
         let table = catalog::Table {
@@ -1529,7 +1547,7 @@ impl Coordinator {
             conn_id,
             depends_on,
         };
-        let index_id = self.catalog.allocate_id()?;
+        let index_id = self.catalog.lock().unwrap().allocate_id()?;
         let mut index_name = name.clone();
         index_name.item += "_primary_idx";
         let index = auto_generate_primary_idx(
@@ -1540,8 +1558,8 @@ impl Coordinator {
             conn_id,
             index_depends_on,
         );
-        let table_oid = self.catalog.allocate_oid()?;
-        let index_oid = self.catalog.allocate_oid()?;
+        let table_oid = self.catalog.lock().unwrap().allocate_oid()?;
+        let index_oid = self.catalog.lock().unwrap().allocate_oid()?;
         match self
             .catalog_transact(vec![
                 catalog::Op::CreateItem {
@@ -1634,7 +1652,7 @@ impl Coordinator {
             } = plan;
             let optimized_expr = self
                 .optimizer
-                .optimize(source.expr, self.catalog.indexes())?;
+                .optimize(source.expr, self.catalog.lock().unwrap().indexes())?;
             let transformed_desc = RelationDesc::new(optimized_expr.0.typ(), source.column_names);
             let source = catalog::Source {
                 create_sql: source.create_sql,
@@ -1644,8 +1662,8 @@ impl Coordinator {
                 bare_desc: source.bare_desc,
                 desc: transformed_desc,
             };
-            let source_id = self.catalog.allocate_id()?;
-            let source_oid = self.catalog.allocate_oid()?;
+            let source_id = self.catalog.lock().unwrap().allocate_id()?;
+            let source_oid = self.catalog.lock().unwrap().allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 oid: source_oid,
@@ -1663,8 +1681,8 @@ impl Coordinator {
                     None,
                     vec![source_id],
                 );
-                let index_id = self.catalog.allocate_id()?;
-                let index_oid = self.catalog.allocate_oid()?;
+                let index_id = self.catalog.lock().unwrap().allocate_id()?;
+                let index_oid = self.catalog.lock().unwrap().allocate_oid()?;
                 ops.push(catalog::Op::CreateItem {
                     id: index_id,
                     oid: index_oid,
@@ -1693,14 +1711,14 @@ impl Coordinator {
         depends_on: Vec<GlobalId>,
     ) {
         // First try to allocate an ID and an OID. If either fails, we're done.
-        let id = match self.catalog.allocate_id() {
+        let id = match self.catalog.lock().unwrap().allocate_id() {
             Ok(id) => id,
             Err(e) => {
                 tx.send(Err(e.into()), session);
                 return;
             }
         };
-        let oid = match self.catalog.allocate_oid() {
+        let oid = match self.catalog.lock().unwrap().allocate_oid() {
             Ok(id) => id,
             Err(e) => {
                 tx.send(Err(e.into()), session);
@@ -1771,10 +1789,10 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let mut ops = vec![];
         if let Some(id) = replace {
-            ops.extend(self.catalog.drop_items_ops(&[id]));
+            ops.extend(self.catalog.lock().unwrap().drop_items_ops(&[id]));
         }
-        let view_id = self.catalog.allocate_id()?;
-        let view_oid = self.catalog.allocate_oid()?;
+        let view_id = self.catalog.lock().unwrap().allocate_id()?;
+        let view_oid = self.catalog.lock().unwrap().allocate_oid()?;
         // Optimize the expression so that we can form an accurately typed description.
         let optimized_expr = self.prep_relation_expr(view.expr, ExprPrepStyle::Static)?;
         let desc = RelationDesc::new(optimized_expr.as_ref().typ(), view.column_names);
@@ -1803,8 +1821,8 @@ impl Coordinator {
                 view.conn_id,
                 vec![view_id],
             );
-            let index_id = self.catalog.allocate_id()?;
-            let index_oid = self.catalog.allocate_oid()?;
+            let index_id = self.catalog.lock().unwrap().allocate_id()?;
+            let index_oid = self.catalog.lock().unwrap().allocate_oid()?;
             ops.push(catalog::Op::CreateItem {
                 id: index_id,
                 oid: index_oid,
@@ -1848,8 +1866,8 @@ impl Coordinator {
             conn_id: None,
             depends_on,
         };
-        let id = self.catalog.allocate_id()?;
-        let oid = self.catalog.allocate_oid()?;
+        let id = self.catalog.lock().unwrap().allocate_id()?;
+        let oid = self.catalog.lock().unwrap().allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
@@ -1881,8 +1899,8 @@ impl Coordinator {
             inner: typ.inner.into(),
             depends_on,
         };
-        let id = self.catalog.allocate_id()?;
-        let oid = self.catalog.allocate_oid()?;
+        let id = self.catalog.lock().unwrap().allocate_id()?;
+        let oid = self.catalog.lock().unwrap().allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
@@ -1899,7 +1917,7 @@ impl Coordinator {
         &mut self,
         name: String,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = self.catalog.drop_database_ops(name);
+        let ops = self.catalog.lock().unwrap().drop_database_ops(name);
         self.catalog_transact(ops).await?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
@@ -1908,7 +1926,7 @@ impl Coordinator {
         &mut self,
         name: SchemaName,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = self.catalog.drop_schema_ops(name);
+        let ops = self.catalog.lock().unwrap().drop_schema_ops(name);
         self.catalog_transact(ops).await?;
         Ok(ExecuteResponse::DroppedSchema)
     }
@@ -1930,7 +1948,7 @@ impl Coordinator {
         items: Vec<GlobalId>,
         ty: ObjectType,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = self.catalog.drop_items_ops(&items);
+        let ops = self.catalog.lock().unwrap().drop_items_ops(&items);
         self.catalog_transact(ops).await?;
         Ok(match ty {
             ObjectType::Schema => unreachable!(),
@@ -2007,7 +2025,7 @@ impl Coordinator {
                         let timestamp = self.get_write_ts();
                         for WriteOp { id, rows } in inserts {
                             // Re-verify this id exists.
-                            if self.catalog.try_get_by_id(id).is_none() {
+                            if self.catalog.lock().unwrap().try_get_by_id(id).is_none() {
                                 return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
                                     id.to_string(),
                                 )));
@@ -2106,7 +2124,7 @@ impl Coordinator {
                 // values by predicate constraints in `map_filter_project`. If we find such
                 // an index, we can use it with the literal to perform look-ups at workers,
                 // and in principle avoid even contacting all but one worker (future work).
-                if let Some(indexes) = self.catalog.indexes().get(id) {
+                if let Some(indexes) = self.catalog.lock().unwrap().indexes().get(id) {
                     // Determine for each index identifier, an optional row literal as key.
                     // We want to extract the "best" option, where we prefer indexes with
                     // literals and long keys, then indexes at all, then exit correctly.
@@ -2235,11 +2253,13 @@ impl Coordinator {
         let sink_name = format!(
             "tail-source-{}",
             self.catalog
+                .lock()
+                .unwrap()
                 .for_session(session)
                 .humanize_id(source_id)
                 .expect("Source id is known to exist in catalog")
         );
-        let sink_id = self.catalog.allocate_id()?;
+        let sink_id = self.catalog.lock().unwrap().allocate_id()?;
         session.add_drop_sink(sink_id);
         let (tx, rx) = mpsc::unbounded_channel();
 
@@ -2295,7 +2315,7 @@ impl Coordinator {
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
         let uses_ids = &source.global_uses();
-        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&uses_ids);
+        let (index_ids, indexes_complete) = self.catalog.lock().unwrap().nearest_indexes(&uses_ids);
 
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
@@ -2319,7 +2339,10 @@ impl Coordinator {
                         For more details, see https://materialize.com/s/non-materialized-error"
                     );
                 }
-                let mut candidate = if uses_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
+                let mut candidate = if uses_ids
+                    .iter()
+                    .any(|id| self.catalog.lock().unwrap().uses_tables(*id))
+                {
                     // If the view depends on any tables, we enforce
                     // linearizability by choosing the latest input time.
                     self.get_read_ts()
@@ -2402,7 +2425,7 @@ impl Coordinator {
         // TODO: The logic that follows is at variance from PEEK logic which consults the
         // "queryable" state of its inputs. We might want those to line up, but it is only
         // a "might".
-        if let Some(index_id) = self.catalog.default_index_for(source_id) {
+        if let Some(index_id) = self.catalog.lock().unwrap().default_index_for(source_id) {
             let upper = self
                 .indexes
                 .upper_of(&index_id)
@@ -2415,7 +2438,8 @@ impl Coordinator {
             }
         } else {
             // Use the earliest time that is still valid for all sources.
-            let (index_ids, _indexes_complete) = self.catalog.nearest_indexes(&[source_id]);
+            let (index_ids, _indexes_complete) =
+                self.catalog.lock().unwrap().nearest_indexes(&[source_id]);
             self.indexes.least_valid_since(index_ids)
         }
     }
@@ -2431,7 +2455,8 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, CoordError> {
         let explanation_string = match stage {
             ExplainStage::RawPlan => {
-                let catalog = self.catalog.for_session(session);
+                let catalog = self.catalog.lock().unwrap();
+                let catalog = catalog.for_session(session);
                 let mut explanation = sql::plan::Explanation::new(&raw_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
                     explanation.explain_row_set_finishing(row_set_finishing);
@@ -2442,7 +2467,8 @@ impl Coordinator {
                 explanation.to_string()
             }
             ExplainStage::DecorrelatedPlan => {
-                let catalog = self.catalog.for_session(session);
+                let catalog = self.catalog.lock().unwrap();
+                let catalog = catalog.for_session(session);
                 let mut explanation =
                     dataflow_types::Explanation::new(&decorrelated_plan, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
@@ -2464,7 +2490,8 @@ impl Coordinator {
                     &mut dataflow,
                 );
                 transform::optimize_dataflow(&mut dataflow);
-                let catalog = self.catalog.for_session(session);
+                let catalog = self.catalog.lock().unwrap();
+                let catalog = catalog.for_session(session);
                 let mut explanation =
                     dataflow_types::Explanation::new_from_dataflow(&dataflow, &catalog);
                 if let Some(row_set_finishing) = row_set_finishing {
@@ -2508,7 +2535,8 @@ impl Coordinator {
         match self.prep_relation_expr(values, prep_style)?.into_inner() {
             MirRelationExpr::Constant { rows, typ: _ } => {
                 let rows = rows?;
-                let desc = self.catalog.get_by_id(&id).desc()?;
+                let catalog = self.catalog.lock().unwrap();
+                let desc = catalog.get_by_id(&id).desc()?;
                 for (row, _) in &rows {
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
                         if datum == &Datum::Null && !typ.nullable {
@@ -2521,6 +2549,7 @@ impl Coordinator {
                         }
                     }
                 }
+                drop(catalog);
                 let affected_rows = rows.len();
                 self.sequence_send_diffs(session, id, rows, affected_rows, MutationKind::Insert)
                     .await
@@ -2578,7 +2607,7 @@ impl Coordinator {
 
         for op in &ops {
             if let catalog::Op::DropItem(id) = op {
-                match self.catalog.get_by_id(id).item() {
+                match self.catalog.lock().unwrap().get_by_id(id).item() {
                     CatalogItem::Table(_) | CatalogItem::Source(_) => {
                         sources_to_drop.push(*id);
                     }
@@ -2596,7 +2625,7 @@ impl Coordinator {
             }
         }
 
-        let builtin_table_updates = self.catalog.transact(ops)?;
+        let builtin_table_updates = self.catalog.lock().unwrap().transact(ops)?;
         self.send_builtin_table_updates(builtin_table_updates).await;
 
         if !sources_to_drop.is_empty() {
@@ -2689,7 +2718,9 @@ impl Coordinator {
         style: ExprPrepStyle,
     ) -> Result<OptimizedMirRelationExpr, CoordError> {
         if let ExprPrepStyle::Static = style {
-            let mut opt_expr = self.optimizer.optimize(expr, self.catalog.indexes())?;
+            let mut opt_expr = self
+                .optimizer
+                .optimize(expr, self.catalog.lock().unwrap().indexes())?;
             opt_expr.0.try_visit_mut(&mut |e| {
                 if let expr::MirRelationExpr::Filter { input, predicates } = &*e {
                     let mfp = expr::MapFilterProject::new(input.arity())
@@ -2699,7 +2730,9 @@ impl Coordinator {
                         Ok(plan) => {
                             // If we are in experimental mode permit temporal filters.
                             // TODO(mcsherry): remove this gating eventually.
-                            if plan.non_temporal() || self.catalog.config().experimental_mode {
+                            if plan.non_temporal()
+                                || self.catalog.lock().unwrap().config().experimental_mode
+                            {
                                 Ok(())
                             } else {
                                 coord_bail!("temporal filters require the --experimental flag")
@@ -2717,7 +2750,9 @@ impl Coordinator {
             // constant expression that originally contains a global get? Is
             // there anything not containing a global get that cannot be
             // optimized to a constant expression?
-            Ok(self.optimizer.optimize(expr, self.catalog.indexes())?)
+            Ok(self
+                .optimizer
+                .optimize(expr, self.catalog.lock().unwrap().indexes())?)
         }
     }
 
@@ -2833,7 +2868,7 @@ impl Coordinator {
     // Notify the timestamper thread that a source has been created or dropped.
     async fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
         if create {
-            if let Some(entry) = self.catalog.try_get_by_id(source_id) {
+            if let Some(entry) = self.catalog.lock().unwrap().try_get_by_id(source_id) {
                 if let CatalogItem::Source(s) = entry.item() {
                     self.ts_tx
                         .send(TimestampMessage::Add(source_id, s.connector.clone()))
@@ -2861,7 +2896,7 @@ impl Coordinator {
             if let Some(cache_tx) = &mut self.cache_tx {
                 cache_tx
                     .send(CacheMessage::AddSource(
-                        self.catalog.config().cluster_id,
+                        self.catalog.lock().unwrap().config().cluster_id,
                         id,
                     ))
                     .expect("caching receiver should not drop first");
@@ -3004,7 +3039,7 @@ pub async fn serve(
             worker_guards,
             worker_txs,
             optimizer: Default::default(),
-            catalog,
+            catalog: Arc::new(Mutex::new(catalog)),
             symbiosis,
             indexes: ArrangementFrontiers::default(),
             sources: ArrangementFrontiers::default(),
