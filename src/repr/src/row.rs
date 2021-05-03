@@ -177,7 +177,7 @@ impl PartialOrd for DatumList<'_> {
 }
 
 /// A mapping from string keys to Datums
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct DatumMap<'a> {
     /// Points at the serialized datums, which should be sorted in key order
     data: &'a [u8],
@@ -1105,6 +1105,12 @@ impl<'a> DatumMap<'a> {
     /// For debugging only
     pub fn data(&self) -> &'a [u8] {
         &self.data
+    }
+}
+
+impl<'a> Debug for DatumMap<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
     }
 }
 
