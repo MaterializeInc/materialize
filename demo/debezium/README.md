@@ -340,3 +340,23 @@ FROM KAFKA BROKER 'kafka:9092' TOPIC 'debezium.inventory.customers'
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
 ENVELOPE DEBEZIUM;
 ```
+
+You can even import the transaction topic if you want to take a look at it!
+
+```sql
+CREATE MATERIALIZED SOURCE IF NOT EXISTS dbz_transactions
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'dbserver1.transaction'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
+```
+
+This will give something like the following:
+
+```sql
+materialize=> select * from dbz_transactions order by id limit 4;
+ status |               id                | event_count |                                               data_collections
+--------+---------------------------------+-------------+--------------------------------------------------------------------------------------------------------------
+ BEGIN  | file=mysql-bin.000003,pos=10668 |             |
+ END    | file=mysql-bin.000003,pos=10668 |           5 | {"(inventory.products_on_hand,1)","(inventory.addresses,1)","(inventory.orders,2)","(inventory.products,1)"}
+ BEGIN  | file=mysql-bin.000003,pos=11483 |             |
+ END    | file=mysql-bin.000003,pos=11483 |           2 | {"(inventory.products_on_hand,1)","(inventory.customers,1)"}
+```
