@@ -1110,7 +1110,7 @@ impl<'a> DatumMap<'a> {
 
 impl<'a> Debug for DatumMap<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list().entries(self.iter()).finish()
+        f.debug_map().entries(self.iter()).finish()
     }
 }
 
