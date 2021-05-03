@@ -602,11 +602,13 @@ fn create_kafka_config(
     // Broker configuration.
     kafka_config.set("bootstrap.servers", &addrs.to_string());
 
-    // Automatically commit read offsets back to Kafka for monitoring purposes,
-    // but on restart begin ingest at 0
-    kafka_config
-        .set("enable.auto.commit", "true")
-        .set("auto.offset.reset", "earliest");
+    // Default to disabling Kafka auto commit. This can be explicitly enabled
+    // by the user if they want to use it for progress tracking.
+    kafka_config.set("enable.auto.commit", "false");
+
+    // Always begin ingest at 0 when restarted, even if Kafka contains committed
+    // consumer read offsets
+    kafka_config.set("auto.offset.reset", "earliest");
 
     // How often to refresh metadata from the Kafka broker. This can have a
     // minor impact on startup latency and latency after adding a new partition,
