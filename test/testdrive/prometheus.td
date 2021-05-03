@@ -12,10 +12,19 @@
 
 # Some prometheus metrics should always exist
 
-$ prometheus-verify metric-name=mz_server_metadata_seconds labels=os value-gt=0
-$ prometheus-verify metric-name=mz_arrangement_maintenance_active_info
-$ prometheus-verify metric-name=mz_worker_command_queue_size
-$ prometheus-verify metric-name=mz_worker_pending_peeks_queue_size value-eq=0
+> SELECT value > 0 AND labels ? 'os' FROM mz_metrics WHERE metric = 'mz_server_metadata_seconds'
+  ORDER BY time DESC LIMIT 1
+true
+
+> SELECT value FROM mz_metrics WHERE metric = 'mz_worker_pending_peeks_queue_size'
+  ORDER BY time DESC LIMIT 1
+0
+
+> SELECT count(*) > 0 FROM mz_metrics WHERE metric = 'mz_worker_command_queue_size'
+true
+
+> SELECT count(*) > 0 FROM mz_metrics WHERE metric = 'mz_arrangement_maintenance_active_info'
+true
 
 # Ensure we retain metrics:
 > CREATE MATERIALIZED VIEW metric_stats AS SELECT count(*) as total, max(time) as youngest, min(time) as oldest FROM mz_metrics;

@@ -4646,7 +4646,6 @@ dependencies = [
  "ccsr",
  "chrono",
  "coord",
- "fast-float",
  "flate2",
  "futures",
  "interchange",

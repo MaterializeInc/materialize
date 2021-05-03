@@ -52,7 +52,6 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", feat
 tokio-stream = "0.1.5"
 url = "2.2.1"
 uuid = "0.8.2"
-fast-float = "0.2.0"
 
 [dev-dependencies]
 assert_cmd = "1.0.3"
