@@ -895,7 +895,7 @@ dependencies = [
 [[package]]
 name = "dec"
 version = "0.3.3"
-source = "git+https://github.com/MaterializeInc/rust-dec?rev=c101061#c101061fafe41d39485feecec1d473f35b063829"
+source = "git+https://github.com/MaterializeInc/rust-dec?rev=ceac6d3#ceac6d32e2bf41c9ba9a9d0c49899c5540212169"
 dependencies = [
  "decnumber-sys",
  "libc",
@@ -906,7 +906,7 @@ dependencies = [
 [[package]]
 name = "decnumber-sys"
 version = "0.1.5"
-source = "git+https://github.com/MaterializeInc/rust-dec?rev=c101061#c101061fafe41d39485feecec1d473f35b063829"
+source = "git+https://github.com/MaterializeInc/rust-dec?rev=ceac6d3#ceac6d32e2bf41c9ba9a9d0c49899c5540212169"
 dependencies = [
  "cc",
  "libc",
@@ -4209,6 +4209,7 @@ dependencies = [
  "chrono",
  "datadriven",
  "dataflow-types",
+ "dec",
  "enum-kinds",
  "expr",
  "futures",

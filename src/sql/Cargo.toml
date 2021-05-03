@@ -13,6 +13,7 @@ build-info = { path = "../build-info" }
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["clock", "std"] }
 dataflow-types = { path = "../dataflow-types" }
+dec = { git = "https://github.com/MaterializeInc/rust-dec", rev = "ceac6d3", features = ["serde"] }
 enum-kinds = "0.5.0"
 expr = { path = "../expr" }
 futures = "0.3.14"

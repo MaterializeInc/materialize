@@ -28,6 +28,7 @@ use std::iter;
 use std::mem;
 
 use anyhow::{anyhow, bail, ensure, Context};
+use dec::{Context as DecCx, Decimal as DecNum, OrderedDecimal};
 use expr::LocalId;
 use itertools::Itertools;
 use ore::iter::IteratorExt;
@@ -2846,23 +2847,23 @@ fn plan_case<'a>(
 fn plan_literal<'a>(l: &'a Value) -> Result<CoercibleScalarExpr, anyhow::Error> {
     let (datum, scalar_type) = match l {
         Value::Number(s) => {
-            let d: Decimal = s.parse()?;
-            if d.scale() == 0 {
-                let significand = d.significand();
-                if let Ok(n) = significand.try_into() {
+            let mut cx = DecCx::<DecNum<13>>::default();
+            let d = cx.parse(s.as_str())?;
+            if d.exponent() == 0 {
+                if let Ok(n) = d.try_into() {
                     (Datum::Int32(n), ScalarType::Int32)
-                } else if let Ok(n) = significand.try_into() {
+                } else if let Ok(n) = d.try_into() {
                     (Datum::Int64(n), ScalarType::Int64)
                 } else {
                     (
-                        Datum::from(significand),
-                        ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
+                        Datum::APD(OrderedDecimal(d)),
+                        ScalarType::APD { scale: None },
                     )
                 }
             } else {
                 (
-                    Datum::from(d.significand()),
-                    ScalarType::Decimal(MAX_DECIMAL_PRECISION, d.scale()),
+                    Datum::APD(OrderedDecimal(d)),
+                    ScalarType::APD { scale: None },
                 )
             }
         }

@@ -330,7 +330,7 @@ impl From<&ScalarType> for Type {
             ScalarType::TimestampTz => Type::TimestampTz,
             ScalarType::Uuid => Type::Uuid,
             ScalarType::Numeric { .. } => Type::RDN,
-            ScalarType::APD { .. } => Type::RDN,
+            ScalarType::APD { .. } => Type::APD,
         }
     }
 }
