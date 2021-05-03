@@ -278,7 +278,9 @@ impl Default for Optimizer {
                     // Note that this eliminates one redundant input per join,
                     // so it is necessary to run this section in a loop.
                     Box::new(crate::redundant_join::RedundantJoin),
-                    // Converts Join {Constant + Input} to Map {Input}
+                    // Converts `Cross Join {Constant(Literal) + Input}` to
+                    // `Map {Cross Join (Input, Constant()), Literal}`.
+                    // Join fusion will clean this up to `Map{Input, Literal}`
                     Box::new(crate::map_lifting::LiteralLifting),
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
