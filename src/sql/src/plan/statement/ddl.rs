@@ -960,9 +960,11 @@ pub fn plan_create_source(
         sql_parser::ast::Envelope::Upsert => match connector {
             Connector::Kafka { .. } => match format {
                 CreateSourceFormat::KeyValue { .. } => SourceEnvelope::Upsert,
-                // this is validated to become keyvalue in purify, where we can talk to CSR
                 CreateSourceFormat::Bare(Format::Avro(AvroSchema::CsrUrl { .. })) => {
-                    SourceEnvelope::Upsert
+                    bail!(
+                        "[internal-error] CSR create source statements should be \
+                           canonicalized to key/value format in purify"
+                    );
                 }
                 _ => unsupported!(format!("upsert requires a key/value format: {:?}", format)),
             },

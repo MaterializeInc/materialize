@@ -595,7 +595,7 @@ where
     C: ParallelizationContract<Timestamp, SourceOutput<Vec<u8>, Vec<u8>>>,
 {
     let stream = stream.unary(contract, &op_name, move |_, _| {
-        let mut trackstate = if upsert_debezium {
+        let mut upsert_state = if upsert_debezium {
             Some((
                 HashMap::new(),
                 metrics::DEBEZIUM_UPSERT_COUNT.with_label_values(&[
@@ -622,7 +622,7 @@ where
                             decoder_state.get_value(payload, *aux_num, *upstream_time_millis);
 
                         if let Some(val) = val {
-                            let val = if let Some((keys, metrics)) = trackstate.as_mut() {
+                            let val = if let Some((keys, metrics)) = upsert_state.as_mut() {
                                 match decoder_state.decode_key(key) {
                                     Ok(Some(decoded_key)) => {
                                         rewrite_for_upsert(val, keys, decoded_key, metrics)

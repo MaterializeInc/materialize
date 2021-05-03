@@ -18,7 +18,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use globset::Glob;
 use log::warn;
 use regex::Regex;
@@ -326,15 +326,10 @@ pub enum DataEncoding {
 
 impl SourceDataEncoding {
     /// Return the encoding if this was a `SourceDataEncoding::Single`, else return an error
-    pub fn single(self, required_by: &str) -> Result<DataEncoding, anyhow::Error> {
+    pub fn single(self) -> Option<DataEncoding> {
         match self {
-            SourceDataEncoding::Single(encoding) => Ok(encoding),
-            SourceDataEncoding::KeyValue { .. } => {
-                bail!(
-                    "{} requires a single encoding, but got a key/value encoding",
-                    required_by
-                )
-            }
+            SourceDataEncoding::Single(encoding) => Some(encoding),
+            SourceDataEncoding::KeyValue { .. } => None,
         }
     }
 
@@ -360,21 +355,25 @@ impl SourceDataEncoding {
                 // Add columns for the key, if using the upsert envelope.
                 // TODO: this will be removed with upsert value rewriting
                 let desc = if matches!(envelope, SourceEnvelope::Upsert) {
-                    let key_desc = key.desc(&SourceEnvelope::None, RelationDesc::empty(), None)?;
+                    let key_desc = {
+                        let key_desc =
+                            key.desc(&SourceEnvelope::None, RelationDesc::empty(), None)?;
 
-                    // It doesn't make sense for the key to have keys.
-                    assert!(key_desc.typ().keys.is_empty());
+                        // It doesn't make sense for the key to have keys.
+                        assert!(key_desc.typ().keys.is_empty());
 
-                    // Add the key columns as a key.
-                    let key_indices = (0..key_desc.arity()).collect();
-                    let mut key_desc = key_desc.with_key(key_indices);
+                        // Add the key columns as a key.
+                        let key_indices = (0..key_desc.arity()).collect();
+                        let key_desc = key_desc.with_key(key_indices);
 
-                    // Rename key columns to "keyN" if the encoding is not Avro.
-                    key_desc = match key {
-                        DataEncoding::Avro(_) => key_desc,
-                        _ => {
-                            let names = (0..key_desc.arity()).map(|i| Some(format!("key{}", i)));
-                            key_desc.with_names(names)
+                        // Rename key columns to "keyN" if the encoding is not Avro.
+                        match key {
+                            DataEncoding::Avro(_) => key_desc,
+                            _ => {
+                                let names =
+                                    (0..key_desc.arity()).map(|i| Some(format!("key{}", i)));
+                                key_desc.with_names(names)
+                            }
                         }
                     };
                     let key_schema = if let DataEncoding::Avro(AvroEncoding { schema, .. }) = key {

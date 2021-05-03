@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
-use anyhow::{Context, Error};
+use anyhow::{anyhow, Context, Error};
 use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
 use inotify::{Inotify, WatchMask};
@@ -67,7 +67,9 @@ impl SourceReader<Value> for FileSourceReader<Value> {
         encoding: SourceDataEncoding,
         _: Option<Logger>,
     ) -> Result<(FileSourceReader<Value>, Option<PartitionId>), anyhow::Error> {
-        let encoding = encoding.single("File source")?;
+        let encoding = encoding.single().ok_or_else(|| {
+            anyhow!("File sources require a single encoding, but got a key/value encoding")
+        })?;
         let receiver = match connector {
             ExternalSourceConnector::AvroOcf(oc) => {
                 let reader_schema = match &encoding {
