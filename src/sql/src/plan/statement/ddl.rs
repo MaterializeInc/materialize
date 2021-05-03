@@ -958,13 +958,15 @@ pub fn plan_create_source(
             SourceEnvelope::Debezium(dedup_strat, mode)
         }
         sql_parser::ast::Envelope::Upsert => match connector {
+            // Currently the get_encoding function rewrites Formats with either a CSR config to be a
+            // KeyValueDecoding, no other formats make sense.
+            //
+            // TODO(bwm): move key/value canonicalization entirely into the purify step, and turn
+            // this and the related code in `get_encoding` into internal errors.
             Connector::Kafka { .. } => match format {
                 CreateSourceFormat::KeyValue { .. } => SourceEnvelope::Upsert,
                 CreateSourceFormat::Bare(Format::Avro(AvroSchema::CsrUrl { .. })) => {
-                    bail!(
-                        "[internal-error] CSR create source statements should be \
-                           canonicalized to key/value format in purify"
-                    );
+                    SourceEnvelope::Upsert
                 }
                 _ => unsupported!(format!("upsert requires a key/value format: {:?}", format)),
             },
