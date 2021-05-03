@@ -606,6 +606,9 @@ swap: {swap_total}KB total, {swap_used}KB used",
             experimental_mode: args.experimental,
             safe_mode: args.safe,
             telemetry_url,
+            introspection_frequency: args
+                .introspection_frequency
+                .unwrap_or_else(|| Duration::from_secs(1)),
         },
         runtime.clone(),
     ))?;

@@ -138,6 +138,7 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
             experimental_mode: config.experimental_mode,
             safe_mode: config.safe_mode,
             telemetry_url: None,
+            introspection_frequency: Duration::from_secs(1),
         },
         runtime.clone(),
     ))?;
