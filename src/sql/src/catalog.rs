@@ -135,6 +135,19 @@ pub trait Catalog: fmt::Debug + ExprHumanizer {
     /// from elsewhere.
     fn try_get_lossy_scalar_type_by_id(&self, id: &GlobalId) -> Option<ScalarType>;
 
+    /// Finds a name like `name` that is not already in use.
+    ///
+    /// If `name` itself is available, it is returned unchanged.
+    fn find_available_name(&self, mut name: FullName) -> FullName {
+        let mut i = 0;
+        let orig_item_name = name.item.clone();
+        while self.item_exists(&name) {
+            i += 1;
+            name.item = format!("{}{}", orig_item_name, i);
+        }
+        name
+    }
+
     /// Returns the configuration of the catalog.
     fn config(&self) -> &CatalogConfig;
 }

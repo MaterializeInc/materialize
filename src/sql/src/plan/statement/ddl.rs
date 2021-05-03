@@ -1557,10 +1557,10 @@ pub fn plan_create_index(
             item: normalize::ident(name.clone()),
         }
     } else {
-        let mut idx_name_base = on.name().clone();
+        let mut idx_name = on.name().clone();
         if key_parts.is_none() {
             // We're trying to create the "default" index.
-            idx_name_base.item += "_primary_idx";
+            idx_name.item += "_primary_idx";
         } else {
             // Use PG schema for automatically naming indexes:
             // `<table>_<_-separated indexed expressions>_idx`
@@ -1574,28 +1574,14 @@ pub fn plan_create_index(
                     _ => "expr".to_string(),
                 })
                 .join("_");
-            idx_name_base.item += &format!("_{}_idx", index_name_col_suffix);
-            idx_name_base.item = normalize::ident(Ident::new(idx_name_base.item))
+            idx_name.item += &format!("_{}_idx", index_name_col_suffix);
+            idx_name.item = normalize::ident(Ident::new(idx_name.item))
         }
-
-        let mut index_name = idx_name_base.clone();
-        let mut i = 0;
-
-        let schema = SchemaName {
-            database: on.name().database.clone(),
-            schema: on.name().schema.clone(),
-        };
-        let mut cat_schema_iter = scx.catalog.list_items(&schema);
-
-        // Search for an unused version of the name unless `if_not_exists`.
-        while cat_schema_iter.any(|i| *i.name() == index_name) && !*if_not_exists {
-            i += 1;
-            index_name = idx_name_base.clone();
-            index_name.item += &i.to_string();
-            cat_schema_iter = scx.catalog.list_items(&schema);
+        if !*if_not_exists {
+            scx.catalog.find_available_name(idx_name)
+        } else {
+            idx_name
         }
-
-        index_name
     };
 
     let options = plan_index_options(with_options.clone())?;
