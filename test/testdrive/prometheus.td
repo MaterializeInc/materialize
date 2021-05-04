@@ -12,10 +12,6 @@
 
 # Some prometheus metrics should always exist
 
-> SELECT value > 0 AND labels ? 'os' FROM mz_metrics WHERE metric = 'mz_server_metadata_seconds'
-  ORDER BY time DESC LIMIT 1
-true
-
 > SELECT value FROM mz_metrics WHERE metric = 'mz_worker_pending_peeks_queue_size'
   ORDER BY time DESC LIMIT 1
 0
