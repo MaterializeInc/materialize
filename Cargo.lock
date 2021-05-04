@@ -2689,6 +2689,7 @@ dependencies = [
  "phf_shared",
  "smallvec",
  "structopt",
+ "timely",
  "tokio",
  "tokio-openssl",
  "tracing-subscriber",

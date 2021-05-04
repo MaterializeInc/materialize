@@ -51,24 +51,24 @@ true
 
 > BEGIN
 
-> DECLARE c1 CURSOR FOR TAIL fetch_concurrent_two_sources1_view;
+> DECLARE c1 CURSOR FOR SELECT * FROM fetch_concurrent_two_sources1_view;
 
-> DECLARE c2 CURSOR FOR TAIL fetch_concurrent_two_sources2_view;
-
-> FETCH 1 c1;
-<TIMESTAMP> 1 12
-
-> FETCH 1 c2;
-<TIMESTAMP> 1 12
+> DECLARE c2 CURSOR FOR SELECT * FROM fetch_concurrent_two_sources2_view;
 
 > FETCH 1 c1;
-<TIMESTAMP> 1 23
+12
 
 > FETCH 1 c2;
-<TIMESTAMP> 1 23
+12
 
 > FETCH 1 c1;
-<TIMESTAMP> 1 34
+23
 
 > FETCH 1 c2;
-<TIMESTAMP> 1 34
+23
+
+> FETCH 1 c1;
+34
+
+> FETCH 1 c2;
+34

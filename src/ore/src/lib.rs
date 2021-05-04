@@ -14,6 +14,7 @@
 // root of a crate, so this module is not public as it would appear empty.
 mod assert;
 
+pub mod antichain;
 pub mod ascii;
 pub mod cast;
 pub mod cli;

@@ -40,10 +40,18 @@ pub enum CoordError {
     ReadOnlyTransaction,
     /// The specified session parameter is read-only.
     ReadOnlyParameter(&'static (dyn Var + Send + Sync)),
+    /// A query in a transaction referenced a relation outside the first query's
+    /// time domain.
+    RelationOutsideTimeDomain {
+        relation: String,
+        names: Vec<String>,
+    },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
     /// An error occurred in a SQL catalog operation.
     SqlCatalog(sql::catalog::CatalogError),
+    /// The transaction is in single-tail mode.
+    TailOnlyTransaction,
     /// An error occurred in the optimizer.
     Transform(TransformError),
     /// The named cursor does not exist.
@@ -126,10 +134,31 @@ impl fmt::Display for CoordError {
             CoordError::ReadOnlyParameter(p) => {
                 write!(f, "parameter {} cannot be changed", p.name().quoted())
             }
+            CoordError::RelationOutsideTimeDomain { relation, names } => {
+                write!(
+                    f,
+                    "transactions can only reference nearby relations; {} referenced here, but {}",
+                    relation.quoted(),
+                    match names.is_empty() {
+                        true => "none available".to_string(),
+                        false => format!(
+                            "only the following are available: {}",
+                            names
+                                .iter()
+                                .map(|name| name.quoted().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    }
+                )
+            }
             CoordError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)
             }
             CoordError::SqlCatalog(e) => e.fmt(f),
+            CoordError::TailOnlyTransaction => {
+                f.write_str("TAIL in transactions must be the only read statement")
+            }
             CoordError::Transform(e) => e.fmt(f),
             CoordError::UnknownCursor(name) => {
                 write!(f, "cursor {} does not exist", name.quoted())

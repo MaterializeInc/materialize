@@ -47,21 +47,9 @@ true
 234
 345
 
-> DECLARE c3 CURSOR FOR TAIL fetch_concurrent_same_source;
-> FETCH 3 c3;
-<TIMESTAMP> 1 123
-<TIMESTAMP> 1 234
-<TIMESTAMP> 1 345
+> DECLARE c3 CURSOR FOR SELECT * FROM fetch_concurrent_same_source;
 
-> DECLARE c4 CURSOR FOR SELECT * FROM fetch_concurrent_same_source;
-
-> FETCH ALL c4;
+> FETCH ALL c3;
 123
 234
 345
-
-> DECLARE c5 CURSOR FOR TAIL fetch_concurrent_same_source;
-> FETCH 3 c5;
-<TIMESTAMP> 1 123
-<TIMESTAMP> 1 234
-<TIMESTAMP> 1 345
