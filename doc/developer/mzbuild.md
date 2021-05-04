@@ -356,10 +356,10 @@ any non-alphanumeric characters.)
 
 ## Development
 
-mzbuild and mzcompose are Python 3 libraries that lives in
-[misc/python/materialize/cli](/misc/python/materialize/cli).
+mzbuild and associated tools are written in Python 3 and live in
+[misc/python/materialize](/misc/python/materialize).
 
-Its only dependency is Python 3.5+, which is easy to find or pre-installed on
+Their only dependency is Python 3.5+, which is easy to find or pre-installed on
 most Linux distributions, and pre-installed on recent versions of macOS, too.
 Python dependencies are automatically installed into a virtualenv by the
 [pyactivate wrapper script](/bin/pyactivate).
