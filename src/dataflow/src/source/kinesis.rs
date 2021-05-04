@@ -21,7 +21,9 @@ use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
 use timely::scheduling::SyncActivator;
 
-use dataflow_types::{DataEncoding, ExternalSourceConnector, KinesisSourceConnector, MzOffset};
+use dataflow_types::{
+    ExternalSourceConnector, KinesisSourceConnector, MzOffset, SourceDataEncoding,
+};
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::logging::materialized::Logger;
@@ -101,7 +103,7 @@ impl SourceReader<Vec<u8>> for KinesisSourceReader {
         _worker_id: usize,
         _consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        _encoding: DataEncoding,
+        _encoding: SourceDataEncoding,
         _: Option<Logger>,
     ) -> Result<(Self, Option<PartitionId>), anyhow::Error> {
         let kc = match connector {

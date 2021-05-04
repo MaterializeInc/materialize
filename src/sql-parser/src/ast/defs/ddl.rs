@@ -125,6 +125,59 @@ impl AstDisplay for CsrSeed {
 impl_display!(CsrSeed);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateSourceFormat<T: AstInfo> {
+    None,
+    /// `CREATE SOURCE .. FORMAT`
+    Bare(Format<T>),
+    /// `CREATE SOURCE .. KEY FORMAT .. VALUE FORMAT`
+    ///
+    /// Also the destination for the legacy `ENVELOPE UPSERT FORMAT ...`
+    KeyValue {
+        key: Format<T>,
+        value: Format<T>,
+    },
+}
+
+impl<T: AstInfo + PartialEq> CreateSourceFormat<T> {
+    /// True if this is a Bare format that can contain no configuration
+    pub fn is_simple(&self) -> bool {
+        match self {
+            CreateSourceFormat::Bare(f) => f.is_simple(),
+            CreateSourceFormat::KeyValue { .. } => false,
+            CreateSourceFormat::None => false,
+        }
+    }
+
+    /// The value portion of a `KeyValue` format, or the only format in `Bare`
+    pub fn value(&self) -> Option<&Format<T>> {
+        match self {
+            CreateSourceFormat::None => None,
+            CreateSourceFormat::Bare(f) => Some(f),
+            CreateSourceFormat::KeyValue { value, .. } => Some(value),
+        }
+    }
+}
+
+impl<T: AstInfo> AstDisplay for CreateSourceFormat<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CreateSourceFormat::None => {}
+            CreateSourceFormat::Bare(format) => {
+                f.write_str(" FORMAT ");
+                f.write_node(format)
+            }
+            CreateSourceFormat::KeyValue { key, value } => {
+                f.write_str(" KEY FORMAT ");
+                f.write_node(key);
+                f.write_str(" VALUE FORMAT ");
+                f.write_node(value);
+            }
+        }
+    }
+}
+impl_display_t!(CreateSourceFormat);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Format<T: AstInfo> {
     Bytes,
     Avro(AvroSchema<T>),
@@ -142,21 +195,28 @@ pub enum Format<T: AstInfo> {
     Text,
 }
 
+impl<T: AstInfo> Format<T> {
+    /// True if the format cannot carry any configuration
+    pub fn is_simple(&self) -> bool {
+        matches!(self, Format::Bytes | Format::Text)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Envelope<T: AstInfo> {
+pub enum Envelope {
     None,
     Debezium(DbzMode),
-    Upsert(Option<Format<T>>),
+    Upsert,
     CdcV2,
 }
 
-impl<T: AstInfo> Default for Envelope<T> {
+impl Default for Envelope {
     fn default() -> Self {
         Self::None
     }
 }
 
-impl<T: AstInfo> AstDisplay for Envelope<T> {
+impl AstDisplay for Envelope {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Self::None => {
@@ -167,12 +227,8 @@ impl<T: AstInfo> AstDisplay for Envelope<T> {
                 f.write_str("DEBEZIUM");
                 f.write_node(mode);
             }
-            Self::Upsert(format) => {
+            Self::Upsert => {
                 f.write_str("UPSERT");
-                if let Some(format) = format {
-                    f.write_str(" FORMAT ");
-                    f.write_node(format);
-                }
             }
             Self::CdcV2 => {
                 f.write_str("MATERIALIZE");
@@ -180,7 +236,7 @@ impl<T: AstInfo> AstDisplay for Envelope<T> {
         }
     }
 }
-impl_display_t!(Envelope);
+impl_display!(Envelope);
 
 impl<T: AstInfo> AstDisplay for Format<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {

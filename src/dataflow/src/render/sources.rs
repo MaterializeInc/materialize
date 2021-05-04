@@ -171,7 +171,9 @@ where
                     );
 
                     let reader_schema = match &encoding {
-                        DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => reader_schema,
+                        SourceDataEncoding::Single(DataEncoding::AvroOcf(AvroOcfEncoding {
+                            reader_schema,
+                        })) => reader_schema,
                         _ => unreachable!(
                             "Internal error: \
                                      Avro OCF schema should have already been resolved.\n\
@@ -251,14 +253,19 @@ where
                             .as_collection(),
                     );
 
-                    let (stream, errors) = if let SourceEnvelope::Upsert(key_encoding) = &envelope {
-                        let value_decoder = get_decoder(encoding, &self.debug_name);
-                        let key_decoder = get_decoder(key_encoding.clone(), &self.debug_name);
+                    let (stream, errors) = if let SourceEnvelope::Upsert = &envelope {
+                        let kv_decoder = if let SourceDataEncoding::KeyValue { key, value } =
+                            encoding
+                        {
+                            get_decoder(key, value, &envelope).expect("decoder should be validated")
+                        } else {
+                            panic!("key/value decoding is required for upsert")
+                        };
+
                         super::upsert::decode_stream(
                             &ok_source,
                             self.as_of_frontier.clone(),
-                            key_decoder,
-                            value_decoder,
+                            kv_decoder,
                             &mut linear_operators,
                             src.bare_desc.typ().arity(),
                         )
@@ -297,10 +304,13 @@ where
                         let dbz_key_indices = match &src.connector {
                             SourceConnector::External {
                                 encoding:
-                                    DataEncoding::Avro(AvroEncoding {
-                                        key_schema: Some(key_schema),
+                                    SourceDataEncoding::KeyValue {
+                                        key:
+                                            DataEncoding::Avro(AvroEncoding {
+                                                schema: key_schema, ..
+                                            }),
                                         ..
-                                    }),
+                                    },
                                 ..
                             } => {
                                 let fields = match &src.bare_desc.typ().column_types[0].scalar_type
@@ -392,7 +402,7 @@ where
 
                 // Apply `as_of` to each timestamp.
                 match &envelope {
-                    SourceEnvelope::Upsert(_) => {}
+                    SourceEnvelope::Upsert => {}
                     _ => {
                         let as_of_frontier1 = self.as_of_frontier.clone();
                         collection = collection

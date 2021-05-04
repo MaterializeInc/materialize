@@ -24,7 +24,7 @@ use std::error::Error;
 use std::fmt;
 
 use itertools::Itertools;
-use log::debug;
+use log::{debug, warn};
 
 use ore::collections::CollectionExt;
 use repr::adt::datetime::DateTimeField;
@@ -1599,7 +1599,7 @@ impl<'a> Parser<'a> {
         Ok(schema)
     }
 
-    fn parse_envelope(&mut self) -> Result<Envelope<Raw>, ParserError> {
+    fn parse_envelope(&mut self) -> Result<Envelope, ParserError> {
         let envelope = if self.parse_keyword(NONE) {
             Envelope::None
         } else if self.parse_keyword(DEBEZIUM) {
@@ -1610,12 +1610,7 @@ impl<'a> Parser<'a> {
             };
             Envelope::Debezium(debezium_mode)
         } else if self.parse_keyword(UPSERT) {
-            let format = if self.parse_keyword(FORMAT) {
-                Some(self.parse_format()?)
-            } else {
-                None
-            };
-            Envelope::Upsert(format)
+            Envelope::Upsert
         } else if self.parse_keyword(MATERIALIZE) {
             Envelope::CdcV2
         } else {
@@ -1648,13 +1643,38 @@ impl<'a> Parser<'a> {
         self.expect_keyword(FROM)?;
         let connector = self.parse_connector()?;
         let with_options = self.parse_opt_with_sql_options()?;
-        let format = if self.parse_keyword(FORMAT) {
-            Some(self.parse_format()?)
-        } else {
-            None
+        // legacy upsert format syntax allows setting the key format after the keyword UPSERT, so we
+        // may mutate this variable in the next block
+        let mut format = match self.parse_one_of_keywords(&[KEY, FORMAT]) {
+            Some(KEY) => {
+                self.expect_keyword(FORMAT)?;
+                let key = self.parse_format()?;
+                self.expect_keywords(&[VALUE, FORMAT])?;
+                let value = self.parse_format()?;
+                CreateSourceFormat::KeyValue { key, value }
+            }
+            Some(FORMAT) => CreateSourceFormat::Bare(self.parse_format()?),
+            Some(_) => unreachable!("parse_one_of_keywords returns None for this"),
+            None => CreateSourceFormat::None,
         };
         let envelope = if self.parse_keyword(ENVELOPE) {
-            self.parse_envelope()?
+            let envelope = self.parse_envelope()?;
+            if matches!(envelope, Envelope::Upsert) {
+                // TODO: remove support for explicit UPSERT FORMAT after a period of deprecation
+                if self.parse_keyword(FORMAT) {
+                    warn!("UPSERT FORMAT has been deprecated, use the new KEY FORMAT syntax");
+                    if let CreateSourceFormat::Bare(value) = format {
+                        let key = self.parse_format()?;
+                        format = CreateSourceFormat::KeyValue { key, value };
+                    } else {
+                        self.error(
+                            self.index,
+                            "ENVELOPE UPSERT FORMAT conflicts with earlier KEY FORMAT specification".into(),
+                        );
+                    }
+                }
+            }
+            envelope
         } else {
             Default::default()
         };
@@ -1792,7 +1812,13 @@ impl<'a> Parser<'a> {
                 let broker = self.parse_literal_string()?;
                 self.expect_keyword(TOPIC)?;
                 let topic = self.parse_literal_string()?;
-                let key = if self.parse_keyword(KEY) {
+                // one token of lookahead:
+                // * `KEY (` means we're parsing a list of columns for the key
+                // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
+                let key = if self.peek_keyword() == Some(KEY)
+                    && self.peek_nth_token(1) != Some(Token::Keyword(FORMAT))
+                {
+                    let _ = self.expect_keyword(KEY);
                     Some(self.parse_parenthesized_column_list(Mandatory)?)
                 } else {
                     None

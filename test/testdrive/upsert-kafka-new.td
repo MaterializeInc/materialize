@@ -7,9 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# This testdrive file uses the deprecated syntax, but is otherwise identical to upsert-kafka-new.td
-#
-# This file can be deleted when/if we finish the deprecation and perform the removal of the old syntax.
+# This testdrive file is exactly the same as upsert-kafka.td, but using the new syntax.
 
 $ set keyschema={
     "type": "record",
@@ -42,8 +40,7 @@ $ kafka-ingest format=avro topic=avroavro key-format=avro key-schema=${keyschema
 {"key": "mammalmore"} {"f1":"moose", "f2": 2}
 
 > CREATE MATERIALIZED SOURCE avroavro
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-avroavro-${testdrive.seed}'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-avroavro-${testdrive.seed}'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE UPSERT
 
@@ -64,17 +61,18 @@ mammal1: {"f1": "moose", "f2": 1}
 
 > CREATE MATERIALIZED SOURCE bytesavro
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textavro-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA  '${schema}'
-  ENVELOPE UPSERT FORMAT BYTES
+  KEY FORMAT BYTES
+  VALUE FORMAT AVRO USING SCHEMA  '${schema}'
+  ENVELOPE UPSERT
 
 $ file-append path=data-schema.json
 \${schema}
 
 > CREATE MATERIALIZED SOURCE textavro
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-textavro-${testdrive.seed}'
-  FORMAT AVRO USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
-  ENVELOPE UPSERT FORMAT TEXT
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textavro-${testdrive.seed}'
+  KEY FORMAT TEXT
+  VALUE FORMAT AVRO USING SCHEMA FILE '${testdrive.temp-dir}/data-schema.json'
+  ENVELOPE UPSERT
 
 > select * from bytesavro
 key0          f1       f2
@@ -107,24 +105,24 @@ mammal1:moose
 bìrd1:
 
 > CREATE MATERIALIZED SOURCE texttext
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-textbytes-${testdrive.seed}'
-    FORMAT TEXT ENVELOPE UPSERT
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textbytes-${testdrive.seed}'
+  FORMAT TEXT ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE textbytes
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-textbytes-${testdrive.seed}'
-  FORMAT BYTES ENVELOPE UPSERT FORMAT TEXT
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textbytes-${testdrive.seed}'
+  KEY FORMAT TEXT
+  VALUE FORMAT BYTES
+  ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE bytesbytes
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-textbytes-${testdrive.seed}'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textbytes-${testdrive.seed}'
   FORMAT BYTES ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE bytestext
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-textbytes-${testdrive.seed}'
-  FORMAT TEXT ENVELOPE UPSERT FORMAT BYTES
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textbytes-${testdrive.seed}'
+  KEY FORMAT BYTES
+  VALUE FORMAT TEXT
+  ENVELOPE UPSERT
 
 > select * from texttext
 key0          text  mz_offset
@@ -172,16 +170,16 @@ mammalmore       herd             10
 $ kafka-create-topic topic=textproto
 
 > CREATE MATERIALIZED SOURCE textproto
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-textproto-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
-  ENVELOPE UPSERT FORMAT TEXT
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textproto-${testdrive.seed}'
+  KEY FORMAT TEXT
+  VALUE FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
+  ENVELOPE UPSERT
 
 > CREATE MATERIALIZED SOURCE bytesproto
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-textproto-${testdrive.seed}'
-  FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
-  ENVELOPE UPSERT FORMAT BYTES
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-textproto-${testdrive.seed}'
+  KEY FORMAT BYTES
+  VALUE FORMAT PROTOBUF MESSAGE '.Struct' USING SCHEMA FILE '${testdrive.protobuf-descriptors-file}'
+  ENVELOPE UPSERT
 
 $ kafka-ingest format=protobuf message=struct topic=textproto key-format=bytes key-terminator=: publish=true
 fish:{"int": 1, "bad_int": 1, "bin": "ONE", "st": "my-string"}
@@ -234,9 +232,10 @@ mammalmore:moose
 mammal1:
 
 > CREATE MATERIALIZED SOURCE nullkey
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-nullkey-${testdrive.seed}'
-  FORMAT TEXT ENVELOPE UPSERT FORMAT TEXT
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nullkey-${testdrive.seed}'
+  KEY FORMAT TEXT
+  VALUE FORMAT TEXT
+  ENVELOPE UPSERT
 
 > select * from nullkey
 key0          text  mz_offset
@@ -267,10 +266,10 @@ $ kafka-ingest format=avro topic=realtimeavroavro key-format=avro key-schema=${k
 {"f3": {"string": "earth"}, "f1":{"string": "dao"}}
 
 > CREATE SOURCE realtimeavroavro (f3, f4, f1, f2)
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-realtimeavroavro-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE UPSERT FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-realtimeavroavro-${testdrive.seed}'
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT
 
 > CREATE MATERIALIZED VIEW realtimeavroavro_view as SELECT * from realtimeavroavro;
 
@@ -286,8 +285,9 @@ water     <null>  crocodile      7
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
   'testdrive-realtimeavroavro-${testdrive.seed}'
   WITH (start_offset=1)
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE UPSERT FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT
 
 > SELECT * FROM realtimeavroavro_ff
 f3        f1        f1           f2
@@ -345,10 +345,10 @@ $ kafka-ingest format=avro topic=realtimefilteravro key-format=avro key-schema=$
 {"k1": {"string": "boucherie"}, "k2": {"long": 5}} {"f1": {"string": "apple"}, "f2": {"long": 3}}
 
 > CREATE SOURCE realtimefilteravro
-  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
-  'testdrive-realtimefilteravro-${testdrive.seed}'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-  ENVELOPE UPSERT FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-realtimefilteravro-${testdrive.seed}'
+  KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT
 
 # filter on key only
 > CREATE MATERIALIZED VIEW filterforkey AS
