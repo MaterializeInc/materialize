@@ -2547,6 +2547,7 @@ lazy_static! {
                 params!(String, String) => BinaryFunc::Eq, 98;
                 params!(Jsonb, Jsonb) => BinaryFunc::Eq, 3240;
                 params!(ListAny, ListAny) => BinaryFunc::Eq, oid::FUNC_LIST_EQ_OID;
+                params!(ArrayAny, ArrayAny) => BinaryFunc::Eq, 1070;
             },
             "<>" => Scalar {
                 params!(DecimalAny, DecimalAny) => {
