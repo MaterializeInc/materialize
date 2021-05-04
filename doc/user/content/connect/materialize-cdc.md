@@ -27,6 +27,14 @@ The Materialize CDC format has two components:
 
 Materialize compares the record updates it has received to the expected changes as described by the applicable progress update, and discards duplicates if there are too many identical record updates for a timestamp.
 
+## Data requirements
+
+Record updates take the form of `(data, time, diff)` triples, representing respectively the changed record, the logical timestamp of the update, and the type of update (`-1` for deletion and `1` for addition or upsert).
+
+There should be at most one diff value for each `(data, time)` pair. That is, if a stream would have updates `(data1, time1, -1)` and `(data1, time1, 1)`, these should be combined and expressed as `(data1, time1, 0)` (and then suppressed). In effect, the data must be pre-consolidated before it is transmitted to Materialize. There can be multiple identical `(data, time, diff)` triples, but they will be treated as duplications, and only one update will be recorded.
+
+
+
 ## Example Materialize CDC Avro schema
 
 ```json
