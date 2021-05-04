@@ -295,22 +295,39 @@ pub struct FuncImpl<R> {
 /// See: https://www.postgresql.org/docs/current/xfunc-volatility.html
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Volatility {
-    /// A `Stable` function cannot modify the database and is guaranteed to return
-    /// the same results given the same arguments for all rows within a single
-    /// statement.
-    Stable,
     /// An `Immutable` function cannot modify the database and is guaranteed to
     /// return the same results given the same arguments forever.
     Immutable,
+    /// An `MzStable` function cannot modify the database and is guaranteed to
+    /// return the same results given the same arguments for all rows within a
+    /// single statement. In a view, any session- or catalog-dependent results are
+    /// executed once at dataflow creation and cached for the duration of the view,
+    /// so these functions can be used in views/dataflows.
+    MzStable,
+    /// A `Stable` function cannot modify the database and is guaranteed to return
+    /// the same results given the same arguments for all rows within a single
+    /// statement. These are not safe to run in a view because they should not
+    /// cache their result like `MzStable`.
+    Stable,
     /// A `Volatile` function can do anything, including modifying the database. It
     /// can return different results on successive calls with the same arguments.
     Volatile,
+}
+
+impl Volatility {
+    fn useable_in_static(&self) -> bool {
+        match self {
+            Volatility::Immutable | Volatility::MzStable => true,
+            Volatility::Stable | Volatility::Volatile => false,
+        }
+    }
 }
 
 impl fmt::Display for Volatility {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Volatility::Immutable => "i",
+            Volatility::MzStable => "m",
             Volatility::Stable => "s",
             Volatility::Volatile => "v",
         })
@@ -943,7 +960,7 @@ where
     // For maintained views, we only allow immutable functions. Other volatilities
     // are dependent on session variables, clocks, or other things set on each
     // startup, and thus can change over the course of execution.
-    if ecx.qcx.lifetime == QueryLifetime::Static && f.volatility != Volatility::Immutable {
+    if ecx.qcx.lifetime == QueryLifetime::Static && !f.volatility.useable_in_static() {
         bail!("{} cannot be used in static queries", spec)
     }
 
@@ -1998,7 +2015,7 @@ lazy_static! {
                 params!() => Operation::nullary(mz_cluster_id), oid::FUNC_MZ_CLUSTER_ID_OID, Volatility::Immutable;
             },
             "mz_logical_timestamp" => Scalar {
-                params!() => NullaryFunc::MzLogicalTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID, Volatility::Stable;
+                params!() => NullaryFunc::MzLogicalTimestamp, oid::FUNC_MZ_LOGICAL_TIMESTAMP_OID, Volatility::MzStable;
             },
             "mz_uptime" => Scalar {
                 params!() => Operation::nullary(mz_uptime), oid::FUNC_MZ_UPTIME_OID, Volatility::Volatile;
