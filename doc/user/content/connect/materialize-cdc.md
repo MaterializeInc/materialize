@@ -31,7 +31,7 @@ Materialize compares the record updates it has received to the expected changes 
 
 Record updates take the form of `(data, time, diff)` triples, representing respectively the changed record, the logical timestamp of the update, and the type of update (`-1` for deletion and `1` for addition or upsert).
 
-There should be at most one diff for each `(data, time)` pair. In effect, the data must be pre-consolidated before it is transmitted to Materialize. This is an important part of the design, because we cannot otherwise distinguish the deliberate use of `(data, time, +1)` and `(data, time, +1)` from duplication in the steam, which the format is meant to resist.
+There should be at most one diff value for each `(data, time)` pair. That is, if a stream has updates `(data1, time1, -1)` and `(data1, time1, 1)`, these should be combined and expressed as `(data1, time1, 0)` (and then suppressed).  In effect, the data must be pre-consolidated before it is transmitted to Materialize. There can be multiple identical `(data, time, diff)` triples, but they will be treated as duplications, and only one update will be recorded. 
 
 ## Example Materialize CDC Avro schema
 
