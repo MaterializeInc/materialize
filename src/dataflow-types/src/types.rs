@@ -587,6 +587,14 @@ impl SourceConnector {
             SourceConnector::Local => false,
         }
     }
+
+    /// todo
+    pub fn external_state_op(&self) -> Option<ExternalStateOp> {
+        match self {
+            SourceConnector::External { connector, .. } => connector.external_state_op(),
+            SourceConnector::Local => None,
+        }
+    }
 }
 
 pub fn cached_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {
@@ -595,6 +603,23 @@ pub fn cached_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {
             cached_files.clone().unwrap_or_else(Vec::new)
         }
         _ => vec![],
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ExternalStateOp {
+    DropPostgresReplicationSlot {
+        connection: String,
+        slots: Vec<String>,
+    },
+}
+
+impl ExternalStateOp {
+    /// todo
+    pub async fn execute(&self) -> Result<(), anyhow::Error> {
+        match self {
+            ExternalStateOp::DropPostgresReplicationSlot { connection, slots } => Ok(()),
+        }
     }
 }
 
@@ -669,6 +694,19 @@ impl ExternalSourceConnector {
         match self {
             ExternalSourceConnector::Kafka(k) => k.enable_caching,
             _ => false,
+        }
+    }
+
+    /// todo
+    pub fn external_state_op(&self) -> Option<ExternalStateOp> {
+        match self {
+            ExternalSourceConnector::Postgres(connector) => {
+                Some(ExternalStateOp::DropPostgresReplicationSlot {
+                    connection: connector.conn.clone(),
+                    slots: vec![connector.slot_name.clone()],
+                })
+            }
+            _ => None,
         }
     }
 }

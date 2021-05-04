@@ -422,6 +422,14 @@ impl CatalogItem {
             }
         }
     }
+
+    /// todo
+    pub fn external_state_op(&self) -> Option<dataflow_types::ExternalStateOp> {
+        match self {
+            CatalogItem::Source(source) => source.connector.external_state_op(),
+            _ => None,
+        }
+    }
 }
 
 impl CatalogEntry {

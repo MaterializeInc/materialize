@@ -46,7 +46,6 @@ use dataflow_types::{
     DataflowDesc, IndexDesc, PeekResponse, SinkConnector, SourceConnector, TailSinkConnector,
     TimestampSourceUpdate, Update,
 };
-use dataflow_types::{ExternalSourceConnector, PostgresSourceConnector};
 use dataflow_types::{SinkAsOf, SinkEnvelope};
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
@@ -54,7 +53,6 @@ use expr::{
 };
 use ore::str::StrExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
-use postgres_util::drop_replication_slots;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
@@ -2605,7 +2603,7 @@ impl Coordinator {
         let mut indexes_to_drop = vec![];
 
         // External state to handle on DROP.
-        let mut slots_to_drop: HashMap<String, Vec<String>> = HashMap::new();
+        let mut external_state_ops = vec![];
 
         for op in &ops {
             if let catalog::Op::DropItem(id) = op {
@@ -2626,22 +2624,8 @@ impl Coordinator {
                     _ => (),
                 }
 
-                if let CatalogItem::Source(source) = item {
-                    if let SourceConnector::External {
-                        connector:
-                            ExternalSourceConnector::Postgres(PostgresSourceConnector {
-                                conn,
-                                slot_name,
-                                ..
-                            }),
-                        ..
-                    } = &source.connector
-                    {
-                        slots_to_drop
-                            .entry(conn.clone())
-                            .or_default()
-                            .push(slot_name.clone());
-                    }
+                if let Some(external_state_op) = item.external_state_op() {
+                    external_state_ops.push(external_state_op);
                 }
             }
         }
@@ -2671,9 +2655,9 @@ impl Coordinator {
             self.drop_indexes(indexes_to_drop).await;
         }
 
-        if !slots_to_drop.is_empty() {
-            for (conn, slots) in slots_to_drop {
-                drop_replication_slots(&conn, &slots).await?
+        if !external_state_ops.is_empty() {
+            for op in &external_state_ops {
+                op.execute().await?;
             }
         }
 
