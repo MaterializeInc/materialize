@@ -54,3 +54,26 @@ query II rowsort
 select * from valid AS OF 18446744073709551615;
 ----
 5  18446744073709551616
+
+#
+# Regression test for #6635
+#
+statement ok
+CREATE TABLE events (
+    content text,
+    insert_ts numeric,
+    delete_ts numeric
+);
+
+statement ok
+CREATE MATERIALIZED VIEW valid_events AS
+SELECT content, count(*)
+FROM events
+WHERE mz_logical_timestamp() >= insert_ts
+  AND mz_logical_timestamp()  < delete_ts
+GROUP BY content;
+
+
+query TI rowsort
+select * from valid_events;
+----
