@@ -57,7 +57,8 @@ We call the indexed update stream an **arrangement**.
 
 In the `(data, time, diff)` triples that make up the update stream, `data` is structured as a key-value pair.  Arrangements are indexed on the `data` keys.
 
-<!-- More on how this index differs from the index you can create manually? -->
+<!-- Is this correct? -->
+Note that this is not the same as the index created by the `CREATE INDEX` command. `CREATE INDEX` creates an index on a **source** or **table**. An arrangement is an index on the **update stream**. You cannot manually create an arrangement, although you can influence the shape of the arrangements created by Materialize by the way you structure queries and views.
 
 When Materialize creates an arrangement, it attempts to choose a key that will ensure that data is well distributed. If there is a primary key, that will be used; if there are source fields not required by the query, they are not included. Often Materialize can pull primary key info from a Confluent or Kafka schema.
 
@@ -73,7 +74,7 @@ Let's take a look at some of the arrangements that Materialize creates for diffe
 
 #### `COUNT`
 
-The simplest arrangements are those for Differential Dataflow operators.
+Some of the simplest arrangements are those for Differential Dataflow operators.
 
 COUNT operator  will have two arrangements: one by input (arrangement by key)  and then one for the output (the results). COUNT reads from input but doesn’t write to it; both reads and writes to output.
 
@@ -98,6 +99,8 @@ In trad dbs: people often have secondary indexes: userID+userSegment, but if you
 #### Delta joins
 
 Delta joins - avoid intermediate arrangements if all collections have arrangements by all of their primary and foreign keys -- uses more arrangements than otherwise but the arrangements are more likely to be shareable with other queries. Requires separate dataflow for each input.
+
+[Frank's blog post]
 
 ## Analyzing arrangements
 
