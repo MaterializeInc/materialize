@@ -27,7 +27,7 @@ The Materialize CDC format has two components:
 
 Materialize compares the record updates it has received to the expected changes as described by the applicable progress update, and discards duplicates if there are too many identical record updates for a timestamp.
 
-### Record updates
+## Data requirements
 
 Record updates take the form of `(data, time, diff)` triples, representing respectively the changed record, the logical timestamp of the update, and the type of update (`-1` for deletion and `1` for addition or upsert).
 
