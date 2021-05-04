@@ -326,7 +326,7 @@ impl Params {
 }
 
 /// Controls planning of a SQL query.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, Copy)]
 pub struct PlanContext {
     pub wall_time: DateTime<Utc>,
 }

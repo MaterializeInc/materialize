@@ -20,7 +20,7 @@ use futures::Stream;
 use expr::GlobalId;
 use repr::{Datum, Row, ScalarType, Timestamp};
 use sql::ast::{Raw, Statement};
-use sql::plan::{Params, StatementDesc};
+use sql::plan::{Params, PlanContext, StatementDesc};
 
 use crate::error::CoordError;
 
@@ -37,6 +37,7 @@ pub struct Session {
     prepared_statements: HashMap<String, PreparedStatement>,
     portals: HashMap<String, Portal>,
     transaction: TransactionStatus,
+    pcx: Option<PlanContext>,
     user: String,
     vars: Vars,
     drop_sinks: Vec<GlobalId>,
@@ -61,6 +62,7 @@ impl Session {
         Session {
             conn_id,
             transaction: TransactionStatus::Default,
+            pcx: None,
             prepared_statements: HashMap::new(),
             portals: HashMap::new(),
             user,
@@ -72,6 +74,16 @@ impl Session {
     /// Returns the connection ID associated with the session.
     pub fn conn_id(&self) -> u32 {
         self.conn_id
+    }
+
+    /// Returns (and creates if empty) the default PlanContext.
+    ///
+    /// This is cleared at the end of a transaction.
+    pub fn pcx(&mut self) -> PlanContext {
+        if self.pcx == None {
+            self.pcx = Some(PlanContext::default());
+        }
+        self.pcx.unwrap()
     }
 
     /// Starts a transaction.
@@ -113,6 +125,7 @@ impl Session {
     /// > An unnamed portal is destroyed at the end of the transaction
     pub fn clear_transaction(&mut self) -> (Vec<GlobalId>, TransactionStatus) {
         self.portals.clear();
+        self.pcx = None;
         let drop_sinks = mem::take(&mut self.drop_sinks);
         let txn = mem::take(&mut self.transaction);
         (drop_sinks, txn)
