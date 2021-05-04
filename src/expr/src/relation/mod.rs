@@ -1164,6 +1164,13 @@ impl MirRelationExpr {
         ViewExplanation::new(self, &DummyHumanizer).to_string()
     }
 
+    /// Pretty-print this MirRelationExpr to a string with type information.
+    pub fn pretty_typed(&self) -> String {
+        let mut explanation = ViewExplanation::new(self, &DummyHumanizer);
+        explanation.explain_types();
+        explanation.to_string()
+    }
+
     /// Take ownership of `self`, leaving an empty `MirRelationExpr::Constant` with the correct type.
     pub fn take_safely(&mut self) -> MirRelationExpr {
         let typ = self.typ();
