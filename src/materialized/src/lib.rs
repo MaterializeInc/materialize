@@ -120,6 +120,8 @@ pub struct Config {
     pub safe_mode: bool,
     /// An optional telemetry endpoint. Use None to disable telemetry.
     pub telemetry_url: Option<String>,
+    /// The frequency at which to update introspection
+    pub introspection_frequency: Duration,
 }
 
 /// Configures TLS encryption for connections.
@@ -258,6 +260,17 @@ pub async fn serve(
             }));
             mux.serve(incoming.by_ref().take_until(drain_tripwire))
                 .await;
+        }
+    });
+
+    tokio::spawn({
+        let start_time = coord_handle.start_instant();
+        let frequency = config.introspection_frequency;
+        async move {
+            loop {
+                server_metrics::update_uptime(start_time);
+                tokio::time::sleep(frequency).await;
+            }
         }
     });
 

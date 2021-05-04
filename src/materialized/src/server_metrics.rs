@@ -76,13 +76,17 @@ lazy_static! {
 /// Call [`prometheus::gather`], ensuring that all our metrics are up to date
 pub fn load_prom_metrics(start_time: Instant) -> Vec<prometheus::proto::MetricFamily> {
     let before_gather = Instant::now();
-    let uptime = before_gather - start_time;
-    let (secs, milli_part) = (uptime.as_secs() as f64, uptime.subsec_millis() as f64);
-    SERVER_METADATA.set(secs + milli_part / 1_000.0);
+    update_uptime(start_time);
     let result = prometheus::gather();
 
     REQUEST_METRICS_GATHER.set(Instant::now().duration_since(before_gather).as_micros() as i64);
     result
+}
+
+pub fn update_uptime(start_time: Instant) {
+    let uptime = start_time.elapsed();
+    let (secs, milli_part) = (uptime.as_secs() as f64, uptime.subsec_millis() as f64);
+    SERVER_METADATA.set(secs + milli_part / 1_000.0);
 }
 
 pub fn filter_metrics<'a>(
