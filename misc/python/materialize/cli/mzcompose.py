@@ -143,9 +143,9 @@ def main(argv: List[str]) -> int:
     announce("Delegating to Docker Compose")
     proc = composition.run(
         [
-            *unknown_args,
             *([args.command] if args.command is not None else []),
             *([args.first_command_arg] if args.first_command_arg is not None else []),
+            *unknown_args,
             *args.remainder,
         ],
         check=False,
@@ -252,10 +252,6 @@ class ArgumentParser(argparse.ArgumentParser):
             if pargs.mz_build_mode not in ["dev", "release"]:
                 raise errors.BadSpec(
                     f'unknown build mode {pargs.mz_build_mode!r} (expected "dev" or "release")'
-                )
-            if "--mz-build-mode" in pargs.remainder:
-                raise errors.BadSpec(
-                    f"--mz-build-mode must be provided before the command: '{pargs.command}'"
                 )
             return (pargs, unknown_args)
         except ValueError:
