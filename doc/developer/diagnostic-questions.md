@@ -61,11 +61,11 @@ What are the column types?
   messed up by implicit casting from int4 (resp. float4) to int8 (resp. float8)
   See [#4171](https://github.com/MaterializeInc/materialize/issues/4171)
 
-Is the plan sane?
+Is the plan sane? (Ask for raw/decorrelated/optimized plans)
 - Can an expensive operator be pushed down?
 - Can two joins reuse the same arrangement?
 
-Is the rendering sane?
+Is the rendering sane? (Ask for the memory graph)
 - How often is Differential Dataflow recomputing results? How much recomputation
   is happening?
   - How frequent are the timestamps changing at different stages of rendering?
@@ -75,6 +75,14 @@ Is the rendering sane?
 Is one worker (or a few workers) behind the others?
 - Is the data really skewed towards one (or a few workers)?
   - Is there a cross join?
+    - Is the cross join happening because the user is trying to create a
+      particular window of time by joining a view tracking the current time to
+      another view?
+      - How frequently is the current time being updated? Each update will
+        result in new row retractions and row additions equal to the size of the
+        other view.
+      - How frequently does the user need the current time to be updated?
+    - Are there alternatives to doing the cross join for the particular use case?
   - Is there a inner join on vacuous columns? (i.e. the columns
     have very few unique values)?
   - Is the data materialized as an index on vacuous columns?
