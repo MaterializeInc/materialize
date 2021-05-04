@@ -293,7 +293,7 @@ pub struct FuncImpl<R> {
 }
 
 /// See: https://www.postgresql.org/docs/current/xfunc-volatility.html
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Volatility {
     /// A `Stable` function cannot modify the database and is guaranteed to return
     /// the same results given the same arguments for all rows within a single
@@ -940,6 +940,13 @@ where
 
     let f = find_match(ecx, types, impls)?;
 
+    // For maintained views, we only allow immutable functions. Other volatilities
+    // are dependent on session variables, clocks, or other things set on each
+    // startup, and thus can change over the course of execution.
+    if ecx.qcx.lifetime == QueryLifetime::Static && f.volatility != Volatility::Immutable {
+        bail!("{} cannot be used in static queries", spec)
+    }
+
     (f.op.0)(ecx, spec, cexprs, &f.params)
 }
 
@@ -1538,7 +1545,7 @@ lazy_static! {
                 params!(Int64, Int64) => Operation::nullary(|_ecx| catalog_name_only!("mod")), 947, Volatility::Immutable;
             },
             "now" => Scalar {
-                params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "now")), 1299, Volatility::Stable;
+                params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx)), 1299, Volatility::Stable;
             },
             "octet_length" => Scalar {
                 params!(Bytes) => UnaryFunc::ByteLengthBytes, 720, Volatility::Immutable;
@@ -1934,7 +1941,7 @@ lazy_static! {
                 params!(Any) => Operation::unary(|_ecx, _e| unsupported!("concat_agg")), oid::FUNC_CONCAT_AGG_OID, Volatility::Immutable;
             },
             "current_timestamp" => Scalar {
-                params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx, "current_timestamp")), oid::FUNC_CURRENT_TIMESTAMP_OID, Volatility::Volatile;
+                params!() => Operation::nullary(|ecx| plan_current_timestamp(ecx)), oid::FUNC_CURRENT_TIMESTAMP_OID, Volatility::Volatile;
             },
             "internal_read_cached_data" => Table {
                 params!(String) => Operation::unary(move |ecx, source| {
@@ -2112,14 +2119,11 @@ lazy_static! {
     };
 }
 
-fn plan_current_timestamp(ecx: &ExprContext, name: &str) -> Result<HirScalarExpr, anyhow::Error> {
-    match ecx.qcx.lifetime {
-        QueryLifetime::OneShot => Ok(HirScalarExpr::literal(
-            Datum::from(ecx.qcx.scx.pcx.wall_time),
-            ScalarType::TimestampTz,
-        )),
-        QueryLifetime::Static => bail!("{} cannot be used in static queries", name),
-    }
+fn plan_current_timestamp(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
+    Ok(HirScalarExpr::literal(
+        Datum::from(ecx.qcx.scx.pcx.wall_time),
+        ScalarType::TimestampTz,
+    ))
 }
 
 fn mz_cluster_id(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
@@ -2144,15 +2148,12 @@ fn mz_workers(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
 }
 
 fn mz_uptime(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
-    match ecx.qcx.lifetime {
-        QueryLifetime::OneShot => Ok(HirScalarExpr::literal(
-            Datum::from(chrono::Duration::from_std(
-                ecx.catalog().config().start_instant.elapsed(),
-            )?),
-            ScalarType::Interval,
-        )),
-        QueryLifetime::Static => bail!("mz_uptime cannot be used in static queries"),
-    }
+    Ok(HirScalarExpr::literal(
+        Datum::from(chrono::Duration::from_std(
+            ecx.catalog().config().start_instant.elapsed(),
+        )?),
+        ScalarType::Interval,
+    ))
 }
 
 fn pg_postmaster_start_time(ecx: &ExprContext) -> Result<HirScalarExpr, anyhow::Error> {
