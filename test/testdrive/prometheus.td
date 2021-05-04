@@ -10,6 +10,18 @@
 # This test validates that prometheus logs make it to testdrive, and that they get retained
 # correctly.
 
+# Some prometheus metrics should always exist
+
+> SELECT value FROM mz_metrics WHERE metric = 'mz_worker_pending_peeks_queue_size'
+  ORDER BY time DESC LIMIT 1
+0
+
+> SELECT count(*) > 0 FROM mz_metrics WHERE metric = 'mz_worker_command_queue_size'
+true
+
+> SELECT count(*) > 0 FROM mz_metrics WHERE metric = 'mz_arrangement_maintenance_active_info'
+true
+
 # Ensure we retain metrics:
 > CREATE MATERIALIZED VIEW metric_stats AS SELECT count(*) as total, max(time) as youngest, min(time) as oldest FROM mz_metrics;
 > SELECT oldest<=youngest FROM metric_stats;
