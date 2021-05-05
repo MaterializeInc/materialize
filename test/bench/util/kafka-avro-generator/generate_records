@@ -16,11 +16,15 @@ import subprocess
 
 DISTRIBUTIONS = "/usr/share/generator/distributions"
 
-
 def run(args: argparse.Namespace) -> None:
     """Run the generator, inserting args.num_records number of messages."""
 
     records_per_process = int(args.num_records / args.parallelism)
+
+    bootstrap_broker = args.bootstrap_broker
+    schema_registry_url = args.schema_registry_url
+
+    topic= args.topic
 
     key_schema = pathlib.Path(DISTRIBUTIONS, "key-schema.json").read_text().strip()
     value_schema = pathlib.Path(DISTRIBUTIONS, "value-schema.json").read_text().strip()
@@ -37,13 +41,13 @@ def run(args: argparse.Namespace) -> None:
         "/usr/local/bin/kgen",
         "--quiet",
         "--bootstrap-server",
-        "kafka:9092",
+        bootstrap_broker,
         "--schema-registry-url",
-        "http://schema-registry:8081",
+        schema_registry_url,
         "--num-records",
         str(records_per_process),
         "--topic",
-        "upsertavrotest",
+        topic,
         "--keys",
         "avro",
         "--values",
@@ -94,6 +98,29 @@ if __name__ == "__main__":
         type=int,
         default=multiprocessing.cpu_count(),
         help="Number of processes to spawn",
+    )
+
+    parser.add_argument(
+        "-b",
+        "--bootstrap-broker",
+        type=str,
+        default="kafka:9092",
+        help="Kafka bootstrap server",
+    )
+
+    parser.add_argument(
+        "-r",
+        "--schema-registry-url",
+        type=str,
+        default="http://schema-registry:8081",
+        help="Schema Registry url",
+    )
+
+    parser.add_argument(
+        "-t",
+        "--topic",
+        type=str,
+        help="Kafka topic",
     )
 
     args = parser.parse_args()

@@ -17,6 +17,7 @@ x-port-mappings:
   - &kafka-external 9093:9093
   - &schema-registry ${SR_PORT:-8081:8081}
   - &materialized ${MZ_PORT:-6875}
+  - &materialized-external ${MZ_PORT:-6875:6875}
   - &grafana 3000:3000
   - &prometheus 9090
   - &perf-metrics ${PERF_METRICS_PORT:-8675}
@@ -24,8 +25,8 @@ x-port-mappings:
 
 version: '3.7'
 services:
-  create-views:
-    mzbuild: avro-upsert-create-views
+  create-sink:
+    mzbuild: kafka-sink-avro-debezium-create-sink
   perf-dash-metrics:
     mzbuild: materialized
     ports:
@@ -49,21 +50,14 @@ services:
     mzbuild: materialized
     ports:
       - *materialized
+      - *materialized-external
     command:
       - --workers=${MZ_WORKERS:-16}
-      - --logical-compaction-window=1ms
-      # We want this to eventually count up to the size of the largest batch in
-      # an arrangement. This number represents a tradeoff between proactive
-      # merging (which takes time) and low latency.
-      #
-      # 1000 was chosen by fair dice roll.
-      - --differential-idle-merge-effort=1000
-      - --timely-progress-mode=${MZ_TIMELY_PROGRESS_MODE:-demand}
       - --disable-telemetry
     environment:
       # You can, for example, add `pgwire=trace` or change `info` to `debug` to
       # get more verbose logs.
-      - MZ_LOG=pgwire=debug,info
+      - MZ_LOG=dataflow::sink::kafka=debug,librdkafka=warn,rdkafka=warn,sql_parser=warn,hyper=warn,info
       - MZ_DEV=1
   zookeeper:
     image: confluentinc/cp-zookeeper:5.5.3
@@ -83,7 +77,7 @@ services:
       KAFKA_METRIC_REPORTERS: "io.confluent.metrics.reporter.ConfluentMetricsReporter"
       KAFKA_BROKER_ID: 1
       KAFKA_LOG_RETENTION_HOURS: -1
-      KAFKA_NUM_PARTITIONS: 30
+      KAFKA_NUM_PARTITIONS: 1
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       #KAFKA_LOG_CLEANUP_POLICY: "compact"
       CONFLUENT_METRICS_REPORTER_BOOTSTRAP_SERVERS: "kafka:9092"
@@ -159,25 +153,25 @@ mzworkflows:
 
   setup-benchmark:
     env:
-      UPSERT_GENERATOR_DISTRIBUTION: ${UPSERT_GENERATOR_DISTRIBUTION:-benchmark}
-      UPSERT_GENERATOR_NUM_RECORDS: ${UPSERT_GENERATOR_NUM_RECORDS:-400000000}
-      UPSERT_GENERATOR_PARALLELISM: ${UPSERT_GENERATOR_PARALLELISM:-40}
+      DATA_GENERATOR_DISTRIBUTION: ${DATA_GENERATOR_DISTRIBUTION:-benchmark}
+      DATA_GENERATOR_NUM_RECORDS: ${DATA_GENERATOR_NUM_RECORDS:-400000000}
+      DATA_GENERATOR_PARALLELISM: ${DATA_GENERATOR_PARALLELISM:-40}
     steps:
     - step: workflow
       workflow: start-services
     - step: run
       service: kafka-avro-generator
       command: >-
-        --parallelism=${UPSERT_GENERATOR_PARALLELISM}
-        --num-records=${UPSERT_GENERATOR_NUM_RECORDS}
-        --distribution=${UPSERT_GENERATOR_DISTRIBUTION}
-        --topic=upsertavrotest
+        --parallelism=${DATA_GENERATOR_PARALLELISM}
+        --num-records=${DATA_GENERATOR_NUM_RECORDS}
+        --distribution=${DATA_GENERATOR_DISTRIBUTION}
+        --topic=plain_avro_records
 
   run-benchmark:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-16}
       METRIC_VERIFIER_TIMEOUT: ${METRIC_VERIFIER_TIMEOUT:-3600}
-      UPSERT_GENERATOR_NUM_RECORDS: ${UPSERT_GENERATOR_NUM_RECORDS:-400000000}
+      DATA_GENERATOR_NUM_RECORDS: ${DATA_GENERATOR_NUM_RECORDS:-400000000}
     steps:
     - step: remove-services
       services: [materialized, perf-dash-scraper]
@@ -190,10 +184,10 @@ mzworkflows:
       command: >-
         scrape
         --timeout-seconds=${METRIC_VERIFIER_TIMEOUT}
-        "sum(mz_messages_ingested)"
-        ${UPSERT_GENERATOR_NUM_RECORDS}
+        "sum(mz_kafka_messages_sent_total)"
+        ${DATA_GENERATOR_NUM_RECORDS}
     - step: run
-      service: create-views
+      service: create-sink
     - step: wait
       service: metric-verifier
       expected_return_code: 0
@@ -209,8 +203,8 @@ mzworkflows:
 
   setup-benchmark-large:
     env:
-      UPSERT_GENERATOR_DISTRIBUTION: benchmark
-      UPSERT_GENERATOR_NUM_RECORDS: 400000000
+      DATA_GENERATOR_DISTRIBUTION: benchmark
+      DATA_GENERATOR_NUM_RECORDS: 400000000
     steps:
     - step: workflow
       workflow: setup-benchmark
@@ -218,7 +212,7 @@ mzworkflows:
   run-benchmark-large:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-16}
-      UPSERT_GENERATOR_NUM_RECORDS: 400000000
+      DATA_GENERATOR_NUM_RECORDS: 400000000
     steps:
     - step: workflow
       workflow: run-benchmark
@@ -233,9 +227,9 @@ mzworkflows:
 
   setup-benchmark-medium:
     env:
-      UPSERT_GENERATOR_DISTRIBUTION: medium
-      UPSERT_GENERATOR_NUM_RECORDS: 20000000
-      UPSERT_GENERATOR_PARALLELISM: 8
+      DATA_GENERATOR_DISTRIBUTION: medium
+      DATA_GENERATOR_NUM_RECORDS: 20000000
+      DATA_GENERATOR_PARALLELISM: 8
     steps:
     - step: workflow
       workflow: setup-benchmark
@@ -244,7 +238,33 @@ mzworkflows:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-8}
       METRIC_VERIFIER_TIMEOUT: 900
-      UPSERT_GENERATOR_NUM_RECORDS: 20000000
+      DATA_GENERATOR_NUM_RECORDS: 20000000
+    steps:
+    - step: workflow
+      workflow: run-benchmark
+
+  # Tiny dataset for quick iteration in dev build mode
+  benchmark-tiny:
+    steps:
+    - step: workflow
+      workflow: setup-benchmark-tiny
+    - step: workflow
+      workflow: run-benchmark-tiny
+
+  setup-benchmark-tiny:
+    env:
+      DATA_GENERATOR_DISTRIBUTION: medium
+      DATA_GENERATOR_NUM_RECORDS: 2000
+      DATA_GENERATOR_PARALLELISM: 1
+    steps:
+    - step: workflow
+      workflow: setup-benchmark
+
+  run-benchmark-tiny:
+    env:
+      MZ_WORKERS: ${MZ_WORKERS:-5}
+      METRIC_VERIFIER_TIMEOUT: 900
+      DATA_GENERATOR_NUM_RECORDS: 2000
     steps:
     - step: workflow
       workflow: run-benchmark
@@ -264,9 +284,9 @@ mzworkflows:
 
   setup-benchmark-ci:
     env:
-      UPSERT_GENERATOR_DISTRIBUTION: small
-      UPSERT_GENERATOR_NUM_RECORDS: 100000
-      UPSERT_GENERATOR_PARALLELISM: 4
+      DATA_GENERATOR_DISTRIBUTION: small
+      DATA_GENERATOR_NUM_RECORDS: 100000
+      DATA_GENERATOR_PARALLELISM: 4
     steps:
     - step: workflow
       workflow: setup-benchmark
@@ -275,52 +295,10 @@ mzworkflows:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-8}
       METRIC_VERIFIER_TIMEOUT: 30
-      UPSERT_GENERATOR_NUM_RECORDS: 100000
+      DATA_GENERATOR_NUM_RECORDS: 100000
     steps:
     - step: workflow
       workflow: run-benchmark
-
-  benchmark-insert-with-filter:
-    steps:
-    - step: workflow
-      workflow: setup-benchmark-insert-with-filter
-    - step: workflow
-      workflow: run-benchmark-insert-with-filter
-
-  setup-benchmark-insert-with-filter:
-    steps:
-    - step: workflow
-      workflow: start-services
-    - step: run
-      service: kafka-avro-generator
-      command: >-
-        --parallelism=40
-
-  run-benchmark-insert-with-filter:
-    env:
-      MZ_WORKERS: ${MZ_WORKERS:-16}
-    steps:
-    - step: remove-services
-      services: [materialized, perf-dash-scraper]
-      destroy_volumes: true
-    - step: start-services
-      services: [materialized, perf-dash-scraper]
-    - step: run
-      service: metric-verifier
-      daemon: true
-      command: >-
-        scrape
-        --timeout-seconds=900
-        "sum(mz_messages_ingested)"
-        "400000000"
-    - step: run
-      service: create-views
-      command: >-
-        insert_views.sql
-    - step: wait
-      service: metric-verifier
-      expected_return_code: 0
-      print_logs: true
 
   run-generator:
     steps:
@@ -335,4 +313,4 @@ mzworkflows:
     - step: start-services
       services: [materialized, perf-dash-scraper]
     - step: run
-      service: create-views
+      service: create-sink
