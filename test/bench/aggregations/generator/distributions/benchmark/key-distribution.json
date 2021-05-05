@@ -1,4 +1,6 @@
 {
-    "com.acme.avro.aggregationtestkey::Key1": [0, 100],
-    "com.acme.avro.aggregationtestkey::Key2": [0, 250000]
+    "com.acme.avro.aggregationtestkey::Key1": [
+        0,
+        100
+    ]
 }

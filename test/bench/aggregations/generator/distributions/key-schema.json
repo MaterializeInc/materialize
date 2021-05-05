@@ -1,15 +1,11 @@
 {
-    "name": "aggregationtestkey",
-    "type" : "record",
-    "namespace": "com.acme.avro",
-    "fields": [
-     {
-       "name": "Key1",
-       "type": "long"
-     },
-     {
-         "name": "Key2",
-         "type": "long"
-     }
-    ]
+  "name": "aggregationtestkey",
+  "type": "record",
+  "namespace": "com.acme.avro",
+  "fields": [
+    {
+      "name": "Key1",
+      "type": "long"
+    }
+  ]
 }

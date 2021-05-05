@@ -292,13 +292,13 @@ impl<'a> RandomAvroGenerator<'a> {
                 .checked_pow(u32::try_from(precision).unwrap())
                 .unwrap();
             assert!(
-                precision_limit <= max,
+                precision_limit >= max,
                 "max value of {} exceeds value expressable with precision {}",
                 max,
                 precision
             );
             assert!(
-                -precision_limit >= min,
+                precision_limit >= min.abs(),
                 "min value of {} exceeds value expressable with precision {}",
                 min,
                 precision

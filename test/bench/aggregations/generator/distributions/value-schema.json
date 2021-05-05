@@ -8,83 +8,18 @@
       "type": "long"
     },
     {
-      "name": "Key2Unused",
-      "type": "long"
-    },
-    {
       "name": "OuterRecord",
       "type": {
         "name": "OuterRecord",
         "type": "record",
         "fields": [
           {
-            "name": "Record1",
+            "name": "DecValue",
             "type": {
-              "name": "Record1",
-              "type": "record",
-              "fields": [
-                {
-                  "name": "InnerRecord1",
-                  "type": {
-                    "name": "InnerRecord1",
-                    "type": "record",
-                    "fields": [
-                      {
-                        "name": "Point",
-                        "type": "long"
-                      }
-                    ]
-                  }
-                },
-                {
-                  "name": "InnerRecord2",
-                  "type": {
-                    "name": "InnerRecord2",
-                    "type": "record",
-                    "fields": [
-                      {
-                        "name": "Point",
-                        "type": "long"
-                      }
-                    ]
-                  }
-                }
-              ]
-            }
-          },
-          {
-            "name": "Record2",
-            "type": {
-              "name": "Record2",
-              "type": "record",
-              "fields": [
-                {
-                  "name": "InnerRecord3",
-                  "type": {
-                    "name": "InnerRecord3",
-                    "type": "record",
-                    "fields": [
-                      {
-                        "name": "Point",
-                        "type": "long"
-                      }
-                    ]
-                  }
-                },
-                {
-                  "name": "InnerRecord4",
-                  "type": {
-                    "name": "InnerRecord4",
-                    "type": "record",
-                    "fields": [
-                      {
-                        "name": "Point",
-                        "type": "long"
-                      }
-                    ]
-                  }
-                }
-              ]
+              "type": "bytes",
+              "scale": 2,
+              "precision": 15,
+              "logicalType": "decimal"
             }
           }
         ]
