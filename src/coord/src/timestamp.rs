@@ -199,57 +199,56 @@ struct ByoFileConnector<Out, Err> {
     stream: Receiver<Result<Out, Err>>,
 }
 
-fn byo_query_source(consumer: &mut ByoTimestampConsumer) -> Vec<ValueEncoding> {
+fn byo_query_source(consumer: &mut ByoTimestampConsumer) -> anyhow::Result<Vec<ValueEncoding>> {
     let mut messages = vec![];
     match &mut consumer.connector {
         ByoTimestampConnector::Kafka(kafka_connector) => {
-            while let Some(payload) = kafka_get_next_message(&mut kafka_connector.consumer) {
+            while let Some(payload) = kafka_get_next_message(&mut kafka_connector.consumer)? {
                 messages.push(ValueEncoding::Bytes(payload));
             }
         }
         ByoTimestampConnector::Ocf(file_consumer) => {
-            while let Some(payload) = file_get_next_message(file_consumer) {
+            while let Some(payload) = file_get_next_message(file_consumer)? {
                 messages.push(ValueEncoding::Avro(payload));
             }
         }
     }
-    messages
+    Ok(messages)
 }
 
 /// Returns the next message of a stream, or None if no such message exists
-fn file_get_next_message<Out, Err>(file_consumer: &mut ByoFileConnector<Out, Err>) -> Option<Out>
+fn file_get_next_message<Out, Err>(
+    file_consumer: &mut ByoFileConnector<Out, Err>,
+) -> anyhow::Result<Option<Out>>
 where
     Err: Display,
 {
     match file_consumer.stream.try_recv() {
-        Ok(Ok(record)) => Some(record),
+        Ok(Ok(record)) => Ok(Some(record)),
         Ok(Err(e)) => {
-            error!("Failed to read file for timestamping: {}", e);
-            None
+            bail!("Failed to read file for timestamping: {}", e);
         }
-        Err(TryRecvError::Empty) => None,
-        Err(TryRecvError::Disconnected) => None,
+        Err(TryRecvError::Empty) => Ok(None),
+        Err(TryRecvError::Disconnected) => Ok(None),
     }
 }
 
 /// Polls a message from a Kafka Source
-fn kafka_get_next_message(consumer: &mut BaseConsumer) -> Option<Vec<u8>> {
+fn kafka_get_next_message(consumer: &mut BaseConsumer) -> anyhow::Result<Option<Vec<u8>>> {
     if let Some(result) = consumer.poll(Duration::from_millis(60)) {
         match result {
             Ok(message) => match message.payload() {
-                Some(p) => Some(p.to_vec()),
+                Some(p) => Ok(Some(p.to_vec())),
                 None => {
-                    error!("unexpected null payload");
-                    None
+                    bail!("unexpected null payload");
                 }
             },
             Err(err) => {
-                error!("Failed to process message {}", err);
-                None
+                bail!("Failed to process message {}", err);
             }
         }
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -299,17 +298,16 @@ fn generate_ts_updates_from_debezium(
     tx: &mpsc::UnboundedSender<coord::Message>,
     byo_consumer: &mut ByoTimestampConsumer,
     value: Value,
-) {
+) -> anyhow::Result<()> {
     if let Value::Record(record) = value {
-        // All entries in the transaction should have the same timestamp
         let results = match parse_debezium(record) {
             Ok(result) => result,
             Err(e) => {
-                error!("Failed to parse debezium transaction msg: {:?}", e);
-                None
+                bail!("Failed to parse debezium transaction msg: {:?}", e);
             }
         };
 
+        // Results are only returned when the record's status type is END
         if let Some(results) = results {
             byo_consumer.last_ts += 1;
             for (topic, count) in results {
@@ -340,7 +338,11 @@ fn generate_ts_updates_from_debezium(
                 }
             }
         }
+    } else {
+        bail!("Expected record type for value, got {:?}", value);
     }
+
+    Ok(())
 }
 
 /// A debezium record contains a set of update counts for each topic that the transaction
@@ -472,14 +474,14 @@ impl Timestamper {
     /// Run the update function in a loop at the specified frequency. Acquires timestamps using
     /// either the Kafka topic ground truth
     /// TODO(ncrooks): move to thread local BYO implementation
-    pub fn update(&mut self) {
+    pub fn update(&mut self) -> anyhow::Result<()> {
         loop {
             thread::sleep(self.timestamp_frequency);
             let shutdown = self.update_sources();
             if shutdown {
-                break;
+                return Ok(());
             } else {
-                self.update_byo_timestamp();
+                self.update_byo_timestamp()?;
             }
         }
     }
@@ -586,17 +588,17 @@ impl Timestamper {
     /// This is necessary to guarantee that this timestamp *could not have been closed yet*
     ///
     /// Supports two envelopes: None and Debezium. Currentlye compatible with Debezium format 1.1
-    fn update_byo_timestamp(&mut self) {
+    fn update_byo_timestamp(&mut self) -> anyhow::Result<()> {
         for (id, byo_consumer) in &mut self.byo_sources {
             // Get the next set of messages from the Consistency topic
-            let messages = byo_query_source(byo_consumer);
+            let messages = byo_query_source(byo_consumer)?;
             match byo_consumer.envelope {
                 ConsistencyFormatting::DebeziumAvro => {
                     for msg in messages {
                         let msg = if let ValueEncoding::Bytes(msg) = msg {
                             msg
                         } else {
-                            panic!("Kafka Debezium consistency should only encode byte messages");
+                            bail!("Kafka Debezium consistency should only encode byte messages");
                         };
                         // The first 5 bytes are reserved for the schema id/schema registry information
                         let mut bytes = &msg[5..];
@@ -604,6 +606,7 @@ impl Timestamper {
                         match res {
                             Err(_) => {
                                 // This was a key message, can safely ignore it
+                                // TODO (chris): are we certain?
                                 continue;
                             }
                             Ok(record) => {
@@ -612,7 +615,7 @@ impl Timestamper {
                                     &self.tx,
                                     byo_consumer,
                                     record,
-                                );
+                                )?;
                             }
                         }
                     }
@@ -622,13 +625,15 @@ impl Timestamper {
                         let value = if let ValueEncoding::Avro(value) = msg {
                             value
                         } else {
-                            panic!("Debezium OCF consistency should only encode Value messages");
+                            bail!("Debezium OCF consistency should only encode Value messages");
                         };
-                        generate_ts_updates_from_debezium(&id, &self.tx, byo_consumer, value);
+                        generate_ts_updates_from_debezium(&id, &self.tx, byo_consumer, value)?;
                     }
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Creates a RT connector

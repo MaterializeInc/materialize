@@ -32,6 +32,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
 use itertools::Itertools;
+use log::{error, info};
 use rand::Rng;
 use timely::communication::WorkerGuards;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
@@ -2991,7 +2992,10 @@ pub async fn serve(
     let executor = TokioHandle::current();
     let timestamper_thread_handle = thread::spawn(move || {
         let _executor_guard = executor.enter();
-        timestamper.update()
+        match timestamper.update() {
+            Err(e) => error!("timestamper exited with error: {:?}", e),
+            _ => info!("timestamper exited cleanly"),
+        }
     })
     .join_on_drop();
 
