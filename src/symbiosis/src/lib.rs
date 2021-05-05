@@ -48,8 +48,8 @@ use sql::catalog::Catalog;
 use sql::names::{DatabaseSpecifier, FullName};
 use sql::normalize;
 use sql::plan::{
-    plan_default_expr, resolve_names_data_type, Aug, MutationKind, Plan, PlanContext,
-    StatementContext, Table,
+    plan_default_expr, resolve_names_data_type, Aug, CreateSchemaPlan, CreateTablePlan,
+    DropItemsPlan, MutationKind, Plan, PlanContext, SendDiffsPlan, StatementContext, Table,
 };
 
 pub struct Postgres {
@@ -242,12 +242,12 @@ END $$;
                     defaults,
                     temporary,
                 };
-                Plan::CreateTable {
+                Plan::CreateTable(CreateTablePlan {
                     name,
                     table,
                     if_not_exists: *if_not_exists,
                     depends_on,
-                }
+                })
             }
             Statement::CreateSchema(CreateSchemaStatement {
                 name,
@@ -266,11 +266,11 @@ END $$;
                     None => DatabaseSpecifier::Name(scx.catalog.default_database().into()),
                     Some(n) => DatabaseSpecifier::Name(normalize::ident(n)),
                 };
-                Plan::CreateSchema {
+                Plan::CreateSchema(CreateSchemaPlan {
                     database_name,
                     schema_name,
                     if_not_exists: *if_not_exists,
-                }
+                })
             }
             Statement::DropObjects(DropObjectsStatement {
                 names,
@@ -292,10 +292,10 @@ END $$;
                         }
                     }
                 }
-                Plan::DropItems {
+                Plan::DropItems(DropItemsPlan {
                     items,
                     ty: ObjectType::Table,
-                }
+                })
             }
             Statement::Delete(DeleteStatement { table_name, .. }) => {
                 let mut updates = vec![];
@@ -305,12 +305,12 @@ END $$;
                     updates.push((row, -1));
                 }
                 let affected_rows = updates.len();
-                Plan::SendDiffs {
+                Plan::SendDiffs(SendDiffsPlan {
                     id: table.id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Delete,
-                }
+                })
             }
             Statement::Insert(InsertStatement { table_name, .. }) => {
                 let mut updates = vec![];
@@ -324,12 +324,12 @@ END $$;
                     updates.push((row, 1));
                 }
                 let affected_rows = updates.len();
-                Plan::SendDiffs {
+                Plan::SendDiffs(SendDiffsPlan {
                     id: table.id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Insert,
-                }
+                })
             }
             Statement::Update(UpdateStatement {
                 table_name,
@@ -351,12 +351,12 @@ END $$;
                     updates.push((row, 1));
                 }
                 assert_eq!(affected_rows * 2, updates.len());
-                Plan::SendDiffs {
+                Plan::SendDiffs(SendDiffsPlan {
                     id: table.id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Update,
-                }
+                })
             }
             _ => bail!("Unsupported symbiosis statement: {:?}", stmt),
         })

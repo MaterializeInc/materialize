@@ -69,7 +69,7 @@ use dataflow_types::{
 use dataflow_types::{SinkAsOf, SinkEnvelope};
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
-    OptimizedMirRelationExpr, RowSetFinishing,
+    OptimizedMirRelationExpr,
 };
 use ore::antichain::AntichainToken;
 use ore::str::StrExt;
@@ -78,15 +78,19 @@ use repr::{ColumnName, Datum, RelationDesc, Row, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
     Connector, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateTableStatement, DropObjectsStatement, ExplainOptions,
-    ExplainStage, FetchStatement, Ident, ObjectType, Raw, Statement,
+    CreateSourceStatement, CreateTableStatement, DropObjectsStatement, ExplainStage,
+    FetchStatement, Ident, ObjectType, Raw, Statement,
 };
 use sql::catalog::{Catalog as _, CatalogError};
-use sql::names::{DatabaseSpecifier, FullName, SchemaName};
+use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::StatementDesc;
 use sql::plan::{
-    CopyFormat, CreateSourcePlan, IndexOption, IndexOptionName, MutationKind, Params, PeekWhen,
-    Plan, PlanContext,
+    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, ExplainPlan, FetchPlan, IndexOption, IndexOptionName,
+    InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, PlanContext, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, TailPlan,
 };
 use storage::Message as PersistedMessage;
 use transform::Optimizer;
@@ -1196,145 +1200,69 @@ impl Coordinator {
         plan: Plan,
     ) {
         match plan {
-            Plan::CreateDatabase {
-                name,
-                if_not_exists,
-            } => tx.send(
-                self.sequence_create_database(name, if_not_exists).await,
-                session,
-            ),
-
-            Plan::CreateSchema {
-                database_name,
-                schema_name,
-                if_not_exists,
-            } => tx.send(
-                self.sequence_create_schema(database_name, schema_name, if_not_exists)
-                    .await,
-                session,
-            ),
-
-            Plan::CreateRole { name } => tx.send(self.sequence_create_role(name).await, session),
-
-            Plan::CreateTable {
-                name,
-                table,
-                if_not_exists,
-                depends_on,
-            } => tx.send(
-                self.sequence_create_table(
-                    &mut session,
-                    pcx,
-                    name,
-                    table,
-                    if_not_exists,
-                    depends_on,
-                )
-                .await,
-                session,
-            ),
-
-            Plan::CreateSource(source) => tx.send(
-                self.sequence_create_source(&mut session, pcx, source).await,
-                session,
-            ),
-
-            Plan::CreateSources { sources } => tx.send(
-                self.sequence_create_sources(&mut session, pcx, sources)
-                    .await,
-                session,
-            ),
-
-            Plan::CreateSink {
-                name,
-                sink,
-                with_snapshot,
-                if_not_exists,
-                depends_on,
-            } => {
-                self.sequence_create_sink(
-                    pcx,
-                    tx,
+            Plan::CreateDatabase(plan) => {
+                tx.send(self.sequence_create_database(plan).await, session);
+            }
+            Plan::CreateSchema(plan) => {
+                tx.send(self.sequence_create_schema(plan).await, session);
+            }
+            Plan::CreateRole(plan) => {
+                tx.send(self.sequence_create_role(plan).await, session);
+            }
+            Plan::CreateTable(plan) => {
+                tx.send(
+                    self.sequence_create_table(&mut session, pcx, plan).await,
                     session,
-                    name,
-                    sink,
-                    with_snapshot,
-                    if_not_exists,
-                    depends_on,
-                )
-                .await
+                );
             }
-
-            Plan::CreateView {
-                name,
-                view,
-                replace,
-                materialize,
-                if_not_exists,
-                depends_on,
-            } => tx.send(
-                self.sequence_create_view(
-                    &mut session,
-                    pcx,
-                    name,
-                    view,
-                    replace,
-                    materialize,
-                    if_not_exists,
-                    depends_on,
-                )
-                .await,
-                session,
-            ),
-
-            Plan::CreateIndex {
-                name,
-                index,
-                options,
-                if_not_exists,
-                depends_on,
-            } => tx.send(
-                self.sequence_create_index(pcx, name, index, options, if_not_exists, depends_on)
-                    .await,
-                session,
-            ),
-
-            Plan::CreateType {
-                name,
-                typ,
-                depends_on,
-            } => tx.send(
-                self.sequence_create_type(pcx, name, typ, depends_on).await,
-                session,
-            ),
-
-            Plan::DropDatabase { name } => {
-                tx.send(self.sequence_drop_database(name).await, session)
+            Plan::CreateSource(plan) => {
+                tx.send(
+                    self.sequence_create_source(&mut session, pcx, plan).await,
+                    session,
+                );
             }
-
-            Plan::DropSchema { name } => tx.send(self.sequence_drop_schema(name).await, session),
-
-            Plan::DropRoles { names } => tx.send(self.sequence_drop_roles(names).await, session),
-
-            Plan::DropItems { items, ty } => {
-                tx.send(self.sequence_drop_items(items, ty).await, session)
+            Plan::CreateSink(plan) => {
+                self.sequence_create_sink(session, pcx, plan, tx).await;
             }
-
-            Plan::EmptyQuery => tx.send(Ok(ExecuteResponse::EmptyQuery), session),
-
+            Plan::CreateView(plan) => {
+                tx.send(
+                    self.sequence_create_view(&mut session, pcx, plan).await,
+                    session,
+                );
+            }
+            Plan::CreateIndex(plan) => {
+                tx.send(self.sequence_create_index(pcx, plan).await, session);
+            }
+            Plan::CreateType(plan) => {
+                tx.send(self.sequence_create_type(pcx, plan).await, session);
+            }
+            Plan::DropDatabase(plan) => {
+                tx.send(self.sequence_drop_database(plan).await, session);
+            }
+            Plan::DropSchema(plan) => {
+                tx.send(self.sequence_drop_schema(plan).await, session);
+            }
+            Plan::DropRoles(plan) => {
+                tx.send(self.sequence_drop_roles(plan).await, session);
+            }
+            Plan::DropItems(plan) => {
+                tx.send(self.sequence_drop_items(plan).await, session);
+            }
+            Plan::EmptyQuery => {
+                tx.send(Ok(ExecuteResponse::EmptyQuery), session);
+            }
             Plan::ShowAllVariables => {
-                tx.send(self.sequence_show_all_variables(&session).await, session)
+                tx.send(self.sequence_show_all_variables(&session).await, session);
             }
-
-            Plan::ShowVariable(name) => {
-                tx.send(self.sequence_show_variable(&session, name).await, session)
+            Plan::ShowVariable(plan) => {
+                tx.send(self.sequence_show_variable(&session, plan).await, session);
             }
-
-            Plan::SetVariable { name, value } => tx.send(
-                self.sequence_set_variable(&mut session, name, value).await,
-                session,
-            ),
-
+            Plan::SetVariable(plan) => {
+                tx.send(
+                    self.sequence_set_variable(&mut session, plan).await,
+                    session,
+                );
+            }
             Plan::StartTransaction => {
                 let duplicated =
                     matches!(session.transaction(), TransactionStatus::InTransaction(_));
@@ -1354,107 +1282,45 @@ impl Coordinator {
                 tx.send(
                     self.sequence_end_transaction(&mut session, action).await,
                     session,
-                )
+                );
             }
-
-            Plan::Peek {
-                source,
-                when,
-                finishing,
-                copy_to,
-            } => tx.send(
-                self.sequence_peek(&mut session, source, when, finishing, copy_to)
-                    .await,
-                session,
-            ),
-
-            Plan::Tail {
-                id,
-                ts,
-                with_snapshot,
-                copy_to,
-                emit_progress,
-                object_columns,
-                desc,
-            } => tx.send(
-                self.sequence_tail(
-                    &mut session,
-                    id,
-                    with_snapshot,
-                    ts,
-                    copy_to,
-                    emit_progress,
-                    object_columns,
-                    desc,
-                )
-                .await,
-                session,
-            ),
-
-            Plan::SendRows(rows) => tx.send(Ok(send_immediate_rows(rows)), session),
-
-            Plan::ExplainPlan {
-                raw_plan,
-                decorrelated_plan,
-                row_set_finishing,
-                stage,
-                options,
-            } => tx.send(
-                self.sequence_explain_plan(
-                    &session,
-                    raw_plan,
-                    decorrelated_plan,
-                    row_set_finishing,
-                    stage,
-                    options,
-                ),
-                session,
-            ),
-
-            Plan::SendDiffs {
-                id,
-                updates,
-                affected_rows,
-                kind,
-            } => tx.send(
-                self.sequence_send_diffs(&mut session, id, updates, affected_rows, kind)
-                    .await,
-                session,
-            ),
-
-            Plan::Insert { id, values } => tx.send(
-                self.sequence_insert(&mut session, id, values).await,
-                session,
-            ),
-
-            Plan::AlterNoop { object_type } => {
-                tx.send(Ok(ExecuteResponse::AlteredObject(object_type)), session)
+            Plan::Peek(plan) => {
+                tx.send(self.sequence_peek(&mut session, plan).await, session);
             }
-
-            Plan::AlterItemRename {
-                id,
-                to_name,
-                object_type,
-            } => tx.send(
-                self.sequence_alter_item_rename(id, to_name, object_type)
-                    .await,
-                session,
-            ),
-
-            Plan::AlterIndexSetOptions { id, options } => {
-                tx.send(self.sequence_alter_index_set_options(id, options), session)
+            Plan::Tail(plan) => {
+                tx.send(self.sequence_tail(&mut session, plan).await, session);
             }
-
-            Plan::AlterIndexResetOptions { id, options } => tx.send(
-                self.sequence_alter_index_reset_options(id, options),
-                session,
-            ),
-
+            Plan::SendRows(plan) => {
+                tx.send(Ok(send_immediate_rows(plan.rows)), session);
+            }
+            Plan::Explain(plan) => {
+                tx.send(self.sequence_explain(&session, plan), session);
+            }
+            Plan::SendDiffs(plan) => {
+                tx.send(self.sequence_send_diffs(&mut session, plan).await, session);
+            }
+            Plan::Insert(plan) => {
+                tx.send(self.sequence_insert(&mut session, plan).await, session);
+            }
+            Plan::AlterNoop(plan) => {
+                tx.send(
+                    Ok(ExecuteResponse::AlteredObject(plan.object_type)),
+                    session,
+                );
+            }
+            Plan::AlterItemRename(plan) => {
+                tx.send(self.sequence_alter_item_rename(plan).await, session);
+            }
+            Plan::AlterIndexSetOptions(plan) => {
+                tx.send(self.sequence_alter_index_set_options(plan), session);
+            }
+            Plan::AlterIndexResetOptions(plan) => {
+                tx.send(self.sequence_alter_index_reset_options(plan), session);
+            }
             Plan::DiscardTemp => {
                 self.drop_temp_items(session.conn_id()).await;
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
             }
-
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
                     self.drop_temp_items(session.conn_id()).await;
@@ -1468,33 +1334,32 @@ impl Coordinator {
                 };
                 tx.send(ret, session);
             }
-
-            Plan::Declare { name, stmt } => {
+            Plan::Declare(plan) => {
                 let param_types = vec![];
                 let res = self
-                    .handle_declare(&mut session, name, stmt, param_types)
+                    .handle_declare(&mut session, plan.name, plan.stmt, param_types)
                     .map(|()| ExecuteResponse::DeclaredCursor);
                 tx.send(res, session);
             }
-
-            Plan::Fetch {
+            Plan::Fetch(FetchPlan {
                 name,
                 count,
                 timeout,
-            } => tx.send(
-                Ok(ExecuteResponse::Fetch {
-                    name,
-                    count,
-                    timeout,
-                }),
-                session,
-            ),
-
-            Plan::Close { name } => {
-                if session.remove_portal(&name) {
-                    tx.send(Ok(ExecuteResponse::ClosedCursor), session)
+            }) => {
+                tx.send(
+                    Ok(ExecuteResponse::Fetch {
+                        name,
+                        count,
+                        timeout,
+                    }),
+                    session,
+                );
+            }
+            Plan::Close(plan) => {
+                if session.remove_portal(&plan.name) {
+                    tx.send(Ok(ExecuteResponse::ClosedCursor), session);
                 } else {
-                    tx.send(Err(CoordError::UnknownCursor(name)), session)
+                    tx.send(Err(CoordError::UnknownCursor(plan.name)), session);
                 }
             }
         }
@@ -1502,51 +1367,54 @@ impl Coordinator {
 
     async fn sequence_create_database(
         &mut self,
-        name: String,
-        if_not_exists: bool,
+        plan: CreateDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let db_oid = self.catalog.allocate_oid()?;
         let schema_oid = self.catalog.allocate_oid()?;
         let ops = vec![
             catalog::Op::CreateDatabase {
-                name: name.clone(),
+                name: plan.name.clone(),
                 oid: db_oid,
             },
             catalog::Op::CreateSchema {
-                database_name: DatabaseSpecifier::Name(name),
+                database_name: DatabaseSpecifier::Name(plan.name),
                 schema_name: "public".into(),
                 oid: schema_oid,
             },
         ];
         match self.catalog_transact(ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
+            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
             Err(err) => Err(err),
         }
     }
 
     async fn sequence_create_schema(
         &mut self,
-        database_name: DatabaseSpecifier,
-        schema_name: String,
-        if_not_exists: bool,
+        plan: CreateSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateSchema {
-            database_name,
-            schema_name,
+            database_name: plan.database_name,
+            schema_name: plan.schema_name,
             oid,
         };
         match self.catalog_transact(vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
+            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
             Err(err) => Err(err),
         }
     }
 
-    async fn sequence_create_role(&mut self, name: String) -> Result<ExecuteResponse, CoordError> {
+    async fn sequence_create_role(
+        &mut self,
+        plan: CreateRolePlan,
+    ) -> Result<ExecuteResponse, CoordError> {
         let oid = self.catalog.allocate_oid()?;
-        let op = catalog::Op::CreateRole { name, oid };
+        let op = catalog::Op::CreateRole {
+            name: plan.name,
+            oid,
+        };
         self.catalog_transact(vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
@@ -1554,13 +1422,17 @@ impl Coordinator {
 
     async fn sequence_create_table(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         pcx: PlanContext,
-        name: FullName,
-        table: sql::plan::Table,
-        if_not_exists: bool,
-        depends_on: Vec<GlobalId>,
+        plan: CreateTablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        let CreateTablePlan {
+            name,
+            table,
+            if_not_exists,
+            depends_on,
+        } = plan;
+
         let conn_id = if table.temporary {
             Some(session.conn_id())
         } else {
@@ -1630,29 +1502,14 @@ impl Coordinator {
         pcx: PlanContext,
         plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let (metadata, ops) = self.generate_create_source_ops(session, pcx, vec![plan.clone()])?;
+        let if_not_exists = plan.if_not_exists;
+        let (metadata, ops) = self.generate_create_source_ops(session, pcx, vec![plan])?;
         match self.catalog_transact(ops).await {
             Ok(()) => {
                 self.ship_sources(metadata).await?;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
-            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
-            Err(err) => Err(err),
-        }
-    }
-
-    async fn sequence_create_sources(
-        &mut self,
-        session: &mut Session,
-        pcx: PlanContext,
-        sources: Vec<CreateSourcePlan>,
-    ) -> Result<ExecuteResponse, CoordError> {
-        let (metadata, ops) = self.generate_create_source_ops(session, pcx, sources)?;
-        match self.catalog_transact(ops).await {
-            Ok(()) => {
-                self.ship_sources(metadata).await?;
-                Ok(ExecuteResponse::CreatedSources)
-            }
+            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -1739,18 +1596,21 @@ impl Coordinator {
         Ok((metadata, ops))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn sequence_create_sink(
         &mut self,
-        pcx: PlanContext,
-        tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
-        name: FullName,
-        sink: sql::plan::Sink,
-        with_snapshot: bool,
-        if_not_exists: bool,
-        depends_on: Vec<GlobalId>,
+        pcx: PlanContext,
+        plan: CreateSinkPlan,
+        tx: ClientTransmitter<ExecuteResponse>,
     ) {
+        let CreateSinkPlan {
+            name,
+            sink,
+            with_snapshot,
+            if_not_exists,
+            depends_on,
+        } = plan;
+
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = match self.catalog.allocate_id() {
             Ok(id) => id,
@@ -1816,18 +1676,21 @@ impl Coordinator {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn sequence_create_view(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         pcx: PlanContext,
-        name: FullName,
-        view: sql::plan::View,
-        replace: Option<GlobalId>,
-        materialize: bool,
-        if_not_exists: bool,
-        depends_on: Vec<GlobalId>,
+        plan: CreateViewPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        let CreateViewPlan {
+            name,
+            view,
+            replace,
+            materialize,
+            if_not_exists,
+            depends_on,
+        } = plan;
+
         let mut ops = vec![];
         if let Some(id) = replace {
             ops.extend(self.catalog.drop_items_ops(&[id]));
@@ -1898,12 +1761,16 @@ impl Coordinator {
     async fn sequence_create_index(
         &mut self,
         pcx: PlanContext,
-        name: FullName,
-        mut index: sql::plan::Index,
-        options: Vec<IndexOption>,
-        if_not_exists: bool,
-        depends_on: Vec<GlobalId>,
+        plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        let CreateIndexPlan {
+            name,
+            mut index,
+            options,
+            if_not_exists,
+            depends_on,
+        } = plan;
+
         for key in &mut index.keys {
             Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
         }
@@ -1938,22 +1805,20 @@ impl Coordinator {
     async fn sequence_create_type(
         &mut self,
         pcx: PlanContext,
-        name: FullName,
-        typ: sql::plan::Type,
-        depends_on: Vec<GlobalId>,
+        plan: CreateTypePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let typ = catalog::Type {
-            create_sql: typ.create_sql,
+            create_sql: plan.typ.create_sql,
             plan_cx: pcx,
-            inner: typ.inner.into(),
-            depends_on,
+            inner: plan.typ.inner.into(),
+            depends_on: plan.depends_on,
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
-            name,
+            name: plan.name,
             item: CatalogItem::Type(typ),
         };
         match self.catalog_transact(vec![op]).await {
@@ -1964,27 +1829,28 @@ impl Coordinator {
 
     async fn sequence_drop_database(
         &mut self,
-        name: String,
+        plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = self.catalog.drop_database_ops(name);
+        let ops = self.catalog.drop_database_ops(plan.name);
         self.catalog_transact(ops).await?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
 
     async fn sequence_drop_schema(
         &mut self,
-        name: SchemaName,
+        plan: DropSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = self.catalog.drop_schema_ops(name);
+        let ops = self.catalog.drop_schema_ops(plan.name);
         self.catalog_transact(ops).await?;
         Ok(ExecuteResponse::DroppedSchema)
     }
 
     async fn sequence_drop_roles(
         &mut self,
-        names: Vec<String>,
+        plan: DropRolesPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = names
+        let ops = plan
+            .names
             .into_iter()
             .map(|name| catalog::Op::DropRole { name })
             .collect();
@@ -1994,12 +1860,11 @@ impl Coordinator {
 
     async fn sequence_drop_items(
         &mut self,
-        items: Vec<GlobalId>,
-        ty: ObjectType,
+        plan: DropItemsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = self.catalog.drop_items_ops(&items);
+        let ops = self.catalog.drop_items_ops(&plan.items);
         self.catalog_transact(ops).await?;
-        Ok(match ty {
+        Ok(match plan.ty {
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
@@ -2034,9 +1899,9 @@ impl Coordinator {
     async fn sequence_show_variable(
         &self,
         session: &Session,
-        name: String,
+        plan: ShowVariablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let variable = session.vars().get(&name)?;
+        let variable = session.vars().get(&plan.name)?;
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
@@ -2044,11 +1909,10 @@ impl Coordinator {
     async fn sequence_set_variable(
         &self,
         session: &mut Session,
-        name: String,
-        value: String,
+        plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        session.vars_mut().set(&name, &value)?;
-        Ok(ExecuteResponse::SetVariable { name })
+        session.vars_mut().set(&plan.name, &plan.value)?;
+        Ok(ExecuteResponse::SetVariable { name: plan.name })
     }
 
     async fn sequence_end_transaction(
@@ -2117,11 +1981,15 @@ impl Coordinator {
     async fn sequence_peek(
         &mut self,
         session: &mut Session,
-        source: MirRelationExpr,
-        when: PeekWhen,
-        finishing: RowSetFinishing,
-        copy_to: Option<CopyFormat>,
+        plan: PeekPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        let PeekPlan {
+            source,
+            when,
+            finishing,
+            copy_to,
+        } = plan;
+
         let conn_id = session.conn_id();
         let in_transaction = matches!(
             session.transaction(),
@@ -2300,7 +2168,7 @@ impl Coordinator {
             self.broadcast(SequencedCommand::Peek {
                 id: index_id,
                 key: literal_row,
-                conn_id,
+                conn_id: session.conn_id(),
                 tx: rows_tx,
                 timestamp,
                 finishing: finishing.clone(),
@@ -2345,18 +2213,20 @@ impl Coordinator {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn sequence_tail(
         &mut self,
         session: &mut Session,
-        source_id: GlobalId,
-        with_snapshot: bool,
-        ts: Option<Timestamp>,
-        copy_to: Option<CopyFormat>,
-        emit_progress: bool,
-        object_columns: usize,
-        desc: RelationDesc,
+        plan: TailPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        let TailPlan {
+            id: source_id,
+            with_snapshot,
+            ts,
+            copy_to,
+            emit_progress,
+            object_columns,
+            desc,
+        } = plan;
         // TAIL AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
         if ts.is_none() {
@@ -2564,15 +2434,19 @@ impl Coordinator {
         }
     }
 
-    fn sequence_explain_plan(
+    fn sequence_explain(
         &mut self,
         session: &Session,
-        raw_plan: sql::plan::HirRelationExpr,
-        decorrelated_plan: expr::MirRelationExpr,
-        row_set_finishing: Option<RowSetFinishing>,
-        stage: ExplainStage,
-        options: ExplainOptions,
+        plan: ExplainPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        let ExplainPlan {
+            raw_plan,
+            decorrelated_plan,
+            row_set_finishing,
+            stage,
+            options,
+        } = plan;
+
         let explanation_string = match stage {
             ExplainStage::RawPlan => {
                 let catalog = self.catalog.for_session(session);
@@ -2627,32 +2501,34 @@ impl Coordinator {
     async fn sequence_send_diffs(
         &mut self,
         session: &mut Session,
-        id: GlobalId,
-        rows: Vec<(Row, isize)>,
-        affected_rows: usize,
-        kind: MutationKind,
+        plan: SendDiffsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp { id, rows }]))?;
-        Ok(match kind {
-            MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
-            MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
-            MutationKind::Update => ExecuteResponse::Updated(affected_rows),
+        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+            id: plan.id,
+            rows: plan.updates,
+        }]))?;
+        Ok(match plan.kind {
+            MutationKind::Delete => ExecuteResponse::Deleted(plan.affected_rows),
+            MutationKind::Insert => ExecuteResponse::Inserted(plan.affected_rows),
+            MutationKind::Update => ExecuteResponse::Updated(plan.affected_rows),
         })
     }
 
     async fn sequence_insert(
         &mut self,
         session: &mut Session,
-        id: GlobalId,
-        values: MirRelationExpr,
+        plan: InsertPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let prep_style = ExprPrepStyle::OneShot {
             logical_time: self.get_write_ts(),
         };
-        match self.prep_relation_expr(values, prep_style)?.into_inner() {
+        match self
+            .prep_relation_expr(plan.values, prep_style)?
+            .into_inner()
+        {
             MirRelationExpr::Constant { rows, typ: _ } => {
                 let rows = rows?;
-                let desc = self.catalog.get_by_id(&id).desc()?;
+                let desc = self.catalog.get_by_id(&plan.id).desc()?;
                 for (row, _) in &rows {
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
                         if datum == &Datum::Null && !typ.nullable {
@@ -2665,9 +2541,13 @@ impl Coordinator {
                         }
                     }
                 }
-                let affected_rows = rows.len();
-                self.sequence_send_diffs(session, id, rows, affected_rows, MutationKind::Insert)
-                    .await
+                let diffs_plan = SendDiffsPlan {
+                    id: plan.id,
+                    affected_rows: rows.len(),
+                    updates: rows,
+                    kind: MutationKind::Insert,
+                };
+                self.sequence_send_diffs(session, diffs_plan).await
             }
             // If we couldn't optimize the INSERT statement to a constant, it
             // must depend on another relation. We're not yet sophisticated
@@ -2678,32 +2558,32 @@ impl Coordinator {
 
     async fn sequence_alter_item_rename(
         &mut self,
-        id: GlobalId,
-        to_name: String,
-        object_type: ObjectType,
+        plan: AlterItemRenamePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let op = catalog::Op::RenameItem { id, to_name };
+        let op = catalog::Op::RenameItem {
+            id: plan.id,
+            to_name: plan.to_name,
+        };
         match self.catalog_transact(vec![op]).await {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(object_type)),
+            Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
     }
 
     fn sequence_alter_index_set_options(
         &mut self,
-        id: GlobalId,
-        options: Vec<IndexOption>,
+        plan: AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        self.set_index_options(id, options);
+        self.set_index_options(plan.id, plan.options);
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
     fn sequence_alter_index_reset_options(
         &mut self,
-        id: GlobalId,
-        options: Vec<IndexOptionName>,
+        plan: AlterIndexResetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let options = options
+        let options = plan
+            .options
             .into_iter()
             .map(|o| match o {
                 IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
@@ -2711,7 +2591,7 @@ impl Coordinator {
                 ),
             })
             .collect();
-        self.set_index_options(id, options);
+        self.set_index_options(plan.id, options);
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 

@@ -64,8 +64,12 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_hypothetical_cast, CastContext};
 use crate::plan::{
-    self, plan_utils, query, CreateSourcePlan, HirRelationExpr, Index, IndexOption,
-    IndexOptionName, Params, Plan, QueryContext, Sink, Source, Table, Type, TypeInner, View,
+    self, plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, QueryContext, Sink, Source,
+    Table, Type, TypeInner, View,
 };
 use crate::pure::Schema;
 
@@ -83,10 +87,10 @@ pub fn plan_create_database(
         if_not_exists,
     }: CreateDatabaseStatement,
 ) -> Result<Plan, anyhow::Error> {
-    Ok(Plan::CreateDatabase {
+    Ok(Plan::CreateDatabase(CreateDatabasePlan {
         name: normalize::ident(name),
         if_not_exists,
-    })
+    }))
 }
 
 pub fn describe_create_schema(
@@ -115,11 +119,11 @@ pub fn plan_create_schema(
         None => DatabaseSpecifier::Name(scx.catalog.default_database().into()),
         Some(n) => DatabaseSpecifier::Name(normalize::ident(n)),
     };
-    Ok(Plan::CreateSchema {
+    Ok(Plan::CreateSchema(CreateSchemaPlan {
         database_name,
         schema_name,
         if_not_exists,
-    })
+    }))
 }
 
 pub fn describe_create_table(
@@ -207,12 +211,12 @@ pub fn plan_create_table(
         defaults,
         temporary,
     };
-    Ok(Plan::CreateTable {
+    Ok(Plan::CreateTable(CreateTablePlan {
         name,
         table,
         if_not_exists: *if_not_exists,
         depends_on,
-    })
+    }))
 }
 
 pub fn describe_create_source(
@@ -1144,7 +1148,7 @@ pub fn plan_create_view(
     let temporary = *temporary;
     let materialize = *materialized; // Normalize for `raw_sql` below.
     let if_not_exists = *if_exists == IfExistsBehavior::Skip;
-    Ok(Plan::CreateView {
+    Ok(Plan::CreateView(CreateViewPlan {
         name,
         view: View {
             create_sql,
@@ -1156,7 +1160,7 @@ pub fn plan_create_view(
         materialize,
         if_not_exists,
         depends_on,
-    })
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1452,7 +1456,7 @@ pub fn plan_create_sink(
         )
     }
 
-    Ok(Plan::CreateSink {
+    Ok(Plan::CreateSink(CreateSinkPlan {
         name,
         sink: Sink {
             create_sql,
@@ -1463,7 +1467,7 @@ pub fn plan_create_sink(
         with_snapshot,
         if_not_exists,
         depends_on,
-    })
+    }))
 }
 
 /// Returns only those `CatalogItem`s that don't have any other user
@@ -1591,7 +1595,7 @@ pub fn plan_create_index(
     let mut depends_on = vec![on.id()];
     depends_on.extend(exprs_depend_on);
 
-    Ok(Plan::CreateIndex {
+    Ok(Plan::CreateIndex(CreateIndexPlan {
         name: index_name,
         index: Index {
             create_sql,
@@ -1601,7 +1605,7 @@ pub fn plan_create_index(
         options,
         if_not_exists,
         depends_on,
-    })
+    }))
 }
 
 pub fn describe_create_type(
@@ -1711,11 +1715,11 @@ pub fn plan_create_type(
         }
     };
 
-    Ok(Plan::CreateType {
+    Ok(Plan::CreateType(CreateTypePlan {
         name,
         typ: Type { create_sql, inner },
         depends_on: ids,
-    })
+    }))
 }
 
 fn extract_timestamp_frequency_option(
@@ -1772,9 +1776,9 @@ pub fn plan_create_role(
     if super_user != Some(true) {
         unsupported!("non-superusers");
     }
-    Ok(Plan::CreateRole {
+    Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
-    })
+    }))
 }
 
 pub fn describe_drop_database(
@@ -1800,7 +1804,7 @@ pub fn plan_drop_database(
         }
         Err(err) => return Err(err.into()),
     };
-    Ok(Plan::DropDatabase { name })
+    Ok(Plan::DropDatabase(DropDatabasePlan { name }))
 }
 
 pub fn describe_drop_objects(
@@ -1856,21 +1860,21 @@ pub fn plan_drop_schema(
                     schema.name(),
                 );
             }
-            Ok(Plan::DropSchema {
+            Ok(Plan::DropSchema(DropSchemaPlan {
                 name: schema.name().clone(),
-            })
+            }))
         }
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the
             // schema does not exist.
             // TODO(benesch): adjust the types here properly, rather than making
             // up a nonexistent database.
-            Ok(Plan::DropSchema {
+            Ok(Plan::DropSchema(DropSchemaPlan {
                 name: SchemaName {
                     database: DatabaseSpecifier::Ambient,
                     schema: "noexist".into(),
                 },
-            })
+            }))
         }
         Err(e) => Err(e.into()),
     }
@@ -1900,7 +1904,7 @@ pub fn plan_drop_role(
             Err(e) => return Err(e.into()),
         }
     }
-    Ok(Plan::DropRoles { names: out })
+    Ok(Plan::DropRoles(DropRolesPlan { names: out }))
 }
 
 pub fn plan_drop_items(
@@ -1925,10 +1929,10 @@ pub fn plan_drop_items(
             Err(err) => return Err(err.into()),
         }
     }
-    Ok(Plan::DropItems {
+    Ok(Plan::DropItems(DropItemsPlan {
         items: ids,
         ty: object_type,
-    })
+    }))
 }
 
 pub fn plan_drop_item(
@@ -2018,9 +2022,9 @@ pub fn plan_alter_index_options(
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating this index does not
             // exist.
-            return Ok(Plan::AlterNoop {
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Index,
-            });
+            }));
         }
         Err(e) => return Err(e.into()),
     };
@@ -2040,11 +2044,17 @@ pub fn plan_alter_index_options(
                     _ => None,
                 })
                 .collect();
-            Ok(Plan::AlterIndexResetOptions { id, options })
+            Ok(Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan {
+                id,
+                options,
+            }))
         }
         AlterIndexOptionsList::Set(options) => {
             let options = plan_index_options(options)?;
-            Ok(Plan::AlterIndexSetOptions { id, options })
+            Ok(Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan {
+                id,
+                options,
+            }))
         }
     }
 }
@@ -2084,14 +2094,14 @@ pub fn plan_alter_object_rename(
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating this
             // item does not exist.
-            return Ok(Plan::AlterNoop { object_type });
+            return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
         }
         Err(err) => return Err(err.into()),
     };
 
-    Ok(Plan::AlterItemRename {
+    Ok(Plan::AlterItemRename(AlterItemRenamePlan {
         id,
         to_name: normalize::ident(to_item_name),
         object_type,
-    })
+    }))
 }
