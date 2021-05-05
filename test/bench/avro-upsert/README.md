@@ -21,6 +21,11 @@ run the version of this benchmark designed for smaller machines:
 
     ./mzcompose run benchmark-medium
 
+You can also use `mzbench` to run comparative benchmarks on different versions. See the `mzbench`
+documentation for more details but here is an example invocation:
+
+    ./bin/mzbench -w --size medium avro-upsert
+
 ## Looking at Performance
 
 Each benchmark will output something like the following:
