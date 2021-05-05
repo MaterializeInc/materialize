@@ -2454,6 +2454,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::Lt, 1957;
                 params!(String, String) => BinaryFunc::Lt, 664;
                 params!(Jsonb, Jsonb) => BinaryFunc::Lt, 3242;
+                params!(ArrayAny, ArrayAny) => BinaryFunc::Lt, 1072;
             },
             "<=" => Scalar {
                 params!(DecimalAny, DecimalAny) => {
@@ -2477,6 +2478,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::Lte, 1958;
                 params!(String, String) => BinaryFunc::Lte, 665;
                 params!(Jsonb, Jsonb) => BinaryFunc::Lte, 3244;
+                params!(ArrayAny, ArrayAny) => BinaryFunc::Lte, 1074;
             },
             ">" => Scalar {
                 params!(DecimalAny, DecimalAny) => {
@@ -2500,6 +2502,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::Gt, 1959;
                 params!(String, String) => BinaryFunc::Gt, 666;
                 params!(Jsonb, Jsonb) => BinaryFunc::Gt, 3243;
+                params!(ArrayAny, ArrayAny) => BinaryFunc::Gt, 1073;
             },
             ">=" => Scalar {
                 params!(DecimalAny, DecimalAny) => {
@@ -2523,6 +2526,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::Gte, 1960;
                 params!(String, String) => BinaryFunc::Gte, 667;
                 params!(Jsonb, Jsonb) => BinaryFunc::Gte, 3245;
+                params!(ArrayAny, ArrayAny) => BinaryFunc::Gte, 1075;
             },
             "=" => Scalar {
                 params!(DecimalAny, DecimalAny) => {
@@ -2571,6 +2575,7 @@ lazy_static! {
                 params!(Bytes, Bytes) => BinaryFunc::NotEq, 1956;
                 params!(String, String) => BinaryFunc::NotEq, 531;
                 params!(Jsonb, Jsonb) => BinaryFunc::NotEq, 3241;
+                params!(ArrayAny, ArrayAny) => BinaryFunc::NotEq, 1071;
             }
         }
     };
