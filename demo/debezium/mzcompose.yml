@@ -106,6 +106,8 @@ services:
     depends_on: [kafka, schema-registry]
   debezium-mysql-gen:
     mzbuild: debezium-mysql-gen
+  validate-debezium-topics:
+    mzbuild: validate-debezium-topics
   simple-mysql-connector:
     build: simple-mysql-connector
     depends_on: [connect]
@@ -199,5 +201,14 @@ mzworkflows:
     steps:
     - step: workflow
       workflow: bring-up-mysql-kafka
+    # Without this sleep, our mysql generator will grab locks that prevent the initial replication
+    # from debezium
+    - step: sleep
+      duration: 15
     - step: run
       service: debezium-mysql-gen
+
+  validate-topics:
+    steps:
+    - step: run
+      service: validate-debezium-topics
