@@ -32,7 +32,7 @@ use differential_dataflow::lattice::Lattice;
 use futures::future::{self, FutureExt, TryFutureExt};
 use futures::stream::{self, StreamExt};
 use itertools::Itertools;
-use log::{error, info};
+use log::{error, info, warn};
 use rand::Rng;
 use timely::communication::WorkerGuards;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
@@ -2836,9 +2836,13 @@ impl Coordinator {
         if create {
             if let Some(entry) = self.catalog.try_get_by_id(source_id) {
                 if let CatalogItem::Source(s) = entry.item() {
-                    self.ts_tx
+                    if self
+                        .ts_tx
                         .send(TimestampMessage::Add(source_id, s.connector.clone()))
-                        .expect("Failed to send CREATE Instance notice to timestamper");
+                        .is_err()
+                    {
+                        warn!("Failed to send CREATE Instance notice to timestamper");
+                    }
                     self.broadcast(SequencedCommand::AddSourceTimestamping {
                         id: source_id,
                         connector: s.connector.clone(),
@@ -2846,9 +2850,9 @@ impl Coordinator {
                 }
             }
         } else {
-            self.ts_tx
-                .send(TimestampMessage::Drop(source_id))
-                .expect("Failed to send DROP Instance notice to timestamper");
+            if self.ts_tx.send(TimestampMessage::Drop(source_id)).is_err() {
+                warn!("Failed to send DROP Instance notice to timestamper");
+            }
             self.broadcast(SequencedCommand::DropSourceTimestamping { id: source_id });
         }
     }
