@@ -573,10 +573,7 @@ async fn main() -> anyhow::Result<()> {
             let value_schema = args.avro_value_schema.as_ref().unwrap();
             let ccsr = ccsr::ClientConfig::new(args.schema_registry_url.clone()).build()?;
             let schema_id = ccsr
-                .publish_schema(
-                    &format!("{}-value", args.topic),
-                    &value_schema.canonical_form(),
-                )
+                .publish_schema(&format!("{}-value", args.topic), &value_schema.to_string())
                 .await?;
             let generator =
                 RandomAvroGenerator::new(value_schema, &args.avro_value_distribution.unwrap());
@@ -601,7 +598,7 @@ async fn main() -> anyhow::Result<()> {
             let key_schema = args.avro_key_schema.as_ref().unwrap();
             let ccsr = ccsr::ClientConfig::new(args.schema_registry_url).build()?;
             let key_schema_id = ccsr
-                .publish_schema(&format!("{}-key", args.topic), &key_schema.canonical_form())
+                .publish_schema(&format!("{}-key", args.topic), &key_schema.to_string())
                 .await?;
             let generator =
                 RandomAvroGenerator::new(key_schema, &args.avro_key_distribution.unwrap());
