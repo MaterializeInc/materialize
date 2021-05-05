@@ -32,7 +32,7 @@ use crate::names::PartialName;
 use crate::parse;
 use crate::plan::query::{resolve_names_stmt, ResolvedObjectName};
 use crate::plan::statement::{dml, StatementContext, StatementDesc};
-use crate::plan::{Aug, Params, Plan};
+use crate::plan::{Aug, Params, Plan, SendRowsPlan};
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -79,10 +79,12 @@ pub fn plan_show_create_view(
     s.visit_statement_mut(&mut resolved);
 
     if let CatalogItemType::View = view.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack_slice(&[
-            Datum::String(&view.name().to_string()),
-            Datum::String(&resolved.to_ast_string_stable()),
-        ])]))
+        Ok(Plan::SendRows(SendRowsPlan {
+            rows: vec![Row::pack_slice(&[
+                Datum::String(&view.name().to_string()),
+                Datum::String(&resolved.to_ast_string_stable()),
+            ])],
+        }))
     } else {
         bail!("{} is not a view", view.name());
     }
@@ -105,10 +107,12 @@ pub fn plan_show_create_table(
 ) -> Result<Plan, anyhow::Error> {
     let table = scx.resolve_item(table_name)?;
     if let CatalogItemType::Table = table.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack_slice(&[
-            Datum::String(&table.name().to_string()),
-            Datum::String(table.create_sql()),
-        ])]))
+        Ok(Plan::SendRows(SendRowsPlan {
+            rows: vec![Row::pack_slice(&[
+                Datum::String(&table.name().to_string()),
+                Datum::String(table.create_sql()),
+            ])],
+        }))
     } else {
         bail!("{} is not a table", table.name());
     }
@@ -131,10 +135,12 @@ pub fn plan_show_create_source(
 ) -> Result<Plan, anyhow::Error> {
     let source = scx.resolve_item(source_name)?;
     if let CatalogItemType::Source = source.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack_slice(&[
-            Datum::String(&source.name().to_string()),
-            Datum::String(source.create_sql()),
-        ])]))
+        Ok(Plan::SendRows(SendRowsPlan {
+            rows: vec![Row::pack_slice(&[
+                Datum::String(&source.name().to_string()),
+                Datum::String(source.create_sql()),
+            ])],
+        }))
     } else {
         bail!("{} is not a source", source.name());
     }
@@ -157,10 +163,12 @@ pub fn plan_show_create_sink(
 ) -> Result<Plan, anyhow::Error> {
     let sink = scx.resolve_item(sink_name)?;
     if let CatalogItemType::Sink = sink.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack_slice(&[
-            Datum::String(&sink.name().to_string()),
-            Datum::String(sink.create_sql()),
-        ])]))
+        Ok(Plan::SendRows(SendRowsPlan {
+            rows: vec![Row::pack_slice(&[
+                Datum::String(&sink.name().to_string()),
+                Datum::String(sink.create_sql()),
+            ])],
+        }))
     } else {
         bail!("'{}' is not a sink", sink.name());
     }
@@ -183,10 +191,12 @@ pub fn plan_show_create_index(
 ) -> Result<Plan, anyhow::Error> {
     let index = scx.resolve_item(index_name)?;
     if let CatalogItemType::Index = index.item_type() {
-        Ok(Plan::SendRows(vec![Row::pack_slice(&[
-            Datum::String(&index.name().to_string()),
-            Datum::String(index.create_sql()),
-        ])]))
+        Ok(Plan::SendRows(SendRowsPlan {
+            rows: vec![Row::pack_slice(&[
+                Datum::String(&index.name().to_string()),
+                Datum::String(index.create_sql()),
+            ])],
+        }))
     } else {
         bail!("'{}' is not an index", index.name());
     }
