@@ -127,6 +127,7 @@ services:
     - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
     - KAFKA_AUTO_CREATE_TOPICS_ENABLE=false
     - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+    - KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE=false
   schema-registry:
     image: confluentinc/cp-schema-registry:5.5.3
     environment:
