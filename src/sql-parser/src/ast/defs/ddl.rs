@@ -465,46 +465,6 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
 }
 impl_display_t!(Connector);
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum MultiConnector<T: AstInfo> {
-    Postgres {
-        /// The postgres connection string
-        conn: String,
-        /// The name of the publication to sync
-        publication: String,
-        /// The replication slot name that will be created upstream
-        slot: Option<String>,
-        /// The tables to sync
-        tables: Vec<PgTable<T>>,
-    },
-}
-
-impl<T: AstInfo> AstDisplay for MultiConnector<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            MultiConnector::Postgres {
-                conn,
-                publication,
-                slot,
-                tables,
-            } => {
-                f.write_str("POSTGRES HOST '");
-                f.write_str(&display::escape_single_quote_string(conn));
-                f.write_str("' PUBLICATION '");
-                f.write_str(&display::escape_single_quote_string(publication));
-                if let Some(slot) = slot {
-                    f.write_str("' SLOT '");
-                    f.write_str(&display::escape_single_quote_string(slot));
-                }
-                f.write_str("' TABLES (");
-                f.write_node(&display::comma_separated(tables));
-                f.write_str(")");
-            }
-        }
-    }
-}
-impl_display_t!(MultiConnector);
-
 /// Information about upstream Postgres tables used for replication sources
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PgTable<T: AstInfo> {

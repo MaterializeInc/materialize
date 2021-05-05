@@ -48,10 +48,10 @@ use crate::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
     ColumnOption, Compression, Connector, CreateDatabaseStatement, CreateIndexStatement,
     CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateSourcesStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, DataType, DbzMode, DropDatabaseStatement,
-    DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, ObjectType, Raw,
-    SqlOption, Statement, UnresolvedObjectName, Value, WithOption,
+    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
+    CreateViewStatement, DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope,
+    Expr, Format, Ident, IfExistsBehavior, ObjectType, Raw, SqlOption, Statement,
+    UnresolvedObjectName, Value, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -218,13 +218,6 @@ pub fn plan_create_table(
 pub fn describe_create_source(
     _: &StatementContext,
     _: CreateSourceStatement<Raw>,
-) -> Result<StatementDesc, anyhow::Error> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn describe_create_sources(
-    _: &StatementContext,
-    _: CreateSourcesStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -1089,23 +1082,6 @@ pub fn plan_create_source(
         if_not_exists,
         materialized,
     }))
-}
-
-pub fn plan_create_sources(
-    scx: &StatementContext,
-    stmt: CreateSourcesStatement<Raw>,
-) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("Postgres Sources")?;
-    let CreateSourcesStatement { stmts, .. } = stmt;
-    let mut sources = vec![];
-    for stmt in stmts {
-        match plan_create_source(scx, stmt)? {
-            Plan::CreateSource(plan) => sources.push(plan),
-            _ => unreachable!("non-create source plan"),
-        }
-    }
-
-    Ok(Plan::CreateSources { sources })
 }
 
 pub fn describe_create_view(
