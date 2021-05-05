@@ -97,7 +97,7 @@ $ avro-ocf-append path=consistency.ocf
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
 {"status":"END","id":"1","event_count":{"long": 0},"data_collections": {"array": []}}
 {"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
-{"status":"END","id":"2","event_count":{"long": 2},"data_collections": {"array": [{"event_count": 2, "data_collection": "${testdrive.temp-dir}/foo.ocf"},{"event_count": 1, "data_collection": "${testdrive.temp-dir}/bar.ocf"}]}}
+{"status":"END","id":"2","event_count":{"long": 3},"data_collections": {"array": [{"event_count": 2, "data_collection": "${testdrive.temp-dir}/foo.ocf"},{"event_count": 1, "data_collection": "${testdrive.temp-dir}/bar.ocf"}]}}
 
 > SELECT * FROM foo;
 b  sum
@@ -123,7 +123,7 @@ $ avro-ocf-append path=bar.ocf
 
 $ avro-ocf-append path=consistency.ocf
 {"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
-{"status":"END","id":"3","event_count":{"long": 2},"data_collections": {"array": [{"event_count": 2, "data_collection": "${testdrive.temp-dir}/foo.ocf"},{"event_count": 1, "data_collection": "${testdrive.temp-dir}/bar.ocf"}]}}
+{"status":"END","id":"3","event_count":{"long": 3},"data_collections": {"array": [{"event_count": 2, "data_collection": "${testdrive.temp-dir}/foo.ocf"},{"event_count": 1, "data_collection": "${testdrive.temp-dir}/bar.ocf"}]}}
 
 > SELECT * FROM foo;
 b  sum
