@@ -10,7 +10,7 @@
 //! Validate transaction invariants for Kafka topics written by Debezium
 //! when replicating MySQL
 
-use anyhow::{anyhow, Error};
+use anyhow::{bail, Context};
 use futures::stream::StreamExt;
 use log::{debug, info};
 use mz_avro::types::Value;
@@ -37,7 +37,7 @@ pub struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() -> anyhow::Result<()> {
     ore::panic::set_abort_on_panic();
     ore::test::init_logging();
 
@@ -46,13 +46,14 @@ async fn main() -> Result<(), Error> {
     info!("validating debezium topics!");
 
     // Read the entire transaction topic and return an ordered list of transaction IDs
-    let transaction_ids = get_transaction_ids(args).await?;
+    let transactions = get_transaction_ids(args).await?;
 
-    info!("Transactions: {:#?}", transaction_ids);
+    validate_transactions(transactions)?;
 
     // Read the list of database tables, spawning a reader per topic/partition, passing a cloned
     // vec! of transaction IDs and have each reader validate that transactions appear in that order
 
+    info!("consistency checks passed!");
     Ok(())
 }
 
@@ -74,7 +75,7 @@ struct DebeziumTransaction {
     status: DebeziumTransactionStatus,
 }
 
-async fn get_transaction_ids(args: Args) -> Result<Vec<DebeziumTransaction>, Error> {
+async fn get_transaction_ids(args: Args) -> anyhow::Result<Vec<DebeziumTransaction>> {
     let transaction_topic = "dbserver1.transaction";
 
     let ccsr = ccsr::ClientConfig::new(args.schema_registry.clone())
@@ -151,7 +152,7 @@ async fn get_transaction_ids(args: Args) -> Result<Vec<DebeziumTransaction>, Err
 fn parse_transaction(
     reader_schema: &Schema,
     msg: rdkafka::message::BorrowedMessage,
-) -> Result<DebeziumTransaction, anyhow::Error> {
+) -> anyhow::Result<DebeziumTransaction> {
     match msg.payload_view::<[u8]>() {
         Some(value) => match value {
             Ok(contents) => {
@@ -174,66 +175,58 @@ fn parse_transaction(
                                 id: parse_transaction_id(&fields)?,
                                 status: DebeziumTransactionStatus::BEGIN,
                             }),
-                            other => Err(anyhow!("Unexpected value for status: {}", other)),
+                            other => bail!("Unexpected value for status: {}", other),
                         }
                     }
-                    _ => Err(anyhow!("expected Record type")),
+                    _ => bail!("expected Record type"),
                 }
             }
-            Err(_) => Err(anyhow!("failed to read value!")),
+            Err(_) => bail!("failed to read value!"),
         },
-        None => Err(anyhow!("Got None when trying to parse transaction!")),
+        None => bail!("Got None when trying to parse transaction!"),
     }
 }
 
-fn parse_status(fields: &HashMap<String, Value>) -> Result<String, anyhow::Error> {
+fn parse_status(fields: &HashMap<String, Value>) -> anyhow::Result<String> {
     match fields.get("status") {
         Some(status) => match status {
             Value::String(s) => Ok(s.to_string()),
-            _ => Err(anyhow!(
-                "Expected status to be a String but got: {:?}",
-                status
-            )),
+            _ => bail!("Expected status to be a String but got: {:?}", status),
         },
-        None => Err(anyhow!("Expected to find a status field")),
+        None => bail!("Expected to find a status field"),
     }
 }
 
-fn parse_transaction_id(fields: &HashMap<String, Value>) -> Result<String, anyhow::Error> {
+fn parse_transaction_id(fields: &HashMap<String, Value>) -> anyhow::Result<String> {
     match fields.get("id") {
         Some(transaction) => match transaction {
             Value::String(t) => Ok(t.to_string()),
-            _ => Err(anyhow!(
+            _ => bail!(
                 "Expected transaction to be a String but got: {:?}",
                 transaction
-            )),
+            ),
         },
-        None => Err(anyhow!("Expected to find a id field!")),
+        None => bail!("Expected to find a id field!"),
     }
 }
 
-fn parse_event_count(fields: &HashMap<String, Value>) -> Result<i64, anyhow::Error> {
+fn parse_event_count(fields: &HashMap<String, Value>) -> anyhow::Result<i64> {
     match fields.get("event_count") {
         Some(inner) => match inner {
             Value::Union { inner: value, .. } => {
                 if let Value::Long(c) = **value {
                     Ok(c)
                 } else {
-                    Err(anyhow!("Expect Long type for event, got {:?}", **value))
+                    bail!("Expect Long type for event, got {:?}", **value)
                 }
             }
-            other => Err(anyhow!(
-                "Expected union type for event_count, got {:?}",
-                other
-            )),
+            other => bail!("Expected union type for event_count, got {:?}", other),
         },
-        None => Err(anyhow!("Expected event count for END transaction message!")),
+        None => bail!("Expected event count for END transaction message!"),
     }
 }
 
-fn parse_collections(
-    fields: &mut HashMap<String, Value>,
-) -> Result<HashMap<String, i64>, anyhow::Error> {
+fn parse_collections(fields: &mut HashMap<String, Value>) -> anyhow::Result<HashMap<String, i64>> {
     match fields.remove("data_collections") {
         Some(inner) => match inner {
             Value::Union { inner: value, .. } => {
@@ -245,53 +238,75 @@ fn parse_collections(
                     }
                     Ok(collections)
                 } else {
-                    Err(anyhow!("Expect Array type for event, got {:?}", *value))
+                    bail!("Expect Array type for event, got {:?}", *value)
                 }
             }
-            other => Err(anyhow!(
-                "Expected union type for data_collections, got {:?}",
-                other
-            )),
+            other => bail!("Expected union type for data_collections, got {:?}", other),
         },
-        None => Err(anyhow!(
-            "Expected data_collections for END transaction message!"
-        )),
+        None => bail!("Expected data_collections for END transaction message!"),
     }
 }
 
-fn parse_data_collection(collection: Value) -> Result<(String, i64), anyhow::Error> {
+fn parse_data_collection(collection: Value) -> anyhow::Result<(String, i64)> {
     match collection {
         Value::Record(items) => {
             let fields: HashMap<_, _> = items.into_iter().collect();
 
             let collection_name = match fields.get("data_collection") {
                 Some(value) => match value {
-                    Value::String(s) => Ok(s.to_string()),
-                    _ => Err(anyhow!(
+                    Value::String(s) => s.to_string(),
+                    _ => bail!(
                         "Expected string type for data collection name, got {:?}",
                         value
-                    )),
+                    ),
                 },
-                None => Err(anyhow!(
-                    "Expected data_collection field from data collection"
-                )),
-            }?;
+                None => bail!("Expected data_collection field from data collection"),
+            };
 
             let count = match fields.get("event_count") {
                 Some(value) => match value {
-                    Value::Long(c) => Ok(*c),
-                    _ => Err(anyhow!("Expected long for count, got {:?}", value)),
+                    Value::Long(c) => *c,
+                    _ => bail!("Expected long for count, got {:?}", value),
                 },
-                None => Err(anyhow!(
-                    "Expected data_collection field from data collection"
-                )),
-            }?;
+                None => bail!("Expected data_collection field from data collection"),
+            };
 
             Ok((collection_name, count))
         }
-        _ => Err(anyhow!(
-            "Expected Record for data collection, got {:?}",
-            collection
-        )),
+        _ => bail!("Expected Record for data collection, got {:?}", collection),
     }
+}
+
+fn validate_transactions(transactions: Vec<DebeziumTransaction>) -> anyhow::Result<()> {
+    debug!("Transactions: {:#?}", transactions);
+
+    for transaction in transactions {
+        validate_transaction_properties(&transaction).with_context(|| {
+            format!(
+                "Transaction {} failed consistency checks: {:?}",
+                transaction.id, transaction
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+fn validate_transaction_properties(transaction: &DebeziumTransaction) -> anyhow::Result<()> {
+    match &transaction.status {
+        DebeziumTransactionStatus::END { txinfo } => {
+            if txinfo.event_count == 0 {
+                bail!("Event count is zero");
+            }
+
+            let sum_collections_count = txinfo.collections.iter().map(|(_, c)| c).sum::<i64>();
+
+            if txinfo.event_count != sum_collections_count {
+                bail!("Event count does not match sum of collections count");
+            }
+        }
+        _ => (),
+    }
+
+    Ok(())
 }
