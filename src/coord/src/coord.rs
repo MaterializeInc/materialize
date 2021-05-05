@@ -605,14 +605,14 @@ impl Coordinator {
     async fn message_statement_ready(
         &mut self,
         StatementReady {
-            session,
+            mut session,
             tx,
             result,
             params,
         }: StatementReady,
     ) {
         match future::ready(result)
-            .and_then(|stmt| self.handle_statement(&session, stmt, &params))
+            .and_then(|stmt| self.handle_statement(&mut session, stmt, &params))
             .await
         {
             Ok((pcx, plan)) => self.sequence_plan(tx, session, pcx, plan).await,
@@ -1007,11 +1007,11 @@ impl Coordinator {
 
     async fn handle_statement(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         stmt: sql::ast::Statement<Raw>,
         params: &sql::plan::Params,
     ) -> Result<(PlanContext, sql::plan::Plan), CoordError> {
-        let pcx = PlanContext::default();
+        let pcx = session.pcx();
 
         // When symbiosis mode is enabled, use symbiosis planning for:
         //  - CREATE TABLE
