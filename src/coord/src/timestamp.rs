@@ -426,7 +426,7 @@ fn parse_debezium(record: Vec<(String, Value)>) -> anyhow::Result<Option<Vec<(St
                 );
             }
         } else if key == "event_count" {
-            if let Value::Union { inner: value , ..} = value {
+            if let Value::Union { inner: value, .. } = value {
                 if let Value::Long(count) = *value {
                     event_count = count;
                 } else {
