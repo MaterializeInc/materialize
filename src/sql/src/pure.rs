@@ -25,8 +25,7 @@ use repr::strconv;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
     AvroSchema, ColumnDef, ColumnOption, Connector, CreateSourceFormat, CreateSourceStatement,
-    CreateSourcesStatement, CsrSeed, DbzMode, Envelope, Format, Ident, MultiConnector, Raw,
-    Statement, UnresolvedObjectName,
+    CsrSeed, DbzMode, Envelope, Format, Ident, Raw, Statement, UnresolvedObjectName,
 };
 use sql_parser::parser::parse_columns;
 
@@ -134,49 +133,6 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             &config_options,
         )
         .await?;
-    }
-    if let Statement::CreateSources(CreateSourcesStatement {
-        connector,
-        stmts,
-        materialized,
-    }) = &mut stmt
-    {
-        match connector {
-            MultiConnector::Postgres {
-                conn,
-                publication,
-                slot,
-                tables,
-            } => {
-                let mut create_stmts = Vec::with_capacity(tables.len());
-                for table in tables.into_iter() {
-                    purify_postgres_table(&conn, &table.name, &mut table.columns).await?;
-                    let table_slot = slot.clone().or_else(|| {
-                        Some(format!(
-                            "materialize_{}",
-                            Uuid::new_v4().to_string().replace('-', "")
-                        ))
-                    });
-                    create_stmts.push(CreateSourceStatement {
-                        name: table.alias.name().clone(),
-                        col_names: table.columns.iter().map(|c| c.name.clone()).collect(),
-                        connector: Connector::Postgres {
-                            conn: conn.to_owned(),
-                            publication: publication.to_owned(),
-                            slot: table_slot,
-                            table: table.name.to_owned(),
-                            columns: table.columns.clone(),
-                        },
-                        format: CreateSourceFormat::None,
-                        with_options: vec![],
-                        envelope: Envelope::None,
-                        if_not_exists: false,
-                        materialized: *materialized,
-                    });
-                }
-                *stmts = create_stmts;
-            }
-        }
     }
     Ok(stmt)
 }

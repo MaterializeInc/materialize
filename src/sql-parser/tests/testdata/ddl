@@ -394,7 +394,7 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]),
 parse-statement
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
 ----
-error: Expected VIEW, SOURCE, or SOURCES after CREATE MATERIALIZED, found OR
+error: Expected VIEW or SOURCE after CREATE MATERIALIZED, found OR
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
                     ^
 
@@ -523,48 +523,6 @@ CREATE SOURCE IF EXISTS foo FROM FILE 'bar' USING SCHEMA ''
 error: Expected NOT, found EXISTS
 CREATE SOURCE IF EXISTS foo FROM FILE 'bar' USING SCHEMA ''
                  ^
-
-parse-statement
-CREATE SOURCES FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' TABLES ();
-----
-error: Expected identifier, found right parenthesis
-CREATE SOURCES FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' TABLES ();
-                                                                                                                     ^
-
-parse-statement
-CREATE SOURCES FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' TABLES (SELECT 1);
-----
-error: Expected AS, found number '1'
-CREATE SOURCES FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' TABLES (SELECT 1);
-                                                                                                                            ^
-
-parse-statement
-CREATE SOURCES FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' TABLES ('public.psychic' (pokedex_id int NOT NULL, evolution int))
-----
-error: Expected identifier, found string literal 'public.psychic'
-CREATE SOURCES FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' TABLES ('public.psychic' (pokedex_id int NOT NULL, evolution int))
-                                                                                                                     ^
-
-parse-statement
-CREATE SOURCES FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' TABLES (generation1.psychic as "public.psychic" (pokedex_id int NOT NULL, evolution int))
-----
-CREATE SOURCES FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' TABLES (generation1.psychic AS "public.psychic" (pokedex_id int4 NOT NULL, evolution int4))
-=>
-CreateSources(CreateSourcesStatement { connector: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", slot: None, tables: [PgTable { name: UnresolvedObjectName([Ident("generation1"), Ident("psychic")]), alias: Name(UnresolvedObjectName([Ident("public.psychic")])), columns: [ColumnDef { name: Ident("pokedex_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("evolution"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }] }] }, materialized: false, stmts: [] })
-
-parse-statement
-CREATE SOURCES FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' TABLES (generation1.random.psychic as "public.psychic" (pokedex_id int NOT NULL, evolution int), another_table as "another_one")
-----
-CREATE SOURCES FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' TABLES (generation1.random.psychic AS "public.psychic" (pokedex_id int4 NOT NULL, evolution int4), another_table AS another_one)
-=>
-CreateSources(CreateSourcesStatement { connector: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", slot: None, tables: [PgTable { name: UnresolvedObjectName([Ident("generation1"), Ident("random"), Ident("psychic")]), alias: Name(UnresolvedObjectName([Ident("public.psychic")])), columns: [ColumnDef { name: Ident("pokedex_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("evolution"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }] }, PgTable { name: UnresolvedObjectName([Ident("another_table")]), alias: Name(UnresolvedObjectName([Ident("another_one")])), columns: [] }] }, materialized: false, stmts: [] })
-
-parse-statement
-CREATE MATERIALIZED SOURCES FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' TABLES (generation1.random.psychic as "public.psychic" (pokedex_id int NOT NULL, evolution int), another_table as "another_one")
-----
-CREATE MATERIALIZED SOURCES FROM POSTGRES HOST 'host=kanto user=ash password=teamrocket dbname=pokemon' PUBLICATION 'red' TABLES (generation1.random.psychic AS "public.psychic" (pokedex_id int4 NOT NULL, evolution int4), another_table AS another_one)
-=>
-CreateSources(CreateSourcesStatement { connector: Postgres { conn: "host=kanto user=ash password=teamrocket dbname=pokemon", publication: "red", slot: None, tables: [PgTable { name: UnresolvedObjectName([Ident("generation1"), Ident("random"), Ident("psychic")]), alias: Name(UnresolvedObjectName([Ident("public.psychic")])), columns: [ColumnDef { name: Ident("pokedex_id"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [ColumnOptionDef { name: None, option: NotNull }] }, ColumnDef { name: Ident("evolution"), data_type: Other { name: Name(UnresolvedObjectName([Ident("int4")])), typ_mod: [] }, collation: None, options: [] }] }, PgTable { name: UnresolvedObjectName([Ident("another_table")]), alias: Name(UnresolvedObjectName([Ident("another_one")])), columns: [] }] }, materialized: true, stmts: [] })
 
 parse-statement
 CREATE SINK foo FROM bar INTO FILE 'baz' FORMAT BYTES
