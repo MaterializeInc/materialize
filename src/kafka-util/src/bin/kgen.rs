@@ -34,7 +34,7 @@ use structopt::StructOpt;
 use url::Url;
 
 use mz_avro::schema::{SchemaNode, SchemaPiece, SchemaPieceOrNamed};
-use mz_avro::types::Value;
+use mz_avro::types::{DecimalValue, Value};
 use mz_avro::Schema;
 use ore::cast::CastFrom;
 
@@ -49,6 +49,7 @@ struct RandomAvroGenerator<'a> {
     bools: HashMap<*const SchemaPiece, Box<dyn FnMut() -> bool>>,
     floats: HashMap<*const SchemaPiece, Box<dyn FnMut() -> f32>>,
     doubles: HashMap<*const SchemaPiece, Box<dyn FnMut() -> f64>>,
+    decimals: HashMap<*const SchemaPiece, Box<dyn FnMut() -> Vec<u8>>>,
     array_lens: HashMap<*const SchemaPiece, Box<dyn FnMut() -> usize>>,
     _map_keys: HashMap<*const SchemaPiece, Box<dyn FnMut(&mut Vec<u8>)>>,
 
@@ -102,10 +103,18 @@ impl<'a> RandomAvroGenerator<'a> {
                 Value::Timestamp(val)
             }
             SchemaPiece::Decimal {
-                precision: _,
-                scale: _,
+                precision,
+                scale,
                 fixed_size: _,
-            } => unreachable!(),
+            } => {
+                let f = self.decimals.get_mut(&p).unwrap();
+                let unscaled = f();
+                Value::Decimal(DecimalValue {
+                    unscaled,
+                    precision: *precision,
+                    scale: *scale,
+                })
+            }
             SchemaPiece::Bytes => {
                 let f = self.bytes.get_mut(&p).unwrap();
                 let mut val = vec![];
@@ -271,6 +280,29 @@ impl<'a> RandomAvroGenerator<'a> {
                 v.extend(iter::repeat_with(sample).take(len));
             }
         }
+        fn decimal_dist(
+            json: &serde_json::Value,
+            rng: Rc<RefCell<ThreadRng>>,
+            precision: usize,
+        ) -> impl FnMut() -> Vec<u8> {
+            let x = json.as_array().unwrap();
+            let (min, max): (i64, i64) = (x[0].as_i64().unwrap(), x[1].as_i64().unwrap());
+            // Ensure values fit within precision bounds.
+            assert!(
+                10i64
+                    .checked_pow(u32::try_from(precision).unwrap())
+                    .unwrap()
+                    > max
+            );
+            assert!(
+                10i64
+                    .checked_pow(u32::try_from(precision).unwrap())
+                    .unwrap()
+                    > min.abs()
+            );
+            let dist = Uniform::<i64>::new_inclusive(min, max);
+            move || dist.sample(&mut *rng.borrow_mut()).to_be_bytes().to_vec()
+        }
         let p: *const _ = &*node.inner;
 
         let dist_json = field_name.and_then(|fn_| annotations.get(fn_));
@@ -304,10 +336,13 @@ impl<'a> RandomAvroGenerator<'a> {
             SchemaPiece::TimestampMilli => {}
             SchemaPiece::TimestampMicro => {}
             SchemaPiece::Decimal {
-                precision: _,
+                precision,
                 scale: _,
                 fixed_size: _,
-            } => unimplemented!(),
+            } => {
+                let dist = decimal_dist(dist_json.expect(&err), rng, *precision);
+                self.decimals.insert(p, Box::new(dist));
+            }
             SchemaPiece::Bytes => {
                 let len_dist_json = annotations
                     .get(&format!("{}.len", field_name.unwrap()))
@@ -391,6 +426,7 @@ impl<'a> RandomAvroGenerator<'a> {
             bools: Default::default(),
             floats: Default::default(),
             doubles: Default::default(),
+            decimals: Default::default(),
             array_lens: Default::default(),
             _map_keys: Default::default(),
             schema: schema.top_node(),
