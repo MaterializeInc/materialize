@@ -292,6 +292,62 @@ pub struct Timestamper {
     timestamp_frequency: Duration,
 }
 
+/// Implements the byo timestamping logic
+///
+/// If the partition count remains the same:
+/// A new timestamp should be
+/// 1) strictly greater than the last timestamp in this partition
+/// 2) greater or equal to all the timestamps that have been assigned so far across all partitions
+/// If the partition count increases:
+/// A new timestamp should be:
+/// 1) strictly greater than the last timestamp
+/// This is necessary to guarantee that this timestamp *could not have been closed yet*
+///
+/// Supports two envelopes: None and Debezium. Currentlye compatible with Debezium format 1.1
+fn update_source_timestamps(
+    id: &GlobalId,
+    tx: &mpsc::UnboundedSender<coord::Message>,
+    byo_consumer: &mut ByoTimestampConsumer,
+) -> anyhow::Result<()> {
+    let messages = byo_query_source(byo_consumer)?;
+    match byo_consumer.envelope {
+        ConsistencyFormatting::DebeziumAvro => {
+            for msg in messages {
+                let msg = if let ValueEncoding::Bytes(msg) = msg {
+                    msg
+                } else {
+                    bail!("Kafka Debezium consistency should only encode byte messages");
+                };
+                // The first 5 bytes are reserved for the schema id/schema registry information
+                let mut bytes = &msg[5..];
+                let res = mz_avro::from_avro_datum(&DEBEZIUM_TRX_SCHEMA_VALUE, &mut bytes);
+                match res {
+                    Err(_) => {
+                        // This was a key message, can safely ignore it
+                        // TODO (chris): are we certain?
+                        continue;
+                    }
+                    Ok(record) => {
+                        generate_ts_updates_from_debezium(&id, tx, byo_consumer, record)?;
+                    }
+                }
+            }
+        }
+        ConsistencyFormatting::DebeziumOcf => {
+            for msg in messages {
+                let value = if let ValueEncoding::Avro(value) = msg {
+                    value
+                } else {
+                    bail!("Debezium OCF consistency should only encode Value messages");
+                };
+                generate_ts_updates_from_debezium(&id, tx, byo_consumer, value)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Extracts Materialize timestamp updates from a Debezium consistency record.
 fn generate_ts_updates_from_debezium(
     id: &GlobalId,
@@ -493,14 +549,14 @@ impl Timestamper {
     /// Run the update function in a loop at the specified frequency. Acquires timestamps using
     /// either the Kafka topic ground truth
     /// TODO(ncrooks): move to thread local BYO implementation
-    pub fn update(&mut self) -> anyhow::Result<()> {
+    pub fn run(&mut self) {
         loop {
             thread::sleep(self.timestamp_frequency);
             let shutdown = self.update_sources();
             if shutdown {
-                return Ok(());
+                return;
             } else {
-                self.update_byo_timestamp()?;
+                self.update_byo_timestamp();
             }
         }
     }
@@ -562,18 +618,7 @@ impl Timestamper {
                     }
                 }
                 TimestampMessage::Drop(id) => {
-                    info!("Dropping Timestamping for Source {}.", id);
-                    if let Some(RtTimestampConsumer {
-                        connector:
-                            RtTimestampConnector::Kafka(RtKafkaConnector {
-                                coordination_state, ..
-                            }),
-                        ..
-                    }) = self.rt_sources.remove(&id)
-                    {
-                        coordination_state.stop.store(true, Ordering::SeqCst);
-                    }
-                    self.byo_sources.remove(&id);
+                    self.drop_source(id);
                 }
                 TimestampMessage::Shutdown => {
                     // First, let's remove all of the threads consuming metadata
@@ -595,64 +640,41 @@ impl Timestamper {
         false
     }
 
-    /// Implements the byo timestamping logic
+    fn drop_source(&mut self, id: GlobalId) {
+        info!("Dropping Timestamping for Source {}.", id);
+        if let Some(RtTimestampConsumer {
+            connector:
+                RtTimestampConnector::Kafka(RtKafkaConnector {
+                    coordination_state, ..
+                }),
+            ..
+        }) = self.rt_sources.remove(&id)
+        {
+            coordination_state.stop.store(true, Ordering::SeqCst);
+        }
+        self.byo_sources.remove(&id);
+    }
+
+    /// Iterate over each source, updating BYO timestamps
     ///
-    /// If the partition count remains the same:
-    /// A new timestamp should be
-    /// 1) strictly greater than the last timestamp in this partition
-    /// 2) greater or equal to all the timestamps that have been assigned so far across all partitions
-    /// If the partition count increases:
-    /// A new timestamp should be:
-    /// 1) strictly greater than the last timestamp
-    /// This is necessary to guarantee that this timestamp *could not have been closed yet*
-    ///
-    /// Supports two envelopes: None and Debezium. Currentlye compatible with Debezium format 1.1
-    fn update_byo_timestamp(&mut self) -> anyhow::Result<()> {
-        for (id, byo_consumer) in &mut self.byo_sources {
+    /// If an error is encountered while reading the sources, log an error message
+    /// and remove that source of BYO timestamps
+    fn update_byo_timestamp(&mut self) {
+        let mut invalid_byo_sources: Vec<GlobalId> = vec![];
+        for (id, byo_consumer) in self.byo_sources.iter_mut() {
             // Get the next set of messages from the Consistency topic
-            let messages = byo_query_source(byo_consumer)?;
-            match byo_consumer.envelope {
-                ConsistencyFormatting::DebeziumAvro => {
-                    for msg in messages {
-                        let msg = if let ValueEncoding::Bytes(msg) = msg {
-                            msg
-                        } else {
-                            bail!("Kafka Debezium consistency should only encode byte messages");
-                        };
-                        // The first 5 bytes are reserved for the schema id/schema registry information
-                        let mut bytes = &msg[5..];
-                        let res = mz_avro::from_avro_datum(&DEBEZIUM_TRX_SCHEMA_VALUE, &mut bytes);
-                        match res {
-                            Err(_) => {
-                                // This was a key message, can safely ignore it
-                                // TODO (chris): are we certain?
-                                continue;
-                            }
-                            Ok(record) => {
-                                generate_ts_updates_from_debezium(
-                                    &id,
-                                    &self.tx,
-                                    byo_consumer,
-                                    record,
-                                )?;
-                            }
-                        }
-                    }
-                }
-                ConsistencyFormatting::DebeziumOcf => {
-                    for msg in messages {
-                        let value = if let ValueEncoding::Avro(value) = msg {
-                            value
-                        } else {
-                            bail!("Debezium OCF consistency should only encode Value messages");
-                        };
-                        generate_ts_updates_from_debezium(&id, &self.tx, byo_consumer, value)?;
-                    }
-                }
+            if let Err(err) = update_source_timestamps(id, &self.tx, byo_consumer) {
+                error!(
+                    "Failed to correctly parse messages from source {}; {}",
+                    id, err
+                );
+                invalid_byo_sources.push(*id);
             }
         }
 
-        Ok(())
+        for id in invalid_byo_sources {
+            self.drop_source(id);
+        }
     }
 
     /// Creates a RT connector
