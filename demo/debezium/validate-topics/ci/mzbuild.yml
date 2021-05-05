@@ -10,5 +10,5 @@
 name: validate-debezium-topics
 publish: false
 pre-image:
-  type: cargo-build
-  bin: validate-debezium-topics
+  - type: cargo-build
+    bin: validate-debezium-topics
