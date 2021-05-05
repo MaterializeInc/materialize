@@ -110,7 +110,7 @@ $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
 {"status":"BEGIN","id":"1","event_count":null,"data_collections":null}
 {"status":"END","id":"1","event_count":{"long": 0},"data_collections":{"array": []}}
 {"status":"BEGIN","id":"2","event_count":null,"data_collections":null}
-{"status":"END","id":"2","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}}
+{"status":"END","id":"2","event_count":{"long": 3},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}}
 
 > SELECT * FROM foo;
 b  sum
@@ -136,7 +136,7 @@ $ kafka-ingest format=avro topic=bar schema=${schema} timestamp=1
 
 $ kafka-ingest format=avro topic=consistency timestamp=1 schema=${trxschema}
 {"status":"BEGIN","id":"3","event_count":null,"data_collections":null}
-{"status":"END","id":"3","event_count":{"long": 2},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}}
+{"status":"END","id":"3","event_count":{"long": 3},"data_collections":{"array": [{"event_count": 2, "data_collection": "testdrive-foo-${testdrive.seed}"},{"event_count": 1, "data_collection": "testdrive-bar-${testdrive.seed}"}]}}
 
 > SELECT * FROM foo;
 b  sum

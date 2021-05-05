@@ -350,6 +350,7 @@ fn generate_ts_updates_from_debezium(
 /// processing an END message. It returns NONE otherwise.
 fn parse_debezium(record: Vec<(String, Value)>) -> anyhow::Result<Option<Vec<(String, i64)>>> {
     let mut result = vec![];
+    let mut event_count = 0;
     for (key, value) in record {
         if key == "status" {
             if let Value::String(status) = value {
@@ -424,10 +425,28 @@ fn parse_debezium(record: Vec<(String, Value)>) -> anyhow::Result<Option<Vec<(St
                     value
                 );
             }
+        } else if key == "event_count" {
+            if let Value::Union { inner: value , ..} = value {
+                if let Value::Long(count) = *value {
+                    event_count = count;
+                } else {
+                    bail!(
+                        "Failed to parse Debezium event count. Long expected, got {:?}",
+                        value
+                    );
+                }
+            } else {
+                bail!(
+                    "Failed to parse Debezium event count. Union expected, got {:?}",
+                    value
+                );
+            }
         }
     }
-    if result.is_empty() {
-        bail!("Failed to parse Debezium transaction message. No collections found");
+    // TODO (chris): why can't we simply assert that event_count is non-zero?
+    // Can a transaction message have zero colections?
+    if result.iter().map(|(_, c)| c).sum::<i64>() != event_count {
+        bail!("Failed to parse Debezium transaction message. Event count '{:?}' does not match parsed collections: {:?}", event_count, result);
     }
     Ok(Some(result))
 }
