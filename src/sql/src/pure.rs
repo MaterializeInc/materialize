@@ -11,7 +11,7 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
@@ -22,12 +22,10 @@ use tokio::time::Duration;
 use uuid::Uuid;
 
 use repr::strconv;
-use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
-    AvroSchema, ColumnDef, ColumnOption, Connector, CreateSourceFormat, CreateSourceStatement,
-    CsrSeed, DbzMode, Envelope, Format, Ident, Raw, Statement, UnresolvedObjectName,
+    AvroSchema, Connector, CreateSourceFormat, CreateSourceStatement, CsrSeed, DbzMode, Envelope,
+    Format, Ident, Raw, Statement,
 };
-use sql_parser::parser::parse_columns;
 
 use crate::kafka_util;
 use crate::normalize;
@@ -108,10 +106,8 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             }
             Connector::Postgres {
                 conn,
-                table,
-                columns,
+                publication,
                 slot,
-                ..
             } => {
                 slot.get_or_insert_with(|| {
                     format!(
@@ -119,7 +115,11 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
                         Uuid::new_v4().to_string().replace('-', "")
                     )
                 });
-                purify_postgres_table(conn, table, columns).await?;
+
+                // verify that we can connect upstream
+                // TODO(petrosagg): store this info along with the source for better error
+                // detection
+                let _ = postgres_util::publication_info(&conn, &publication).await?;
             }
             Connector::PubNub { .. } => (),
         }
@@ -137,73 +137,9 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
     Ok(stmt)
 }
 
-async fn purify_postgres_table(
-    conn: &str,
-    table: &UnresolvedObjectName,
-    columns: &mut Vec<ColumnDef<Raw>>,
-) -> Result<(), anyhow::Error> {
-    let fetched_columns = postgres_util::table_info(conn, &table.to_ast_string())
-        .await?
-        .schema
-        .iter()
-        .map(|c| c.to_ast_string())
-        .collect::<Vec<String>>()
-        .join(", ");
-    let (upstream_columns, _constraints) = parse_columns(&format!("({})", fetched_columns))?;
-    if columns.is_empty() {
-        *columns = upstream_columns;
-    } else {
-        if columns != &upstream_columns {
-            if columns.len() != upstream_columns.len() {
-                bail!(
-                    "incorrect column specification: {} columns were specified, upstream has {}: {}",
-                    columns.len(),
-                    upstream_columns.len(),
-                    upstream_columns
-                        .iter()
-                        .map(|u| u.name.to_string())
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                )
-            }
-            for (column, upstream_column) in columns.into_iter().zip(upstream_columns) {
-                if column != &upstream_column {
-                    if column.name != upstream_column.name
-                        || column.data_type != upstream_column.data_type
-                        || column.collation != upstream_column.collation
-                    {
-                        bail!("incorrect column specification: specified column does not match upstream source, specified: {}, upstream: {}", column, upstream_column);
-                    }
-
-                    // Some column modifiers can be omitted by the user. Add any potentially omitted column
-                    // options, and compare again.
-                    let mut cols: HashSet<&ColumnOption<Raw>> =
-                        column.options.iter().map(|o| &o.option).collect();
-                    let has_null = cols.contains(&ColumnOption::Null);
-                    let has_not_null = cols.contains(&ColumnOption::NotNull);
-                    let has_primary_key = cols.contains(&ColumnOption::Unique { is_primary: true });
-
-                    if !has_null && !has_not_null && !has_primary_key {
-                        cols.insert(&ColumnOption::Null);
-                    } else if has_primary_key && !has_not_null {
-                        cols.insert(&ColumnOption::NotNull);
-                    }
-                    let upstream_cols = upstream_column.options.iter().map(|o| &o.option).collect();
-                    if cols != upstream_cols {
-                        bail!("incorrect column specification: specified column modifiers do not match upstream source, specified: {}, upstream: {}", column, upstream_column);
-                    }
-                }
-            }
-        }
-    }
-    //TODO(petrosagg): attempt to connect with a replication connection and create a temporary
-    //                 logical replication slot to ensure the server has the correct WAL settings
-    Ok(())
-}
-
 async fn purify_format(
     format: &mut CreateSourceFormat<Raw>,
-    connector: &mut Connector<Raw>,
+    connector: &mut Connector,
     envelope: &Envelope,
     col_names: &mut Vec<Ident>,
     file: Option<File>,
@@ -266,7 +202,7 @@ async fn purify_format(
 
 async fn purify_format_single(
     format: &mut Format<Raw>,
-    connector: &mut Connector<Raw>,
+    connector: &mut Connector,
     envelope: &Envelope,
     col_names: &mut Vec<Ident>,
     file: Option<File>,
