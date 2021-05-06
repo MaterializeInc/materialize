@@ -12,4 +12,4 @@ set -euo pipefail
 
 view_file="/data/${1:-upsert_views.sql}"
 
-psql -h materialized -p 6875 -U materialize -f "${view_file}" materialize
+psql -v ON_ERROR_STOP=1 -h materialized -p 6875 -U materialize -f "${view_file}" materialize
