@@ -326,6 +326,34 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS myschema.myview AS SELECT foo FROM bar
 CreateView(CreateViewStatement { name: UnresolvedObjectName([Ident("myschema"), Ident("myview")]), columns: [], with_options: [], query: Query { ctes: [], body: Select(Select { distinct: None, projection: [Expr { expr: Identifier([Ident("foo")]), alias: None }], from: [TableWithJoins { relation: Table { name: Name(UnresolvedObjectName([Ident("bar")])), alias: None }, joins: [] }], selection: None, group_by: [], having: None, options: [] }), order_by: [], limit: None, offset: None }, if_exists: Skip, temporary: false, materialized: true })
 
 parse-statement
+CREATE VIEWS FROM SOURCE "foobar"
+----
+CREATE VIEWS FROM SOURCE foobar
+=>
+CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: false, views_definition: Source { name: UnresolvedObjectName([Ident("foobar")]), targets: None } })
+
+parse-statement
+CREATE OR REPLACE VIEWS FROM SOURCE "foobar"
+----
+CREATE OR REPLACE VIEWS FROM SOURCE foobar
+=>
+CreateViews(CreateViewsStatement { if_exists: Replace, temporary: false, materialized: false, views_definition: Source { name: UnresolvedObjectName([Ident("foobar")]), targets: None } })
+
+parse-statement
+CREATE VIEWS FROM SOURCE "foobar" ();
+----
+error: Expected identifier, found right parenthesis
+CREATE VIEWS FROM SOURCE "foobar" ();
+                                   ^
+
+parse-statement
+CREATE MATERIALIZED VIEWS FROM SOURCE "foobar" (t1, "t2" AS t3);
+----
+CREATE MATERIALIZED VIEWS FROM SOURCE foobar (t1, t2 AS t3)
+=>
+CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: true, views_definition: Source { name: UnresolvedObjectName([Ident("foobar")]), targets: Some([CreateViewsSourceTarget { name: Ident("t1"), alias: None }, CreateViewsSourceTarget { name: Ident("t2"), alias: Some(Ident("t3")) }]) } })
+
+parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING SCHEMA 'baz'
 ----
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING SCHEMA 'baz'
@@ -394,7 +422,7 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]),
 parse-statement
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
 ----
-error: Expected VIEW or SOURCE after CREATE MATERIALIZED, found OR
+error: Expected VIEW, VIEWS, or SOURCE after CREATE MATERIALIZED, found OR
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
                     ^
 

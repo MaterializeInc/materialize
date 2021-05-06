@@ -40,6 +40,7 @@ pub enum Statement<T: AstInfo> {
     CreateSource(CreateSourceStatement<T>),
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
+    CreateViews(CreateViewsStatement<T>),
     CreateTable(CreateTableStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
     CreateType(CreateTypeStatement<T>),
@@ -94,6 +95,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSource(stmt) => f.write_node(stmt),
             Statement::CreateSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
+            Statement::CreateViews(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
             Statement::CreateRole(stmt) => f.write_node(stmt),
@@ -500,6 +502,79 @@ impl<T: AstInfo> AstDisplay for CreateViewStatement<T> {
     }
 }
 impl_display_t!(CreateViewStatement);
+
+/// `CREATE VIEWS`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateViewsStatement<T: AstInfo> {
+    pub if_exists: IfExistsBehavior,
+    pub temporary: bool,
+    pub materialized: bool,
+    pub views_definition: CreateViewsDefinition<T>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CreateViewsDefinition<T: AstInfo> {
+    Source {
+        name: UnresolvedObjectName,
+        targets: Option<Vec<CreateViewsSourceTarget>>,
+    },
+    Literal(Vec<CreateViewStatement<T>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateViewsSourceTarget {
+    pub name: Ident,
+    pub alias: Option<Ident>,
+}
+
+impl AstDisplay for CreateViewsSourceTarget {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        if let Some(alias) = &self.alias {
+            f.write_str(" AS ");
+            f.write_node(alias);
+        }
+    }
+}
+impl_display!(CreateViewsSourceTarget);
+
+impl<T: AstInfo> AstDisplay for CreateViewsStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE");
+        if self.if_exists == IfExistsBehavior::Replace {
+            f.write_str(" OR REPLACE");
+        }
+        if self.temporary {
+            f.write_str(" TEMPORARY");
+        }
+        if self.materialized {
+            f.write_str(" MATERIALIZED");
+        }
+
+        f.write_str(" VIEWS");
+
+        if self.if_exists == IfExistsBehavior::Skip {
+            f.write_str(" IF NOT EXISTS");
+        }
+
+        match &self.views_definition {
+            CreateViewsDefinition::Source { name, targets } => {
+                f.write_str(" FROM SOURCE ");
+                f.write_node(name);
+                if let Some(targets) = targets {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(&targets));
+                    f.write_str(")");
+                }
+            }
+            CreateViewsDefinition::Literal(views) => {
+                f.write_str(" ");
+                f.write_node(&display::comma_separated(&views));
+            }
+        }
+    }
+}
+impl_display_t!(CreateViewsStatement);
 
 /// `CREATE TABLE`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
