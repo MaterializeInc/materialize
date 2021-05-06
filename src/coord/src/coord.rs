@@ -63,8 +63,8 @@ use build_info::BuildInfo;
 use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
-    DataflowDesc, IndexDesc, PeekResponse, SinkConnector, SourceConnector, TailSinkConnector,
-    TimestampSourceUpdate, Update,
+    DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, SinkConnector, SourceConnector,
+    TailSinkConnector, TimestampSourceUpdate, Update,
 };
 use dataflow_types::{SinkAsOf, SinkEnvelope};
 use expr::{
@@ -90,7 +90,7 @@ use sql::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan,
     DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan, FetchPlan, IndexOption,
     IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, PlanContext,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailPlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
 use storage::Message as PersistedMessage;
 use transform::Optimizer;
@@ -1509,6 +1509,24 @@ impl Coordinator {
         pcx: PlanContext,
         plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        // TODO(petrosagg): remove this check once postgres sources are properly supported
+        if matches!(
+            plan,
+            CreateSourcePlan {
+                source: Source {
+                    connector: SourceConnector::External {
+                        connector: ExternalSourceConnector::Postgres(_),
+                        ..
+                    },
+                    ..
+                },
+                materialized: false,
+                ..
+            }
+        ) {
+            coord_bail!("Unmaterialized Postgres sources are not supported yet");
+        }
+
         let if_not_exists = plan.if_not_exists;
         let (metadata, ops) = self.generate_create_source_ops(session, pcx, vec![plan])?;
         match self.catalog_transact(ops).await {
