@@ -2766,6 +2766,12 @@ impl Coordinator {
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
+    /// Utility method for the more general [Self::ship_dataflows]
+    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) -> Result<(), CoordError> {
+        self.ship_dataflows(vec![dataflow]).await
+    }
+
+    /// Finalizes a list of dataflows and then broadcasts it to all workers.
     ///
     /// Finalization includes optimization, but also validation of various
     /// invariants such as ensuring that the `as_of` frontier is in advance of
@@ -2774,69 +2780,71 @@ impl Coordinator {
     /// In particular, there are requirement on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
-    async fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) -> Result<(), CoordError> {
-        // The identity for `join` is the minimum element.
-        let mut since = Antichain::from_elem(Timestamp::minimum());
+    async fn ship_dataflows(&mut self, mut dataflows: Vec<DataflowDesc>) -> Result<(), CoordError> {
+        for dataflow in &mut dataflows {
+            // The identity for `join` is the minimum element.
+            let mut since = Antichain::from_elem(Timestamp::minimum());
 
-        // Populate "valid from" information for each source BYO Debezium source.
-        // TODO: extend this to all sources.
-        for (source_id, _description) in dataflow.source_imports.iter() {
-            // Extract `since` information about each source and apply here.
-            if let Some(source_since) = self.sources.since_of(source_id) {
-                since.join_assign(&source_since);
+            // Populate "valid from" information for each source BYO Debezium source.
+            // TODO: extend this to all sources.
+            for (source_id, _description) in dataflow.source_imports.iter() {
+                // Extract `since` information about each source and apply here.
+                if let Some(source_since) = self.sources.since_of(source_id) {
+                    since.join_assign(&source_since);
+                }
             }
-        }
 
-        // For each imported arrangement, lower bound `since` by its own frontier.
-        for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
-            since.join_assign(
-                &self
-                    .indexes
-                    .since_of(global_id)
-                    .expect("global id missing at coordinator"),
-            );
-        }
-
-        // For each produced arrangement, start tracking the arrangement with
-        // a compaction frontier of at least `since`.
-        for (global_id, _description, _typ) in dataflow.index_exports.iter() {
-            let frontiers = self.new_frontiers(
-                *global_id,
-                since.elements().to_vec(),
-                self.logical_compaction_window_ms,
-            );
-            self.indexes.insert(*global_id, frontiers);
-        }
-
-        // TODO: Produce "valid from" information for each sink.
-        // For each sink, ... do nothing because we don't yield `since` for sinks.
-        // for (global_id, _description) in dataflow.sink_exports.iter() {
-        //     // TODO: assign `since` to a "valid from" element of the sink. E.g.
-        //     self.sink_info[global_id].valid_from(&since);
-        // }
-
-        // Ensure that the dataflow's `as_of` is at least `since`.
-        if let Some(as_of) = &mut dataflow.as_of {
-            // If we have requested a specific time that is invalid .. someone errored.
-            use timely::order::PartialOrder;
-            if !(<_ as PartialOrder>::less_equal(&since, as_of)) {
-                coord_bail!(
-                    "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
-                    dataflow.debug_name,
-                    as_of,
-                    since
+            // For each imported arrangement, lower bound `since` by its own frontier.
+            for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
+                since.join_assign(
+                    &self
+                        .indexes
+                        .since_of(global_id)
+                        .expect("global id missing at coordinator"),
                 );
             }
-        } else {
-            // Bind the since frontier to the dataflow description.
-            dataflow.set_as_of(since);
+
+            // For each produced arrangement, start tracking the arrangement with
+            // a compaction frontier of at least `since`.
+            for (global_id, _description, _typ) in dataflow.index_exports.iter() {
+                let frontiers = self.new_frontiers(
+                    *global_id,
+                    since.elements().to_vec(),
+                    self.logical_compaction_window_ms,
+                );
+                self.indexes.insert(*global_id, frontiers);
+            }
+
+            // TODO: Produce "valid from" information for each sink.
+            // For each sink, ... do nothing because we don't yield `since` for sinks.
+            // for (global_id, _description) in dataflow.sink_exports.iter() {
+            //     // TODO: assign `since` to a "valid from" element of the sink. E.g.
+            //     self.sink_info[global_id].valid_from(&since);
+            // }
+
+            // Ensure that the dataflow's `as_of` is at least `since`.
+            if let Some(as_of) = &mut dataflow.as_of {
+                // If we have requested a specific time that is invalid .. someone errored.
+                use timely::order::PartialOrder;
+                if !(<_ as PartialOrder>::less_equal(&since, as_of)) {
+                    coord_bail!(
+                        "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
+                        dataflow.debug_name,
+                        as_of,
+                        since
+                    );
+                }
+            } else {
+                // Bind the since frontier to the dataflow description.
+                dataflow.set_as_of(since);
+            }
+
+            // Optimize the dataflow across views, and any other ways that appeal.
+            transform::optimize_dataflow(dataflow);
         }
 
-        // Optimize the dataflow across views, and any other ways that appeal.
-        transform::optimize_dataflow(&mut dataflow);
-
         // Finalize the dataflow by broadcasting its construction to all workers.
-        self.broadcast(SequencedCommand::CreateDataflows(vec![dataflow]));
+        self.broadcast(SequencedCommand::CreateDataflows(dataflows));
         Ok(())
     }
 
