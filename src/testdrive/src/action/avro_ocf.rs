@@ -175,7 +175,7 @@ impl Action for VerifyAction {
             let reader = Reader::new(file).map_err(|e| format!("creating avro reader: {}", e))?;
             let schema = reader.writer_schema().clone();
             let actual = reader
-                .map(|res| res.map(|val| (None, val)))
+                .map(|res| res.map(|val| (None, Some(val))))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| format!("reading avro values from file: {}", e))?;
             avro::validate_sink(None, &schema, &self.expected, &actual)
