@@ -59,7 +59,7 @@ pub use query::{
     plan_default_expr, resolve_names, resolve_names_data_type, resolve_names_stmt,
     scalar_type_from_sql, unwrap_numeric_typ_mod, Aug, QueryContext, QueryLifetime,
 };
-pub use statement::{describe, plan, StatementContext, StatementDesc};
+pub use statement::{describe, plan, plan_copy_from, StatementContext, StatementDesc};
 
 /// Instructions for executing a SQL query.
 #[derive(Debug)]
@@ -238,6 +238,7 @@ pub struct SendRowsPlan {
 #[derive(Debug)]
 pub struct CopyFromPlan {
     pub id: GlobalId,
+    pub columns: Vec<usize>,
     pub params: CopyParams,
 }
 

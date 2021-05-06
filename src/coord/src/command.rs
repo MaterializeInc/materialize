@@ -73,6 +73,14 @@ pub enum Command {
         tx: oneshot::Sender<Response<String>>,
     },
 
+    CopyRows {
+        id: GlobalId,
+        columns: Vec<usize>,
+        rows: Vec<Row>,
+        session: Session,
+        tx: oneshot::Sender<Response<ExecuteResponse>>,
+    },
+
     Terminate {
         session: Session,
     },
@@ -152,6 +160,7 @@ pub enum ExecuteResponse {
     },
     CopyFrom {
         id: GlobalId,
+        columns: Vec<usize>,
         params: sql::plan::CopyParams,
     },
     /// The requested database was created.

@@ -23,9 +23,8 @@ use repr::{RelationDesc, ScalarType};
 
 use crate::ast::{
     CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
-    ExplainStage, ExplainStatement, Explainee, Ident, InsertSource, InsertStatement, Query, Raw,
-    SelectStatement, Statement, TailStatement, UnresolvedObjectName, UpdateStatement,
-    ViewDefinition,
+    ExplainStage, ExplainStatement, Explainee, Ident, InsertStatement, Query, Raw, SelectStatement,
+    Statement, TailStatement, UnresolvedObjectName, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::plan::query;
@@ -64,7 +63,7 @@ pub fn plan_insert(
     }: InsertStatement<Raw>,
     params: &Params,
 ) -> Result<Plan, anyhow::Error> {
-    let (id, mut expr, _) = query::plan_insert_query(scx, table_name, columns, source)?;
+    let (id, mut expr) = query::plan_insert_query(scx, table_name, columns, source)?;
     expr.bind_parameters(&params)?;
     let expr = expr.lower();
 
@@ -324,8 +323,7 @@ pub fn describe_table(
     table_name: UnresolvedObjectName,
     columns: Vec<Ident>,
 ) -> Result<StatementDesc, anyhow::Error> {
-    let source = InsertSource::DefaultValues;
-    let (_, _, desc) = query::plan_insert_query(scx, table_name, columns, source)?;
+    let (_, desc, _) = query::plan_copy_from(scx, table_name, columns)?;
     Ok(StatementDesc::new(Some(desc)))
 }
 
@@ -355,9 +353,12 @@ fn plan_copy_from(
     columns: Vec<Ident>,
     params: CopyParams,
 ) -> Result<Plan, anyhow::Error> {
-    let source = InsertSource::DefaultValues;
-    let (id, _, _) = query::plan_insert_query(scx, table_name, columns, source)?;
-    Ok(Plan::CopyFrom(CopyFromPlan { id, params }))
+    let (id, _, columns) = query::plan_copy_from(scx, table_name, columns)?;
+    Ok(Plan::CopyFrom(CopyFromPlan {
+        id,
+        columns,
+        params,
+    }))
 }
 
 pub fn plan_copy(

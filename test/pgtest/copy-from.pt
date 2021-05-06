@@ -548,6 +548,26 @@ ErrorResponse {"fields":[{"typ":"C","value":"XX000"},{"typ":"M","value":"null va
 ReadyForQuery {"status":"I"}
 
 send
+Query {"query": "COPY not_null_table(f2) FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text"]}
+
+send
+CopyData "1\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"XX000"},{"typ":"M","value":"null value in column \"f1\" violates not-null constraint"}]}
+ReadyForQuery {"status":"I"}
+
+send
 Query {"query": "COPY not_null_table FROM STDIN"}
 ----
 
@@ -571,6 +591,136 @@ ReadyForQuery {"status":"I"}
 
 send
 Query {"query": "DROP TABLE not_null_table"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+#
+# Default value
+#
+
+send
+Query {"query": "DROP TABLE IF EXISTS default_values"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE default_values(f1 INT NOT NULL DEFAULT 10, f2 INT DEFAULT 20, f3 INT DEFAULT 30)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+# missing f2; f1 and f3 swapped
+send
+Query {"query": "COPY default_values(f3, f1) FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+
+send
+CopyData "\\N\t1\n"
+CopyData "3\t11\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 2"}
+ReadyForQuery {"status":"I"}
+
+# missing f1; f2 and f3 swapped
+send
+Query {"query": "COPY default_values(f3, f2) FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+
+send
+CopyData "\\N\t2\n"
+CopyData "3\t22\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 2"}
+ReadyForQuery {"status":"I"}
+
+# repeated column
+send
+Query {"query": "COPY default_values(f1, f2, f3, f1) FROM STDIN"}
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"XX000"},{"typ":"M","value":"column \"f1\" specified more than once"}]}
+ReadyForQuery {"status":"I"}
+
+# all columns
+
+send
+Query {"query": "COPY default_values(f3, f1, f2) FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "333\t111\t222\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+# dump table
+send
+Query {"query": "COPY (SELECT * FROM default_values ORDER BY f1, f2, f3) TO STDOUT"}
+----
+
+until
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text","text","text"]}
+CopyData "1\t20\t\\N\n"
+CopyData "10\t2\t\\N\n"
+CopyData "10\t22\t3\n"
+CopyData "11\t20\t3\n"
+CopyData "111\t222\t333\n"
+CopyDone
+CommandComplete {"tag":"COPY 5"}
+ReadyForQuery {"status":"I"}
+
+# cleanup
+send
+Query {"query": "DROP TABLE default_values"}
 ----
 
 until

@@ -30,15 +30,14 @@ use tokio::time::{self, Duration, Instant};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use coord::session::{
-    EndTransactionAction, Portal, PortalState, RowBatchStream, Session, TransactionOps,
-    TransactionStatus, WriteOp,
+    EndTransactionAction, Portal, PortalState, RowBatchStream, Session, TransactionStatus,
 };
 use coord::ExecuteResponse;
 use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use ore::netio::AsyncReady;
 use ore::str::StrExt;
-use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowArena};
+use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
 use sql::ast::{FetchDirection, Ident, Raw, Statement};
 use sql::plan::{CopyFormat, CopyParams, ExecuteTimeout, StatementDesc};
@@ -1114,10 +1113,14 @@ where
                 };
                 self.copy_rows(format, row_desc, rows).await
             }
-            ExecuteResponse::CopyFrom { id, params } => {
+            ExecuteResponse::CopyFrom {
+                id,
+                columns,
+                params,
+            } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
-                self.read_rows(id, params, row_desc).await
+                self.read_rows(id, columns, params, row_desc).await
             }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
@@ -1401,6 +1404,7 @@ where
     async fn read_rows(
         &mut self,
         id: GlobalId,
+        columns: Vec<usize>,
         params: CopyParams,
         row_desc: RelationDesc,
     ) -> Result<State, io::Error> {
@@ -1451,51 +1455,24 @@ where
             .collect::<Vec<pgrepr::Type>>();
 
         if let State::Ready = next_state {
-            let mut rows =
-                match decode_row_text(&data, &column_types, &params.delimiter, &params.null) {
-                    Ok(rows) => rows,
-                    Err(e) => {
-                        return self
-                            .error(ErrorResponse::error(
-                                SqlState::INVALID_PARAMETER_VALUE,
-                                format!("{}", e),
-                            ))
-                            .await
-                    }
-                };
-
-            // TODO(asenac) This doesn't seem to belong here. Should we not pass the rows
-            // to the coordinator and let it validate them and add them to the transaction?
-            for row in &rows {
-                for (datum, (name, typ)) in row.unpack().iter().zip(row_desc.iter()) {
-                    if datum == &Datum::Null && !typ.nullable {
-                        return self
-                            .error(ErrorResponse::error(
-                                SqlState::INTERNAL_ERROR,
-                                format!(
-                                    "null value in column {} violates not-null constraint",
-                                    name.unwrap_or(&ColumnName::from("unnamed column"))
-                                        .as_str()
-                                        .quoted()
-                                ),
-                            ))
-                            .await;
-                    }
-                }
-            }
-            let rows = rows.drain(..).map(|row| (row, 1)).collect::<Vec<_>>();
-            let count = rows.len();
-            match self
-                .coord_client
-                .session()
-                .add_transaction_ops(TransactionOps::Writes(vec![WriteOp { id, rows }]))
+            let rows = match decode_row_text(&data, &column_types, &params.delimiter, &params.null)
             {
-                Ok(_) => {}
+                Ok(rows) => rows,
                 Err(e) => {
                     return self
-                        .error(ErrorResponse::from_coord(Severity::Error, e))
-                        .await;
+                        .error(ErrorResponse::error(
+                            SqlState::INVALID_PARAMETER_VALUE,
+                            format!("{}", e),
+                        ))
+                        .await
                 }
+            };
+            let count = rows.len();
+
+            if let Err(e) = self.coord_client.insert_rows(id, columns, rows).await {
+                return self
+                    .error(ErrorResponse::from_coord(Severity::Error, e))
+                    .await;
             }
 
             let tag = format!("COPY {}", count);

@@ -18,7 +18,7 @@ copy_to ::=
   'COPY' '(' query ')' 'TO' 'STDOUT'
   ( 'WITH'? '(' option ( ',' option )* ')' )?
 copy_from ::=
-  'COPY' table_name 'FROM' 'STDIN'
+  'COPY' table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
   ( 'WITH'? '(' option ( ',' option )* ')' )?
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name

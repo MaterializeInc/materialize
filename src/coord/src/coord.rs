@@ -922,6 +922,19 @@ impl Coordinator {
                 });
             }
 
+            Command::CopyRows {
+                id,
+                columns,
+                rows,
+                mut session,
+                tx,
+            } => {
+                let result = self
+                    .sequence_copy_rows(&mut session, id, columns, rows)
+                    .await;
+                let _ = tx.send(Response { result, session });
+            }
+
             Command::Terminate { mut session } => {
                 self.handle_terminate(&mut session).await;
             }
@@ -1307,6 +1320,7 @@ impl Coordinator {
                 tx.send(
                     Ok(ExecuteResponse::CopyFrom {
                         id: plan.id,
+                        columns: plan.columns,
                         params: plan.params,
                     }),
                     session,
@@ -2665,6 +2679,22 @@ impl Coordinator {
             // enough to handle this.
             _ => coord_bail!("INSERT statements cannot reference other relations"),
         }
+    }
+
+    async fn sequence_copy_rows(
+        &mut self,
+        session: &mut Session,
+        id: GlobalId,
+        columns: Vec<usize>,
+        rows: Vec<Row>,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let catalog = self.catalog.for_session(session);
+        let values = sql::plan::plan_copy_from(&catalog, id, columns, rows)?;
+        let plan = InsertPlan {
+            id,
+            values: values.lower(),
+        };
+        self.sequence_insert(session, plan).await
     }
 
     async fn sequence_alter_item_rename(
