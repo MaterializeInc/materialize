@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Copyright Materialize, Inc. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -7,14 +8,8 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM kgen
+set -euo pipefail
 
-FROM python:3.9-slim
+sink_file="/data/${1:-no-consistency-no-exactly-once-sink.sql}"
 
-COPY --from=0 /usr/local/bin/kgen /usr/local/bin
-
-RUN mkdir -p /usr/share/generator/distributions
-COPY distributions /usr/share/generator/distributions
-
-COPY generate_upserts /usr/local/bin
-ENTRYPOINT ["generate_upserts"]
+psql -h materialized -p 6875 -U materialize -f "${sink_file}" materialize

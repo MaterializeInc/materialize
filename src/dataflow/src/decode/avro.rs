@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use anyhow::Context;
 use futures::executor::block_on;
 
 use dataflow_types::{DataflowError, DecodeError};
@@ -19,7 +18,6 @@ use crate::metrics::EVENTS_COUNTER;
 
 pub struct AvroDecoderState {
     decoder: Decoder,
-    key_decoder: Option<Decoder>,
     events_success: i64,
     events_error: i64,
 }
@@ -27,7 +25,6 @@ pub struct AvroDecoderState {
 impl AvroDecoderState {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        key_schema: Option<&str>,
         value_schema: &str,
         schema_registry_config: Option<ccsr::ClientConfig>,
         envelope: EnvelopeType,
@@ -35,19 +32,6 @@ impl AvroDecoderState {
         debug_name: String,
         confluent_wire_format: bool,
     ) -> Result<Self, anyhow::Error> {
-        let key_decoder = key_schema
-            .map(|key_schema| {
-                Decoder::new(
-                    key_schema,
-                    schema_registry_config.clone(),
-                    EnvelopeType::None,
-                    debug_name.clone(),
-                    confluent_wire_format,
-                    reject_non_inserts,
-                )
-            })
-            .transpose()
-            .context("Creating Kafka Avro Key decoder")?;
         Ok(AvroDecoderState {
             decoder: Decoder::new(
                 value_schema,
@@ -57,7 +41,6 @@ impl AvroDecoderState {
                 confluent_wire_format,
                 reject_non_inserts,
             )?,
-            key_decoder,
             events_success: 0,
             events_error: 0,
         })
@@ -65,20 +48,8 @@ impl AvroDecoderState {
 }
 
 impl DecoderState for AvroDecoderState {
-    fn decode_key(&mut self, bytes: &[u8]) -> Result<Option<Row>, String> {
-        match self.key_decoder.as_mut() {
-            Some(key_decoder) => match block_on(key_decoder.decode(bytes, None, None)) {
-                Ok(row) => {
-                    self.events_success += 1;
-                    Ok(Some(row))
-                }
-                Err(err) => {
-                    self.events_error += 1;
-                    Err(format!("avro deserialization error: {}", err))
-                }
-            },
-            None => Err(format!("No key decoder configured")),
-        }
+    fn decode_key(&mut self, _: &[u8]) -> Result<Option<Row>, String> {
+        Err(format!("Plain avro decoder has no key decoder"))
     }
 
     /// give a session a key-value pair

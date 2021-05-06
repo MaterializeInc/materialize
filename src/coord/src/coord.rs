@@ -7,20 +7,40 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Coordination of installed views, available timestamps, and compacted timestamps.
+//! Coordination of installed views, available timestamps, compacted timestamps, and transactions.
 //!
-//! The command coordinator maintains a view of the installed views, and for each tracks
-//! the frontier of available times (`upper`) and the frontier of compacted times (`since`).
-//! The upper frontier describes times that may not return immediately, as any timestamps in
-//! advance of the frontier are still open. The since frontier constrains those times for
-//! which the maintained view will be correct, as any timestamps in advance of the frontier
-//! must accumulate to the same value as would an un-compacted trace.
+//! The command coordinator maintains a view of the installed
+//! views, and for each tracks the frontier of available times
+//! ([`upper`](arrangement_state::Frontiers::upper)) and the frontier
+//! of compacted times ([`since`](arrangement_state::Frontiers::since)).
+//! The upper frontier describes times that may not return immediately, as any
+//! timestamps in advance of the frontier are still open. The since frontier
+//! constrains those times for which the maintained view will be correct,
+//! as any timestamps in advance of the frontier must accumulate to the same
+//! value as would an un-compacted trace. The since frontier cannot be directly
+//! mutated, but instead can have multiple handles to it which forward changes
+//! from an internal MutableAntichain to the since.
+//!
+//! The [`Coordinator`] tracks various compaction frontiers
+//! so that indexes, compaction, and transactions can work
+//! together. [`determine_timestamp()`](Coordinator::determine_timestamp)
+//! returns the least valid since of its sources. Any new transactions
+//! should thus always be >= the current compaction frontier
+//! and so should never change the frontier when being added to
+//! [`txn_reads`](Coordinator::txn_reads). The compaction frontier may
+//! change when a transaction ends (if it was the oldest transaction and
+//! the index's since was advanced after the transaction started) or when
+//! [`update_upper()`](Coordinator::update_upper) is run (if there are no in
+//! progress transactions before the new since). When it does, it is added to
+//! [`since_updates`](Coordinator::since_updates) and will be processed during
+//! the next [`maintenance()`](Coordinator::maintenance) call.
 
+use std::cell::RefCell;
 use std::cmp;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryInto;
-use std::mem;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime};
@@ -49,23 +69,28 @@ use dataflow_types::{
 use dataflow_types::{SinkAsOf, SinkEnvelope};
 use expr::{
     ExprHumanizer, GlobalId, Id, MirRelationExpr, MirScalarExpr, NullaryFunc,
-    OptimizedMirRelationExpr, RowSetFinishing,
+    OptimizedMirRelationExpr,
 };
+use ore::antichain::AntichainToken;
 use ore::str::StrExt;
 use ore::thread::{JoinHandleExt, JoinOnDropHandle};
-use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, Timestamp};
+use repr::{ColumnName, Datum, RelationDesc, Row, Timestamp};
 use sql::ast::display::AstDisplay;
 use sql::ast::{
-    Connector, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, DropObjectsStatement, ExplainOptions, ExplainStage, FetchStatement,
-    Ident, ObjectType, Raw, Statement,
+    Connector, CreateIndexStatement, CreateSchemaStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateTableStatement, DropObjectsStatement, ExplainStage,
+    FetchStatement, Ident, ObjectType, Raw, Statement,
 };
 use sql::catalog::{Catalog as _, CatalogError};
-use sql::names::{DatabaseSpecifier, FullName, SchemaName};
+use sql::names::{DatabaseSpecifier, FullName};
 use sql::plan::StatementDesc;
 use sql::plan::{
-    CopyFormat, CreateSourcePlan, IndexOption, IndexOptionName, MutationKind, Params, PeekWhen,
-    Plan, PlanContext,
+    AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, CreateDatabasePlan,
+    CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropDatabasePlan, DropItemsPlan,
+    DropRolesPlan, DropSchemaPlan, ExplainPlan, FetchPlan, IndexOption, IndexOptionName,
+    InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, PlanContext, SendDiffsPlan,
+    SetVariablePlan, ShowVariablePlan, TailPlan,
 };
 use storage::Message as PersistedMessage;
 use transform::Optimizer;
@@ -166,11 +191,13 @@ pub struct Coordinator {
     optimizer: Optimizer,
     catalog: Catalog,
     symbiosis: Option<symbiosis::Postgres>,
-    /// Maps (global Id of arrangement) -> (frontier information)
+    /// Maps (global Id of arrangement) -> (frontier information). This tracks the
+    /// `upper` and computed `since` of the indexes. The `since` is the time at
+    /// which we are willing to compact up to. `determine_timestamp()` uses this as
+    /// part of its heuristic when determining a viable timestamp for queries.
     indexes: ArrangementFrontiers<Timestamp>,
     /// Map of frontier information for sources
     sources: ArrangementFrontiers<Timestamp>,
-    since_updates: Vec<(GlobalId, Antichain<Timestamp>)>,
     /// Delta from leading edge of an arrangement from which we allow compaction.
     logical_compaction_window_ms: Option<Timestamp>,
     /// Instance count: number of times sources have been instantiated in views. This is used
@@ -199,6 +226,16 @@ pub struct Coordinator {
     active_conns: HashMap<u32, ConnMeta>,
     /// Map of all persisted tables.
     persisted_tables: Option<PersistentTables>,
+
+    /// Holds pending compaction messages to be sent to the dataflow workers. When
+    /// `since_handles` are advanced or `txn_reads` are dropped, this can advance.
+    since_updates: Rc<RefCell<HashMap<GlobalId, Antichain<Timestamp>>>>,
+    /// Holds handles to ids that are advanced by update_upper.
+    since_handles: HashMap<GlobalId, AntichainToken<Timestamp>>,
+    /// Tracks active read transactions so that we don't compact any indexes beyond
+    /// an in-progress transaction.
+    // TODO(mjibson): Should this live on a Session?
+    txn_reads: HashMap<u32, TxnReads>,
 }
 
 /// Metadata about an active connection.
@@ -215,6 +252,11 @@ struct ConnMeta {
     /// requests are required to authenticate with the secret of the connection
     /// that they are targeting.
     secret_key: u32,
+}
+
+struct TxnReads {
+    timedomain_ids: HashSet<GlobalId>,
+    _handles: Vec<AntichainToken<Timestamp>>,
 }
 
 impl Coordinator {
@@ -264,6 +306,35 @@ impl Coordinator {
         }
     }
 
+    /// Generate a new frontiers object that forwards since changes to since_updates.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if called twice with the same `id`.
+    fn new_frontiers<I>(
+        &mut self,
+        id: GlobalId,
+        initial: I,
+        compaction_window_ms: Option<Timestamp>,
+    ) -> Frontiers<Timestamp>
+    where
+        I: IntoIterator<Item = Timestamp>,
+    {
+        let since_updates = Rc::clone(&self.since_updates);
+        let (frontier, handle) = Frontiers::new(
+            self.num_workers(),
+            initial,
+            compaction_window_ms,
+            move |frontier| {
+                since_updates.borrow_mut().insert(id, frontier);
+            },
+        );
+        let prev = self.since_handles.insert(id, handle);
+        // Ensure we don't double-register ids.
+        assert!(prev.is_none());
+        frontier
+    }
+
     /// Initializes coordinator state based on the contained catalog. Must be
     /// called after creating the coordinator and before calling the
     /// `Coordinator::serve` method.
@@ -288,7 +359,7 @@ impl Coordinator {
                     self.maybe_begin_caching(entry.id(), source.connector.caching_enabled())
                         .await;
                     let frontiers =
-                        Frontiers::new(self.num_workers(), self.logical_compaction_window_ms);
+                        self.new_frontiers(entry.id(), Some(0), self.logical_compaction_window_ms);
                     self.sources.insert(entry.id(), frontiers);
                 }
                 CatalogItem::Index(_) => {
@@ -302,8 +373,8 @@ impl Coordinator {
                         // TODO(benesch): why is this hardcoded to 1000?
                         // Should it not be the same logical compaction window
                         // that everything else uses?
-                        self.indexes
-                            .insert(entry.id(), Frontiers::new(self.num_workers(), Some(1_000)));
+                        let frontiers = self.new_frontiers(entry.id(), Some(0), Some(1_000));
+                        self.indexes.insert(entry.id(), frontiers);
                     } else {
                         let df = self.dataflow_builder().build_index_dataflow(entry.id());
                         self.ship_dataflow(df).await?;
@@ -538,14 +609,14 @@ impl Coordinator {
     async fn message_statement_ready(
         &mut self,
         StatementReady {
-            session,
+            mut session,
             tx,
             result,
             params,
         }: StatementReady,
     ) {
         match future::ready(result)
-            .and_then(|stmt| self.handle_statement(&session, stmt, &params))
+            .and_then(|stmt| self.handle_statement(&mut session, stmt, &params))
             .await
         {
             Ok((pcx, plan)) => self.sequence_plan(tx, session, pcx, plan).await,
@@ -665,7 +736,7 @@ impl Coordinator {
 
             Command::Execute {
                 portal_name,
-                mut session,
+                session,
                 tx,
             } => {
                 let result = session
@@ -725,11 +796,14 @@ impl Coordinator {
                                 // don't interleave reads and writes since we can't perform those serializably.
                                 Statement::Close(_)
                                 | Statement::Commit(_)
+                                | Statement::Copy(_)
                                 | Statement::Declare(_)
                                 | Statement::Discard(_)
                                 | Statement::Explain(_)
                                 | Statement::Fetch(_)
+                                | Statement::Insert(_)
                                 | Statement::Rollback(_)
+                                | Statement::Select(_)
                                 | Statement::SetTransaction(_)
                                 | Statement::ShowColumns(_)
                                 | Statement::ShowCreateIndex(_)
@@ -741,34 +815,9 @@ impl Coordinator {
                                 | Statement::ShowIndexes(_)
                                 | Statement::ShowObjects(_)
                                 | Statement::ShowVariable(_)
-                                | Statement::StartTransaction(_) => {
+                                | Statement::StartTransaction(_)
+                                | Statement::Tail(_) => {
                                     // Always safe.
-                                }
-
-                                Statement::Copy(_) | Statement::Select(_) | Statement::Tail(_) => {
-                                    if let Err(e) =
-                                        session.add_transaction_ops(TransactionOps::Reads)
-                                    {
-                                        let _ = tx.send(Response {
-                                            result: Err(e),
-                                            session,
-                                        });
-                                        return;
-                                    }
-                                }
-
-                                Statement::Insert(_) => {
-                                    // Insert will add the actual operations later. We can still do a check to
-                                    // early exit here before processing it.
-                                    if let Err(e) =
-                                        session.add_transaction_ops(TransactionOps::Writes(vec![]))
-                                    {
-                                        let _ = tx.send(Response {
-                                            result: Err(e),
-                                            session,
-                                        });
-                                        return;
-                                    }
                                 }
 
                                 // Statements below must by run singly (in Started).
@@ -780,7 +829,6 @@ impl Coordinator {
                                 | Statement::CreateSchema(_)
                                 | Statement::CreateSink(_)
                                 | Statement::CreateSource(_)
-                                | Statement::CreateSources(_)
                                 | Statement::CreateTable(_)
                                 | Statement::CreateType(_)
                                 | Statement::CreateView(_)
@@ -905,19 +953,17 @@ impl Coordinator {
                     // reduce the volume of the collection, but we don't have that
                     // information here.
                     if !index_state.upper.frontier().is_empty() {
-                        let mut compaction_frontier = Antichain::new();
-                        for time in index_state.upper.frontier().iter() {
-                            compaction_frontier.insert(
+                        // The since_handle for this GlobalId should have already been registered with
+                        // an AntichainToken. Advance it. Changes to the AntichainToken's frontier
+                        // will propagate to the Frontiers' since, and changes to that will propate to
+                        // self.since_updates.
+                        self.since_handles.get_mut(name).unwrap().advance(
+                            index_state.upper.frontier().iter().map(|time| {
                                 compaction_window_ms
                                     * (time.saturating_sub(compaction_window_ms)
-                                        / compaction_window_ms),
-                            );
-                        }
-                        if index_state.since != compaction_frontier {
-                            index_state.advance_since(&compaction_frontier);
-                            self.since_updates
-                                .push((name.clone(), index_state.since.clone()));
-                        }
+                                        / compaction_window_ms)
+                            }),
+                        );
                     }
                 }
             }
@@ -926,19 +972,13 @@ impl Coordinator {
             if !changes.is_empty() {
                 if let Some(compaction_window_ms) = source_state.compaction_window_ms {
                     if !source_state.upper.frontier().is_empty() {
-                        let mut compaction_frontier = Antichain::new();
-                        for time in source_state.upper.frontier().iter() {
-                            compaction_frontier.insert(
+                        self.since_handles.get_mut(name).unwrap().advance(
+                            source_state.upper.frontier().iter().map(|time| {
                                 compaction_window_ms
                                     * (time.saturating_sub(compaction_window_ms)
-                                        / compaction_window_ms),
-                            );
-                        }
-                        if source_state.since != compaction_frontier {
-                            source_state.advance_since(&compaction_frontier);
-                            self.since_updates
-                                .push((name.clone(), source_state.since.clone()));
-                        }
+                                        / compaction_window_ms)
+                            }),
+                        );
                     }
                 }
             }
@@ -954,10 +994,13 @@ impl Coordinator {
         // Don't try to compact to an empty frontier. There may be a good reason to do this
         // in principle, but not in any current Mz use case.
         // (For background, see: https://github.com/MaterializeInc/materialize/pull/1113#issuecomment-559281990)
-        self.since_updates
-            .retain(|(_, frontier)| frontier != &Antichain::new());
-        if !self.since_updates.is_empty() {
-            let since_updates = mem::take(&mut self.since_updates);
+        let since_updates: Vec<_> = self
+            .since_updates
+            .borrow_mut()
+            .drain()
+            .filter(|(_, frontier)| frontier != &Antichain::new())
+            .collect();
+        if !since_updates.is_empty() {
             if let Some(tables) = &mut self.persisted_tables {
                 tables.allow_compaction(&since_updates);
             }
@@ -967,14 +1010,15 @@ impl Coordinator {
 
     async fn handle_statement(
         &mut self,
-        session: &Session,
+        session: &mut Session,
         stmt: sql::ast::Statement<Raw>,
         params: &sql::plan::Params,
     ) -> Result<(PlanContext, sql::plan::Plan), CoordError> {
-        let pcx = PlanContext::default();
+        let pcx = session.pcx();
 
         // When symbiosis mode is enabled, use symbiosis planning for:
         //  - CREATE TABLE
+        //  - CREATE SCHEMA
         //  - DROP TABLE
         //  - INSERT
         // When these statements are routed through symbiosis, table information
@@ -985,6 +1029,7 @@ impl Coordinator {
             object_type: ObjectType::Table,
             ..
         })
+        | Statement::CreateSchema(CreateSchemaStatement { .. })
         | Statement::Insert { .. } = &stmt
         {
             if let Some(ref mut postgres) = self.symbiosis {
@@ -1155,142 +1200,69 @@ impl Coordinator {
         plan: Plan,
     ) {
         match plan {
-            Plan::CreateDatabase {
-                name,
-                if_not_exists,
-            } => tx.send(
-                self.sequence_create_database(name, if_not_exists).await,
-                session,
-            ),
-
-            Plan::CreateSchema {
-                database_name,
-                schema_name,
-                if_not_exists,
-            } => tx.send(
-                self.sequence_create_schema(database_name, schema_name, if_not_exists)
-                    .await,
-                session,
-            ),
-
-            Plan::CreateRole { name } => tx.send(self.sequence_create_role(name).await, session),
-
-            Plan::CreateTable {
-                name,
-                table,
-                if_not_exists,
-                depends_on,
-            } => tx.send(
-                self.sequence_create_table(
-                    pcx,
-                    name,
-                    table,
-                    if_not_exists,
-                    depends_on,
-                    session.conn_id(),
-                )
-                .await,
-                session,
-            ),
-
-            Plan::CreateSource(source) => {
-                tx.send(self.sequence_create_source(pcx, source).await, session)
+            Plan::CreateDatabase(plan) => {
+                tx.send(self.sequence_create_database(plan).await, session);
             }
-
-            Plan::CreateSources { sources } => {
-                tx.send(self.sequence_create_sources(pcx, sources).await, session)
+            Plan::CreateSchema(plan) => {
+                tx.send(self.sequence_create_schema(plan).await, session);
             }
-
-            Plan::CreateSink {
-                name,
-                sink,
-                with_snapshot,
-                if_not_exists,
-                depends_on,
-            } => {
-                self.sequence_create_sink(
-                    pcx,
-                    tx,
+            Plan::CreateRole(plan) => {
+                tx.send(self.sequence_create_role(plan).await, session);
+            }
+            Plan::CreateTable(plan) => {
+                tx.send(
+                    self.sequence_create_table(&mut session, pcx, plan).await,
                     session,
-                    name,
-                    sink,
-                    with_snapshot,
-                    if_not_exists,
-                    depends_on,
-                )
-                .await
+                );
             }
-
-            Plan::CreateView {
-                name,
-                view,
-                replace,
-                materialize,
-                if_not_exists,
-                depends_on,
-            } => tx.send(
-                self.sequence_create_view(
-                    pcx,
-                    name,
-                    view,
-                    replace,
-                    session.conn_id(),
-                    materialize,
-                    if_not_exists,
-                    depends_on,
-                )
-                .await,
-                session,
-            ),
-
-            Plan::CreateIndex {
-                name,
-                index,
-                options,
-                if_not_exists,
-                depends_on,
-            } => tx.send(
-                self.sequence_create_index(pcx, name, index, options, if_not_exists, depends_on)
-                    .await,
-                session,
-            ),
-
-            Plan::CreateType {
-                name,
-                typ,
-                depends_on,
-            } => tx.send(
-                self.sequence_create_type(pcx, name, typ, depends_on).await,
-                session,
-            ),
-
-            Plan::DropDatabase { name } => {
-                tx.send(self.sequence_drop_database(name).await, session)
+            Plan::CreateSource(plan) => {
+                tx.send(
+                    self.sequence_create_source(&mut session, pcx, plan).await,
+                    session,
+                );
             }
-
-            Plan::DropSchema { name } => tx.send(self.sequence_drop_schema(name).await, session),
-
-            Plan::DropRoles { names } => tx.send(self.sequence_drop_roles(names).await, session),
-
-            Plan::DropItems { items, ty } => {
-                tx.send(self.sequence_drop_items(items, ty).await, session)
+            Plan::CreateSink(plan) => {
+                self.sequence_create_sink(session, pcx, plan, tx).await;
             }
-
-            Plan::EmptyQuery => tx.send(Ok(ExecuteResponse::EmptyQuery), session),
-
+            Plan::CreateView(plan) => {
+                tx.send(
+                    self.sequence_create_view(&mut session, pcx, plan).await,
+                    session,
+                );
+            }
+            Plan::CreateIndex(plan) => {
+                tx.send(self.sequence_create_index(pcx, plan).await, session);
+            }
+            Plan::CreateType(plan) => {
+                tx.send(self.sequence_create_type(pcx, plan).await, session);
+            }
+            Plan::DropDatabase(plan) => {
+                tx.send(self.sequence_drop_database(plan).await, session);
+            }
+            Plan::DropSchema(plan) => {
+                tx.send(self.sequence_drop_schema(plan).await, session);
+            }
+            Plan::DropRoles(plan) => {
+                tx.send(self.sequence_drop_roles(plan).await, session);
+            }
+            Plan::DropItems(plan) => {
+                tx.send(self.sequence_drop_items(plan).await, session);
+            }
+            Plan::EmptyQuery => {
+                tx.send(Ok(ExecuteResponse::EmptyQuery), session);
+            }
             Plan::ShowAllVariables => {
-                tx.send(self.sequence_show_all_variables(&session).await, session)
+                tx.send(self.sequence_show_all_variables(&session).await, session);
             }
-
-            Plan::ShowVariable(name) => {
-                tx.send(self.sequence_show_variable(&session, name).await, session)
+            Plan::ShowVariable(plan) => {
+                tx.send(self.sequence_show_variable(&session, plan).await, session);
             }
-
-            Plan::SetVariable { name, value } => tx.send(
-                self.sequence_set_variable(&mut session, name, value).await,
-                session,
-            ),
-
+            Plan::SetVariable(plan) => {
+                tx.send(
+                    self.sequence_set_variable(&mut session, plan).await,
+                    session,
+                );
+            }
             Plan::StartTransaction => {
                 let duplicated =
                     matches!(session.transaction(), TransactionStatus::InTransaction(_));
@@ -1310,107 +1282,45 @@ impl Coordinator {
                 tx.send(
                     self.sequence_end_transaction(&mut session, action).await,
                     session,
-                )
+                );
             }
-
-            Plan::Peek {
-                source,
-                when,
-                finishing,
-                copy_to,
-            } => tx.send(
-                self.sequence_peek(session.conn_id(), source, when, finishing, copy_to)
-                    .await,
-                session,
-            ),
-
-            Plan::Tail {
-                id,
-                ts,
-                with_snapshot,
-                copy_to,
-                emit_progress,
-                object_columns,
-                desc,
-            } => tx.send(
-                self.sequence_tail(
-                    &mut session,
-                    id,
-                    with_snapshot,
-                    ts,
-                    copy_to,
-                    emit_progress,
-                    object_columns,
-                    desc,
-                )
-                .await,
-                session,
-            ),
-
-            Plan::SendRows(rows) => tx.send(Ok(send_immediate_rows(rows)), session),
-
-            Plan::ExplainPlan {
-                raw_plan,
-                decorrelated_plan,
-                row_set_finishing,
-                stage,
-                options,
-            } => tx.send(
-                self.sequence_explain_plan(
-                    &session,
-                    raw_plan,
-                    decorrelated_plan,
-                    row_set_finishing,
-                    stage,
-                    options,
-                ),
-                session,
-            ),
-
-            Plan::SendDiffs {
-                id,
-                updates,
-                affected_rows,
-                kind,
-            } => tx.send(
-                self.sequence_send_diffs(&mut session, id, updates, affected_rows, kind)
-                    .await,
-                session,
-            ),
-
-            Plan::Insert { id, values } => tx.send(
-                self.sequence_insert(&mut session, id, values).await,
-                session,
-            ),
-
-            Plan::AlterNoop { object_type } => {
-                tx.send(Ok(ExecuteResponse::AlteredObject(object_type)), session)
+            Plan::Peek(plan) => {
+                tx.send(self.sequence_peek(&mut session, plan).await, session);
             }
-
-            Plan::AlterItemRename {
-                id,
-                to_name,
-                object_type,
-            } => tx.send(
-                self.sequence_alter_item_rename(id, to_name, object_type)
-                    .await,
-                session,
-            ),
-
-            Plan::AlterIndexSetOptions { id, options } => {
-                tx.send(self.sequence_alter_index_set_options(id, options), session)
+            Plan::Tail(plan) => {
+                tx.send(self.sequence_tail(&mut session, plan).await, session);
             }
-
-            Plan::AlterIndexResetOptions { id, options } => tx.send(
-                self.sequence_alter_index_reset_options(id, options),
-                session,
-            ),
-
+            Plan::SendRows(plan) => {
+                tx.send(Ok(send_immediate_rows(plan.rows)), session);
+            }
+            Plan::Explain(plan) => {
+                tx.send(self.sequence_explain(&session, plan), session);
+            }
+            Plan::SendDiffs(plan) => {
+                tx.send(self.sequence_send_diffs(&mut session, plan).await, session);
+            }
+            Plan::Insert(plan) => {
+                tx.send(self.sequence_insert(&mut session, plan).await, session);
+            }
+            Plan::AlterNoop(plan) => {
+                tx.send(
+                    Ok(ExecuteResponse::AlteredObject(plan.object_type)),
+                    session,
+                );
+            }
+            Plan::AlterItemRename(plan) => {
+                tx.send(self.sequence_alter_item_rename(plan).await, session);
+            }
+            Plan::AlterIndexSetOptions(plan) => {
+                tx.send(self.sequence_alter_index_set_options(plan), session);
+            }
+            Plan::AlterIndexResetOptions(plan) => {
+                tx.send(self.sequence_alter_index_reset_options(plan), session);
+            }
             Plan::DiscardTemp => {
                 self.drop_temp_items(session.conn_id()).await;
                 tx.send(Ok(ExecuteResponse::DiscardedTemp), session);
             }
-
             Plan::DiscardAll => {
                 let ret = if let TransactionStatus::Started(_) = session.transaction() {
                     self.drop_temp_items(session.conn_id()).await;
@@ -1424,33 +1334,32 @@ impl Coordinator {
                 };
                 tx.send(ret, session);
             }
-
-            Plan::Declare { name, stmt } => {
+            Plan::Declare(plan) => {
                 let param_types = vec![];
                 let res = self
-                    .handle_declare(&mut session, name, stmt, param_types)
+                    .handle_declare(&mut session, plan.name, plan.stmt, param_types)
                     .map(|()| ExecuteResponse::DeclaredCursor);
                 tx.send(res, session);
             }
-
-            Plan::Fetch {
+            Plan::Fetch(FetchPlan {
                 name,
                 count,
                 timeout,
-            } => tx.send(
-                Ok(ExecuteResponse::Fetch {
-                    name,
-                    count,
-                    timeout,
-                }),
-                session,
-            ),
-
-            Plan::Close { name } => {
-                if session.remove_portal(&name) {
-                    tx.send(Ok(ExecuteResponse::ClosedCursor), session)
+            }) => {
+                tx.send(
+                    Ok(ExecuteResponse::Fetch {
+                        name,
+                        count,
+                        timeout,
+                    }),
+                    session,
+                );
+            }
+            Plan::Close(plan) => {
+                if session.remove_portal(&plan.name) {
+                    tx.send(Ok(ExecuteResponse::ClosedCursor), session);
                 } else {
-                    tx.send(Err(CoordError::UnknownCursor(name)), session)
+                    tx.send(Err(CoordError::UnknownCursor(plan.name)), session);
                 }
             }
         }
@@ -1458,51 +1367,54 @@ impl Coordinator {
 
     async fn sequence_create_database(
         &mut self,
-        name: String,
-        if_not_exists: bool,
+        plan: CreateDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let db_oid = self.catalog.allocate_oid()?;
         let schema_oid = self.catalog.allocate_oid()?;
         let ops = vec![
             catalog::Op::CreateDatabase {
-                name: name.clone(),
+                name: plan.name.clone(),
                 oid: db_oid,
             },
             catalog::Op::CreateSchema {
-                database_name: DatabaseSpecifier::Name(name),
+                database_name: DatabaseSpecifier::Name(plan.name),
                 schema_name: "public".into(),
                 oid: schema_oid,
             },
         ];
         match self.catalog_transact(ops).await {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase { existed: false }),
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
+            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedDatabase { existed: true }),
             Err(err) => Err(err),
         }
     }
 
     async fn sequence_create_schema(
         &mut self,
-        database_name: DatabaseSpecifier,
-        schema_name: String,
-        if_not_exists: bool,
+        plan: CreateSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateSchema {
-            database_name,
-            schema_name,
+            database_name: plan.database_name,
+            schema_name: plan.schema_name,
             oid,
         };
         match self.catalog_transact(vec![op]).await {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema { existed: false }),
-            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
+            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSchema { existed: true }),
             Err(err) => Err(err),
         }
     }
 
-    async fn sequence_create_role(&mut self, name: String) -> Result<ExecuteResponse, CoordError> {
+    async fn sequence_create_role(
+        &mut self,
+        plan: CreateRolePlan,
+    ) -> Result<ExecuteResponse, CoordError> {
         let oid = self.catalog.allocate_oid()?;
-        let op = catalog::Op::CreateRole { name, oid };
+        let op = catalog::Op::CreateRole {
+            name: plan.name,
+            oid,
+        };
         self.catalog_transact(vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
@@ -1510,14 +1422,22 @@ impl Coordinator {
 
     async fn sequence_create_table(
         &mut self,
+        session: &Session,
         pcx: PlanContext,
-        name: FullName,
-        table: sql::plan::Table,
-        if_not_exists: bool,
-        depends_on: Vec<GlobalId>,
-        conn_id: u32,
+        plan: CreateTablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let conn_id = if table.temporary { Some(conn_id) } else { None };
+        let CreateTablePlan {
+            name,
+            table,
+            if_not_exists,
+            depends_on,
+        } = plan;
+
+        let conn_id = if table.temporary {
+            Some(session.conn_id())
+        } else {
+            None
+        };
         let table_id = self.catalog.allocate_id()?;
         let mut index_depends_on = depends_on.clone();
         index_depends_on.push(table_id);
@@ -1532,6 +1452,10 @@ impl Coordinator {
         let index_id = self.catalog.allocate_id()?;
         let mut index_name = name.clone();
         index_name.item += "_primary_idx";
+        index_name = self
+            .catalog
+            .for_session(session)
+            .find_available_name(index_name);
         let index = auto_generate_primary_idx(
             index_name.item.clone(),
             name.clone(),
@@ -1574,31 +1498,18 @@ impl Coordinator {
 
     async fn sequence_create_source(
         &mut self,
+        session: &mut Session,
         pcx: PlanContext,
         plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let (metadata, ops) = self.generate_create_source_ops(pcx, vec![plan.clone()])?;
+        let if_not_exists = plan.if_not_exists;
+        let (metadata, ops) = self.generate_create_source_ops(session, pcx, vec![plan])?;
         match self.catalog_transact(ops).await {
             Ok(()) => {
                 self.ship_sources(metadata).await?;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
-            Err(_) if plan.if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
-            Err(err) => Err(err),
-        }
-    }
-
-    async fn sequence_create_sources(
-        &mut self,
-        pcx: PlanContext,
-        sources: Vec<CreateSourcePlan>,
-    ) -> Result<ExecuteResponse, CoordError> {
-        let (metadata, ops) = self.generate_create_source_ops(pcx, sources)?;
-        match self.catalog_transact(ops).await {
-            Ok(()) => {
-                self.ship_sources(metadata).await?;
-                Ok(ExecuteResponse::CreatedSources)
-            }
+            Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -1620,6 +1531,7 @@ impl Coordinator {
 
     fn generate_create_source_ops(
         &mut self,
+        session: &mut Session,
         pcx: PlanContext,
         plans: Vec<CreateSourcePlan>,
     ) -> Result<(Vec<(GlobalId, Option<GlobalId>, bool)>, Vec<catalog::Op>), CoordError> {
@@ -1655,6 +1567,10 @@ impl Coordinator {
             let index_id = if materialized {
                 let mut index_name = name.clone();
                 index_name.item += "_primary_idx";
+                index_name = self
+                    .catalog
+                    .for_session(session)
+                    .find_available_name(index_name);
                 let index = auto_generate_primary_idx(
                     index_name.item.clone(),
                     name,
@@ -1680,18 +1596,21 @@ impl Coordinator {
         Ok((metadata, ops))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn sequence_create_sink(
         &mut self,
-        pcx: PlanContext,
-        tx: ClientTransmitter<ExecuteResponse>,
         session: Session,
-        name: FullName,
-        sink: sql::plan::Sink,
-        with_snapshot: bool,
-        if_not_exists: bool,
-        depends_on: Vec<GlobalId>,
+        pcx: PlanContext,
+        plan: CreateSinkPlan,
+        tx: ClientTransmitter<ExecuteResponse>,
     ) {
+        let CreateSinkPlan {
+            name,
+            sink,
+            with_snapshot,
+            if_not_exists,
+            depends_on,
+        } = plan;
+
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id = match self.catalog.allocate_id() {
             Ok(id) => id,
@@ -1757,18 +1676,21 @@ impl Coordinator {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn sequence_create_view(
         &mut self,
+        session: &Session,
         pcx: PlanContext,
-        name: FullName,
-        view: sql::plan::View,
-        replace: Option<GlobalId>,
-        conn_id: u32,
-        materialize: bool,
-        if_not_exists: bool,
-        depends_on: Vec<GlobalId>,
+        plan: CreateViewPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        let CreateViewPlan {
+            name,
+            view,
+            replace,
+            materialize,
+            if_not_exists,
+            depends_on,
+        } = plan;
+
         let mut ops = vec![];
         if let Some(id) = replace {
             ops.extend(self.catalog.drop_items_ops(&[id]));
@@ -1783,7 +1705,11 @@ impl Coordinator {
             plan_cx: pcx,
             optimized_expr,
             desc,
-            conn_id: if view.temporary { Some(conn_id) } else { None },
+            conn_id: if view.temporary {
+                Some(session.conn_id())
+            } else {
+                None
+            },
             depends_on,
         };
         ops.push(catalog::Op::CreateItem {
@@ -1795,6 +1721,10 @@ impl Coordinator {
         let index_id = if materialize {
             let mut index_name = name.clone();
             index_name.item += "_primary_idx";
+            index_name = self
+                .catalog
+                .for_session(session)
+                .find_available_name(index_name);
             let index = auto_generate_primary_idx(
                 index_name.item.clone(),
                 name,
@@ -1831,12 +1761,16 @@ impl Coordinator {
     async fn sequence_create_index(
         &mut self,
         pcx: PlanContext,
-        name: FullName,
-        mut index: sql::plan::Index,
-        options: Vec<IndexOption>,
-        if_not_exists: bool,
-        depends_on: Vec<GlobalId>,
+        plan: CreateIndexPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        let CreateIndexPlan {
+            name,
+            mut index,
+            options,
+            if_not_exists,
+            depends_on,
+        } = plan;
+
         for key in &mut index.keys {
             Self::prep_scalar_expr(key, ExprPrepStyle::Static)?;
         }
@@ -1871,22 +1805,20 @@ impl Coordinator {
     async fn sequence_create_type(
         &mut self,
         pcx: PlanContext,
-        name: FullName,
-        typ: sql::plan::Type,
-        depends_on: Vec<GlobalId>,
+        plan: CreateTypePlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let typ = catalog::Type {
-            create_sql: typ.create_sql,
+            create_sql: plan.typ.create_sql,
             plan_cx: pcx,
-            inner: typ.inner.into(),
-            depends_on,
+            inner: plan.typ.inner.into(),
+            depends_on: plan.depends_on,
         };
         let id = self.catalog.allocate_id()?;
         let oid = self.catalog.allocate_oid()?;
         let op = catalog::Op::CreateItem {
             id,
             oid,
-            name,
+            name: plan.name,
             item: CatalogItem::Type(typ),
         };
         match self.catalog_transact(vec![op]).await {
@@ -1897,27 +1829,28 @@ impl Coordinator {
 
     async fn sequence_drop_database(
         &mut self,
-        name: String,
+        plan: DropDatabasePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = self.catalog.drop_database_ops(name);
+        let ops = self.catalog.drop_database_ops(plan.name);
         self.catalog_transact(ops).await?;
         Ok(ExecuteResponse::DroppedDatabase)
     }
 
     async fn sequence_drop_schema(
         &mut self,
-        name: SchemaName,
+        plan: DropSchemaPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = self.catalog.drop_schema_ops(name);
+        let ops = self.catalog.drop_schema_ops(plan.name);
         self.catalog_transact(ops).await?;
         Ok(ExecuteResponse::DroppedSchema)
     }
 
     async fn sequence_drop_roles(
         &mut self,
-        names: Vec<String>,
+        plan: DropRolesPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = names
+        let ops = plan
+            .names
             .into_iter()
             .map(|name| catalog::Op::DropRole { name })
             .collect();
@@ -1927,12 +1860,11 @@ impl Coordinator {
 
     async fn sequence_drop_items(
         &mut self,
-        items: Vec<GlobalId>,
-        ty: ObjectType,
+        plan: DropItemsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let ops = self.catalog.drop_items_ops(&items);
+        let ops = self.catalog.drop_items_ops(&plan.items);
         self.catalog_transact(ops).await?;
-        Ok(match ty {
+        Ok(match plan.ty {
             ObjectType::Schema => unreachable!(),
             ObjectType::Source => ExecuteResponse::DroppedSource,
             ObjectType::View => ExecuteResponse::DroppedView,
@@ -1967,9 +1899,9 @@ impl Coordinator {
     async fn sequence_show_variable(
         &self,
         session: &Session,
-        name: String,
+        plan: ShowVariablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let variable = session.vars().get(&name)?;
+        let variable = session.vars().get(&plan.name)?;
         let row = Row::pack_slice(&[Datum::String(&variable.value())]);
         Ok(send_immediate_rows(vec![row]))
     }
@@ -1977,11 +1909,10 @@ impl Coordinator {
     async fn sequence_set_variable(
         &self,
         session: &mut Session,
-        name: String,
-        value: String,
+        plan: SetVariablePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        session.vars_mut().set(&name, &value)?;
-        Ok(ExecuteResponse::SetVariable { name })
+        session.vars_mut().set(&plan.name, &plan.value)?;
+        Ok(ExecuteResponse::SetVariable { name: plan.name })
     }
 
     async fn sequence_end_transaction(
@@ -1997,36 +1928,45 @@ impl Coordinator {
         let (drop_sinks, txn) = session.clear_transaction();
         self.drop_sinks(drop_sinks).await;
 
+        // Allow compaction of sources from this transaction, regardless of the action.
+        self.txn_reads.remove(&session.conn_id());
+        // Although the compaction frontier may have advanced, we do not need to
+        // call `maintenance` here because it will soon be called after the next
+        // `update_upper`.
+
         if let EndTransactionAction::Commit = action {
             match txn {
                 TransactionStatus::Default | TransactionStatus::Failed => {}
                 TransactionStatus::Started(ops)
                 | TransactionStatus::InTransaction(ops)
                 | TransactionStatus::InTransactionImplicit(ops) => {
-                    if let TransactionOps::Writes(inserts) = ops {
-                        let timestamp = self.get_write_ts();
-                        for WriteOp { id, rows } in inserts {
-                            // Re-verify this id exists.
-                            if self.catalog.try_get_by_id(id).is_none() {
-                                return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
-                                    id.to_string(),
-                                )));
-                            }
+                    match ops {
+                        TransactionOps::Writes(inserts) => {
+                            let timestamp = self.get_write_ts();
+                            for WriteOp { id, rows } in inserts {
+                                // Re-verify this id exists.
+                                if self.catalog.try_get_by_id(id).is_none() {
+                                    return Err(CoordError::SqlCatalog(CatalogError::UnknownItem(
+                                        id.to_string(),
+                                    )));
+                                }
 
-                            let updates: Vec<_> = rows
-                                .into_iter()
-                                .map(|(row, diff)| Update {
-                                    row,
-                                    diff,
-                                    timestamp,
-                                })
-                                .collect();
+                                let updates: Vec<_> = rows
+                                    .into_iter()
+                                    .map(|(row, diff)| Update {
+                                        row,
+                                        diff,
+                                        timestamp,
+                                    })
+                                    .collect();
 
-                            if let Some(tables) = &mut self.persisted_tables {
-                                tables.write(id, &updates);
+                                if let Some(tables) = &mut self.persisted_tables {
+                                    tables.write(id, &updates);
+                                }
+                                self.broadcast(SequencedCommand::Insert { id, updates });
                             }
-                            self.broadcast(SequencedCommand::Insert { id, updates });
                         }
+                        _ => {}
                     }
                 }
             }
@@ -2040,13 +1980,81 @@ impl Coordinator {
 
     async fn sequence_peek(
         &mut self,
-        conn_id: u32,
-        source: MirRelationExpr,
-        when: PeekWhen,
-        finishing: RowSetFinishing,
-        copy_to: Option<CopyFormat>,
+        session: &mut Session,
+        plan: PeekPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let timestamp = self.determine_timestamp(&source, when)?;
+        let PeekPlan {
+            source,
+            when,
+            finishing,
+            copy_to,
+        } = plan;
+
+        let conn_id = session.conn_id();
+        let in_transaction = matches!(
+            session.transaction(),
+            &TransactionStatus::InTransaction(_) | &TransactionStatus::InTransactionImplicit(_)
+        );
+        // For explicit or implicit transactions that do not use AS OF, get the
+        // timestamp of the in-progress transaction or create one. If this is an AS OF
+        // query, we don't care about any possible transaction timestamp. If this is a
+        // single-statement transaction (TransactionStatus::Started), we don't need to
+        // worry about preventing compaction or choosing a valid timestamp for future
+        // queries.
+        let timestamp = if in_transaction && when == PeekWhen::Immediately {
+            let timestamp = session.get_transaction_timestamp(|| {
+                // Determine a timestamp that will be valid for anything in any schema
+                // referenced by the first query. This is a first pass implementation of "time
+                // domains".
+                let timedomain_ids = self.catalog.timedomain_for(&source, conn_id);
+
+                // We want to prevent compaction of the indexes consulted by
+                // determine_timestamp, not the ones listed in the query.
+                let (timestamp, timestamp_ids) =
+                    self.determine_timestamp(&timedomain_ids, PeekWhen::Immediately)?;
+                let mut handles = vec![];
+                for id in timestamp_ids {
+                    handles.push(self.indexes.get(&id).unwrap().since_handle(vec![timestamp]));
+                }
+                let mut timedomain_set = HashSet::new();
+                for id in timedomain_ids {
+                    timedomain_set.insert(id);
+                }
+                self.txn_reads.insert(
+                    conn_id,
+                    TxnReads {
+                        timedomain_ids: timedomain_set,
+                        _handles: handles,
+                    },
+                );
+
+                Ok(timestamp)
+            })?;
+
+            // Verify that the indexes for this query are in the current read transaction.
+            let txn_reads = self.txn_reads.get(&conn_id).unwrap();
+            for id in source.global_uses() {
+                if !txn_reads.timedomain_ids.contains(&id) {
+                    let mut names: Vec<_> = txn_reads
+                        .timedomain_ids
+                        .iter()
+                        // This could filter out a view that has been replaced in another transaction.
+                        .filter_map(|id| self.catalog.try_get_by_id(*id))
+                        .map(|item| item.name().to_string())
+                        .collect();
+                    // Sort so error messages are deterministic.
+                    names.sort();
+                    return Err(CoordError::RelationOutsideTimeDomain {
+                        relation: self.catalog.get_by_id(&id).name().to_string(),
+                        names,
+                    });
+                }
+            }
+
+            timestamp
+        } else {
+            self.determine_timestamp(&source.global_uses(), when)?.0
+        };
 
         let source = self.prep_relation_expr(
             source,
@@ -2160,7 +2168,7 @@ impl Coordinator {
             self.broadcast(SequencedCommand::Peek {
                 id: index_id,
                 key: literal_row,
-                conn_id,
+                conn_id: session.conn_id(),
                 tx: rows_tx,
                 timestamp,
                 finishing: finishing.clone(),
@@ -2205,30 +2213,36 @@ impl Coordinator {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn sequence_tail(
         &mut self,
         session: &mut Session,
-        source_id: GlobalId,
-        with_snapshot: bool,
-        ts: Option<Timestamp>,
-        copy_to: Option<CopyFormat>,
-        emit_progress: bool,
-        object_columns: usize,
-        desc: RelationDesc,
+        plan: TailPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        let TailPlan {
+            id: source_id,
+            with_snapshot,
+            ts,
+            copy_to,
+            emit_progress,
+            object_columns,
+            desc,
+        } = plan;
+        // TAIL AS OF, similar to peeks, doesn't need to worry about transaction
+        // timestamp semantics.
+        if ts.is_none() {
+            // If this isn't a TAIL AS OF, the TAIL can be in a transaction if it's the
+            // only operation.
+            session.add_transaction_ops(TransactionOps::Tail)?;
+        }
+
         // Determine the frontier of updates to tail *from*.
         // Updates greater or equal to this frontier will be produced.
         let frontier = if let Some(ts) = ts {
             // If a timestamp was explicitly requested, use that.
-            Antichain::from_elem(self.determine_timestamp(
-                &MirRelationExpr::Get {
-                    id: Id::Global(source_id),
-                    // TODO(justin): find a way to avoid synthesizing an arbitrary relation type.
-                    typ: RelationType::empty(),
-                },
-                PeekWhen::AtTimestamp(ts),
-            )?)
+            Antichain::from_elem(
+                self.determine_timestamp(&[source_id], PeekWhen::AtTimestamp(ts))?
+                    .0,
+            )
         } else {
             self.determine_frontier(source_id)
         };
@@ -2274,15 +2288,16 @@ impl Coordinator {
 
     /// A policy for determining the timestamp for a peek.
     ///
-    /// The result may be `None` in the case that the `when` policy cannot be satisfied,
-    /// which is possible due to the restricted validity of traces (each has a `since`
-    /// and `upper` frontier, and are only valid after `since` and sure to be available
-    /// not after `upper`).
+    /// The Timestamp result may be `None` in the case that the `when` policy
+    /// cannot be satisfied, which is possible due to the restricted validity of
+    /// traces (each has a `since` and `upper` frontier, and are only valid after
+    /// `since` and sure to be available not after `upper`). The set of indexes
+    /// used is also returned.
     fn determine_timestamp(
         &mut self,
-        source: &MirRelationExpr,
+        uses_ids: &[GlobalId],
         when: PeekWhen,
-    ) -> Result<Timestamp, CoordError> {
+    ) -> Result<(Timestamp, Vec<GlobalId>), CoordError> {
         // Each involved trace has a validity interval `[since, upper)`.
         // The contents of a trace are only guaranteed to be correct when
         // accumulated at a time greater or equal to `since`, and they
@@ -2294,8 +2309,7 @@ impl Coordinator {
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
-        let uses_ids = &source.global_uses();
-        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&uses_ids);
+        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(uses_ids);
 
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
@@ -2373,7 +2387,7 @@ impl Coordinator {
         // If the timestamp is greater or equal to some element in `since` we are
         // assured that the answer will be correct.
         if since.less_equal(&timestamp) {
-            Ok(timestamp)
+            Ok((timestamp, index_ids))
         } else {
             let invalid = index_ids
                 .iter()
@@ -2420,15 +2434,19 @@ impl Coordinator {
         }
     }
 
-    fn sequence_explain_plan(
+    fn sequence_explain(
         &mut self,
         session: &Session,
-        raw_plan: sql::plan::HirRelationExpr,
-        decorrelated_plan: expr::MirRelationExpr,
-        row_set_finishing: Option<RowSetFinishing>,
-        stage: ExplainStage,
-        options: ExplainOptions,
+        plan: ExplainPlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        let ExplainPlan {
+            raw_plan,
+            decorrelated_plan,
+            row_set_finishing,
+            stage,
+            options,
+        } = plan;
+
         let explanation_string = match stage {
             ExplainStage::RawPlan => {
                 let catalog = self.catalog.for_session(session);
@@ -2483,32 +2501,34 @@ impl Coordinator {
     async fn sequence_send_diffs(
         &mut self,
         session: &mut Session,
-        id: GlobalId,
-        rows: Vec<(Row, isize)>,
-        affected_rows: usize,
-        kind: MutationKind,
+        plan: SendDiffsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp { id, rows }]))?;
-        Ok(match kind {
-            MutationKind::Delete => ExecuteResponse::Deleted(affected_rows),
-            MutationKind::Insert => ExecuteResponse::Inserted(affected_rows),
-            MutationKind::Update => ExecuteResponse::Updated(affected_rows),
+        session.add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
+            id: plan.id,
+            rows: plan.updates,
+        }]))?;
+        Ok(match plan.kind {
+            MutationKind::Delete => ExecuteResponse::Deleted(plan.affected_rows),
+            MutationKind::Insert => ExecuteResponse::Inserted(plan.affected_rows),
+            MutationKind::Update => ExecuteResponse::Updated(plan.affected_rows),
         })
     }
 
     async fn sequence_insert(
         &mut self,
         session: &mut Session,
-        id: GlobalId,
-        values: MirRelationExpr,
+        plan: InsertPlan,
     ) -> Result<ExecuteResponse, CoordError> {
         let prep_style = ExprPrepStyle::OneShot {
             logical_time: self.get_write_ts(),
         };
-        match self.prep_relation_expr(values, prep_style)?.into_inner() {
+        match self
+            .prep_relation_expr(plan.values, prep_style)?
+            .into_inner()
+        {
             MirRelationExpr::Constant { rows, typ: _ } => {
                 let rows = rows?;
-                let desc = self.catalog.get_by_id(&id).desc()?;
+                let desc = self.catalog.get_by_id(&plan.id).desc()?;
                 for (row, _) in &rows {
                     for (datum, (name, typ)) in row.unpack().iter().zip(desc.iter()) {
                         if datum == &Datum::Null && !typ.nullable {
@@ -2521,9 +2541,13 @@ impl Coordinator {
                         }
                     }
                 }
-                let affected_rows = rows.len();
-                self.sequence_send_diffs(session, id, rows, affected_rows, MutationKind::Insert)
-                    .await
+                let diffs_plan = SendDiffsPlan {
+                    id: plan.id,
+                    affected_rows: rows.len(),
+                    updates: rows,
+                    kind: MutationKind::Insert,
+                };
+                self.sequence_send_diffs(session, diffs_plan).await
             }
             // If we couldn't optimize the INSERT statement to a constant, it
             // must depend on another relation. We're not yet sophisticated
@@ -2534,32 +2558,32 @@ impl Coordinator {
 
     async fn sequence_alter_item_rename(
         &mut self,
-        id: GlobalId,
-        to_name: String,
-        object_type: ObjectType,
+        plan: AlterItemRenamePlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let op = catalog::Op::RenameItem { id, to_name };
+        let op = catalog::Op::RenameItem {
+            id: plan.id,
+            to_name: plan.to_name,
+        };
         match self.catalog_transact(vec![op]).await {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(object_type)),
+            Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
             Err(err) => Err(err),
         }
     }
 
     fn sequence_alter_index_set_options(
         &mut self,
-        id: GlobalId,
-        options: Vec<IndexOption>,
+        plan: AlterIndexSetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        self.set_index_options(id, options);
+        self.set_index_options(plan.id, plan.options);
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
     fn sequence_alter_index_reset_options(
         &mut self,
-        id: GlobalId,
-        options: Vec<IndexOptionName>,
+        plan: AlterIndexResetOptionsPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let options = options
+        let options = plan
+            .options
             .into_iter()
             .map(|o| match o {
                 IndexOptionName::LogicalCompactionWindow => IndexOption::LogicalCompactionWindow(
@@ -2567,7 +2591,7 @@ impl Coordinator {
                 ),
             })
             .collect();
-        self.set_index_options(id, options);
+        self.set_index_options(plan.id, options);
         Ok(ExecuteResponse::AlteredObject(ObjectType::Index))
     }
 
@@ -2766,14 +2790,15 @@ impl Coordinator {
         for (source_id, _description) in dataflow.source_imports.iter() {
             // Extract `since` information about each source and apply here.
             if let Some(source_since) = self.sources.since_of(source_id) {
-                since.join_assign(source_since);
+                since.join_assign(&source_since);
             }
         }
 
         // For each imported arrangement, lower bound `since` by its own frontier.
         for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
             since.join_assign(
-                self.indexes
+                &self
+                    .indexes
                     .since_of(global_id)
                     .expect("global id missing at coordinator"),
             );
@@ -2782,9 +2807,11 @@ impl Coordinator {
         // For each produced arrangement, start tracking the arrangement with
         // a compaction frontier of at least `since`.
         for (global_id, _description, _typ) in dataflow.index_exports.iter() {
-            let mut frontiers =
-                Frontiers::new(self.num_workers(), self.logical_compaction_window_ms);
-            frontiers.advance_since(&since);
+            let frontiers = self.new_frontiers(
+                *global_id,
+                since.elements().to_vec(),
+                self.logical_compaction_window_ms,
+            );
             self.indexes.insert(*global_id, frontiers);
         }
 
@@ -3008,7 +3035,6 @@ pub async fn serve(
             symbiosis,
             indexes: ArrangementFrontiers::default(),
             sources: ArrangementFrontiers::default(),
-            since_updates: Vec::new(),
             logging_granularity: logging
                 .as_ref()
                 .and_then(|c| c.granularity.as_millis().try_into().ok()),
@@ -3025,6 +3051,9 @@ pub async fn serve(
             transient_id_counter: 1,
             active_conns: HashMap::new(),
             persisted_tables,
+            txn_reads: HashMap::new(),
+            since_handles: HashMap::new(),
+            since_updates: Rc::new(RefCell::new(HashMap::new())),
         };
         coord.broadcast(SequencedCommand::EnableFeedback(feedback_tx));
         if let Some(config) = &logging {

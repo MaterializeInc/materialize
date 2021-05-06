@@ -529,6 +529,7 @@ impl Runner {
             experimental_mode: true,
             safe_mode: false,
             telemetry_url: None,
+            introspection_frequency: Duration::from_secs(1),
         };
         let server = materialized::serve(mz_config, config.runtime.clone()).await?;
         let client = connect(&server).await;

@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
@@ -24,9 +24,8 @@ use uuid::Uuid;
 use repr::strconv;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
-    AvroSchema, ColumnDef, ColumnOption, Connector, CreateSourceStatement, CreateSourcesStatement,
-    CsrSeed, DbzMode, Envelope, Format, Ident, MultiConnector, Raw, Statement,
-    UnresolvedObjectName,
+    AvroSchema, ColumnDef, ColumnOption, Connector, CreateSourceFormat, CreateSourceStatement,
+    CsrSeed, DbzMode, Envelope, Format, Ident, Raw, Statement, UnresolvedObjectName,
 };
 use sql_parser::parser::parse_columns;
 
@@ -57,14 +56,14 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
 
         let mut file = None;
         match connector {
-            Connector::Kafka { broker, .. } => {
+            Connector::Kafka { broker, topic, .. } => {
                 if !broker.contains(':') {
                     *broker += ":9092";
                 }
 
                 // Verify that the provided security options are valid and then test them.
                 config_options = kafka_util::extract_config(&mut with_options_map)?;
-                kafka_util::test_config(&broker, &config_options).await?;
+                kafka_util::test_config(&broker, &topic, &config_options).await?;
             }
             Connector::AvroOcf { path, .. } => {
                 let path = path.clone();
@@ -134,68 +133,6 @@ pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::
             &config_options,
         )
         .await?;
-        if let sql_parser::ast::Envelope::Upsert(_) = envelope {
-            // TODO(bwm): this will be removed with the upcoming upsert rationalization
-            //
-            // The `format` argument is mutated in the call to purify_format, so it must be the
-            // original format from the outer envelope. The envelope is just matched against, and
-            // can be cloned safely.
-            let envelope_dupe = envelope.clone();
-            if let sql_parser::ast::Envelope::Upsert(format) = envelope {
-                purify_format(
-                    format,
-                    connector,
-                    &envelope_dupe,
-                    col_names,
-                    None,
-                    &config_options,
-                )
-                .await?;
-            }
-        }
-    }
-    if let Statement::CreateSources(CreateSourcesStatement {
-        connector,
-        stmts,
-        materialized,
-    }) = &mut stmt
-    {
-        match connector {
-            MultiConnector::Postgres {
-                conn,
-                publication,
-                slot,
-                tables,
-            } => {
-                let mut create_stmts = Vec::with_capacity(tables.len());
-                for table in tables.into_iter() {
-                    purify_postgres_table(&conn, &table.name, &mut table.columns).await?;
-                    let table_slot = slot.clone().or_else(|| {
-                        Some(format!(
-                            "materialize_{}",
-                            Uuid::new_v4().to_string().replace('-', "")
-                        ))
-                    });
-                    create_stmts.push(CreateSourceStatement {
-                        name: table.alias.name().clone(),
-                        col_names: table.columns.iter().map(|c| c.name.clone()).collect(),
-                        connector: Connector::Postgres {
-                            conn: conn.to_owned(),
-                            publication: publication.to_owned(),
-                            slot: table_slot,
-                            table: table.name.to_owned(),
-                            columns: table.columns.clone(),
-                        },
-                        format: None,
-                        with_options: vec![],
-                        envelope: Envelope::None,
-                        if_not_exists: false,
-                        materialized: *materialized,
-                    });
-                }
-                *stmts = create_stmts;
-            }
-        }
     }
     Ok(stmt)
 }
@@ -265,15 +202,78 @@ async fn purify_postgres_table(
 }
 
 async fn purify_format(
-    format: &mut Option<Format<Raw>>,
+    format: &mut CreateSourceFormat<Raw>,
     connector: &mut Connector<Raw>,
-    envelope: &Envelope<Raw>,
+    envelope: &Envelope,
+    col_names: &mut Vec<Ident>,
+    file: Option<File>,
+    connector_options: &BTreeMap<String, String>,
+) -> Result<(), anyhow::Error> {
+    if matches!(format, CreateSourceFormat::KeyValue { .. })
+        && !matches!(connector, Connector::Kafka { .. })
+    {
+        bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
+    }
+
+    // the existing semantics of Upsert is that specifying a simple bare format
+    // duplicates the format into the key.
+    //
+    // TODO(bwm): We should either make this the semantics everywhere, or deprecate
+    // this.
+    if matches!(connector, Connector::Kafka { .. })
+        && matches!(envelope, Envelope::Upsert)
+        && format.is_simple()
+    {
+        let value = format.value().map(|f| f.clone());
+        if let Some(value) = value {
+            *format = CreateSourceFormat::KeyValue {
+                key: value.clone(),
+                value,
+            }
+        } else {
+            bail!("Upsert requires either a VALUE FORMAT or a bare TEXT or BYTES format");
+        };
+    }
+
+    match format {
+        CreateSourceFormat::None => {}
+        CreateSourceFormat::Bare(format) => {
+            purify_format_single(
+                format,
+                connector,
+                envelope,
+                col_names,
+                file,
+                connector_options,
+            )
+            .await?
+        }
+
+        CreateSourceFormat::KeyValue { key, value: val } => {
+            ensure!(
+                file.is_none(),
+                anyhow!("[internal-error] File sources cannot be key-value sources")
+            );
+
+            purify_format_single(key, connector, envelope, col_names, None, connector_options)
+                .await?;
+            purify_format_single(val, connector, envelope, col_names, None, connector_options)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn purify_format_single(
+    format: &mut Format<Raw>,
+    connector: &mut Connector<Raw>,
+    envelope: &Envelope,
     col_names: &mut Vec<Ident>,
     file: Option<File>,
     connector_options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
     match format {
-        Some(Format::Avro(schema)) => match schema {
+        Format::Avro(schema) => match schema {
             AvroSchema::CsrUrl {
                 url,
                 seed,
@@ -315,32 +315,15 @@ async fn purify_format(
                 schema: sql_parser::ast::Schema::File(path),
                 with_options,
             } => {
-                if matches!(envelope, Envelope::Debezium(DbzMode::Upsert)) {
-                    // TODO(bwm): Support key schemas everywhere, something like
-                    // https://github.com/MaterializeInc/materialize/pull/6286
-                    bail!(
-                        "ENVELOPE DEBEZIUM UPSERT can only be used with schemas from \
-                           the confluent schema registry, and requires a key schema"
-                    );
-                }
-                let value_schema = tokio::fs::read_to_string(path).await?;
+                let file_schema = tokio::fs::read_to_string(path).await?;
                 *schema = AvroSchema::Schema {
-                    schema: sql_parser::ast::Schema::Inline(value_schema),
+                    schema: sql_parser::ast::Schema::Inline(file_schema),
                     with_options: with_options.clone(),
                 };
             }
-            _ => {
-                if matches!(envelope, Envelope::Debezium(DbzMode::Upsert)) {
-                    // TODO(bwm): Support key schemas everywhere, something like
-                    // https://github.com/MaterializeInc/materialize/pull/6286
-                    bail!(
-                        "ENVELOPE DEBEZIUM UPSERT can only be used with schemas from \
-                           the confluent schema registry, and requires a key schema"
-                    );
-                }
-            }
+            _ => {}
         },
-        Some(Format::Protobuf { schema, .. }) => {
+        Format::Protobuf { schema, .. } => {
             if let sql_parser::ast::Schema::File(path) = schema {
                 let descriptors = tokio::fs::read(path).await?;
                 let mut buf = String::new();
@@ -348,11 +331,11 @@ async fn purify_format(
                 *schema = sql_parser::ast::Schema::Inline(buf);
             }
         }
-        Some(Format::Csv {
+        Format::Csv {
             header_row,
             delimiter,
             ..
-        }) => {
+        } => {
             if *header_row && col_names.is_empty() {
                 if let Some(file) = file {
                     let file = tokio::io::BufReader::new(file);
@@ -370,7 +353,7 @@ async fn purify_format(
                 }
             }
         }
-        _ => (),
+        Format::Bytes | Format::Regex(_) | Format::Json | Format::Text => (),
     }
     Ok(())
 }

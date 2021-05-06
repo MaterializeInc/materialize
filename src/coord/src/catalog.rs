@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
 use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
-use expr::{ExprHumanizer, GlobalId, MirScalarExpr, OptimizedMirRelationExpr};
+use expr::{ExprHumanizer, GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
 use sql::ast::{Expr, Raw};
@@ -37,7 +37,10 @@ use sql::catalog::{
 };
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
 use sql::plan::HirRelationExpr;
-use sql::plan::{CreateSourcePlan, Params, Plan, PlanContext};
+use sql::plan::{
+    CreateIndexPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, Params, Plan, PlanContext,
+};
 use transform::Optimizer;
 use uuid::Uuid;
 
@@ -1724,9 +1727,9 @@ impl Catalog {
         let stmt = sql::parse::parse(&create_sql)?.into_element();
         let plan = sql::plan::plan(&pcx, &self.for_system_session(), stmt, &Params::empty())?;
         Ok(match plan {
-            Plan::CreateTable {
+            Plan::CreateTable(CreateTablePlan {
                 table, depends_on, ..
-            } => CatalogItem::Table(Table {
+            }) => CatalogItem::Table(Table {
                 create_sql: table.create_sql,
                 plan_cx: pcx,
                 desc: table.desc,
@@ -1748,9 +1751,9 @@ impl Catalog {
                     desc: transformed_desc,
                 })
             }
-            Plan::CreateView {
+            Plan::CreateView(CreateViewPlan {
                 view, depends_on, ..
-            } => {
+            }) => {
                 let mut optimizer = Optimizer::default();
                 let optimized_expr = optimizer.optimize(view.expr, self.indexes())?;
                 let desc = RelationDesc::new(optimized_expr.as_ref().typ(), view.column_names);
@@ -1763,9 +1766,9 @@ impl Catalog {
                     depends_on,
                 })
             }
-            Plan::CreateIndex {
+            Plan::CreateIndex(CreateIndexPlan {
                 index, depends_on, ..
-            } => CatalogItem::Index(Index {
+            }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
                 plan_cx: pcx,
                 on: index.on,
@@ -1773,12 +1776,12 @@ impl Catalog {
                 conn_id: None,
                 depends_on,
             }),
-            Plan::CreateSink {
+            Plan::CreateSink(CreateSinkPlan {
                 sink,
                 with_snapshot,
                 depends_on,
                 ..
-            } => CatalogItem::Sink(Sink {
+            }) => CatalogItem::Sink(Sink {
                 create_sql: sink.create_sql,
                 plan_cx: pcx,
                 from: sink.from,
@@ -1787,9 +1790,9 @@ impl Catalog {
                 with_snapshot,
                 depends_on,
             }),
-            Plan::CreateType {
+            Plan::CreateType(CreateTypePlan {
                 typ, depends_on, ..
-            } => CatalogItem::Type(Type {
+            }) => CatalogItem::Type(Type {
                 create_sql: typ.create_sql,
                 plan_cx: pcx,
                 inner: typ.inner.into(),
@@ -1936,6 +1939,34 @@ impl Catalog {
 
     pub fn entries(&self) -> impl Iterator<Item = &CatalogEntry> {
         self.by_id.values()
+    }
+
+    /// Returns the items in a "time domain" for an expression.
+    ///
+    /// A "time domain" is a set of relations (tables, views, sources) that need to
+    /// share time guarantees. Currently we assume time domains to mean "everything
+    /// in a schema". For example, a read transaction on table A in some schema may
+    /// also need to query table B in the same schema, so A and B (and all other
+    /// tables and views in the schema) are in the same time domain.
+    pub fn timedomain_for(&self, source: &MirRelationExpr, conn_id: u32) -> Vec<GlobalId> {
+        // Find all relations referenced by the expression. Find their parent schemas
+        // and add all tables, views, and sources in those schemas to a set.
+        let mut ids = HashSet::new();
+        for id in source.global_uses() {
+            let entry = self.get_by_id(&id);
+            let name = entry.name();
+            if let Some(schema) = self.get_schema(&name.database, &name.schema, conn_id) {
+                for id in schema.items.values() {
+                    if let SqlCatalogItemType::Table
+                    | SqlCatalogItemType::View
+                    | SqlCatalogItemType::Source = self.get_by_id(id).item_type()
+                    {
+                        ids.insert(*id);
+                    }
+                }
+            }
+        }
+        ids.into_iter().collect()
     }
 }
 

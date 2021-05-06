@@ -264,6 +264,71 @@ kafkacat -C -b localhost:9092 -s avro -r localhost:8081 -t debezium.inventory.cu
 % Reached end of topic debezium.inventory.customers [0] at offset 4: exiting
 ```
 
+### Getting the List of Transaction IDs
+
+Use the transaction topic to generate the list of transactions, in commit order:
+
+```sh
+[chris-work:~/materialize/materialize:(main[|]*)] kafkacat -C -b localhost:9092 -r localhost:8081 -s avro -t dbserver1.transaction -e -f "Partition: %p\tOffset: %o\t: %k\n"
+Partition: 0    Offset: 0       : {"id": "file=mysql-bin.000003,pos=2201"}
+Partition: 0    Offset: 1       : {"id": "file=mysql-bin.000003,pos=2201"}
+Partition: 0    Offset: 2       : {"id": "file=mysql-bin.000003,pos=3491"}
+Partition: 0    Offset: 3       : {"id": "file=mysql-bin.000003,pos=3491"}
+Partition: 0    Offset: 4       : {"id": "file=mysql-bin.000003,pos=4397"}
+Partition: 0    Offset: 5       : {"id": "file=mysql-bin.000003,pos=4397"}
+Partition: 0    Offset: 6       : {"id": "file=mysql-bin.000003,pos=5506"}
+Partition: 0    Offset: 7       : {"id": "file=mysql-bin.000003,pos=5506"}
+Partition: 0    Offset: 8       : {"id": "file=mysql-bin.000003,pos=6250"}
+Partition: 0    Offset: 9       : {"id": "file=mysql-bin.000003,pos=6250"}
+Partition: 0    Offset: 10      : {"id": "file=mysql-bin.000003,pos=6710"}
+Partition: 0    Offset: 11      : {"id": "file=mysql-bin.000003,pos=6710"}
+Partition: 0    Offset: 12      : {"id": "file=mysql-bin.000003,pos=7397"}
+Partition: 0    Offset: 13      : {"id": "file=mysql-bin.000003,pos=7397"}
+Partition: 0    Offset: 14      : {"id": "file=mysql-bin.000003,pos=7819"}
+Partition: 0    Offset: 15      : {"id": "file=mysql-bin.000003,pos=7819"}
+Partition: 0    Offset: 16      : {"id": "file=mysql-bin.000003,pos=9048"}
+Partition: 0    Offset: 17      : {"id": "file=mysql-bin.000003,pos=9048"}
+Partition: 0    Offset: 18      : {"id": "file=mysql-bin.000003,pos=10238"}
+Partition: 0    Offset: 19      : {"id": "file=mysql-bin.000003,pos=10238"}
+Partition: 0    Offset: 20      : {"id": "file=mysql-bin.000003,pos=10944"}
+Partition: 0    Offset: 21      : {"id": "file=mysql-bin.000003,pos=10944"}
+Partition: 0    Offset: 22      : {"id": "file=mysql-bin.000003,pos=11591"}
+Partition: 0    Offset: 23      : {"id": "file=mysql-bin.000003,pos=11591"}
+Partition: 0    Offset: 24      : {"id": "file=mysql-bin.000003,pos=12248"}
+Partition: 0    Offset: 25      : {"id": "file=mysql-bin.000003,pos=12248"}
+Partition: 0    Offset: 26      : {"id": "file=mysql-bin.000003,pos=13065"}
+Partition: 0    Offset: 27      : {"id": "file=mysql-bin.000003,pos=13065"}
+Partition: 0    Offset: 28      : {"id": "file=mysql-bin.000003,pos=13941"}
+Partition: 0    Offset: 29      : {"id": "file=mysql-bin.000003,pos=13941"}
+Partition: 0    Offset: 30      : {"id": "file=mysql-bin.000003,pos=14480"}
+Partition: 0    Offset: 31      : {"id": "file=mysql-bin.000003,pos=14480"}
+```
+
+You can then list another topic, and you'll see 5 types of messages:
+
+- Initial snapshot of data, (.before is null, .after is non null) -- no transaction ID,
+- Creates,(.before is null, .after is non null) -- transaction ID is supplied
+- Updates (.before and .after are both non null) -- transaction ID is supplied
+- Deletes (.before is non null, .after is null) -- transaction ID is supplied
+- Tombstone messages, entire value is empty -- no transaction ID because no value
+
+You might see something like:
+
+```sh
+{"id": 1003}{"before": null, "after": {"Value": {"id": 1003, "first_name": "Edward", "last_name": "Walker", "email": "ed@walker.com"}}, "source": {"version": "1.5.0.Final", "connector": "mysql", "name": "dbserver1", "ts_ms": 1619121065623, "snapshot": {"string": "true"}, "db": "inventory", "sequence": null, "table": {"string": "customers"}, "server_id": 0, "gtid": null, "file": "mysql-bin.000003", "pos": 154, "row": 0, "thread": null, "query": null}, "op": "r", "ts_ms": {"long": 1619121065623}, "transaction": null}
+{"id": 1003}{"before": {"Value": {"id": 1003, "first_name": "Edward", "last_name": "Walker", "email": "ed@walker.com"}}, "after": null, "source": {"version": "1.5.0.Final", "connector": "mysql", "name": "dbserver1", "ts_ms": 1619121079000, "snapshot": {"string": "false"}, "db": "inventory", "sequence": null, "table": {"string": "customers"}, "server_id": 223344, "gtid": null, "file": "mysql-bin.000003", "pos": 7542, "row": 0, "thread": null, "query": null}, "op": "d", "ts_ms": {"long": 1619121080079}, "transaction": {"ConnectDefault": {"id": "file=mysql-bin.000003,pos=7397", "total_order": 1, "data_collection_order": 1}}}
+{"id": 1003}
+% Reached end of topic dbserver1.inventory.customers [0] at offset 28: exiting
+```
+
+The first message is the initial load, the second is an delete and the third is a tombstone for
+both records.
+
+#### Messages in Transaction ID Order
+
+For messages with transaction IDs, they are presented in order of the transaction ID presented in
+the transaction topic.
+
 ## Importing Tables in Materialized
 
 If you want to import the tables by hand, you can use the following SQL
@@ -274,4 +339,24 @@ CREATE MATERIALIZED SOURCE IF NOT EXISTS customers
 FROM KAFKA BROKER 'kafka:9092' TOPIC 'debezium.inventory.customers'
 FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081'
 ENVELOPE DEBEZIUM;
+```
+
+You can even import the transaction topic if you want to take a look at it!
+
+```sql
+CREATE MATERIALIZED SOURCE IF NOT EXISTS dbz_transactions
+FROM KAFKA BROKER 'kafka:9092' TOPIC 'dbserver1.transaction'
+FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://schema-registry:8081';
+```
+
+This will give something like the following:
+
+```sql
+materialize=> select * from dbz_transactions order by id limit 4;
+ status |               id                | event_count |                                               data_collections
+--------+---------------------------------+-------------+--------------------------------------------------------------------------------------------------------------
+ BEGIN  | file=mysql-bin.000003,pos=10668 |             |
+ END    | file=mysql-bin.000003,pos=10668 |           5 | {"(inventory.products_on_hand,1)","(inventory.addresses,1)","(inventory.orders,2)","(inventory.products,1)"}
+ BEGIN  | file=mysql-bin.000003,pos=11483 |             |
+ END    | file=mysql-bin.000003,pos=11483 |           2 | {"(inventory.products_on_hand,1)","(inventory.customers,1)"}
 ```

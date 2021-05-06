@@ -20,19 +20,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use aws_arn::ARN;
-use expr::MirRelationExpr;
-use expr::TableFunc;
-use expr::UnaryFunc;
 use globset::GlobBuilder;
 use itertools::Itertools;
-use log::error;
-use log::warn;
-use ore::str::StrExt;
-use repr::ColumnName;
-use repr::ColumnType;
-use repr::Datum;
-use repr::Row;
-
+use log::{error, warn};
+use regex::Regex;
 use reqwest::Url;
 
 use dataflow_types::{
@@ -40,25 +31,27 @@ use dataflow_types::{
     DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
     KafkaSinkConnectorBuilder, KafkaSourceConnector, KinesisSourceConnector,
     PostgresSourceConnector, ProtobufEncoding, PubNubSourceConnector, RegexEncoding,
-    S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceEnvelope,
+    S3SourceConnector, SinkConnectorBuilder, SinkEnvelope, SourceConnector, SourceDataEncoding,
+    SourceEnvelope,
 };
-use expr::GlobalId;
+use expr::{GlobalId, MirRelationExpr, TableFunc, UnaryFunc};
 use interchange::avro::{self, DebeziumDeduplicationStrategy, Encoder};
 use interchange::envelopes;
 use ore::collections::CollectionExt;
 use ore::iter::IteratorExt;
-use regex::Regex;
-use repr::{strconv, RelationDesc, RelationType, ScalarType};
+use ore::str::StrExt;
+use repr::{strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, Row, ScalarType};
+use sql_parser::ast::CreateSourceFormat;
 
 use crate::ast::display::AstDisplay;
 use crate::ast::{
     AlterIndexOptionsList, AlterIndexOptionsStatement, AlterObjectRenameStatement, AvroSchema,
     ColumnOption, Compression, Connector, CreateDatabaseStatement, CreateIndexStatement,
     CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSinkStatement,
-    CreateSourceStatement, CreateSourcesStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeStatement, CreateViewStatement, DataType, DropDatabaseStatement,
-    DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior, ObjectType, Raw,
-    SqlOption, Statement, UnresolvedObjectName, Value, WithOption,
+    CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
+    CreateViewStatement, DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope,
+    Expr, Format, Ident, IfExistsBehavior, ObjectType, Raw, SqlOption, Statement,
+    UnresolvedObjectName, Value, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -71,8 +64,12 @@ use crate::plan::scope::Scope;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::typeconv::{plan_hypothetical_cast, CastContext};
 use crate::plan::{
-    self, plan_utils, query, CreateSourcePlan, HirRelationExpr, Index, IndexOption,
-    IndexOptionName, Params, Plan, QueryContext, Sink, Source, Table, Type, TypeInner, View,
+    self, plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
+    AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
+    HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, QueryContext, Sink, Source,
+    Table, Type, TypeInner, View,
 };
 use crate::pure::Schema;
 
@@ -90,10 +87,10 @@ pub fn plan_create_database(
         if_not_exists,
     }: CreateDatabaseStatement,
 ) -> Result<Plan, anyhow::Error> {
-    Ok(Plan::CreateDatabase {
+    Ok(Plan::CreateDatabase(CreateDatabasePlan {
         name: normalize::ident(name),
         if_not_exists,
-    })
+    }))
 }
 
 pub fn describe_create_schema(
@@ -122,11 +119,11 @@ pub fn plan_create_schema(
         None => DatabaseSpecifier::Name(scx.catalog.default_database().into()),
         Some(n) => DatabaseSpecifier::Name(normalize::ident(n)),
     };
-    Ok(Plan::CreateSchema {
+    Ok(Plan::CreateSchema(CreateSchemaPlan {
         database_name,
         schema_name,
         if_not_exists,
-    })
+    }))
 }
 
 pub fn describe_create_table(
@@ -214,24 +211,17 @@ pub fn plan_create_table(
         defaults,
         temporary,
     };
-    Ok(Plan::CreateTable {
+    Ok(Plan::CreateTable(CreateTablePlan {
         name,
         table,
         if_not_exists: *if_not_exists,
         depends_on,
-    })
+    }))
 }
 
 pub fn describe_create_source(
     _: &StatementContext,
     _: CreateSourceStatement<Raw>,
-) -> Result<StatementDesc, anyhow::Error> {
-    Ok(StatementDesc::new(None))
-}
-
-pub fn describe_create_sources(
-    _: &StatementContext,
-    _: CreateSourcesStatement<Raw>,
 ) -> Result<StatementDesc, anyhow::Error> {
     Ok(StatementDesc::new(None))
 }
@@ -396,17 +386,14 @@ pub fn plan_create_source(
         col_names,
         connector,
         with_options,
-        format,
         envelope,
         if_not_exists,
         materialized,
+        format,
     } = &stmt;
-    let get_encoding = |format: &Option<Format<Raw>>| {
-        let format = format
-            .as_ref()
-            .ok_or_else(|| anyhow!("Source format must be specified"))?;
-
-        Ok(match format {
+    let get_encoding_inner = |format: &Format<Raw>| {
+        // Avro/CSR can return a `SourceDataEncoding::KeyValue`
+        Ok(SourceDataEncoding::Single(match format {
             Format::Bytes => DataEncoding::Bytes,
             Format::Avro(schema) => {
                 let Schema {
@@ -453,7 +440,7 @@ pub fn plan_create_source(
                         let ccsr_config = kafka_util::generate_ccsr_client_config(
                             url,
                             &kafka_options,
-                            normalize::options(ccsr_options),
+                            normalize::options(&ccsr_options),
                         )?;
 
                         if let Some(seed) = seed {
@@ -469,12 +456,26 @@ pub fn plan_create_source(
                     }
                 };
 
-                DataEncoding::Avro(AvroEncoding {
-                    key_schema,
-                    value_schema,
-                    schema_registry_config,
-                    confluent_wire_format,
-                })
+                if let Some(key_schema) = key_schema {
+                    return Ok(SourceDataEncoding::KeyValue {
+                        key: DataEncoding::Avro(AvroEncoding {
+                            schema: key_schema,
+                            schema_registry_config: schema_registry_config.clone(),
+                            confluent_wire_format,
+                        }),
+                        value: DataEncoding::Avro(AvroEncoding {
+                            schema: value_schema,
+                            schema_registry_config,
+                            confluent_wire_format,
+                        }),
+                    });
+                } else {
+                    DataEncoding::Avro(AvroEncoding {
+                        schema: value_schema,
+                        schema_registry_config,
+                        confluent_wire_format,
+                    })
+                }
             }
             Format::Protobuf {
                 message_name,
@@ -493,7 +494,7 @@ pub fn plan_create_source(
                 })
             }
             Format::Regex(regex) => {
-                let regex = Regex::new(regex)?;
+                let regex = Regex::new(&regex)?;
                 DataEncoding::Regex(RegexEncoding { regex })
             }
             Format::Csv {
@@ -506,7 +507,7 @@ pub fn plan_create_source(
                         Some(n) => *n,
                         None => bail!(
                             "Cannot determine number of columns in CSV source; specify using \
-                            CREATE SOURCE...FORMAT CSV WITH X COLUMNS"
+                             CREATE SOURCE...FORMAT CSV WITH X COLUMNS"
                         ),
                     }
                 } else {
@@ -523,7 +524,35 @@ pub fn plan_create_source(
             }
             Format::Json => unsupported!("JSON sources"),
             Format::Text => DataEncoding::Text,
-        })
+        }))
+    };
+    let get_encoding = |format: &CreateSourceFormat<Raw>| {
+        let encoding = match format {
+            CreateSourceFormat::None => bail!("Source format must be specified"),
+            CreateSourceFormat::Bare(format) => get_encoding_inner(format)?,
+            CreateSourceFormat::KeyValue { key, value } => {
+                let key = match get_encoding_inner(key)? {
+                    SourceDataEncoding::Single(key) => key,
+                    SourceDataEncoding::KeyValue { key, .. } => key,
+                };
+                let value = match get_encoding_inner(value)? {
+                    SourceDataEncoding::Single(value) => value,
+                    SourceDataEncoding::KeyValue { value, .. } => value,
+                };
+                SourceDataEncoding::KeyValue { key, value }
+            }
+        };
+
+        let requires_keyvalue = matches!(
+            envelope,
+            Envelope::Debezium(DbzMode::Upsert) | Envelope::Upsert
+        );
+        let is_keyvalue = matches!(encoding, SourceDataEncoding::KeyValue { .. });
+        if requires_keyvalue && !is_keyvalue {
+            bail!("ENVELOPE [DEBEZIUM] UPSERT requires that KEY FORMAT be specified");
+        };
+
+        Ok(encoding)
     };
 
     let mut with_options = normalize::options(with_options);
@@ -531,7 +560,7 @@ pub fn plan_create_source(
     let mut consistency = Consistency::RealTime;
     let mut ts_frequency = scx.catalog.config().timestamp_frequency;
 
-    let (external_connector, mut encoding) = match connector {
+    let (external_connector, encoding) = match connector {
         Connector::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
@@ -792,21 +821,22 @@ pub fn plan_create_source(
                 slot_name: slot_name.clone(),
             });
 
-            (connector, DataEncoding::Postgres(desc))
+            let encoding = SourceDataEncoding::Single(DataEncoding::Postgres(desc));
+            (connector, encoding)
         }
         Connector::PubNub {
             subscribe_key,
             channel,
         } => {
             match format {
-                None | Some(Format::Text) => (),
+                CreateSourceFormat::None | CreateSourceFormat::Bare(Format::Text) => (),
                 _ => bail!("CREATE SOURCE ... PUBNUB must specify FORMAT TEXT"),
             }
             let connector = ExternalSourceConnector::PubNub(PubNubSourceConnector {
                 subscribe_key: subscribe_key.clone(),
                 channel: channel.clone(),
             });
-            (connector, DataEncoding::Text)
+            (connector, SourceDataEncoding::Single(DataEncoding::Text))
         }
         Connector::AvroOcf { path, .. } => {
             let tail = match with_options.remove("tail") {
@@ -836,7 +866,7 @@ pub fn plan_create_source(
                 compression: dataflow_types::Compression::None,
                 tail,
             });
-            if format.is_some() {
+            if !matches!(format, CreateSourceFormat::None) {
                 bail!("avro ocf sources cannot specify a format");
             }
             let reader_schema = match with_options
@@ -846,7 +876,9 @@ pub fn plan_create_source(
                 Value::String(s) => s,
                 _ => bail!("reader_schema option must be a string"),
             };
-            let encoding = DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema });
+            let encoding = SourceDataEncoding::Single(DataEncoding::AvroOcf(AvroOcfEncoding {
+                reader_schema,
+            }));
             (connector, encoding)
         }
     };
@@ -922,28 +954,19 @@ pub fn plan_create_source(
             }
             SourceEnvelope::Debezium(dedup_strat, mode)
         }
-        sql_parser::ast::Envelope::Upsert(key_format) => match connector {
-            Connector::Kafka { .. } => {
-                let mut key_encoding = if key_format.is_some() {
-                    get_encoding(key_format)?
-                } else {
-                    encoding.clone()
-                };
-                match &mut key_encoding {
-                    DataEncoding::Avro(AvroEncoding {
-                        key_schema,
-                        value_schema,
-                        ..
-                    }) => {
-                        if key_schema.is_some() {
-                            *value_schema = key_schema.take().unwrap();
-                        }
-                    }
-                    DataEncoding::Bytes | DataEncoding::Text => {}
-                    _ => unsupported!("format for upsert key"),
+        sql_parser::ast::Envelope::Upsert => match connector {
+            // Currently the get_encoding function rewrites Formats with either a CSR config to be a
+            // KeyValueDecoding, no other formats make sense.
+            //
+            // TODO(bwm): move key/value canonicalization entirely into the purify step, and turn
+            // this and the related code in `get_encoding` into internal errors.
+            Connector::Kafka { .. } => match format {
+                CreateSourceFormat::KeyValue { .. } => SourceEnvelope::Upsert,
+                CreateSourceFormat::Bare(Format::Avro(AvroSchema::CsrUrl { .. })) => {
+                    SourceEnvelope::Upsert
                 }
-                SourceEnvelope::Upsert(key_encoding)
-            }
+                _ => unsupported!(format!("upsert requires a key/value format: {:?}", format)),
+            },
             _ => unsupported!("upsert envelope for non-Kafka sources"),
         },
         sql_parser::ast::Envelope::CdcV2 => {
@@ -954,24 +977,19 @@ pub fn plan_create_source(
                 unsupported!("ENVELOPE MATERIALIZE over OCF (Avro files)")
             }
             match format {
-                Some(Format::Avro(_)) => {}
+                CreateSourceFormat::Bare(Format::Avro(_)) => {}
                 _ => unsupported!("non-Avro-encoded ENVELOPE MATERIALIZE"),
             }
             SourceEnvelope::CdcV2
         }
     };
 
-    if let SourceEnvelope::Upsert(key_encoding) = &envelope {
-        match &mut encoding {
-            DataEncoding::Avro(AvroEncoding { key_schema, .. }) => {
-                *key_schema = None;
+    if matches!(envelope, SourceEnvelope::Upsert) {
+        match &encoding {
+            SourceDataEncoding::Single(_) => {
+                unsupported!("upsert envelopes must have a key")
             }
-            DataEncoding::Bytes | DataEncoding::Text | DataEncoding::Protobuf(_) => {
-                if let DataEncoding::Avro(_) = &key_encoding {
-                    unsupported!("Avro key for this format");
-                }
-            }
-            _ => unsupported!("upsert envelope for this format"),
+            SourceDataEncoding::KeyValue { .. } => (),
         }
     }
 
@@ -986,7 +1004,11 @@ pub fn plan_create_source(
     }
 
     let post_transform_key = if let SourceEnvelope::Debezium(_, _) = &envelope {
-        if let DataEncoding::Avro(AvroEncoding { key_schema, .. }) = &encoding {
+        if let SourceDataEncoding::KeyValue {
+            key: DataEncoding::Avro(AvroEncoding { schema, .. }),
+            ..
+        } = &encoding
+        {
             if ignore_source_keys {
                 None
             } else {
@@ -995,14 +1017,12 @@ pub fn plan_create_source(
                         let row_desc = RelationDesc::from_names_and_types(
                             fields.clone().into_iter().map(|(n, t)| (Some(n), t)),
                         );
-                        let key_schema_indices = key_schema.as_ref().and_then(|key_schema| {
-                            avro::validate_key_schema(key_schema, &row_desc)
-                                .map(Some)
-                                .unwrap_or_else(|e| {
-                                    warn!("Not using key due to error: {}", e);
-                                    None
-                                })
-                        });
+                        let key_schema_indices = avro::validate_key_schema(&schema, &row_desc)
+                            .map(Some)
+                            .unwrap_or_else(|e| {
+                                warn!("Not using key due to error: {}", e);
+                                None
+                            });
                         key_schema_indices
                     }
                     _ => {
@@ -1025,12 +1045,11 @@ pub fn plan_create_source(
     //
     // TODO(brennan): They should not depend on the envelope either. Figure out a way to
     // make all of this more tasteful.
-    match (&encoding, &envelope) {
-        (DataEncoding::Avro { .. }, _) | (_, SourceEnvelope::Debezium(_, _)) => (),
-        _ => {
-            for (name, ty) in external_connector.metadata_columns() {
-                bare_desc = bare_desc.with_named_column(name, ty);
-            }
+    if !matches!(encoding.value_ref(), DataEncoding::Avro { .. })
+        && !matches!(envelope, SourceEnvelope::Debezium(_, _))
+    {
+        for (name, ty) in external_connector.metadata_columns() {
+            bare_desc = bare_desc.with_named_column(name, ty);
         }
     }
 
@@ -1067,23 +1086,6 @@ pub fn plan_create_source(
         if_not_exists,
         materialized,
     }))
-}
-
-pub fn plan_create_sources(
-    scx: &StatementContext,
-    stmt: CreateSourcesStatement<Raw>,
-) -> Result<Plan, anyhow::Error> {
-    scx.require_experimental_mode("Postgres Sources")?;
-    let CreateSourcesStatement { stmts, .. } = stmt;
-    let mut sources = vec![];
-    for stmt in stmts {
-        match plan_create_source(scx, stmt)? {
-            Plan::CreateSource(plan) => sources.push(plan),
-            _ => unreachable!("non-create source plan"),
-        }
-    }
-
-    Ok(Plan::CreateSources { sources })
 }
 
 pub fn describe_create_view(
@@ -1146,7 +1148,7 @@ pub fn plan_create_view(
     let temporary = *temporary;
     let materialize = *materialized; // Normalize for `raw_sql` below.
     let if_not_exists = *if_exists == IfExistsBehavior::Skip;
-    Ok(Plan::CreateView {
+    Ok(Plan::CreateView(CreateViewPlan {
         name,
         view: View {
             create_sql,
@@ -1158,7 +1160,7 @@ pub fn plan_create_view(
         materialize,
         if_not_exists,
         depends_on,
-    })
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1340,13 +1342,12 @@ pub fn plan_create_sink(
 
     let envelope = match envelope {
         None | Some(Envelope::Debezium(sql_parser::ast::DbzMode::Plain)) => SinkEnvelope::Debezium,
-        Some(Envelope::Upsert(None)) => SinkEnvelope::Upsert,
+        Some(Envelope::Upsert) => SinkEnvelope::Upsert,
         Some(Envelope::CdcV2) => unsupported!("CDCv2 sinks"),
         Some(Envelope::Debezium(sql_parser::ast::DbzMode::Upsert)) => {
             unsupported!("UPSERT doesn't make sense for sinks")
         }
         Some(Envelope::None) => unsupported!("\"ENVELOPE NONE\" sinks"),
-        Some(Envelope::Upsert(Some(_))) => unsupported!("Upsert sinks with custom key encodings"),
     };
     let name = scx.allocate_name(normalize::unresolved_object_name(name)?);
     let from = scx.resolve_item(from)?;
@@ -1455,7 +1456,7 @@ pub fn plan_create_sink(
         )
     }
 
-    Ok(Plan::CreateSink {
+    Ok(Plan::CreateSink(CreateSinkPlan {
         name,
         sink: Sink {
             create_sql,
@@ -1466,7 +1467,7 @@ pub fn plan_create_sink(
         with_snapshot,
         if_not_exists,
         depends_on,
-    })
+    }))
 }
 
 /// Returns only those `CatalogItem`s that don't have any other user
@@ -1557,10 +1558,10 @@ pub fn plan_create_index(
             item: normalize::ident(name.clone()),
         }
     } else {
-        let mut idx_name_base = on.name().clone();
+        let mut idx_name = on.name().clone();
         if key_parts.is_none() {
             // We're trying to create the "default" index.
-            idx_name_base.item += "_primary_idx";
+            idx_name.item += "_primary_idx";
         } else {
             // Use PG schema for automatically naming indexes:
             // `<table>_<_-separated indexed expressions>_idx`
@@ -1574,28 +1575,14 @@ pub fn plan_create_index(
                     _ => "expr".to_string(),
                 })
                 .join("_");
-            idx_name_base.item += &format!("_{}_idx", index_name_col_suffix);
-            idx_name_base.item = normalize::ident(Ident::new(idx_name_base.item))
+            idx_name.item += &format!("_{}_idx", index_name_col_suffix);
+            idx_name.item = normalize::ident(Ident::new(idx_name.item))
         }
-
-        let mut index_name = idx_name_base.clone();
-        let mut i = 0;
-
-        let schema = SchemaName {
-            database: on.name().database.clone(),
-            schema: on.name().schema.clone(),
-        };
-        let mut cat_schema_iter = scx.catalog.list_items(&schema);
-
-        // Search for an unused version of the name unless `if_not_exists`.
-        while cat_schema_iter.any(|i| *i.name() == index_name) && !*if_not_exists {
-            i += 1;
-            index_name = idx_name_base.clone();
-            index_name.item += &i.to_string();
-            cat_schema_iter = scx.catalog.list_items(&schema);
+        if !*if_not_exists {
+            scx.catalog.find_available_name(idx_name)
+        } else {
+            idx_name
         }
-
-        index_name
     };
 
     let options = plan_index_options(with_options.clone())?;
@@ -1608,7 +1595,7 @@ pub fn plan_create_index(
     let mut depends_on = vec![on.id()];
     depends_on.extend(exprs_depend_on);
 
-    Ok(Plan::CreateIndex {
+    Ok(Plan::CreateIndex(CreateIndexPlan {
         name: index_name,
         index: Index {
             create_sql,
@@ -1618,7 +1605,7 @@ pub fn plan_create_index(
         options,
         if_not_exists,
         depends_on,
-    })
+    }))
 }
 
 pub fn describe_create_type(
@@ -1728,11 +1715,11 @@ pub fn plan_create_type(
         }
     };
 
-    Ok(Plan::CreateType {
+    Ok(Plan::CreateType(CreateTypePlan {
         name,
         typ: Type { create_sql, inner },
         depends_on: ids,
-    })
+    }))
 }
 
 fn extract_timestamp_frequency_option(
@@ -1789,9 +1776,9 @@ pub fn plan_create_role(
     if super_user != Some(true) {
         unsupported!("non-superusers");
     }
-    Ok(Plan::CreateRole {
+    Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
-    })
+    }))
 }
 
 pub fn describe_drop_database(
@@ -1817,7 +1804,7 @@ pub fn plan_drop_database(
         }
         Err(err) => return Err(err.into()),
     };
-    Ok(Plan::DropDatabase { name })
+    Ok(Plan::DropDatabase(DropDatabasePlan { name }))
 }
 
 pub fn describe_drop_objects(
@@ -1873,21 +1860,21 @@ pub fn plan_drop_schema(
                     schema.name(),
                 );
             }
-            Ok(Plan::DropSchema {
+            Ok(Plan::DropSchema(DropSchemaPlan {
                 name: schema.name().clone(),
-            })
+            }))
         }
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating that the
             // schema does not exist.
             // TODO(benesch): adjust the types here properly, rather than making
             // up a nonexistent database.
-            Ok(Plan::DropSchema {
+            Ok(Plan::DropSchema(DropSchemaPlan {
                 name: SchemaName {
                     database: DatabaseSpecifier::Ambient,
                     schema: "noexist".into(),
                 },
-            })
+            }))
         }
         Err(e) => Err(e.into()),
     }
@@ -1917,7 +1904,7 @@ pub fn plan_drop_role(
             Err(e) => return Err(e.into()),
         }
     }
-    Ok(Plan::DropRoles { names: out })
+    Ok(Plan::DropRoles(DropRolesPlan { names: out }))
 }
 
 pub fn plan_drop_items(
@@ -1942,10 +1929,10 @@ pub fn plan_drop_items(
             Err(err) => return Err(err.into()),
         }
     }
-    Ok(Plan::DropItems {
+    Ok(Plan::DropItems(DropItemsPlan {
         items: ids,
         ty: object_type,
-    })
+    }))
 }
 
 pub fn plan_drop_item(
@@ -2035,9 +2022,9 @@ pub fn plan_alter_index_options(
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating this index does not
             // exist.
-            return Ok(Plan::AlterNoop {
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
                 object_type: ObjectType::Index,
-            });
+            }));
         }
         Err(e) => return Err(e.into()),
     };
@@ -2057,11 +2044,17 @@ pub fn plan_alter_index_options(
                     _ => None,
                 })
                 .collect();
-            Ok(Plan::AlterIndexResetOptions { id, options })
+            Ok(Plan::AlterIndexResetOptions(AlterIndexResetOptionsPlan {
+                id,
+                options,
+            }))
         }
         AlterIndexOptionsList::Set(options) => {
             let options = plan_index_options(options)?;
-            Ok(Plan::AlterIndexSetOptions { id, options })
+            Ok(Plan::AlterIndexSetOptions(AlterIndexSetOptionsPlan {
+                id,
+                options,
+            }))
         }
     }
 }
@@ -2101,14 +2094,14 @@ pub fn plan_alter_object_rename(
         Err(_) if if_exists => {
             // TODO(benesch): generate a notice indicating this
             // item does not exist.
-            return Ok(Plan::AlterNoop { object_type });
+            return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
         }
         Err(err) => return Err(err.into()),
     };
 
-    Ok(Plan::AlterItemRename {
+    Ok(Plan::AlterItemRename(AlterItemRenamePlan {
         id,
         to_name: normalize::ident(to_item_name),
         object_type,
-    })
+    }))
 }

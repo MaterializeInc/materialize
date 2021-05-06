@@ -50,7 +50,7 @@ Enable connections to Kerberized Kafka clusters using the appropriate [`WITH`
 options](#kerberos-with-options).
 
 - Materialize currently only supports:
-  - `GSSAPI` as the `sasl_mechanisms`
+  - `GSSAPI` or `PLAIN` as the `sasl_mechanisms`
   - `sasl_plaintext`, `scram-sha-256`, or `scram-sha-512`  as the `security_protocol`
 - Materialize does _not_ support Kerberos authentication for Confluent Schema
   Registries.

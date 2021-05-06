@@ -1278,7 +1278,7 @@ lazy_static! {
             // Scalars.
             "abs" => Scalar {
                 params!(Int32) => UnaryFunc::AbsInt32, 1397;
-                params!(Int64) => UnaryFunc::AbsInt64, 1395;
+                params!(Int64) => UnaryFunc::AbsInt64, 1396;
                 params!(DecimalAny) => UnaryFunc::AbsDecimal, 1398;
                 params!(Float32) => UnaryFunc::AbsFloat32, 1394;
                 params!(Float64) => UnaryFunc::AbsFloat64, 1395;
@@ -1305,7 +1305,7 @@ lazy_static! {
                 params!(DecimalAny) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2103;
                 params!(Float32) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2104;
                 params!(Float64) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2105;
-                params!(Interval) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2105;
+                params!(Interval) => Operation::nullary(|_ecx| catalog_name_only!("avg")), 2106;
             },
             "bit_length" => Scalar {
                 params!(Bytes) => UnaryFunc::BitLengthBytes, 1810;
@@ -1398,7 +1398,7 @@ lazy_static! {
                 params!(Bytes, String) => BinaryFunc::DigestBytes, 44155;
             },
             "exp" => Scalar {
-                params!(Float64) => UnaryFunc::Exp, 1346;
+                params!(Float64) => UnaryFunc::Exp, 1347;
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::ExpDecimal(s)))
@@ -1483,7 +1483,7 @@ lazy_static! {
                 params!(DecimalAny) => Operation::unary(|ecx, e| {
                     let (_, s) = ecx.scalar_type(&e).unwrap_decimal_parts();
                     Ok(e.call_unary(UnaryFunc::Log10Decimal(s)))
-                }), 1340;
+                }), 1741;
                 params!(DecimalAny, DecimalAny) => Operation::binary(|ecx, lhs, rhs| {
                     let (_, s) = ecx.scalar_type(&lhs).unwrap_decimal_parts();
                     Ok(lhs.call_binary(rhs, BinaryFunc::LogDecimal(s)))
@@ -1653,14 +1653,14 @@ lazy_static! {
                 params!(Float64) => UnaryFunc::Tan, 1606;
             },
             "tanh" => Scalar {
-                params!(Float64) => UnaryFunc::Tanh, 246;
+                params!(Float64) => UnaryFunc::Tanh, 2464;
             },
             "timezone" => Scalar {
                 params!(String, Timestamp) => BinaryFunc::TimezoneTimestamp, 2069;
                 params!(String, TimestampTz) => BinaryFunc::TimezoneTimestampTz, 1159;
                 // PG defines this as `text timetz`
                 params!(String, Time) => BinaryFunc::TimezoneTime, 2037;
-                params!(Interval, Timestamp) => BinaryFunc::TimezoneIntervalTimestamp, 1026;
+                params!(Interval, Timestamp) => BinaryFunc::TimezoneIntervalTimestamp, 2070;
                 params!(Interval, TimestampTz) => BinaryFunc::TimezoneIntervalTimestampTz, 1026;
                 // PG defines this as `interval timetz`
                 params!(Interval, Time) => BinaryFunc::TimezoneIntervalTime, 2038;
@@ -1790,7 +1790,7 @@ lazy_static! {
                         exprs: vec![key, val],
                     };
                     Ok((e, AggregateFunc::JsonbObjectAgg))
-                }), 3267;
+                }), 3270;
             },
             "string_agg" => Aggregate {
                 params!(Any, String) => Operation::binary(|_ecx, _lhs, _rhs| unsupported!("string_agg")), 3538;
@@ -2547,6 +2547,7 @@ lazy_static! {
                 params!(String, String) => BinaryFunc::Eq, 98;
                 params!(Jsonb, Jsonb) => BinaryFunc::Eq, 3240;
                 params!(ListAny, ListAny) => BinaryFunc::Eq, oid::FUNC_LIST_EQ_OID;
+                params!(ArrayAny, ArrayAny) => BinaryFunc::Eq, 1070;
             },
             "<>" => Scalar {
                 params!(DecimalAny, DecimalAny) => {

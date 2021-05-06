@@ -22,8 +22,8 @@ use std::fmt;
 
 use crate::ast::display::{self, AstDisplay, AstFormatter};
 use crate::ast::{
-    AstInfo, ColumnDef, Connector, DataType, Envelope, Expr, Format, Ident, MultiConnector, Query,
-    TableConstraint, UnresolvedObjectName, Value,
+    AstInfo, ColumnDef, Connector, CreateSourceFormat, DataType, Envelope, Expr, Format, Ident,
+    Query, TableConstraint, UnresolvedObjectName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -38,7 +38,6 @@ pub enum Statement<T: AstInfo> {
     CreateDatabase(CreateDatabaseStatement),
     CreateSchema(CreateSchemaStatement),
     CreateSource(CreateSourceStatement<T>),
-    CreateSources(CreateSourcesStatement<T>),
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateTable(CreateTableStatement<T>),
@@ -93,7 +92,6 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateDatabase(stmt) => f.write_node(stmt),
             Statement::CreateSchema(stmt) => f.write_node(stmt),
             Statement::CreateSource(stmt) => f.write_node(stmt),
-            Statement::CreateSources(stmt) => f.write_node(stmt),
             Statement::CreateSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
@@ -356,8 +354,8 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub col_names: Vec<Ident>,
     pub connector: Connector<T>,
     pub with_options: Vec<SqlOption<T>>,
-    pub format: Option<Format<T>>,
-    pub envelope: Envelope<T>,
+    pub format: CreateSourceFormat<T>,
+    pub envelope: Envelope,
     pub if_not_exists: bool,
     pub materialized: bool,
 }
@@ -386,10 +384,7 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
             f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
-        if let Some(format) = &self.format {
-            f.write_str(" FORMAT ");
-            f.write_node(format);
-        }
+        f.write_node(&self.format);
         match self.envelope {
             Envelope::None => (),
             _ => {
@@ -401,26 +396,6 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
 }
 impl_display_t!(CreateSourceStatement);
 
-/// `CREATE SOURCES`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateSourcesStatement<T: AstInfo> {
-    pub connector: MultiConnector<T>,
-    pub materialized: bool,
-    pub stmts: Vec<CreateSourceStatement<T>>,
-}
-
-impl<T: AstInfo> AstDisplay for CreateSourcesStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("CREATE ");
-        if self.materialized {
-            f.write_str("MATERIALIZED ");
-        }
-        f.write_str("SOURCES FROM ");
-        f.write_node(&self.connector);
-    }
-}
-impl_display_t!(CreateSourcesStatement);
-
 /// `CREATE SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateSinkStatement<T: AstInfo> {
@@ -429,7 +404,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub connector: Connector<T>,
     pub with_options: Vec<SqlOption<T>>,
     pub format: Option<Format<T>>,
-    pub envelope: Option<Envelope<T>>,
+    pub envelope: Option<Envelope>,
     pub with_snapshot: bool,
     pub as_of: Option<Expr<T>>,
     pub if_not_exists: bool,

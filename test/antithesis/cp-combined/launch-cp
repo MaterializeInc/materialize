@@ -13,7 +13,7 @@ set -euo pipefail
 
 /usr/bin/zookeeper-server-start /etc/kafka/zookeeper.properties &
 /usr/bin/kafka-server-start /etc/kafka/server.properties &
-wait-for-it localhost:9092
+wait-for-it --timeout=120 localhost:9092
 /usr/bin/schema-registry-start /etc/schema-registry/schema-registry.properties &
 wait -n
 wait -n

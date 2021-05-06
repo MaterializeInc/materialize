@@ -193,6 +193,7 @@ pub fn extract_config(
 ///   exist.
 pub async fn test_config(
     broker: &str,
+    topic: &str,
     options: &BTreeMap<String, String>,
 ) -> Result<(), anyhow::Error> {
     let mut config = rdkafka::ClientConfig::new();
@@ -205,13 +206,14 @@ pub async fn test_config(
         Ok(consumer) => {
             let consumer: BaseConsumer<KafkaErrCheckContext> = consumer;
             let context = consumer.context().clone();
+            let topic = String::from(topic);
             // Wait for a metadata request for up to one second. This greatly
             // increases the probability that we'll see a connection error if
             // e.g. the hostname was mistyped. librdkafka doesn't expose a
             // better API for asking whether a connection succeeded or failed,
             // unfortunately.
             task::spawn_blocking(move || {
-                let _ = consumer.fetch_metadata(None, Duration::from_secs(1));
+                let _ = consumer.fetch_metadata(Some(&topic), Duration::from_secs(1));
             })
             .await?;
             let error = context.error.lock().expect("lock poisoned");

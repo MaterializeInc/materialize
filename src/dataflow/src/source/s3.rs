@@ -32,7 +32,9 @@ use tokio::sync::mpsc as tokio_mpsc;
 use tokio::time::{self, Duration};
 
 use aws_util::aws;
-use dataflow_types::{Compression, DataEncoding, ExternalSourceConnector, MzOffset, S3KeySource};
+use dataflow_types::{
+    Compression, ExternalSourceConnector, MzOffset, S3KeySource, SourceDataEncoding,
+};
 use expr::{PartitionId, SourceInstanceId};
 
 use crate::logging::materialized::Logger;
@@ -631,7 +633,7 @@ impl SourceReader<Vec<u8>> for S3SourceReader {
         worker_id: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        _encoding: DataEncoding,
+        _encoding: SourceDataEncoding,
         _: Option<Logger>,
     ) -> Result<(S3SourceReader, Option<PartitionId>), anyhow::Error> {
         let s3_conn = match connector {

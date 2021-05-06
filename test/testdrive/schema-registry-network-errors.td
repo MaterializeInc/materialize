@@ -43,22 +43,21 @@ URL scheme is not allowed
 fetching latest schema for subject 'foo-value' from registry: subject not found
 
 #
-# HTTP connection to an HTTPS port
+# HTTP connection to a non-HTTP port port
 #
 
 ! CREATE MATERIALIZED SOURCE foo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'foo'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://www.materialize.com:443'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://${testdrive.kafka-addr}'
   ENVELOPE NONE
-fetching latest schema for subject 'foo-value' from registry: server error 400: unable to decode error details
-
+Connection reset by peer
 
 #
-# HTTPS connection to an HTTP port
+# HTTPS connection to a non-HTTPS port
 #
 
 ! CREATE MATERIALIZED SOURCE foo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'foo'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://www.materialize.com'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://${testdrive.kafka-addr}'
   ENVELOPE NONE
-fetching latest schema for subject 'foo-value' from registry: server error 301: unable to decode error details
+Connection reset by peer

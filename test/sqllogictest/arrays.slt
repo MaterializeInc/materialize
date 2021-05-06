@@ -211,3 +211,30 @@ query T
 SELECT ARRAY['a', 'b', 'c'][3.5]
 ----
 NULL
+
+# Array equality
+
+query B
+SELECT ARRAY[1,2,3] = ARRAY[1,2,3]
+----
+true
+
+query B
+SELECT ARRAY[1,2,4] = ARRAY[1,2,3]
+----
+false
+
+query B
+SELECT ARRAY[1,2,4] = NULL
+----
+NULL
+
+# This behavior is surprising (one might expect that the result would be
+# NULL), but it's how Postgres behaves.
+query B
+SELECT ARRAY[1,2,NULL] = ARRAY[1,2,3]
+----
+false
+
+query error no overload for integer\[\] = text\[\]: arguments cannot be implicitly cast to any implementation's parameters; try providing explicit casts
+SELECT ARRAY[1,2,3] = ARRAY['1','2','3']

@@ -13,10 +13,10 @@ use ore::collections::CollectionExt;
 use sql::ast::display::AstDisplay;
 use sql::ast::visit_mut::{self, VisitMut};
 use sql::ast::{
-    AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateTableStatement, CreateTypeStatement, CreateViewStatement, DataType, Format, Function,
-    Ident, Raw, RawName, Statement, TableFactor, UnresolvedObjectName, Value, WithOption,
-    WithOptionValue,
+    AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceFormat,
+    CreateSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
+    DataType, Format, Function, Ident, Raw, RawName, Statement, TableFactor, UnresolvedObjectName,
+    Value, WithOption, WithOptionValue,
 };
 use sql::plan::resolve_names_stmt;
 
@@ -292,7 +292,7 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
             match stmt {
                 Statement::CreateSource(CreateSourceStatement {
                     format:
-                        Some(Format::Avro(AvroSchema::Schema {
+                        CreateSourceFormat::Bare(Format::Avro(AvroSchema::Schema {
                             ref mut with_options,
                             ..
                         })),

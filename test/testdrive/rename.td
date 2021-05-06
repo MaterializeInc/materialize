@@ -752,3 +752,13 @@ renamed_j
 name
 ------
 renamed_j
+
+# Test that after renaming a materialized object it is possible to create
+# another object with the original name. This used to fail because the index
+# on the original object is not renamed. See #5096.
+> CREATE TABLE t_orig ()
+> ALTER TABLE t_orig RENAME TO t_dontcare
+> CREATE TABLE t_orig ()
+> CREATE MATERIALIZED VIEW v_orig AS SELECT 1
+> ALTER VIEW v_orig RENAME TO v_dontcare
+> CREATE MATERIALIZED VIEW v_orig AS SELECT 1

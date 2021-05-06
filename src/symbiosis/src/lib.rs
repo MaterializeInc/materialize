@@ -40,15 +40,16 @@ use pgrepr::Jsonb;
 use repr::adt::decimal::Significand;
 use repr::{Datum, RelationDesc, RelationType, Row};
 use sql::ast::{
-    ColumnOption, CreateTableStatement, DataType, DeleteStatement, DropObjectsStatement, Expr,
-    InsertStatement, ObjectType, Raw, Statement, TableConstraint, UpdateStatement,
+    ColumnOption, CreateSchemaStatement, CreateTableStatement, DataType, DeleteStatement,
+    DropObjectsStatement, Expr, InsertStatement, ObjectType, Raw, Statement, TableConstraint,
+    UpdateStatement,
 };
 use sql::catalog::Catalog;
-use sql::names::FullName;
+use sql::names::{DatabaseSpecifier, FullName};
 use sql::normalize;
 use sql::plan::{
-    plan_default_expr, resolve_names_data_type, Aug, MutationKind, Plan, PlanContext,
-    StatementContext, Table,
+    plan_default_expr, resolve_names_data_type, Aug, CreateSchemaPlan, CreateTablePlan,
+    DropItemsPlan, MutationKind, Plan, PlanContext, SendDiffsPlan, StatementContext, Table,
 };
 
 pub struct Postgres {
@@ -102,6 +103,17 @@ BEGIN
     FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = current_schema()) LOOP
         EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE';
     END LOOP;
+    -- DROP all schemas (and any tables within) non-default schemas.
+    FOR r IN (
+        SELECT nspname
+        FROM pg_namespace
+        WHERE
+            nspname !~ '^pg_' AND
+            nspname <> 'information_schema' AND
+            nspname <> current_schema()
+        ) LOOP
+        EXECUTE 'DROP SCHEMA IF EXISTS ' || quote_ident(r.nspname) || ' CASCADE';
+    END LOOP;
 END $$;
 "#,
                 &[],
@@ -117,6 +129,7 @@ END $$;
         matches!(
             stmt,
             Statement::CreateTable { .. }
+                | Statement::CreateSchema { .. }
                 | Statement::DropObjects { .. }
                 | Statement::Delete { .. }
                 | Statement::Insert { .. }
@@ -229,12 +242,35 @@ END $$;
                     defaults,
                     temporary,
                 };
-                Plan::CreateTable {
+                Plan::CreateTable(CreateTablePlan {
                     name,
                     table,
                     if_not_exists: *if_not_exists,
                     depends_on,
+                })
+            }
+            Statement::CreateSchema(CreateSchemaStatement {
+                name,
+                if_not_exists,
+            }) => {
+                self.client.execute(&*stmt.to_string(), &[]).await?;
+                if name.0.len() > 2 {
+                    bail!("schema name {} has more than two components", name);
                 }
+                let mut name = name.0.clone();
+                let schema_name = normalize::ident(
+                    name.pop()
+                        .expect("names always have at least one component"),
+                );
+                let database_name = match name.pop() {
+                    None => DatabaseSpecifier::Name(scx.catalog.default_database().into()),
+                    Some(n) => DatabaseSpecifier::Name(normalize::ident(n)),
+                };
+                Plan::CreateSchema(CreateSchemaPlan {
+                    database_name,
+                    schema_name,
+                    if_not_exists: *if_not_exists,
+                })
             }
             Statement::DropObjects(DropObjectsStatement {
                 names,
@@ -256,10 +292,10 @@ END $$;
                         }
                     }
                 }
-                Plan::DropItems {
+                Plan::DropItems(DropItemsPlan {
                     items,
                     ty: ObjectType::Table,
-                }
+                })
             }
             Statement::Delete(DeleteStatement { table_name, .. }) => {
                 let mut updates = vec![];
@@ -269,12 +305,12 @@ END $$;
                     updates.push((row, -1));
                 }
                 let affected_rows = updates.len();
-                Plan::SendDiffs {
+                Plan::SendDiffs(SendDiffsPlan {
                     id: table.id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Delete,
-                }
+                })
             }
             Statement::Insert(InsertStatement { table_name, .. }) => {
                 let mut updates = vec![];
@@ -288,12 +324,12 @@ END $$;
                     updates.push((row, 1));
                 }
                 let affected_rows = updates.len();
-                Plan::SendDiffs {
+                Plan::SendDiffs(SendDiffsPlan {
                     id: table.id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Insert,
-                }
+                })
             }
             Statement::Update(UpdateStatement {
                 table_name,
@@ -315,12 +351,12 @@ END $$;
                     updates.push((row, 1));
                 }
                 assert_eq!(affected_rows * 2, updates.len());
-                Plan::SendDiffs {
+                Plan::SendDiffs(SendDiffsPlan {
                     id: table.id(),
                     updates,
                     affected_rows,
                     kind: MutationKind::Update,
-                }
+                })
             }
             _ => bail!("Unsupported symbiosis statement: {:?}", stmt),
         })

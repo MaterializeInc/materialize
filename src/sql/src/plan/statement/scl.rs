@@ -24,7 +24,9 @@ use crate::ast::{
     SetVariableStatement, SetVariableValue, ShowVariableStatement, Value,
 };
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::{ExecuteTimeout, Plan};
+use crate::plan::{
+    ClosePlan, DeclarePlan, ExecuteTimeout, FetchPlan, Plan, SetVariablePlan, ShowVariablePlan,
+};
 
 pub fn describe_set_variable(
     _: &StatementContext,
@@ -44,14 +46,14 @@ pub fn plan_set_variable(
     if local {
         unsupported!("SET LOCAL");
     }
-    Ok(Plan::SetVariable {
+    Ok(Plan::SetVariable(SetVariablePlan {
         name: variable.to_string(),
         value: match value {
             SetVariableValue::Literal(Value::String(s)) => s,
             SetVariableValue::Literal(lit) => lit.to_string(),
             SetVariableValue::Ident(ident) => ident.into_string(),
         },
-    })
+    }))
 }
 
 pub fn describe_show_variable(
@@ -77,7 +79,9 @@ pub fn plan_show_variable(
     if variable.as_str() == unicase::Ascii::new("ALL") {
         Ok(Plan::ShowAllVariables)
     } else {
-        Ok(Plan::ShowVariable(variable.to_string()))
+        Ok(Plan::ShowVariable(ShowVariablePlan {
+            name: variable.to_string(),
+        }))
     }
 }
 
@@ -111,10 +115,10 @@ pub fn plan_declare(
     _: &StatementContext,
     DeclareStatement { name, stmt }: DeclareStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
-    Ok(Plan::Declare {
+    Ok(Plan::Declare(DeclarePlan {
         name: name.to_string(),
         stmt: *stmt,
-    })
+    }))
 }
 
 with_options! {
@@ -154,11 +158,11 @@ pub fn plan_fetch(
         // FETCH defaults to WaitOnce.
         None => ExecuteTimeout::WaitOnce,
     };
-    Ok(Plan::Fetch {
+    Ok(Plan::Fetch(FetchPlan {
         name: name.to_string(),
         count,
         timeout,
-    })
+    }))
 }
 
 pub fn describe_close(
@@ -172,7 +176,7 @@ pub fn plan_close(
     _: &StatementContext,
     CloseStatement { name }: CloseStatement,
 ) -> Result<Plan, anyhow::Error> {
-    Ok(Plan::Close {
+    Ok(Plan::Close(ClosePlan {
         name: name.to_string(),
-    })
+    }))
 }

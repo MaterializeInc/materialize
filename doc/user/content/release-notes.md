@@ -54,6 +54,16 @@ Wrap your release notes at the 80 character mark.
 - Add a new metric, `mz_log_message_total` that counts the number of log
   messages emitted per severity.
 
+- Return the number of days between two dates (an integer) when subtracting one
+  date from the other. Previously, the interval between the two dates would be
+  returned. The new behavior matches the behavior in PostgreSQL.
+
+- **Breaking change.** Change the default for the `enable_auto_commit` option
+  on [Kafka sources](/sql/create-source/avro-kafka) to `false`.
+
+- Support the [equality operator](/sql/functions/#boolean) on
+  [array data](/sql/types/array).
+
 {{% version-header v0.7.2 %}}
 
 - Introduce the concept of [volatility](/overview/volatility) to describe

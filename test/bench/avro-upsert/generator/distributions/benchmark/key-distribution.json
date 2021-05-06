@@ -1,4 +1,0 @@
-{
-    "com.acme.avro.upsertavrotestkey::Key1": [0, 100],
-    "com.acme.avro.upsertavrotestkey::Key2": [0, 250000]
-}
