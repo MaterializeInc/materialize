@@ -832,6 +832,7 @@ impl Coordinator {
                                 | Statement::CreateTable(_)
                                 | Statement::CreateType(_)
                                 | Statement::CreateView(_)
+                                | Statement::CreateViews(_)
                                 | Statement::Delete(_)
                                 | Statement::DropDatabase(_)
                                 | Statement::DropObjects(_)

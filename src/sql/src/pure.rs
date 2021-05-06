@@ -22,10 +22,10 @@ use tokio::time::Duration;
 use uuid::Uuid;
 
 use repr::strconv;
-use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::{
-    AvroSchema, ColumnDef, ColumnOption, Connector, CreateSourceFormat, CreateSourceStatement,
-    CsrSeed, DbzMode, Envelope, Format, Ident, Raw, Statement, UnresolvedObjectName,
+    display::AstDisplay, AvroSchema, ColumnDef, ColumnOption, Connector, CreateSourceFormat,
+    CreateSourceStatement, CsrSeed, DbzMode, Envelope, Format, Ident, Raw, Statement,
+    UnresolvedObjectName,
 };
 use sql_parser::parser::parse_columns;
 

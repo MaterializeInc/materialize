@@ -206,14 +206,14 @@ $ set schema={
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-data-${testdrive.seed}'
   FORMAT AVRO USING SCHEMA '${schema}'
   ENVELOPE DEBEZIUM
-Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW after CREATE, found SOURCE
+Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE, found SOURCE
 
 
 ##### Temporary sinks.
 ! CREATE TEMPORARY SINK data_sink FROM data
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW after CREATE, found SINK
+Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE, found SINK
 
 #####################################################################
 

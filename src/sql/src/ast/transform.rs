@@ -19,7 +19,7 @@ use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
     AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateViewStatement, Expr, Ident, Query, Raw, Statement,
-    UnresolvedObjectName,
+    UnresolvedObjectName, ViewDefinition,
 };
 use crate::names::FullName;
 
@@ -34,7 +34,10 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
         }
         Statement::CreateSink(CreateSinkStatement { name, .. })
         | Statement::CreateSource(CreateSourceStatement { name, .. })
-        | Statement::CreateView(CreateViewStatement { name, .. })
+        | Statement::CreateView(CreateViewStatement {
+            definition: ViewDefinition { name, .. },
+            ..
+        })
         | Statement::CreateTable(CreateTableStatement { name, .. }) => {
             // The last name in an ObjectName is the item name. The item name
             // does not have a fixed index.
@@ -82,7 +85,10 @@ pub fn create_stmt_rename_refs(
         Statement::CreateSink(CreateSinkStatement { from, .. }) => {
             maybe_update_object_name(from);
         }
-        Statement::CreateView(CreateViewStatement { query, .. }) => {
+        Statement::CreateView(CreateViewStatement {
+            definition: ViewDefinition { query, .. },
+            ..
+        }) => {
             rewrite_query(from_name, to_item_name, query)?;
         }
         Statement::CreateSource(_) | Statement::CreateTable(_) => {}

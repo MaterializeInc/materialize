@@ -27,6 +27,7 @@ use sql_parser::ast::{
     AstInfo, Connector, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
     IfExistsBehavior, Query, Raw, SqlOption, Statement, TableFactor, UnresolvedObjectName, Value,
+    ViewDefinition,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -314,13 +315,16 @@ pub fn create_statement(
         }
 
         Statement::CreateView(CreateViewStatement {
-            name,
-            columns: _,
-            query,
             temporary,
             materialized,
             if_exists,
-            with_options: _,
+            definition:
+                ViewDefinition {
+                    name,
+                    query,
+                    columns: _,
+                    with_options: _,
+                },
         }) => {
             *name = if *temporary {
                 allocate_temporary_name(name)?

@@ -26,7 +26,7 @@ use ore::retry::Retry;
 use pgrepr::{Interval, Jsonb, Numeric};
 use sql_parser::ast::{
     CreateDatabaseStatement, CreateSchemaStatement, CreateSourceStatement, CreateTableStatement,
-    CreateViewStatement, FetchStatement, Raw, Statement,
+    CreateViewStatement, FetchStatement, Raw, Statement, ViewDefinition,
 };
 
 use crate::action::{Action, SqlContext, State};
@@ -80,7 +80,10 @@ impl Action for SqlAction {
                 )
                 .await
             }
-            Statement::CreateView(CreateViewStatement { name, .. }) => {
+            Statement::CreateView(CreateViewStatement {
+                definition: ViewDefinition { name, .. },
+                ..
+            }) => {
                 self.try_drop(
                     &mut state.pgclient,
                     &format!("DROP VIEW IF EXISTS {} CASCADE", name),

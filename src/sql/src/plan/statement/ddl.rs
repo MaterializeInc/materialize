@@ -51,7 +51,7 @@ use crate::ast::{
     CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
     CreateViewStatement, DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope,
     Expr, Format, Ident, IfExistsBehavior, ObjectType, Raw, SqlOption, Statement,
-    UnresolvedObjectName, Value, WithOption,
+    UnresolvedObjectName, Value, ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -1102,13 +1102,16 @@ pub fn plan_create_view(
 ) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, Statement::CreateView(stmt.clone()))?;
     let CreateViewStatement {
-        name,
-        columns,
-        query,
         temporary,
         materialized,
         if_exists,
-        with_options,
+        definition:
+            ViewDefinition {
+                name,
+                columns,
+                query,
+                with_options,
+            },
     } = &mut stmt;
     if !with_options.is_empty() {
         unsupported!("WITH options");
