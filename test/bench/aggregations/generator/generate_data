@@ -13,6 +13,7 @@ import argparse
 import multiprocessing
 import pathlib
 import subprocess
+import sys
 
 DISTRIBUTIONS = "/usr/share/generator/distributions"
 
@@ -66,11 +67,16 @@ def run(args: argparse.Namespace) -> None:
         f"Spawning {args.parallelism} generator processes, writing {records_per_process} messages each"
     )
     procs = [subprocess.Popen(kafka_gen) for _ in range(0, args.parallelism)]
+    exit_code = 0
     for (i, p) in enumerate(procs):
         p.wait()
         print(
             f"{i}/{args.parallelism} processes finished: pid={p.pid} returncode={p.returncode}"
         )
+        if p.returncode != 0:
+            exit_code = p.returncode
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
