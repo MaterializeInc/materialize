@@ -326,7 +326,7 @@ fn update_source_timestamps(
                 match res {
                     Err(_) => {
                         // This was a key message, can safely ignore it
-                        // TODO (chris): are we certain?
+                        // TODO (#6671): raise error on failure to parse
                         continue;
                     }
                     Ok(record) => {
@@ -489,7 +489,7 @@ fn parse_debezium(
             (_, _) => (),
         }
     }
-    // TODO (chris): why can't we simply assert that event_count is non-zero?
+    // TODO (#6670): figure out if we can assert that event_count is non-zero
     // Can a transaction message have zero colections?
     if collections.iter().map(|(_, c)| c).sum::<i64>() != event_count {
         bail!("Failed to parse Debezium transaction message. Event count '{:?}' does not match parsed collections: {:?}", event_count, collections);
