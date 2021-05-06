@@ -38,7 +38,7 @@ use dataflow_types::PeekResponse;
 use ore::cast::CastFrom;
 use ore::netio::AsyncReady;
 use ore::str::StrExt;
-use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
+use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
 use sql::ast::{FetchDirection, Ident, Raw, Statement};
 use sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
@@ -1462,6 +1462,26 @@ where
                         .await
                 }
             };
+
+            // TODO(asenac) This doesn't seem to belong here. Should we not pass the rows
+            // to the coordinator and let it validate them and add them to the transaction?
+            for row in &rows {
+                for (datum, (name, typ)) in row.unpack().iter().zip(row_desc.iter()) {
+                    if datum == &Datum::Null && !typ.nullable {
+                        return self
+                            .error(ErrorResponse::error(
+                                SqlState::INTERNAL_ERROR,
+                                format!(
+                                    "null value in column {} violates not-null constraint",
+                                    name.unwrap_or(&ColumnName::from("unnamed column"))
+                                        .as_str()
+                                        .quoted()
+                                ),
+                            ))
+                            .await;
+                    }
+                }
+            }
             let rows = rows.drain(..).map(|row| (row, 1)).collect::<Vec<_>>();
             let count = rows.len();
             match self

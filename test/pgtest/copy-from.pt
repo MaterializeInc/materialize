@@ -478,3 +478,80 @@ ReadyForQuery
 ----
 CommandComplete {"tag":"DROP TABLE"}
 ReadyForQuery {"status":"I"}
+
+#
+# NULL check constraint
+#
+send
+Query {"query": "DROP TABLE IF EXISTS not_null_table"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE not_null_table(f1 INT NOT NULL, f2 INT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY not_null_table FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+
+send
+CopyData "1\t2\n"
+CopyData "\\N\t\\N\n"
+CopyData "3\t4\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"XX000"},{"typ":"M","value":"null value in column \"f1\" violates not-null constraint"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY not_null_table FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+
+send
+CopyData "1\t\\N\n"
+CopyData "2\t3\n"
+CopyData "4\t\\N\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "DROP TABLE not_null_table"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
