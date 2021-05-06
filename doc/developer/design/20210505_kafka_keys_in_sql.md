@@ -8,23 +8,24 @@
 -->
 
 Kafka is unique in our supported sources (although not all possible sources,
-e.g. [DynamoDB Streams][ddb]) in that it partitions messages into a Key part and
-a Value part. The Key is intended to be the equivalent of a primary key in a
-database, and it is commonly used that way by Kafka users. Following from that,
-the Key is semantically meaningful to the Kafka system -- it has effects on
-which shard the message goes to, and affects old-message deletion. We rely on
-the Key primarily for Upsert logic, ensuring deduplication of messages based on
-it.
+e.g. [DynamoDB Streams][ddb]) in that it partitions the data portion of messages
+into a Key part and a Value part. The Key is intended to be the equivalent of a
+primary key in a database, and it is commonly used that way by Kafka users.
+Following from that, the Key is semantically meaningful to the Kafka system --
+it has effects on which shard the message goes to, and affects old-message
+deletion. We rely on the Key primarily for Upsert logic, ensuring deduplication
+of messages based on it.
 
 An important aspect of the Key is that it is a separate data section -- it never
 shares backing storage with the Value. This means that it is possible to have
 data in the Key that appears nowhere in the Value, putting the responsibility on
-consumers or [Kafka connectors](https://kafka-tutorials.confluent.io/connect-add-key-to-source/kafka.html) to stitch the data back together.
+consumers or [Kafka connectors][connect] to stitch the data back together.
 
 Materialize does not support accessing the Key part of messages from our SQL
 layer, which has been mentioned as a pain point on several occasions. This is a
 design to resolve that pain point.
 
+[connect]: https://kafka-tutorials.confluent.io/connect-add-key-to-source/kafka.html
 [ddb]: https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/dynamodbstreams.html#DynamoDBStreams.Client.get_records
 
 ## Goals
@@ -194,7 +195,7 @@ section using Kafka itself.
 It might be possible to provide something like a `kafka_key()` function that
 introduces a demand for the key, pulling it into dataflows.
 
-### Alternative: key and value records
+### Alternative syntax: key and value records
 
 Instead of automatically extracting Key columns at all, we could provide a
 syntax like:
@@ -214,6 +215,22 @@ usage patterns from the SQL layer. That has effects both on documentation which
 would now have to deal with a niche alternative usage. Changing to `AS KEY
 VALUE` would force a rewrite or intermediate view if a user realizes that they
 need data from the key after already using a topic for awhile.
+
+### Alternative semantics: Always provide key and value fields
+
+Semantically it would be fine to (semantically) always allow access to key
+fields and then rely on the use (or not) of that column to drive the
+instantiation of the key.
+
+The largest downsides that I see to this philosophy are:
+
+* Backwards-compatibility: `SELECT *`-type queries will change the semantics of
+  which columns they present. Especially undesirable for things like debezium,
+  where the key is afaik always a duplicated subset of the value fields.
+* Ergonomically: I think that for this to be an unambiguous API we would require
+  that key and value were always presented as the `key`/`value` record syntax
+  from the previous alternative, which would be both more annoying (for users
+  and for docs) and an even larger backcompat change.
 
 ## Open questions
 
