@@ -64,7 +64,7 @@ services:
         --materialized-url=postgres://materialize@materialized:6875
         --validate-catalog=/share/mzdata/catalog
         --default-timeout 300
-        !(*s3|kinesis*).td ;
+        !(*s3|kinesis*|avro-resolution*).td ;
         do :; done
       - bash
     environment:
