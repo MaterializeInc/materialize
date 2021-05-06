@@ -199,7 +199,9 @@ struct ByoFileConnector<Out, Err> {
     stream: Receiver<Result<Out, Err>>,
 }
 
-fn byo_query_source(consumer: &mut ByoTimestampConsumer) -> anyhow::Result<Vec<ValueEncoding>> {
+fn byo_query_source(
+    consumer: &mut ByoTimestampConsumer,
+) -> Result<Vec<ValueEncoding>, anyhow::Error> {
     let mut messages = vec![];
     match &mut consumer.connector {
         ByoTimestampConnector::Kafka(kafka_connector) => {
@@ -219,7 +221,7 @@ fn byo_query_source(consumer: &mut ByoTimestampConsumer) -> anyhow::Result<Vec<V
 /// Returns the next message of a stream, or None if no such message exists
 fn file_get_next_message<Out, Err>(
     file_consumer: &mut ByoFileConnector<Out, Err>,
-) -> anyhow::Result<Option<Out>>
+) -> Result<Option<Out>, anyhow::Error>
 where
     Err: Display,
 {
@@ -234,7 +236,7 @@ where
 }
 
 /// Polls a message from a Kafka Source
-fn kafka_get_next_message(consumer: &mut BaseConsumer) -> anyhow::Result<Option<Vec<u8>>> {
+fn kafka_get_next_message(consumer: &mut BaseConsumer) -> Result<Option<Vec<u8>>, anyhow::Error> {
     if let Some(result) = consumer.poll(Duration::from_millis(60)) {
         match result {
             Ok(message) => match message.payload() {
@@ -308,7 +310,7 @@ fn update_source_timestamps(
     id: &GlobalId,
     tx: &mpsc::UnboundedSender<coord::Message>,
     byo_consumer: &mut ByoTimestampConsumer,
-) -> anyhow::Result<()> {
+) -> Result<(), anyhow::Error> {
     let messages = byo_query_source(byo_consumer)?;
     match byo_consumer.envelope {
         ConsistencyFormatting::DebeziumAvro => {
@@ -354,7 +356,7 @@ fn generate_ts_updates_from_debezium(
     tx: &mpsc::UnboundedSender<coord::Message>,
     byo_consumer: &mut ByoTimestampConsumer,
     value: Value,
-) -> anyhow::Result<()> {
+) -> Result<(), anyhow::Error> {
     if let Value::Record(record) = value {
         let results = match parse_debezium(record) {
             Ok(result) => result,
@@ -404,107 +406,95 @@ fn generate_ts_updates_from_debezium(
 /// A debezium record contains a set of update counts for each topic that the transaction
 /// updated. This function extracts the set of (topic, update_count) as a vector if
 /// processing an END message. It returns NONE otherwise.
-fn parse_debezium(record: Vec<(String, Value)>) -> anyhow::Result<Option<Vec<(String, i64)>>> {
-    let mut result = vec![];
+fn parse_debezium(
+    record: Vec<(String, Value)>,
+) -> Result<Option<Vec<(String, i64)>>, anyhow::Error> {
+    let mut collections = vec![];
     let mut event_count = 0;
     for (key, value) in record {
-        if key == "status" {
-            if let Value::String(status) = value {
-                match status.as_str() {
-                    "BEGIN" => return Ok(None),
-                    "END" => (),
-                    _ => {
-                        bail!(
-                            "Failed to parse Debezium transaction message. Invalid status '{}'",
-                            status
-                        )
-                    }
-                }
-            } else {
-                bail!(
-                        "Failed to parse Debezium transaction message. Expected String for field 'status', got {:?}",
-                        value
-                    );
-            }
-        } else if key == "data_collections" {
-            if let Value::Union { inner: value, .. } = value {
-                if let Value::Array(items) = *value {
+        match (key.as_str(), value) {
+            ("data_collections", Value::Union { inner: value, .. }) => match *value {
+                Value::Array(items) => {
                     for v in items {
-                        if let Value::Record(item) = v {
-                            let mut value: Option<String> = None;
-                            let mut write_count: Option<i64> = None;
-                            for (k, v) in item {
-                                if k == "data_collection" {
-                                    if let Value::String(data) = v {
-                                        value = Some(data);
-                                    } else {
-                                        bail!(
-                                            "Failed to parse Debezium transaction message. Expected string for 'data_collection', got {:?}",
-                                            v
-                                        );
+                        match v {
+                            Value::Record(item) => {
+                                let mut collection: Option<String> = None;
+                                let mut event_count: Option<i64> = None;
+                                for (k, v) in item {
+                                    match (k.as_str(), v) {
+                                        ("data_collection", Value::String(data)) => {
+                                            collection = Some(data)
+                                        }
+                                        ("data_collection", v) => {
+                                            bail!(
+                                                "Expected string for field 'data_collection', got {:?}",
+                                                v
+                                            );
+                                        }
+                                        ("event_count", Value::Long(e)) => event_count = Some(e),
+                                        ("event_count", v) => {
+                                            bail!(
+                                                "Expected long for field 'event_count', got {:?}",
+                                                v
+                                            );
+                                        }
+                                        (_, _) => (),
                                     }
-                                } else if k == "event_count" {
-                                    if let Value::Long(e) = v {
-                                        write_count = Some(e);
-                                    } else {
+                                }
+                                match (collection, event_count) {
+                                    (Some(c), Some(e)) => collections.push((c, e)),
+                                    (c, w) => {
                                         bail!(
-                                            "Failed to parse Debezium transaction message. Expected long for 'event_count', got {:?}",
-                                            v
-                                        );
+                                        "Missing count or collection name. Parsed collection={:?}, event_count={:?}",
+                                        c, w);
                                     }
                                 }
                             }
-                            match (value, write_count) {
-                                (Some(v), Some(c)) => result.push((v, c)),
-                                (v, c) => {
-                                    bail!(
-                                        "Failed to parse Debezium transaction message. Missing count or collection name. Parsed: collection={:?}, count={:?}",
-                                        v, c);
-                                }
+                            _ => {
+                                bail!("Record expected, got {:?}", v);
                             }
-                        } else {
-                            bail!(
-                                "Failed to parse Debezium transaction message. Record expected, got {:?}",
-                                v
-                            );
                         }
                     }
-                } else {
+                }
+                _ => {
                     bail!(
-                        "Failed to parse Debezium transaction message. Array expected, got {:?}",
+                        "Expected Array for field 'data_collections', got {:?}",
                         value
                     );
                 }
-            } else {
-                bail!(
-                    "Failed to parse Debezium transaction message. Union of Null/Array expected, got {:?}",
-                    value
-                );
+            },
+            ("data_collections", v) => {
+                bail!("Expection Union for field 'data_collections', got {:?}", v);
             }
-        } else if key == "event_count" {
-            if let Value::Union { inner: value, .. } = value {
-                if let Value::Long(count) = *value {
-                    event_count = count;
-                } else {
-                    bail!(
-                        "Failed to parse Debezium event count. Long expected, got {:?}",
-                        value
-                    );
+            ("event_count", Value::Union { inner: value, .. }) => match *value {
+                Value::Long(e) => event_count = e,
+                _ => {
+                    bail!("Expected Long for field 'event_count', got {:?}", value);
                 }
-            } else {
-                bail!(
-                    "Failed to parse Debezium event count. Union expected, got {:?}",
-                    value
-                );
+            },
+            ("event_count", v) => {
+                bail!("Expected Union for field 'event_count', got {:?}", v);
             }
+            ("status", Value::String(status)) => match status.as_str() {
+                "BEGIN" => return Ok(None),
+                "END" => (),
+                _ => bail!(
+                    "Expect 'BEGIN' or 'END' for field 'status', got {:?}",
+                    status
+                ),
+            },
+            ("status", v) => {
+                bail!("Expected String for field 'status', got {:?}", v);
+            }
+            (_, _) => (),
         }
     }
     // TODO (chris): why can't we simply assert that event_count is non-zero?
     // Can a transaction message have zero colections?
-    if result.iter().map(|(_, c)| c).sum::<i64>() != event_count {
-        bail!("Failed to parse Debezium transaction message. Event count '{:?}' does not match parsed collections: {:?}", event_count, result);
+    if collections.iter().map(|(_, c)| c).sum::<i64>() != event_count {
+        bail!("Failed to parse Debezium transaction message. Event count '{:?}' does not match parsed collections: {:?}", event_count, collections);
     }
-    Ok(Some(result))
+    Ok(Some(collections))
 }
 
 /// This function determines the expected format of the consistency metadata as a function
