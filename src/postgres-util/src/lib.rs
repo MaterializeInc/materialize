@@ -47,67 +47,90 @@ impl_display!(PgColumn);
 pub struct TableInfo {
     /// The OID of the table
     pub rel_id: u32,
+    /// The namespace the table belongs to
+    pub namespace: String,
+    /// The name of the table
+    pub name: String,
     /// The schema of each column, in order
     pub schema: Vec<PgColumn>,
 }
 
-/// Fetches column information from an upstream Postgres source, given
-/// a connection string and a target table.
+/// Fetches table schema information from an upstream Postgres source for all tables that are part
+/// of a publication, given a connection string and the publication name.
 ///
 /// # Errors
 ///
 /// - Invalid connection string, user information, or user permissions.
-/// - Upstream table does not exist or contains invalid values.
-pub async fn table_info(conn: &str, ast_table: &String) -> Result<TableInfo, anyhow::Error> {
+/// - Upstream publication does not exist or contains invalid values.
+pub async fn publication_info(
+    conn: &str,
+    publication: &str,
+) -> Result<Vec<TableInfo>, anyhow::Error> {
     let (client, connection) = tokio_postgres::connect(&conn, NoTls).await?;
     tokio::spawn(connection);
 
-    let rel_id: u32 = client
-        // The "::regclass::oid" thing converts its LHS to an OID, so this gets
-        // us the OID of a specified table (which can optionally include a schema
-        // namespace). The "::text" is to appease the rust postgres driver since we are
-        // passing a string, not a regclass.
-        .query("SELECT $1::text::regclass::oid", &[ast_table])
-        .await?
-        .get(0)
-        .ok_or_else(|| anyhow!("table not found in the upstream catalog"))?
-        .get(0);
-
-    let schema = client
+    let tables = client
         .query(
             "SELECT
-                    a.attname,
-                    a.atttypid,
-                    a.attnotnull,
-                    b.oid IS NOT NULL
-                FROM pg_catalog.pg_attribute a
-                LEFT JOIN pg_catalog.pg_constraint b
-                    ON a.attrelid = b.conrelid
-                    AND b.contype = 'p'
-                    AND a.attnum = ANY (b.conkey)
-                WHERE a.attnum > 0::pg_catalog.int2
-                    AND NOT a.attisdropped
-                    AND a.attrelid = $1
-                ORDER BY a.attnum",
-            &[&rel_id],
+                c.oid, p.schemaname, p.tablename
+            FROM
+                pg_catalog.pg_class AS c
+                JOIN pg_namespace AS n ON c.relnamespace = n.oid
+                JOIN pg_publication_tables AS p ON
+                        c.relname = p.tablename AND n.nspname = p.schemaname
+            WHERE
+                p.pubname = $1",
+            &[&publication],
         )
-        .await?
-        .into_iter()
-        .map(|row| {
-            let name: String = row.get(0);
-            let oid = row.get(1);
-            let scalar_type =
-                PgType::from_oid(oid).ok_or_else(|| anyhow!("unknown type OID: {}", oid))?;
-            let nullable = !row.get::<_, bool>(2);
-            let primary_key = row.get(3);
-            Ok(PgColumn {
-                name,
-                scalar_type,
-                nullable,
-                primary_key,
-            })
-        })
-        .collect::<Result<Vec<_>, anyhow::Error>>()?;
+        .await?;
 
-    Ok(TableInfo { rel_id, schema })
+    let mut table_infos = vec![];
+    for row in tables {
+        let rel_id = row.get("oid");
+
+        let schema = client
+            .query(
+                "SELECT
+                        a.attname,
+                        a.atttypid,
+                        a.attnotnull,
+                        b.oid IS NOT NULL
+                    FROM pg_catalog.pg_attribute a
+                    LEFT JOIN pg_catalog.pg_constraint b
+                        ON a.attrelid = b.conrelid
+                        AND b.contype = 'p'
+                        AND a.attnum = ANY (b.conkey)
+                    WHERE a.attnum > 0::pg_catalog.int2
+                        AND NOT a.attisdropped
+                        AND a.attrelid = $1
+                    ORDER BY a.attnum",
+                &[&rel_id],
+            )
+            .await?
+            .into_iter()
+            .map(|row| {
+                let name: String = row.get(0);
+                let oid = row.get(1);
+                let scalar_type =
+                    PgType::from_oid(oid).ok_or_else(|| anyhow!("unknown type OID: {}", oid))?;
+                let nullable = !row.get::<_, bool>(2);
+                let primary_key = row.get(3);
+                Ok(PgColumn {
+                    name,
+                    scalar_type,
+                    nullable,
+                    primary_key,
+                })
+            })
+            .collect::<Result<Vec<_>, anyhow::Error>>()?;
+
+        table_infos.push(TableInfo {
+            rel_id,
+            namespace: row.get("schemaname"),
+            name: row.get("tablename"),
+            schema,
+        });
+    }
+
+    Ok(table_infos)
 }
