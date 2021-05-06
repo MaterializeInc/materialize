@@ -75,7 +75,7 @@ Enhance the Kafka create source syntax like so:
 ```sql
 CREATE SOURCE <source-name> FROM KAFKA BROKER '<>'
 <format>
-[INCLUDE KEY [AS RECORD <key-record-name>]]
+[INCLUDE KEY [AS <key-column-name>]]
 ```
 
 where `<format>` is either:
@@ -98,12 +98,22 @@ all of the values of the key as columns in the dataflow. Format types that do
 not specify subfields (e.g. `FORMAT TEXT`) will use their standard column names
 (i.e. `text`).
 
-Alternatively, if the `INCLUDE KEY AS RECORD <name>` syntax is used all fields
-will be included as fields on a record with the specified name.
+Alternatively, if the `INCLUDE KEY AS <name>` syntax is used then the key value
+will get the name specified:
+
+* If the field type is simple (bytes or text) the field will just be renamed
+* If the field type has defined fields, the fields will be included as a record
+  with that name.
 
 If any key column names colide with value columns using the bare `INCLUDE KEY`
 syntax, an error will be raised before dataflow construction suggesting the use
-of the `AS RECORD` clause.
+of the `AS <name>` clause.
+
+Justification for this set of defaults is that it is reasonable to expect that
+the common case for the `INCLUDE KEY` will not have collisions between the key
+and value fields: if the key fields are a subset of the value fields (as is the
+case in Debezium) then there isn't any reason to include the key, since all its
+data is already in the value.
 
 #### Usage Examples
 
@@ -112,7 +122,7 @@ of the `AS RECORD` clause.
 ```sql
 CREATE SOURCE text_text FROM KAFKA BROKER '...' TOPIC '...'
 KEY FORMAT TEXT VALUE FORMAT TEXT
-INCLUDE KEY AS RECORD key
+INCLUDE KEY AS key
 ENVELOPE UPSERT;
 ```
 
@@ -122,7 +132,7 @@ ENVELOPE UPSERT;
 ```sql
 CREATE SOURCE text_text FROM KAFKA BROKER '...' TOPIC '...'
 FORMAT TEXT
-INCLUDE KEY AS RECORD key
+INCLUDE KEY AS key
 ENVELOPE UPSERT;
 ```
 
@@ -135,7 +145,7 @@ Usage in a view looks like:
 
 ```sql
 CREATE MATERIALIZED VIEW text_text_view AS
-SELECT (key).text, text FROM text_text
+SELECT key, text FROM text_text
 WHERE ...;
 ```
 
@@ -158,8 +168,10 @@ SELECT text, field as interesting FROM text_avro;
 
 ```sql
 CREATE SOURCE avro_avro FROM KAFKA BROKER '...' TOPIC '...'
-KEY FORMAT AVRO USING SCHEMA '{"type": "record", "name": "boring", "fields": [ {"name": "key_field", "type": "int"} ] }'
-VALUE FORMAT AVRO USING SCHEMA '{"type": "record", "name": "value", "fields": [ {"name": "valueish", "type": "int"} ] }';
+KEY FORMAT AVRO USING SCHEMA '{"type": "record", "name": "boring", "fields": [
+    {"name": "key_field", "type": "int"} ] }'
+VALUE FORMAT AVRO USING SCHEMA '{"type": "record", "name": "value", "fields": [
+    {"name": "valueish", "type": "int"} ] }';
 ```
 
 Usage in a view looks like:
@@ -167,6 +179,27 @@ Usage in a view looks like:
 ```sql
 CREATE MATERIALIZED VIEW text_avro_view AS
 SELECT key_field, valueish FROM avro_avro; -- equivalent to SELECT *
+```
+
+##### Avro/Avro with conflicting fields
+
+Note that the `fields` in the key and value are the same, even though the record
+name is not:
+
+```sql
+CREATE SOURCE avro_avro FROM KAFKA BROKER '...' TOPIC '...'
+KEY FORMAT AVRO USING SCHEMA '{"type": "record", "name": "boring", "fields": [
+    {"name": "valueish", "type": "int"} ] }'
+VALUE FORMAT AVRO USING SCHEMA '{"type": "record", "name": "value", "fields": [
+    {"name": "valueish", "type": "int"} ] }'
+INCLUDE KEY AS key;
+```
+
+Usage in a view looks like:
+
+```sql
+CREATE MATERIALIZED VIEW text_avro_view AS
+SELECT (key).valueish, valueish FROM avro_avro;
 ```
 
 ### Implementation
@@ -232,6 +265,25 @@ The largest downsides that I see to this philosophy are:
   from the previous alternative, which would be both more annoying (for users
   and for docs) and an even larger backcompat change.
 
+### Alternative syntax: Always require the fields to be in a record
+
+The original proposal suggested the syntax `INCLUDE KEY [AS RECORD <name>]` and
+*always* embedded the key as field on a record whether or not the upstream type
+is a record, but the current proposal is just `AS <name>`.
+
+The original proposal resulted in usage like so:
+
+```sql
+CREATE SOURCE text_text FROM KAFKA BROKER '...' TOPIC '...'
+KEY FORMAT TEXT VALUE FORMAT TEXT
+INCLUDE KEY AS RECORD key;
+
+CREATE MATERIALIZED VIEW text_text_view AS
+SELECT (key).text, text FROM text_text;
+```
+
+Which is just sort of annoying.
+
 ## Open questions
 
 <!--
@@ -240,7 +292,11 @@ The largest downsides that I see to this philosophy are:
 // These questions may be technical, product, or anything in-between.
 -->
 
-We could make the `AS RECORD <name>` syntax required. The proposed design is
-based on the assumption that the common case is that key fields do not conflict
-with value fields, but a more conservative option is just requiring users to
-specify everything and do more work for value access.
+* We could make the `AS <name>` syntax required. The proposed design is based on
+  the assumption that the common case is that key fields do not conflict with
+  value fields, but a more conservative option is just requiring users to
+  specify everything and do more work for value access.
+
+* We could default the key field for simple formats (i.e. text, bytes) to use
+  the name `key` instead of `text` or `bytes`, and thereby probably reduce the
+  likely need for the `AS <name>` syntax.
