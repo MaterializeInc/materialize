@@ -41,7 +41,7 @@ use ore::str::StrExt;
 use repr::{ColumnName, Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
 use sql::ast::{FetchDirection, Ident, Raw, Statement};
-use sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
+use sql::plan::{CopyFormat, CopyParams, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
 use crate::message::{
@@ -1114,10 +1114,10 @@ where
                 };
                 self.copy_rows(format, row_desc, rows).await
             }
-            ExecuteResponse::CopyFrom { id, format } => {
+            ExecuteResponse::CopyFrom { id, params } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
-                self.read_rows(id, format, row_desc).await
+                self.read_rows(id, params, row_desc).await
             }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
@@ -1401,17 +1401,17 @@ where
     async fn read_rows(
         &mut self,
         id: GlobalId,
-        format: CopyFormat,
+        params: CopyParams,
         row_desc: RelationDesc,
     ) -> Result<State, io::Error> {
-        let encode_format: pgrepr::Format = match format {
+        let encode_format: pgrepr::Format = match params.format {
             CopyFormat::Text => pgrepr::Format::Text,
             // CopyFormat::Binary => pgrepr::Format::Binary,
             _ => {
                 return self
                     .error(ErrorResponse::error(
                         SqlState::FEATURE_NOT_SUPPORTED,
-                        format!("COPY FROM format {:?} not supported", format),
+                        format!("COPY FROM format {:?} not supported", params.format),
                     ))
                     .await
             }
@@ -1451,17 +1451,18 @@ where
             .collect::<Vec<pgrepr::Type>>();
 
         if let State::Ready = next_state {
-            let mut rows = match decode_row_text(&data, &column_types) {
-                Ok(rows) => rows,
-                Err(e) => {
-                    return self
-                        .error(ErrorResponse::error(
-                            SqlState::INVALID_PARAMETER_VALUE,
-                            format!("{}", e),
-                        ))
-                        .await
-                }
-            };
+            let mut rows =
+                match decode_row_text(&data, &column_types, &params.delimiter, &params.null) {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        return self
+                            .error(ErrorResponse::error(
+                                SqlState::INVALID_PARAMETER_VALUE,
+                                format!("{}", e),
+                            ))
+                            .await
+                    }
+                };
 
             // TODO(asenac) This doesn't seem to belong here. Should we not pass the rows
             // to the coordinator and let it validate them and add them to the transaction?

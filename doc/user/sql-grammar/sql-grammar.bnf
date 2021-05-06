@@ -19,6 +19,7 @@ copy_to ::=
   ( 'WITH'? '(' option ( ',' option )* ')' )?
 copy_from ::=
   'COPY' table_name 'FROM' 'STDIN'
+  ( 'WITH'? '(' option ( ',' option )* ')' )?
 create_database ::=
     'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
 create_index ::=

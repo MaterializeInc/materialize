@@ -152,7 +152,7 @@ pub enum ExecuteResponse {
     },
     CopyFrom {
         id: GlobalId,
-        format: sql::plan::CopyFormat,
+        params: sql::plan::CopyParams,
     },
     /// The requested database was created.
     CreatedDatabase {

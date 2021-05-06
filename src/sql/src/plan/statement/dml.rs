@@ -32,7 +32,8 @@ use crate::plan::query;
 use crate::plan::query::QueryLifetime;
 use crate::plan::statement::{StatementContext, StatementDesc};
 use crate::plan::{
-    CopyFormat, CopyFromPlan, ExplainPlan, InsertPlan, Params, PeekPlan, PeekWhen, Plan, TailPlan,
+    CopyFormat, CopyFromPlan, CopyParams, ExplainPlan, InsertPlan, Params, PeekPlan, PeekWhen,
+    Plan, TailPlan,
 };
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
@@ -331,6 +332,8 @@ pub fn describe_table(
 with_options! {
     struct CopyOptions {
         format: String,
+        delimiter: String,
+        null: String,
     }
 }
 
@@ -350,11 +353,11 @@ fn plan_copy_from(
     scx: &StatementContext,
     table_name: UnresolvedObjectName,
     columns: Vec<Ident>,
-    copy_from: CopyFormat,
+    params: CopyParams,
 ) -> Result<Plan, anyhow::Error> {
     let source = InsertSource::DefaultValues;
     let (id, _, _) = query::plan_insert_query(scx, table_name, columns, source)?;
-    Ok(Plan::CopyFrom(CopyFromPlan { id, copy_from }))
+    Ok(Plan::CopyFrom(CopyFromPlan { id, params }))
 }
 
 pub fn plan_copy(
@@ -367,26 +370,42 @@ pub fn plan_copy(
     }: CopyStatement<Raw>,
 ) -> Result<Plan, anyhow::Error> {
     let options = CopyOptions::try_from(options)?;
-    let format = if let Some(format) = options.format {
-        match format.to_lowercase().as_str() {
+    let mut copy_params = CopyParams {
+        format: CopyFormat::Text,
+        delimiter: options.delimiter,
+        null: options.null,
+    };
+    if let Some(format) = options.format {
+        copy_params.format = match format.to_lowercase().as_str() {
             "text" => CopyFormat::Text,
             "csv" => CopyFormat::Csv,
             "binary" => CopyFormat::Binary,
             _ => bail!("unknown FORMAT: {}", format),
+        };
+    }
+    if let CopyDirection::To = direction {
+        if copy_params.delimiter.is_some() {
+            bail!("COPY TO does not support DELIMITER option yet");
         }
-    } else {
-        CopyFormat::Text
-    };
+        if copy_params.null.is_some() {
+            bail!("COPY TO does not support NULL option yet");
+        }
+    }
     match (&direction, &target) {
         (CopyDirection::To, CopyTarget::Stdout) => match relation {
             CopyRelation::Table { .. } => bail!("table with COPY TO unsupported"),
-            CopyRelation::Select(stmt) => {
-                Ok(plan_select(scx, stmt, &Params::empty(), Some(format))?)
-            }
-            CopyRelation::Tail(stmt) => Ok(plan_tail(scx, stmt, Some(format))?),
+            CopyRelation::Select(stmt) => Ok(plan_select(
+                scx,
+                stmt,
+                &Params::empty(),
+                Some(copy_params.format),
+            )?),
+            CopyRelation::Tail(stmt) => Ok(plan_tail(scx, stmt, Some(copy_params.format))?),
         },
         (CopyDirection::From, CopyTarget::Stdin) => match relation {
-            CopyRelation::Table { name, columns } => plan_copy_from(scx, name, columns, format),
+            CopyRelation::Table { name, columns } => {
+                plan_copy_from(scx, name, columns, copy_params)
+            }
             _ => bail!("COPY FROM {} not supported", target),
         },
         _ => bail!("COPY {} {} not supported", direction, target),

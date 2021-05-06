@@ -240,6 +240,28 @@ ReadyForQuery
 CommandComplete {"tag":"COPY 1"}
 ReadyForQuery {"status":"I"}
 
+# supported options: DELIMITER and NULL
+send
+Query {"query": "COPY a FROM STDIN WITH ( DELIMITER '|', NULL '$' )"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "$|$|row with special delimiter\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+
 # dump table
 send
 Query {"query": "COPY (SELECT * FROM a ORDER BY a, b, c) TO STDOUT"}
@@ -250,6 +272,7 @@ ReadyForQuery
 ----
 CopyOut {"format":"text","column_formats":["text","text","text"]}
 CopyData "\\N\t\\N\t\\N\n"
+CopyData "\\N\t\\N\trow with special delimiter\n"
 CopyData "1\t2.1\ttext\n"
 CopyData "2\t2.1\tsome other text\n"
 CopyData "2\t2.1\tsome other text\n"
@@ -259,7 +282,7 @@ CopyData "3\t2.1\tlong text\n"
 CopyData "4\t3.1\tlong text and some more\n"
 CopyData "5\t5.5\tno new line at the end\n"
 CopyDone
-CommandComplete {"tag":"COPY 9"}
+CommandComplete {"tag":"COPY 10"}
 ReadyForQuery {"status":"I"}
 
 # clean up

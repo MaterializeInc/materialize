@@ -1307,7 +1307,7 @@ impl Coordinator {
                 tx.send(
                     Ok(ExecuteResponse::CopyFrom {
                         id: plan.id,
-                        format: plan.copy_from,
+                        params: plan.params,
                     }),
                     session,
                 );

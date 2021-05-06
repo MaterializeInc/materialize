@@ -16,7 +16,14 @@ Field | Use
 ------|-----
 _name_| The name of the table to be copied.
 
-Rows are expected in `text` format, one per line, with columns separated by a tab character. `\N` (backslash-N) represents a null collumn value.
+Supported `option` values:
+
+Name | Default value | Description
+-----|---------------|------------
+`DELIMITER` | tab character | Specifies the character that separates columns within each row (line) of the file.
+`NULL` | `\N` (backslash-N) | Specifies the string that represents a null value.
+
+Rows are expected in `text` format, one per line, with columns separated by the `DELIMITER` character.
 
 ## Example
 

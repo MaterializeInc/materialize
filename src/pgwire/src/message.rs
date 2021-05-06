@@ -701,9 +701,21 @@ impl<'a> RowTextParser<'a> {
 pub fn decode_row_text(
     data: &[u8],
     column_types: &Vec<pgrepr::Type>,
+    delimiter: &Option<String>,
+    null: &Option<String>,
 ) -> Result<Vec<Row>, io::Error> {
     let mut rows = Vec::new();
-    let mut parser = RowTextParser::new(data, "\t", "\\N");
+    let null = if let Some(null) = null {
+        null.as_str()
+    } else {
+        "\\N"
+    };
+    let delimiter = if let Some(delimiter) = delimiter {
+        delimiter.as_str()
+    } else {
+        "\t"
+    };
+    let mut parser = RowTextParser::new(data, delimiter, null);
     while !parser.is_eof() {
         let mut row = Vec::new();
         let buf = RowArena::new();

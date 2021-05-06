@@ -238,7 +238,7 @@ pub struct SendRowsPlan {
 #[derive(Debug)]
 pub struct CopyFromPlan {
     pub id: GlobalId,
-    pub copy_from: CopyFormat,
+    pub params: CopyParams,
 }
 
 #[derive(Debug)]
@@ -386,6 +386,13 @@ pub enum CopyFormat {
     Text,
     Csv,
     Binary,
+}
+
+#[derive(Debug)]
+pub struct CopyParams {
+    pub format: CopyFormat,
+    pub null: Option<String>,
+    pub delimiter: Option<String>,
 }
 
 #[derive(Debug, Copy, Clone)]
