@@ -1119,7 +1119,7 @@ pub fn plan_create_views(
                 views: planned_views,
             }))
         }
-        CreateViewsDefinition::Source { .. } => bail!("cannot plan unpurified statement"),
+        CreateViewsDefinition::Source { .. } => bail!("cannot create view from source"),
     }
 }
 
