@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
@@ -358,12 +358,8 @@ fn generate_ts_updates_from_debezium(
     value: Value,
 ) -> Result<(), anyhow::Error> {
     if let Value::Record(record) = value {
-        let results = match parse_debezium(record) {
-            Ok(result) => result,
-            Err(e) => {
-                bail!("Failed to parse debezium transaction msg: {:?}", e);
-            }
-        };
+        let results =
+            parse_debezium(record).with_context(|| format!("Failed to parse debezium record"))?;
 
         // Results are only returned when the record's status type is END
         if let Some(results) = results {
@@ -492,7 +488,11 @@ fn parse_debezium(
     // TODO (#6670): figure out if we can assert that event_count is non-zero
     // Can a transaction message have zero colections?
     if collections.iter().map(|(_, c)| c).sum::<i64>() != event_count {
-        bail!("Failed to parse Debezium transaction message. Event count '{:?}' does not match parsed collections: {:?}", event_count, collections);
+        bail!(
+            "Event count '{:?}' does not match parsed collections: {:?}",
+            event_count,
+            collections
+        );
     }
     Ok(Some(collections))
 }
