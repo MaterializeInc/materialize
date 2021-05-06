@@ -3011,7 +3011,7 @@ pub async fn serve(
     let executor = TokioHandle::current();
     let timestamper_thread_handle = thread::spawn(move || {
         let _executor_guard = executor.enter();
-        timestamper.update()
+        timestamper.run();
     })
     .join_on_drop();
 

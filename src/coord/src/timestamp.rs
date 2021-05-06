@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{debug, error, info, log_enabled, warn};
@@ -199,57 +199,58 @@ struct ByoFileConnector<Out, Err> {
     stream: Receiver<Result<Out, Err>>,
 }
 
-fn byo_query_source(consumer: &mut ByoTimestampConsumer) -> Vec<ValueEncoding> {
+fn byo_query_source(
+    consumer: &mut ByoTimestampConsumer,
+) -> Result<Vec<ValueEncoding>, anyhow::Error> {
     let mut messages = vec![];
     match &mut consumer.connector {
         ByoTimestampConnector::Kafka(kafka_connector) => {
-            while let Some(payload) = kafka_get_next_message(&mut kafka_connector.consumer) {
+            while let Some(payload) = kafka_get_next_message(&mut kafka_connector.consumer)? {
                 messages.push(ValueEncoding::Bytes(payload));
             }
         }
         ByoTimestampConnector::Ocf(file_consumer) => {
-            while let Some(payload) = file_get_next_message(file_consumer) {
+            while let Some(payload) = file_get_next_message(file_consumer)? {
                 messages.push(ValueEncoding::Avro(payload));
             }
         }
     }
-    messages
+    Ok(messages)
 }
 
 /// Returns the next message of a stream, or None if no such message exists
-fn file_get_next_message<Out, Err>(file_consumer: &mut ByoFileConnector<Out, Err>) -> Option<Out>
+fn file_get_next_message<Out, Err>(
+    file_consumer: &mut ByoFileConnector<Out, Err>,
+) -> Result<Option<Out>, anyhow::Error>
 where
     Err: Display,
 {
     match file_consumer.stream.try_recv() {
-        Ok(Ok(record)) => Some(record),
+        Ok(Ok(record)) => Ok(Some(record)),
         Ok(Err(e)) => {
-            error!("Failed to read file for timestamping: {}", e);
-            None
+            bail!("Failed to read file for timestamping: {}", e);
         }
-        Err(TryRecvError::Empty) => None,
-        Err(TryRecvError::Disconnected) => None,
+        Err(TryRecvError::Empty) => Ok(None),
+        Err(TryRecvError::Disconnected) => Ok(None),
     }
 }
 
 /// Polls a message from a Kafka Source
-fn kafka_get_next_message(consumer: &mut BaseConsumer) -> Option<Vec<u8>> {
+fn kafka_get_next_message(consumer: &mut BaseConsumer) -> Result<Option<Vec<u8>>, anyhow::Error> {
     if let Some(result) = consumer.poll(Duration::from_millis(60)) {
         match result {
             Ok(message) => match message.payload() {
-                Some(p) => Some(p.to_vec()),
+                Some(p) => Ok(Some(p.to_vec())),
                 None => {
-                    error!("unexpected null payload");
-                    None
+                    bail!("unexpected null payload");
                 }
             },
             Err(err) => {
-                error!("Failed to process message {}", err);
-                None
+                bail!("Failed to process message {}", err);
             }
         }
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -293,16 +294,74 @@ pub struct Timestamper {
     timestamp_frequency: Duration,
 }
 
+/// Implements the byo timestamping logic
+///
+/// If the partition count remains the same:
+/// A new timestamp should be
+/// 1) strictly greater than the last timestamp in this partition
+/// 2) greater or equal to all the timestamps that have been assigned so far across all partitions
+/// If the partition count increases:
+/// A new timestamp should be:
+/// 1) strictly greater than the last timestamp
+/// This is necessary to guarantee that this timestamp *could not have been closed yet*
+///
+/// Supports two envelopes: None and Debezium. Currentlye compatible with Debezium format 1.1
+fn update_source_timestamps(
+    id: &GlobalId,
+    tx: &mpsc::UnboundedSender<coord::Message>,
+    byo_consumer: &mut ByoTimestampConsumer,
+) -> Result<(), anyhow::Error> {
+    let messages = byo_query_source(byo_consumer)?;
+    match byo_consumer.envelope {
+        ConsistencyFormatting::DebeziumAvro => {
+            for msg in messages {
+                let msg = if let ValueEncoding::Bytes(msg) = msg {
+                    msg
+                } else {
+                    bail!("Kafka Debezium consistency should only encode byte messages");
+                };
+                // The first 5 bytes are reserved for the schema id/schema registry information
+                let mut bytes = &msg[5..];
+                let res = mz_avro::from_avro_datum(&DEBEZIUM_TRX_SCHEMA_VALUE, &mut bytes);
+                match res {
+                    Err(_) => {
+                        // This was a key message, can safely ignore it
+                        // TODO (#6671): raise error on failure to parse
+                        continue;
+                    }
+                    Ok(record) => {
+                        generate_ts_updates_from_debezium(&id, tx, byo_consumer, record)?;
+                    }
+                }
+            }
+        }
+        ConsistencyFormatting::DebeziumOcf => {
+            for msg in messages {
+                let value = if let ValueEncoding::Avro(value) = msg {
+                    value
+                } else {
+                    bail!("Debezium OCF consistency should only encode Value messages");
+                };
+                generate_ts_updates_from_debezium(&id, tx, byo_consumer, value)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Extracts Materialize timestamp updates from a Debezium consistency record.
 fn generate_ts_updates_from_debezium(
     id: &GlobalId,
     tx: &mpsc::UnboundedSender<coord::Message>,
     byo_consumer: &mut ByoTimestampConsumer,
     value: Value,
-) {
+) -> Result<(), anyhow::Error> {
     if let Value::Record(record) = value {
-        // All entries in the transaction should have the same timestamp
-        let results = parse_debezium(record);
+        let results =
+            parse_debezium(record).with_context(|| format!("Failed to parse debezium record"))?;
+
+        // Results are only returned when the record's status type is END
         if let Some(results) = results {
             byo_consumer.last_ts += 1;
             for (topic, count) in results {
@@ -333,60 +392,109 @@ fn generate_ts_updates_from_debezium(
                 }
             }
         }
+    } else {
+        bail!("Expected record type for value, got {:?}", value);
     }
+
+    Ok(())
 }
 
 /// A debezium record contains a set of update counts for each topic that the transaction
 /// updated. This function extracts the set of (topic, update_count) as a vector if
 /// processing an END message. It returns NONE otherwise.
-fn parse_debezium(record: Vec<(String, Value)>) -> Option<Vec<(String, i64)>> {
-    let mut result = vec![];
+fn parse_debezium(
+    record: Vec<(String, Value)>,
+) -> Result<Option<Vec<(String, i64)>>, anyhow::Error> {
+    let mut collections = vec![];
+    let mut event_count = 0;
     for (key, value) in record {
-        if key == "status" {
-            if let Value::String(status) = value {
-                if status == "BEGIN" {
-                    return None;
-                }
-            }
-        } else if key == "data_collections" {
-            if let Value::Union { inner: value, .. } = value {
-                if let Value::Array(items) = *value {
+        match (key.as_str(), value) {
+            ("data_collections", Value::Union { inner: value, .. }) => match *value {
+                Value::Array(items) => {
                     for v in items {
-                        if let Value::Record(item) = v {
-                            let mut value: String = String::new();
-                            let mut write_count = 0;
-                            for (k, v) in item {
-                                if k == "data_collection" {
-                                    if let Value::String(data) = v {
-                                        value = data;
-                                    } else {
-                                        panic!("Incorrect AVRO format. String expected");
+                        match v {
+                            Value::Record(item) => {
+                                let mut collection: Option<String> = None;
+                                let mut event_count: Option<i64> = None;
+                                for (k, v) in item {
+                                    match (k.as_str(), v) {
+                                        ("data_collection", Value::String(data)) => {
+                                            collection = Some(data)
+                                        }
+                                        ("data_collection", v) => {
+                                            bail!(
+                                                "Expected string for field 'data_collection', got {:?}",
+                                                v
+                                            );
+                                        }
+                                        ("event_count", Value::Long(e)) => event_count = Some(e),
+                                        ("event_count", v) => {
+                                            bail!(
+                                                "Expected long for field 'event_count', got {:?}",
+                                                v
+                                            );
+                                        }
+                                        (_, _) => (),
                                     }
-                                } else if k == "event_count" {
-                                    if let Value::Long(e) = v {
-                                        write_count = e;
-                                    } else {
-                                        panic!("Incorrect AVRO format. Long expected");
+                                }
+                                match (collection, event_count) {
+                                    (Some(c), Some(e)) => collections.push((c, e)),
+                                    (c, w) => {
+                                        bail!(
+                                        "Missing count or collection name. Parsed collection={:?}, event_count={:?}",
+                                        c, w);
                                     }
                                 }
                             }
-                            if !value.is_empty() {
-                                result.push((value, write_count));
+                            _ => {
+                                bail!("Record expected, got {:?}", v);
                             }
-                        } else {
-                            error!("Incorrect AVRO format. Record expected");
                         }
                     }
                 }
-            } else {
-                error!(
-                    "Incorrect AVRO format. Union of Null/Array expected {:?}",
-                    value
-                );
+                _ => {
+                    bail!(
+                        "Expected Array for field 'data_collections', got {:?}",
+                        value
+                    );
+                }
+            },
+            ("data_collections", v) => {
+                bail!("Expection Union for field 'data_collections', got {:?}", v);
             }
+            ("event_count", Value::Union { inner: value, .. }) => match *value {
+                Value::Long(e) => event_count = e,
+                _ => {
+                    bail!("Expected Long for field 'event_count', got {:?}", value);
+                }
+            },
+            ("event_count", v) => {
+                bail!("Expected Union for field 'event_count', got {:?}", v);
+            }
+            ("status", Value::String(status)) => match status.as_str() {
+                "BEGIN" => return Ok(None),
+                "END" => (),
+                _ => bail!(
+                    "Expect 'BEGIN' or 'END' for field 'status', got {:?}",
+                    status
+                ),
+            },
+            ("status", v) => {
+                bail!("Expected String for field 'status', got {:?}", v);
+            }
+            (_, _) => (),
         }
     }
-    Some(result)
+    // TODO (#6670): figure out if we can assert that event_count is non-zero
+    // Can a transaction message have zero colections?
+    if collections.iter().map(|(_, c)| c).sum::<i64>() != event_count {
+        bail!(
+            "Event count '{:?}' does not match parsed collections: {:?}",
+            event_count,
+            collections
+        );
+    }
+    Ok(Some(collections))
 }
 
 /// This function determines the expected format of the consistency metadata as a function
@@ -431,12 +539,12 @@ impl Timestamper {
     /// Run the update function in a loop at the specified frequency. Acquires timestamps using
     /// either the Kafka topic ground truth
     /// TODO(ncrooks): move to thread local BYO implementation
-    pub fn update(&mut self) {
+    pub fn run(&mut self) {
         loop {
             thread::sleep(self.timestamp_frequency);
             let shutdown = self.update_sources();
             if shutdown {
-                break;
+                return;
             } else {
                 self.update_byo_timestamp();
             }
@@ -501,18 +609,7 @@ impl Timestamper {
                     }
                 }
                 TimestampMessage::Drop(id) => {
-                    info!("Dropping Timestamping for Source {}.", id);
-                    if let Some(RtTimestampConsumer {
-                        connector:
-                            RtTimestampConnector::Kafka(RtKafkaConnector {
-                                coordination_state, ..
-                            }),
-                        ..
-                    }) = self.rt_sources.remove(&id)
-                    {
-                        coordination_state.stop.store(true, Ordering::SeqCst);
-                    }
-                    self.byo_sources.remove(&id);
+                    self.drop_source(id);
                 }
                 TimestampMessage::Shutdown => {
                     // First, let's remove all of the threads consuming metadata
@@ -534,60 +631,40 @@ impl Timestamper {
         false
     }
 
-    /// Implements the byo timestamping logic
+    fn drop_source(&mut self, id: GlobalId) {
+        info!("Dropping Timestamping for Source {}.", id);
+        if let Some(RtTimestampConsumer {
+            connector:
+                RtTimestampConnector::Kafka(RtKafkaConnector {
+                    coordination_state, ..
+                }),
+            ..
+        }) = self.rt_sources.remove(&id)
+        {
+            coordination_state.stop.store(true, Ordering::SeqCst);
+        }
+        self.byo_sources.remove(&id);
+    }
+
+    /// Iterate over each source, updating BYO timestamps
     ///
-    /// If the partition count remains the same:
-    /// A new timestamp should be
-    /// 1) strictly greater than the last timestamp in this partition
-    /// 2) greater or equal to all the timestamps that have been assigned so far across all partitions
-    /// If the partition count increases:
-    /// A new timestamp should be:
-    /// 1) strictly greater than the last timestamp
-    /// This is necessary to guarantee that this timestamp *could not have been closed yet*
-    ///
-    /// Supports two envelopes: None and Debezium. Currentlye compatible with Debezium format 1.1
+    /// If an error is encountered while reading the sources, log an error message
+    /// and remove that source of BYO timestamps
     fn update_byo_timestamp(&mut self) {
-        for (id, byo_consumer) in &mut self.byo_sources {
+        let mut invalid_byo_sources: Vec<GlobalId> = vec![];
+        for (id, byo_consumer) in self.byo_sources.iter_mut() {
             // Get the next set of messages from the Consistency topic
-            let messages = byo_query_source(byo_consumer);
-            match byo_consumer.envelope {
-                ConsistencyFormatting::DebeziumAvro => {
-                    for msg in messages {
-                        let msg = if let ValueEncoding::Bytes(msg) = msg {
-                            msg
-                        } else {
-                            panic!("Kafka Debezium consistency should only encode byte messages");
-                        };
-                        // The first 5 bytes are reserved for the schema id/schema registry information
-                        let mut bytes = &msg[5..];
-                        let res = mz_avro::from_avro_datum(&DEBEZIUM_TRX_SCHEMA_VALUE, &mut bytes);
-                        match res {
-                            Err(_) => {
-                                // This was a key message, can safely ignore it
-                                continue;
-                            }
-                            Ok(record) => {
-                                generate_ts_updates_from_debezium(
-                                    &id,
-                                    &self.tx,
-                                    byo_consumer,
-                                    record,
-                                );
-                            }
-                        }
-                    }
-                }
-                ConsistencyFormatting::DebeziumOcf => {
-                    for msg in messages {
-                        let value = if let ValueEncoding::Avro(value) = msg {
-                            value
-                        } else {
-                            panic!("Debezium OCF consistency should only encode Value messages");
-                        };
-                        generate_ts_updates_from_debezium(&id, &self.tx, byo_consumer, value);
-                    }
-                }
+            if let Err(err) = update_source_timestamps(id, &self.tx, byo_consumer) {
+                error!(
+                    "Failed to correctly parse messages from source {}; {}",
+                    id, err
+                );
+                invalid_byo_sources.push(*id);
             }
+        }
+
+        for id in invalid_byo_sources {
+            self.drop_source(id);
         }
     }
 
