@@ -90,7 +90,7 @@ use sql::plan::{
     CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan,
     DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan, FetchPlan, IndexOption,
     IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, PlanContext,
-    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailPlan,
 };
 use storage::Message as PersistedMessage;
 use transform::Optimizer;

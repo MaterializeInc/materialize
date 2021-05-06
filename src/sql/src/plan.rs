@@ -71,6 +71,7 @@ pub enum Plan {
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
+    CreateViews(CreateViewsPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
     DiscardTemp,
@@ -154,6 +155,11 @@ pub struct CreateViewPlan {
     pub materialize: bool,
     pub if_not_exists: bool,
     pub depends_on: Vec<GlobalId>,
+}
+
+#[derive(Debug)]
+pub struct CreateViewsPlan {
+    pub views: Vec<CreateViewPlan>,
 }
 
 #[derive(Debug)]
