@@ -11,7 +11,7 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 
 use anyhow::{anyhow, bail, ensure, Context};
@@ -22,11 +22,15 @@ use tokio::task;
 use tokio::time::Duration;
 use uuid::Uuid;
 
+use dataflow_types::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
 use repr::strconv;
 use sql_parser::ast::{
-    AvroSchema, Connector, CreateSourceFormat, CreateSourceStatement, CsrSeed, DbzMode, Envelope,
-    Format, Ident, Raw, Statement,
+    display::AstDisplay, AvroSchema, Connector, CreateSourceFormat, CreateSourceStatement,
+    CreateViewsDefinitions, CreateViewsSourceTarget, CreateViewsStatement, CsrSeed, DbzMode,
+    Envelope, Expr, Format, Ident, Query, Raw, RawName, Select, SelectItem, SetExpr, Statement,
+    TableFactor, TableWithJoins, UnresolvedObjectName, Value, ViewDefinition,
 };
+use sql_parser::parser::parse_columns;
 
 use crate::catalog::Catalog;
 use crate::kafka_util;
@@ -42,9 +46,29 @@ use crate::normalize;
 /// [`Catalog`](crate::catalog::Catalog), as that would require locking access
 /// to the catalog for an unbounded amount of time.
 pub fn purify(
-    _catalog: &dyn Catalog,
+    catalog: &dyn Catalog,
     mut stmt: Statement<Raw>,
 ) -> impl Future<Output = Result<Statement<Raw>, anyhow::Error>> {
+    // If we're dealing with a CREATE VIEWS statement we need to query the catalog for the
+    // corresponding source connector and store it before we enter the async section.
+    let source_connector = if let Statement::CreateViews(CreateViewsStatement {
+        definitions: CreateViewsDefinitions::Source { name, .. },
+        ..
+    }) = &stmt
+    {
+        normalize::unresolved_object_name(name.clone())
+            .map_err(anyhow::Error::new)
+            .and_then(|name| {
+                catalog
+                    .resolve_item(&name)
+                    .and_then(|item| item.source_connector())
+                    .map(|s| s.clone())
+                    .map_err(anyhow::Error::new)
+            })
+    } else {
+        Err(anyhow!("SQL statement does not refer to a source"))
+    };
+
     async {
         if let Statement::CreateSource(CreateSourceStatement {
             col_names,
@@ -139,6 +163,127 @@ pub fn purify(
                 &config_options,
             )
             .await?;
+        }
+        if let Statement::CreateViews(CreateViewsStatement { definitions, .. }) = &mut stmt {
+            if let CreateViewsDefinitions::Source {
+                name: source_name,
+                targets,
+            } = definitions
+            {
+                match source_connector? {
+                    SourceConnector::External {
+                        connector:
+                            ExternalSourceConnector::Postgres(PostgresSourceConnector {
+                                conn,
+                                publication,
+                                ..
+                            }),
+                        ..
+                    } => {
+                        let publication_info: HashMap<_, _> =
+                            postgres_util::publication_info(&conn, &publication)
+                                .await?
+                                .into_iter()
+                                .map(|info| (info.name.clone(), info))
+                                .collect();
+
+                        let mut views = Vec::with_capacity(publication_info.len());
+
+                        let targets = targets.clone().unwrap_or_else(|| {
+                            publication_info
+                                .keys()
+                                .map(|name| CreateViewsSourceTarget {
+                                    name: Ident::new(name),
+                                    alias: None,
+                                })
+                                .collect()
+                        });
+
+                        for target in targets {
+                            let table_info = match publication_info.get(target.name.as_str()) {
+                                Some(info) => info,
+                                None => bail!(
+                                    "table {:?} does not exist in upstream database",
+                                    target.name.as_str()
+                                ),
+                            };
+
+                            let view_name =
+                                target.alias.clone().unwrap_or_else(|| target.name.clone());
+
+                            let col_schema = table_info
+                                .schema
+                                .iter()
+                                .map(|c| c.to_ast_string())
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            let (columns, _constraints) =
+                                parse_columns(&format!("({})", col_schema))?;
+
+                            let mut projection = vec![];
+                            for (i, column) in columns.iter().enumerate() {
+                                projection.push(SelectItem::Expr {
+                                    expr: Expr::Cast {
+                                        expr: Box::new(Expr::SubscriptIndex {
+                                            expr: Box::new(Expr::Identifier(vec![Ident::new(
+                                                "row_data",
+                                            )])),
+                                            subscript: Box::new(Expr::Value(Value::Number(
+                                                // LIST is one based
+                                                (i + 1).to_string(),
+                                            ))),
+                                        }),
+                                        data_type: column.data_type.clone(),
+                                    },
+                                    alias: Some(column.name.clone()),
+                                });
+                            }
+
+                            let query = Query {
+                                ctes: vec![],
+                                body: SetExpr::Select(Box::new(Select {
+                                    distinct: None,
+                                    projection,
+                                    from: vec![TableWithJoins {
+                                        relation: TableFactor::Table {
+                                            name: RawName::Name(UnresolvedObjectName::unqualified(
+                                                &source_name.to_string(),
+                                            )),
+                                            alias: None,
+                                        },
+                                        joins: vec![],
+                                    }],
+                                    selection: Some(Expr::Op {
+                                        op: "=".to_string(),
+                                        expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
+                                        expr2: Some(Box::new(Expr::Value(Value::Number(
+                                            table_info.rel_id.to_string(),
+                                        )))),
+                                    }),
+                                    group_by: vec![],
+                                    having: None,
+                                    options: vec![],
+                                })),
+                                order_by: vec![],
+                                limit: None,
+                                offset: None,
+                            };
+
+                            views.push(ViewDefinition {
+                                name: UnresolvedObjectName::unqualified(view_name.as_str()),
+                                columns: columns.iter().map(|c| c.name.clone()).collect(),
+                                with_options: vec![],
+                                query: query,
+                            });
+                        }
+                        *definitions = CreateViewsDefinitions::Literal(views);
+                    }
+                    SourceConnector::External { connector, .. } => {
+                        bail!("cannot generate views from {} sources", connector.name())
+                    }
+                    SourceConnector::Local => bail!("cannot generate views from local sources"),
+                }
+            }
         }
         Ok(stmt)
     }
