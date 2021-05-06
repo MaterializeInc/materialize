@@ -1339,10 +1339,10 @@ pub fn plan_create_sink(
                     }
                 }
                 let indices = key
-                    .into_iter()
+                    .iter()
                     .map(|col| -> anyhow::Result<usize> {
                         let name_idx = desc
-                            .get_by_name(&col)
+                            .get_by_name(col)
                             .map(|(idx, _type)| idx)
                             .ok_or_else(|| anyhow!("No such column: {}", col))?;
                         if desc.get_unambiguous_name(name_idx).is_none() {
@@ -1351,6 +1351,13 @@ pub fn plan_create_sink(
                         Ok(name_idx)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                let is_valid_key =
+                    desc.typ().keys.iter().any(|key_columns| {
+                        key_columns.iter().all(|column| indices.contains(column))
+                    });
+                if !is_valid_key && envelope == SinkEnvelope::Upsert {
+                    return Err(invalid_upsert_key_err(&desc, &key));
+                }
                 Some(indices)
             } else {
                 None
@@ -1432,6 +1439,32 @@ pub fn plan_create_sink(
         if_not_exists,
         depends_on,
     }))
+}
+
+fn invalid_upsert_key_err(desc: &RelationDesc, requested_user_key: &[ColumnName]) -> anyhow::Error {
+    let requested_user_key = requested_user_key
+        .iter()
+        .map(|column| column.as_str())
+        .join(", ");
+    let requested_user_key = format!("({})", requested_user_key);
+    let valid_keys = if desc.typ().keys.is_empty() {
+        "there are no valid keys".to_owned()
+    } else {
+        let valid_keys = desc
+            .typ()
+            .keys
+            .iter()
+            .map(|key_columns| {
+                let columns_string = key_columns
+                    .iter()
+                    .map(|col| desc.get_name(*col).expect("known to exist").as_str())
+                    .join(", ");
+                format!("({})", columns_string)
+            })
+            .join(", ");
+        format!("valid keys are: {}", valid_keys)
+    };
+    anyhow!("Invalid upsert key: {}, {}", requested_user_key, valid_keys)
 }
 
 /// Returns only those `CatalogItem`s that don't have any other user
