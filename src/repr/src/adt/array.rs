@@ -17,6 +17,7 @@ use std::mem;
 use serde::{Deserialize, Serialize};
 
 use crate::row::DatumList;
+use std::cmp::Ordering;
 
 /// The maximum number of dimensions permitted in an array.
 pub const MAX_ARRAY_DIMENSIONS: u8 = 6;
@@ -24,10 +25,10 @@ pub const MAX_ARRAY_DIMENSIONS: u8 = 6;
 /// A variable-length multi-dimensional array.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub struct Array<'a> {
-    /// The dimensions of the array.
-    pub(crate) dims: ArrayDimensions<'a>,
     /// The elements in the array.
     pub(crate) elements: DatumList<'a>,
+    /// The dimensions of the array.
+    pub(crate) dims: ArrayDimensions<'a>,
 }
 
 impl<'a> Array<'a> {
@@ -43,7 +44,7 @@ impl<'a> Array<'a> {
 }
 
 /// The dimensions of an [`Array`].
-#[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ArrayDimensions<'a> {
     pub(crate) data: &'a [u8],
 }
@@ -63,6 +64,18 @@ impl ArrayDimensions<'_> {
     /// Reports whether the number of dimensions in the array is zero.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+impl Ord for ArrayDimensions<'_> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.ndims().cmp(&other.ndims())
+    }
+}
+
+impl PartialOrd for ArrayDimensions<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
