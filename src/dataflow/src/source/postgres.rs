@@ -13,26 +13,21 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
-use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use futures::StreamExt;
-use itertools::Itertools;
 use lazy_static::lazy_static;
 
 use postgres_protocol::message::backend::{
     LogicalReplicationMessage, ReplicationMessage, Tuple, TupleData,
 };
-use tokio_postgres::binary_copy::BinaryCopyOutStream;
 use tokio_postgres::config::{Config, ReplicationMode};
 use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
-use tokio_postgres::types::{PgLsn, Type as PgType};
+use tokio_postgres::types::PgLsn;
 use tokio_postgres::{Client, NoTls, SimpleQueryMessage};
-use uuid::Uuid;
 
 use crate::source::{SimpleSource, SourceError, Timestamper};
 use dataflow_types::PostgresSourceConnector;
-use postgres_util::TableInfo;
-use repr::{Datum, Row, RowArena};
+use repr::{Datum, Row};
 
 lazy_static! {
     /// Postgres epoch is 2000-01-01T00:00:00Z
@@ -93,11 +88,7 @@ impl PostgresSourceReader {
     ///
     /// After the initial snapshot has been produced it returns the name of the created slot and
     /// the LSN at which we should start the replication stream at.
-    async fn produce_snapshot(
-        &mut self,
-        table_info: &TableInfo,
-        timestamper: &Timestamper,
-    ) -> Result<(), anyhow::Error> {
+    async fn produce_snapshot(&mut self, timestamper: &Timestamper) -> Result<(), anyhow::Error> {
         let client = self.connect_replication().await?;
 
         // We're initialising this source so any previously existing slot must be removed and
@@ -108,6 +99,11 @@ impl PostgresSourceReader {
                 &self.connector.slot_name
             ))
             .await;
+
+        // Get all the relevant tables for this publication
+        let publication_tables =
+            postgres_util::publication_info(&self.connector.conn, &self.connector.publication)
+                .await?;
 
         // Start a transaction and immediatelly create a replication slot with the USE SNAPSHOT
         // directive. This makes the starting point of the slot and the snapshot of the transaction
@@ -138,47 +134,29 @@ impl PostgresSourceReader {
             .parse()
             .or_else(|_| Err(anyhow!("invalid lsn")))?;
 
-        let copy_query = format!(
-            r#"COPY {} TO STDOUT WITH (FORMAT binary);"#,
-            self.connector.ast_table,
-        );
-
-        let stream = client.copy_out_simple(&copy_query).await?;
-
-        let scalar_types = table_info
-            .schema
-            .iter()
-            .map(|c| c.scalar_type.clone())
-            .collect_vec();
-
-        let rows = BinaryCopyOutStream::new(stream, &scalar_types);
-        tokio::pin!(rows);
-
         let snapshot_tx = timestamper.start_tx().await;
-        while let Some(row) = rows.next().await.transpose()? {
-            let mut mz_row = Row::default();
-            for (i, ty) in table_info.schema.iter().enumerate() {
-                let datum: Datum = match ty.scalar_type {
-                    PgType::BOOL => row.get::<Option<bool>>(i).into(),
-                    PgType::INT4 => row.get::<Option<i32>>(i).into(),
-                    PgType::INT8 => row.get::<Option<i64>>(i).into(),
-                    PgType::FLOAT4 => row.get::<Option<f32>>(i).into(),
-                    PgType::FLOAT8 => row.get::<Option<f64>>(i).into(),
-                    PgType::DATE => row.get::<Option<NaiveDate>>(i).into(),
-                    PgType::TIME => row.get::<Option<NaiveTime>>(i).into(),
-                    PgType::TIMESTAMP => row.get::<Option<NaiveDateTime>>(i).into(),
-                    PgType::TEXT => row.get::<Option<&str>>(i).into(),
-                    PgType::UUID => row.get::<Option<Uuid>>(i).into(),
-                    ref other => bail!("Unsupported data type {:?}", other),
-                };
 
-                if !ty.nullable && datum.is_null() {
-                    bail!("Got null value in non nullable column");
+        for info in publication_tables {
+            // TODO(petrosagg): use a COPY statement here for more efficient network transfer
+            let data = client
+                .simple_query(&format!(
+                    "SELECT * FROM {:?}.{:?}",
+                    info.namespace, info.name
+                ))
+                .await?;
+
+            for msg in data {
+                if let SimpleQueryMessage::Row(row) = msg {
+                    let mut mz_row = Row::default();
+                    let rel_id: Datum = (info.rel_id as i32).into();
+                    mz_row.push(rel_id);
+                    mz_row.push_list((0..row.len()).map(|n| {
+                        let a: Datum = row.get(n).into();
+                        a
+                    }));
+                    snapshot_tx.insert(mz_row).await?;
                 }
-                mz_row.push(datum);
             }
-
-            snapshot_tx.insert(mz_row).await?;
         }
 
         client.simple_query("COMMIT;").await?;
@@ -188,32 +166,28 @@ impl PostgresSourceReader {
     /// Converts a Tuple received in the replication stream into a Row instance. The logical
     /// replication protocol doesn't use the binary encoding for column values so contrary to the
     /// initial snapshot here we need to parse the textual form of each column.
-    fn row_from_tuple(&mut self, tuple: &Tuple) -> Result<Row, anyhow::Error> {
+    fn row_from_tuple(&mut self, rel_id: u32, tuple: &Tuple) -> Result<Row, anyhow::Error> {
         let mut row = Row::default();
-        let arena = RowArena::new();
 
-        for (val, cast_expr) in tuple
-            .tuple_data()
-            .iter()
-            .zip(self.connector.cast_exprs.iter())
-        {
-            let datum = match val {
-                TupleData::Null => Datum::Null,
-                TupleData::UnchangedToast => bail!("Unsupported TOAST value"),
-                TupleData::Text(b) => {
-                    let txt_datum: Datum = std::str::from_utf8(&b)?.into();
-                    cast_expr.eval(&[txt_datum], &arena)?
-                }
-            };
-            row.push(datum);
-        }
+        let rel_id: Datum = (rel_id as i32).into();
+        row.push(rel_id);
+        row.push_list_with(|packer| {
+            for val in tuple.tuple_data() {
+                let datum = match val {
+                    TupleData::Null => Datum::Null,
+                    TupleData::UnchangedToast => bail!("Unsupported TOAST value"),
+                    TupleData::Text(b) => std::str::from_utf8(&b)?.into(),
+                };
+                packer.push(datum);
+            }
+            Ok(())
+        })?;
 
         Ok(row)
     }
 
     async fn produce_replication(
         &mut self,
-        table_info: &TableInfo,
         timestamper: &Timestamper,
     ) -> Result<(), ReplicationError> {
         use ReplicationError::*;
@@ -247,30 +221,29 @@ impl PostgresSourceReader {
                                 )));
                             }
                         }
-                        // The replication stream might include data from other tables in the
-                        // publication, so we ignore them
-                        Insert(event) if event.rel_id() != table_info.rel_id => continue,
-                        Update(event) if event.rel_id() != table_info.rel_id => continue,
-                        Delete(event) if event.rel_id() != table_info.rel_id => continue,
                         Insert(insert) => {
-                            let row = try_fatal!(self.row_from_tuple(insert.tuple()));
+                            let rel_id = insert.rel_id();
+                            let row = try_fatal!(self.row_from_tuple(rel_id, insert.tuple()));
                             inserts.push(row);
                         }
                         Update(update) => {
+                            let rel_id = update.rel_id();
                             let old_tuple = try_fatal!(update
                                 .old_tuple()
                                 .ok_or_else(|| anyhow!("full row missisng from update")));
-                            let old_row = try_fatal!(self.row_from_tuple(old_tuple));
+                            let old_row = try_fatal!(self.row_from_tuple(rel_id, old_tuple));
                             deletes.push(old_row);
 
-                            let new_row = try_fatal!(self.row_from_tuple(update.new_tuple()));
+                            let new_row =
+                                try_fatal!(self.row_from_tuple(rel_id, update.new_tuple()));
                             inserts.push(new_row);
                         }
                         Delete(delete) => {
+                            let rel_id = delete.rel_id();
                             let old_tuple = try_fatal!(delete
                                 .old_tuple()
                                 .ok_or_else(|| anyhow!("full row missisng from delete")));
-                            let row = try_fatal!(self.row_from_tuple(old_tuple));
+                            let row = try_fatal!(self.row_from_tuple(rel_id, old_tuple));
                             deletes.push(row);
                         }
                         Commit(commit) => {
@@ -355,17 +328,13 @@ impl PostgresSourceReader {
 impl SimpleSource for PostgresSourceReader {
     /// The top-level control of the state machine and retry logic
     async fn start(mut self, timestamper: &Timestamper) -> Result<(), SourceError> {
-        let table_info = postgres_util::table_info(&self.connector.conn, &self.connector.ast_table)
-            .await
-            .map_err(|e| SourceError::FileIO(e.to_string()))?;
-
         // The initial snapshot has no easy way of retrying it in case of connection failures
-        self.produce_snapshot(&table_info, timestamper)
+        self.produce_snapshot(timestamper)
             .await
             .map_err(|e| SourceError::FileIO(e.to_string()))?;
 
         loop {
-            match self.produce_replication(&table_info, timestamper).await {
+            match self.produce_replication(timestamper).await {
                 Ok(_) => log::info!("replication interrupted with no error"),
                 Err(ReplicationError::Recoverable(e)) => {
                     log::info!("replication interrupted: {}", e)

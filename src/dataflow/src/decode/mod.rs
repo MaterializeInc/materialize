@@ -241,7 +241,7 @@ fn get_decoder_inner(
         DataEncoding::AvroOcf(_)
         | DataEncoding::Csv(_)
         | DataEncoding::Regex(_)
-        | DataEncoding::Postgres(_) => bail!(
+        | DataEncoding::Postgres => bail!(
             "Unsupported encoder for key/value encoding: {}",
             encoding.op_name()
         ),
@@ -568,7 +568,7 @@ where
             ),
             None,
         ),
-        (DataEncoding::Postgres(_), _) => {
+        (DataEncoding::Postgres, _) => {
             unreachable!("Internal error: postgres sources are never decoded");
         }
     }

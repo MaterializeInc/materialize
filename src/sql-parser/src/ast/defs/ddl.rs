@@ -332,7 +332,7 @@ impl AstDisplay for DbzMode {
 impl_display!(DbzMode);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Connector<T: AstInfo> {
+pub enum Connector {
     File {
         path: String,
         compression: Compression,
@@ -363,10 +363,6 @@ pub enum Connector<T: AstInfo> {
         publication: String,
         /// The replication slot name that will be created upstream
         slot: Option<String>,
-        /// The name of the table to sync
-        table: UnresolvedObjectName,
-        /// The expected column schema of the synced table
-        columns: Vec<ColumnDef<T>>,
     },
     PubNub {
         /// PubNub's subscribe key
@@ -376,7 +372,7 @@ pub enum Connector<T: AstInfo> {
     },
 }
 
-impl<T: AstInfo> AstDisplay for Connector<T> {
+impl AstDisplay for Connector {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
             Connector::File { path, compression } => {
@@ -432,8 +428,6 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
             Connector::Postgres {
                 conn,
                 publication,
-                table,
-                columns,
                 slot,
             } => {
                 f.write_str("POSTGRES HOST '");
@@ -444,11 +438,7 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
                     f.write_str("' SLOT '");
                     f.write_str(&display::escape_single_quote_string(slot));
                 }
-                f.write_str("' TABLE ");
-                f.write_node(table);
-                f.write_str(" (");
-                f.write_node(&display::comma_separated(columns));
-                f.write_str(")");
+                f.write_str("'");
             }
             Connector::PubNub {
                 subscribe_key,
@@ -463,7 +453,7 @@ impl<T: AstInfo> AstDisplay for Connector<T> {
         }
     }
 }
-impl_display_t!(Connector);
+impl_display!(Connector);
 
 /// Information about upstream Postgres tables used for replication sources
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

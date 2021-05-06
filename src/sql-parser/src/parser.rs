@@ -1717,7 +1717,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_connector(&mut self) -> Result<Connector<Raw>, ParserError> {
+    fn parse_connector(&mut self) -> Result<Connector, ParserError> {
         match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
@@ -1740,25 +1740,11 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                self.expect_keyword(TABLE)?;
-                let table = self.parse_object_name()?;
-
-                let (columns, constraints) = self.parse_columns(Optional)?;
-
-                if !constraints.is_empty() {
-                    return parser_err!(
-                        self,
-                        self.peek_prev_pos(),
-                        "Cannot specify constraints in Postgres table definition"
-                    );
-                }
 
                 Ok(Connector::Postgres {
                     conn,
                     publication,
                     slot,
-                    table,
-                    columns,
                 })
             }
             FILE => {
