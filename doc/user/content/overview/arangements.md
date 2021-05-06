@@ -36,7 +36,7 @@ The cost of maintaining a dataflow can be very different from the cost of execut
 
 ### Collections
 
-Materialize dataflows act on **collections** of data, [multisets](https://en.wikipedia.org/wiki/Multiset) updates that store information as triples of `(data, time, diff)`.
+Materialize dataflows act on **collections** of data, [multisets](https://en.wikipedia.org/wiki/Multiset) that store events in an update stream as triples of `(data, time, diff)`.
 
 Term | Definition
 -----|-----------
@@ -74,89 +74,47 @@ Let's take a look at some of the arrangements that Materialize creates for diffe
 
 #### `COUNT`
 
-Some of the simplest arrangements are those for Differential Dataflow operators.
+Some of the simplest arrangements are those for Differential Dataflow operators. For example, the `COUNT` operator, which predictably counts items, has two arrangements:
 
-COUNT operator  will have two arrangements: one by input (arrangement by key)  and then one for the output (the results). COUNT reads from input but doesn’t write to it; both reads and writes to output.
+* An arrangement for the input, which indexes the key whose values will be counted
+* An arrangement for the output, which maintains the results
 
-![Diagram of arrangements for COUNT](/images/arrangements-count.png)
+`COUNT` reads from the input arrangement to count values, and both reads from the output (to see the previous total) and writes to the output (adding the new updates to the previous total).
+
+![Diagram of arrangements for count](/images/arrangements-count.png "Diagram of arrangements for COUNT")
 
 #### Three-way join
 
 Most exciting place for arrangements is JOINS.
 
-![Diagram of arrangements for a three-way join](/images/arrangements-3-way-join.png)
-
+![Diagram of arrangements for a three-way join](/images/arrangements-3-way-join.png "Diagram of arrangements for a three-way join")
 
 Create a materialized view: 3-way join group by fields 1,2,3  - Mz creates arrangements
 
 
-
-Things that traditional indexes do that we don’t do:
-Most db indexes are sorted by the value of the thing they’re indexed on. This makes RANGE queries easier. Doesn’t happen in Mz.
 Trad: if you join on 3 columns, it builds on 1+2+3, but also 1+2, 1+3, and 2+3. Mz doesn’t do this. (Ask Andy about example again)
-In trad dbs: people often have secondary indexes: userID+userSegment, but if you want real customer data, you have to go back to userID table. We don’t do that; we just make a copy of all the data.
-
-#### Delta joins
-
-Delta joins - avoid intermediate arrangements if all collections have arrangements by all of their primary and foreign keys -- uses more arrangements than otherwise but the arrangements are more likely to be shareable with other queries. Requires separate dataflow for each input.
-
-[Frank's blog post]
 
 ## Analyzing arrangements
 
-Materialize provides various tools that allow you to analyze arrangements, although they are post hoc tools best used for debugging, rather than planning tools to be used before creating indexes or views.
-
-### `EXPLAIN PLAN`
-
-`EXPLAIN PLAN`
-
-used to debug. Do we have a concept of a table scan/row estimate/the size of the index or the table? EXPLAIN PLAN explains what we’re doing, but doesn’t explain the impact (memory usage) - awkward to use for debugging. [](https://github.com/MaterializeInc/materialize/issues/4675)
-
-### Memory usage
-
-Memory visualizer - /memory - will show you the dataflow graph and the number of records that  are associated with each arrangement (number will be 0 for arrangements are borrowed). If you type CREATE INDEX, we will create an arrangement and leave it in the catalog as a thing future queries will use; CREATE MATERIALIZED * will also create index and leave behind arrangements.
-
-To investigate existing arrangements, query mz_arrangement_sizes logging source. Diagnostic views in mz_catalog connect to this information to operator names and group it by dataflow.
-
-### Sharing
-
-Mz_arrangement_sharing reports the number of times each arrangement is shared. Arrangements identified by worker and operator that created it. only useful for posthoc analysis, doesn’t identify opportunities for sharing.
+Materialize provides various tools that allow you to analyze arrangements, although they are post hoc tools best used for debugging, rather than planning tools to be used before creating indexes or views. See [Diagnosing Using SQL](/ops/diagnosing-using-sql/) and [Monitoring](/ops/monitoring/) for more details.
 
 ## Reducing memory usage
 
+### Creating indexes manually
+
 You can't create arrangements directly, but in some cases you can manually create indexes that will help Materialize create more sharable arrangements -- and therefore reduce memory usage.
 
-For maximal control:
-Do create view (will not build index), then create index on the keys you want
-Can be a 2x memory reduction for people
+For maximal control, you can create an unmaterialized view, then create an index on the view for the keys you know you'll want to search on. This can create a significant memory reduction for cases where Materialize is unable to detect the primary key, for example, if you have a customerID but never actually use it and always search on the join of customer first and last names.
 
-https://github.com/MaterializeInc/materialize/issues/4171
+For more examples of cases where you might want to create an index manually, see [Joins in Materialize](https://materialize.com/joins-in-materialize/).
 
-Most likely to benefit from this:
-you have input data and we can’t tell what primary key is (you have a customerID but never use it; you always search on join of customer last name-customer first name)
+### Casting the data type
 
-GROUP BY operators: DISTINCT often shows up in correlated subquery (subquery references the outer columns), at some point we need to grab the outer columns. If you were decorrelating it, you would have to create a DISTINCT query
-? possibly use scalar indicators ?
-
-
-Humans can CREATE INDEX/DROP INDEX: Look at joins blog post for examples -- if it’s pre-built, it’s faster. Table may only have a few columns you care about -- each of the indexes will increase memory consumption but reusing them costs basically nothing. Don’t build an index that you’ll only use once -- creating a key.
-
-If Mz can figure out your primary key, it will use that as the index; if you select *, Mz will use all columns. Setting up keys is helpful in reducing memory.
-
-I create a materialized view grouped by userID. I create another materialized view with a different aggregation, may not reuse same arrangement.
-
-customerID (32-bit integer) that you want to combine with a 64-bit integer - just building an index with the type changed, better for you to do it than for us to do it. Changing of types happens a lot -- this is embarrassing. existing bug: https://github.com/MaterializeInc/materialize/issues/4171
-
-Anti-pattern: If you have a query that ends in a GROUP BY, we will have to build an arrangement for you anyway.
-
-JOIN blog post -- storytelling: bad, better, best. Some magical things happen if you have a large set of arrangements: look up blog post
-
-Arrangements house materialized sources and views, but also many internal operators. Ex - differential dataflow join and reduce both require input and output to be arrangements. These are the basis for Mz’s relational operators (the operators in the explain plan for queries). TopK builds a sequence of 16 reduce operators.
+Currently, Materialize handles implicit casts in a very [memory-intensive way](https://github.com/MaterializeInc/materialize/issues/4171). Until this issue is resolved, you can reduce memory usage by building an index on the view with the type changed for any queries which include implicit casts, for example, when you combine 32-bit and 64-bit numbers.
 
 ## Related topics
 
 * [Joins in Materialize](https://materialize.com/joins-in-materialize/)
 * [Diagnosing Using SQL](/ops/diagnosing-using-sql/)
 * [Deployment](/ops/deployment/)
-* [original paper]()
-* [Differential Dataflow]()
+* [Differential Dataflow](https://timelydataflow.github.io/differential-dataflow/)
