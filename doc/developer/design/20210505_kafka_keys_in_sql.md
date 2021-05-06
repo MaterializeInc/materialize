@@ -104,6 +104,70 @@ If any key column names colide with value columns using the bare `INCLUDE KEY`
 syntax, an error will be raised before dataflow construction suggesting the use
 of the `AS RECORD` clause.
 
+#### Usage Examples
+
+##### Text/Text
+
+```sql
+CREATE SOURCE text_text FROM KAFKA BROKER '...' TOPIC '...'
+KEY FORMAT TEXT VALUE FORMAT TEXT
+INCLUDE KEY AS RECORD key
+ENVELOPE UPSERT;
+```
+
+<details>
+<summary>👨‍🔬 It is possible to express the above with a bare format. 👨‍🔬</summary>
+
+```sql
+CREATE SOURCE text_text FROM KAFKA BROKER '...' TOPIC '...'
+FORMAT TEXT
+INCLUDE KEY AS RECORD key
+ENVELOPE UPSERT;
+```
+
+</details>
+
+This will create a new source, it requires specifying the record syntax because
+we use the same name by default, which would result in a name conflict.
+
+Usage in a view looks like:
+
+```sql
+CREATE MATERIALIZED VIEW text_text_view AS
+SELECT (key).text, text FROM text_text
+WHERE ...;
+```
+
+##### Text/Avro
+
+```sql
+CREATE SOURCE text_avro FROM KAFKA BROKER '...' TOPIC '...'
+KEY FORMAT TEXT
+VALUE FORMAT AVRO USING SCHEMA '{"type": "record", "name": "value", "fields": [ {"name": "field", "type": "int"} ] }';
+```
+
+Usage in a view looks like:
+
+```sql
+CREATE MATERIALIZED VIEW text_avro_view AS
+SELECT text, field as interesting FROM text_avro;
+```
+
+##### Avro/Avro
+
+```sql
+CREATE SOURCE avro_avro FROM KAFKA BROKER '...' TOPIC '...'
+KEY FORMAT AVRO USING SCHEMA '{"type": "record", "name": "boring", "fields": [ {"name": "key_field", "type": "int"} ] }'
+VALUE FORMAT AVRO USING SCHEMA '{"type": "record", "name": "value", "fields": [ {"name": "valueish", "type": "int"} ] }';
+```
+
+Usage in a view looks like:
+
+```sql
+CREATE MATERIALIZED VIEW text_avro_view AS
+SELECT key_field, valueish FROM avro_avro; -- equivalent to SELECT *
+```
+
 ### Implementation
 
 Mostly standard for new syntax additions. We will need to wait until
