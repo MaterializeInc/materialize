@@ -244,7 +244,52 @@ pub fn kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let name = format!("kafka-{}", id);
+
     let stream = &collection.inner;
+
+    let encoder = Encoder::new(key_desc, value_desc, connector.consistency.is_some());
+    let key_schema_id = connector.key_schema_id;
+    let value_schema_id = connector.value_schema_id;
+
+    let encoded_stream = avro_encode_stream(
+        stream,
+        as_of.clone(),
+        connector
+            .consistency
+            .clone()
+            .and_then(|consistency| consistency.gate_ts),
+        encoder,
+        key_schema_id,
+        value_schema_id,
+        connector.fuel,
+        name.clone(),
+    );
+
+    produce_to_kafka(encoded_stream, id, name, connector, as_of)
+}
+
+/// Produces/sends a stream of encoded rows (as `Vec<u8>`) to Kafka.
+///
+/// This operator exchanges all updates to a single worker by hashing on the given sink `id`.
+///
+/// Updates are only sent to Kafka once the input frontier has passed their `time`. Updates are
+/// sent in ascending timestamp order. The order of updates at the same timstamp will not be changed.
+/// However, it is important to keep in mind that this operator exchanges updates so if the input
+/// stream is sharded updates will likely arrive at this operator in some non-deterministic order.
+///
+/// Updates that are not beyond the given [`SinkAsOf`] and/or the `gate_ts` in
+/// [`KafkaSinkConnector`] will be discarded without producing them.
+pub fn produce_to_kafka<G>(
+    stream: Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>,
+    id: GlobalId,
+    name: String,
+    connector: KafkaSinkConnector,
+    as_of: SinkAsOf,
+) -> Box<dyn Any>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &connector.addrs.to_string());
 
@@ -285,25 +330,6 @@ where
     } else {
         false
     };
-
-    let name = format!("kafka-{}", id);
-
-    let encoder = Encoder::new(key_desc, value_desc, connector.consistency.is_some());
-    let key_schema_id = connector.key_schema_id;
-    let value_schema_id = connector.value_schema_id;
-    let stream = avro_encode_stream(
-        stream,
-        as_of.clone(),
-        connector
-            .consistency
-            .clone()
-            .and_then(|consistency| consistency.gate_ts),
-        encoder,
-        key_schema_id,
-        value_schema_id,
-        connector.fuel,
-        name.clone(),
-    );
 
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let mut builder = OperatorBuilder::new(name.clone(), stream.scope());
