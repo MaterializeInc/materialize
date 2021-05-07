@@ -115,13 +115,10 @@ services:
       # ensure that data doesn't get lost across restarts
       # data will be lost if you remove docker volumes (using nuke, for example)
       - prometheus:/prometheus
-      - grafana:/var/lib/grafana
       # specialized configurations
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ./grafana/conf/load-test.json:/etc/grafana/provisioning/dashboards/chbench-load-test.json
 
 volumes:
-  grafana:
   prometheus:
 
 mzworkflows:
