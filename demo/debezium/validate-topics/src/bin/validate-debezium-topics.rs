@@ -282,6 +282,8 @@ fn parse_data_collection(collection: Value) -> anyhow::Result<(String, i64)> {
 fn validate_transactions(transactions: Vec<DebeziumTransaction>) -> anyhow::Result<()> {
     debug!("Transactions: {:#?}", transactions);
 
+    let mut tx_counts = HashMap::new();
+
     for transaction in transactions {
         validate_transaction_properties(&transaction).with_context(|| {
             format!(
@@ -289,6 +291,13 @@ fn validate_transactions(transactions: Vec<DebeziumTransaction>) -> anyhow::Resu
                 transaction.id, transaction
             )
         })?;
+
+        let count = tx_counts.entry(transaction.id.clone()).or_insert(0);
+        *count += 1;
+
+        if *count > 2 {
+            info!("tx_id {} repeated!", transaction.id);
+        }
     }
 
     Ok(())
