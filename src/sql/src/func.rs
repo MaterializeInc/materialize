@@ -723,21 +723,21 @@ pub enum ParamType {
     /// to exactly match arguments of decimal type.
     DecimalAny,
     /// A polymorphic pseudotype permitting any array type.  For more details,
-    /// see [`ParamList::resolve_polymorphic_types`].
+    /// see `ParamList::resolve_polymorphic_types`.
     ArrayAny,
     /// A polymorphic pseudotype permitting a `ScalarType::List` of any element
-    /// type.  For more details, see [`ParamList::resolve_polymorphic_types`].
+    /// type.  For more details, see `ParamList::resolve_polymorphic_types`.
     ListAny,
     /// A polymorphic pseudotype permitting all types, with more constraints
     /// than `Any`, i.e. it is subject to polymorphic constraints. For more
-    /// details, see [`ParamList::resolve_polymorphic_types`].
+    /// details, see `ParamList::resolve_polymorphic_types`.
     ListElementAny,
     /// A polymorphic pseudotype with the same behavior as `ListElementAny`,
     /// except it does not permit either `ScalarType::Array` or
     /// `ScalarType::List`.
     NonVecAny,
     /// A polymorphic pseudotype permitting a `ScalarType::Map` of any non-nested
-    /// value type. For more details, see [`ParamList::resolve_polymorphic_types`].
+    /// value type. For more details, see `ParamList::resolve_polymorphic_types`.
     MapAny,
     /// A standard parameter that accepts arguments that match its embedded
     /// `ScalarType`.
