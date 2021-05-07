@@ -66,7 +66,7 @@ impl DecoderState for AvroDecoderState {
             }
             Err(err) => {
                 self.events_error += 1;
-                Err(format!("avro deserialization error: {}", err))
+                Err(format!("avro deserialization error: {:#}", err))
             }
         }
     }
@@ -86,7 +86,7 @@ impl DecoderState for AvroDecoderState {
             Err(err) => {
                 self.events_error += 1;
                 Some(Err(DataflowError::DecodeError(DecodeError::Text(format!(
-                    "avro deserialization error: {}",
+                    "avro deserialization error: {:#}",
                     err
                 )))))
             }
