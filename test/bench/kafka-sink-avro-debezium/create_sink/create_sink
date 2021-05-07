@@ -12,4 +12,4 @@ set -euo pipefail
 
 sink_file="/data/${1:-no-consistency-no-exactly-once-sink.sql}"
 
-psql -h materialized -p 6875 -U materialize -f "${sink_file}" materialize
+psql -v ON_ERROR_STOP=1 -h materialized -p 6875 -U materialize -f "${sink_file}" materialize

@@ -1,4 +1,3 @@
-#!/usr/bin/env bash
 # Copyright Materialize, Inc. All rights reserved.
 #
 # Use of this software is governed by the Business Source License
@@ -8,8 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-set -euo pipefail
+MZFROM kgen
 
-view_file="/data/${1:-upsert_views.sql}"
+FROM python:3.9-slim
 
-psql -v ON_ERROR_STOP=1 -h materialized -p 6875 -U materialize -f "${view_file}" materialize
+COPY --from=0 /usr/local/bin/kgen /usr/local/bin
+
+RUN mkdir -p /usr/share/generator/distributions
+COPY distributions /usr/share/generator/distributions
+
+COPY generate_data /usr/local/bin
+ENTRYPOINT ["generate_data"]

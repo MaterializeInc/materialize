@@ -11,5 +11,5 @@
 set -euo pipefail
 
 for view_file in *.sql; do
-    psql -h perf-dash-metrics -p 8675 -U materialize -f "${view_file}" materialize
+    psql -v ON_ERROR_STOP=1 -h perf-dash-metrics -p 8675 -U materialize -f "${view_file}" materialize
 done

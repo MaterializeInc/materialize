@@ -1,0 +1,10 @@
+{
+    "com.acme.avro.aggregationtest::Key1Unused": [
+        0,
+        10
+    ],
+    "com.acme.avro.OuterRecord::DecValue": [
+        10000,
+        1000000000
+    ]
+}
