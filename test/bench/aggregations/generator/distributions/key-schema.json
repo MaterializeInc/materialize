@@ -1,0 +1,11 @@
+{
+  "name": "aggregationtestkey",
+  "type": "record",
+  "namespace": "com.acme.avro",
+  "fields": [
+    {
+      "name": "Key1",
+      "type": "long"
+    }
+  ]
+}

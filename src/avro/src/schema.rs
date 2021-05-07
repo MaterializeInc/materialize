@@ -1980,7 +1980,8 @@ fn parsing_canonical_form(schema: &serde_json::Value) -> String {
         serde_json::Value::Object(map) => pcf_map(map),
         serde_json::Value::String(s) => pcf_string(s),
         serde_json::Value::Array(v) => pcf_array(v),
-        _ => unreachable!(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => unreachable!("{:?} cannot yet be printed in canonical form", schema),
     }
 }
 

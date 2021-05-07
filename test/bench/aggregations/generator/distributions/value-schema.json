@@ -1,0 +1,29 @@
+{
+  "name": "aggregationtest",
+  "type": "record",
+  "namespace": "com.acme.avro",
+  "fields": [
+    {
+      "name": "Key1Unused",
+      "type": "long"
+    },
+    {
+      "name": "OuterRecord",
+      "type": {
+        "name": "OuterRecord",
+        "type": "record",
+        "fields": [
+          {
+            "name": "DecValue",
+            "type": {
+              "type": "bytes",
+              "scale": 2,
+              "precision": 15,
+              "logicalType": "decimal"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
