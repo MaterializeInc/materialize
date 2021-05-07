@@ -360,3 +360,96 @@ materialize=> select * from dbz_transactions order by id limit 4;
  BEGIN  | file=mysql-bin.000003,pos=11483 |             |
  END    | file=mysql-bin.000003,pos=11483 |           2 | {"(inventory.products_on_hand,1)","(inventory.customers,1)"}
 ```
+
+## Restarting Debezium (Postgres edition)
+
+If you restart Debezium, in the middle of running chbench, you'll see something like the following
+in the logs:
+
+```
+2021-05-07 04:59:25,186 INFO   Postgres|debezium|postgres-connector-task  Searching for WAL resume position   [io.debezium.connector.postgresql.PostgresStreamingChangeEventSource]
+2021-05-07 04:59:29,770 INFO   Postgres|debezium|postgres-connector-task  First LSN 'LSN{0/13741C98}' received   [io.debezium.connector.postgresql.connection.WalPositionLocator]
+2021-05-07 04:59:29,779 INFO   Postgres|debezium|postgres-connector-task  LSN after last stored change LSN 'LSN{0/13741CC0}' received   [io.debezium.connector.postgresql.connection.WalPositionLocator]
+2021-05-07 04:59:29,779 INFO   Postgres|debezium|postgres-connector-task  WAL resume position 'LSN{0/13741CC0}' discovered   [io.debezium.connector.postgresql.PostgresStreamingChangeEventSource]
+2021-05-07 04:59:29,780 INFO   Postgres|debezium|postgres-connector-task  Connection gracefully closed   [io.debezium.jdbc.JdbcConnection]
+2021-05-07 04:59:29,800 INFO   Postgres|debezium|postgres-connector-task  Processing messages   [io.debezium.connector.postgresql.PostgresStreamingChangeEventSource]
+2021-05-07 04:59:30,815 INFO   Postgres|debezium|postgres-connector-task  Streaming requested from LSN LSN{0/13741C98}, received LSN LSN{0/13741C98} identified as already processed   [io.debezium.connector.postgresql.connection.AbstractMessageDecoder]
+2021-05-07 04:59:30,816 INFO   Postgres|debezium|postgres-connector-task  Message with LSN 'LSN{0/13741CC0}' arrived, switching off the filtering   [io.debezium.connector.postgresql.connection.WalPositionLocator]
+```
+
+It appears that this resulted in a single transaction's END message (`130681`)
+being repeated:
+
+```
+2021-05-07T05:13:33.840383Z  INFO validate_debezium_topics: validating DebeziumTransaction {
+    id: "130649",
+    status: BEGIN,
+}
+2021-05-07T05:13:33.840392Z  INFO validate_debezium_topics: validating DebeziumTransaction {
+    id: "130649",
+    status: END {
+        txinfo: DebeziumTransactionInfo {
+            event_count: 31,
+            collections: {
+                "tpcch.neworder": 1,
+                "tpcch.district": 1,
+                "tpcch.orderline": 14,
+                "tpcch.order": 1,
+                "tpcch.stock": 14,
+            },
+        },
+    },
+}
+2021-05-07T05:13:33.840417Z  INFO validate_debezium_topics: validating DebeziumTransaction {
+    id: "130681",
+    status: BEGIN,
+}
+2021-05-07T05:13:33.840425Z  INFO validate_debezium_topics: validating DebeziumTransaction {
+    id: "130681",
+    status: END {
+        txinfo: DebeziumTransactionInfo {
+            event_count: 4,
+            collections: {
+                "tpcch.district": 1,
+                "tpcch.customer": 1,
+                "tpcch.warehouse": 1,
+                "tpcch.history": 1,
+            },
+        },
+    },
+}
+2021-05-07T05:13:33.840450Z  INFO validate_debezium_topics: validating DebeziumTransaction {
+    id: "130681",
+    status: END {
+        txinfo: DebeziumTransactionInfo {
+            event_count: 4,
+            collections: {
+                "tpcch.history": 1,
+                "tpcch.district": 1,
+                "tpcch.customer": 1,
+                "tpcch.warehouse": 1,
+            },
+        },
+    },
+}
+2021-05-07T05:13:33.840472Z  INFO validate_debezium_topics: tx_id 130681 repeated!
+2021-05-07T05:13:33.840480Z  INFO validate_debezium_topics: validating DebeziumTransaction {
+    id: "130686",
+    status: BEGIN,
+}
+2021-05-07T05:13:33.840488Z  INFO validate_debezium_topics: validating DebeziumTransaction {
+    id: "130686",
+    status: END {
+        txinfo: DebeziumTransactionInfo {
+            event_count: 19,
+            collections: {
+                "tpcch.order": 1,
+                "tpcch.neworder": 1,
+                "tpcch.stock": 8,
+                "tpcch.district": 1,
+                "tpcch.orderline": 8,
+            },
+        },
+    },
+}
+```
