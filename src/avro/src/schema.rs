@@ -1641,6 +1641,36 @@ impl<'a> SchemaNode<'a> {
                     }
                 }
             }
+            (String(s), piece)
+                if s.eq_ignore_ascii_case("nan")
+                    && (piece == &SchemaPiece::Float || piece == &SchemaPiece::Double) =>
+            {
+                match piece {
+                    SchemaPiece::Float => AvroValue::Float(f32::NAN),
+                    SchemaPiece::Double => AvroValue::Double(f64::NAN),
+                    _ => unreachable!(),
+                }
+            }
+            (String(s), piece)
+                if s.eq_ignore_ascii_case("infinity")
+                    && (piece == &SchemaPiece::Float || piece == &SchemaPiece::Double) =>
+            {
+                match piece {
+                    SchemaPiece::Float => AvroValue::Float(f32::INFINITY),
+                    SchemaPiece::Double => AvroValue::Double(f64::INFINITY),
+                    _ => unreachable!(),
+                }
+            }
+            (String(s), piece)
+                if s.eq_ignore_ascii_case("-infinity")
+                    && (piece == &SchemaPiece::Float || piece == &SchemaPiece::Double) =>
+            {
+                match piece {
+                    SchemaPiece::Float => AvroValue::Float(f32::NEG_INFINITY),
+                    SchemaPiece::Double => AvroValue::Double(f64::NEG_INFINITY),
+                    _ => unreachable!(),
+                }
+            }
             (String(s), SchemaPiece::Bytes) => AvroValue::Bytes(s.clone().into_bytes()),
             (
                 String(s),
@@ -2339,6 +2369,80 @@ mod tests {
             crate::types::Value::Record(vec![("f1".to_string(), crate::types::Value::Int(1))]);
         assert_eq!(reader_value, expected);
         assert!(reader.is_empty()); // all bytes should have been consumed
+    }
+
+    #[test]
+    fn default_non_nums() {
+        let reader = r#"{
+            "type": "record",
+            "name": "MyRecord",
+            "fields": [
+                {"name": "f1", "type": "double", "default": "NaN"},
+                {"name": "f2", "type": "double", "default": "Infinity"},
+                {"name": "f3", "type": "double", "default": "-Infinity"}
+            ]
+        }
+        "#;
+        let writer = r#"{"type": "record", "name": "MyRecord", "fields": []}"#;
+
+        let writer_schema = Schema::from_str(writer).unwrap();
+        let reader_schema = Schema::from_str(reader).unwrap();
+        let resolved = resolve_schemas(&writer_schema, &reader_schema).unwrap();
+
+        let record = Record::new(writer_schema.top_node()).unwrap();
+
+        let value = record.avro();
+        let mut buf = vec![];
+        crate::encode::encode(&value, &writer_schema, &mut buf);
+
+        let reader = &mut &buf[..];
+        let reader_value = crate::decode::decode(resolved.top_node(), reader).unwrap();
+        let expected = crate::types::Value::Record(vec![
+            ("f1".to_string(), crate::types::Value::Double(f64::NAN)),
+            ("f2".to_string(), crate::types::Value::Double(f64::INFINITY)),
+            (
+                "f3".to_string(),
+                crate::types::Value::Double(f64::NEG_INFINITY),
+            ),
+        ]);
+
+        #[derive(Debug)]
+        struct NanEq(crate::types::Value);
+        impl std::cmp::PartialEq for NanEq {
+            fn eq(&self, other: &Self) -> bool {
+                match (self, other) {
+                    (
+                        NanEq(crate::types::Value::Double(x)),
+                        NanEq(crate::types::Value::Double(y)),
+                    ) if x.is_nan() && y.is_nan() => true,
+                    (
+                        NanEq(crate::types::Value::Float(x)),
+                        NanEq(crate::types::Value::Float(y)),
+                    ) if x.is_nan() && y.is_nan() => true,
+                    (
+                        NanEq(crate::types::Value::Record(xs)),
+                        NanEq(crate::types::Value::Record(ys)),
+                    ) => {
+                        let xs = xs
+                            .iter()
+                            .cloned()
+                            .map(|(k, v)| (k, NanEq(v)))
+                            .collect::<Vec<_>>();
+                        let ys = ys
+                            .iter()
+                            .cloned()
+                            .map(|(k, v)| (k, NanEq(v)))
+                            .collect::<Vec<_>>();
+
+                        xs == ys
+                    }
+                    (NanEq(x), NanEq(y)) => x == y,
+                }
+            }
+        }
+
+        assert_eq!(NanEq(reader_value), NanEq(expected));
+        assert!(reader.is_empty());
     }
 
     #[test]
