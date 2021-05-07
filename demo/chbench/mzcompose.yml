@@ -271,6 +271,8 @@ services:
     command: ${CORRECTNESS_CMD:---mz-sources --checks c3321 --config-file /etc/test-correctness/checks-noconsistency.toml}
     volumes:
       - ./test-correctness-config:/etc/test-correctness
+  validate-debezium-topics:
+    mzbuild: validate-debezium-topics
 
 
 volumes:
@@ -771,3 +773,10 @@ mzworkflows:
         -l /var/log/chbench.log
         --config-file-path=/etc/chbenchmark/mz-default-postgres.cfg
         --mz-url=postgresql://materialize@${MZ_HOST:-materialized}:${MZ_PORT:-6875}/materialize?sslmode=disable
+
+  validate-topics:
+    steps:
+    - step: run
+      service: validate-debezium-topics
+      command: >-
+        --database-name=debezium

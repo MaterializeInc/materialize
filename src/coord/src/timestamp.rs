@@ -485,8 +485,9 @@ fn parse_debezium(
             (_, _) => (),
         }
     }
-    // TODO (#6670): figure out if we can assert that event_count is non-zero
-    // Can a transaction message have zero colections?
+    if event_count < 0 {
+        bail!("Expected non-negative event count, got '{}'", event_count);
+    }
     if collections.iter().map(|(_, c)| c).sum::<i64>() != event_count {
         bail!(
             "Event count '{:?}' does not match parsed collections: {:?}",

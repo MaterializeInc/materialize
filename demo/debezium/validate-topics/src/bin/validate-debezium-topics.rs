@@ -26,6 +26,8 @@ use url::Url;
 
 #[derive(Clone, Debug, StructOpt)]
 pub struct Args {
+    #[structopt(long, default_value = "dbserver1", value_name = "SOURCE_DATABASE_NAME")]
+    pub database_name: String,
     #[structopt(long, default_value = "kafka:9092", value_name = "KAFKA_BROKER")]
     pub kafka_brokers: String,
     #[structopt(
@@ -76,20 +78,20 @@ struct DebeziumTransaction {
 }
 
 async fn get_transaction_ids(args: Args) -> anyhow::Result<Vec<DebeziumTransaction>> {
-    let transaction_topic = "dbserver1.transaction";
+    let transaction_topic = format!("{}.transaction", args.database_name);
 
     let ccsr = ccsr::ClientConfig::new(args.schema_registry.clone())
         .build()
         .expect("can create schema registry object");
     let key_schema: Schema = ccsr
-        .get_schema_by_subject("dbserver1.transaction-key")
+        .get_schema_by_subject(format!("{}-key", transaction_topic).as_str())
         .await
         .expect("can fetch key schema for transactions topic")
         .raw
         .parse()
         .expect("can parse key schema");
     let value_schema: Schema = ccsr
-        .get_schema_by_subject("dbserver1.transaction-value")
+        .get_schema_by_subject(format!("{}-value", transaction_topic).as_str())
         .await
         .expect("can fetch key schema for transactions topic")
         .raw
@@ -110,7 +112,7 @@ async fn get_transaction_ids(args: Args) -> anyhow::Result<Vec<DebeziumTransacti
 
     // TODO: Correctly handle this unwrap because Kafka likes to fail this API every once and a while
     let (_, num_transactions) = consumer
-        .fetch_watermarks(transaction_topic, 0, Duration::from_secs(5))
+        .fetch_watermarks(transaction_topic.as_str(), 0, Duration::from_secs(5))
         .unwrap();
 
     info!(
@@ -119,7 +121,7 @@ async fn get_transaction_ids(args: Args) -> anyhow::Result<Vec<DebeziumTransacti
     );
 
     consumer
-        .subscribe(&[transaction_topic])
+        .subscribe(&[transaction_topic.as_str()])
         .expect("can subscribe to transaction topic");
 
     let mut transactions = vec![];
@@ -295,8 +297,8 @@ fn validate_transactions(transactions: Vec<DebeziumTransaction>) -> anyhow::Resu
 fn validate_transaction_properties(transaction: &DebeziumTransaction) -> anyhow::Result<()> {
     match &transaction.status {
         DebeziumTransactionStatus::END { txinfo } => {
-            if txinfo.event_count == 0 {
-                bail!("Event count is zero");
+            if txinfo.event_count < 0 {
+                bail!("Negative event count observed: {}", txinfo.event_count);
             }
 
             let sum_collections_count = txinfo.collections.iter().map(|(_, c)| c).sum::<i64>();
