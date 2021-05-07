@@ -17,9 +17,9 @@ benchmark designed for smaller machines:
 
     ./mzcompose run benchmark-medium
 
-You can also use `mzbench` to run comparative benchmarks on different versions.
-See the `mzbench` documentation for more details but here is an example
-invocation:
+You can also use [mzbench](../../../doc/developer/mzbench.md) to run comparative benchmarks on
+different versions. See the `mzbench` documentation for more details but here is an example
+invocation (run from the repository root):
 
     ./bin/mzbench -w --size medium kafka-sink-avro-debezium
 
