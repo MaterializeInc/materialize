@@ -118,7 +118,6 @@ services:
       - grafana:/var/lib/grafana
       # specialized configurations
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - ./grafana/conf/load-test.json:/etc/grafana/provisioning/dashboards/chbench-load-test.json
 
 volumes:
   grafana:
