@@ -39,22 +39,28 @@ def create_topics(args: argparse.Namespace) -> None:
     csr_config = {'url': f'http://{args.csr_host}:{args.csr_port}'}
     csr = confluent_kafka.schema_registry.SchemaRegistryClient(csr_config)
 
-    kafka_config = {'bootstrap.servers': f"{args.kafka_host}:{args.kafka_port}"}
+    kafka_config = {
+        'bootstrap.servers': f"{args.kafka_host}:{args.kafka_port}"}
     admin_client = confluent_kafka.admin.AdminClient(kafka_config)
 
     for metric_dir in pathlib.Path(args.metrics_directory).iterdir():
 
-        key_schema_str = pathlib.Path(metric_dir, 'key-schema.avsc').read_text().strip()
-        key_schema = confluent_kafka.schema_registry.Schema(key_schema_str, 'AVRO')
-        value_schema_str = pathlib.Path(metric_dir, 'value-schema.avsc').read_text().strip()
-        value_schema = confluent_kafka.schema_registry.Schema(value_schema_str, 'AVRO')
+        key_schema_str = pathlib.Path(
+            metric_dir, 'key-schema.avsc').read_text().strip()
+        key_schema = confluent_kafka.schema_registry.Schema(
+            key_schema_str, 'AVRO')
+        value_schema_str = pathlib.Path(
+            metric_dir, 'value-schema.avsc').read_text().strip()
+        value_schema = confluent_kafka.schema_registry.Schema(
+            value_schema_str, 'AVRO')
 
         csr.register_schema(f"{metric_dir.name}-key", key_schema)
         csr.register_schema(f"{metric_dir.name}-value", value_schema)
 
         # Create topics takes and returns a list of futures but we're going to call create topic
         # while iterating on each directory, so these are just lists of 1
-        topics = [confluent_kafka.admin.NewTopic(metric_dir.name, num_partitions=10, replication_factor=1)]
+        topics = [confluent_kafka.admin.NewTopic(
+            metric_dir.name, num_partitions=10, replication_factor=1)]
         # Don't bother trying to catch the error, let's just fail startup and raise the error
         [future.result() for future in admin_client.create_topics(topics).values()]
 
@@ -65,16 +71,18 @@ class Producer:
         """Construct a producer for writing to the given topic, using the given config."""
         self.topic_name = topic_dir.name
 
-        key_schema = confluent_kafka.avro.load(pathlib.Path(topic_dir, 'key-schema.avsc'))
-        value_schema = confluent_kafka.avro.load(pathlib.Path(topic_dir, 'value-schema.avsc'))
+        key_schema = confluent_kafka.avro.load(
+            pathlib.Path(topic_dir, 'key-schema.avsc'))
+        value_schema = confluent_kafka.avro.load(
+            pathlib.Path(topic_dir, 'value-schema.avsc'))
 
         # Namespace for both schemas should be the name of the topic
         assert key_schema.namespace == value_schema.namespace
         assert self.topic_name == key_schema.namespace
 
         self.producer = confluent_kafka.avro.AvroProducer(kafka_config,
-                                                default_key_schema=key_schema,
-                                                default_value_schema=value_schema)
+                                                          default_key_schema=key_schema,
+                                                          default_value_schema=value_schema)
 
     def write_metric(self, key: typing.Any, value: typing.Any) -> None:
         """Encode key and value using Avro and send event to Kafka."""
@@ -128,7 +136,7 @@ def scrape(args: argparse.Namespace) -> int:
 
 
 def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: datetime.datetime,
-        rows_per_second: int = 0, result: str = "passed"):
+                   rows_per_second: int = 0, result: str = "passed"):
     """Write the results of this benchmark to the Kafka topic"""
     metrics.write_metric('dev.mtrlz.benchmarks.runs.results.v0',
                          {"run_id": args.mzbench_run_id},
@@ -141,19 +149,21 @@ def record_results(args: argparse.Namespace, metrics: BenchmarkMetrics, start: d
     # Add padding to make the charts nicer to read
     # Grafana expects timestamps with milliseconds
     path = '/d/materialize-overview/materialize-overview'
-    query = urllib.parse.urlencode( {
-              "from": round((start - datetime.timedelta(seconds=30)).timestamp()) * 1000,
-                "to": round(dateparser.parse('in 30 seconds').timestamp()) * 1000,
-                "tz": "UTC"
-             })
-    dashboard_url = urllib.parse.urlunparse(('http', args.grafana_location, path, '', query, ''))
+    query = urllib.parse.urlencode({
+        "from": round((start - datetime.timedelta(seconds=30)).timestamp()) * 1000,
+        "to": round(dateparser.parse('in 30 seconds').timestamp()) * 1000,
+        "tz": "UTC"
+    })
+    dashboard_url = urllib.parse.urlunparse(
+        ('http', args.grafana_location, path, '', query, ''))
 
     print(f'Grafana URL: {dashboard_url}')
 
 
 def wait_metric(args: argparse.Namespace, metrics: BenchmarkMetrics, start: datetime.datetime) -> int:
     """Wait for the given metric, returning desired exit code (0 is success)."""
-    prom = prometheus_api_client.PrometheusConnect(f'http://{args.prometheus_host}:{args.prometheus_port}')
+    prom = prometheus_api_client.PrometheusConnect(
+        f'http://{args.prometheus_host}:{args.prometheus_port}')
     time_so_far = 0
     begin = int(time.monotonic())
     while time_so_far < args.timeout_seconds:
@@ -171,7 +181,8 @@ def wait_metric(args: argparse.Namespace, metrics: BenchmarkMetrics, start: date
             (ts, point) = [float(i) for i in current_values[0]['value']]
             if point == args.expected_value:
                 rate = round(point / max(time_so_far, 1))
-                print(f"SUCCESS! seconds_taken={time_so_far} rows_per_sec={rate}")
+                print(
+                    f"SUCCESS! seconds_taken={time_so_far} rows_per_sec={rate}")
                 record_results(args, metrics, start, rate)
                 return 0
 
@@ -307,6 +318,7 @@ def parse_args() -> argparse.Namespace:
 
     args = parser.parse_args()
     return args
+
 
 if __name__ == '__main__':
     sys.exit(run(parse_args()))

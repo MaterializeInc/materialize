@@ -308,6 +308,8 @@
 //! [Materialize](https://github.com/MaterializeInc/materialize/blob/main/src/interchange/src/avro.rs)
 //! furnishes the most complete example.
 
+#![recursion_limit = "4096"]
+
 mod codec;
 mod decode;
 pub mod encode;

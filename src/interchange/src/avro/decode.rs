@@ -16,7 +16,7 @@ use std::io::Read;
 use std::rc::Rc;
 
 use anyhow::bail;
-use dec::{Context as DecimalCx, Decimal128, OrderedDecimal};
+use dec::{Context as DecimalCx, Decimal as DecNum, Decimal128, OrderedDecimal};
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
 
@@ -30,7 +30,7 @@ use mz_avro::{
 };
 use repr::adt::decimal::Significand;
 use repr::adt::jsonb::JsonbPacker;
-use repr::adt::rdn;
+use repr::adt::{apd, rdn};
 use repr::{Datum, Row};
 
 use super::envelope_debezium::DebeziumSourceCoordinates;
@@ -249,7 +249,7 @@ impl<'a> AvroDecode for AvroStringDecoder<'a> {
         Ok(())
     }
     define_unexpected! {
-        record, union_branch, array, map, enum_variant, scalar, decimal, numeric, bytes, json, uuid, fixed
+        record, union_branch, array, map, enum_variant, scalar, decimal, numeric, apd, bytes, json, uuid, fixed
     }
 }
 
@@ -282,7 +282,7 @@ impl<'a> AvroDecode for OptionalRecordDecoder<'a> {
         }
     }
     define_unexpected! {
-        record, array, map, enum_variant, scalar, decimal, numeric, bytes, string, json, uuid, fixed
+        record, array, map, enum_variant, scalar, decimal, numeric, apd, bytes, string, json, uuid, fixed
     }
 }
 
@@ -308,7 +308,7 @@ impl AvroDecode for RowDecoder {
         Ok(RowWrapper(row))
     }
     define_unexpected! {
-        union_branch, array, map, enum_variant, scalar, decimal, numeric, bytes, string, json, uuid, fixed
+        union_branch, array, map, enum_variant, scalar, decimal, numeric, apd, bytes, string, json, uuid, fixed
     }
 }
 
@@ -518,6 +518,49 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
     }
 
     #[inline]
+    fn apd<'b, R: AvroRead>(
+        self,
+        _precision: usize,
+        scale: usize,
+        r: ValueOrReader<'b, &'b [u8], R>,
+    ) -> Result<Self::Out, AvroError> {
+        let buf = match r {
+            ValueOrReader::Value(val) => val,
+            ValueOrReader::Reader { len, r } => {
+                self.buf.resize_with(len, Default::default);
+                r.read_exact(self.buf)?;
+                &self.buf
+            }
+        };
+        let coefficient =
+            apd::twos_complement_be_to_i128(buf).map_err(|e| DecodeError::Custom(e.to_string()))?;
+        let mut cx = DecimalCx::<DecNum<13>>::default();
+        let mut n = cx.from_i128(coefficient);
+        n.set_exponent(-i32::try_from(scale).unwrap());
+
+        let n = OrderedDecimal(n);
+
+        if apd::check_max_precision_strict(&n).is_err() {
+            return Err(AvroError::Decode(DecodeError::Custom(format!(
+                "Error encoding numeric: exceeds maximum precision {}",
+                rdn::RDN_MAX_PRECISION
+            ))));
+        }
+
+        // Catchall for unexpected statuses.
+        if cx.status().any() {
+            return Err(AvroError::Decode(DecodeError::Custom(format!(
+                "Unexpected error encoding numeric: {:?}",
+                cx.status()
+            ))));
+        }
+
+        self.packer.push(Datum::APD(n));
+
+        Ok(())
+    }
+
+    #[inline]
     fn bytes<'b, R: AvroRead>(
         self,
         r: ValueOrReader<'b, &'b [u8], R>,
@@ -676,6 +719,23 @@ fn pack_value(v: Value, mut row: Row, n: SchemaNode) -> anyhow::Result<Row> {
             }
 
             row.push(Datum::Numeric(n))
+        }
+        Value::APD(DecimalValue {
+            unscaled, scale, ..
+        }) => {
+            let coefficient = apd::twos_complement_be_to_i128(&unscaled)?;
+            let mut cx = DecimalCx::<DecNum<13>>::default();
+            let mut n = cx.from_i128(coefficient);
+            n.set_exponent(-i32::try_from(scale).unwrap());
+            let n = OrderedDecimal(n);
+            apd::check_max_precision_strict(&n)?;
+
+            // Catchall for unexpected statuses.
+            if cx.status().any() {
+                bail!("Unexpected error encoding numeric: {:?}", cx.status());
+            }
+
+            row.push(Datum::APD(n))
         }
         Value::Bytes(b) => row.push(Datum::Bytes(&b)),
         Value::String(s) | Value::Enum(_ /* idx */, s) => row.push(Datum::String(&s)),

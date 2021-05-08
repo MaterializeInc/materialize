@@ -102,6 +102,8 @@ pub enum Value {
     Decimal(DecimalValue),
     /// A parallel numeric type powered by `rust-dec`.
     RDN(DecimalValue),
+    /// Yet another parallel numeric type powered by `rust-dec`.
+    APD(DecimalValue),
     /// A `bytes` Avro value.
     Bytes(Vec<u8>),
     /// A `string` Avro value.
@@ -350,6 +352,18 @@ impl Value {
             (&Value::Timestamp(_), SchemaPiece::TimestampMilli) => true,
             (
                 &Value::Decimal(DecimalValue {
+                    precision: vp,
+                    scale: vs,
+                    ..
+                }),
+                SchemaPiece::Decimal {
+                    precision: sp,
+                    scale: ss,
+                    fixed_size: _,
+                },
+            ) => vp == *sp && vs == *ss,
+            (
+                &Value::APD(DecimalValue {
                     precision: vp,
                     scale: vs,
                     ..

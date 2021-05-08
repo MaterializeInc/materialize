@@ -103,7 +103,7 @@ services:
   kafka-avro-generator:
     mzbuild: kafka-avro-generator
   metric-verifier:
-    mzbuild: metric-verifier
+    mzbuild: 
     environment:
       MZ_WORKERS: ${MZ_WORKERS:-0}
       MZBENCH_GIT_REF: ${MZBENCH_GIT_REF:-None}
