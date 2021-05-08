@@ -148,6 +148,7 @@ mzworkflows:
     - step: run
       service: metric-verifier
       command: >-
+        --verbose
         create-topics
     - step: run
       service: perf-dash-create-views

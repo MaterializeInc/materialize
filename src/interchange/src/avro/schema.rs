@@ -9,6 +9,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
 use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
@@ -254,7 +255,9 @@ fn validate_schema_2(
                     MAX_DECIMAL_PRECISION
                 )
             }
-            ScalarType::Decimal(*precision as u8, *scale as u8)
+            ScalarType::APD {
+                scale: Some(u8::try_from(*scale).unwrap()),
+            }
         }
         SchemaPiece::Bytes | SchemaPiece::Fixed { .. } => ScalarType::Bytes,
         SchemaPiece::String | SchemaPiece::Enum { .. } => ScalarType::String,

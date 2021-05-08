@@ -380,6 +380,18 @@ impl Value {
                     fixed_size: _,
                 },
             ) => vp == *sp && vs == *ss,
+            (
+                &Value::APD(DecimalValue {
+                    precision: vp,
+                    scale: vs,
+                    ..
+                }),
+                SchemaPiece::Decimal {
+                    precision: sp,
+                    scale: ss,
+                    fixed_size: _,
+                },
+            ) => vp == *sp && vs == *ss,
             (&Value::Bytes(_), SchemaPiece::Bytes) => true,
             (&Value::String(_), SchemaPiece::String) => true,
             (&Value::Fixed(n, _), SchemaPiece::Fixed { size }) => n == *size,

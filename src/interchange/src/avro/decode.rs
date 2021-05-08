@@ -10,12 +10,14 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt;
 use std::io::Read;
 use std::rc::Rc;
 
 use ordered_float::OrderedFloat;
 use uuid::Uuid;
+use dec::OrderedDecimal;
 
 use mz_avro::error::{DecodeError, Error as AvroError};
 use mz_avro::{
@@ -25,6 +27,7 @@ use mz_avro::{
 };
 use repr::adt::decimal::Significand;
 use repr::adt::jsonb::JsonbPacker;
+use repr::adt::apd;
 use repr::{Datum, Row};
 
 use super::envelope_debezium::DebeziumSourceCoordinates;
@@ -244,7 +247,7 @@ impl<'a> AvroDecode for AvroStringDecoder<'a> {
         Ok(())
     }
     define_unexpected! {
-        record, union_branch, array, map, enum_variant, scalar, decimal, bytes, json, uuid, fixed
+        record, union_branch, array, map, enum_variant, scalar, decimal, apd, bytes, json, uuid, fixed
     }
 }
 
@@ -277,7 +280,7 @@ impl<'a> AvroDecode for OptionalRecordDecoder<'a> {
         }
     }
     define_unexpected! {
-        record, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+        record, array, map, enum_variant, scalar, decimal, apd, bytes, string, json, uuid, fixed
     }
 }
 
@@ -303,7 +306,7 @@ impl AvroDecode for RowDecoder {
         Ok(RowWrapper(row))
     }
     define_unexpected! {
-        union_branch, array, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
+        union_branch, array, map, enum_variant, scalar, decimal, apd, bytes, string, json, uuid, fixed
     }
 }
 
@@ -466,6 +469,47 @@ impl<'a> AvroDecode for AvroFlatDecoder<'a> {
             Significand::from_twos_complement_be(buf)
                 .map_err(|e| DecodeError::Custom(e.to_string()))?,
         ));
+        Ok(())
+    }
+
+    #[inline]
+    fn apd<'b, R: AvroRead>(
+        self,
+        _precision: usize,
+        scale: usize,
+        r: ValueOrReader<'b, &'b [u8], R>,
+    ) -> Result<Self::Out, AvroError> {
+        let buf = match r {
+            ValueOrReader::Value(val) => val,
+            ValueOrReader::Reader { len, r } => {
+                self.buf.resize_with(len, Default::default);
+                r.read_exact(self.buf)?;
+                &self.buf
+            }
+        };
+        let coefficient =
+            apd::twos_complement_be_to_i128(buf).map_err(|e| DecodeError::Custom(e.to_string()))?;
+        let mut cx = apd::cx_datum();
+        let mut n = cx.from_i128(coefficient);
+        n.set_exponent(-i32::try_from(scale).unwrap());
+
+        if apd::get_precision(&n) > apd::APD_DATUM_MAX_PRECISION as u32 {
+            return Err(AvroError::Decode(DecodeError::Custom(format!(
+                "Error encoding apd: exceeds maximum precision {}",
+                apd::APD_DATUM_MAX_PRECISION
+            ))));
+        }
+
+        // Catchall for unexpected statuses.
+        if cx.status().any() {
+            return Err(AvroError::Decode(DecodeError::Custom(format!(
+                "Unexpected error encoding numeric: {:?}",
+                cx.status()
+            ))));
+        }
+
+        self.packer.push(Datum::APD(OrderedDecimal(n)));
+
         Ok(())
     }
 
