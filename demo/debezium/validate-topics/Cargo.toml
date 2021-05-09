@@ -15,4 +15,4 @@ ore = { path = "../../../src/ore" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 structopt = "0.3.21"
 tokio = "1.5.0"
-url = "2.2.1"
+url = "2.2.2"
