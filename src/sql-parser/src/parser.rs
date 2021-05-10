@@ -2029,7 +2029,7 @@ impl<'a> Parser<'a> {
 
     fn parse_drop(&mut self) -> Result<Statement<Raw>, ParserError> {
         let object_type = match self.parse_one_of_keywords(&[
-            DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW,
+            DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW, MATERIALIZED,
         ]) {
             Some(DATABASE) => {
                 return Ok(Statement::DropDatabase(DropDatabaseStatement {
@@ -2045,6 +2045,7 @@ impl<'a> Parser<'a> {
             Some(TABLE) => ObjectType::Table,
             Some(TYPE) => ObjectType::Type,
             Some(VIEW) => ObjectType::View,
+            Some(MATERIALIZED) => return parser_err!(self,self.peek_pos(),"please use DROP VIEW instead of DROP MATERIALIZED VIEW"),
             _ => return self.expected(
                 self.peek_pos(),
                 "DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TABLE, TYPE, USER, VIEW after DROP",
