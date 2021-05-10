@@ -241,7 +241,6 @@ enum DataDecoderInner {
     DelimitedBytes {
         delimiter: u8,
         format: PreDelimitedFormat,
-        lines_seen: usize,
     },
     Csv(CsvDecoderState),
 
@@ -262,12 +261,7 @@ impl DataDecoder {
         push_metadata: bool,
     ) -> Result<Option<Row>, DataflowError> {
         match &mut self.inner {
-            DataDecoderInner::DelimitedBytes {
-                delimiter,
-                format,
-                lines_seen,
-            } => {
-                *lines_seen += 1;
+            DataDecoderInner::DelimitedBytes { delimiter, format } => {
                 let delimiter = *delimiter;
                 let chunk_idx = match bytes.iter().position(move |&byte| byte == delimiter) {
                     None => return Ok(None),
@@ -275,12 +269,12 @@ impl DataDecoder {
                 };
                 let data = &bytes[0..chunk_idx];
                 *bytes = &bytes[chunk_idx + 1..];
-                format.decode(data, Some(*lines_seen as i64), push_metadata)
+                format.decode(data, upstream_coord, push_metadata)
             }
             DataDecoderInner::Avro(avro) => {
                 avro.get_value(bytes, upstream_coord, upstream_time_millis, push_metadata)
             }
-            DataDecoderInner::Csv(csv) => csv.next(bytes, push_metadata),
+            DataDecoderInner::Csv(csv) => csv.next(bytes, upstream_coord, push_metadata),
             DataDecoderInner::PreDelimited(format) => {
                 let result = format.decode(*bytes, upstream_coord, push_metadata);
                 *bytes = &[];
@@ -288,9 +282,13 @@ impl DataDecoder {
             }
         }
     }
-    pub fn eof(&mut self, push_metadata: bool) -> Result<Option<Row>, DataflowError> {
+    pub fn eof(
+        &mut self,
+        upstream_coord: Option<i64>,
+        push_metadata: bool,
+    ) -> Result<Option<Row>, DataflowError> {
         match &mut self.inner {
-            DataDecoderInner::Csv(csv) => csv.next(&mut &[][..], push_metadata),
+            DataDecoderInner::Csv(csv) => csv.next(&mut &[][..], upstream_coord, push_metadata),
             _ => Ok(None),
         }
     }
@@ -399,7 +397,6 @@ fn get_decoder(
                 DataDecoderInner::DelimitedBytes {
                     delimiter: b'\n',
                     format: after_delimiting,
-                    lines_seen: 0,
                 }
             };
             DataDecoder { inner }
@@ -540,7 +537,7 @@ where
                             (key_decoder.as_mut(), key.is_empty())
                         {
                             let mut key = key_decoder
-                                .next(key_cursor, *position, *upstream_time_millis, false)
+                                .next(key_cursor, None, *upstream_time_millis, false)
                                 .transpose();
                             if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
                                 key = Some(Err(DecodeError::Text(format!(
@@ -549,7 +546,7 @@ where
                                 ))
                                 .into()));
                             }
-                            key.or_else(|| key_decoder.eof(false).transpose())
+                            key.or_else(|| key_decoder.eof(None, false).transpose())
                         } else {
                             None
                         };
@@ -577,8 +574,9 @@ where
                                 ))
                                 .into()));
                             }
-                            let value =
-                                value.or_else(|| value_decoder.eof(push_metadata).transpose());
+                            let value = value.or_else(|| {
+                                value_decoder.eof(*position, push_metadata).transpose()
+                            });
 
                             if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
                                 n_errors += 1;
@@ -670,6 +668,9 @@ where
     );
 
     let mut value_buf = vec![];
+
+    // The `position` value from `SourceOutput` is meaningless here -- it's just the index of a chunk.
+    // We therefore ignore it, and keep track ourselves of how many records we've seen (for filling in `mz_line_no`, etc).
     let mut n_seen = 0;
     let results = stream.unary_frontier(Pipeline, &op_name, move |_, _| {
         move |input, output| {
@@ -680,7 +681,7 @@ where
                 for SourceOutput {
                     key,
                     value,
-                    position,
+                    position: _,
                     upstream_time_millis,
                 } in data.iter()
                 {
@@ -689,7 +690,7 @@ where
                         (key_decoder.as_mut(), key.is_empty())
                     {
                         let mut key = key_decoder
-                            .next(key_cursor, *position, *upstream_time_millis, false)
+                            .next(key_cursor, None, *upstream_time_millis, false)
                             .transpose();
                         if let (Some(Ok(_)), false) = (&key, key_cursor.is_empty()) {
                             // Perhaps someday we'll assign semantics to multiple keys in one message, but for now it doesn't make sense.
@@ -727,10 +728,11 @@ where
                         // here, but that runs into borrow checker issues, so we use `loop`
                         // and break manually.
                         loop {
+                            n_seen += 1; // Match historical practice - files start at 1, not 0.
                             let old_value_cursor = *value_cursor;
                             let value = match value_decoder.next(
                                 value_cursor,
-                                *position,
+                                Some(n_seen),
                                 *upstream_time_millis,
                                 push_metadata,
                             ) {
@@ -748,7 +750,6 @@ where
                             assert!(old_value_cursor != *value_cursor || value.is_err());
 
                             let is_err = value.is_err();
-                            n_seen += 1;
                             if matches!(&key, Some(Err(_))) || matches!(&value, Err(_)) {
                                 n_errors += 1;
                             } else if matches!(&value, Ok(_)) {

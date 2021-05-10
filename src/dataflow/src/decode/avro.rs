@@ -54,7 +54,7 @@ impl AvroDecoderState {
             Ok(mut row) => {
                 self.events_success += 1;
                 if push_metadata {
-                    row.push(Datum::Int64(self.events_success))
+                    row.push(Datum::from(coord))
                 }
                 Ok(Some(row))
             }

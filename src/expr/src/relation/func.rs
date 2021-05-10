@@ -735,7 +735,6 @@ pub fn csv_extract(a: Datum, n_cols: usize) -> Vec<(Row, Diff)> {
 }
 
 pub fn repeat(a: Datum) -> Vec<(Row, Diff)> {
-    println!("Calling repeat: {:?}", a);
     let n = Diff::cast_from(a.unwrap_int64());
     vec![(Row::default(), n)]
 }

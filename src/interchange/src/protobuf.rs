@@ -214,9 +214,9 @@ impl Decoder {
             })?,
             &mut packer,
         )?;
-        if let (Some(pos), true) = (position, push_metadata) {
-            packer.push(Datum::from(pos));
-        };
+        if push_metadata {
+            packer.push(Datum::from(position));
+        }
         Ok(Some(packer.finish_and_reuse()))
     }
 }

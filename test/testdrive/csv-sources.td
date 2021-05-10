@@ -47,9 +47,9 @@ Rochester      NY        14618   2
 > SELECT * FROM static_csv_header
 city           state     zip     mz_line_no
 --------------------------------------------
-Rochester      NY        14618   2
-"New York"     NY        10004   3
-"bad,\nplace\""  CA        92679   4
+Rochester      NY        14618   1
+"New York"     NY        10004   2
+"bad,\nplace\""  CA        92679   3
 
 # Static CSV with manual headers.
 > CREATE MATERIALIZED SOURCE static_csv_manual_header (city_man, state_man, zip_man)
@@ -59,9 +59,9 @@ Rochester      NY        14618   2
 > SELECT * FROM static_csv_manual_header
 city_man       state_man  zip_man  mz_line_no
 ---------------------------------------------
-Rochester      NY         14618    2
-"New York"     NY         10004    3
-"bad,\nplace\""  CA         92679    4
+Rochester      NY         14618    1
+"New York"     NY         10004    2
+"bad,\nplace\""  CA         92679    3
 
 # Dynamic CSV with automatic headers.
 
@@ -80,7 +80,7 @@ Rochester,NY,14618
 > SELECT * FROM dynamic_csv
 city           state     zip     mz_line_no
 --------------------------------------------
-Rochester      NY        14618   2
+Rochester      NY        14618   1
 
 $ file-append path=dynamic.csv
 New York,NY,10004
@@ -88,8 +88,8 @@ New York,NY,10004
 > SELECT * FROM dynamic_csv
 city           state     zip     mz_line_no
 --------------------------------------------
-Rochester      NY        14618   2
-"New York"     NY        10004   3
+Rochester      NY        14618   1
+"New York"     NY        10004   2
 
 $ file-append path=deleting.csv
 city,state,zip

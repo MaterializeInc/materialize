@@ -70,6 +70,7 @@ impl CsvDecoderState {
     pub fn next(
         &mut self,
         chunk: &mut &[u8],
+        coord: Option<i64>,
         push_metadata: bool,
     ) -> Result<Option<Row>, DataflowError> {
         loop {
@@ -117,9 +118,7 @@ impl CsvDecoderState {
                                                         ""
                                                     })
                                                 })
-                                                .chain(iter::once(Datum::Int64(
-                                                    self.total_events() as i64,
-                                                ))),
+                                                .chain(iter::once(Datum::from(coord))),
                                         );
                                     } else {
                                         row_packer.extend((0..self.n_cols).map(|i| {
