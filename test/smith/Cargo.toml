@@ -19,4 +19,4 @@ structopt = "0.3.21"
 test-util = { path = "../test-util" }
 tokio = "1.5.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-url = "2.2.1"
+url = "2.2.2"
