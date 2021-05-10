@@ -453,7 +453,7 @@ impl<'a> Parser<'a> {
         // includes the opening/closing parentheses, even though this function
         // is not responsible for parsing them.
         fn parse(parser: &mut Parser) -> Result<Either, ParserError> {
-            if let Some(SELECT) | Some(WITH) = parser.peek_keyword() {
+            if parser.peek_keyword(SELECT) || parser.peek_keyword(WITH) {
                 // Easy case one: unambiguously a subquery.
                 Ok(Either::Query(parser.parse_query()?))
             } else if !parser.consume_token(&Token::LParen) {
@@ -1176,11 +1176,25 @@ impl<'a> Parser<'a> {
         self.peek_nth_token(0)
     }
 
-    fn peek_keyword(&self) -> Option<Keyword> {
+    fn peek_keyword(&mut self, kw: Keyword) -> bool {
         match self.peek_token() {
-            Some(Token::Keyword(kw)) => Some(kw),
-            _ => None,
+            Some(Token::Keyword(k)) => k == kw,
+            _ => false,
         }
+    }
+
+    fn peek_keywords(&mut self, keywords: &[Keyword]) -> bool {
+        for (i, keyword) in keywords.iter().enumerate() {
+            match self.peek_nth_token(i) {
+                Some(Token::Keyword(k)) => {
+                    if k != *keyword {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
     }
 
     /// Return the nth token that has not yet been processed.
@@ -1257,26 +1271,23 @@ impl<'a> Parser<'a> {
     /// Look for an expected keyword and consume it if it exists
     #[must_use]
     fn parse_keyword(&mut self, kw: Keyword) -> bool {
-        match self.peek_token() {
-            Some(Token::Keyword(k)) if k == kw => {
-                self.next_token();
-                true
-            }
-            _ => false,
+        if self.peek_keyword(kw) {
+            self.next_token();
+            true
+        } else {
+            false
         }
     }
 
     /// Look for an expected sequence of keywords and consume them if they exist
     #[must_use]
     fn parse_keywords(&mut self, keywords: &[Keyword]) -> bool {
-        let index = self.index;
-        for keyword in keywords {
-            if !self.parse_keyword(*keyword) {
-                self.index = index;
-                return false;
-            }
+        if self.peek_keywords(keywords) {
+            self.index += keywords.len();
+            true
+        } else {
+            false
         }
-        true
     }
 
     /// Look for one of the given keywords and return the one that matches.
@@ -1795,7 +1806,7 @@ impl<'a> Parser<'a> {
                 // one token of lookahead:
                 // * `KEY (` means we're parsing a list of columns for the key
                 // * `KEY FORMAT` means there is no key, we'll parse a KeyValueFormat later
-                let key = if self.peek_keyword() == Some(KEY)
+                let key = if self.peek_keyword(KEY)
                     && self.peek_nth_token(1) != Some(Token::Keyword(FORMAT))
                 {
                     let _ = self.expect_keyword(KEY);
