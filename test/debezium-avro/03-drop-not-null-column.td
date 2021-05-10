@@ -16,9 +16,6 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_drop_column_not_null (f1 INTEGER, col_not_null INTEGER NOT NULL);
 INSERT INTO alter_drop_column_not_null VALUES (123, 234);
 
-# Debezium can take a while to make the topic
-$ set-sql-timeout duration=300s
-
 > CREATE MATERIALIZED SOURCE alter_drop_column_not_null
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.alter_drop_column_not_null'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

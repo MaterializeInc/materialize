@@ -54,7 +54,7 @@ services:
         --materialized-url=postgres://materialize@materialized:6875
         --validate-catalog=/share/mzdata/catalog
         --no-reset
-        --default-timeout 60
+        --default-timeout 300
         $$*
       - bash
     environment:
