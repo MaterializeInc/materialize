@@ -11,7 +11,8 @@
 //!
 //! See the [crate-level documentation](crate) for details.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
@@ -21,12 +22,17 @@ use tokio::task;
 use tokio::time::Duration;
 use uuid::Uuid;
 
+use dataflow_types::{ExternalSourceConnector, PostgresSourceConnector, SourceConnector};
 use repr::strconv;
 use sql_parser::ast::{
-    AvroSchema, Connector, CreateSourceFormat, CreateSourceStatement, CsrSeed, DbzMode, Envelope,
-    Format, Ident, Raw, Statement,
+    display::AstDisplay, AvroSchema, Connector, CreateSourceFormat, CreateSourceStatement,
+    CreateViewStatement, CreateViewsDefinition, CreateViewsSourceTarget, CreateViewsStatement,
+    CsrSeed, DbzMode, Envelope, Expr, Format, Ident, Query, Raw, RawName, Select, SelectItem,
+    SetExpr, Statement, TableFactor, TableWithJoins, UnresolvedObjectName, Value,
 };
+use sql_parser::parser::parse_columns;
 
+use crate::catalog::Catalog;
 use crate::kafka_util;
 use crate::normalize;
 
@@ -39,102 +45,257 @@ use crate::normalize;
 /// time to complete. As a result purification does *not* have access to a
 /// [`Catalog`](crate::catalog::Catalog), as that would require locking access
 /// to the catalog for an unbounded amount of time.
-pub async fn purify(mut stmt: Statement<Raw>) -> Result<Statement<Raw>, anyhow::Error> {
-    if let Statement::CreateSource(CreateSourceStatement {
-        col_names,
-        connector,
-        format,
-        with_options,
-        envelope,
+pub fn purify(
+    catalog: &dyn Catalog,
+    mut stmt: Statement<Raw>,
+) -> impl Future<Output = Result<Statement<Raw>, anyhow::Error>> {
+    // If we're dealing with a CREATE VIEWS statement we need to query the catalog for the
+    // corresponding source connector and store it before we enter the async section.
+    let source_connector = if let Statement::CreateViews(CreateViewsStatement {
+        views_definition: CreateViewsDefinition::Source { name, .. },
         ..
-    }) = &mut stmt
+    }) = &stmt
     {
-        let mut with_options_map = normalize::options(with_options);
-        let mut config_options = BTreeMap::new();
+        normalize::unresolved_object_name(name.clone())
+            .map_err(anyhow::Error::new)
+            .and_then(|name| {
+                catalog
+                    .resolve_item(&name)
+                    .and_then(|item| item.source_connector())
+                    .map(|s| s.clone())
+                    .map_err(anyhow::Error::new)
+            })
+    } else {
+        Err(anyhow!("SQL statement does not refer to a source"))
+    };
 
-        let mut file = None;
-        match connector {
-            Connector::Kafka { broker, topic, .. } => {
-                if !broker.contains(':') {
-                    *broker += ":9092";
-                }
-
-                // Verify that the provided security options are valid and then test them.
-                config_options = kafka_util::extract_config(&mut with_options_map)?;
-                kafka_util::test_config(&broker, &topic, &config_options).await?;
-            }
-            Connector::AvroOcf { path, .. } => {
-                let path = path.clone();
-                task::block_in_place(|| {
-                    // mz_avro::Reader has no async equivalent, so we're stuck
-                    // using blocking calls here.
-                    let f = std::fs::File::open(path)?;
-                    let r = mz_avro::Reader::new(f)?;
-                    if !with_options_map.contains_key("reader_schema") {
-                        let schema = serde_json::to_string(r.writer_schema()).unwrap();
-                        with_options.push(sql_parser::ast::SqlOption::Value {
-                            name: sql_parser::ast::Ident::new("reader_schema"),
-                            value: sql_parser::ast::Value::String(schema),
-                        });
-                    }
-                    Ok::<_, anyhow::Error>(())
-                })?;
-            }
-            // Report an error if a file cannot be opened, or if it is a directory.
-            Connector::File { path, .. } => {
-                let f = File::open(&path).await?;
-                if f.metadata().await?.is_dir() {
-                    bail!("Expected a regular file, but {} is a directory.", path);
-                }
-                file = Some(f);
-            }
-            Connector::S3 { .. } => {
-                let aws_info = normalize::aws_connect_info(&mut with_options_map, None)?;
-                aws_util::aws::validate_credentials(aws_info.clone(), Duration::from_secs(1))
-                    .await?;
-            }
-            Connector::Kinesis { arn } => {
-                let region = arn
-                    .parse::<ARN>()
-                    .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?
-                    .region
-                    .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
-
-                let aws_info =
-                    normalize::aws_connect_info(&mut with_options_map, Some(region.into()))?;
-                aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
-            }
-            Connector::Postgres {
-                conn,
-                publication,
-                slot,
-            } => {
-                slot.get_or_insert_with(|| {
-                    format!(
-                        "materialize_{}",
-                        Uuid::new_v4().to_string().replace('-', "")
-                    )
-                });
-
-                // verify that we can connect upstream
-                // TODO(petrosagg): store this info along with the source for better error
-                // detection
-                let _ = postgres_util::publication_info(&conn, &publication).await?;
-            }
-            Connector::PubNub { .. } => (),
-        }
-
-        purify_format(
-            format,
-            connector,
-            &envelope,
+    async {
+        if let Statement::CreateSource(CreateSourceStatement {
             col_names,
-            file,
-            &config_options,
-        )
-        .await?;
+            connector,
+            format,
+            with_options,
+            envelope,
+            ..
+        }) = &mut stmt
+        {
+            let mut with_options_map = normalize::options(with_options);
+            let mut config_options = BTreeMap::new();
+
+            let mut file = None;
+            match connector {
+                Connector::Kafka { broker, topic, .. } => {
+                    if !broker.contains(':') {
+                        *broker += ":9092";
+                    }
+
+                    // Verify that the provided security options are valid and then test them.
+                    config_options = kafka_util::extract_config(&mut with_options_map)?;
+                    kafka_util::test_config(&broker, &topic, &config_options).await?;
+                }
+                Connector::AvroOcf { path, .. } => {
+                    let path = path.clone();
+                    task::block_in_place(|| {
+                        // mz_avro::Reader has no async equivalent, so we're stuck
+                        // using blocking calls here.
+                        let f = std::fs::File::open(path)?;
+                        let r = mz_avro::Reader::new(f)?;
+                        if !with_options_map.contains_key("reader_schema") {
+                            let schema = serde_json::to_string(r.writer_schema()).unwrap();
+                            with_options.push(sql_parser::ast::SqlOption::Value {
+                                name: sql_parser::ast::Ident::new("reader_schema"),
+                                value: sql_parser::ast::Value::String(schema),
+                            });
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    })?;
+                }
+                // Report an error if a file cannot be opened, or if it is a directory.
+                Connector::File { path, .. } => {
+                    let f = File::open(&path).await?;
+                    if f.metadata().await?.is_dir() {
+                        bail!("Expected a regular file, but {} is a directory.", path);
+                    }
+                    file = Some(f);
+                }
+                Connector::S3 { .. } => {
+                    let aws_info = normalize::aws_connect_info(&mut with_options_map, None)?;
+                    aws_util::aws::validate_credentials(aws_info.clone(), Duration::from_secs(1))
+                        .await?;
+                }
+                Connector::Kinesis { arn } => {
+                    let region = arn
+                        .parse::<ARN>()
+                        .map_err(|e| anyhow!("Unable to parse provided ARN: {:#?}", e))?
+                        .region
+                        .ok_or_else(|| anyhow!("Provided ARN does not include an AWS region"))?;
+
+                    let aws_info =
+                        normalize::aws_connect_info(&mut with_options_map, Some(region.into()))?;
+                    aws_util::aws::validate_credentials(aws_info, Duration::from_secs(1)).await?;
+                }
+                Connector::Postgres {
+                    conn,
+                    publication,
+                    slot,
+                } => {
+                    slot.get_or_insert_with(|| {
+                        format!(
+                            "materialize_{}",
+                            Uuid::new_v4().to_string().replace('-', "")
+                        )
+                    });
+
+                    // verify that we can connect upstream
+                    // TODO(petrosagg): store this info along with the source for better error
+                    // detection
+                    let _ = postgres_util::publication_info(&conn, &publication).await?;
+                }
+                Connector::PubNub { .. } => (),
+            }
+
+            purify_format(
+                format,
+                connector,
+                &envelope,
+                col_names,
+                file,
+                &config_options,
+            )
+            .await?;
+        }
+        if let Statement::CreateViews(CreateViewsStatement {
+            if_exists,
+            temporary,
+            materialized,
+            views_definition,
+        }) = &mut stmt
+        {
+            if let CreateViewsDefinition::Source {
+                name: source_name,
+                targets,
+            } = views_definition
+            {
+                match source_connector? {
+                    SourceConnector::External {
+                        connector:
+                            ExternalSourceConnector::Postgres(PostgresSourceConnector {
+                                conn,
+                                publication,
+                                ..
+                            }),
+                        ..
+                    } => {
+                        let publication_info: HashMap<_, _> =
+                            postgres_util::publication_info(&conn, &publication)
+                                .await?
+                                .into_iter()
+                                .map(|info| (info.name.clone(), info))
+                                .collect();
+
+                        let mut view_stmts = Vec::with_capacity(publication_info.len());
+
+                        let targets = targets.clone().unwrap_or_else(|| {
+                            publication_info
+                                .keys()
+                                .map(|name| CreateViewsSourceTarget {
+                                    name: Ident::new(name),
+                                    alias: None,
+                                })
+                                .collect()
+                        });
+
+                        for target in targets {
+                            let table_info = match publication_info.get(target.name.as_str()) {
+                                Some(info) => info,
+                                None => bail!(
+                                    "table {:?} does not exist in upstream database",
+                                    target.name.as_str()
+                                ),
+                            };
+
+                            let view_name =
+                                target.alias.clone().unwrap_or_else(|| target.name.clone());
+
+                            let col_schema = table_info
+                                .schema
+                                .iter()
+                                .map(|c| c.to_ast_string())
+                                .collect::<Vec<String>>()
+                                .join(", ");
+                            let (columns, _constraints) =
+                                parse_columns(&format!("({})", col_schema))?;
+
+                            let mut projection = vec![];
+                            for (i, column) in columns.iter().enumerate() {
+                                projection.push(SelectItem::Expr {
+                                    expr: Expr::Cast {
+                                        expr: Box::new(Expr::SubscriptIndex {
+                                            expr: Box::new(Expr::Identifier(vec![Ident::new(
+                                                "row_data",
+                                            )])),
+                                            subscript: Box::new(Expr::Value(Value::Number(
+                                                // LIST is one based
+                                                (i + 1).to_string(),
+                                            ))),
+                                        }),
+                                        data_type: column.data_type.clone(),
+                                    },
+                                    alias: Some(column.name.clone()),
+                                });
+                            }
+
+                            let query = Query {
+                                ctes: vec![],
+                                body: SetExpr::Select(Box::new(Select {
+                                    distinct: None,
+                                    projection,
+                                    from: vec![TableWithJoins {
+                                        relation: TableFactor::Table {
+                                            name: RawName::Name(UnresolvedObjectName::unqualified(
+                                                &source_name.to_string(),
+                                            )),
+                                            alias: None,
+                                        },
+                                        joins: vec![],
+                                    }],
+                                    selection: Some(Expr::Op {
+                                        op: "=".to_string(),
+                                        expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
+                                        expr2: Some(Box::new(Expr::Value(Value::Number(
+                                            table_info.rel_id.to_string(),
+                                        )))),
+                                    }),
+                                    group_by: vec![],
+                                    having: None,
+                                    options: vec![],
+                                })),
+                                order_by: vec![],
+                                limit: None,
+                                offset: None,
+                            };
+
+                            view_stmts.push(CreateViewStatement {
+                                name: UnresolvedObjectName::unqualified(view_name.as_str()),
+                                columns: columns.iter().map(|c| c.name.clone()).collect(),
+                                with_options: vec![],
+                                query: query,
+                                if_exists: *if_exists,
+                                temporary: *temporary,
+                                materialized: *materialized,
+                            });
+                        }
+                        *views_definition = CreateViewsDefinition::Literal(view_stmts);
+                    }
+                    SourceConnector::External { connector, .. } => {
+                        bail!("cannot generate views from {} sources", connector.name())
+                    }
+                    SourceConnector::Local => bail!("cannot generate views from local sources"),
+                }
+            }
+        }
+        Ok(stmt)
     }
-    Ok(stmt)
 }
 
 async fn purify_format(
