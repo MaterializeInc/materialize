@@ -1585,6 +1585,13 @@ impl Coordinator {
             };
             let source_id = self.catalog.allocate_id()?;
             let source_oid = self.catalog.allocate_oid()?;
+            let source_item = CatalogItem::Source(source.clone());
+            if let Some(state) = source_item.external_state() {
+                ops.push(catalog::Op::CreateExternalState {
+                    id: source_id.clone(),
+                    state,
+                });
+            }
             ops.push(catalog::Op::CreateItem {
                 id: source_id,
                 oid: source_oid,
@@ -2673,6 +2680,7 @@ impl Coordinator {
         let mut sources_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
+        let mut state_to_destroy = vec![];
 
         for op in &ops {
             if let catalog::Op::DropItem(id) = op {
@@ -2692,10 +2700,22 @@ impl Coordinator {
                     _ => (),
                 }
             }
+            if let catalog::Op::CreateExternalState { state, .. } = op {
+                state.create().await?;
+            }
+            if let catalog::Op::DropExternalState { id } = op {
+                state_to_destroy.push(self.catalog.get_external_state_by_id(&id).clone());
+            }
         }
 
         let builtin_table_updates = self.catalog.transact(ops)?;
         self.send_builtin_table_updates(builtin_table_updates).await;
+
+        if !state_to_destroy.is_empty() {
+            for state in state_to_destroy {
+                state.destroy().await?;
+            }
+        }
 
         if !sources_to_drop.is_empty() {
             for &id in &sources_to_drop {

@@ -312,6 +312,8 @@ pub enum CatalogError {
     UnknownRole(String),
     /// Unknown item.
     UnknownItem(String),
+    /// Unknown external state.
+    UnknownExternalState(String),
     /// Unknown function.
     UnknownFunction(String),
     /// Unknown source.
@@ -334,6 +336,7 @@ impl fmt::Display for CatalogError {
             Self::UnknownSchema(name) => write!(f, "unknown schema '{}'", name),
             Self::UnknownRole(name) => write!(f, "unknown role '{}'", name),
             Self::UnknownItem(name) => write!(f, "unknown catalog item '{}'", name),
+            Self::UnknownExternalState(name) => write!(f, "unknown external state '{}'", name),
             Self::InvalidDependency { name, typ } => write!(
                 f,
                 "catalog item '{}' is {} {} and so cannot be depended upon",

@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
-use dataflow_types::{ExternalSourceConnector, SinkEnvelope};
+use dataflow_types::{ExternalSourceConnector, ExternalState, SinkEnvelope};
 use expr::Id;
 use itertools::Itertools;
 use lazy_static::lazy_static;
@@ -103,6 +103,7 @@ pub struct Catalog {
     ambient_schemas: BTreeMap<String, Schema>,
     temporary_schemas: HashMap<u32, Schema>,
     roles: HashMap<String, Role>,
+    external_state: HashMap<GlobalId, ExternalState>,
     storage: Arc<Mutex<storage::Connection>>,
     oid_counter: u32,
     config: sql::catalog::CatalogConfig,
@@ -425,6 +426,14 @@ impl CatalogItem {
             }
         }
     }
+
+    // Optionally return external state being managed by a given CatalogItem.
+    pub fn external_state(&self) -> Option<ExternalState> {
+        match self {
+            CatalogItem::Source(source) => source.connector.external_state(),
+            _ => None,
+        }
+    }
 }
 
 impl CatalogEntry {
@@ -497,6 +506,7 @@ impl Catalog {
             ambient_schemas: BTreeMap::new(),
             temporary_schemas: HashMap::new(),
             roles: HashMap::new(),
+            external_state: HashMap::new(),
             storage: Arc::new(Mutex::new(storage)),
             oid_counter: FIRST_USER_OID,
             config: sql::catalog::CatalogConfig {
@@ -751,6 +761,7 @@ impl Catalog {
         }
 
         let catalog = Self::load_catalog_items(catalog)?;
+        let catalog = Self::load_external_state(catalog)?;
 
         let mut builtin_table_updates = vec![];
         for (schema_name, schema) in &catalog.ambient_schemas {
@@ -807,6 +818,24 @@ impl Catalog {
             };
             let oid = c.allocate_oid()?;
             c.insert_item(id, oid, name, item);
+        }
+        Ok(c)
+    }
+
+    /// Takes a catalog which only has external state information in its on-disk storage ("unloaded")
+    /// and returns a catalog loaded with that state.
+    pub fn load_external_state(mut c: Catalog) -> Result<Catalog, Error> {
+        let external_state_data = c.storage().load_external_state()?;
+        for (id, state) in external_state_data {
+            let state = match c.deserialize_state(state) {
+                Ok(state) => state,
+                Err(e) => {
+                    return Err(Error::new(ErrorKind::Corruption {
+                        detail: format!("failed to deserialize external state {}: {}", id, e),
+                    }))
+                }
+            };
+            c.insert_external_state(id, state);
         }
         Ok(c)
     }
@@ -1017,6 +1046,10 @@ impl Catalog {
         &self.by_id[id]
     }
 
+    pub fn get_external_state_by_id(&self, id: &GlobalId) -> &ExternalState {
+        &self.external_state[id]
+    }
+
     /// Creates a new schema in the `Catalog` for temporary items
     /// indicated by the TEMPORARY or TEMP keywords.
     pub fn create_temporary_schema(&mut self, conn_id: u32) -> Result<(), Error> {
@@ -1149,12 +1182,22 @@ impl Catalog {
         self.by_id.insert(entry.id, entry.clone());
     }
 
+    pub fn insert_external_state(&mut self, id: GlobalId, state: ExternalState) {
+        self.external_state.insert(id, state);
+    }
+
     pub fn drop_database_ops(&mut self, name: String) -> Vec<Op> {
         let mut ops = vec![];
         let mut seen = HashSet::new();
         if let Some(database) = self.by_name.get(&name) {
             for (schema_name, schema) in &database.schemas {
-                Self::drop_schema_items(schema, &self.by_id, &mut ops, &mut seen);
+                Self::drop_schema_items(
+                    schema,
+                    &self.by_id,
+                    &self.external_state,
+                    &mut ops,
+                    &mut seen,
+                );
                 ops.push(Op::DropSchema {
                     database_name: DatabaseSpecifier::Name(name.clone()),
                     schema_name: schema_name.clone(),
@@ -1171,7 +1214,13 @@ impl Catalog {
         if let DatabaseSpecifier::Name(database_name) = name.database {
             if let Some(database) = self.by_name.get(&database_name) {
                 if let Some(schema) = database.schemas.get(&name.schema) {
-                    Self::drop_schema_items(schema, &self.by_id, &mut ops, &mut seen);
+                    Self::drop_schema_items(
+                        schema,
+                        &self.by_id,
+                        &self.external_state,
+                        &mut ops,
+                        &mut seen,
+                    );
                     ops.push(Op::DropSchema {
                         database_name: DatabaseSpecifier::Name(database_name),
                         schema_name: name.schema,
@@ -1186,7 +1235,7 @@ impl Catalog {
         let mut ops = vec![];
         let mut seen = HashSet::new();
         for &id in ids {
-            Self::drop_item_cascade(id, &self.by_id, &mut ops, &mut seen);
+            Self::drop_item_cascade(id, &self.by_id, &self.external_state, &mut ops, &mut seen);
         }
         ops
     }
@@ -1194,26 +1243,31 @@ impl Catalog {
     fn drop_schema_items(
         schema: &Schema,
         by_id: &BTreeMap<GlobalId, CatalogEntry>,
+        external_state: &HashMap<GlobalId, ExternalState>,
         ops: &mut Vec<Op>,
         seen: &mut HashSet<GlobalId>,
     ) {
         for &id in schema.items.values() {
-            Self::drop_item_cascade(id, by_id, ops, seen)
+            Self::drop_item_cascade(id, by_id, external_state, ops, seen)
         }
     }
 
     fn drop_item_cascade(
         id: GlobalId,
         by_id: &BTreeMap<GlobalId, CatalogEntry>,
+        external_state: &HashMap<GlobalId, ExternalState>,
         ops: &mut Vec<Op>,
         seen: &mut HashSet<GlobalId>,
     ) {
         if !seen.contains(&id) {
             seen.insert(id);
             for &u in &by_id[&id].used_by {
-                Self::drop_item_cascade(u, by_id, ops, seen)
+                Self::drop_item_cascade(u, by_id, external_state, ops, seen)
             }
             ops.push(Op::DropItem(id));
+            if external_state.get(&id).is_some() {
+                ops.push(Op::DropExternalState { id });
+            }
         }
     }
 
@@ -1277,6 +1331,10 @@ impl Catalog {
                 name: FullName,
                 item: CatalogItem,
             },
+            CreateExternalState {
+                id: GlobalId,
+                state: ExternalState,
+            },
 
             DropDatabase {
                 name: String,
@@ -1289,6 +1347,7 @@ impl Catalog {
                 name: String,
             },
             DropItem(GlobalId),
+            DropExternalState(GlobalId),
             UpdateItem {
                 id: GlobalId,
                 to_name: FullName,
@@ -1410,6 +1469,11 @@ impl Catalog {
                         item,
                     }]
                 }
+                Op::CreateExternalState { id, state } => {
+                    let serialized_state = self.serialize_state(&state);
+                    tx.insert_external_state(id, &serialized_state)?;
+                    vec![Action::CreateExternalState { id, state }]
+                }
                 Op::DropDatabase { name } => {
                     tx.remove_database(&name)?;
                     builtin_table_updates.push(self.pack_database_update(&name, -1));
@@ -1460,6 +1524,10 @@ impl Catalog {
                     }
                     builtin_table_updates.extend(self.pack_item_update(id, -1));
                     vec![Action::DropItem(id)]
+                }
+                Op::DropExternalState { id } => {
+                    tx.remove_external_state(id)?;
+                    vec![Action::DropExternalState(id)]
                 }
                 Op::RenameItem { id, to_name } => {
                     let mut actions = Vec::new();
@@ -1594,6 +1662,11 @@ impl Catalog {
                     builtin_table_updates.extend(self.pack_item_update(id, 1));
                 }
 
+                Action::CreateExternalState { id, state } => {
+                    self.insert_external_state(id, state);
+                    // todo@jldlaughlin: add builtin tables to track external state
+                }
+
                 Action::DropDatabase { name } => {
                     self.by_name.remove(&name);
                 }
@@ -1644,6 +1717,11 @@ impl Catalog {
                         indexes.remove(i);
                     }
                     self.indexes.remove(&id);
+                }
+
+                Action::DropExternalState(id) => {
+                    self.external_state.remove(&id);
+                    // todo@jldlaughlin: add builtin tables to track external state
                 }
 
                 Action::UpdateItem { id, to_name, item } => {
@@ -1717,6 +1795,18 @@ impl Catalog {
             Some(eval_env) => eval_env.into(),
         };
         self.parse_item(create_sql, pcx)
+    }
+
+    fn serialize_state(&self, external_state: &ExternalState) -> Vec<u8> {
+        let state = SerializedExternalState::V1 {
+            state: external_state.clone(),
+        };
+        serde_json::to_vec(&state).expect("external state serialization cannot fail")
+    }
+
+    fn deserialize_state(&self, bytes: Vec<u8>) -> Result<ExternalState, anyhow::Error> {
+        let SerializedExternalState::V1 { state } = serde_json::from_slice(&bytes)?;
+        Ok(state)
     }
 
     fn parse_item(
@@ -1995,6 +2085,10 @@ pub enum Op {
         name: FullName,
         item: CatalogItem,
     },
+    CreateExternalState {
+        id: GlobalId,
+        state: ExternalState,
+    },
     DropDatabase {
         name: String,
     },
@@ -2009,6 +2103,9 @@ pub enum Op {
     /// IDs come from the output of `plan_remove`; otherwise consistency rules
     /// may be violated.
     DropItem(GlobalId),
+    DropExternalState {
+        id: GlobalId,
+    },
     RenameItem {
         id: GlobalId,
         to_name: String,
@@ -2022,6 +2119,11 @@ enum SerializedCatalogItem {
         // The name "eval_env" is historical.
         eval_env: Option<SerializedPlanContext>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum SerializedExternalState {
+    V1 { state: ExternalState },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

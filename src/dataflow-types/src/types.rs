@@ -654,6 +654,13 @@ impl SourceConnector {
             SourceConnector::Local => false,
         }
     }
+
+    pub fn external_state(&self) -> Option<ExternalState> {
+        match self {
+            SourceConnector::External { connector, .. } => connector.external_state(),
+            SourceConnector::Local => None,
+        }
+    }
 }
 
 pub fn cached_files(e: &ExternalSourceConnector) -> Vec<PathBuf> {
@@ -736,6 +743,18 @@ impl ExternalSourceConnector {
         match self {
             ExternalSourceConnector::Kafka(k) => k.enable_caching,
             _ => false,
+        }
+    }
+
+    /// Returns the external state related to a particular source that is
+    /// managed by Materialize
+    pub fn external_state(&self) -> Option<ExternalState> {
+        match self {
+            ExternalSourceConnector::Postgres(p) => Some(ExternalState::PostgresReplicationSlot {
+                conn: p.conn.clone(),
+                slot_prefix: p.slot_name.clone(),
+            }),
+            _ => None,
         }
     }
 }
@@ -1008,5 +1027,27 @@ impl LinearOperator {
     /// input of the specified arity.
     pub fn is_trivial(&self, arity: usize) -> bool {
         self.predicates.is_empty() && self.projection.iter().copied().eq(0..arity)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub enum ExternalState {
+    PostgresReplicationSlot { conn: String, slot_prefix: String },
+}
+
+impl ExternalState {
+    pub async fn create(&self) -> Result<(), anyhow::Error> {
+        match self {
+            // todo@jldlaughlin: move slot creation logic from source to here
+            ExternalState::PostgresReplicationSlot { .. } => (),
+        }
+        Ok(())
+    }
+
+    pub async fn destroy(&self) -> Result<(), anyhow::Error> {
+        match self {
+            ExternalState::PostgresReplicationSlot { .. } => (),
+        }
+        Ok(())
     }
 }

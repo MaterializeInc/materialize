@@ -105,6 +105,14 @@ const MIGRATIONS: &[&str] = &[
     // Introduced in v0.7.0.
     "INSERT INTO schemas (database_id, name) VALUES
         (NULL, 'mz_internal');",
+    // Adds the ability to store information about external state managed by
+    // Materialize.
+    //
+    // Introduced in 0.7.4.
+    "CREATE TABLE external_state_data (
+        gid   blob PRIMARY KEY,
+        data  blob NOT NULL
+    );",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -362,6 +370,17 @@ impl Connection {
             .collect()
     }
 
+    pub fn load_external_state(&self) -> Result<Vec<(GlobalId, Vec<u8>)>, Error> {
+        self.inner
+            .prepare("SELECT gid, data FROM external_state_data")?
+            .query_and_then(params![], |row| -> Result<_, Error> {
+                let id: SqlVal<GlobalId> = row.get(0)?;
+                let state: Vec<u8> = row.get(1)?;
+                Ok((id.0, state))
+            })?
+            .collect()
+    }
+
     pub fn allocate_id(&mut self) -> Result<GlobalId, Error> {
         let tx = self.inner.transaction()?;
         // SQLite doesn't support u64s, so we constrain ourselves to the more
@@ -481,6 +500,20 @@ impl Transaction<'_> {
         }
     }
 
+    pub fn insert_external_state(&self, id: GlobalId, external_state: &[u8]) -> Result<(), Error> {
+        match self
+            .inner
+            .prepare_cached("INSERT INTO external_state_data (gid, data) VALUES (?, ?)")?
+            .execute(params![SqlVal(&id), external_state])
+        {
+            Ok(_) => Ok(()),
+            Err(err) if is_constraint_violation(&err) => Err(Error::new(
+                ErrorKind::ExternalStateAlreadyExists(id.to_string()),
+            )),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     pub fn remove_database(&self, name: &str) -> Result<(), Error> {
         let n = self
             .inner
@@ -530,6 +563,19 @@ impl Transaction<'_> {
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
+        }
+    }
+
+    pub fn remove_external_state(&self, id: GlobalId) -> Result<(), Error> {
+        let n = self
+            .inner
+            .prepare_cached("DELETE FROM external_state_data WHERE gid = ?")?
+            .execute(params![SqlVal(id)])?;
+        assert!(n <= 1);
+        if n == 1 {
+            Ok(())
+        } else {
+            Err(SqlCatalogError::UnknownExternalState(id.to_string()).into())
         }
     }
 

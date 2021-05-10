@@ -32,6 +32,7 @@ pub(crate) enum ErrorKind {
     SchemaAlreadyExists(String),
     RoleAlreadyExists(String),
     ItemAlreadyExists(String),
+    ExternalStateAlreadyExists(String),
     ReservedSchemaName(String),
     ReservedRoleName(String),
     ReadOnlySystemSchema(String),
@@ -107,6 +108,7 @@ impl std::error::Error for Error {
             | ErrorKind::SchemaAlreadyExists(_)
             | ErrorKind::RoleAlreadyExists(_)
             | ErrorKind::ItemAlreadyExists(_)
+            | ErrorKind::ExternalStateAlreadyExists(_)
             | ErrorKind::ReservedSchemaName(_)
             | ErrorKind::ReservedRoleName(_)
             | ErrorKind::ReadOnlySystemSchema(_)
@@ -143,6 +145,13 @@ impl fmt::Display for Error {
             }
             ErrorKind::ItemAlreadyExists(name) => {
                 write!(f, "catalog item '{}' already exists", name)
+            }
+            ErrorKind::ExternalStateAlreadyExists(gid) => {
+                write!(
+                    f,
+                    "external state for catalog item '{}' already exists",
+                    gid
+                )
             }
             ErrorKind::ReservedSchemaName(name) => {
                 write!(f, "unacceptable schema name '{}'", name)
