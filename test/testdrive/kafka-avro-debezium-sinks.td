@@ -7,29 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Test Avro sinks.
-
-# Test that we invent field names for unnamed columns.
-
-> CREATE VIEW unnamed_cols AS SELECT 1, 2 AS b, 3;
-
-> CREATE SINK unnamed_cols_sink FROM unnamed_cols
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'unnamed-cols-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-$ kafka-verify format=avro sink=materialize.public.unnamed_cols_sink
-{"before": null, "after": {"row": {"column1": 1, "b": 2, "column3": 3}}}
-
-# Test that invented field names do not clash with named columns.
-
-> CREATE VIEW clashing_cols AS SELECT 1, 2 AS column1, 3 as b, 4 as b, 5 as b;
-
-> CREATE SINK clashing_cols_sink FROM clashing_cols
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'clashing-cols-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-$ kafka-verify format=avro sink=materialize.public.clashing_cols_sink
-{"before": null, "after": {"row": {"column1": 1, "column1_1": 2, "b": 3, "b1": 4, "b2": 5}}}
+# Test behavior that is specific to Kafka Avro Sinks with ENVELOPE DEBEZIUM
 
 # Test a basic sink with multiple rows.
 
@@ -45,29 +23,7 @@ $ kafka-verify format=avro sink=materialize.public.data_sink
 {"before": null, "after": {"row": {"a": 2, "b": 1}}}
 {"before": null, "after": {"row": {"a": 3, "b": 1}}}
 
-# Test date/time types.
-
-> CREATE VIEW datetime_data (date, ts, ts_tz) AS VALUES
-  (DATE '2000-01-01', TIMESTAMP '2000-01-01 10:10:10.111', TIMESTAMPTZ '2000-01-01 10:10:10.111+02'),
-  (DATE '2000-02-01', TIMESTAMP '2000-02-01 10:10:10.111', TIMESTAMPTZ '2000-02-01 10:10:10.111+02')
-
-> CREATE SINK datetime_data_sink FROM datetime_data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'datetime-data-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-$ kafka-verify format=avro sink=materialize.public.datetime_data_sink
-{"before": null, "after": {"row": {"date": 10988, "ts": 949399810111000, "ts_tz": 949392610111000}}}
-{"before": null, "after": {"row": {"date": 10957, "ts": 946721410111000, "ts_tz": 946714210111000}}}
-
-> CREATE VIEW time_data (time) AS VALUES (TIME '01:02:03'), (TIME '01:02:04')
-
-> CREATE SINK time_data_sink FROM time_data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'time-data-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-$ kafka-verify format=avro sink=materialize.public.time_data_sink
-{"before": null, "after": {"row": {"time": 3723000000}}}
-{"before": null, "after": {"row": {"time": 3724000000}}}
+# More complex sinks, with multiple keys and/or a consistency topic
 
 $ set schema={
     "type": "record",
@@ -193,20 +149,6 @@ $ kafka-verify format=avro sink=materialize.public.input_sink consistency=debezi
 {"id": "3", "status": "BEGIN", "event_count": null}
 {"id": "3", "status": "END", "event_count": {"long": 1}}
 
-! CREATE SINK bad_sink FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a, a)
-  FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Repeated column name in sink key: a
-
-> CREATE VIEW ambiguous (a, a) AS SELECT * FROM (VALUES (1, 2))
-
-! CREATE SINK bad_sink FROM ambiguous
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
-  FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-Ambiguous column: a
-
 # Again, compare split by transaction. See comment just above.
 
 $ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
@@ -219,11 +161,3 @@ $ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort
 
 $ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
 {"b": 7, "a": 1} {"before": null, "after": {"row": {"a": 1, "b": 7}}, "transaction": {"id": "3"}}
-
-> CREATE VIEW json_data (a, b) AS VALUES ('{"a":1, "b":2}'::jsonb, 2)
-
-# Sinks with JSON columns should not crash - see https://github.com/MaterializeInc/materialize/issues/4722
-> CREATE SINK json_data_sink FROM json_data
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'json-data-sink'
-  FORMAT AVRO
-  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
