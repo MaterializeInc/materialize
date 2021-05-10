@@ -36,7 +36,7 @@ The cost of maintaining a dataflow can be very different from the cost of execut
 
 ### Collections
 
-Materialize dataflows act on **collections** of data, [multisets](https://en.wikipedia.org/wiki/Multiset) that store events in an update stream as triples of `(data, time, diff)`.
+Materialize dataflows act on **collections** of data, [multisets](https://en.wikipedia.org/wiki/Multiset) that store each event in an update stream as a triple of `(data, time, diff)`.
 
 Term | Definition
 -----|-----------
@@ -85,14 +85,43 @@ Some of the simplest arrangements are those for Differential Dataflow operators.
 
 #### Three-way join
 
-Most exciting place for arrangements is JOINS.
+Using an example from the [TPC-H](http://www.tpc.org/tpch/) data warehousing benchmark, let's say that you want to determine which ten orders that haven't shipped as of a certain date have the greatest potential revenue. The query itself is:
+
+```sql
+SELECT
+    l_orderkey,
+    o_orderdate,
+    o_shippriority,
+    sum(l_extendedprice * (1 - l_discount)) AS revenue
+FROM
+    customer,
+    orders,
+    lineitem
+WHERE
+    c_mktsegment = 'BUILDING'
+    AND c_custkey = o_custkey
+    AND l_orderkey = o_orderkey
+    AND o_orderdate < DATE '1995-03-15'
+    AND l_shipdate > DATE '1995-03-15'
+GROUP BY
+    l_orderkey,
+    o_orderdate,
+    o_shippriority
+ORDER BY
+    revenue desc,
+    o_orderdate
+LIMIT 10;
+```
+
+The query is a three-way join between `customer`, `orders`, and `lineitem`, followed by a reduction. For the purposes of this explanation, we're going to focus on the join and skip the reduction.
+
+When joining three columns, most dataflows will build an index on the combination of Column 1 + Column 2 + Column 3, but also on every other possible combination of columns: Column 1 + Column 2, Column 1 + Column 3, and Column 2 + Column 3.  Materialize does something different.
+
+Materialize builds indexes on Column 1 + 2 and (Column 1 + Column 2) + Column 3. It can do this because it separates out the work of the join calculation from the work of indexing information or creating arrangements. Each of the original columns and both of the necessary joins create arrangements that can be reused for other queries.
 
 ![Diagram of arrangements for a three-way join](/images/arrangements-3-way-join.png "Diagram of arrangements for a three-way join")
 
-Create a materialized view: 3-way join group by fields 1,2,3  - Mz creates arrangements
-
-
-Trad: if you join on 3 columns, it builds on 1+2+3, but also 1+2, 1+3, and 2+3. Mz doesn’t do this. (Ask Andy about example again)
+You can find a more detailed analysis of the dataflow (and the performance benefits of using Materialize) in our blog post on [Joins in Materialize](https://materialize.com/joins-in-materialize).
 
 ## Analyzing arrangements
 
