@@ -35,11 +35,6 @@ Specifically, the goals of postgres sources are to:
 In order to keep the initial scope manageable a few assumptions are made.
 Lifting those assumptions will be part of the goals for future work.
 
-* **The upstream database doesn't require complex authentication or TLS
-  connections.** This constraint will be lifted shortly after the MVP. This
-  will involve adding syntax (possibly WITH options) in the connector syntax and
-  threading them through to the postgres driver.
-
 * **The schema will remain static for the duration of the source.** When
   creating a postgres source a list of upstream tables will be specified either
   explicitly by the user or by introspecting the upstream database. After that
@@ -100,6 +95,41 @@ to move data from one postgres instance to another.
    updates with the WAL offset up to which it has consumed which then lets the
    upstream database safely clean up segments from disk.
 
+### User experience
+
+The system will expose a low level source type to users that once instanciated
+provides the raw replication stream data as a streaming source. Specifically,
+users will have to invoke syntax similar to `CREATE SOURCE "foo" FROM POSTGRES
+..` which will create a source `foo` with a generic schema not tied to
+particular upstream table datatypes. Each row of every upstream table is
+represented as a single row with two columns in the replication stream source.
+The first column is the `oid` of the table, which lets the system know where the
+generic row belongs, and the `row_data` column which is nothing more than a text
+encoded, variable length LIST. The number of text elements in a list is always
+equal to the number of columns in of the upstream table. Finally, the source
+will only contain oids for tables that are included in the `publication`
+specified by the user.
+
+Once the replication stream source has been created the user can then create
+sub-views that filter the stream with particular `oid`s and convert the text
+elements of `row_data` into proper datatypes depending on the upstream schema.
+
+While nothing stops creating these subviews manually, we will offer a shorthand
+notation for autogenerating the view definition. The mechanism is based on the
+`CREATE VIEWS FROM SOURCE "source_name" ("tableA", "tableB")` syntax. When
+materialize processes this statement it can rewrite it into view definitions
+based on the specific source type.
+
+Here is a complete example of what the user will type into materialize:
+
+```sql
+CREATE SOURCE "repl_stream"
+       FROM POSTGRES HOST 'host=postgres user=postgres dbname=postgres'
+       PUBLICATION 'mz_source';
+
+CREATE VIEWS FROM SOURCE "repl_stream" ("table_a", "table_b");
+```
+
 ### Replication mechanism
 
 In order to replicate a set of tables from an upstream database a replica needs
@@ -152,28 +182,31 @@ Each transaction is timestamped with the wall-clock time at the time of the
 BEGIN message. This allows the source implementation to emit rows as it receives
 them and ensure that transaction boundaries are guaranteed.
 
-### Adaptation to multiple tables
+### Optimizing multiple table syncing
 
-If the sources naively applied the mechanism described above for every source
-instance they would [very quickly
-exhaust](https://www.postgresql.org/docs/13/runtime-config-replication.html#GUC-MAX-REPLICATION-SLOTS)
-the available replication slots from upstream and also multiply the bandwidth
-used by several times.
+If one view was created per upstream table one by one would lead to several
+source instances of being created. This is problematic since each source
+instance needs a separate replication slot created upstream which can be
+[exhausted very
+quickly](https://www.postgresql.org/docs/13/runtime-config-replication.html#GUC-MAX-REPLICATION-SLOTS)
+and also the required bandwidth would be multiplied by the number of synced
+tables.
 
-In order to have one independent `SOURCE` object for each upstream table while
-also maintaining a single replication connection between them a new SQL syntax
-will be introduced that allows creating multiple sources at once.
+An easy way to ensure this doesn't happen is to declare the original SOURCE a
+MATERIALIZED SOURCE. This has the benefit of creating only one source instance,
+avoiding the bandiwdth bloat. The downside is that the in-memory index created
+will contain the data for all the tables, even ones that are not needed by
+downstream views, and also hold data in their text-encoded format meaning that
+each downstream user will have to decode independently.
 
-Specifically, a user should be able to do `CREATE SOURCES FROM POSTGRES..` and
-have one `SOURCE` object created for each upstream table. By introducing this
-syntax the SQL planner will have an opportunity to create all the relevant
-sources at once and therefore give them some shared state. The shared state
-could be some form of `Arc<RwLock<Option<T>>>` where the first source instance
-that grabs the write lock will initialize it and afterwards all the source
-instances will keep a read lock around to share the stream.
+In order to optimize the in-memory indexes an un-materialized source needs to be
+created on which multiple materialized views are based. In order to ensure a
+single source instance is created the views have to be created all at once so
+that materialize has a chance to process them as a single unit.
 
-The concrete syntax for `CREATE SOURCES` can be seen in
-https://github.com/MaterializeInc/materialize/pull/6299.
+This is accomplished using the `CREATE VIEWS FROM SOURCE ..` syntax. When views
+are created using this syntax the system will create single dataflow where each
+per-table index is reading data from a singular source instance.
 
 ### Testing strategy
 
