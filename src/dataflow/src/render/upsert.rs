@@ -312,10 +312,6 @@ fn evaluate(
     }
     // We pack dummy values in locations that do not reference
     // specific columns.
-    println!(
-        "In evaluate; datums: {:?}; position_or: {:?}",
-        datums, position_or
-    );
     row_packer.clear();
     row_packer.extend(position_or.iter().map(|x| match x {
         Some(column) => datums[*column],

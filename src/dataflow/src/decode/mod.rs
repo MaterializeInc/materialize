@@ -229,7 +229,7 @@ impl PreDelimitedFormat {
                 Ok(Some(row_packer.finish_and_reuse()))
             }
             PreDelimitedFormat::Protobuf(pb) => pb
-                .get_value2(bytes, upstream_coord, push_metadata)
+                .get_value(bytes, upstream_coord, push_metadata)
                 .transpose(),
         }
     }

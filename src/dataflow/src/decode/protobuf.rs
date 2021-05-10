@@ -28,7 +28,7 @@ impl ProtobufDecoderState {
             events_error: 0,
         }
     }
-    pub fn get_value2(
+    pub fn get_value(
         &mut self,
         bytes: &[u8],
         position: Option<i64>,
