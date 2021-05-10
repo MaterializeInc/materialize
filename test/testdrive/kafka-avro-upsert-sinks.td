@@ -172,3 +172,59 @@ $ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort
 $ kafka-verify format=avro sink=materialize.public.input_sink_multiple_keys sort-messages=true
 {"a": 1, "b": 1}
 {"a": 1, "b": 7} {"a": 1, "b": 7, "transaction": {"id": "3"}}
+
+# verify if/when input deletions are emitted to an UPSERT sink
+
+$ kafka-create-topic topic=input-with-deletions
+
+> CREATE MATERIALIZED SOURCE input_with_deletions
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-with-deletions-${testdrive.seed}'
+  FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
+
+> CREATE VIEW input_with_deletions_keyed AS SELECT a, max(b) as b FROM input_with_deletions GROUP BY a
+
+> CREATE SINK input_with_deletions_sink FROM input_with_deletions_keyed
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+
+$ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+
+$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+{"a": 1} {"a": 1, "b": 1}
+
+$ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
+{"before": null, "after": {"row": {"a": 1, "b": 2}}}
+
+$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+{"a": 1} {"a": 1, "b": 2}
+
+# deletion of the "shadowed" input should not cause downstream updates
+
+$ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
+{"before": {"row": {"a": 1, "b": 1}}, "after": null}
+
+$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+
+$ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
+{"before": {"row": {"a": 1, "b": 2}}, "after": null}
+
+# now we should see a NULL update on the key, which means a DELETE
+
+$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+{"a": 1}
+
+$ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
+{"before": null, "after": {"row": {"a": 1, "b": 1}}}
+{"before": null, "after": {"row": {"a": 1, "b": 2}}}
+
+$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+{"a": 1} {"a": 1, "b": 2}
+
+$ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
+{"before": {"row": {"a": 1, "b": 2}}, "after": null}
+
+# removing the occluding input should "reveal" the previous input again
+#
+$ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
+{"a": 1} {"a": 1, "b": 1}
