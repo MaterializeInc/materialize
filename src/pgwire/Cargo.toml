@@ -19,7 +19,7 @@ itertools = "0.9.0"
 lazy_static = "1.4.0"
 log = "0.4.13"
 openssl = { version = "0.10.34", features = ["vendored"] }
-ordered-float = { version = "2.1.1", features = ["serde"] }
+ordered-float = { version = "2.2.0", features = ["serde"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
