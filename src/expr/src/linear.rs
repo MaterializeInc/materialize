@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{MirRelationExpr, MirScalarExpr, NullaryFunc};
+use crate::{MirRelationExpr, MirScalarExpr};
 use repr::{Datum, Row};
 
 /// A compound operator that can be applied row-by-row.
@@ -855,6 +855,7 @@ impl MapFilterProject {
                         true
                     } else {
                         reference_count[i] == 1
+                            || self.expressions[i - input_arity].contains_temporal()
                     }
                 }
             })
@@ -1009,7 +1010,6 @@ pub fn memoize_expr(
                 MirScalarExpr::Column(_) | MirScalarExpr::Literal(_, _) => {
                     // Literals do not need to be memoized.
                 }
-                MirScalarExpr::CallNullary(_func @ NullaryFunc::MzLogicalTimestamp) => {}
                 _ => {
                     if let Some(position) = memoized_parts.iter().position(|e2| e2 == e) {
                         // Any complex expression that already exists as a prior column can
