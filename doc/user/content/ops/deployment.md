@@ -22,7 +22,7 @@ in some cases dramatically reduce Materialize's memory footprint.
 ### Compaction
 
 To prevent memory from growing without bound, Materialize periodically
-"compacts" data in [arrangements](../overview/arrangements). For
+"compacts" data in [arrangements](/overview/arrangements). For
 example, if you have a source that tracks product inventory, you might receive
 periodic inventory updates throughout the day:
 
