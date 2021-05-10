@@ -31,7 +31,7 @@ anyhow = "1.0.40"
 askama = { version = "0.10.5", features = ["serde-json"] }
 async-trait = "0.1.50"
 atty = "0.2.14"
-backtrace = "0.3.57"
+backtrace = "0.3.59"
 build-info = { path = "../build-info" }
 cfg-if = "1.0.0"
 clap = { version = "2.33.0", features = ["wrap_help"] }
@@ -84,7 +84,7 @@ tracing = "0.1.25"
 # TODO(benesch): we can use the default features here once tracing-subscriber
 # does not enable chrono's "oldtime" feature.
 tracing-subscriber = { version = "0.2.18", default-features = false, features = ["ansi", "env-filter", "fmt", "tracing-log"] }
-url = "2.2.1"
+url = "2.2.2"
 uuid = "0.8.2"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
@@ -123,7 +123,7 @@ flate2 = "1.0.20"
 hex = "0.4.3"
 hex-literal = "0.3.1"
 reqwest = { version = "0.11.3", features = ["blocking"] }
-sha2 = "0.9.3"
+sha2 = "0.9.4"
 tar = "0.4.33"
 walkdir = "2.3.2"
 
