@@ -1386,81 +1386,48 @@ impl<'a> Parser<'a> {
 
     /// Parse a SQL CREATE statement
     fn parse_create(&mut self) -> Result<Statement<Raw>, ParserError> {
-        if self.parse_keyword(DATABASE) {
+        if self.peek_keyword(DATABASE) {
             self.parse_create_database()
-        } else if self.parse_keyword(SCHEMA) {
+        } else if self.peek_keyword(SCHEMA) {
             self.parse_create_schema()
-        } else if self.parse_keyword(TABLE) {
-            self.prev_token();
-            self.parse_create_table()
-        } else if self.parse_keyword(OR) || self.parse_keyword(VIEW) {
-            self.prev_token();
-            self.parse_create_view()
-        } else if self.parse_keyword(TEMP) || self.parse_keyword(TEMPORARY) {
-            if self.parse_keyword(VIEW) {
-                self.prev_token();
-                self.prev_token();
-                self.parse_create_view()
-            } else if self.parse_keyword(MATERIALIZED) && self.parse_keyword(VIEW) {
-                self.prev_token();
-                self.prev_token();
-                self.prev_token();
-                self.parse_create_view()
-            } else if self.parse_keyword(TABLE) {
-                self.prev_token();
-                self.prev_token();
-                self.parse_create_table()
-            } else {
-                self.expected(
-                    self.peek_pos(),
-                    "VIEW or MATERIALIZED VIEW after CREATE TEMPORARY",
-                    self.peek_token(),
-                )
-            }
-        } else if self.parse_keyword(MATERIALIZED) {
-            if self.parse_keyword(VIEW) {
-                self.prev_token();
-                self.prev_token();
-                self.parse_create_view()
-            } else if self.parse_keyword(SOURCE) {
-                self.prev_token();
-                self.prev_token();
-                self.parse_create_source()
-            } else {
-                self.expected(
-                    self.peek_pos(),
-                    "VIEW or SOURCE after CREATE MATERIALIZED",
-                    self.peek_token(),
-                )
-            }
-        } else if self.parse_keyword(SOURCE) {
-            self.prev_token();
-            self.parse_create_source()
-        } else if self.parse_keyword(SINK) {
+        } else if self.peek_keyword(SINK) {
             self.parse_create_sink()
-        } else if self.parse_keyword(DEFAULT) {
-            self.expect_keyword(INDEX)?;
-            self.prev_token();
-            self.prev_token();
-            self.parse_create_index()
-        } else if self.parse_keyword(INDEX) {
-            self.prev_token();
-            self.parse_create_index()
-        } else if self.parse_keyword(ROLE) || self.parse_keyword(USER) {
-            self.prev_token();
-            self.parse_create_role()
-        } else if self.parse_keyword(TYPE) {
+        } else if self.peek_keyword(TYPE) {
             self.parse_create_type()
+        } else if self.peek_keyword(ROLE) || self.peek_keyword(USER) {
+            self.parse_create_role()
+        } else if self.peek_keyword(INDEX) || self.peek_keywords(&[DEFAULT, INDEX]) {
+            self.parse_create_index()
+        } else if self.peek_keyword(SOURCE) || self.peek_keywords(&[MATERIALIZED, SOURCE]) {
+            self.parse_create_source()
+        } else if self.peek_keyword(TABLE)
+            || self.peek_keywords(&[TEMP, TABLE])
+            || self.peek_keywords(&[TEMPORARY, TABLE])
+        {
+            self.parse_create_table()
         } else {
-            self.expected(
-                self.peek_pos(),
-                "DATABASE, INDEX, ROLE, SCHEMA, SINK, SOURCE, TYPE, USER, or [MATERIALIZED] VIEW after CREATE",
-                self.peek_token(),
-            )
+            let index = self.index;
+
+            // go over optional modifiers
+            let _ = self.parse_keywords(&[OR, REPLACE]);
+            let _ = self.parse_one_of_keywords(&[TEMP, TEMPORARY]);
+            let _ = self.parse_keyword(MATERIALIZED);
+
+            if self.parse_keyword(VIEW) {
+                self.index = index;
+                self.parse_create_view()
+            } else {
+                self.expected(
+                    self.peek_pos(),
+                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW after CREATE",
+                    self.peek_token(),
+                )
+            }
         }
     }
 
     fn parse_create_database(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(DATABASE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
         Ok(Statement::CreateDatabase(CreateDatabaseStatement {
@@ -1470,6 +1437,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_schema(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(SCHEMA)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         Ok(Statement::CreateSchema(CreateSchemaStatement {
@@ -1696,6 +1664,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_sink(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(SINK)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_object_name()?;
         self.expect_keyword(FROM)?;
@@ -1981,6 +1950,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_type(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(TYPE)?;
         let name = self.parse_object_name()?;
         self.expect_keyword(AS)?;
         let as_type = match self.expect_one_of_keywords(&[LIST, MAP])? {

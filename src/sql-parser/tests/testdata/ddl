@@ -394,7 +394,7 @@ CreateSource(CreateSourceStatement { name: UnresolvedObjectName([Ident("foo")]),
 parse-statement
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
 ----
-error: Expected VIEW or SOURCE after CREATE MATERIALIZED, found OR
+error: Expected DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW after CREATE, found OR
 CREATE MATERIALIZED OR VIEW foo as SELECT * from bar
                     ^
 
