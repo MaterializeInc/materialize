@@ -8,12 +8,13 @@
 // by the Apache License, Version 2.0.
 
 use std::any::Any;
+use std::cmp;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::Collection;
+use differential_dataflow::{Collection, Hashable};
 use lazy_static::lazy_static;
 use log::{error, info};
 use prometheus::{
@@ -26,10 +27,12 @@ use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::message::Message;
 use rdkafka::producer::Producer;
 use rdkafka::producer::{BaseRecord, DeliveryResult, ProducerContext, ThreadedProducer};
+use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
-use timely::dataflow::operators::generic::FrontieredInputHandle;
-use timely::dataflow::Scope;
+use timely::dataflow::operators::generic::{FrontieredInputHandle, InputHandle, OutputHandle};
+use timely::dataflow::operators::Capability;
+use timely::dataflow::{Scope, Stream};
 
 use dataflow_types::{KafkaSinkConnector, SinkAsOf};
 use expr::GlobalId;
@@ -141,7 +144,6 @@ struct KafkaSink {
     name: String,
     shutdown_flag: Arc<AtomicBool>,
     metrics: SinkMetrics,
-    encoder: Encoder,
     producer: ThreadedProducer<SinkProducerContext>,
     activator: timely::scheduling::Activator,
     txn_timeout: Duration,
@@ -242,7 +244,52 @@ pub fn kafka<G>(
 where
     G: Scope<Timestamp = Timestamp>,
 {
+    let name = format!("kafka-{}", id);
+
     let stream = &collection.inner;
+
+    let encoder = Encoder::new(key_desc, value_desc, connector.consistency.is_some());
+    let key_schema_id = connector.key_schema_id;
+    let value_schema_id = connector.value_schema_id;
+
+    let encoded_stream = avro_encode_stream(
+        stream,
+        as_of.clone(),
+        connector
+            .consistency
+            .clone()
+            .and_then(|consistency| consistency.gate_ts),
+        encoder,
+        key_schema_id,
+        value_schema_id,
+        connector.fuel,
+        name.clone(),
+    );
+
+    produce_to_kafka(encoded_stream, id, name, connector, as_of)
+}
+
+/// Produces/sends a stream of encoded rows (as `Vec<u8>`) to Kafka.
+///
+/// This operator exchanges all updates to a single worker by hashing on the given sink `id`.
+///
+/// Updates are only sent to Kafka once the input frontier has passed their `time`. Updates are
+/// sent in ascending timestamp order. The order of updates at the same timstamp will not be changed.
+/// However, it is important to keep in mind that this operator exchanges updates so if the input
+/// stream is sharded updates will likely arrive at this operator in some non-deterministic order.
+///
+/// Updates that are not beyond the given [`SinkAsOf`] and/or the `gate_ts` in
+/// [`KafkaSinkConnector`] will be discarded without producing them.
+pub fn produce_to_kafka<G>(
+    stream: Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>,
+    id: GlobalId,
+    name: String,
+    connector: KafkaSinkConnector,
+    as_of: SinkAsOf,
+) -> Box<dyn Any>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &connector.addrs.to_string());
 
@@ -284,7 +331,6 @@ where
         false
     };
 
-    let name = format!("kafka-{}", id);
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let mut builder = OperatorBuilder::new(name.clone(), stream.scope());
 
@@ -294,8 +340,6 @@ where
             &id.to_string(),
             &stream.scope().index().to_string(),
         );
-
-        let encoder = Encoder::new(key_desc, value_desc, connector.consistency.is_some());
 
         let producer = config
             .create_with_context::<_, ThreadedProducer<_>>(SinkProducerContext::new(
@@ -312,7 +356,6 @@ where
             name,
             shutdown_flag: shutdown_flag.clone(),
             metrics,
-            encoder,
             producer,
             activator,
             txn_timeout: Duration::from_secs(5),
@@ -326,7 +369,7 @@ where
 
     let mut sink_logic = move |input: &mut FrontieredInputHandle<
         _,
-        ((Option<Row>, Option<Row>), Timestamp, Diff),
+        ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff),
         _,
     >| {
         if s.shutdown_flag.load(Ordering::SeqCst) {
@@ -334,7 +377,7 @@ where
             return false;
         }
 
-        // Encode and queue all pending rows waiting to be sent to kafka
+        // Queue all pending rows waiting to be sent to kafka
         input.for_each(|_, rows| {
             rows.swap(&mut vector);
             for ((key, value), time, diff) in vector.drain(..) {
@@ -363,15 +406,6 @@ where
                     continue;
                 };
                 let diff = diff as usize;
-
-                let key = key.map(|key| {
-                    s.encoder
-                        .encode_key_unchecked(connector.key_schema_id.unwrap(), key)
-                });
-                let value = value.map(|value| {
-                    s.encoder
-                        .encode_value_unchecked(connector.value_schema_id, value)
-                });
 
                 let rows = pending_rows.entry(time).or_default();
                 rows.push(EncodedRow {
@@ -562,9 +596,9 @@ where
     };
 
     // We want exactly one worker to send all the data to the sink topic.
-    // This should already have been handled upstream (in render/mod.rs),
-    // so we can use `Pipeline` here.
-    let mut input = builder.new_input(stream, Pipeline);
+    let hashed_id = id.hashed();
+    let mut input = builder.new_input(&stream, Exchange::new(move |_| hashed_id));
+
     builder.build_reschedule(|_capabilities| {
         move |frontiers| {
             let mut input_handle = FrontieredInputHandle::new(&mut input, &frontiers[0]);
@@ -573,4 +607,133 @@ where
     });
 
     Box::new(KafkaSinkToken { shutdown_flag })
+}
+
+/// Encodes a stream of `(Option<Row>, Option<Row>)` updates using Avro.
+///
+/// This operator will only encode `fuel` number of updates per invocation. If necessary, it will
+/// stash updates and use an [`timely::scheduling::Activator`] to re-schedule future invocations.
+///
+/// Input [`Row`] updates must me compatible with the given [`Encoder`].
+///
+/// Updates that are not beyond the given [`SinkAsOf`] and/or the `gate_ts` will be discarded
+/// without encoding them.
+///
+/// Input updates do not have to be partitioned and/or sorted. This operator will not exchange
+/// data. Updates with lower timestamps will be processed before updates with higher timestamps
+/// if they arrive in order. However, this is not a guarantee, as this operator does not wait
+/// for the frontier to signal completeness. It is an optimization for downstream operators
+/// that behave suboptimal when receiving updates that are too far in the future with respect
+/// to the current frontier. The order of updates that arrive at the same timestamp will not be
+/// changed.
+fn avro_encode_stream<G>(
+    input_stream: &Stream<G, ((Option<Row>, Option<Row>), Timestamp, Diff)>,
+    as_of: SinkAsOf,
+    gate_ts: Option<Timestamp>,
+    encoder: Encoder,
+    key_schema_id: Option<i32>,
+    value_schema_id: i32,
+    fuel: usize,
+    name_prefix: String,
+) -> Stream<G, ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff)>
+where
+    G: Scope<Timestamp = Timestamp>,
+{
+    let name = format!("{}-avro_encode", name_prefix);
+
+    let mut builder = OperatorBuilder::new(name, input_stream.scope());
+    let mut input = builder.new_input(&input_stream, Pipeline);
+    let (mut output, output_stream) = builder.new_output();
+    builder.set_notify(false);
+
+    let activator = input_stream
+        .scope()
+        .activator_for(&builder.operator_info().address[..]);
+
+    let mut stash: HashMap<Capability<Timestamp>, Vec<_>> = HashMap::new();
+    let mut vector = Vec::new();
+    let mut encode_logic = move |input: &mut InputHandle<
+        Timestamp,
+        ((Option<Row>, Option<Row>), Timestamp, Diff),
+        _,
+    >,
+                                 output: &mut OutputHandle<
+        _,
+        ((Option<Vec<u8>>, Option<Vec<u8>>), Timestamp, Diff),
+        _,
+    >| {
+        let mut fuel_remaining = fuel;
+        // stash away all the input we get, we want to be a nice citizen
+        input.for_each(|cap, data| {
+            data.swap(&mut vector);
+            let stashed = stash.entry(cap.retain()).or_default();
+            for update in vector.drain(..) {
+                let time = update.1;
+
+                let should_emit = if as_of.strict {
+                    as_of.frontier.less_than(&time)
+                } else {
+                    as_of.frontier.less_equal(&time)
+                };
+
+                let ts_gated = match gate_ts {
+                    Some(gate_ts) => time <= gate_ts,
+                    None => false,
+                };
+
+                if !should_emit || ts_gated {
+                    // Skip stale data for already published timestamps
+                    continue;
+                }
+                stashed.push(update);
+            }
+        });
+
+        // work off some of our data and then yield, can't be hogging
+        // the worker for minutes at a time
+
+        while fuel_remaining > 0 && !stash.is_empty() {
+            let lowest_ts = stash
+                .keys()
+                .min_by(|x, y| x.time().cmp(y.time()))
+                .expect("known to exist")
+                .clone();
+            let records = stash.get_mut(&lowest_ts).expect("known to exist");
+
+            let mut session = output.session(&lowest_ts);
+            let num_records_to_drain = cmp::min(records.len(), fuel_remaining);
+            records
+                .drain(..num_records_to_drain)
+                .for_each(|((key, value), time, diff)| {
+                    let key =
+                        key.map(|key| encoder.encode_key_unchecked(key_schema_id.unwrap(), key));
+                    let value =
+                        value.map(|value| encoder.encode_value_unchecked(value_schema_id, value));
+                    session.give(((key, value), time, diff));
+                });
+
+            fuel_remaining -= num_records_to_drain;
+
+            if records.is_empty() {
+                // drop our capability for this time
+                stash.remove(&lowest_ts);
+            }
+        }
+
+        if !stash.is_empty() {
+            activator.activate();
+            return true;
+        }
+        // signal that we're complete now
+        false
+    };
+
+    builder.build_reschedule(|_capabilities| {
+        move |_frontiers| {
+            let mut output_handle = output.activate();
+            encode_logic(&mut input, &mut output_handle)
+        }
+    });
+
+    output_stream
 }
