@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail, Error};
 
 use byteorder::{BigEndian, ByteOrder};
 use mz_avro::error::Error as AvroError;
@@ -383,7 +383,7 @@ impl ConfluentAvroResolver {
                 cache
                     .get(schema_id, &self.reader_schema)
                     .await
-                    .with_context(|| format!("Failed to fetch schema with ID {}", schema_id))?
+                    .map_err(Error::msg)?
             }
 
             // If we haven't been asked to use a schema registry, we have no way
