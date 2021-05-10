@@ -752,7 +752,7 @@ impl ExternalSourceConnector {
         match self {
             ExternalSourceConnector::Postgres(p) => Some(ExternalState::PostgresReplicationSlot {
                 conn: p.conn.clone(),
-                slot_prefix: p.slot_name.clone(),
+                slot_name: p.slot_name.clone(),
             }),
             _ => None,
         }
@@ -1032,7 +1032,7 @@ impl LinearOperator {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum ExternalState {
-    PostgresReplicationSlot { conn: String, slot_prefix: String },
+    PostgresReplicationSlot { conn: String, slot_name: String },
 }
 
 impl ExternalState {
@@ -1046,7 +1046,9 @@ impl ExternalState {
 
     pub async fn destroy(&self) -> Result<(), anyhow::Error> {
         match self {
-            ExternalState::PostgresReplicationSlot { .. } => (),
+            ExternalState::PostgresReplicationSlot { conn, slot_name } => {
+                postgres_util::drop_replication_slots(conn, &[slot_name]).await?
+            }
         }
         Ok(())
     }

@@ -12,8 +12,8 @@
 use std::fmt;
 
 use anyhow::anyhow;
-use tokio_postgres::types::Type as PgType;
 use tokio_postgres::NoTls;
+use tokio_postgres::{types::Type as PgType, Client};
 
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::impl_display;
@@ -133,4 +133,35 @@ pub async fn publication_info(
     }
 
     Ok(table_infos)
+}
+
+pub async fn drop_replication_slots(conn: &str, slots: &[&str]) -> Result<(), anyhow::Error> {
+    let (client, connection) = tokio_postgres::connect(&conn, NoTls).await?;
+    tokio::spawn(connection);
+
+    for slot in slots {
+        let active_pid = query_pg_replication_slots(&client, slot).await?;
+        if let Some(pid) = active_pid {
+            client
+                .query("SELECT pg_terminate_backend($1)", &[&pid])
+                .await?;
+        }
+        client
+            .query("SELECT pg_drop_replication_slot($1)", &[&slot])
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn query_pg_replication_slots(
+    client: &Client,
+    slot: &str,
+) -> Result<Option<i32>, anyhow::Error> {
+    let row = client
+        .query_one(
+            "SELECT active_pid FROM pg_replication_slots WHERE slot_name = $1::TEXT",
+            &[&slot],
+        )
+        .await?;
+    Ok(row.get(0))
 }

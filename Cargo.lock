@@ -867,6 +867,7 @@ dependencies = [
  "interchange",
  "kafka-util",
  "log",
+ "postgres-util",
  "regex",
  "repr",
  "rusoto_core",
