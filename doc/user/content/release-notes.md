@@ -61,7 +61,7 @@ Wrap your release notes at the 80 character mark.
 - **Breaking change.** Change the default for the `enable_auto_commit` option
   on [Kafka sources](/sql/create-source/avro-kafka) to `false`.
 
-- Support the [equality operator](/sql/functions/#boolean) on
+- Support [equality operators](/sql/functions/#boolean) on
   [array data](/sql/types/array).
 
 {{% version-header v0.7.2 %}}
