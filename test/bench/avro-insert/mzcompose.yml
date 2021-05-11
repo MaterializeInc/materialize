@@ -25,7 +25,7 @@ x-port-mappings:
 version: '3.7'
 services:
   create-views:
-    mzbuild: avro-upsert-create-views
+    mzbuild: avro-insert-create-views
   perf-dash-metrics:
     mzbuild: materialized
     ports:
@@ -121,10 +121,12 @@ services:
       # ensure that data doesn't get lost across restarts
       # data will be lost if you remove docker volumes (using nuke, for example)
       - prometheus:/prometheus
+      - grafana:/var/lib/grafana
       # specialized configurations
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
 
 volumes:
+  grafana:
   prometheus:
 
 mzworkflows:
@@ -156,25 +158,25 @@ mzworkflows:
 
   setup-benchmark:
     env:
-      UPSERT_GENERATOR_DISTRIBUTION: ${UPSERT_GENERATOR_DISTRIBUTION:-benchmark}
-      UPSERT_GENERATOR_NUM_RECORDS: ${UPSERT_GENERATOR_NUM_RECORDS:-400000000}
-      UPSERT_GENERATOR_PARALLELISM: ${UPSERT_GENERATOR_PARALLELISM:-40}
+      AVRO_GENERATOR_DISTRIBUTION: ${AVRO_GENERATOR_DISTRIBUTION:-benchmark}
+      AVRO_GENERATOR_NUM_RECORDS: ${AVRO_GENERATOR_NUM_RECORDS:-400000000}
+      AVRO_GENERATOR_PARALLELISM: ${AVRO_GENERATOR_PARALLELISM:-40}
     steps:
     - step: workflow
       workflow: start-services
     - step: run
       service: kafka-avro-generator
       command: >-
-        --parallelism=${UPSERT_GENERATOR_PARALLELISM}
-        --num-records=${UPSERT_GENERATOR_NUM_RECORDS}
-        --distribution=${UPSERT_GENERATOR_DISTRIBUTION}
-        --topic=upsertavrotest
+        --parallelism=${AVRO_GENERATOR_PARALLELISM}
+        --num-records=${AVRO_GENERATOR_NUM_RECORDS}
+        --distribution=${AVRO_GENERATOR_DISTRIBUTION}
+        --topic=insertavrotest
 
   run-benchmark:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-16}
       METRIC_VERIFIER_TIMEOUT: ${METRIC_VERIFIER_TIMEOUT:-3600}
-      UPSERT_GENERATOR_NUM_RECORDS: ${UPSERT_GENERATOR_NUM_RECORDS:-400000000}
+      AVRO_GENERATOR_NUM_RECORDS: ${AVRO_GENERATOR_NUM_RECORDS:-400000000}
     steps:
     - step: remove-services
       services: [materialized, perf-dash-scraper]
@@ -188,7 +190,7 @@ mzworkflows:
         scrape
         --timeout-seconds=${METRIC_VERIFIER_TIMEOUT}
         "sum(mz_messages_ingested)"
-        ${UPSERT_GENERATOR_NUM_RECORDS}
+        ${AVRO_GENERATOR_NUM_RECORDS}
     - step: run
       service: create-views
     - step: wait
@@ -206,8 +208,8 @@ mzworkflows:
 
   setup-benchmark-large:
     env:
-      UPSERT_GENERATOR_DISTRIBUTION: benchmark
-      UPSERT_GENERATOR_NUM_RECORDS: 400000000
+      AVRO_GENERATOR_DISTRIBUTION: benchmark
+      AVRO_GENERATOR_NUM_RECORDS: 400000000
     steps:
     - step: workflow
       workflow: setup-benchmark
@@ -215,7 +217,7 @@ mzworkflows:
   run-benchmark-large:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-16}
-      UPSERT_GENERATOR_NUM_RECORDS: 400000000
+      AVRO_GENERATOR_NUM_RECORDS: 400000000
     steps:
     - step: workflow
       workflow: run-benchmark
@@ -230,9 +232,9 @@ mzworkflows:
 
   setup-benchmark-medium:
     env:
-      UPSERT_GENERATOR_DISTRIBUTION: medium
-      UPSERT_GENERATOR_NUM_RECORDS: 20000000
-      UPSERT_GENERATOR_PARALLELISM: 8
+      AVRO_GENERATOR_DISTRIBUTION: medium
+      AVRO_GENERATOR_NUM_RECORDS: 20000000
+      AVRO_GENERATOR_PARALLELISM: 8
     steps:
     - step: workflow
       workflow: setup-benchmark
@@ -241,7 +243,7 @@ mzworkflows:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-8}
       METRIC_VERIFIER_TIMEOUT: 900
-      UPSERT_GENERATOR_NUM_RECORDS: 20000000
+      AVRO_GENERATOR_NUM_RECORDS: 20000000
     steps:
     - step: workflow
       workflow: run-benchmark
@@ -261,9 +263,9 @@ mzworkflows:
 
   setup-benchmark-ci:
     env:
-      UPSERT_GENERATOR_DISTRIBUTION: small
-      UPSERT_GENERATOR_NUM_RECORDS: 100000
-      UPSERT_GENERATOR_PARALLELISM: 4
+      AVRO_GENERATOR_DISTRIBUTION: small
+      AVRO_GENERATOR_NUM_RECORDS: 100000
+      AVRO_GENERATOR_PARALLELISM: 4
     steps:
     - step: workflow
       workflow: setup-benchmark
@@ -272,7 +274,7 @@ mzworkflows:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-8}
       METRIC_VERIFIER_TIMEOUT: 30
-      UPSERT_GENERATOR_NUM_RECORDS: 100000
+      AVRO_GENERATOR_NUM_RECORDS: 100000
     steps:
     - step: workflow
       workflow: run-benchmark
