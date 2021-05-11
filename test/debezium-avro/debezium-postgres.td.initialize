@@ -58,3 +58,9 @@ $ http-request method=POST url=http://debezium:8083/connectors content-type=appl
     "decimal.handling.mode": "precise"
   }
 }
+
+# Sleep for 10 seconds, as Debezium may fail to replicate any
+# postgresql statements that come immediately afterwards
+
+> SELECT mz_internal.mz_sleep(10)
+<null>
