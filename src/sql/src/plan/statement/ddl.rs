@@ -49,9 +49,9 @@ use crate::ast::{
     ColumnOption, Compression, Connector, CreateDatabaseStatement, CreateIndexStatement,
     CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, ObjectType, Raw, SqlOption, Statement,
-    UnresolvedObjectName, Value, ViewDefinition, WithOption,
+    CreateViewStatement, CreateViewsDefinitions, CreateViewsStatement, DataType, DbzMode,
+    DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior,
+    ObjectType, Raw, SqlOption, Statement, UnresolvedObjectName, Value, ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -67,9 +67,9 @@ use crate::plan::{
     self, plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
     CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, QueryContext, Sink, Source,
-    Table, Type, TypeInner, View,
+    CreateViewPlan, CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan,
+    QueryContext, Sink, Source, Table, Type, TypeInner, View,
 };
 use crate::pure::Schema;
 
@@ -1164,6 +1164,40 @@ pub fn plan_create_view(
         if_not_exists,
         depends_on,
     }))
+}
+
+pub fn describe_create_views(
+    _: &StatementContext,
+    _: CreateViewsStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_views(
+    scx: &StatementContext,
+    stmt: CreateViewsStatement<Raw>,
+) -> Result<Plan, anyhow::Error> {
+    match stmt.definitions {
+        CreateViewsDefinitions::Literal(view_definitions) => {
+            let mut planned_views = Vec::with_capacity(view_definitions.len());
+            for definition in view_definitions {
+                let view = CreateViewStatement {
+                    temporary: stmt.temporary,
+                    materialized: stmt.materialized,
+                    if_exists: stmt.if_exists,
+                    definition,
+                };
+                match plan_create_view(scx, view, &Params::empty())? {
+                    Plan::CreateView(plan) => planned_views.push(plan),
+                    _ => unreachable!(),
+                }
+            }
+            Ok(Plan::CreateViews(CreateViewsPlan {
+                views: planned_views,
+            }))
+        }
+        CreateViewsDefinitions::Source { .. } => bail!("cannot create view from source"),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -87,10 +87,10 @@ use sql::plan::StatementDesc;
 use sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, CreateDatabasePlan,
     CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, ExplainPlan, FetchPlan, IndexOption, IndexOptionName,
-    InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, PlanContext, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, TailPlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan, FetchPlan, IndexOption,
+    IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, PlanContext,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, TailPlan,
 };
 use storage::Message as PersistedMessage;
 use transform::Optimizer;
