@@ -39,6 +39,7 @@ use crate::render::SystemEventTime;
 /// in arrangements for other join inputs. These lookups require specific
 /// instructions about which expressions to use as keys. Along the way,
 /// various closures are applied to filter and project as early as possible.
+#[derive(Debug)]
 pub struct DeltaJoinPlan {
     /// The set of path plans.
     ///
@@ -48,6 +49,7 @@ pub struct DeltaJoinPlan {
 }
 
 /// A delta query path is implemented by a sequences of stages,
+#[derive(Debug)]
 pub struct DeltaPathPlan {
     /// The relation whose updates seed the dataflow path.
     source_relation: usize,
@@ -64,6 +66,7 @@ pub struct DeltaPathPlan {
 }
 
 /// A delta query stage performs a stream lookup into an arrangement.
+#[derive(Debug)]
 pub struct DeltaStagePlan {
     /// The relation index into which we will look up.
     lookup_relation: usize,
@@ -214,6 +217,8 @@ where
                 map_filter_project,
             );
 
+            println!("WORKER {} RENDERING: {:?}", scope.index(), join_plan);
+
             // Collects error streams for the ambient scope.
             let mut scope_errs = Vec::new();
 
@@ -240,12 +245,12 @@ where
                 // of the arrangement is by a relation before or after it in the order, resp.
                 // Because the alt and neu variants have different types, we will maintain
                 // them in different collections.
-                let mut arrangements = std::collections::HashMap::new();
+                let mut arrangements = std::collections::BTreeMap::new();
                 for relation in 0..inputs.len() {
                     let order = &orders[relation];
                     for (other, lookup_key) in order.iter() {
                         arrangements
-                            .entry((&inputs[*other], &lookup_key[..]))
+                            .entry((other, &lookup_key[..]))
                             .or_insert_with(|| {
                                 match self
                                     .arrangement(&inputs[*other], &lookup_key[..])
@@ -315,7 +320,7 @@ where
                         // Ensure this input is rendered, and extract its update stream.
                         let mut update_stream = if let Some((_key, val)) = arrangements
                             .iter()
-                            .find(|(key, _val)| key.0 == &inputs[source_relation])
+                            .find(|(key, _val)| key.0 == &source_relation)
                         {
                             match val {
                                 Ok(local) => {
@@ -370,7 +375,7 @@ where
                             // We may need to cache each of these if we want to re-use the same wrapped
                             // arrangement, rather than re-wrap each time we use a thing.
                             let (oks, errs) = match arrangements
-                                .get(&(&inputs[lookup_relation], &lookup_key[..]))
+                                .get(&(&lookup_relation, &lookup_key[..]))
                                 .unwrap()
                             {
                                 Ok(local) => {
