@@ -504,7 +504,7 @@ where
         true,
     );
 
-    // The Debezium deduplication logic relies on elements for the same key going to the same worker.
+    // The Debezium deduplication and upsert logic rely on elements for the same key going to the same worker.
     // Other decoders don't care; so we distribute things round-robin (i.e., by "position"), and
     // fall back to arbitrarily hashing by value if the upstream didn't give us a position.
     let use_key_contract = matches!(envelope, SourceEnvelope::Debezium(..));
@@ -728,11 +728,10 @@ where
                         // here, but that runs into borrow checker issues, so we use `loop`
                         // and break manually.
                         loop {
-                            n_seen += 1; // Match historical practice - files start at 1, not 0.
                             let old_value_cursor = *value_cursor;
                             let value = match value_decoder.next(
                                 value_cursor,
-                                Some(n_seen),
+                                Some(n_seen + 1), // Match historical practice - files start at 1, not 0.
                                 *upstream_time_millis,
                                 push_metadata,
                             ) {
@@ -744,6 +743,7 @@ where
                                 }
                                 Ok(Some(value)) => Ok(value),
                             };
+                            n_seen += 1;
 
                             // If the decoders decoded a message, they need to have made progress consuming the bytes.
                             // Otherwise, we risk going into an infinite loop.
