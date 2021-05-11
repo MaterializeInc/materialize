@@ -138,8 +138,8 @@ $ kafka-verify format=avro sink=materialize.public.snk6
 # Ensure the data is read into the source before creating sinks from it
 # to correctly test WITH/WITHOUT SNAPSHOT.
 > SELECT * FROM dynamic_src
-jack jill 2
-goofus gallant 3
+jack jill 1
+goofus gallant 2
 
 > CREATE SINK snk7 FROM dynamic_src
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk7'
