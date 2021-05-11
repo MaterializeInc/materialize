@@ -24,9 +24,10 @@ use repr::ColumnName;
 use sql_parser::ast::display::AstDisplay;
 use sql_parser::ast::visit_mut::{self, VisitMut};
 use sql_parser::ast::{
-    AstInfo, Connector, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
+    AstInfo, CreateIndexStatement, CreateSinkStatement, CreateSourceStatement,
     CreateTableStatement, CreateTypeStatement, CreateViewStatement, Function, FunctionArgs, Ident,
     IfExistsBehavior, Query, Raw, SqlOption, Statement, TableFactor, UnresolvedObjectName, Value,
+    ViewDefinition,
 };
 
 use crate::names::{DatabaseSpecifier, FullName, PartialName};
@@ -256,7 +257,7 @@ pub fn create_statement(
         Statement::CreateSource(CreateSourceStatement {
             name,
             col_names: _,
-            connector,
+            connector: _,
             with_options: _,
             format: _,
             envelope: _,
@@ -266,12 +267,6 @@ pub fn create_statement(
             *name = allocate_name(name)?;
             *if_not_exists = false;
             *materialized = false;
-            if let Connector::Postgres { columns, .. } = connector {
-                let mut normalizer = QueryNormalizer::new(scx);
-                for c in columns {
-                    normalizer.visit_column_def_mut(c);
-                }
-            }
         }
 
         Statement::CreateTable(CreateTableStatement {
@@ -314,13 +309,16 @@ pub fn create_statement(
         }
 
         Statement::CreateView(CreateViewStatement {
-            name,
-            columns: _,
-            query,
             temporary,
             materialized,
             if_exists,
-            with_options: _,
+            definition:
+                ViewDefinition {
+                    name,
+                    query,
+                    columns: _,
+                    with_options: _,
+                },
         }) => {
             *name = if *temporary {
                 allocate_temporary_name(name)?

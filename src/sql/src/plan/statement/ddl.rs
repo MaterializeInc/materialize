@@ -49,9 +49,9 @@ use crate::ast::{
     ColumnOption, Compression, Connector, CreateDatabaseStatement, CreateIndexStatement,
     CreateRoleOption, CreateRoleStatement, CreateSchemaStatement, CreateSinkStatement,
     CreateSourceStatement, CreateTableStatement, CreateTypeAs, CreateTypeStatement,
-    CreateViewStatement, DataType, DbzMode, DropDatabaseStatement, DropObjectsStatement, Envelope,
-    Expr, Format, Ident, IfExistsBehavior, ObjectType, Raw, SqlOption, Statement,
-    UnresolvedObjectName, Value, WithOption,
+    CreateViewStatement, CreateViewsDefinitions, CreateViewsStatement, DataType, DbzMode,
+    DropDatabaseStatement, DropObjectsStatement, Envelope, Expr, Format, Ident, IfExistsBehavior,
+    ObjectType, Raw, SqlOption, Statement, UnresolvedObjectName, Value, ViewDefinition, WithOption,
 };
 use crate::catalog::{CatalogItem, CatalogItemType};
 use crate::kafka_util;
@@ -59,17 +59,15 @@ use crate::names::{DatabaseSpecifier, FullName, SchemaName};
 use crate::normalize;
 use crate::plan::error::PlanError;
 use crate::plan::expr::{ColumnRef, HirScalarExpr, JoinKind};
-use crate::plan::query::{resolve_names_data_type, ExprContext, QueryLifetime};
-use crate::plan::scope::Scope;
+use crate::plan::query::{resolve_names_data_type, QueryLifetime};
 use crate::plan::statement::{StatementContext, StatementDesc};
-use crate::plan::typeconv::{plan_hypothetical_cast, CastContext};
 use crate::plan::{
     self, plan_utils, query, AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan,
     AlterItemRenamePlan, AlterNoopPlan, CreateDatabasePlan, CreateIndexPlan, CreateRolePlan,
     CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan, DropSchemaPlan,
-    HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, QueryContext, Sink, Source,
-    Table, Type, TypeInner, View,
+    CreateViewPlan, CreateViewsPlan, DropDatabasePlan, DropItemsPlan, DropRolesPlan,
+    DropSchemaPlan, HirRelationExpr, Index, IndexOption, IndexOptionName, Params, Plan, Sink,
+    Source, Table, Type, TypeInner, View,
 };
 use crate::pure::Schema;
 
@@ -741,8 +739,6 @@ pub fn plan_create_source(
         Connector::Postgres {
             conn,
             publication,
-            table,
-            columns,
             slot,
         } => {
             scx.require_experimental_mode("Postgres Sources")?;
@@ -751,77 +747,13 @@ pub fn plan_create_source(
                 .as_ref()
                 .ok_or_else(|| anyhow!("Postgres sources must provide a slot name"))?;
 
-            let qcx = QueryContext::root(scx, QueryLifetime::Static);
-            let cast_desc = RelationDesc::empty();
-            let ecx = ExprContext {
-                qcx: &qcx,
-                name: "postgres column cast",
-                scope: &Scope::empty(None),
-                relation_type: &cast_desc.typ(),
-                allow_aggregates: false,
-                allow_subqueries: true,
-            };
-
-            // Build the expected relation description
-            let col_names: Vec<_> = columns
-                .iter()
-                .map(|c| Some(normalize::column_name(c.name.clone())))
-                .collect();
-
-            let mut col_types = vec![];
-            let mut key_cols = vec![];
-            let mut cast_exprs = vec![];
-            for (i, c) in columns.iter().enumerate() {
-                if let Some(collation) = &c.collation {
-                    unsupported!(format!(
-                        "CREATE SOURCE FROM POSTGRES with column collation: {}",
-                        collation
-                    ));
-                }
-
-                let (aug_data_type, _ids) = resolve_names_data_type(scx, c.data_type.clone())?;
-                let scalar_ty = plan::scalar_type_from_sql(scx, &aug_data_type)?;
-
-                let mut nullable = true;
-                for option in &c.options {
-                    match &option.option {
-                        ColumnOption::Null => (),
-                        ColumnOption::NotNull => nullable = false,
-                        ColumnOption::Unique { is_primary: true } => key_cols.push(i),
-                        other => unsupported!(format!(
-                            "CREATE SOURCE FROM POSTGRES with column constraint: {}",
-                            other
-                        )),
-                    }
-                }
-
-                let cast_expr = plan_hypothetical_cast(
-                    &ecx,
-                    CastContext::Explicit,
-                    &ScalarType::String,
-                    &scalar_ty,
-                )
-                .unwrap();
-
-                col_types.push(scalar_ty.nullable(nullable));
-                cast_exprs.push(cast_expr);
-            }
-
-            let typ = if key_cols.is_empty() {
-                RelationType::new(col_types)
-            } else {
-                RelationType::new(col_types).with_key(key_cols)
-            };
-            let desc = RelationDesc::new(typ, col_names);
             let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
                 conn: conn.clone(),
                 publication: publication.clone(),
-                ast_table: table.to_ast_string(),
-                cast_exprs,
                 slot_name: slot_name.clone(),
             });
 
-            let encoding = SourceDataEncoding::Single(DataEncoding::Postgres(desc));
+            let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
             (connector, encoding)
         }
         Connector::PubNub {
@@ -1102,13 +1034,16 @@ pub fn plan_create_view(
 ) -> Result<Plan, anyhow::Error> {
     let create_sql = normalize::create_statement(scx, Statement::CreateView(stmt.clone()))?;
     let CreateViewStatement {
-        name,
-        columns,
-        query,
         temporary,
         materialized,
         if_exists,
-        with_options,
+        definition:
+            ViewDefinition {
+                name,
+                columns,
+                query,
+                with_options,
+            },
     } = &mut stmt;
     if !with_options.is_empty() {
         unsupported!("WITH options");
@@ -1161,6 +1096,40 @@ pub fn plan_create_view(
         if_not_exists,
         depends_on,
     }))
+}
+
+pub fn describe_create_views(
+    _: &StatementContext,
+    _: CreateViewsStatement<Raw>,
+) -> Result<StatementDesc, anyhow::Error> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_views(
+    scx: &StatementContext,
+    stmt: CreateViewsStatement<Raw>,
+) -> Result<Plan, anyhow::Error> {
+    match stmt.definitions {
+        CreateViewsDefinitions::Literal(view_definitions) => {
+            let mut planned_views = Vec::with_capacity(view_definitions.len());
+            for definition in view_definitions {
+                let view = CreateViewStatement {
+                    temporary: stmt.temporary,
+                    materialized: stmt.materialized,
+                    if_exists: stmt.if_exists,
+                    definition,
+                };
+                match plan_create_view(scx, view, &Params::empty())? {
+                    Plan::CreateView(plan) => planned_views.push(plan),
+                    _ => unreachable!(),
+                }
+            }
+            Ok(Plan::CreateViews(CreateViewsPlan {
+                views: planned_views,
+            }))
+        }
+        CreateViewsDefinitions::Source { .. } => bail!("cannot create view from source"),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

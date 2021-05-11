@@ -1416,10 +1416,13 @@ impl<'a> Parser<'a> {
             if self.parse_keyword(VIEW) {
                 self.index = index;
                 self.parse_create_view()
+            } else if self.parse_keyword(VIEWS) {
+                self.index = index;
+                self.parse_create_views()
             } else {
                 self.expected(
                     self.peek_pos(),
-                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW after CREATE",
+                    "DATABASE, SCHEMA, ROLE, USER, TYPE, INDEX, SINK, SOURCE, TABLE or [OR REPLACE] [TEMPORARY] [MATERIALIZED] VIEW or VIEWS after CREATE",
                     self.peek_token(),
                 )
             }
@@ -1714,7 +1717,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_connector(&mut self) -> Result<Connector<Raw>, ParserError> {
+    fn parse_connector(&mut self) -> Result<Connector, ParserError> {
         match self.expect_one_of_keywords(&[FILE, KAFKA, KINESIS, AVRO, S3, POSTGRES, PUBNUB])? {
             PUBNUB => {
                 self.expect_keywords(&[SUBSCRIBE, KEY])?;
@@ -1737,25 +1740,11 @@ impl<'a> Parser<'a> {
                 } else {
                     None
                 };
-                self.expect_keyword(TABLE)?;
-                let table = self.parse_object_name()?;
-
-                let (columns, constraints) = self.parse_columns(Optional)?;
-
-                if !constraints.is_empty() {
-                    return parser_err!(
-                        self,
-                        self.peek_prev_pos(),
-                        "Cannot specify constraints in Postgres table definition"
-                    );
-                }
 
                 Ok(Connector::Postgres {
                     conn,
                     publication,
                     slot,
-                    table,
-                    columns,
                 })
             }
             FILE => {
@@ -1858,6 +1847,16 @@ impl<'a> Parser<'a> {
             if_exists = IfExistsBehavior::Skip;
         }
 
+        let definition = self.parse_view_definition()?;
+        Ok(Statement::CreateView(CreateViewStatement {
+            temporary,
+            materialized,
+            if_exists,
+            definition,
+        }))
+    }
+
+    fn parse_view_definition(&mut self) -> Result<ViewDefinition<Raw>, ParserError> {
         // Many dialects support `OR REPLACE` | `OR ALTER` right after `CREATE`, but we don't (yet).
         // ANSI SQL and Postgres support RECURSIVE here, but we don't support it either.
         let name = self.parse_object_name()?;
@@ -1866,14 +1865,62 @@ impl<'a> Parser<'a> {
         self.expect_keyword(AS)?;
         let query = self.parse_query()?;
         // Optional `WITH [ CASCADED | LOCAL ] CHECK OPTION` is widely supported here.
-        Ok(Statement::CreateView(CreateViewStatement {
+        Ok(ViewDefinition {
             name,
             columns,
+            with_options,
             query,
+        })
+    }
+
+    fn parse_create_views(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let mut if_exists = if self.parse_keyword(OR) {
+            self.expect_keyword(REPLACE)?;
+            IfExistsBehavior::Replace
+        } else {
+            IfExistsBehavior::Error
+        };
+        let temporary = self.parse_keyword(TEMPORARY) | self.parse_keyword(TEMP);
+        let materialized = self.parse_keyword(MATERIALIZED);
+        self.expect_keyword(VIEWS)?;
+        if if_exists == IfExistsBehavior::Error && self.parse_if_not_exists()? {
+            if_exists = IfExistsBehavior::Skip;
+        }
+
+        let definitions = if self.parse_keywords(&[FROM, SOURCE]) {
+            let name = self.parse_object_name()?;
+            let targets = if self.consume_token(&Token::LParen) {
+                let targets = self.parse_comma_separated(|parser| {
+                    let name = parser.parse_identifier()?;
+                    let alias = if parser.parse_keyword(AS) {
+                        Some(parser.parse_identifier()?)
+                    } else {
+                        None
+                    };
+                    Ok(CreateViewsSourceTarget { name, alias })
+                })?;
+                self.expect_token(&Token::RParen)?;
+                Some(targets)
+            } else {
+                None
+            };
+            CreateViewsDefinitions::Source { name, targets }
+        } else {
+            let views = self.parse_comma_separated(|parser| {
+                parser.expect_token(&Token::LParen)?;
+                let view = parser.parse_view_definition()?;
+                parser.expect_token(&Token::RParen)?;
+                Ok(view)
+            })?;
+
+            CreateViewsDefinitions::Literal(views)
+        };
+
+        Ok(Statement::CreateViews(CreateViewsStatement {
             temporary,
             materialized,
             if_exists,
-            with_options,
+            definitions,
         }))
     }
 

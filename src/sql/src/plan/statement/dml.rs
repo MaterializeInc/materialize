@@ -24,7 +24,7 @@ use repr::{RelationDesc, ScalarType};
 use crate::ast::{
     CopyDirection, CopyRelation, CopyStatement, CopyTarget, CreateViewStatement, DeleteStatement,
     ExplainStage, ExplainStatement, Explainee, InsertStatement, Query, Raw, SelectStatement,
-    Statement, TailStatement, UpdateStatement,
+    Statement, TailStatement, UpdateStatement, ViewDefinition,
 };
 use crate::catalog::CatalogItemType;
 use crate::plan::query;
@@ -180,7 +180,10 @@ pub fn plan_explain(
             let parsed = crate::parse::parse(view.create_sql())
                 .expect("Sql for existing view should be valid sql");
             let query = match parsed.into_last() {
-                Statement::CreateView(CreateViewStatement { query, .. }) => query,
+                Statement::CreateView(CreateViewStatement {
+                    definition: ViewDefinition { query, .. },
+                    ..
+                }) => query,
                 _ => panic!("Sql for existing view should parse as a view"),
             };
             let scx = StatementContext {

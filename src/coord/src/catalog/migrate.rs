@@ -16,7 +16,7 @@ use sql::ast::{
     AvroSchema, CreateIndexStatement, CreateSinkStatement, CreateSourceFormat,
     CreateSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
     DataType, Format, Function, Ident, Raw, RawName, Statement, TableFactor, UnresolvedObjectName,
-    Value, WithOption, WithOptionValue,
+    Value, ViewDefinition, WithOption, WithOptionValue,
 };
 use sql::plan::resolve_names_stmt;
 
@@ -81,13 +81,16 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
                 }
 
                 Statement::CreateView(CreateViewStatement {
-                    name: _,
-                    columns: _,
-                    query,
                     temporary: _,
                     materialized: _,
                     if_exists: _,
-                    with_options: _,
+                    definition:
+                        ViewDefinition {
+                            name: _,
+                            columns: _,
+                            query,
+                            with_options: _,
+                        },
                 }) => TypeNormalizer.visit_query_mut(query),
 
                 Statement::CreateIndex(CreateIndexStatement {
@@ -199,13 +202,16 @@ pub const CONTENT_MIGRATIONS: &[fn(&mut Catalog) -> Result<(), anyhow::Error>] =
             let mut stmt = sql::parse::parse(&create_sql)?.into_element();
             match &mut stmt {
                 Statement::CreateView(CreateViewStatement {
-                    name: _,
-                    columns: _,
-                    query,
                     temporary: _,
                     materialized: _,
                     if_exists: _,
-                    with_options: _,
+                    definition:
+                        ViewDefinition {
+                            name: _,
+                            columns: _,
+                            query,
+                            with_options: _,
+                        },
                 }) => FuncNormalizer.visit_query_mut(query),
 
                 Statement::CreateIndex(CreateIndexStatement {

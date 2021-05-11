@@ -19,6 +19,7 @@ CREATE SCHEMA public;
 CREATE TABLE numbers (number int PRIMARY KEY, is_prime bool, name text);
 ALTER TABLE numbers REPLICA IDENTITY FULL;
 
+DROP SCHEMA IF EXISTS other_schema CASCADE;
 CREATE SCHEMA other_schema;
 CREATE TABLE other_schema.numbers (number int PRIMARY KEY, is_prime bool NOT NULL, name text NOT NULL);
 
@@ -77,147 +78,57 @@ CREATE TABLE conflict_table (f1 INTEGER);
 ALTER TABLE conflict_table REPLICA IDENTITY FULL;
 INSERT INTO conflict_table VALUES (123);
 
+DROP SCHEMA IF EXISTS conflict_schema CASCADE;
 CREATE SCHEMA conflict_schema;
 CREATE TABLE conflict_schema.conflict_table (f1 TEXT);
 ALTER TABLE conflict_schema.conflict_table REPLICA IDENTITY FULL;
 INSERT INTO conflict_schema.conflict_table VALUES ('234');
 
-## CREATE SOURCE with correct information should pass purification and fail afterwards.
-
-> CREATE SOURCE "schema_omitted"
-  FROM POSTGRES
-    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-    PUBLICATION 'mz_source'
-    TABLE numbers;
-
-> CREATE SOURCE "empty_schema2"
-  FROM POSTGRES
-    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-    PUBLICATION 'mz_source'
-    TABLE numbers ();
-# TODO: This should be an error
-
-> CREATE SOURCE "correct_schema_explicit_null"
-  FROM POSTGRES
-    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-    PUBLICATION 'mz_source'
-    TABLE numbers (number int PRIMARY KEY, is_prime bool NULL, name text NULL)
-
-> CREATE MATERIALIZED SOURCE "correct_schema"
-  FROM POSTGRES
-    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-    PUBLICATION 'mz_source'
-    TABLE numbers (number int PRIMARY KEY NOT NULL, is_prime bool, name text)
-
-## CREATE SOURCE with incorrect information should fail purification.
-
-! CREATE MATERIALIZED SOURCE "numbers"
-  FROM POSTGRES
-    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-    PUBLICATION 'mz_source'
-    TABLE numbers (number int NOT NULL)
-incorrect column specification: 1 columns were specified, upstream has 3: number, is_prime, name
-
-! CREATE MATERIALIZED SOURCE "numbers"
-  FROM POSTGRES
-    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-    PUBLICATION 'mz_source'
-    TABLE numbers (number int NOT NULL, is_prime bool null, name text, extra numeric NULL)
-incorrect column specification: 4 columns were specified, upstream has 3: number, is_prime, name
-
-! CREATE MATERIALIZED SOURCE "numbers"
-  FROM POSTGRES
-    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-    PUBLICATION 'mz_source'
-    TABLE numbers (number int NOT NULL, is_prime int, name text)
-incorrect column specification: specified column modifiers do not match upstream source, specified: number int4 NOT NULL, upstream: number int4 PRIMARY KEY NOT NULL
-
-! CREATE MATERIALIZED SOURCE "numbers"
-  FROM POSTGRES
-    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-    PUBLICATION 'mz_source'
-    TABLE numbers (number int NULL, is_prime bool null, name text)
-incorrect column specification: specified column modifiers do not match upstream source, specified: number int4 NULL, upstream: number int4 PRIMARY KEY NOT NULL
-
-! CREATE MATERIALIZED SOURCE "numbers"
-  FROM POSTGRES
-    HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-    PUBLICATION 'mz_source'
-    TABLE numbers (number int PRIMARY KEY, is_prime bool, name text NOT NULL)
-incorrect column specification: specified column modifiers do not match upstream source, specified: name text NOT NULL, upstream: name text NULL
-
 #
 # Error checking
 #
 
-! CREATE SOURCE "no_such_host"
+! CREATE MATERIALIZED SOURCE "no_such_host"
   FROM POSTGRES HOST 'host=no_such_postgres.mtrlz.com port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER NOT NULL, f2 TEXT);
+  PUBLICATION 'mz_source';
 error connecting to server: failed to lookup address information: Name or service not known
 
-! CREATE SOURCE "no_such_port"
+! CREATE MATERIALIZED SOURCE "no_such_port"
   FROM POSTGRES HOST 'host=postgres port=65534 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER NOT NULL, f2 TEXT);
+  PUBLICATION 'mz_source';
 error connecting to server: Connection refused (os error 111)
 
-! CREATE SOURCE "no_such_user"
+! CREATE MATERIALIZED SOURCE "no_such_user"
   FROM POSTGRES HOST 'host=postgres port=5432 user=no_such_user password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER NOT NULL, f2 TEXT);
+  PUBLICATION 'mz_source';
 db error: FATAL: role "no_such_user" does not exist
 
-> CREATE SOURCE "no_such_password"
+> CREATE MATERIALIZED SOURCE "no_such_password"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=no_such_password dbname=postgres'
-  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER PRIMARY KEY NOT NULL, f2 TEXT);
+  PUBLICATION 'mz_source';
 # TODO: This should produce an error
 
-! CREATE SOURCE "no_replication"
+> CREATE MATERIALIZED SOURCE "no_replication"
   FROM POSTGRES HOST 'host=postgres port=5432 user=no_replication password=no_replication dbname=postgres'
-  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
-db error: ERROR: relation "pk_table" does not exist
+  PUBLICATION 'mz_source';
+# TODO: This should produce an error
 
-! CREATE SOURCE "no_such_dbname"
+! CREATE MATERIALIZED SOURCE "no_such_dbname"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=no_such_dbname'
-  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
+  PUBLICATION 'mz_source';
 db error: FATAL: database "no_such_dbname" does not exist
 
-> CREATE SOURCE "no_such_publication"
+> CREATE MATERIALIZED SOURCE "no_such_publication"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'no_such_publication' TABLE pk_table (pk INTEGER PRIMARY KEY NOT NULL, f2 TEXT);
+  PUBLICATION 'no_such_publication';
 # TODO: This should produce an error
 
-! CREATE SOURCE "no_such_namespace"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE no_such_namespace.pk_table (pk INTEGER PRIMARY KEY NOT NULL, f2 TEXT);
-schema "no_such_namespace" does not exist
 
-! CREATE SOURCE "no_such_table"
+> CREATE MATERIALIZED SOURCE "mz_source"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE no_such_table (pk INTEGER PRIMARY KEY, f2 TEXT);
-relation "no_such_table" does not exist
+  PUBLICATION 'mz_source';
 
-! CREATE SOURCE "no_such_column"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE pk_table (no_such_column INTEGER, f2 TEXT);
-column does not match upstream source, specified: no_such_column int4, upstream: pk int4 PRIMARY KEY NOT NULL
-
-! CREATE SOURCE "column_type_mismatch"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE pk_table (f1 TIMESTAMP, f2 TEXT);
-column does not match upstream source, specified: f1 timestamp, upstream: pk int4 PRIMARY KEY NOT NULL
-
-! CREATE SOURCE "missing_column"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER NOT NULL);
-incorrect column specification: 1 columns were specified, upstream has 2: pk, f2
-
-! CREATE SOURCE "extra_column"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER NOT NULL, f2 TEXT, f3 INTEGER);
-incorrect column specification: 3 columns were specified, upstream has 2: pk, f2
-
-> CREATE MATERIALIZED SOURCE "no_replica_identity"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE no_replica_identity (f1 INTEGER);
+> CREATE VIEWS FROM SOURCE "mz_source" ("no_replica_identity")
 # TODO: This should produce an error
 
 #
@@ -228,58 +139,33 @@ incorrect column specification: 3 columns were specified, upstream has 2: pk, f2
 1
 2
 
-! CREATE MATERIALIZED SOURCE "conflict_table"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE conflict_table (f1 TEXT)
-incorrect column specification: specified column does not match upstream source
-
 #
 # Establish direct replication
 #
 
-> CREATE MATERIALIZED SOURCE "pk_table"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
+> CREATE VIEWS FROM SOURCE "mz_source" ("pk_table");
 
-> CREATE MATERIALIZED SOURCE "nonpk_table"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE nonpk_table (f1 INTEGER, f2 INTEGER);
+> CREATE VIEWS FROM SOURCE "mz_source" ("nonpk_table");
 
-> CREATE MATERIALIZED SOURCE "types_table"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE types_table (date_col DATE, time_col TIME, timestamp_col TIMESTAMP, uuid_col UUID, double_col DOUBLE PRECISION);
+> CREATE VIEWS FROM SOURCE "mz_source" ("types_table");
 
-> CREATE MATERIALIZED SOURCE "large_text"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE large_text (f1 TEXT);
+> CREATE VIEWS FROM SOURCE "mz_source" ("large_text");
 
-> CREATE MATERIALIZED SOURCE "trailing_space_pk"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE trailing_space_pk (f1 TEXT PRIMARY KEY);
+> CREATE VIEWS FROM SOURCE "mz_source" ("trailing_space_pk");
 
-> CREATE MATERIALIZED SOURCE "trailing_space_nopk"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE trailing_space_nopk (f1 TEXT);
+> CREATE VIEWS FROM SOURCE "mz_source" ("trailing_space_nopk");
 
-> CREATE MATERIALIZED SOURCE "multipart_pk"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE multipart_pk (f1 INTEGER PRIMARY KEY, f2 TEXT PRIMARY KEY NOT NULL, f3 TEXT);
+> CREATE VIEWS FROM SOURCE "mz_source" ("multipart_pk");
 
-> CREATE MATERIALIZED SOURCE "nulls_table"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE nulls_table (f1 TEXT, f2 INTEGER);
+> CREATE VIEWS FROM SOURCE "mz_source" ("nulls_table");
 
-> CREATE MATERIALIZED SOURCE "utf8_table"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE utf8_table (f1 TEXT PRIMARY KEY, f2 TEXT);
+> CREATE VIEWS FROM SOURCE "mz_source" ("utf8_table");
 
-> CREATE MATERIALIZED SOURCE "таблица"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE "таблица" ("колона" TEXT);
+> CREATE VIEWS FROM SOURCE "mz_source" ("таблица");
 
-> CREATE MATERIALIZED SOURCE "conflict_table"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
-  PUBLICATION 'mz_source' TABLE conflict_schema.conflict_table
+# TODO(petrosagg): support this syntax
+! CREATE VIEWS FROM SOURCE "mz_source" (conflict_schema.conflict_table AS conflict_table);
+Expected right parenthesis, found dot
 
 #
 # Perform sanity checks of the initial snapshot
@@ -320,8 +206,9 @@ incorrect column specification: specified column does not match upstream source
 > SELECT * FROM "таблица";
 стойност
 
-> SELECT * FROM conflict_table;
-234
+# TODO(petrosagg): contigent to fixing fully qualified targets
+# > SELECT * FROM conflict_table;
+# 234
 
 #
 # Confirm that the new sources can be used to build upon
@@ -501,8 +388,8 @@ true
 > SELECT COUNT(*) = 0 FROM "таблица";
 true
 
-> SELECT COUNT(*) = 0 FROM conflict_table;
-true
+# > SELECT COUNT(*) = 0 FROM conflict_table;
+# true
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP PUBLICATION mz_source;

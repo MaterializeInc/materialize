@@ -63,8 +63,8 @@ use build_info::BuildInfo;
 use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
-    DataflowDesc, IndexDesc, PeekResponse, SinkConnector, SourceConnector, TailSinkConnector,
-    TimestampSourceUpdate, Update,
+    DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, SinkConnector, SourceConnector,
+    TailSinkConnector, TimestampSourceUpdate, Update,
 };
 use dataflow_types::{SinkAsOf, SinkEnvelope};
 use expr::{
@@ -87,10 +87,10 @@ use sql::plan::StatementDesc;
 use sql::plan::{
     AlterIndexResetOptionsPlan, AlterIndexSetOptionsPlan, AlterItemRenamePlan, CreateDatabasePlan,
     CreateIndexPlan, CreateRolePlan, CreateSchemaPlan, CreateSinkPlan, CreateSourcePlan,
-    CreateTablePlan, CreateTypePlan, CreateViewPlan, DropDatabasePlan, DropItemsPlan,
-    DropRolesPlan, DropSchemaPlan, ExplainPlan, FetchPlan, IndexOption, IndexOptionName,
-    InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, PlanContext, SendDiffsPlan,
-    SetVariablePlan, ShowVariablePlan, TailPlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, CreateViewsPlan, DropDatabasePlan,
+    DropItemsPlan, DropRolesPlan, DropSchemaPlan, ExplainPlan, FetchPlan, IndexOption,
+    IndexOptionName, InsertPlan, MutationKind, Params, PeekPlan, PeekWhen, Plan, PlanContext,
+    SendDiffsPlan, SetVariablePlan, ShowVariablePlan, Source, TailPlan,
 };
 use storage::Message as PersistedMessage;
 use transform::Optimizer;
@@ -832,6 +832,7 @@ impl Coordinator {
                                 | Statement::CreateTable(_)
                                 | Statement::CreateType(_)
                                 | Statement::CreateView(_)
+                                | Statement::CreateViews(_)
                                 | Statement::Delete(_)
                                 | Statement::DropDatabase(_)
                                 | Statement::DropObjects(_)
@@ -859,8 +860,10 @@ impl Coordinator {
                         }
 
                         let internal_cmd_tx = self.internal_cmd_tx.clone();
+                        let catalog = self.catalog.for_session(&session);
+                        let purify_fut = sql::pure::purify(&catalog, stmt);
                         tokio::spawn(async move {
-                            let result = sql::pure::purify(stmt).await.map_err(|e| e.into());
+                            let result = purify_fut.await.map_err(|e| e.into());
                             internal_cmd_tx
                                 .send(Message::StatementReady(StatementReady {
                                     session,
@@ -1230,6 +1233,12 @@ impl Coordinator {
                     session,
                 );
             }
+            Plan::CreateViews(plan) => {
+                tx.send(
+                    self.sequence_create_views(&mut session, pcx, plan).await,
+                    session,
+                );
+            }
             Plan::CreateIndex(plan) => {
                 tx.send(self.sequence_create_index(pcx, plan).await, session);
             }
@@ -1502,6 +1511,24 @@ impl Coordinator {
         pcx: PlanContext,
         plan: CreateSourcePlan,
     ) -> Result<ExecuteResponse, CoordError> {
+        // TODO(petrosagg): remove this check once postgres sources are properly supported
+        if matches!(
+            plan,
+            CreateSourcePlan {
+                source: Source {
+                    connector: SourceConnector::External {
+                        connector: ExternalSourceConnector::Postgres(_),
+                        ..
+                    },
+                    ..
+                },
+                materialized: false,
+                ..
+            }
+        ) {
+            coord_bail!("Unmaterialized Postgres sources are not supported yet");
+        }
+
         let if_not_exists = plan.if_not_exists;
         let (metadata, ops) = self.generate_create_source_ops(session, pcx, vec![plan])?;
         match self.catalog_transact(ops).await {
@@ -1676,22 +1703,23 @@ impl Coordinator {
         });
     }
 
-    async fn sequence_create_view(
+    fn generate_view_ops(
         &mut self,
         session: &Session,
         pcx: PlanContext,
         plan: CreateViewPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<(Vec<catalog::Op>, Option<GlobalId>), CoordError> {
         let CreateViewPlan {
             name,
             view,
             replace,
             materialize,
-            if_not_exists,
+            if_not_exists: _,
             depends_on,
         } = plan;
 
         let mut ops = vec![];
+
         if let Some(id) = replace {
             ops.extend(self.catalog.drop_items_ops(&[id]));
         }
@@ -1745,6 +1773,19 @@ impl Coordinator {
         } else {
             None
         };
+
+        Ok((ops, index_id))
+    }
+
+    async fn sequence_create_view(
+        &mut self,
+        session: &Session,
+        pcx: PlanContext,
+        plan: CreateViewPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let if_not_exists = plan.if_not_exists;
+        let (ops, index_id) = self.generate_view_ops(session, pcx, plan)?;
+
         match self.catalog_transact(ops).await {
             Ok(()) => {
                 if let Some(index_id) = index_id {
@@ -1754,6 +1795,39 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn sequence_create_views(
+        &mut self,
+        session: &mut Session,
+        pcx: PlanContext,
+        plan: CreateViewsPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let mut ops = vec![];
+        let mut index_ids = vec![];
+
+        for view_plan in plan.views {
+            let (mut view_ops, index_id) = self.generate_view_ops(session, pcx, view_plan)?;
+            ops.append(&mut view_ops);
+            if let Some(index_id) = index_id {
+                index_ids.push(index_id);
+            }
+        }
+
+        match self.catalog_transact(ops).await {
+            Ok(()) => {
+                let mut dfs = vec![];
+                for index_id in index_ids {
+                    let df = self.dataflow_builder().build_index_dataflow(index_id);
+                    dfs.push(df);
+                }
+                self.ship_dataflows(dfs).await?;
+                Ok(ExecuteResponse::CreatedView { existed: false })
+            }
+            // TODO somehow check this or remove if not exists modifiers
+            // Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
             Err(err) => Err(err),
         }
     }
@@ -2766,6 +2840,12 @@ impl Coordinator {
     }
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
+    /// Utility method for the more general [Self::ship_dataflows]
+    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) -> Result<(), CoordError> {
+        self.ship_dataflows(vec![dataflow]).await
+    }
+
+    /// Finalizes a list of dataflows and then broadcasts it to all workers.
     ///
     /// Finalization includes optimization, but also validation of various
     /// invariants such as ensuring that the `as_of` frontier is in advance of
@@ -2774,69 +2854,71 @@ impl Coordinator {
     /// In particular, there are requirement on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
-    async fn ship_dataflow(&mut self, mut dataflow: DataflowDesc) -> Result<(), CoordError> {
-        // The identity for `join` is the minimum element.
-        let mut since = Antichain::from_elem(Timestamp::minimum());
+    async fn ship_dataflows(&mut self, mut dataflows: Vec<DataflowDesc>) -> Result<(), CoordError> {
+        for dataflow in &mut dataflows {
+            // The identity for `join` is the minimum element.
+            let mut since = Antichain::from_elem(Timestamp::minimum());
 
-        // Populate "valid from" information for each source BYO Debezium source.
-        // TODO: extend this to all sources.
-        for (source_id, _description) in dataflow.source_imports.iter() {
-            // Extract `since` information about each source and apply here.
-            if let Some(source_since) = self.sources.since_of(source_id) {
-                since.join_assign(&source_since);
+            // Populate "valid from" information for each source BYO Debezium source.
+            // TODO: extend this to all sources.
+            for (source_id, _description) in dataflow.source_imports.iter() {
+                // Extract `since` information about each source and apply here.
+                if let Some(source_since) = self.sources.since_of(source_id) {
+                    since.join_assign(&source_since);
+                }
             }
-        }
 
-        // For each imported arrangement, lower bound `since` by its own frontier.
-        for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
-            since.join_assign(
-                &self
-                    .indexes
-                    .since_of(global_id)
-                    .expect("global id missing at coordinator"),
-            );
-        }
-
-        // For each produced arrangement, start tracking the arrangement with
-        // a compaction frontier of at least `since`.
-        for (global_id, _description, _typ) in dataflow.index_exports.iter() {
-            let frontiers = self.new_frontiers(
-                *global_id,
-                since.elements().to_vec(),
-                self.logical_compaction_window_ms,
-            );
-            self.indexes.insert(*global_id, frontiers);
-        }
-
-        // TODO: Produce "valid from" information for each sink.
-        // For each sink, ... do nothing because we don't yield `since` for sinks.
-        // for (global_id, _description) in dataflow.sink_exports.iter() {
-        //     // TODO: assign `since` to a "valid from" element of the sink. E.g.
-        //     self.sink_info[global_id].valid_from(&since);
-        // }
-
-        // Ensure that the dataflow's `as_of` is at least `since`.
-        if let Some(as_of) = &mut dataflow.as_of {
-            // If we have requested a specific time that is invalid .. someone errored.
-            use timely::order::PartialOrder;
-            if !(<_ as PartialOrder>::less_equal(&since, as_of)) {
-                coord_bail!(
-                    "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
-                    dataflow.debug_name,
-                    as_of,
-                    since
+            // For each imported arrangement, lower bound `since` by its own frontier.
+            for (global_id, (_description, _typ)) in dataflow.index_imports.iter() {
+                since.join_assign(
+                    &self
+                        .indexes
+                        .since_of(global_id)
+                        .expect("global id missing at coordinator"),
                 );
             }
-        } else {
-            // Bind the since frontier to the dataflow description.
-            dataflow.set_as_of(since);
+
+            // For each produced arrangement, start tracking the arrangement with
+            // a compaction frontier of at least `since`.
+            for (global_id, _description, _typ) in dataflow.index_exports.iter() {
+                let frontiers = self.new_frontiers(
+                    *global_id,
+                    since.elements().to_vec(),
+                    self.logical_compaction_window_ms,
+                );
+                self.indexes.insert(*global_id, frontiers);
+            }
+
+            // TODO: Produce "valid from" information for each sink.
+            // For each sink, ... do nothing because we don't yield `since` for sinks.
+            // for (global_id, _description) in dataflow.sink_exports.iter() {
+            //     // TODO: assign `since` to a "valid from" element of the sink. E.g.
+            //     self.sink_info[global_id].valid_from(&since);
+            // }
+
+            // Ensure that the dataflow's `as_of` is at least `since`.
+            if let Some(as_of) = &mut dataflow.as_of {
+                // If we have requested a specific time that is invalid .. someone errored.
+                use timely::order::PartialOrder;
+                if !(<_ as PartialOrder>::less_equal(&since, as_of)) {
+                    coord_bail!(
+                        "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
+                        dataflow.debug_name,
+                        as_of,
+                        since
+                    );
+                }
+            } else {
+                // Bind the since frontier to the dataflow description.
+                dataflow.set_as_of(since);
+            }
+
+            // Optimize the dataflow across views, and any other ways that appeal.
+            transform::optimize_dataflow(dataflow);
         }
 
-        // Optimize the dataflow across views, and any other ways that appeal.
-        transform::optimize_dataflow(&mut dataflow);
-
         // Finalize the dataflow by broadcasting its construction to all workers.
-        self.broadcast(SequencedCommand::CreateDataflows(vec![dataflow]));
+        self.broadcast(SequencedCommand::CreateDataflows(dataflows));
         Ok(())
     }
 

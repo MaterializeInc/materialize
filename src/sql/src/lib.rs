@@ -57,9 +57,9 @@
 //! CREATE SOURCE ... FORMAT AVRO USING SCHEMA '{"name": "foo", "fields": [...]}'
 //! ```
 //!
-//! Importantly, purification runs without access to the catalog. That means it
-//! can run in its own Tokio task so that it does not block any other SQL
-//! commands on the server.
+//! Importantly, purification cannot hold its reference to the catalog across an
+//! await point. That means it can run in its own Tokio task so that it does not
+//! block any other SQL commands on the server.
 //!
 //! [`Plan`]: crate::plan::Plan
 
