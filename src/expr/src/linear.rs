@@ -21,6 +21,12 @@ use repr::{Datum, Row};
 /// must be satisfied for an output to be produced. If all predicates
 /// evaluate to `Datum::True` the data at the identified columns are
 /// collected and produced as output in a packed `Row`.
+///
+/// This operator is a "builder" and its contents may contain expressions
+/// that are not yet executable. For example, it may contain temporal
+/// expressions in `self.expressions`, even though this is not something
+/// we can directly evaluate. The plan creation methods will defensively
+/// ensure that the right thing happens.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct MapFilterProject {
     /// A sequence of expressions that should be appended to the row.
@@ -234,8 +240,15 @@ impl MapFilterProject {
     ///
     /// This separation is valuable when the execution cannot be fused into one operator.
     pub fn extract_temporal(&mut self) -> Self {
-        // Assert that we have not in-lined any temporal statements.
-        // This should only be possible in memoization, where a guard prevents it.
+        // Optimize the expression, as it is only post-optimization that we can be certain
+        // that temporal expressions are restricted to filters. We could relax this in the
+        // future to be only `inline_expressions` and `remove_undemanded`, but optimization
+        // seems to be the best fit at the moment.
+        self.optimize();
+
+        // Assert that we no longer have temporal expressions to evaluate. This should only
+        // occur if the optimization above results with temporal expressions yielded in the
+        // output, which is out of spec for how the type is meant to be used.
         assert!(!self.expressions.iter().any(|e| e.contains_temporal()));
 
         // Extract temporal predicates from `self.predicates`.
@@ -569,6 +582,11 @@ impl MapFilterProject {
     /// times, inlining those that are not, and removing expressions that are
     /// unreferenced.
     ///
+    /// This method will inline all temporal expressions, and remove any columns
+    /// that are not demanded by the output, which should transform any temporal
+    /// filters to a state where the temporal expressions exist only in the list
+    /// of predicates.
+    ///
     /// # Example
     ///
     /// This example demonstrates how the re-use of one expression, converting
@@ -772,7 +790,7 @@ impl MapFilterProject {
     ///
     /// This method only inlines expressions; it does not delete expressions
     /// that are no longer referenced. The `remove_undemanded()` method does
-    /// that, and should ilkely be used after this method.
+    /// that, and should likely be used after this method.
     ///
     /// Inlining replaces column references when the refered-to item is either
     /// another column reference, or the only referrer of its referent. This
@@ -844,8 +862,18 @@ impl MapFilterProject {
             reference_count[*proj] += 1;
         }
 
+        // Determine which expressions should be inlined because they reference temporal expressions.
+        let mut is_temporal = vec![false; input_arity];
+        for expr in self.expressions.iter() {
+            // An express may contain a temporal expression, or reference a column containing such.
+            is_temporal.push(
+                expr.contains_temporal() || expr.support().into_iter().any(|col| is_temporal[col]),
+            );
+        }
+
         // Inline only those columns that 1. are expressions not inputs, and
-        // 2a. are column references or literals or 2b. have a refcount of 1.
+        // 2a. are column references or literals or 2b. have a refcount of 1,
+        // or 2c. reference temporal expressions (which cannot be evaluated).
         let should_inline = (0..reference_count.len())
             .map(|i| {
                 if i < input_arity {
@@ -854,14 +882,13 @@ impl MapFilterProject {
                     if let MirScalarExpr::Column(_) = self.expressions[i - input_arity] {
                         true
                     } else {
-                        reference_count[i] == 1
-                            || self.expressions[i - input_arity].contains_temporal()
+                        reference_count[i] == 1 || is_temporal[i]
                     }
                 }
             })
             .collect::<Vec<_>>();
 
-        // Inline expressions that are single uses, or reference columns, or literals.
+        // Inline expressions per `should_inline`.
         for index in 0..self.expressions.len() {
             let (prior, expr) = self.expressions.split_at_mut(index);
             expr[0].visit_mut(&mut |e| {
@@ -1165,6 +1192,9 @@ pub mod plan {
             let mut upper_bounds = Vec::new();
 
             let mut temporal = Vec::new();
+
+            // Optimize, to ensure that temporal predicates are move in to `mfp.predicates`.
+            mfp.optimize();
 
             mfp.predicates.retain(|(_position, predicate)| {
                 if predicate.contains_temporal() {
