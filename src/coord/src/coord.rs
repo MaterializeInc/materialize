@@ -1231,6 +1231,12 @@ impl Coordinator {
                     session,
                 );
             }
+            Plan::CreateViews(plan) => {
+                tx.send(
+                    self.sequence_create_views(&mut session, pcx, plan).await,
+                    session,
+                );
+            }
             Plan::CreateIndex(plan) => {
                 tx.send(self.sequence_create_index(pcx, plan).await, session);
             }
@@ -1677,22 +1683,23 @@ impl Coordinator {
         });
     }
 
-    async fn sequence_create_view(
+    fn generate_view_ops(
         &mut self,
         session: &Session,
         pcx: PlanContext,
         plan: CreateViewPlan,
-    ) -> Result<ExecuteResponse, CoordError> {
+    ) -> Result<(Vec<catalog::Op>, Option<GlobalId>), CoordError> {
         let CreateViewPlan {
             name,
             view,
             replace,
             materialize,
-            if_not_exists,
+            if_not_exists: _,
             depends_on,
         } = plan;
 
         let mut ops = vec![];
+
         if let Some(id) = replace {
             ops.extend(self.catalog.drop_items_ops(&[id]));
         }
@@ -1746,6 +1753,19 @@ impl Coordinator {
         } else {
             None
         };
+
+        Ok((ops, index_id))
+    }
+
+    async fn sequence_create_view(
+        &mut self,
+        session: &Session,
+        pcx: PlanContext,
+        plan: CreateViewPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let if_not_exists = plan.if_not_exists;
+        let (ops, index_id) = self.generate_view_ops(session, pcx, plan)?;
+
         match self.catalog_transact(ops).await {
             Ok(()) => {
                 if let Some(index_id) = index_id {
@@ -1755,6 +1775,39 @@ impl Coordinator {
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn sequence_create_views(
+        &mut self,
+        session: &mut Session,
+        pcx: PlanContext,
+        plan: CreateViewsPlan,
+    ) -> Result<ExecuteResponse, CoordError> {
+        let mut ops = vec![];
+        let mut index_ids = vec![];
+
+        for view_plan in plan.views {
+            let (mut view_ops, index_id) = self.generate_view_ops(session, pcx, view_plan)?;
+            ops.append(&mut view_ops);
+            if let Some(index_id) = index_id {
+                index_ids.push(index_id);
+            }
+        }
+
+        match self.catalog_transact(ops).await {
+            Ok(()) => {
+                let mut dfs = vec![];
+                for index_id in index_ids {
+                    let df = self.dataflow_builder().build_index_dataflow(index_id);
+                    dfs.push(df);
+                }
+                self.ship_dataflows(dfs).await?;
+                Ok(ExecuteResponse::CreatedView { existed: false })
+            }
+            // TODO somehow check this or remove if not exists modifiers
+            // Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedView { existed: true }),
             Err(err) => Err(err),
         }
     }
