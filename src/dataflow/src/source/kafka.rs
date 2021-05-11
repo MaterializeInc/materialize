@@ -220,7 +220,7 @@ pub struct KafkaSourceReader {
     stats_rx: crossbeam_channel::Receiver<Statistics>,
 }
 
-impl SourceReader<Vec<u8>> for KafkaSourceReader {
+impl SourceReader for KafkaSourceReader {
     /// Create a new instance of a Kafka reader.
     fn new(
         source_name: String,
@@ -270,7 +270,7 @@ impl SourceReader<Vec<u8>> for KafkaSourceReader {
     ///
     /// If a message has an offset that is smaller than the next expected offset for this consumer (and this partition)
     /// we skip this message, and seek to the appropriate offset
-    fn get_next_message(&mut self) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
         // Poll the consumer once. Since we split the consumer's partitions out into separate queues and poll those individually,
         // we expect this poll to always return None - but it's necessary to drive logic that consumes from rdkafka's internal
         // event queue, such as statistics callbacks.
@@ -668,7 +668,7 @@ fn create_kafka_config(
     kafka_config
 }
 
-impl<'a> From<&BorrowedMessage<'a>> for SourceMessage<Vec<u8>> {
+impl<'a> From<&BorrowedMessage<'a>> for SourceMessage {
     fn from(msg: &BorrowedMessage<'a>) -> Self {
         let kafka_offset = KafkaOffset {
             offset: msg.offset(),
@@ -707,7 +707,7 @@ impl PartitionConsumer {
     }
 
     /// Returns the next message to process for this partition (if any).
-    fn get_next_message(&mut self) -> Result<Option<SourceMessage<Vec<u8>>>, KafkaError> {
+    fn get_next_message(&mut self) -> Result<Option<SourceMessage>, KafkaError> {
         match self.partition_queue.poll(Duration::from_millis(0)) {
             Some(Ok(msg)) => {
                 let result = SourceMessage::from(&msg);

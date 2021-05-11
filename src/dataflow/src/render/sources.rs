@@ -17,6 +17,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
 use log::warn;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
+use timely::dataflow::operators::Inspect;
 use timely::dataflow::operators::Map;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::scopes::Child;
@@ -189,26 +190,26 @@ where
 
                         let ((ok_source, err_source), capability) = match connector {
                             ExternalSourceConnector::Kafka(_) => {
-                                source::create_source::<_, KafkaSourceReader, _>(
+                                source::create_source::<_, KafkaSourceReader>(
                                     source_config,
                                     &connector,
                                 )
                             }
                             ExternalSourceConnector::Kinesis(_) => {
-                                source::create_source::<_, KinesisSourceReader, _>(
+                                source::create_source::<_, KinesisSourceReader>(
                                     source_config,
                                     &connector,
                                 )
                             }
                             ExternalSourceConnector::S3(_) => {
-                                source::create_source::<_, S3SourceReader, _>(
+                                source::create_source::<_, S3SourceReader>(
                                     source_config,
                                     &connector,
                                 )
                             }
                             ExternalSourceConnector::File(_)
                             | ExternalSourceConnector::AvroOcf(_) => {
-                                source::create_source::<_, FileSourceReader<Vec<u8>>, Vec<u8>>(
+                                source::create_source::<_, FileSourceReader>(
                                     source_config,
                                     &connector,
                                 )
@@ -216,6 +217,8 @@ where
                             ExternalSourceConnector::Postgres(_) => unreachable!(),
                             ExternalSourceConnector::PubNub(_) => unreachable!(),
                         };
+
+                        let ok_source = ok_source.inspect(|x| println!("ok: {:?}", x));
 
                         // Include any source errors.
                         error_collections.push(

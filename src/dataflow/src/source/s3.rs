@@ -626,7 +626,7 @@ async fn download_object(
     }
 }
 
-impl SourceReader<Vec<u8>> for S3SourceReader {
+impl SourceReader for S3SourceReader {
     fn new(
         source_name: String,
         source_id: SourceInstanceId,
@@ -694,7 +694,7 @@ impl SourceReader<Vec<u8>> for S3SourceReader {
         ))
     }
 
-    fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(InternalMessage { record })) => {
                 self.offset += 1;

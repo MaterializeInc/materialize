@@ -12,7 +12,6 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::ops::Deref;
 use std::panic;
-use std::path::PathBuf;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -32,8 +31,6 @@ use rdkafka::message::Message;
 use rdkafka::ClientConfig;
 use tokio::sync::mpsc;
 
-use dataflow::source::read_file_task;
-use dataflow::source::FileReadStyle;
 use dataflow_types::{
     AvroOcfEncoding, Consistency, DataEncoding, DebeziumMode, ExternalSourceConnector,
     FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector,
@@ -804,29 +801,10 @@ impl Timestamper {
     fn create_byo_ocf_connector(
         &self,
         _id: GlobalId,
-        fc: &FileSourceConnector,
-        timestamp_topic: String,
+        _fc: &FileSourceConnector,
+        _timestamp_topic: String,
     ) -> Option<ByoFileConnector<mz_avro::types::Value, anyhow::Error>> {
-        let ctor = move |file| mz_avro::Reader::new(file);
-        let tail = if fc.tail {
-            FileReadStyle::TailFollowFd
-        } else {
-            FileReadStyle::ReadOnce
-        };
-        let (tx, rx) = std::sync::mpsc::sync_channel(10000_usize);
-        let compression = fc.compression.clone();
-        std::thread::spawn(move || {
-            read_file_task(
-                PathBuf::from(timestamp_topic),
-                tx,
-                None,
-                tail,
-                compression,
-                ctor,
-            );
-        });
-
-        Some(ByoFileConnector { stream: rx })
+        todo!("XXX get rid of this in the planner");
     }
 
     /// Creates a BYO connector
