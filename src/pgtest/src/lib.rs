@@ -143,15 +143,21 @@ impl PgTest {
                                 fields: body
                                     .ranges()
                                     .map(|range| {
-                                        let range = range.unwrap();
-                                        // Attempt to convert to a String. If not utf8, print as array of bytes instead.
-                                        Ok(String::from_utf8(buf[range.start..range.end].to_vec())
-                                            .unwrap_or_else(|_| {
-                                                format!(
-                                                    "{:?}",
-                                                    buf[range.start..range.end].to_vec()
+                                        match range {
+                                            Some(range) => {
+                                                // Attempt to convert to a String. If not utf8, print as array of bytes instead.
+                                                Ok(String::from_utf8(
+                                                    buf[range.start..range.end].to_vec(),
                                                 )
-                                            }))
+                                                .unwrap_or_else(|_| {
+                                                    format!(
+                                                        "{:?}",
+                                                        buf[range.start..range.end].to_vec()
+                                                    )
+                                                }))
+                                            }
+                                            None => Ok("NULL".into()),
+                                        }
                                     })
                                     .collect()
                                     .unwrap(),

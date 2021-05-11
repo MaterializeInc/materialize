@@ -681,7 +681,12 @@ impl<'a> RowTextParser<'a> {
                             }
                             raw_value.push(value);
                         }
-                        _ => {
+                        Some(c) => {
+                            self.consume_n(1);
+                            raw_value.push(c);
+                            continue;
+                        }
+                        None => {
                             raw_value.push(b'\\');
                             continue;
                         }
@@ -823,5 +828,82 @@ mod tests {
             "$$S".as_bytes()
         );
         assert!(parser.is_eof());
+    }
+
+    #[test]
+    fn test_row_text_parser_escapes() {
+        struct TestCase {
+            input: &'static str,
+            expect: &'static [u8],
+        }
+        let tests = vec![
+            TestCase {
+                input: "simple",
+                expect: b"simple",
+            },
+            TestCase {
+                input: r#"new\nline"#,
+                expect: b"new\nline",
+            },
+            TestCase {
+                input: r#"\b\f\n\r\t\v\\"#,
+                expect: b"\x08\x0c\n\r\t\x0b\\",
+            },
+            TestCase {
+                input: r#"\0\12\123"#,
+                expect: &[0, 0o12, 0o123],
+            },
+            TestCase {
+                input: r#"\x1\xaf"#,
+                expect: &[0x01, 0xaf],
+            },
+            TestCase {
+                input: r#"T\n\07\xEV\x0fA\xb2C\1"#,
+                expect: b"T\n\x07\x0eV\x0fA\xb2C\x01",
+            },
+            TestCase {
+                input: r#"\\\""#,
+                expect: b"\\\"",
+            },
+            TestCase {
+                input: r#"\x"#,
+                expect: b"x",
+            },
+            TestCase {
+                input: r#"\xg"#,
+                expect: b"xg",
+            },
+            TestCase {
+                input: r#"\"#,
+                expect: b"\\",
+            },
+            TestCase {
+                input: r#"\8"#,
+                expect: b"8",
+            },
+            TestCase {
+                input: r#"\a"#,
+                expect: b"a",
+            },
+            TestCase {
+                input: r#"\x\xg\8\xH\x32\s\"#,
+                expect: b"xxg8xH2s\\",
+            },
+        ];
+
+        for test in tests {
+            let mut parser = RowTextParser::new(test.input.as_bytes(), "\t", "\\N");
+            assert_eq!(
+                parser
+                    .consume_raw_value()
+                    .expect("unexpected error")
+                    .expect("unexpected empty result"),
+                test.expect,
+                "input: {}, expect: {:?}",
+                test.input,
+                std::str::from_utf8(test.expect),
+            );
+            assert!(parser.is_eof());
+        }
     }
 }
