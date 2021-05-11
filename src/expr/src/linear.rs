@@ -855,6 +855,7 @@ impl MapFilterProject {
                         true
                     } else {
                         reference_count[i] == 1
+                            || self.expressions[i - input_arity].contains_temporal()
                     }
                 }
             })
