@@ -1821,11 +1821,10 @@ impl Catalog {
     /// Finds the nearest indexes that can satisfy the views or sources whose
     /// identifiers are listed in `ids`.
     ///
-    /// Returns the identifiers of all discovered indexes, along with a boolean
-    /// indicating whether the set of indexes is complete. If incomplete, then
-    /// one of the provided identifiers transitively depends on an
-    /// unmaterialized source.
-    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, bool) {
+    /// Returns the identifiers of all discovered indexes, and the identifiers of
+    /// the discovered unmaterialized sources required to satisfy ids. The returned list
+    /// of indexes is incomplete iff `ids` depends on at least one unmaterialized source.
+    pub fn nearest_indexes(&self, ids: &[GlobalId]) -> (Vec<GlobalId>, Vec<GlobalId>) {
         fn has_indexes(catalog: &Catalog, id: GlobalId) -> bool {
             matches!(
                 catalog.get_by_id(&id).item(),
@@ -1837,7 +1836,7 @@ impl Catalog {
             catalog: &Catalog,
             id: GlobalId,
             indexes: &mut Vec<GlobalId>,
-            complete: &mut bool,
+            unmaterialized: &mut Vec<GlobalId>,
         ) {
             if !has_indexes(catalog, id) {
                 return;
@@ -1852,13 +1851,13 @@ impl Catalog {
                 view @ CatalogItem::View(_) => {
                     // Unmaterialized view. Recursively search its dependencies.
                     for id in view.uses() {
-                        inner(catalog, *id, indexes, complete)
+                        inner(catalog, *id, indexes, unmaterialized)
                     }
                 }
                 CatalogItem::Source(_) => {
                     // Unmaterialized source. Record that we are missing at
                     // least one index.
-                    *complete = false;
+                    unmaterialized.push(id);
                 }
                 CatalogItem::Table(_) => (),
                 _ => unreachable!(),
@@ -1866,13 +1865,16 @@ impl Catalog {
         }
 
         let mut indexes = vec![];
-        let mut complete = true;
+        let mut unmaterialized = vec![];
         for id in ids {
-            inner(self, *id, &mut indexes, &mut complete)
+            inner(self, *id, &mut indexes, &mut unmaterialized)
         }
         indexes.sort();
         indexes.dedup();
-        (indexes, complete)
+
+        unmaterialized.sort();
+        unmaterialized.dedup();
+        (indexes, unmaterialized)
     }
 
     pub fn uses_tables(&self, id: GlobalId) -> bool {

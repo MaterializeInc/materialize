@@ -1567,12 +1567,18 @@ impl Coordinator {
 
     async fn ship_sources(&mut self, metadata: Vec<(GlobalId, Option<GlobalId>, bool)>) {
         for (source_id, idx_id, caching_enabled) in metadata {
+            // Do everything to instantiate the source at the coordinator and
+            // inform the timestamper and dataflow workers of its existence before
+            // shipping any dataflows that depend on its existence.
             self.update_timestamper(source_id, true).await;
+            self.maybe_begin_caching(source_id, caching_enabled).await;
+            let frontiers =
+                self.new_frontiers(source_id, Some(0), self.logical_compaction_window_ms);
+            self.sources.insert(source_id, frontiers);
             if let Some(index_id) = idx_id {
                 let df = self.dataflow_builder().build_index_dataflow(index_id);
                 self.ship_dataflow(df).await;
             }
-            self.maybe_begin_caching(source_id, caching_enabled).await;
         }
     }
 
@@ -2403,7 +2409,7 @@ impl Coordinator {
         // the compacted arrangements we have at hand. It remains unresolved
         // what to do if it cannot be satisfied (perhaps the query should use
         // a larger timestamp and block, perhaps the user should intervene).
-        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(uses_ids);
+        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(uses_ids);
 
         // Determine the valid lower bound of times that can produce correct outputs.
         // This bound is determined by the arrangements contributing to the query,
@@ -2420,7 +2426,7 @@ impl Coordinator {
             // timestamp determination process: either the trace itself or the
             // original sources on which they depend.
             PeekWhen::Immediately => {
-                if !indexes_complete {
+                if !unmaterialized_source_ids.is_empty() {
                     coord_bail!(
                         "Unable to automatically determine a timestamp for your query; \
                         this can happen if your query depends on non-materialized sources.\n\
@@ -2519,14 +2525,19 @@ impl Coordinator {
         // nearest_indexes. We don't care about the indexes being incomplete because
         // callers of this function (CREATE SINK and TAIL) are responsible for creating
         // indexes if needed.
-        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&[source_id]);
-        let since = self.indexes.least_valid_since(index_ids.iter().copied());
+        let (index_ids, unmaterialized_source_ids) = self.catalog.nearest_indexes(&[source_id]);
+        let mut since = self.indexes.least_valid_since(index_ids.iter().copied());
+        since.join_assign(
+            &self
+                .sources
+                .least_valid_since(unmaterialized_source_ids.iter().copied()),
+        );
 
         let mut candidate = if index_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
             // If the sink depends on any tables, we enforce linearizability by choosing
             // the latest input time.
             self.get_read_ts()
-        } else if indexes_complete && !index_ids.is_empty() {
+        } else if unmaterialized_source_ids.is_empty() && !index_ids.is_empty() {
             // If the sink does not need to create any indexes and requires at least 1
             // index, use the upper. For something like a static view, the indexes are
             // complete but the index count is 0, and we want 0 instead of max for the
@@ -2950,8 +2961,7 @@ impl Coordinator {
             // The identity for `join` is the minimum element.
             let mut since = Antichain::from_elem(Timestamp::minimum());
 
-            // Populate "valid from" information for each source BYO Debezium source.
-            // TODO: extend this to all sources.
+            // Populate "valid from" information for each source.
             for (source_id, _description) in dataflow.source_imports.iter() {
                 // Extract `since` information about each source and apply here.
                 if let Some(source_since) = self.sources.since_of(source_id) {
