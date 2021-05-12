@@ -2486,26 +2486,53 @@ impl Coordinator {
     /// `source_id`.
     ///
     /// Updates greater or equal to this frontier will be produced.
-    fn determine_frontier(&self, source_id: GlobalId) -> Antichain<Timestamp> {
-        // TODO: The logic that follows is at variance from PEEK logic which consults the
-        // "queryable" state of its inputs. We might want those to line up, but it is only
-        // a "might".
-        if let Some(index_id) = self.catalog.default_index_for(source_id) {
-            let upper = self
-                .indexes
-                .upper_of(&index_id)
-                .expect("name missing at coordinator");
+    fn determine_frontier(&mut self, source_id: GlobalId) -> Antichain<Timestamp> {
+        // This function differs from determine_timestamp because sinks/tail don't care
+        // about indexes existing or timestamps being complete. If data don't exist
+        // yet (upper = 0), it is not a problem for the sink to wait for it. If the
+        // timestamp we choose isn't as fresh as possible, that's also fine because we
+        // produce timestamps describing when the diff occurred, so users can determine
+        // if that's fresh enough.
 
-            if let Some(ts) = upper.get(0) {
-                Antichain::from_elem(ts.saturating_sub(1))
+        // If source_id is already indexed, then nearest_indexes will return the
+        // same index that default_index_for does, so we can stick with only using
+        // nearest_indexes. We don't care about the indexes being incomplete because
+        // callers of this function (CREATE SINK and TAIL) are responsible for creating
+        // indexes if needed.
+        let (index_ids, indexes_complete) = self.catalog.nearest_indexes(&[source_id]);
+        let since = self.indexes.least_valid_since(index_ids.iter().copied());
+
+        let mut candidate = if index_ids.iter().any(|id| self.catalog.uses_tables(*id)) {
+            // If the sink depends on any tables, we enforce linearizability by choosing
+            // the latest input time.
+            self.get_read_ts()
+        } else if indexes_complete && !index_ids.is_empty() {
+            // If the sink does not need to create any indexes and requires at least 1
+            // index, use the upper. For something like a static view, the indexes are
+            // complete but the index count is 0, and we want 0 instead of max for the
+            // time, so we should fall through to the else in that case.
+            let upper = self.indexes.greatest_open_upper(index_ids);
+            if let Some(ts) = upper.elements().get(0) {
+                // We don't need to worry about `ts == 0` like determine_timestamp, because
+                // it's fine to not have any timestamps completed yet, which will just cause
+                // this sink to wait.
+                ts.saturating_sub(1)
             } else {
-                Antichain::from_elem(Timestamp::max_value())
+                Timestamp::max_value()
             }
         } else {
-            // Use the earliest time that is still valid for all sources.
-            let (index_ids, _indexes_complete) = self.catalog.nearest_indexes(&[source_id]);
-            self.indexes.least_valid_since(index_ids)
+            // If the sink does need to create an index, use 0, which will cause the since
+            // to be used below.
+            Timestamp::min_value()
+        };
+
+        // Ensure that the timestamp is >= since. This is necessary because when a
+        // Frontiers is created, its upper = 0, but the since is > 0 until update_upper
+        // has run.
+        if !since.less_equal(&candidate) {
+            candidate.advance_by(since.borrow());
         }
+        Antichain::from_elem(candidate)
     }
 
     fn sequence_explain(
