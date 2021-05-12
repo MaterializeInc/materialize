@@ -33,3 +33,13 @@
 1
 3
 1
+
+> CREATE TABLE dec (d DECIMAL)
+
+# Verify that mz_logical_timestamp cannot be used in INSERTs (until
+# we decide what it should do in an INSERT). Previously it could, but
+# would produce different times even in a transaction (hence the test
+# in this file). Although this error message is misleading, we don't
+# expect users to do this, so it's ok for now.
+! INSERT INTO dec VALUES (mz_logical_timestamp())
+mz_logical_timestamp cannot be used in static or write queries
