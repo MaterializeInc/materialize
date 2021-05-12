@@ -518,6 +518,7 @@ struct RowTextParser<'a> {
     position: usize,
     column_delimiter: &'a str,
     null_string: &'a str,
+    buffer: Vec<u8>,
 }
 
 impl<'a> RowTextParser<'a> {
@@ -527,6 +528,7 @@ impl<'a> RowTextParser<'a> {
             position: 0,
             column_delimiter,
             null_string,
+            buffer: Vec::new(),
         }
     }
 
@@ -602,42 +604,50 @@ impl<'a> RowTextParser<'a> {
         self.consume_bytes(self.null_string.as_bytes())
     }
 
-    fn consume_raw_value(&mut self) -> Result<Option<Vec<u8>>, io::Error> {
+    fn consume_raw_value(&mut self) -> Result<Option<&[u8]>, io::Error> {
         if self.consume_null_string() {
             return Ok(None);
         }
-        let mut raw_value = Vec::new();
+
+        let mut start = self.position;
+
+        // buffer where unescaped data is accumulated
+        self.buffer.clear();
+
         while !self.is_eof() {
             if self.is_end_of_line() || self.is_column_delimiter() {
                 break;
             }
             match self.peek() {
                 Some(b'\\') => {
+                    // Add non-escaped data parsed so far
+                    self.buffer.extend(&self.data[start..self.position]);
+
                     self.consume_n(1);
                     match self.peek() {
                         Some(b'b') => {
                             self.consume_n(1);
-                            raw_value.push(8);
+                            self.buffer.push(8);
                         }
                         Some(b'f') => {
                             self.consume_n(1);
-                            raw_value.push(12);
+                            self.buffer.push(12);
                         }
                         Some(b'n') => {
                             self.consume_n(1);
-                            raw_value.push(b'\n');
+                            self.buffer.push(b'\n');
                         }
                         Some(b'r') => {
                             self.consume_n(1);
-                            raw_value.push(b'\r');
+                            self.buffer.push(b'\r');
                         }
                         Some(b't') => {
                             self.consume_n(1);
-                            raw_value.push(b'\t');
+                            self.buffer.push(b'\t');
                         }
                         Some(b'v') => {
                             self.consume_n(1);
-                            raw_value.push(11);
+                            self.buffer.push(11);
                         }
                         Some(b'x') => {
                             self.consume_n(1);
@@ -661,10 +671,10 @@ impl<'a> RowTextParser<'a> {
                                             _ => break,
                                         }
                                     }
-                                    raw_value.push(value);
+                                    self.buffer.push(value);
                                 }
                                 _ => {
-                                    raw_value.push(b'x');
+                                    self.buffer.push(b'x');
                                 }
                             }
                         }
@@ -679,27 +689,35 @@ impl<'a> RowTextParser<'a> {
                                     _ => break,
                                 }
                             }
-                            raw_value.push(value);
+                            self.buffer.push(value);
                         }
                         Some(c) => {
                             self.consume_n(1);
-                            raw_value.push(c);
-                            continue;
+                            self.buffer.push(c);
                         }
                         None => {
-                            raw_value.push(b'\\');
-                            continue;
+                            self.buffer.push(b'\\');
                         }
                     }
+
+                    start = self.position;
                 }
-                Some(c) => {
+                Some(_) => {
                     self.consume_n(1);
-                    raw_value.push(c);
                 }
                 None => {}
             }
         }
-        Ok(Some(raw_value))
+
+        // Return a slice of the original buffer if no escaped characters where processed
+        if self.buffer.is_empty() {
+            Ok(Some(&self.data[start..self.position]))
+        } else {
+            // ... otherwise, add the remaining non-escaped data to the decoding buffer
+            // and return a pointer to it
+            self.buffer.extend(&self.data[start..self.position]);
+            Ok(Some(&self.buffer[..]))
+        }
     }
 }
 
@@ -730,7 +748,7 @@ pub fn decode_row_text(
             }
             let raw_value = parser.consume_raw_value()?;
             if let Some(raw_value) = raw_value {
-                match pgrepr::Value::decode_text(&typ, &raw_value) {
+                match pgrepr::Value::decode_text(&typ, raw_value) {
                     Ok(value) => row.push(value.into_datum(&buf, &typ).0),
                     Err(err) => {
                         let msg = format!("unable to decode column: {}", err);
