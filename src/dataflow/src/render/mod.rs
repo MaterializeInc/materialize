@@ -124,7 +124,7 @@ use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::operator::CollectionExt;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::server::{CacheMessage, LocalInput};
-use crate::source::timestamp::TimestampDataUpdates;
+use crate::source::timestamp::TimestampBindingRc;
 use crate::source::SourceToken;
 
 mod arrange_by;
@@ -148,7 +148,7 @@ pub struct RenderState {
     /// Handles to external sources, keyed by ID.
     pub ts_source_mapping: HashMap<GlobalId, Vec<Weak<Option<SourceToken>>>>,
     /// Timestamp data updates for each source.
-    pub ts_histories: TimestampDataUpdates,
+    pub ts_histories: HashMap<GlobalId, TimestampBindingRc>,
     /// Tokens that should be dropped when a dataflow is dropped to clean up
     /// associated state.
     pub dataflow_tokens: HashMap<GlobalId, Box<dyn Any>>,
