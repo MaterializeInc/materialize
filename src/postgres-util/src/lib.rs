@@ -12,8 +12,10 @@
 use std::fmt;
 
 use anyhow::anyhow;
+use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+use postgres_openssl::MakeTlsConnector;
 use tokio_postgres::types::Type as PgType;
-use tokio_postgres::NoTls;
+use tokio_postgres::Config;
 
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::impl_display;
@@ -55,6 +57,15 @@ pub struct TableInfo {
     pub schema: Vec<PgColumn>,
 }
 
+/// Creates a TLS connector that respects the Postgres' connector Config, in particular `sslmode`.
+pub fn make_tls(_config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
+    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
+    // Currently supported sslmodes (disable, prefer, require) don't verify peer certificates.
+    // todo(uce): add additional sslmodes (see #6716)
+    builder.set_verify(SslVerifyMode::NONE);
+    Ok(MakeTlsConnector::new(builder.build()))
+}
+
 /// Fetches table schema information from an upstream Postgres source for all tables that are part
 /// of a publication, given a connection string and the publication name.
 ///
@@ -66,7 +77,9 @@ pub async fn publication_info(
     conn: &str,
     publication: &str,
 ) -> Result<Vec<TableInfo>, anyhow::Error> {
-    let (client, connection) = tokio_postgres::connect(&conn, NoTls).await?;
+    let config = conn.parse()?;
+    let tls = make_tls(&config)?;
+    let (client, connection) = config.connect(tls).await?;
     tokio::spawn(connection);
 
     let tables = client

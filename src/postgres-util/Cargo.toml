@@ -7,6 +7,8 @@ publish = false
 
 [dependencies]
 anyhow = "1.0.40"
+openssl = { version = "0.10.34", features = ["vendored"] }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 sql-parser = { path = "../sql-parser" }
 tokio = { version = "1.5.0", features = ["fs"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
