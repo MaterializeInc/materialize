@@ -55,7 +55,7 @@ use itertools::Itertools;
 use rand::Rng;
 use timely::communication::WorkerGuards;
 use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
-use tokio::runtime::{Handle as TokioHandle, Runtime};
+use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
@@ -3008,10 +3008,6 @@ pub async fn serve(
         safe_mode,
         build_info,
     }: Config<'_>,
-    // TODO(benesch): Don't pass runtime explicitly when
-    // `Handle::current().block_in_place()` lands. See:
-    // https://github.com/tokio-rs/tokio/pull/3097.
-    runtime: Arc<Runtime>,
 ) -> Result<(Handle, Client), CoordError> {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (feedback_tx, feedback_rx) = mpsc::unbounded_channel();
@@ -3101,6 +3097,7 @@ pub async fn serve(
     // sent across threads. Spawn it in a thread and have this parent thread wait
     // for bootstrap completion before proceeding.
     let (bootstrap_tx, bootstrap_rx) = std::sync::mpsc::channel();
+    let handle = TokioHandle::current();
     let thread = thread::spawn(move || {
         let mut coord = Coordinator {
             worker_guards,
@@ -3144,7 +3141,7 @@ pub async fn serve(
         if let Some(cache_tx) = &coord.cache_tx {
             coord.broadcast(SequencedCommand::EnableCaching(cache_tx.clone()));
         }
-        let bootstrap = runtime.block_on(coord.bootstrap(builtin_table_updates));
+        let bootstrap = handle.block_on(coord.bootstrap(builtin_table_updates));
         let ok = bootstrap.is_ok();
         bootstrap_tx.send(bootstrap).unwrap();
         if !ok {
@@ -3157,7 +3154,7 @@ pub async fn serve(
             coord.broadcast(SequencedCommand::Shutdown);
             return;
         }
-        runtime.block_on(coord.serve(
+        handle.block_on(coord.serve(
             internal_cmd_rx,
             cmd_rx,
             feedback_rx,

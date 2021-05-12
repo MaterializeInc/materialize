@@ -17,14 +17,12 @@ use std::convert::TryInto;
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use compile_time_run::run_command_str;
 use futures::StreamExt;
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod, SslVerifyMode};
 use tokio::net::TcpListener;
-use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 
@@ -157,13 +155,7 @@ pub enum TlsMode {
 }
 
 /// Start a `materialized` server.
-pub async fn serve(
-    config: Config,
-    // TODO(benesch): Don't pass runtime explicitly when
-    // `Handle::current().block_in_place()` lands. See:
-    // https://github.com/tokio-rs/tokio/pull/3097.
-    runtime: Arc<Runtime>,
-) -> Result<Server, anyhow::Error> {
+pub async fn serve(config: Config) -> Result<Server, anyhow::Error> {
     let workers = config.workers;
 
     // Validate TLS configuration, if present.
@@ -214,23 +206,20 @@ pub async fn serve(
     let local_addr = listener.local_addr()?;
 
     // Initialize coordinator.
-    let (coord_handle, coord_client) = coord::serve(
-        coord::Config {
-            workers,
-            timely_worker: config.timely_worker,
-            symbiosis_url: config.symbiosis_url.as_deref(),
-            logging: config.logging,
-            data_directory: &config.data_directory,
-            timestamp_frequency: config.timestamp_frequency,
-            cache: config.cache,
-            persistence: config.persistence,
-            logical_compaction_window: config.logical_compaction_window,
-            experimental_mode: config.experimental_mode,
-            safe_mode: config.safe_mode,
-            build_info: &BUILD_INFO,
-        },
-        runtime,
-    )
+    let (coord_handle, coord_client) = coord::serve(coord::Config {
+        workers,
+        timely_worker: config.timely_worker,
+        symbiosis_url: config.symbiosis_url.as_deref(),
+        logging: config.logging,
+        data_directory: &config.data_directory,
+        timestamp_frequency: config.timestamp_frequency,
+        cache: config.cache,
+        persistence: config.persistence,
+        logical_compaction_window: config.logical_compaction_window,
+        experimental_mode: config.experimental_mode,
+        safe_mode: config.safe_mode,
+        build_info: &BUILD_INFO,
+    })
     .await?;
 
     // Launch task to serve connections.

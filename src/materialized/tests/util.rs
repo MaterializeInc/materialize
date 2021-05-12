@@ -116,32 +116,29 @@ pub fn start_server(config: Config) -> Result<Server, Box<dyn Error>> {
         }
         Some(data_directory) => (data_directory, None),
     };
-    let inner = runtime.block_on(materialized::serve(
-        materialized::Config {
-            logging: config
-                .logging_granularity
-                .map(|granularity| coord::LoggingConfig {
-                    granularity,
-                    log_logging: false,
-                    retain_readings_for: granularity,
-                }),
-            timestamp_frequency: Duration::from_secs(1),
-            cache: None,
-            persistence: None,
-            logical_compaction_window: config.logical_compaction_window,
-            workers: config.workers,
-            timely_worker: timely::WorkerConfig::default(),
-            data_directory,
-            symbiosis_url: None,
-            listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
-            tls: config.tls,
-            experimental_mode: config.experimental_mode,
-            safe_mode: config.safe_mode,
-            telemetry_url: None,
-            introspection_frequency: Duration::from_secs(1),
-        },
-        runtime.clone(),
-    ))?;
+    let inner = runtime.block_on(materialized::serve(materialized::Config {
+        logging: config
+            .logging_granularity
+            .map(|granularity| coord::LoggingConfig {
+                granularity,
+                log_logging: false,
+                retain_readings_for: granularity,
+            }),
+        timestamp_frequency: Duration::from_secs(1),
+        cache: None,
+        persistence: None,
+        logical_compaction_window: config.logical_compaction_window,
+        workers: config.workers,
+        timely_worker: timely::WorkerConfig::default(),
+        data_directory,
+        symbiosis_url: None,
+        listen_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        tls: config.tls,
+        experimental_mode: config.experimental_mode,
+        safe_mode: config.safe_mode,
+        telemetry_url: None,
+        introspection_frequency: Duration::from_secs(1),
+    }))?;
     let server = Server {
         inner,
         runtime,

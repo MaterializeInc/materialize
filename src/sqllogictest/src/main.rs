@@ -13,11 +13,9 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
-use std::sync::Arc;
 
 use chrono::Utc;
 use structopt::StructOpt;
-use tokio::runtime::Runtime;
 use walkdir::WalkDir;
 
 use sqllogictest::runner::{self, Outcomes, RunConfig, WriteFmt};
@@ -53,19 +51,14 @@ struct Args {
     paths: Vec<String>,
 }
 
-fn main() {
-    let runtime = Arc::new(Runtime::new().unwrap());
-    runtime.block_on(run(runtime.clone()))
-}
-
-async fn run(runtime: Arc<Runtime>) {
+#[tokio::main]
+async fn main() {
     ore::panic::set_abort_on_panic();
     ore::test::init_logging_default("warn");
 
     let args: Args = ore::cli::parse_args();
 
     let config = RunConfig {
-        runtime,
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
         stderr: &OutputStream::new(io::stderr(), args.timestamps),
         verbosity: args.verbosity,
