@@ -123,6 +123,16 @@ queries' semantics.
 
 For an example, see [Using CTEs](#using-ctes).
 
+#### Known limitations
+
+CTEs have the following limitations, which we are working to improve:
+
+- CTEs only support `SELECT` queries. {{% gh 4867 %}}
+- Materialize inlines the CTE where it's referenced, which could cause
+  unexpected performance characteristics for especially complex expressions. {{%
+  gh 4867 %}}
+- `WTIH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
+
 ### Query hints
 
 {{< version-added v0.6.0 />}}
@@ -134,20 +144,9 @@ The following query hints are valid within the `OPTION` clause.
 
 Hint | Value type | Description
 ------|------------|------------
-`expected_group_size` | `int` | How many rows will have the same group key. Materialize
-can render `min` and `max` expressions more efficiently with this information.
+`expected_group_size` | `int` | How many rows will have the same group key. Materialize can render `min` and `max` expressions more efficiently with this information.
 
 For an example, see [Using query hints](#using-query-hints).
-
-#### Known limitations
-
-CTEs have the following limitations, which we are working to improve:
-
-- CTEs only support `SELECT` queries. {{% gh 4867 %}}
-- Materialize inlines the CTE where it's referenced, which could cause
-  unexpected performance characteristics for especially complex expressions. {{%
-  gh 4867 %}}
-- `WTIH RECURSIVE` CTEs are not available yet. {{% gh 2516 %}}
 
 ## Examples
 
