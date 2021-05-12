@@ -125,8 +125,9 @@ impl Error {
                     } else {
                         write!(&mut stderr, ", {}", cause)?;
                     }
-                    writeln!(&mut stderr)?;
                 }
+                writeln!(&mut stderr)?;
+
                 for hint in hints {
                     stderr.set_color(&color_spec.clone().set_bold(true))?;
                     write!(&mut stderr, " hint: ")?;
@@ -224,6 +225,12 @@ pub struct InputDetails {
     snippet: String,
     line: usize,
     col: usize,
+}
+
+impl InputDetails {
+    pub fn filename(&self) -> String {
+        return self.filename.clone();
+    }
 }
 
 pub trait Positioner {

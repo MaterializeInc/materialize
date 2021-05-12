@@ -42,36 +42,44 @@ fn test_leading_input() {
         .write_stdin("leading input")
         .assert()
         .failure()
-        .stderr(
+        .stderr(predicate::str::starts_with(
             r#"<stdin>:1:1: error: unexpected input line at beginning of file
      |
    1 | leading input
      | ^
 "#,
-        );
+        ));
 }
 
 #[test]
 fn test_cmd_missing_name() {
-    cmd().write_stdin("$   ").assert().failure().stderr(concat!(
-        r#"<stdin>:1:1: error: command line is missing command name
+    cmd()
+        .write_stdin("$   ")
+        .assert()
+        .failure()
+        .stderr(predicate::str::starts_with(concat!(
+            r#"<stdin>:1:1: error: command line is missing command name
      |
    1 | $   "#, // separated to preserve trailing spaces
-        r#"
+            r#"
      | ^
 "#,
-    ));
+        )));
 }
 
 #[test]
 fn test_cmd_arg_missing_value() {
-    cmd().write_stdin("$ cmd badarg").assert().failure().stderr(
-        r#"<stdin>:1:7: error: command argument is not in required key=value format
+    cmd()
+        .write_stdin("$ cmd badarg")
+        .assert()
+        .failure()
+        .stderr(predicate::str::starts_with(
+            r#"<stdin>:1:7: error: command argument is not in required key=value format
      |
    1 | $ cmd badarg
      |       ^
 "#,
-    );
+        ));
 }
 
 #[test]
@@ -80,13 +88,13 @@ fn test_cmd_arg_bad_nesting_brace_close() {
         .write_stdin("$ cmd arg={}}")
         .assert()
         .failure()
-        .stderr(
+        .stderr(predicate::str::starts_with(
             r#"<stdin>:1:13: error: command argument has unbalanced close brace
      |
    1 | $ cmd arg={}}
      |             ^
 "#,
-        );
+        ));
 }
 
 #[test]
@@ -95,13 +103,13 @@ fn test_cmd_arg_bad_nesting_brace_open() {
         .write_stdin("$ cmd arg={{one} two three")
         .assert()
         .failure()
-        .stderr(
+        .stderr(predicate::str::starts_with(
             r#"<stdin>:1:26: error: command argument has unterminated open brace
      |
    1 | $ cmd arg={{one} two three
      |                          ^
 "#,
-        );
+        ));
 }
 
 #[test]
@@ -110,13 +118,13 @@ fn test_cmd_arg_bad_nesting_bracket_close() {
         .write_stdin("$ cmd arg=[{} things ] more]")
         .assert()
         .failure()
-        .stderr(
+        .stderr(predicate::str::starts_with(
             r#"<stdin>:1:28: error: command argument has unbalanced close bracket
      |
    1 | $ cmd arg=[{} things ] more]
      |                            ^
 "#,
-        );
+        ));
 }
 
 #[test]
@@ -125,13 +133,13 @@ fn test_cmd_arg_bad_nesting_bracket_open() {
         .write_stdin("$ cmd arg=[{one} two three")
         .assert()
         .failure()
-        .stderr(
+        .stderr(predicate::str::starts_with(
             r#"<stdin>:1:26: error: command argument has unterminated open bracket
      |
    1 | $ cmd arg=[{one} two three
      |                          ^
 "#,
-        );
+        ));
 }
 
 #[test]
@@ -140,13 +148,13 @@ fn test_cmd_arg_bad_nesting_intersect1() {
         .write_stdin("$ cmd arg=[{one]} two three")
         .assert()
         .failure()
-        .stderr(
+        .stderr(predicate::str::starts_with(
             r#"<stdin>:1:16: error: command argument has unterminated open brace
      |
    1 | $ cmd arg=[{one]} two three
      |                ^
 "#,
-        );
+        ));
 }
 
 #[test]
@@ -155,13 +163,13 @@ fn test_cmd_arg_bad_nesting_intersect2() {
         .write_stdin("$ cmd arg=[{one {} two} [ three}]")
         .assert()
         .failure()
-        .stderr(
+        .stderr(predicate::str::starts_with(
             r#"<stdin>:1:32: error: command argument has unterminated open bracket
      |
    1 | $ cmd arg=[{one {} two} [ three}]
      |                                ^
 "#,
-        );
+        ));
 }
 
 // --ci-output tests
@@ -186,13 +194,13 @@ fn test_ci_output_cmd_arg() {
         .write_stdin("$ cmd badarg")
         .assert()
         .failure()
-        .stderr(
+        .stderr(predicate::str::starts_with(
             r#"<stdin>:1:7: error: command argument is not in required key=value format
      |
    1 | $ cmd badarg
      |       ^
 "#,
-        )
+        ))
         .stdout(predicate::str::contains(
             "--- ==> <stdin>
 ^^^ +++",
