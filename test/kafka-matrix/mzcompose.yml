@@ -50,7 +50,7 @@ mzworkflows:
 
   kafka-5_5_3:
     env:
-      KAFKA_VERSION: 5.5.3
+      KAFKA_VERSION: 5.5.4
     steps:
       - step: workflow
         workflow: test-kafka

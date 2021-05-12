@@ -95,13 +95,13 @@ services:
     depends_on:
       - postgres
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.5.3
+    image: confluentinc/cp-zookeeper:5.5.4
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
     volumes:
       - ${MZ_CHBENCH_SNAPSHOT_ZK_DATA:-zk-data}:/var/lib/zookeeper
   kafka:
-    image: confluentinc/cp-enterprise-kafka:5.5.3
+    image: confluentinc/cp-enterprise-kafka:5.5.4
     ports:
       - *kafka-internal
       - *kafka-external
@@ -136,7 +136,7 @@ services:
       CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
     depends_on: [kafka, schema-registry]
   schema-registry:
-    image: confluentinc/cp-schema-registry:5.5.3
+    image: confluentinc/cp-schema-registry:5.5.4
     ports:
       - *schema-registry
     environment:
@@ -152,7 +152,7 @@ services:
     build: connector-postgres
     depends_on: [schema-registry, control-center]
   control-center:
-    image: confluentinc/cp-enterprise-control-center:5.5.3
+    image: confluentinc/cp-enterprise-control-center:5.5.4
     depends_on: [zookeeper, kafka, connect]
     ports:
       - *control-center
