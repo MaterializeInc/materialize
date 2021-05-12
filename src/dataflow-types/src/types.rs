@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
+use std::ops::Add;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -772,6 +773,16 @@ pub struct MzOffset {
 impl fmt::Display for MzOffset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.offset)
+    }
+}
+
+impl Add<i64> for MzOffset {
+    type Output = MzOffset;
+
+    fn add(self, x: i64) -> MzOffset {
+        MzOffset {
+            offset: self.offset + x,
+        }
     }
 }
 
