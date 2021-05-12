@@ -1440,6 +1440,14 @@ where
             match message {
                 Some(FrontendMessage::CopyData(buf)) => data.extend(buf),
                 Some(FrontendMessage::CopyDone) => break,
+                Some(_) => {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::PROTOCOL_VIOLATION,
+                            "unexpected message type during COPY from stdin",
+                        ))
+                        .await
+                }
                 _ => {
                     next_state = State::Done;
                     break;
