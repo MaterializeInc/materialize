@@ -771,6 +771,32 @@ impl fmt::Display for MzOffset {
         write!(f, "{}", self.offset)
     }
 }
+// Structured representation of a transaction ID parsed from the Debezium consistency topic
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Serialize, Deserialize)]
+pub enum DebeziumTransactionId {
+    MySql {
+        file_idx: usize,
+        pos: usize,
+    },
+    Postgres {
+        lsn: usize,
+    },
+    MSSql {
+        file_seq_num: u32,
+        log_block_offset: u32,
+        slot_num: u16,
+    },
+    Unknown,
+}
+
+// Structured representation of a transaction parsed from the Debezium consistency topic
+// Event count is the event count for the topic that the source reader is reading from, not
+// the total event count for this transaction
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Serialize, Deserialize)]
+pub struct DebeziumTransaction {
+    pub transaction_id: DebeziumTransactionId,
+    pub event_count: i64,
+}
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct KafkaOffset {
@@ -790,6 +816,8 @@ pub enum TimestampSourceUpdate {
     /// MzOffset tuple. This tuple informs workers that messages with Offset on
     /// PartitionId will be timestamped with Timestamp.
     BringYourOwn(PartitionId, u64, MzOffset),
+    /// Timestamp update for a Debezium source
+    Debezium(PartitionId, u64, DebeziumTransaction),
 }
 
 /// Convert from KafkaOffset to MzOffset (1-indexed)

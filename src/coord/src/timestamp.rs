@@ -31,9 +31,9 @@ use rdkafka::ClientConfig;
 use tokio::sync::mpsc;
 
 use dataflow_types::{
-    Consistency, DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
-    KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector, SourceConnector,
-    SourceEnvelope, TimestampSourceUpdate,
+    Consistency, DataEncoding, DebeziumMode, DebeziumTransactionId, ExternalSourceConnector,
+    FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector,
+    SourceConnector, SourceEnvelope, TimestampSourceUpdate,
 };
 use expr::{GlobalId, PartitionId};
 use ore::collections::CollectionExt;
@@ -137,6 +137,7 @@ struct ByoTimestampConsumer {
     last_ts: u64,
     /// The max offset for which a timestamp has been assigned
     last_offset: MzOffset,
+    last_transaction_id: Option<DebeziumTransactionId>,
 }
 
 /// Supported format/envelope pairs for consistency topic decoding
@@ -309,7 +310,8 @@ fn generate_ts_updates_from_debezium(
             parse_debezium(record).with_context(|| format!("Failed to parse debezium record"))?;
 
         // Results are only returned when the record's status type is END
-        if let Some(results) = results {
+        if let Some((transaction_id, results)) = results {
+            info!("Parsed transaction id: {:?}", transaction_id);
             byo_consumer.last_ts += 1;
             for (topic, count) in results {
                 // Debezium topics are formatted as "server_name.database.topic", but
@@ -350,7 +352,8 @@ fn generate_ts_updates_from_debezium(
 /// processing an END message. It returns NONE otherwise.
 fn parse_debezium(
     record: Vec<(String, Value)>,
-) -> Result<Option<Vec<(String, i64)>>, anyhow::Error> {
+) -> Result<Option<(DebeziumTransactionId, Vec<(String, i64)>)>, anyhow::Error> {
+    let mut transaction_id: Option<DebeziumTransactionId> = None;
     let mut collections = vec![];
     let mut event_count = 0;
     for (key, value) in record {
@@ -417,6 +420,10 @@ fn parse_debezium(
             ("event_count", v) => {
                 bail!("Expected Union for field 'event_count', got {:?}", v);
             }
+            ("id", Value::String(id)) => transaction_id = Some(parse_transaction_id(id)?),
+            ("id", v) => {
+                bail!("Expected String for field 'transaction', got {:?}", v);
+            }
             ("status", Value::String(status)) => match status.as_str() {
                 "BEGIN" => return Ok(None),
                 "END" => (),
@@ -441,7 +448,48 @@ fn parse_debezium(
             collections
         );
     }
-    Ok(Some(collections))
+    match transaction_id {
+        Some(t) => Ok(Some((t, collections))),
+        _ => bail!("Failed to parse transaction ID"),
+    }
+}
+
+fn parse_transaction_id(transaction_id: String) -> Result<DebeziumTransactionId, anyhow::Error> {
+    // Postgres has a single integer LSN that can be read as an integer
+    // MySQL has a 'file=mysql-bin.<file_numer>,pos=<pos>'
+    // MSSQL has a 3-item tuple of hex-encoded integers delimited by ';'
+    if let Ok(lsn) = transaction_id.parse::<usize>() {
+        Ok(DebeziumTransactionId::Postgres { lsn })
+    } else if let Some(mysql_transaction) = transaction_id.strip_prefix("file=mysql-bin") {
+        let parts: Vec<&str> = mysql_transaction.split(",").collect();
+        match &parts[..] {
+            [file_idx, pos] => {
+                if let Some(pos) = pos.strip_prefix("pos=") {
+                    Ok(DebeziumTransactionId::MySql {
+                        file_idx: file_idx.parse::<usize>()?,
+                        pos: pos.parse::<usize>()?,
+                    })
+                } else {
+                    bail!("unrecognized mysql transaction id: {}", transaction_id)
+                }
+            }
+            _ => bail!("unrecognized mysql transaction id: {}", transaction_id),
+        }
+    } else {
+        // TODO: copied from envelope_debezium::decode_change_lsn
+        if transaction_id.len() != 22 {
+            bail!("unrecognized transaction id: {}", transaction_id);
+        }
+        if transaction_id.as_bytes()[8] != b':' || transaction_id.as_bytes()[17] != b':' {
+            bail!("unrecognized transaction id: {}", transaction_id);
+        }
+
+        Ok(DebeziumTransactionId::MSSql {
+            file_seq_num: u32::from_str_radix(&transaction_id[0..8], 16)?,
+            log_block_offset: u32::from_str_radix(&transaction_id[9..17], 16)?,
+            slot_num: u16::from_str_radix(&transaction_id[18..22], 16)?,
+        })
+    }
 }
 
 /// This function determines the expected format of the consistency metadata as a function
@@ -762,6 +810,7 @@ impl Timestamper {
                         envelope: identify_consistency_format(enc, env),
                         last_ts: 0,
                         last_offset: MzOffset { offset: 0 },
+                        last_transaction_id: None,
                     }),
                     None => None,
                 }
