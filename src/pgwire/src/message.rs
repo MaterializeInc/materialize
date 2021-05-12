@@ -541,11 +541,36 @@ impl<'a> RowTextParser<'a> {
     }
 
     fn consume_n(&mut self, n: usize) {
-        self.position += n;
+        self.position = std::cmp::min(self.position + n, self.data.len());
     }
 
     fn is_eof(&self) -> bool {
-        self.peek().is_none()
+        self.peek().is_none() || self.is_end_of_copy_marker()
+    }
+
+    fn end_of_copy_marker() -> &'static [u8] {
+        "\\.".as_bytes()
+    }
+
+    fn is_end_of_copy_marker(&self) -> bool {
+        self.check_bytes(Self::end_of_copy_marker())
+    }
+
+    /// Verifies there is no extra data after the end-of-copy marker.
+    fn expect_no_junk_data(&mut self) -> Result<(), io::Error> {
+        if self.is_end_of_copy_marker() {
+            self.consume_bytes(Self::end_of_copy_marker());
+            if self.is_end_of_line() {
+                self.consume_n(1);
+            }
+            if self.peek().is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "end-of-copy marker corrupt",
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn is_end_of_line(&self) -> bool {
@@ -614,7 +639,7 @@ impl<'a> RowTextParser<'a> {
         // buffer where unescaped data is accumulated
         self.buffer.clear();
 
-        while !self.is_eof() {
+        while !self.is_eof() && !self.is_end_of_copy_marker() {
             if self.is_end_of_line() || self.is_column_delimiter() {
                 break;
             }
@@ -739,7 +764,7 @@ pub fn decode_row_text(
         "\t"
     };
     let mut parser = RowTextParser::new(data, delimiter, null);
-    while !parser.is_eof() {
+    while !parser.is_eof() && !parser.is_end_of_copy_marker() {
         let mut row = Vec::new();
         let buf = RowArena::new();
         for (col, typ) in column_types.iter().enumerate() {
@@ -762,6 +787,7 @@ pub fn decode_row_text(
         parser.expect_end_of_line()?;
         rows.push(Row::pack(row));
     }
+    parser.expect_no_junk_data()?;
     Ok(rows)
 }
 
