@@ -1469,7 +1469,7 @@ where
                 Err(e) => {
                     return self
                         .error(ErrorResponse::error(
-                            SqlState::INVALID_PARAMETER_VALUE,
+                            SqlState::BAD_COPY_FILE_FORMAT,
                             format!("{}", e),
                         ))
                         .await

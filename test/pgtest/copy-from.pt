@@ -40,7 +40,7 @@ CopyDone
 until
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"22023"},{"typ":"M","value":"missing data for column"}]}
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"missing data for column"}]}
 ReadyForQuery {"status":"I"}
 
 # extra data at the end
@@ -61,7 +61,7 @@ CopyDone
 until
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"22023"},{"typ":"M","value":"extra data after last expected column"}]}
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"extra data after last expected column"}]}
 ReadyForQuery {"status":"I"}
 
 # invalid type
@@ -82,7 +82,7 @@ CopyDone
 until
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"22023"},{"typ":"M","value":"unable to decode column: invalid input syntax for type integer: invalid digit found in string: \"text as int\""}]}
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"unable to decode column: invalid input syntax for type integer: invalid digit found in string: \"text as int\""}]}
 ReadyForQuery {"status":"I"}
 
 # invalid type
@@ -103,7 +103,7 @@ CopyDone
 until
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"22023"},{"typ":"M","value":"unable to decode column: invalid input syntax for type double precision: \"2.1a\""}]}
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"unable to decode column: invalid input syntax for type double precision: \"2.1a\""}]}
 ReadyForQuery {"status":"I"}
 
 #
