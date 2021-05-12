@@ -86,6 +86,11 @@ $ kafka-create-topic topic=tx
 > ALTER INDEX materialize.public.nums_primary_idx
   SET (logical_compaction_window = 'off')
 
+# Create a sink before we ingest any data, to ensure the sink starts AS OF 0
+> CREATE SINK nums_sink FROM nums
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'nums-sink'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
 # ==> Test consolidation.
 
 # Ingest several updates that consolidate. Some of these updates are in one
@@ -108,10 +113,6 @@ $ kafka-ingest format=avro topic=tx schema=${tx-schema}
 
 # Test that by default updates that occurred at the same time are consolidated,
 # but updates that occurred at distinct times are not.
-
-> CREATE SINK nums_sink FROM nums
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'nums-sink'
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-verify format=avro sink=materialize.public.nums_sink
 {"before": null, "after": {"row": {"num": 3}}}
