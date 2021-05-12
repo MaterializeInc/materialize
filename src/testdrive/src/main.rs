@@ -12,6 +12,7 @@ use std::process;
 use std::time::Duration;
 
 use aws_util::aws;
+use rand::{rngs::StdRng, seq::SliceRandom, Rng, SeedableRng};
 use rusoto_credential::{AwsCredentials, ChainProvider, ProvideAwsCredentials};
 use structopt::StructOpt;
 use url::Url;
@@ -81,6 +82,10 @@ struct Args {
     /// Maximum number of errors before aborting
     #[structopt(long, default_value = "10")]
     max_errors: usize,
+
+    /// Shuffle tests (using the value from --seed, if any)
+    #[structopt(long)]
+    shuffle_tests: bool,
 
     // === Positional arguments. ===
     /// Paths to testdrive scripts to run.
@@ -164,6 +169,13 @@ async fn main() {
 
     if files.is_empty() {
         files.push("-".to_string())
+    }
+
+    if args.shuffle_tests {
+        let mut rng: StdRng = SeedableRng::seed_from_u64(
+            args.seed.unwrap_or_else(|| rand::thread_rng().gen()).into(),
+        );
+        files.shuffle(&mut rng);
     }
 
     for file in files {
