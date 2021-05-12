@@ -590,28 +590,25 @@ swap: {swap_total}KB total, {swap_used}KB used",
             .build()?,
     );
 
-    let server = runtime.block_on(materialized::serve(
-        materialized::Config {
-            workers: args.workers.0,
-            timely_worker,
-            logging,
-            logical_compaction_window: args.logical_compaction_window,
-            timestamp_frequency: args.timestamp_frequency,
-            cache,
-            persistence,
-            listen_addr: args.listen_addr,
-            tls,
-            data_directory,
-            symbiosis_url: args.symbiosis,
-            experimental_mode: args.experimental,
-            safe_mode: args.safe,
-            telemetry_url,
-            introspection_frequency: args
-                .introspection_frequency
-                .unwrap_or_else(|| Duration::from_secs(1)),
-        },
-        runtime.clone(),
-    ))?;
+    let server = runtime.block_on(materialized::serve(materialized::Config {
+        workers: args.workers.0,
+        timely_worker,
+        logging,
+        logical_compaction_window: args.logical_compaction_window,
+        timestamp_frequency: args.timestamp_frequency,
+        cache,
+        persistence,
+        listen_addr: args.listen_addr,
+        tls,
+        data_directory,
+        symbiosis_url: args.symbiosis,
+        experimental_mode: args.experimental,
+        safe_mode: args.safe,
+        telemetry_url,
+        introspection_frequency: args
+            .introspection_frequency
+            .unwrap_or_else(|| Duration::from_secs(1)),
+    }))?;
 
     eprintln!(
         "=======================================================================

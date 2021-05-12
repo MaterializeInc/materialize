@@ -34,7 +34,6 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::ops;
 use std::path::Path;
 use std::str;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
@@ -45,7 +44,6 @@ use md5::{Digest, Md5};
 use postgres_protocol::types;
 use regex::Regex;
 use tempfile::TempDir;
-use tokio::runtime::Runtime;
 use tokio_postgres::types::FromSql;
 use tokio_postgres::types::Kind as PgKind;
 use tokio_postgres::types::Type as PgType;
@@ -531,7 +529,7 @@ impl Runner {
             telemetry_url: None,
             introspection_frequency: Duration::from_secs(1),
         };
-        let server = materialized::serve(mz_config, config.runtime.clone()).await?;
+        let server = materialized::serve(mz_config).await?;
         let client = connect(&server).await;
 
         Ok(Runner {
@@ -892,7 +890,6 @@ pub trait WriteFmt {
 }
 
 pub struct RunConfig<'a> {
-    pub runtime: Arc<Runtime>,
     pub stdout: &'a dyn WriteFmt,
     pub stderr: &'a dyn WriteFmt,
     pub verbosity: usize,
