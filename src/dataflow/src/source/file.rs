@@ -337,7 +337,7 @@ fn open_file_stream(
                             Ok(mut events) => {
                                 if events.any(|x| x.mask == EventMask::ATTRIB) && !_path.exists() {
                                     error!(
-                                        "file source: closing streamd due to deleted file (path: {})",
+                                        "file source: closing stream due to deleted file (path: {})",
                                         _path.display()
                                     );
                                     return;
