@@ -579,10 +579,6 @@ pub fn plan_create_source(
                 &mut with_options,
             )?;
 
-            // THIS IS EXPERIMENTAL - DO NOT DOCUMENT IT
-            // until we have had time to think about what the right UX/design is on a non-urgent timeline!
-            // By using this feature, you are opting in to not using updates or deletes in CDC sources, and
-            // accepting panics if that constraint is violated.
             if with_options.contains_key("start_offset") && consistency != Consistency::RealTime {
                 bail!("`start_offset` is not yet implemented for non-realtime consistency sources.")
             }
