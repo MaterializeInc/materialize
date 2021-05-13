@@ -157,7 +157,7 @@ mzworkflows:
   setup-benchmark:
     env:
       AGGREGATION_GENERATOR_DISTRIBUTION: ${AGGREGATION_GENERATOR_DISTRIBUTION:-benchmark}
-      AGGREGATION_GENERATOR_NUM_RECORDS: ${AGGREGATION_GENERATOR_NUM_RECORDS:-400000000}
+      AGGREGATION_GENERATOR_NUM_RECORDS: ${AGGREGATION_GENERATOR_NUM_RECORDS:-175000000}
       AGGREGATION_GENERATOR_PARALLELISM: ${AGGREGATION_GENERATOR_PARALLELISM:-40}
     steps:
     - step: workflow
@@ -173,7 +173,7 @@ mzworkflows:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-16}
       METRIC_VERIFIER_TIMEOUT: ${METRIC_VERIFIER_TIMEOUT:-3600}
-      AGGREGATION_GENERATOR_NUM_RECORDS: ${AGGREGATION_GENERATOR_NUM_RECORDS:-400000000}
+      AGGREGATION_GENERATOR_NUM_RECORDS: ${AGGREGATION_GENERATOR_NUM_RECORDS:-175000000}
     steps:
     - step: remove-services
       services: [materialized, perf-dash-scraper]
@@ -206,7 +206,7 @@ mzworkflows:
   setup-benchmark-large:
     env:
       AGGREGATION_GENERATOR_DISTRIBUTION: benchmark
-      AGGREGATION_GENERATOR_NUM_RECORDS: 400000000
+      AGGREGATION_GENERATOR_NUM_RECORDS: 7500000
     steps:
     - step: workflow
       workflow: setup-benchmark
@@ -214,7 +214,7 @@ mzworkflows:
   run-benchmark-large:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-16}
-      AGGREGATION_GENERATOR_NUM_RECORDS: 400000000
+      AGGREGATION_GENERATOR_NUM_RECORDS: 7500000
     steps:
     - step: workflow
       workflow: run-benchmark
@@ -230,7 +230,7 @@ mzworkflows:
   setup-benchmark-medium:
     env:
       AGGREGATION_GENERATOR_DISTRIBUTION: medium
-      AGGREGATION_GENERATOR_NUM_RECORDS: 20000000
+      AGGREGATION_GENERATOR_NUM_RECORDS: 500000
       AGGREGATION_GENERATOR_PARALLELISM: 8
     steps:
     - step: workflow
@@ -240,7 +240,7 @@ mzworkflows:
     env:
       MZ_WORKERS: ${MZ_WORKERS:-8}
       METRIC_VERIFIER_TIMEOUT: 900
-      AGGREGATION_GENERATOR_NUM_RECORDS: 20000000
+      AGGREGATION_GENERATOR_NUM_RECORDS: 500000
     steps:
     - step: workflow
       workflow: run-benchmark
