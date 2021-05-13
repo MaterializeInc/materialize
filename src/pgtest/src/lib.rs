@@ -58,6 +58,7 @@
 //! ReadyForQuery {"status":"I"}
 //! ```
 
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
@@ -93,7 +94,7 @@ impl PgTest {
             Message::AuthenticationOk => {}
             _ => bail!("expected AuthenticationOk"),
         };
-        pgtest.until(vec!["ReadyForQuery"], vec![])?;
+        pgtest.until(vec!["ReadyForQuery"], vec![], HashSet::new())?;
         Ok(pgtest)
     }
     pub fn send<F: Fn(&mut BytesMut)>(&mut self, f: F) -> anyhow::Result<()> {
@@ -106,6 +107,7 @@ impl PgTest {
         &mut self,
         until: Vec<&str>,
         err_field_typs: Vec<char>,
+        ignore: HashSet<String>,
     ) -> anyhow::Result<Vec<String>> {
         let mut msgs = Vec::with_capacity(until.len());
         for expect in until {
@@ -256,6 +258,9 @@ impl PgTest {
                 };
                 if self.verbose {
                     println!("RECV {}: {:?}", ch, typ);
+                }
+                if ignore.contains(typ) {
+                    continue;
                 }
                 let mut s = typ.to_string();
                 if !args.is_empty() {
@@ -446,20 +451,30 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: 
                 "".to_string()
             }
             "until" => {
+                let mut args = tc.args.clone();
                 // Our error field values don't always match postgres. Default to reporting
                 // the error code (C) and message (M), but allow the user to specify which ones
                 // they want.
-                let err_field_typs = if tc.args.contains_key("no_error_fields") {
+                let err_field_typs = if let Some(_) = args.remove("no_error_fields") {
                     vec![]
                 } else {
-                    match tc.args.get("err_field_typs") {
+                    match args.remove("err_field_typs") {
                         Some(typs) => typs.join("").chars().collect(),
                         None => vec!['C', 'M'],
                     }
                 };
+                let mut ignore = HashSet::new();
+                if let Some(values) = args.remove("ignore") {
+                    for v in values {
+                        ignore.insert(v);
+                    }
+                }
+                if !args.is_empty() {
+                    panic!("extra until arguments: {:?}", args);
+                }
                 format!(
                     "{}\n",
-                    pgt.until(lines.collect(), err_field_typs)
+                    pgt.until(lines.collect(), err_field_typs, ignore)
                         .unwrap()
                         .join("\n")
                 )

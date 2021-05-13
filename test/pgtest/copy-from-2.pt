@@ -29,7 +29,7 @@ CopyDone
 Query {"query": "SELECT * FROM t ORDER BY i"}
 ----
 
-until ignore=RowDescription
+until
 ReadyForQuery
 ReadyForQuery
 ----
@@ -79,7 +79,7 @@ Query {"query": "COPY t FROM STDIN"}
 Query {"query": "SELECT 2"}
 ----
 
-until ignore=RowDescription err_field_typs=C
+until err_field_typs=C
 ErrorResponse
 ReadyForQuery
 ----
@@ -97,7 +97,7 @@ CopyDone
 Query {"query": "SELECT * FROM t ORDER BY i"}
 ----
 
-until ignore=RowDescription
+until
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -126,7 +126,7 @@ CopyDone
 Query {"query": "SELECT * FROM t ORDER BY i"}
 ----
 
-until ignore=RowDescription
+until
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -157,7 +157,7 @@ CopyDone
 Query {"query": "SELECT * FROM t ORDER BY i"}
 ----
 
-until ignore=RowDescription
+until
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -184,7 +184,7 @@ CopyData "\\.\n"
 CopyDone
 ----
 
-until ignore=RowDescription err_field_typs=C
+until err_field_typs=C
 ErrorResponse
 ReadyForQuery
 ----
@@ -203,7 +203,7 @@ CopyDone
 Query {"query": "SELECT * FROM t ORDER BY i"}
 ----
 
-until ignore=RowDescription
+until
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -234,7 +234,7 @@ CopyDone
 Query {"query": "SELECT * FROM t ORDER BY i"}
 ----
 
-until ignore=RowDescription
+until
 ReadyForQuery
 ReadyForQuery
 ReadyForQuery
@@ -261,7 +261,7 @@ CopyData "\\.\n"
 CopyDone
 ----
 
-until ignore=RowDescription err_field_typs=C
+until err_field_typs=C
 ErrorResponse
 ReadyForQuery
 ----
@@ -282,7 +282,7 @@ CopyDone
 Query {"query": "SELECT * FROM t ORDER BY i"}
 ----
 
-until ignore=RowDescription
+until
 ReadyForQuery
 ReadyForQuery
 ----

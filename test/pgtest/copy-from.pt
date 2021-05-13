@@ -2,14 +2,14 @@ send
 Query {"query": "DROP TABLE IF EXISTS a"}
 ----
 
-until
+until ignore=NoticeResponse
 ReadyForQuery
 ----
 CommandComplete {"tag":"DROP TABLE"}
 ReadyForQuery {"status":"I"}
 
 send
-Query {"query": "CREATE TABLE a(a INT, b DOUBLE, c STRING)"}
+Query {"query": "CREATE TABLE a(a INT, b FLOAT, c TEXT)"}
 ----
 
 until
@@ -37,10 +37,10 @@ CopyData "1\t2.1"
 CopyDone
 ----
 
-until
+until err_field_typs=C
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"missing data for column"}]}
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"}]}
 ReadyForQuery {"status":"I"}
 
 # extra data at the end
@@ -79,10 +79,10 @@ CopyData "text as int\t2.1\ttext\n"
 CopyDone
 ----
 
-until
+until no_error_fields
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"unable to decode column: invalid input syntax for type integer: invalid digit found in string: \"text as int\""}]}
+ErrorResponse {"fields":[]}
 ReadyForQuery {"status":"I"}
 
 # invalid type
@@ -100,10 +100,10 @@ CopyData "1\t2.1a\ttext\n"
 CopyDone
 ----
 
-until
+until no_error_fields
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"unable to decode column: invalid input syntax for type double precision: \"2.1a\""}]}
+ErrorResponse {"fields":[]}
 ReadyForQuery {"status":"I"}
 
 #
@@ -263,16 +263,20 @@ ReadyForQuery {"status":"I"}
 
 
 # dump table
+# Our NULL ordering differs from postgres, so do some shennanigans to
+# make the results identical between mz and postgres.
 send
-Query {"query": "COPY (SELECT * FROM a ORDER BY a, b, c) TO STDOUT"}
+Query {"query": "COPY (SELECT * FROM a WHERE a IS NOT NULL ORDER BY a, b, c) TO STDOUT"}
+Query {"query": "COPY (SELECT * FROM a WHERE a IS NULL AND c IS NOT NULL ORDER BY a, b, c) TO STDOUT"}
+Query {"query": "COPY (SELECT * FROM a WHERE c IS NULL ORDER BY a, b, c) TO STDOUT"}
 ----
 
 until
 ReadyForQuery
+ReadyForQuery
+ReadyForQuery
 ----
 CopyOut {"format":"text","column_formats":["text","text","text"]}
-CopyData "\\N\t\\N\t\\N\n"
-CopyData "\\N\t\\N\trow with special delimiter\n"
 CopyData "1\t2.1\ttext\n"
 CopyData "2\t2.1\tsome other text\n"
 CopyData "2\t2.1\tsome other text\n"
@@ -282,7 +286,17 @@ CopyData "3\t2.1\tlong text\n"
 CopyData "4\t3.1\tlong text and some more\n"
 CopyData "5\t5.5\tno new line at the end\n"
 CopyDone
-CommandComplete {"tag":"COPY 10"}
+CommandComplete {"tag":"COPY 8"}
+ReadyForQuery {"status":"I"}
+CopyOut {"format":"text","column_formats":["text","text","text"]}
+CopyData "\\N\t\\N\trow with special delimiter\n"
+CopyDone
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+CopyOut {"format":"text","column_formats":["text","text","text"]}
+CopyData "\\N\t\\N\t\\N\n"
+CopyDone
+CommandComplete {"tag":"COPY 1"}
 ReadyForQuery {"status":"I"}
 
 # clean up
@@ -303,7 +317,7 @@ send
 Query {"query": "DROP TABLE IF EXISTS b"}
 ----
 
-until
+until ignore=NoticeResponse
 ReadyForQuery
 ----
 CommandComplete {"tag":"DROP TABLE"}
@@ -374,14 +388,14 @@ send
 Query {"query": "DROP TABLE IF EXISTS inf"}
 ----
 
-until
+until ignore=NoticeResponse
 ReadyForQuery
 ----
 CommandComplete {"tag":"DROP TABLE"}
 ReadyForQuery {"status":"I"}
 
 send
-Query {"query": "CREATE TABLE inf(f1 DOUBLE)"}
+Query {"query": "CREATE TABLE inf(f1 FLOAT)"}
 ----
 
 until
@@ -443,7 +457,7 @@ send
 Query {"query": "DROP TABLE IF EXISTS ts"}
 ----
 
-until
+until ignore=NoticeResponse
 ReadyForQuery
 ----
 CommandComplete {"tag":"DROP TABLE"}
@@ -509,7 +523,7 @@ send
 Query {"query": "DROP TABLE IF EXISTS not_null_table"}
 ----
 
-until
+until ignore=NoticeResponse
 ReadyForQuery
 ----
 CommandComplete {"tag":"DROP TABLE"}
@@ -541,10 +555,10 @@ CopyData "3\t4\n"
 CopyDone
 ----
 
-until
+until no_error_fields
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"XX000"},{"typ":"M","value":"null value in column \"f1\" violates not-null constraint"}]}
+ErrorResponse {"fields":[]}
 ReadyForQuery {"status":"I"}
 
 send
@@ -561,10 +575,10 @@ CopyData "1\n"
 CopyDone
 ----
 
-until
+until no_error_fields
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"XX000"},{"typ":"M","value":"null value in column \"f1\" violates not-null constraint"}]}
+ErrorResponse {"fields":[]}
 ReadyForQuery {"status":"I"}
 
 send
@@ -607,7 +621,7 @@ send
 Query {"query": "DROP TABLE IF EXISTS default_values"}
 ----
 
-until
+until ignore=NoticeResponse
 ReadyForQuery
 ----
 CommandComplete {"tag":"DROP TABLE"}
@@ -672,10 +686,10 @@ send
 Query {"query": "COPY default_values(f1, f2, f3, f1) FROM STDIN"}
 ----
 
-until
+until no_error_fields
 ReadyForQuery
 ----
-ErrorResponse {"fields":[{"typ":"C","value":"XX000"},{"typ":"M","value":"column \"f1\" specified more than once"}]}
+ErrorResponse {"fields":[]}
 ReadyForQuery {"status":"I"}
 
 # all columns
