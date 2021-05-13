@@ -1440,6 +1440,14 @@ where
             match message {
                 Some(FrontendMessage::CopyData(buf)) => data.extend(buf),
                 Some(FrontendMessage::CopyDone) => break,
+                Some(FrontendMessage::CopyFail(err)) => {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::QUERY_CANCELED,
+                            format!("COPY from stdin failed: {}", err),
+                        ))
+                        .await
+                }
                 Some(FrontendMessage::Flush) | Some(FrontendMessage::Sync) => {}
                 Some(_) => {
                     return self

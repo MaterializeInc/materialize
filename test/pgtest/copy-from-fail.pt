@@ -1,0 +1,53 @@
+send
+Query {"query": "DROP TABLE IF EXISTS t"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE t (i INT8, t TEXT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+
+# send CopyFail and check the remaining messages are ignored until Sync is sent
+send
+Query {"query": "COPY t FROM STDIN"}
+CopyData "1\tblah\n"
+CopyFail "frontend failure"
+CopyData "2\t\n"
+CopyData "\\.\n"
+CopyDone
+Sync
+Query {"query": "SELECT * FROM t ORDER BY i"}
+----
+
+until ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+ErrorResponse {"fields":[{"typ":"C","value":"57014"},{"typ":"M","value":"COPY from stdin failed: frontend failure"}]}
+ReadyForQuery {"status":"I"}
+ReadyForQuery {"status":"I"}
+
+
+send
+Query {"query": "DROP TABLE IF EXISTS t"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+CommandComplete {"tag":"SELECT 0"}
+ReadyForQuery {"status":"I"}

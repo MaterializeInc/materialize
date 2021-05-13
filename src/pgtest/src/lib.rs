@@ -435,6 +435,10 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: 
                         "CopyDone" => {
                             frontend::copy_done(buf);
                         }
+                        "CopyFail" => {
+                            let v: String = serde_json::from_str(args).unwrap();
+                            frontend::copy_fail(&v, buf).unwrap();
+                        }
                         _ => panic!("unknown message type {}", typ),
                     })
                     .unwrap();
