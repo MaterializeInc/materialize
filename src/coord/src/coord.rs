@@ -2620,11 +2620,8 @@ impl Coordinator {
         session: &mut Session,
         plan: InsertPlan,
     ) -> Result<ExecuteResponse, CoordError> {
-        let prep_style = ExprPrepStyle::OneShot {
-            logical_time: self.get_write_ts(),
-        };
         match self
-            .prep_relation_expr(plan.values, prep_style)?
+            .prep_relation_expr(plan.values, ExprPrepStyle::Write)?
             .into_inner()
         {
             MirRelationExpr::Constant { rows, typ: _ } => {
@@ -2860,8 +2857,8 @@ impl Coordinator {
                 }
             }
         });
-        if observes_ts && matches!(style, ExprPrepStyle::Static) {
-            coord_bail!("mz_logical_timestamp cannot be used in static queries");
+        if observes_ts && matches!(style, ExprPrepStyle::Static | ExprPrepStyle::Write) {
+            coord_bail!("mz_logical_timestamp cannot be used in static or write queries");
         }
         Ok(())
     }
@@ -3216,6 +3213,8 @@ enum ExprPrepStyle {
     /// The expression is being prepared to run once at the specified logical
     /// time.
     OneShot { logical_time: u64 },
+    /// The expression is being prepared to run in an INSERT or other write.
+    Write,
 }
 
 /// Constructs an [`ExecuteResponse`] that that will send some rows to the
