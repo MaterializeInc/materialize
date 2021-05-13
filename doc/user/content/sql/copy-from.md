@@ -12,9 +12,10 @@ menu:
 
 {{< diagram "copy-from.svg" >}}
 
-Field | Use
-------|-----
-_name_| The name of the table to be copied.
+Field       | Use
+------------|-----
+_table_name_| The name of the table to be copied.
+_column_    | An optional list of columns to be copied. If no column list is specified, all columns of the table will be copied.
 
 Supported `option` values:
 
