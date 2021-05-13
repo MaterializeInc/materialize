@@ -9,11 +9,13 @@
 
 FROM ubuntu:bionic-20200403
 
+ENV CONFLUENT_VERSION=5.5.4-1
+
 RUN apt-get update \
     && apt-get install -y ca-certificates wait-for-it \
     && echo "deb [trusted=yes] https://packages.confluent.io/deb/5.5 stable main" >> /etc/apt/sources.list.d/confluent.list \
     && apt-get update \
-    && apt-get install -y openjdk-11-jdk confluent-kafka-2.11 confluent-schema-registry
+    && apt-get install -y openjdk-11-jdk confluent-kafka-2.11=${CONFLUENT_VERSION} confluent-schema-registry=${CONFLUENT_VERSION}
 
 COPY launch-cp /usr/bin/launch-cp
 
