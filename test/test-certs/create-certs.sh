@@ -28,7 +28,7 @@ openssl req \
 	-passin pass:$SSL_SECRET \
 	-passout pass:$SSL_SECRET
 
-for i in kafka kafka1 kafka2 schema-registry materialized producer
+for i in kafka kafka1 kafka2 schema-registry materialized producer postgres
 do
 	# Create key & csr
 	openssl req -nodes \
@@ -97,3 +97,5 @@ echo $SSL_SECRET > secrets/cert_creds
 
 # Ensure files are readable for any user
 chmod -R a+r secrets/
+# Keys are only user-accessible
+chmod -R og-rwx secrets/*.key

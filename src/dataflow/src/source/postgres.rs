@@ -23,7 +23,7 @@ use tokio_postgres::config::{Config, ReplicationMode};
 use tokio_postgres::error::{DbError, Severity, SqlState};
 use tokio_postgres::replication::LogicalReplicationStream;
 use tokio_postgres::types::PgLsn;
-use tokio_postgres::{Client, NoTls, SimpleQueryMessage};
+use tokio_postgres::{Client, SimpleQueryMessage};
 
 use crate::source::{SimpleSource, SourceError, Timestamper};
 use dataflow_types::PostgresSourceConnector;
@@ -75,10 +75,10 @@ impl PostgresSourceReader {
     /// Starts a replication connection to the upstream database
     async fn connect_replication(&self) -> Result<Client, anyhow::Error> {
         let mut config: Config = self.connector.conn.parse()?;
-
+        let tls = postgres_util::make_tls(&config)?;
         let (client, conn) = config
             .replication_mode(ReplicationMode::Logical)
-            .connect(NoTls)
+            .connect(tls)
             .await?;
         tokio::spawn(conn);
         Ok(client)

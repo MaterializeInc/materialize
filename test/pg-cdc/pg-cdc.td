@@ -7,6 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# IMPORTANT: The Postgres server has a custom pg_hba.conf that only
+# accepts connections from specific users. You will have to update
+# pg_hba.conf if you modify the existing user names or add new ones.
+
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP USER IF EXISTS no_replication;
 CREATE USER no_replication WITH PASSWORD 'no_replication';
@@ -125,7 +129,7 @@ db error: FATAL: database "no_such_dbname" does not exist
 
 
 > CREATE MATERIALIZED SOURCE "mz_source"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres dbname=postgres'
+  FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=postgres sslmode=require dbname=postgres'
   PUBLICATION 'mz_source';
 
 > CREATE VIEWS FROM SOURCE "mz_source" ("no_replica_identity")
