@@ -616,8 +616,7 @@ pub fn plan_copy_from(
 
 /// Builds a plan that adds the default values for the missing columns and re-orders
 /// the datums in the given rows to match the order in the target table.
-// TODO(asenac) This needs refactoring and a better name.
-pub fn plan_copy_from_2(
+pub fn plan_copy_from_rows(
     catalog: &dyn Catalog,
     id: GlobalId,
     columns: Vec<usize>,
