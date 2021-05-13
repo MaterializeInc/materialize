@@ -50,7 +50,7 @@ fetching latest schema for subject 'foo-value' from registry: subject not found
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'foo'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'http://${testdrive.kafka-addr}'
   ENVELOPE NONE
-Connection reset by peer
+error sending request for url
 
 #
 # HTTPS connection to a non-HTTPS port
@@ -60,4 +60,4 @@ Connection reset by peer
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'foo'
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY 'https://${testdrive.kafka-addr}'
   ENVELOPE NONE
-Connection reset by peer
+error sending request for url

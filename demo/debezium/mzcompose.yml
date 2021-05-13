@@ -60,13 +60,13 @@ services:
     depends_on:
       - mysql
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.5.3
+    image: confluentinc/cp-zookeeper:5.5.4
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
     volumes:
       - zookeeper:/var/lib/zookeeper
   kafka:
-    image: confluentinc/cp-enterprise-kafka:5.5.3
+    image: confluentinc/cp-enterprise-kafka:5.5.4
     ports:
       - *kafka-internal
       - *kafka-external
@@ -112,7 +112,7 @@ services:
     build: simple-mysql-connector
     depends_on: [connect]
   schema-registry:
-    image: confluentinc/cp-schema-registry:5.5.3
+    image: confluentinc/cp-schema-registry:5.5.4
     ports:
       - *schema-registry
     environment:
@@ -122,7 +122,7 @@ services:
 
     depends_on: [zookeeper, kafka]
   control-center:
-    image: confluentinc/cp-enterprise-control-center:5.5.3
+    image: confluentinc/cp-enterprise-control-center:5.5.4
     depends_on: [zookeeper, kafka, connect]
     ports:
       - *control-center

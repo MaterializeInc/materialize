@@ -77,20 +77,20 @@ services:
       - MZ_DEV=1
 
   zookeeper:
-    image: confluentinc/cp-zookeeper:5.5.3
+    image: confluentinc/cp-zookeeper:5.5.4
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOO_TICK_TIME: 500
 
   schema-registry:
-    image: confluentinc/cp-schema-registry:5.5.3
+    image: confluentinc/cp-schema-registry:5.5.4
     environment:
     - SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS=PLAINTEXT://kafka2:9092
     - SCHEMA_REGISTRY_HOST_NAME=localhost
     depends_on: [kafka2, zookeeper]
 
   kafka1:
-    image: confluentinc/cp-kafka:5.5.3
+    image: confluentinc/cp-kafka:5.5.4
     hostname: kafka1
     environment:
       KAFKA_BROKER_ID: 1
@@ -102,7 +102,7 @@ services:
     ports: [9092]
 
   kafka2:
-    image: confluentinc/cp-kafka:5.5.3
+    image: confluentinc/cp-kafka:5.5.4
     hostname: kafka2
     environment:
       KAFKA_BROKER_ID: 2
@@ -114,7 +114,7 @@ services:
     ports: [9092]
 
   kafka3:
-    image: confluentinc/cp-kafka:5.5.3
+    image: confluentinc/cp-kafka:5.5.4
     hostname: kafka3
     environment:
       KAFKA_BROKER_ID: 3

@@ -12,7 +12,7 @@
 #
 
 $ set enum-reader={"type": "record", "name": "schema_enum", "fields": [ {"name": "f1", "type": { "type": "enum", "name": "enum1", "symbols" : ["E1", "E2", "E3", "E4", "E_DEFAULT"], "default": "E_DEFAULT" } } ] }
-$ set enum-writer={"type": "record", "name": "schema_enum", "fields": [ {"name": "f1", "type": { "type": "enum", "name": "enum1", "symbols" : ["E2", "E3", "E4", "E5"] } } ] }
+$ set enum-writer={"type": "record", "name": "schema_enum", "fields": [ {"name": "f1", "type": { "type": "enum", "name": "enum1", "symbols" : ["E2", "E3", "E4", "E5", "E_DEFAULT"], "default": "E_DEFAULT" } } ] }
 
 $ kafka-create-topic topic=resolution-enums
 
