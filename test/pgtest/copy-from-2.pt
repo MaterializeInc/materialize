@@ -268,3 +268,32 @@ ReadyForQuery
 CopyIn {"format":"text","column_formats":["text","text"]}
 ErrorResponse {"fields":[{"typ":"C","value":"22P04"}]}
 ReadyForQuery {"status":"I"}
+
+# check Sync message is ignored
+send
+Query {"query": "COPY t FROM STDIN"}
+Sync
+CopyData "4\t\\N\n"
+Sync
+Sync
+Sync
+CopyData "5\t\\N\n"
+CopyDone
+Query {"query": "SELECT * FROM t ORDER BY i"}
+----
+
+until ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+CommandComplete {"tag":"COPY 2"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
+DataRow {"fields":["1","blah"]}
+DataRow {"fields":["2","NULL"]}
+DataRow {"fields":["3",""]}
+DataRow {"fields":["4","NULL"]}
+DataRow {"fields":["5","NULL"]}
+CommandComplete {"tag":"SELECT 5"}
+ReadyForQuery {"status":"I"}

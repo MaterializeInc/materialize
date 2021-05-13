@@ -1440,6 +1440,7 @@ where
             match message {
                 Some(FrontendMessage::CopyData(buf)) => data.extend(buf),
                 Some(FrontendMessage::CopyDone) => break,
+                Some(FrontendMessage::Flush) | Some(FrontendMessage::Sync) => {}
                 Some(_) => {
                     return self
                         .error(ErrorResponse::error(
