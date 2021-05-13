@@ -51,12 +51,12 @@ CopyData "\\.\n"
 CopyDone
 ----
 
-until
+until err_field_typs=C
 ErrorResponse
 ReadyForQuery
 ----
 CopyIn {"format":"text","column_formats":["text","text"]}
-ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"missing data for column \"t\""}]}
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"}]}
 ReadyForQuery {"status":"I"}
 
 # Verify that only one COPY can run at once.
@@ -65,12 +65,12 @@ Query {"query": "COPY t FROM STDIN"}
 Query {"query": "COPY t FROM STDIN"}
 ----
 
-until
+until err_field_typs=C
 ErrorResponse
 ReadyForQuery
 ----
 CopyIn {"format":"text","column_formats":["text","text"]}
-ErrorResponse {"fields":[{"typ":"C","value":"08P01"},{"typ":"M","value":"unexpected message type 0x51 during COPY from stdin"}]}
+ErrorResponse {"fields":[{"typ":"C","value":"08P01"}]}
 ReadyForQuery {"status":"I"}
 
 # Verify that after a COPY has started another statement cannot run.
@@ -79,12 +79,12 @@ Query {"query": "COPY t FROM STDIN"}
 Query {"query": "SELECT 2"}
 ----
 
-until ignore=RowDescription
+until ignore=RowDescription err_field_typs=C
 ErrorResponse
 ReadyForQuery
 ----
 CopyIn {"format":"text","column_formats":["text","text"]}
-ErrorResponse {"fields":[{"typ":"C","value":"08P01"},{"typ":"M","value":"unexpected message type 0x51 during COPY from stdin"}]}
+ErrorResponse {"fields":[{"typ":"C","value":"08P01"}]}
 ReadyForQuery {"status":"I"}
 
 send
@@ -118,7 +118,7 @@ ReadyForQuery {"status":"I"}
 send
 Query {"query": "DROP TABLE t"}
 Query {"query": "CREATE TABLE t (i INT8, t TEXT)"}
-Query {"query": "COPY t FROM STDIN DELIMITER ','"}
+Query {"query": "COPY t FROM STDIN WITH (DELIMITER ',')"}
 CopyData "1,blah\n"
 CopyData "2,\\N\n"
 CopyData "\\.\n"
@@ -148,7 +148,7 @@ ReadyForQuery {"status":"I"}
 send
 Query {"query": "DROP TABLE t"}
 Query {"query": "CREATE TABLE t (i INT8, t TEXT)"}
-Query {"query": "COPY t FROM STDIN NULL 'NS'"}
+Query {"query": "COPY t FROM STDIN WITH (NULL 'NS')"}
 CopyData "1\tblah\n"
 CopyData "2\t\\N\n"
 CopyData "3\tNS\n"
@@ -184,18 +184,18 @@ CopyData "\\.\n"
 CopyDone
 ----
 
-until ignore=RowDescription
+until ignore=RowDescription err_field_typs=C
 ErrorResponse
 ReadyForQuery
 ----
 CopyIn {"format":"text","column_formats":["text","text"]}
-ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"missing data for column \"t\""}]}
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"}]}
 ReadyForQuery {"status":"I"}
 
 send
 Query {"query": "DROP TABLE t"}
 Query {"query": "CREATE TABLE t (i INT8, t TEXT)"}
-Query {"query": "COPY t FROM STDIN CSV"}
+Query {"query": "COPY t FROM STDIN WITH (DELIMITER ',')"}
 CopyData "1,blah\n"
 CopyData "2,\n"
 CopyData "\\.\n"
@@ -218,14 +218,14 @@ CommandComplete {"tag":"COPY 2"}
 ReadyForQuery {"status":"I"}
 RowDescription {"fields":[{"name":"i"},{"name":"t"}]}
 DataRow {"fields":["1","blah"]}
-DataRow {"fields":["2","NULL"]}
+DataRow {"fields":["2",""]}
 CommandComplete {"tag":"SELECT 2"}
 ReadyForQuery {"status":"I"}
 
 send
 Query {"query": "DROP TABLE t"}
 Query {"query": "CREATE TABLE t (i INT8, t TEXT)"}
-Query {"query": "COPY t FROM STDIN CSV NULL 'NS' DELIMITER '|'"}
+Query {"query": "COPY t FROM STDIN WITH (NULL 'NS', DELIMITER '|')"}
 CopyData "1|blah\n"
 CopyData "2|NS\n"
 CopyData "3|\n"
@@ -255,16 +255,16 @@ CommandComplete {"tag":"SELECT 3"}
 ReadyForQuery {"status":"I"}
 
 send
-Query {"query": "COPY t FROM STDIN CSV"}
+Query {"query": "COPY t FROM STDIN WITH (DELIMITER ',')"}
 CopyData "1\n"
 CopyData "\\.\n"
 CopyDone
 ----
 
-until ignore=RowDescription
+until ignore=RowDescription err_field_typs=C
 ErrorResponse
 ReadyForQuery
 ----
 CopyIn {"format":"text","column_formats":["text","text"]}
-ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"missing data for column \"t\""}]}
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"}]}
 ReadyForQuery {"status":"I"}
