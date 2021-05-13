@@ -180,7 +180,8 @@ def main(args: argparse.Namespace) -> None:
     mz_root = os.environ["MZ_ROOT"]
     os.chdir(mz_root)
 
-    worker_counts = enumerate_cpu_counts()
+    # worker_counts = enumerate_cpu_counts()
+    worker_counts = [1, 7, 27]
 
     if not args.no_cleanup:
         cleanup = [
