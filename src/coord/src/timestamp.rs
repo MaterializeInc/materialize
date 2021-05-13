@@ -10,6 +10,7 @@
 use std::cmp;
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::mem::discriminant;
 use std::ops::Deref;
 use std::panic;
 use std::str;
@@ -31,9 +32,9 @@ use rdkafka::ClientConfig;
 use tokio::sync::mpsc;
 
 use dataflow_types::{
-    Consistency, DataEncoding, DebeziumMode, DebeziumTransactionId, ExternalSourceConnector,
-    FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector,
-    SourceConnector, SourceEnvelope, TimestampSourceUpdate,
+    Consistency, DataEncoding, DebeziumMode, DebeziumTransaction, DebeziumTransactionId,
+    ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector,
+    S3SourceConnector, SourceConnector, SourceEnvelope, TimestampSourceUpdate,
 };
 use expr::{GlobalId, PartitionId};
 use ore::collections::CollectionExt;
@@ -135,8 +136,6 @@ struct ByoTimestampConsumer {
     envelope: ConsistencyFormatting,
     /// The max assigned timestamp.
     last_ts: u64,
-    /// The max offset for which a timestamp has been assigned
-    last_offset: MzOffset,
     last_transaction_id: Option<DebeziumTransactionId>,
 }
 
@@ -312,8 +311,24 @@ fn generate_ts_updates_from_debezium(
         // Results are only returned when the record's status type is END
         if let Some((transaction_id, results)) = results {
             info!("Parsed transaction id: {:?}", transaction_id);
+            if let Some(last_transaction_id) = byo_consumer.last_transaction_id {
+                if discriminant(&last_transaction_id) != discriminant(&transaction_id) {
+                    bail!(
+                        "mismatched transaction IDs parsed from topic: {:?} {:?}",
+                        last_transaction_id,
+                        transaction_id
+                    );
+                }
+
+                if transaction_id <= last_transaction_id {
+                    return Ok(());
+                }
+            }
+
             byo_consumer.last_ts += 1;
-            for (topic, count) in results {
+            byo_consumer.last_transaction_id = Some(transaction_id);
+
+            for (topic, event_count) in results {
                 // Debezium topics are formatted as "server_name.database.topic", but
                 // entries in data_collection do not contain server_name
                 // so we discard it before doing the comparison.
@@ -321,18 +336,20 @@ fn generate_ts_updates_from_debezium(
                 // TODO(): possible performance issue here?
                 let parsed_source_name = byo_consumer.source_name.split('.').skip(1).join(".");
                 if byo_consumer.source_name == topic.trim() || parsed_source_name == topic.trim() {
-                    byo_consumer.last_offset.offset += count;
                     // Debezium consistency topic should only work for single-partition
                     // topics
                     tx.send(coord::Message::AdvanceSourceTimestamp(
                         coord::AdvanceSourceTimestamp {
                             id: *id,
-                            update: TimestampSourceUpdate::BringYourOwn(
+                            update: TimestampSourceUpdate::Debezium(
                                 match byo_consumer.connector {
                                     ByoTimestampConnector::Kafka(_) => PartitionId::Kafka(0),
                                 },
                                 byo_consumer.last_ts,
-                                byo_consumer.last_offset,
+                                DebeziumTransaction {
+                                    transaction_id,
+                                    event_count,
+                                },
                             ),
                         },
                     ))
@@ -455,28 +472,22 @@ fn parse_debezium(
 }
 
 fn parse_transaction_id(transaction_id: String) -> Result<DebeziumTransactionId, anyhow::Error> {
-    // Postgres has a single integer LSN that can be read as an integer
-    // MySQL has a 'file=mysql-bin.<file_numer>,pos=<pos>'
-    // MSSQL has a 3-item tuple of hex-encoded integers delimited by ';'
     if let Ok(lsn) = transaction_id.parse::<usize>() {
+        // Postgres has a single integer LSN that can be read as an integer
         Ok(DebeziumTransactionId::Postgres { lsn })
     } else if let Some(mysql_transaction) = transaction_id.strip_prefix("file=mysql-bin") {
-        let parts: Vec<&str> = mysql_transaction.split(",").collect();
+        // MySQL has a 'file=mysql-bin.<file_number>,pos=<pos>'
+        let parts: Vec<&str> = mysql_transaction.split(|c| c == ',' || c == '=').collect();
         match &parts[..] {
-            [file_idx, pos] => {
-                if let Some(pos) = pos.strip_prefix("pos=") {
-                    Ok(DebeziumTransactionId::MySql {
-                        file_idx: file_idx.parse::<usize>()?,
-                        pos: pos.parse::<usize>()?,
-                    })
-                } else {
-                    bail!("unrecognized mysql transaction id: {}", transaction_id)
-                }
-            }
+            [file_idx, "pos", pos] => Ok(DebeziumTransactionId::MySql {
+                file_idx: file_idx.parse::<usize>()?,
+                pos: pos.parse::<usize>()?,
+            }),
             _ => bail!("unrecognized mysql transaction id: {}", transaction_id),
         }
     } else {
-        // TODO: copied from envelope_debezium::decode_change_lsn
+        // MSSQL has a 3-item tuple of hex-encoded integers delimited by ':'
+        // TODO: this is just copied from envelope_debezium::decode_change_lsn
         if transaction_id.len() != 22 {
             bail!("unrecognized transaction id: {}", transaction_id);
         }
@@ -809,7 +820,6 @@ impl Timestamper {
                         connector: ByoTimestampConnector::Kafka(connector),
                         envelope: identify_consistency_format(enc, env),
                         last_ts: 0,
-                        last_offset: MzOffset { offset: 0 },
                         last_transaction_id: None,
                     }),
                     None => None,

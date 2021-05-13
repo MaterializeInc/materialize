@@ -812,10 +812,6 @@ pub struct KafkaOffset {
 pub enum TimestampSourceUpdate {
     /// Update for an RT source: contains a new partition to add to this source.
     RealTime(PartitionId),
-    /// Timestamp update for a BYO source: contains a PartitionID, Timestamp,
-    /// MzOffset tuple. This tuple informs workers that messages with Offset on
-    /// PartitionId will be timestamped with Timestamp.
-    BringYourOwn(PartitionId, u64, MzOffset),
     /// Timestamp update for a Debezium source
     Debezium(PartitionId, u64, DebeziumTransaction),
 }
