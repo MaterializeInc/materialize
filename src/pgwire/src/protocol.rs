@@ -1120,7 +1120,7 @@ where
             } => {
                 let row_desc =
                     row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
-                self.read_rows(id, columns, params, row_desc).await
+                self.copy_from(id, columns, params, row_desc).await
             }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
@@ -1401,7 +1401,9 @@ where
         Ok(State::Ready)
     }
 
-    async fn read_rows(
+    /// Handles the copy-in mode of the postgres protocol from transfering
+    /// data to the server.
+    async fn copy_from(
         &mut self,
         id: GlobalId,
         columns: Vec<usize>,
