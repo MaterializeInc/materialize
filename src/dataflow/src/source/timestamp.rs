@@ -11,17 +11,18 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::mem::discriminant;
 use std::rc::Rc;
 
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 
-use dataflow_types::MzOffset;
+use dataflow_types::{DebeziumTimestampBinding, DebeziumTransaction};
 use expr::{GlobalId, PartitionId};
 use repr::Timestamp;
 
 /// This struct holds per partition timestamp binding state.
 pub struct PartitionTimestamps {
-    bindings: Vec<(Timestamp, MzOffset)>,
+    bindings: Vec<DebeziumTimestampBinding>,
 }
 
 impl PartitionTimestamps {
@@ -38,16 +39,16 @@ impl PartitionTimestamps {
 
         // First, let's advance all times not in advance of the frontier to the frontier
         // to the frontier
-        for (time, _) in self.bindings.iter_mut() {
-            if !frontier.less_equal(time) {
-                *time = *frontier.first().expect("known to exist");
+        for binding in self.bindings.iter_mut() {
+            if !frontier.less_equal(&binding.timestamp) {
+                binding.timestamp = *frontier.first().expect("known to exist");
             }
         }
 
         let mut new_bindings = Vec::with_capacity(self.bindings.len());
         // Now let's only keep the largest binding for each offset
         for i in 0..(self.bindings.len() - 1) {
-            if self.bindings[i].0 != self.bindings[i + 1].0 {
+            if self.bindings[i].timestamp != self.bindings[i + 1].timestamp {
                 new_bindings.push(self.bindings[i]);
             }
         }
@@ -57,24 +58,31 @@ impl PartitionTimestamps {
         self.bindings = new_bindings;
     }
 
-    fn add_binding(&mut self, timestamp: Timestamp, offset: MzOffset) {
-        let (last_ts, last_offset) = self.bindings.last().unwrap_or(&(0, MzOffset { offset: 0 }));
-        assert!(
-            offset >= *last_offset,
-            "offset should not go backwards, but {} < {}",
-            offset,
-            last_offset
-        );
-        assert!(
-            timestamp > *last_ts,
-            "timestamp should move forwards, but {} <= {}",
-            timestamp,
-            last_ts
-        );
-        self.bindings.push((timestamp, offset));
+    fn add_binding(&mut self, binding: DebeziumTimestampBinding) {
+        if let Some(last) = self.bindings.last() {
+            assert!(
+                discriminant(&binding.transaction) == discriminant(&last.transaction),
+                "transactions should be of the same type, but {:?} is a different type from {:?}",
+                binding.transaction,
+                last.transaction
+            );
+            assert!(
+                binding.transaction >= last.transaction,
+                "offset should not go backwards, but {:?} < {:?}",
+                binding.transaction,
+                last.transaction
+            );
+            assert!(
+                binding.timestamp > last.timestamp,
+                "timestamp should move forwards, but {} <= {}",
+                binding.timestamp,
+                last.timestamp
+            );
+        }
+        self.bindings.push(binding);
     }
 
-    fn get_binding(&self, offset: MzOffset) -> Option<(Timestamp, MzOffset)> {
+    fn get_binding(&self, transaction: DebeziumTransaction) -> Option<DebeziumTimestampBinding> {
         // Rust's binary search is inconvenient so let's roll our own.
         // Maintain the invariants that the offset at lo (entries[lo].1) is always less
         // than the requested offset, and n is > 1. Check for violations of that before we
@@ -83,7 +91,7 @@ impl PartitionTimestamps {
             return None;
         }
 
-        if self.bindings[0].1 >= offset {
+        if self.bindings[0].transaction >= transaction {
             return Some(self.bindings[0]);
         }
 
@@ -94,7 +102,7 @@ impl PartitionTimestamps {
             let half = n / 2;
 
             // Advance lo if a later element has an offset lower than the one requested.
-            if self.bindings[lo + half].1 < offset {
+            if self.bindings[lo + half].transaction < transaction {
                 lo += half;
             }
 
@@ -109,7 +117,7 @@ impl PartitionTimestamps {
     }
 
     fn upper(&self) -> Option<Timestamp> {
-        self.bindings.last().map(|(time, _)| *time)
+        self.bindings.last().map(|binding| binding.timestamp)
     }
 }
 
@@ -165,25 +173,25 @@ impl TimestampBindingBox {
         }
     }
 
-    fn add_binding(&mut self, partition: PartitionId, timestamp: Timestamp, offset: MzOffset) {
+    fn add_binding(&mut self, partition: PartitionId, binding: DebeziumTimestampBinding) {
         let partition = self
             .partitions
             .entry(partition)
             .or_insert_with(PartitionTimestamps::new);
-        partition.add_binding(timestamp, offset);
+        partition.add_binding(binding);
     }
 
     fn get_binding(
         &self,
         partition: &PartitionId,
-        offset: MzOffset,
-    ) -> Option<(Timestamp, MzOffset)> {
+        transaction: DebeziumTransaction,
+    ) -> Option<DebeziumTimestampBinding> {
         if !self.partitions.contains_key(partition) {
             return None;
         }
 
         let partition = self.partitions.get(partition).expect("known to exist");
-        partition.get_binding(offset)
+        partition.get_binding(transaction)
     }
 
     fn read_upper(&self, target: &mut Antichain<Timestamp>) {
@@ -239,15 +247,13 @@ impl TimestampBindingRc {
         self.wrapper.borrow_mut().compact();
     }
 
-    /// Add a new mapping from `(partition, offset) -> timestamp`.
+    /// Add a new mapping from `(partition, transaction_id) -> timestamp`.
     ///
     /// Note that the `timestamp` greater than the largest previously bound
-    /// timestamp for that partition, and `offset` has to be greater than or equal to
+    /// timestamp for that partition, and `transaction_id` has to be greater than or equal to
     /// the largest previously bound offset for that partition.
-    pub fn add_binding(&self, partition: PartitionId, timestamp: Timestamp, offset: MzOffset) {
-        self.wrapper
-            .borrow_mut()
-            .add_binding(partition, timestamp, offset);
+    pub fn add_binding(&self, partition: PartitionId, binding: DebeziumTimestampBinding) {
+        self.wrapper.borrow_mut().add_binding(partition, binding);
     }
 
     /// Get the timestamp assignment for `(partition, offset)` if it is known.
@@ -257,9 +263,9 @@ impl TimestampBindingRc {
     pub fn get_binding(
         &self,
         partition: &PartitionId,
-        offset: MzOffset,
-    ) -> Option<(Timestamp, MzOffset)> {
-        self.wrapper.borrow().get_binding(partition, offset)
+        transaction: DebeziumTransaction,
+    ) -> Option<DebeziumTimestampBinding> {
+        self.wrapper.borrow().get_binding(partition, transaction)
     }
 
     /// Returns the lower bound across every partition's most recent timestamp.
@@ -310,8 +316,8 @@ impl Drop for TimestampBindingRc {
 pub enum TimestampDataUpdate {
     /// RT sources see the current set of partitions known to the source.
     RealTime(HashSet<PartitionId>),
-    /// BYO sources see a list of (Timestamp, MzOffset) timestamp updates
-    BringYourOwn(TimestampBindingRc),
+    /// BYO sources see a list of (Timestamp, DebeziumTransaction) timestamp updates
+    Debezium(TimestampBindingRc),
 }
 
 /// Map of source ID to timestamp data updates (RT or BYO).

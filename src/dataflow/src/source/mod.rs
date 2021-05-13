@@ -30,7 +30,8 @@ use timely::dataflow::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use dataflow_types::{
-    Consistency, ExternalSourceConnector, MzOffset, SourceDataEncoding, SourceError,
+    Consistency, DebeziumTransaction, ExternalSourceConnector, MzOffset, SourceDataEncoding,
+    SourceError,
 };
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
@@ -425,43 +426,51 @@ impl fmt::Debug for SourceMessage {
 struct ConsInfo {
     /// The timestamp we are currently aware of. This timestamp is open iff
     /// offset < current_upper_bound and closed otherwise.
-    current_ts: Timestamp,
-    /// Current upper bound for the current timestamp. All offsets <= upper_bound
+    timestamp: Timestamp,
+    /// Current upper bound for the current timestamp. All transactions <= upper_bound
     /// are assigned to current_ts.
-    current_upper_bound: MzOffset,
+    current_upper_bound: Option<DebeziumTransaction>,
     /// the last processed offset
-    offset: MzOffset,
+    transaction: Option<DebeziumTransaction>,
 }
 
 impl ConsInfo {
     fn new(timestamp: Timestamp) -> Self {
         Self {
-            current_ts: timestamp,
-            current_upper_bound: MzOffset { offset: 0 },
-            offset: MzOffset { offset: 0 },
+            timestamp,
+            current_upper_bound: None,
+            transaction: None,
         }
     }
 
-    fn update_timestamp(&mut self, timestamp: Timestamp, upper: MzOffset) {
-        assert!(timestamp >= self.current_ts);
-        assert!(upper >= self.current_upper_bound);
+    fn advance_timestamp(&mut self, timestamp: Timestamp, upper: DebeziumTransaction) {
+        assert!(timestamp >= self.timestamp);
+        if let Some(previous_upper) = self.current_upper_bound {
+            assert!(upper >= previous_upper);
+        }
 
-        self.current_upper_bound = upper;
-        self.current_ts = timestamp;
+        self.current_upper_bound = Some(upper);
+        self.timestamp = timestamp;
     }
 
-    fn update_offset(&mut self, offset: MzOffset) {
-        assert!(offset >= self.offset);
-        assert!(offset <= self.current_upper_bound);
-        self.offset = offset;
+    fn advance_transaction(&mut self, transaction: DebeziumTransaction) {
+        if let Some(current_transaction) = self.transaction {
+            assert!(transaction >= current_transaction);
+        }
+
+        if let Some(current_upper_bound) = self.transaction {
+            assert!(transaction <= current_upper_bound);
+        }
+
+        self.transaction = Some(transaction);
     }
 
     fn get_closed_timestamp(&self) -> Timestamp {
-        if self.current_ts == 0 || self.current_upper_bound == self.offset {
-            return self.current_ts;
+        if self.timestamp == 0 || self.current_upper_bound == self.transaction {
+            return self.timestamp;
         }
 
-        self.current_ts - 1
+        self.timestamp - 1
     }
 }
 
@@ -604,12 +613,12 @@ impl ConsistencyInfo {
         Some(self.last_closed_ts)
     }
 
-    /// Timestamp history map is of format [pid1: (p_ct, ts1, offset1), (p_ct, ts2, offset2), pid2: (p_ct, ts1, offset)...].
-    /// For a given partition pid, messages in interval \[0,offset1\] get assigned ts1, all messages in interval \[offset1+1,offset2\]
+    /// Timestamp history map is of format [pid1: (p_ct, ts1, transaction_id1), (p_ct, ts2, transaction_id2), pid2: (p_ct, ts1, transaction_id3)...].
+    /// For a given partition pid, messages in interval \[0,transaction1\] get assigned ts1, all messages in interval \[transaction2,transaction2+1\)
     /// get assigned ts2, etc.
-    /// When receive message with offset1, it is safe to downgrade the capability to the next
+    /// Once all messages for a transaction have been observed, it's safe to downgrade the capability to the next
     /// timestamp, which is either
-    /// 1) the timestamp associated with the next highest offset if it exists
+    /// 1) the timestamp associated with the next highest transaction id if it exists
     /// 2) max(timestamp, offset1) + 1. The timestamp_history map can contain multiple timestamps for
     /// the same offset. We pick the greatest one + 1
     /// (the next message we generate will necessarily have timestamp timestamp + 1)
@@ -627,25 +636,27 @@ impl ConsistencyInfo {
         timestamp_histories: &TimestampDataUpdates,
         timestamp_bindings: &mut TimestampBindingRc,
     ) {
-        //  We need to determine the maximum timestamp that is fully closed. This corresponds to the minimum of
-        //  * closed timestamps across all partitions we own
-        //  * maximum bound timestamps across all partitions we don't own (the `upper`)
-        let mut upper = Antichain::new();
-        timestamp_bindings.read_upper(&mut upper);
-        let mut min: Option<Timestamp> = if let Some(time) = upper.elements().get(0) {
-            Some(*time)
-        } else {
-            None
-        };
+        if let Consistency::Debezium(_) = self.source_type {
+            //  We need to determine the maximum timestamp that is fully closed. This corresponds to the minimum of
+            //  * closed timestamps across all partitions we own
+            //  * maximum bound timestamps across all partitions we don't own (the `upper`)
+            let mut upper = Antichain::new();
+            timestamp_bindings.read_upper(&mut upper);
+            let mut min: Option<Timestamp> = if let Some(time) = upper.elements().get(0) {
+                Some(*time)
+            } else {
+                None
+            };
 
-        if let Consistency::BringYourOwn(_) = self.source_type {
             // Determine which timestamps have been closed. A timestamp is closed once we have processed
             // all messages that we are going to process for this timestamp across all partitions that the
             // worker knows about (i.e. the ones the worker has been assigned to read from).
             // In practice, the following happens:
-            // Per partition, we iterate over the data structure to remove (ts,offset) mappings for which
-            // we have seen all records <= offset. We keep track of the last "closed" timestamp in that partition
-            // in next_partition_ts
+            // Per partition, we iterate over the data structure to count the
+            // number of (ts, unique debezium transaction coordinate) mappings
+            // for which we have seen all records <= offset. We keep track of
+            // the last "closed" timestamp in that partition in
+            // next_partition_ts
 
             for pid in timestamp_bindings.partitions() {
                 if !self.knows_of(&pid) && self.responsible_for(&pid) {
@@ -714,16 +725,17 @@ impl ConsistencyInfo {
         }
     }
 
-    /// For a given offset, returns an option type returning the matching timestamp or None
+    /// For a given Debezium transaction ID, returns an option type returning the matching timestamp or None
     /// if no timestamp can be assigned.
     ///
     /// The timestamp history contains a sequence of
-    /// (partition_count, timestamp, offset) tuples. A message with offset x will be assigned the first timestamp
+    /// (partition_count, timestamp, debezium transaction) tuples. A message with offset x will be assigned the first timestamp
     /// for which offset>=x.
+
     fn find_matching_timestamp(
         &mut self,
         partition: &PartitionId,
-        offset: MzOffset,
+        transaction: DebeziumTransaction,
         timestamp_bindings: &TimestampBindingRc,
     ) -> Option<Timestamp> {
         if let Consistency::RealTime = self.source_type {
@@ -741,18 +753,21 @@ impl ConsistencyInfo {
                 .get_mut(partition)
                 .expect("known to exist");
 
-            if cons_info.current_upper_bound >= offset {
+            let behind = match cons_info.current_upper_bound {
+                Some(upper) => upper >= transaction,
+                _ => false,
+            };
+
+            if behind {
                 // This is the fast path - we can reuse a timestamp binding
                 // we already know about.
-                cons_info.update_offset(offset);
-                Some(cons_info.current_ts)
+                cons_info.advance_transaction(transaction);
+                Some(cons_info.timestamp)
             } else {
-                if let Some((timestamp, max_offset)) =
-                    timestamp_bindings.get_binding(partition, offset)
-                {
-                    cons_info.update_timestamp(timestamp, max_offset);
-                    cons_info.update_offset(offset);
-                    Some(timestamp)
+                if let Some(binding) = timestamp_bindings.get_binding(partition, transaction) {
+                    cons_info.advance_timestamp(binding.timestamp, transaction);
+                    cons_info.advance_transaction(transaction);
+                    Some(binding.timestamp)
                 } else {
                     None
                 }
@@ -1484,6 +1499,7 @@ where
 {
     let partition = message.partition.clone();
     let offset = message.offset;
+    let transaction_coordinates = message.transaction;
     let msg_predecessor = *predecessor;
     *predecessor = Some(offset);
 

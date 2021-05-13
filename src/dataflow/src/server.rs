@@ -473,7 +473,7 @@ where
                 // TODO(rkhaitan): get rid of this distinction.
                 match source_ts_history {
                     TimestampDataUpdate::RealTime(_) => continue,
-                    TimestampDataUpdate::BringYourOwn(history) => {
+                    TimestampDataUpdate::Debezium(history) => {
                         // Read the upper frontier and compare to what we've reported.
                         history.read_upper(&mut upper);
                         let lower = self
@@ -655,7 +655,7 @@ where
                         self.render_state.ts_histories.borrow_mut().get_mut(&id)
                     {
                         match ts_history {
-                            TimestampDataUpdate::BringYourOwn(history) => {
+                            TimestampDataUpdate::Debezium(history) => {
                                 history.set_compaction_frontier(frontier.borrow());
                             }
                             _ => (),
@@ -679,7 +679,7 @@ where
                 self.shutdown_logging();
             }
             SequencedCommand::AddSourceTimestamping { id, connector } => {
-                let byo_default = TimestampDataUpdate::BringYourOwn(TimestampBindingRc::new());
+                let debezium_default = TimestampDataUpdate::Debezium(TimestampBindingRc::new());
 
                 let source_timestamp_data = if let SourceConnector::External {
                     connector,
@@ -688,24 +688,24 @@ where
                 } = connector
                 {
                     match (connector, consistency) {
-                        (ExternalSourceConnector::Kafka(_), Consistency::BringYourOwn(_)) => {
-                            Some(byo_default)
+                        (ExternalSourceConnector::Kafka(_), Consistency::Debezium(_)) => {
+                            Some(debezium_default)
                         }
                         (ExternalSourceConnector::Kafka(_), Consistency::RealTime) => {
                             let mut partitions = HashSet::new();
                             partitions.insert(PartitionId::Kafka(0));
                             Some(TimestampDataUpdate::RealTime(partitions))
                         }
-                        (ExternalSourceConnector::AvroOcf(_), Consistency::BringYourOwn(_)) => {
-                            Some(byo_default)
+                        (ExternalSourceConnector::AvroOcf(_), Consistency::Debezium(_)) => {
+                            Some(debezium_default)
                         }
                         (ExternalSourceConnector::AvroOcf(_), Consistency::RealTime) => {
                             let mut partitions = HashSet::new();
                             partitions.insert(PartitionId::File);
                             Some(TimestampDataUpdate::RealTime(partitions))
                         }
-                        (ExternalSourceConnector::File(_), Consistency::BringYourOwn(_)) => {
-                            Some(byo_default)
+                        (ExternalSourceConnector::File(_), Consistency::Debezium(_)) => {
+                            Some(debezium_default)
                         }
                         (ExternalSourceConnector::File(_), Consistency::RealTime) => {
                             let mut partitions = HashSet::new();
@@ -722,11 +722,11 @@ where
                             partitions.insert(PartitionId::S3);
                             Some(TimestampDataUpdate::RealTime(partitions))
                         }
-                        (ExternalSourceConnector::Kinesis(_), Consistency::BringYourOwn(_)) => {
+                        (ExternalSourceConnector::Kinesis(_), Consistency::Debezium(_)) => {
                             log::error!("BYO timestamping not supported for Kinesis sources");
                             None
                         }
-                        (ExternalSourceConnector::S3(_), Consistency::BringYourOwn(_)) => {
+                        (ExternalSourceConnector::S3(_), Consistency::Debezium(_)) => {
                             log::error!("BYO timestamping not supported for S3 sources");
                             None
                         }
@@ -761,13 +761,11 @@ where
                 let mut timestamps = self.render_state.ts_histories.borrow_mut();
                 if let Some(ts_entries) = timestamps.get_mut(&id) {
                     match ts_entries {
-                        TimestampDataUpdate::BringYourOwn(history) => {
-                            if let TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) =
-                                update
-                            {
-                                history.add_binding(pid, timestamp, offset);
+                        TimestampDataUpdate::Debezium(history) => {
+                            if let TimestampSourceUpdate::Debezium(pid, binding) = update {
+                                history.add_binding(pid, binding);
                             } else {
-                                panic!("Unexpected message type. Expected BYO update.")
+                                panic!("Unexpected message type. Expected Debezium transaction update.")
                             }
                         }
                         TimestampDataUpdate::RealTime(partitions) => {

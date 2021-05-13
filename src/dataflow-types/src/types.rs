@@ -638,7 +638,7 @@ impl SourceConnector {
     pub fn yields_stable_input(&self) -> bool {
         if let SourceConnector::External {
             connector: ExternalSourceConnector::Kafka(_),
-            consistency: Consistency::BringYourOwn(_),
+            consistency: Consistency::Debezium(_),
             ..
         } = self
         {
@@ -754,7 +754,7 @@ impl ExternalSourceConnector {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Consistency {
-    BringYourOwn(String),
+    Debezium(String),
     RealTime,
 }
 
@@ -798,6 +798,25 @@ pub struct DebeziumTransaction {
     pub event_count: i64,
 }
 
+// An individual event within a Debezium transaction
+// If we have a DebeziumTransaction { event_count: 3, ..}, then we should see
+// 3 individual DebeziumTransactionEntry messages before we consider the transaction complete:
+//     DebeziumTransactionEntry{ total_order: 0, .. }
+//     DebeziumTransactionEntry{ total_order: 1, .. }
+//     DebeziumTransactionEntry{ total_order: 2, .. }
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Serialize, Deserialize)]
+pub struct DebeziumTransactionEntry {
+    pub transaction_id: DebeziumTransactionId,
+    pub total_order: i64,
+}
+
+// Structured representation mapping a Timestamp to a DebeziumTransactionID
+#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Serialize, Deserialize)]
+pub struct DebeziumTimestampBinding {
+    pub timestamp: Timestamp,
+    pub transaction: DebeziumTransaction,
+}
+
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct KafkaOffset {
     pub offset: i64,
@@ -813,7 +832,7 @@ pub enum TimestampSourceUpdate {
     /// Update for an RT source: contains a new partition to add to this source.
     RealTime(PartitionId),
     /// Timestamp update for a Debezium source
-    Debezium(PartitionId, u64, DebeziumTransaction),
+    Debezium(PartitionId, DebeziumTimestampBinding),
 }
 
 /// Convert from KafkaOffset to MzOffset (1-indexed)
