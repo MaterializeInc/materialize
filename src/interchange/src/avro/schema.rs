@@ -11,14 +11,17 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Error};
+use log::warn;
 
 use byteorder::{BigEndian, ByteOrder};
 use mz_avro::error::Error as AvroError;
 use mz_avro::schema::{
     resolve_schemas, Schema, SchemaFingerprint, SchemaNode, SchemaPiece, SchemaPieceOrNamed,
 };
+use ore::retry::Retry;
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
 use sha2::Sha256;
@@ -448,8 +451,22 @@ impl SchemaCache {
                 // An issue with _fetching_ the schema should be returned
                 // immediately, and not cached, since it might get better on the
                 // next retry.
-                // TODO - some sort of exponential backoff or similar logic
-                let response = self.ccsr_client.get_schema_by_id(id).await?;
+                let ccsr_client = &self.ccsr_client;
+                let response = Retry::default()
+                    .max_duration(Duration::from_secs(30))
+                    .retry(|state| async move {
+                        let res = ccsr_client.get_schema_by_id(id).await;
+                        match res {
+                            Err(e) => {
+                                if let Some(timeout) = state.next_backoff {
+                                    warn!("transient failure fetching schema id {}: {:?}, retrying in {:?}", id, e, timeout);
+                                }
+                                Err(e)
+                            }
+                            _ => res,
+                        }
+                    })
+                    .await?;
                 // Now, we've gotten some json back, so we want to cache it (regardless of whether it's a valid
                 // avro schema, it won't change).
                 //
