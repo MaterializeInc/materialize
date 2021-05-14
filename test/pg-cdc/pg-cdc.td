@@ -43,8 +43,8 @@ INSERT INTO nonpk_table VALUES (1, 1), (1, 1);
 ALTER TABLE nonpk_table REPLICA IDENTITY FULL;
 INSERT INTO nonpk_table VALUES (2, 2), (2, 2);
 
-CREATE TABLE types_table (date_col DATE, time_col TIME, timestamp_col TIMESTAMP, uuid_col UUID, double_col DOUBLE PRECISION);
-INSERT INTO types_table VALUES ('2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 1234.56768);
+CREATE TABLE types_table (date_col DATE, time_col TIME, timestamp_col TIMESTAMP, uuid_col UUID, double_col DOUBLE PRECISION, numeric NUMERIC(8,4));
+INSERT INTO types_table VALUES ('2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 1234.56768, 1234.5678);
 ALTER TABLE types_table REPLICA IDENTITY FULL;
 
 CREATE TABLE large_text (f1 TEXT);
@@ -187,7 +187,10 @@ Expected right parenthesis, found dot
 2 2
 
 > SELECT * FROM types_table;
-"2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768"
+"2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
+
+> SELECT pg_typeof(numeric) FROM types_table;
+"numeric(38,4)"
 
 > SELECT LENGTH(f1) FROM large_text;
 16777216
@@ -255,7 +258,7 @@ DELETE FROM nonpk_table WHERE ctid = '(0,1)';
 UPDATE nonpk_table SET f1 = f1 + 10 WHERE ctid = '(0,2)';
 UPDATE nonpk_table SET f1 = f1 + 100 WHERE f1 = 3;
 
-INSERT INTO types_table VALUES ('2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 1234.56768);
+INSERT INTO types_table VALUES ('2011-11-11', '11:11:11', '2011-11-11 11:11:11', 'A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11', 1234.56768, 1234.5678);
 
 INSERT INTO large_text VALUES (REPEAT('x', 16 * 1024 * 1024));
 
@@ -296,8 +299,8 @@ INSERT INTO "таблица" SELECT * FROM "таблица";
 2 2
 
 > SELECT * FROM types_table;
-"2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768"
-"2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768"
+"2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
+"2011-11-11" "11:11:11" "2011-11-11 11:11:11" "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11" "1234.56768" "1234.5678"
 
 > SELECT LENGTH(f1) FROM large_text;
 16777216

@@ -20,10 +20,41 @@ use tokio_postgres::Config;
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
 use sql_parser::impl_display;
 
+pub enum PgScalarType {
+    Simple(PgType),
+    Numeric { precision: u16, scale: u16 },
+    NumericArray { precision: u16, scale: u16 },
+}
+
+impl AstDisplay for PgScalarType {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            Self::Simple(typ) => {
+                f.write_str(typ);
+            }
+            Self::Numeric { precision, scale } => {
+                f.write_str("numeric(");
+                f.write_str(precision);
+                f.write_str(", ");
+                f.write_str(scale);
+                f.write_str(")");
+            }
+            Self::NumericArray { precision, scale } => {
+                f.write_str("numeric(");
+                f.write_str(precision);
+                f.write_str(", ");
+                f.write_str(scale);
+                f.write_str(")[]");
+            }
+        }
+    }
+}
+impl_display!(PgScalarType);
+
 /// The schema of a single column
 pub struct PgColumn {
     pub name: String,
-    pub scalar_type: PgType,
+    pub scalar_type: PgScalarType,
     pub nullable: bool,
     pub primary_key: bool,
 }
@@ -104,10 +135,11 @@ pub async fn publication_info(
         let schema = client
             .query(
                 "SELECT
-                        a.attname,
-                        a.atttypid,
-                        a.attnotnull,
-                        b.oid IS NOT NULL
+                        a.attname AS name,
+                        a.atttypid AS oid,
+                        a.atttypmod AS modifier,
+                        a.attnotnull AS not_null,
+                        b.oid IS NOT NULL AS primary_key
                     FROM pg_catalog.pg_attribute a
                     LEFT JOIN pg_catalog.pg_constraint b
                         ON a.attrelid = b.conrelid
@@ -122,16 +154,32 @@ pub async fn publication_info(
             .await?
             .into_iter()
             .map(|row| {
-                let name: String = row.get(0);
-                let oid = row.get(1);
-                let scalar_type =
+                let name: String = row.get("name");
+                let oid = row.get("oid");
+                let pg_type =
                     PgType::from_oid(oid).ok_or_else(|| anyhow!("unknown type OID: {}", oid))?;
-                let nullable = !row.get::<_, bool>(2);
-                let primary_key = row.get(3);
+                let scalar_type = match pg_type {
+                    typ @ PgType::NUMERIC | typ @ PgType::NUMERIC_ARRAY => {
+                        let modifier: i32 = row.get("modifier");
+                        // https://github.com/postgres/postgres/blob/REL_13_3/src/backend/utils/adt/numeric.c#L978-L983
+                        let tmp_mod = modifier - 4;
+                        let scale = (tmp_mod & 0xffff) as u16;
+                        let precision = ((tmp_mod >> 16) & 0xffff) as u16;
+
+                        if typ == PgType::NUMERIC {
+                            PgScalarType::Numeric { scale, precision }
+                        } else {
+                            PgScalarType::NumericArray { scale, precision }
+                        }
+                    }
+                    other => PgScalarType::Simple(other),
+                };
+                let not_null: bool = row.get("not_null");
+                let primary_key = row.get("primary_key");
                 Ok(PgColumn {
                     name,
                     scalar_type,
-                    nullable,
+                    nullable: !not_null,
                     primary_key,
                 })
             })
