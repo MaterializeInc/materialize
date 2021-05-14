@@ -149,23 +149,23 @@ db error: FATAL: database "no_such_dbname" does not exist
 
 > CREATE VIEWS FROM SOURCE "mz_source" ("pk_table");
 
-> CREATE VIEWS FROM SOURCE "mz_source" ("nonpk_table");
+> CREATE VIEWS FROM SOURCE "public"."mz_source" ("nonpk_table");
 
-> CREATE VIEWS FROM SOURCE "mz_source" ("types_table");
+> CREATE VIEWS FROM SOURCE "materialize"."public"."mz_source" ("types_table");
 
-> CREATE VIEWS FROM SOURCE "mz_source" ("large_text");
+> CREATE VIEWS FROM SOURCE mz_source ("large_text");
 
-> CREATE VIEWS FROM SOURCE "mz_source" ("trailing_space_pk");
+> CREATE VIEWS FROM SOURCE public.mz_source ("trailing_space_pk");
 
-> CREATE VIEWS FROM SOURCE "mz_source" ("trailing_space_nopk");
+> CREATE VIEWS FROM SOURCE materialize.public.mz_source ("trailing_space_nopk");
 
-> CREATE VIEWS FROM SOURCE "mz_source" ("multipart_pk");
+> CREATE VIEWS FROM SOURCE public."mz_source" ("multipart_pk");
 
-> CREATE VIEWS FROM SOURCE "mz_source" ("nulls_table");
+> CREATE VIEWS FROM SOURCE "materialize".public."mz_source" ("nulls_table");
 
-> CREATE VIEWS FROM SOURCE "mz_source" ("utf8_table");
+> CREATE VIEWS FROM SOURCE "materialize"."public".mz_source ("utf8_table");
 
-> CREATE VIEWS FROM SOURCE "mz_source" ("таблица");
+> CREATE VIEWS FROM SOURCE materialize."public".mz_source ("таблица");
 
 # TODO(petrosagg): support this syntax
 ! CREATE VIEWS FROM SOURCE "mz_source" (conflict_schema.conflict_table AS conflict_table);

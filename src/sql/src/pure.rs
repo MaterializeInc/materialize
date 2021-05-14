@@ -246,9 +246,7 @@ pub fn purify(
                                     projection,
                                     from: vec![TableWithJoins {
                                         relation: TableFactor::Table {
-                                            name: RawName::Name(UnresolvedObjectName::unqualified(
-                                                &source_name.to_string(),
-                                            )),
+                                            name: RawName::Name(source_name.clone()),
                                             alias: None,
                                         },
                                         joins: vec![],
