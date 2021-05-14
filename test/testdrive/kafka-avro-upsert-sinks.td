@@ -10,22 +10,52 @@
 # Test Avro UPSERT sinks. Some tests that should cover both DEBEZIUM and UPSERT
 # sinks are only in kafka-avro-upsert-sinks.td
 
-# Test a basic sink with multiple rows.
+# sinking directly from an UPSERT source with multi-part key
 
-> CREATE VIEW data (a, b) AS VALUES (1, 1), (2, 1), (3, 1), (4, 1)
+$ set upsert-keyschema={
+    "type": "record",
+    "name": "Key",
+    "fields": [
+        {"name": "key1", "type": "string"},
+        {"name": "key2", "type": "long"}
+    ]
+  }
 
-> CREATE VIEW data_keyed AS SELECT a, max(b) AS b FROM data GROUP BY a
+$ set upsert-schema={
+        "type" : "record",
+        "name" : "test",
+        "fields" : [
+            {"name":"f1", "type":"string"},
+            {"name":"f2", "type":"long"}
+        ]
+    }
 
-> CREATE SINK data_sink FROM data_keyed
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
-  KEY (a)
+$ kafka-create-topic topic=upsert-avro
+
+$ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema} publish=true
+{"key1": "fish", "key2": 2} {"f1": "fish", "f2": 1000}
+{"key1": "fisch", "key2": 42} {"f1": "fish", "f2": 1000}
+
+> CREATE MATERIALIZED SOURCE upsert_input
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-upsert-avro-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE UPSERT
+
+> CREATE SINK upsert_input_sink FROM upsert_input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'upsert-input-sink'
+  KEY (key1, key2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
-$ kafka-verify format=avro sink=materialize.public.data_sink sort-messages=true
-{"a": 1} {"a": 1, "b": 1}
-{"a": 2} {"a": 2, "b": 1}
-{"a": 3} {"a": 3, "b": 1}
-{"a": 4} {"a": 4, "b": 1}
+$ kafka-verify format=avro sink=materialize.public.upsert_input_sink sort-messages=true
+{"key1": "fisch", "key2": 42} {"key1": "fisch", "key2": 42, "f1": "fish", "f2": 1000}
+{"key1": "fish", "key2": 2} {"key1": "fish", "key2": 2, "f1": "fish", "f2": 1000}
+
+$ kafka-ingest format=avro topic=upsert-avro key-format=avro key-schema=${upsert-keyschema} schema=${upsert-schema} publish=true
+{"key1": "fisch", "key2": 42} {"f1": "richtig, fisch", "f2": 2000}
+
+$ kafka-verify format=avro sink=materialize.public.upsert_input_sink
+{"key1": "fisch", "key2": 42} {"key1": "fisch", "key2": 42, "f1": "richtig, fisch", "f2": 2000}
 
 # More complicated scenarios: super keys, consistency input/output
 
@@ -228,3 +258,43 @@ $ kafka-ingest format=avro topic=input-with-deletions schema=${schema}
 #
 $ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sort-messages=true
 {"a": 1} {"a": 1, "b": 1}
+
+# Bad upsert keys
+
+! CREATE SINK invalid_key FROM input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
+  WITH (consistency = true) FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+Invalid upsert key: (a), there are no valid keys
+
+! CREATE SINK another_invalid_key FROM input_keyed
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b)
+  WITH (consistency = true) FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+Invalid upsert key: (b), valid keys are: (a)
+
+> CREATE VIEW input_keyed_ab AS SELECT a, b FROM input GROUP BY a, b
+
+! CREATE SINK invalid_sub_key FROM input_keyed_ab
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
+  WITH (consistency = true) FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+Invalid upsert key: (a), valid keys are: (a, b)
+
+! CREATE SINK another_invalid_sub_key FROM input_keyed_ab
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b)
+  WITH (consistency = true) FORMAT AVRO
+  USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+Invalid upsert key: (b), valid keys are: (a, b)
+
+! CREATE SINK invalid_key_from_upsert_input FROM upsert_input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
+  KEY (key1)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+Invalid upsert key: (key1), valid keys are: (key1, key2)
+
+! CREATE SINK invalid_key_from_upsert_input FROM upsert_input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'data-sink'
+  KEY (key2)
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
+Invalid upsert key: (key2), valid keys are: (key1, key2)
