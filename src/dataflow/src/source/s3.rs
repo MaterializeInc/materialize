@@ -719,6 +719,7 @@ impl SourceReader for S3SourceReader {
                 Ok(NextMessage::Ready(SourceMessage {
                     partition: PartitionId::S3,
                     offset: self.offset.into(),
+                    transaction_id: None,
                     upstream_time_millis: None,
                     key: None,
                     payload: Some(record),

@@ -167,6 +167,7 @@ impl SourceReader for FileSourceReader {
                 let message = SourceMessage {
                     partition: PartitionId::File,
                     offset: self.current_file_offset.into(),
+                    transaction_id: None,
                     upstream_time_millis: None,
                     key: None,
                     payload: Some(record),

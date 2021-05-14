@@ -30,8 +30,8 @@ use timely::dataflow::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use dataflow_types::{
-    Consistency, DebeziumTransaction, ExternalSourceConnector, MzOffset, SourceDataEncoding,
-    SourceError,
+    Consistency, DebeziumTransactionEntry, DebeziumTransactionId, ExternalSourceConnector,
+    MzOffset, SourceDataEncoding, SourceError,
 };
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
@@ -378,6 +378,7 @@ fn read_file(path: PathBuf) -> Vec<SourceMessage> {
             key: Some(r.key),
             payload: Some(r.value),
             offset: MzOffset { offset: r.offset },
+            transaction_id: None,
             upstream_time_millis: None,
             partition: partition.clone(),
         })
@@ -399,6 +400,8 @@ pub struct SourceMessage {
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
     pub offset: MzOffset,
+    /// Debezium Transaction ID, if applicable
+    pub transaction_id: Option<DebeziumTransactionEntry>,
     /// The time that an external system first observed the message
     ///
     /// Milliseconds since the unix epoch
@@ -425,13 +428,13 @@ impl fmt::Debug for SourceMessage {
 #[derive(Copy, Clone)]
 struct ConsInfo {
     /// The timestamp we are currently aware of. This timestamp is open iff
-    /// offset < current_upper_bound and closed otherwise.
+    /// transaction < current_upper_bound and closed otherwise.
     timestamp: Timestamp,
     /// Current upper bound for the current timestamp. All transactions <= upper_bound
     /// are assigned to current_ts.
-    current_upper_bound: Option<DebeziumTransaction>,
-    /// the last processed offset
-    transaction: Option<DebeziumTransaction>,
+    current_upper_bound: Option<DebeziumTransactionId>,
+    /// the last processed transaction
+    transaction: Option<DebeziumTransactionId>,
 }
 
 impl ConsInfo {
@@ -443,7 +446,7 @@ impl ConsInfo {
         }
     }
 
-    fn advance_timestamp(&mut self, timestamp: Timestamp, upper: DebeziumTransaction) {
+    fn close_timestamp(&mut self, timestamp: Timestamp, upper: DebeziumTransactionId) {
         assert!(timestamp >= self.timestamp);
         if let Some(previous_upper) = self.current_upper_bound {
             assert!(upper >= previous_upper);
@@ -453,7 +456,7 @@ impl ConsInfo {
         self.timestamp = timestamp;
     }
 
-    fn advance_transaction(&mut self, transaction: DebeziumTransaction) {
+    fn close_transaction(&mut self, transaction: DebeziumTransactionId) {
         if let Some(current_transaction) = self.transaction {
             assert!(transaction >= current_transaction);
         }
@@ -735,13 +738,16 @@ impl ConsistencyInfo {
     fn find_matching_timestamp(
         &mut self,
         partition: &PartitionId,
-        transaction: DebeziumTransaction,
+        entry: Option<DebeziumTransactionEntry>,
         timestamp_bindings: &TimestampBindingRc,
     ) -> Option<Timestamp> {
         if let Consistency::RealTime = self.source_type {
             // Simply assign to this message the next timestamp that is not closed
             Some(self.find_matching_rt_timestamp())
         } else {
+            // TODO(cirego): propagate the error upwards somehow?
+            let entry = entry.expect("transaction ID known for DBZ");
+
             // The source is a BYO source. We either can take a fast path, where we simply re-use the currently
             // available timestamp binding, or if one isn't available for `offset` in `partition`, we have to
             // look it up from the set of timestamp histories
@@ -754,19 +760,21 @@ impl ConsistencyInfo {
                 .expect("known to exist");
 
             let behind = match cons_info.current_upper_bound {
-                Some(upper) => upper >= transaction,
+                Some(upper) => upper >= entry.transaction_id,
                 _ => false,
             };
 
             if behind {
                 // This is the fast path - we can reuse a timestamp binding
                 // we already know about.
-                cons_info.advance_transaction(transaction);
+                // TODO (cirego): remove call to update_entry
+                cons_info.close_transaction(entry.transaction_id);
                 Some(cons_info.timestamp)
             } else {
-                if let Some(binding) = timestamp_bindings.get_binding(partition, transaction) {
-                    cons_info.advance_timestamp(binding.timestamp, transaction);
-                    cons_info.advance_transaction(transaction);
+                // TODO (cirego): Only return a binding when the transaction can be closed
+                if let Some(binding) = timestamp_bindings.get_binding(partition, entry) {
+                    cons_info.close_timestamp(binding.timestamp, entry.transaction_id);
+                    cons_info.close_transaction(entry.transaction_id);
                     Some(binding.timestamp)
                 } else {
                     None
@@ -1298,7 +1306,7 @@ where
             &consistency_info,
         );
 
-        let mut timestamp_bindings = if let TimestampDataUpdate::BringYourOwn(history) =
+        let mut timestamp_bindings = if let TimestampDataUpdate::Debezium(history) =
             timestamp_histories
                 .borrow_mut()
                 .get(&id.source_id)
@@ -1499,7 +1507,7 @@ where
 {
     let partition = message.partition.clone();
     let offset = message.offset;
-    let transaction_coordinates = message.transaction;
+    let transaction_coordinates = message.transaction_id;
     let msg_predecessor = *predecessor;
     *predecessor = Some(offset);
 
@@ -1515,7 +1523,11 @@ where
         .set(offset.offset);
 
     // Determine the timestamp to which we need to assign this message
-    let ts = consistency_info.find_matching_timestamp(&partition, offset, timestamp_bindings);
+    let ts = consistency_info.find_matching_timestamp(
+        &partition,
+        transaction_coordinates,
+        timestamp_bindings,
+    );
     match ts {
         None => {
             // We have not yet decided on a timestamp for this message,

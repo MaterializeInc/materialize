@@ -565,7 +565,7 @@ pub fn plan_create_source(
 
             consistency = match with_options.remove("consistency") {
                 None => Consistency::RealTime,
-                Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
+                Some(Value::String(topic)) => Consistency::Debezium(topic),
                 Some(_) => bail!("consistency must be a string"),
             };
 
@@ -775,7 +775,7 @@ pub fn plan_create_source(
             };
             consistency = match with_options.remove("consistency") {
                 None => Consistency::RealTime,
-                Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
+                Some(Value::String(topic)) => Consistency::Debezium(topic),
                 Some(_) => bail!("consistency must be a string"),
             };
 

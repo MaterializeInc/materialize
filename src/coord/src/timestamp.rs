@@ -32,9 +32,10 @@ use rdkafka::ClientConfig;
 use tokio::sync::mpsc;
 
 use dataflow_types::{
-    Consistency, DataEncoding, DebeziumMode, DebeziumTransaction, DebeziumTransactionId,
-    ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector,
-    S3SourceConnector, SourceConnector, SourceEnvelope, TimestampSourceUpdate,
+    Consistency, DataEncoding, DebeziumMode, DebeziumTimestampBinding, DebeziumTransaction,
+    DebeziumTransactionId, ExternalSourceConnector, FileSourceConnector, KafkaSourceConnector,
+    KinesisSourceConnector, S3SourceConnector, SourceConnector, SourceEnvelope,
+    TimestampSourceUpdate,
 };
 use expr::{GlobalId, PartitionId};
 use ore::collections::CollectionExt;
@@ -345,10 +346,12 @@ fn generate_ts_updates_from_debezium(
                                 match byo_consumer.connector {
                                     ByoTimestampConnector::Kafka(_) => PartitionId::Kafka(0),
                                 },
-                                byo_consumer.last_ts,
-                                DebeziumTransaction {
-                                    transaction_id,
-                                    event_count,
+                                DebeziumTimestampBinding {
+                                    timestamp: byo_consumer.last_ts,
+                                    transaction: DebeziumTransaction {
+                                        transaction_id,
+                                        event_count,
+                                    },
                                 },
                             ),
                         },
@@ -593,15 +596,15 @@ impl Timestamper {
                                     self.rt_sources.insert(source_id, consumer);
                                 }
                             }
-                            Consistency::BringYourOwn(consistency_topic) => {
-                                info!("Timestamping Source {} with BYO Consistency. Consistency Source: {}.",
-                                      source_id, consistency_topic);
+                            Consistency::Debezium(transaction_topic) => {
+                                info!("Timestamping Source {} with Debezium Consistency. Transaction topic: {}.",
+                                      source_id, transaction_topic);
                                 let consumer = self.create_byo_connector(
                                     source_id,
                                     sc,
                                     enc.value(),
                                     env,
-                                    consistency_topic,
+                                    transaction_topic,
                                 );
                                 if let Some(consumer) = consumer {
                                     self.byo_sources.insert(source_id, consumer);

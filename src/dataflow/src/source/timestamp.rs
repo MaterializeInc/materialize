@@ -16,13 +16,17 @@ use std::rc::Rc;
 
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 
-use dataflow_types::{DebeziumTimestampBinding, DebeziumTransaction};
+use dataflow_types::{DebeziumTimestampBinding, DebeziumTransactionEntry};
 use expr::{GlobalId, PartitionId};
 use repr::Timestamp;
 
+struct DebeziumTransactionCompletions {
+    binding: DebeziumTimestampBinding,
+    completions: HashMap<i64, bool>,
+}
 /// This struct holds per partition timestamp binding state.
 pub struct PartitionTimestamps {
-    bindings: Vec<DebeziumTimestampBinding>,
+    bindings: Vec<DebeziumTransactionCompletions>,
 }
 
 impl PartitionTimestamps {
@@ -32,6 +36,7 @@ impl PartitionTimestamps {
         }
     }
 
+    // TODO (cirego): Compact entries that have
     fn compact(&mut self, frontier: AntichainRef<Timestamp>) {
         if self.bindings.is_empty() {
             return;
@@ -39,27 +44,18 @@ impl PartitionTimestamps {
 
         // First, let's advance all times not in advance of the frontier to the frontier
         // to the frontier
-        for binding in self.bindings.iter_mut() {
+        for DebeziumTransactionCompletions { binding, .. } in self.bindings.iter_mut() {
             if !frontier.less_equal(&binding.timestamp) {
                 binding.timestamp = *frontier.first().expect("known to exist");
+                // debug_assert!(binding.is_complete());
             }
         }
 
-        let mut new_bindings = Vec::with_capacity(self.bindings.len());
-        // Now let's only keep the largest binding for each offset
-        for i in 0..(self.bindings.len() - 1) {
-            if self.bindings[i].timestamp != self.bindings[i + 1].timestamp {
-                new_bindings.push(self.bindings[i]);
-            }
-        }
-
-        // We always keep the last binding around.
-        new_bindings.push(*self.bindings.last().expect("known to exist"));
-        self.bindings = new_bindings;
+        // TODO (cirego): Actually remove entries that have been completed
     }
 
     fn add_binding(&mut self, binding: DebeziumTimestampBinding) {
-        if let Some(last) = self.bindings.last() {
+        if let Some(DebeziumTransactionCompletions { binding: last, .. }) = self.bindings.last() {
             assert!(
                 discriminant(&binding.transaction) == discriminant(&last.transaction),
                 "transactions should be of the same type, but {:?} is a different type from {:?}",
@@ -67,8 +63,8 @@ impl PartitionTimestamps {
                 last.transaction
             );
             assert!(
-                binding.transaction >= last.transaction,
-                "offset should not go backwards, but {:?} < {:?}",
+                binding.transaction > last.transaction,
+                "transaction should only ever increase, but {:?} <= {:?}",
                 binding.transaction,
                 last.transaction
             );
@@ -79,10 +75,18 @@ impl PartitionTimestamps {
                 last.timestamp
             );
         }
-        self.bindings.push(binding);
+        let mut completions = HashMap::new();
+        for i in 0..binding.transaction.event_count {
+            completions.insert(i, false);
+        }
+        self.bindings.push(DebeziumTransactionCompletions {
+            binding,
+            completions,
+        });
     }
 
-    fn get_binding(&self, transaction: DebeziumTransaction) -> Option<DebeziumTimestampBinding> {
+    // TODO (cirego) This is the part with the bitmap and it returns None if no timestamps can be closed
+    fn get_binding(&self, entry: DebeziumTransactionEntry) -> Option<DebeziumTimestampBinding> {
         // Rust's binary search is inconvenient so let's roll our own.
         // Maintain the invariants that the offset at lo (entries[lo].1) is always less
         // than the requested offset, and n is > 1. Check for violations of that before we
@@ -91,8 +95,9 @@ impl PartitionTimestamps {
             return None;
         }
 
-        if self.bindings[0].transaction >= transaction {
-            return Some(self.bindings[0]);
+        // TODO (cirego): make this greater than
+        if self.bindings[0].binding.transaction.transaction_id >= entry.transaction_id {
+            return Some(self.bindings[0].binding);
         }
 
         let mut n = self.bindings.len();
@@ -102,7 +107,7 @@ impl PartitionTimestamps {
             let half = n / 2;
 
             // Advance lo if a later element has an offset lower than the one requested.
-            if self.bindings[lo + half].transaction < transaction {
+            if self.bindings[lo + half].binding.transaction.transaction_id < entry.transaction_id {
                 lo += half;
             }
 
@@ -110,14 +115,14 @@ impl PartitionTimestamps {
         }
 
         if lo + 1 < self.bindings.len() {
-            return Some(self.bindings[lo + 1]);
+            return Some(self.bindings[lo + 1].binding);
         }
 
         None
     }
 
     fn upper(&self) -> Option<Timestamp> {
-        self.bindings.last().map(|binding| binding.timestamp)
+        self.bindings.last().map(|b| b.binding.timestamp)
     }
 }
 
@@ -184,14 +189,14 @@ impl TimestampBindingBox {
     fn get_binding(
         &self,
         partition: &PartitionId,
-        transaction: DebeziumTransaction,
+        entry: DebeziumTransactionEntry,
     ) -> Option<DebeziumTimestampBinding> {
         if !self.partitions.contains_key(partition) {
             return None;
         }
 
         let partition = self.partitions.get(partition).expect("known to exist");
-        partition.get_binding(transaction)
+        partition.get_binding(entry)
     }
 
     fn read_upper(&self, target: &mut Antichain<Timestamp>) {
@@ -263,9 +268,9 @@ impl TimestampBindingRc {
     pub fn get_binding(
         &self,
         partition: &PartitionId,
-        transaction: DebeziumTransaction,
+        entry: DebeziumTransactionEntry,
     ) -> Option<DebeziumTimestampBinding> {
-        self.wrapper.borrow().get_binding(partition, transaction)
+        self.wrapper.borrow().get_binding(partition, entry)
     }
 
     /// Returns the lower bound across every partition's most recent timestamp.

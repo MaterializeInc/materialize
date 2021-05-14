@@ -810,7 +810,7 @@ pub struct DebeziumTransactionEntry {
     pub total_order: i64,
 }
 
-// Structured representation mapping a Timestamp to a DebeziumTransactionID
+// Structured representation mapping a Timestamp to a DebeziumTransactionId
 #[derive(Copy, Clone, Debug, PartialEq, PartialOrd, Eq, Serialize, Deserialize)]
 pub struct DebeziumTimestampBinding {
     pub timestamp: Timestamp,
