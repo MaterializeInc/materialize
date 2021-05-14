@@ -416,6 +416,12 @@ pub const TYPE_INT2_ARRAY: BuiltinType = BuiltinType {
     pgtype: &postgres_types::Type::INT2_ARRAY,
 };
 
+pub const TYPE_BPCHAR: BuiltinType = BuiltinType {
+    schema: PG_CATALOG_SCHEMA,
+    id: GlobalId::System(1042),
+    pgtype: &postgres_types::Type::BPCHAR,
+};
+
 lazy_static! {
     pub static ref TYPE_RDN: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
@@ -1274,6 +1280,7 @@ lazy_static! {
             Builtin::Type(&TYPE_BOOL_ARRAY),
             Builtin::Type(&TYPE_BYTEA),
             Builtin::Type(&TYPE_BYTEA_ARRAY),
+            Builtin::Type(&TYPE_BPCHAR),
             Builtin::Type(&TYPE_CHAR),
             Builtin::Type(&TYPE_DATE),
             Builtin::Type(&TYPE_DATE_ARRAY),

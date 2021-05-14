@@ -112,7 +112,9 @@ impl Type {
             postgres_types::Type::JSONB => Some(Type::Jsonb),
             postgres_types::Type::NUMERIC => Some(Type::Numeric),
             postgres_types::Type::OID => Some(Type::Oid),
+            // TODO(petrosagg): char and bpchar values should not be stored as Text. see #6757
             postgres_types::Type::TEXT
+            | postgres_types::Type::BPCHAR
             | postgres_types::Type::CHAR
             | postgres_types::Type::VARCHAR => Some(Type::Text),
             postgres_types::Type::TIME => Some(Type::Time),
