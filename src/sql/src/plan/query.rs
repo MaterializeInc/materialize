@@ -3100,7 +3100,7 @@ pub fn scalar_type_from_sql(
                         // if this type is actually a length-parameterized
                         // string.
                         match name.raw_name().item.as_str() {
-                            n @ "char" | n @ "varchar" => {
+                            n @ "bpchar" | n @ "char" | n @ "varchar" => {
                                 validate_typ_mod(n, &typ_mod, &[("length", 1, 10_485_760)])?
                             }
                             _ => {}

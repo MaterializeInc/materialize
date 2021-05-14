@@ -412,7 +412,8 @@ fn push_column(
                     let bytes = get_column_inner::<Vec<u8>>(postgres_row, i, nullable)?;
                     row.push(Datum::from(bytes.as_deref()));
                 }
-                "pg_catalog.char" | "pg_catalog.text" | "pg_catalog.varchar" => {
+                "pg_catalog.bpchar" | "pg_catalog.char" | "pg_catalog.text"
+                | "pg_catalog.varchar" => {
                     let string = get_column_inner::<String>(postgres_row, i, nullable)?;
                     row.push(Datum::from(string.as_deref()));
                 }

@@ -2602,6 +2602,13 @@ impl<'a> Parser<'a> {
                         },
                     }
                 }
+                BPCHAR => DataType::Other {
+                    name: RawName::Name(UnresolvedObjectName::unqualified("bpchar")),
+                    typ_mod: match self.parse_optional_precision()? {
+                        Some(u) => vec![u],
+                        None => vec![],
+                    },
+                },
                 VARCHAR => DataType::Other {
                     name: RawName::Name(UnresolvedObjectName::unqualified("varchar")),
                     typ_mod: match self.parse_optional_precision()? {

@@ -38,6 +38,7 @@ Between
 Bigint
 Boolean
 Both
+Bpchar
 Broker
 Bucket
 By
