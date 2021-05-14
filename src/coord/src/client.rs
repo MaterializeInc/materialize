@@ -15,9 +15,10 @@ use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use dataflow_types::PeekResponse;
+use expr::GlobalId;
 use ore::collections::CollectionExt;
 use ore::thread::JoinOnDropHandle;
-use repr::{ColumnType, Datum, ScalarType};
+use repr::{ColumnType, Datum, Row, ScalarType};
 use sql::ast::{Raw, Statement};
 
 use crate::command::{
@@ -287,6 +288,27 @@ impl SessionClient {
     pub async fn dump_catalog(&mut self) -> Result<String, CoordError> {
         self.send(|tx, session| Command::DumpCatalog { session, tx })
             .await
+    }
+
+    /// Inserts a set of rows into the given table.
+    ///
+    /// The rows only contain the columns positions in `columns`, so they
+    /// must be re-encoded for adding the default values for the remaining
+    /// ones.
+    pub async fn insert_rows(
+        &mut self,
+        id: GlobalId,
+        columns: Vec<usize>,
+        rows: Vec<Row>,
+    ) -> Result<ExecuteResponse, CoordError> {
+        self.send(|tx, session| Command::CopyRows {
+            id,
+            columns,
+            rows,
+            session,
+            tx,
+        })
+        .await
     }
 
     /// Executes a SQL statement using a simple protocol that does not involve

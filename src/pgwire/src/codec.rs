@@ -227,6 +227,7 @@ impl Encoder<BackendMessage> for Codec {
                     b'N'
                 }
             }
+            BackendMessage::CopyInResponse { .. } => b'G',
             BackendMessage::CopyOutResponse { .. } => b'H',
             BackendMessage::CopyData(_) => b'd',
             BackendMessage::CopyDone => b'c',
@@ -239,7 +240,11 @@ impl Encoder<BackendMessage> for Codec {
 
         // Write message contents.
         match msg {
-            BackendMessage::CopyOutResponse {
+            BackendMessage::CopyInResponse {
+                overall_format,
+                column_formats,
+            }
+            | BackendMessage::CopyOutResponse {
                 overall_format,
                 column_formats,
             } => {
@@ -508,6 +513,11 @@ impl Decoder for Codec {
                         // Termination.
                         b'X' => decode_terminate(buf)?,
 
+                        // Copy from flow.
+                        b'f' => decode_copy_fail(buf)?,
+                        b'd' => decode_copy_data(buf, frame_len)?,
+                        b'c' => decode_copy_done(buf)?,
+
                         // Invalid.
                         _ => {
                             return Err(io::Error::new(
@@ -632,6 +642,23 @@ fn decode_flush(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
 fn decode_sync(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
     // Nothing more to decode.
     Ok(FrontendMessage::Sync)
+}
+
+fn decode_copy_data(mut buf: Cursor, frame_len: usize) -> Result<FrontendMessage, io::Error> {
+    let mut data = Vec::with_capacity(frame_len);
+    for _ in 0..frame_len {
+        data.push(buf.read_byte()?);
+    }
+    Ok(FrontendMessage::CopyData(data))
+}
+
+fn decode_copy_done(mut _buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    // Nothing more to decode.
+    Ok(FrontendMessage::CopyDone)
+}
+
+fn decode_copy_fail(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
+    Ok(FrontendMessage::CopyFail(buf.read_cstr()?.to_string()))
 }
 
 /// Decodes data within pgwire messages.

@@ -15,11 +15,13 @@ use std::iter;
 use std::mem;
 
 use byteorder::{ByteOrder, NetworkEndian};
+use expr::GlobalId;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::{self, StreamExt};
 use itertools::izip;
 use lazy_static::lazy_static;
 use log::debug;
+use message::decode_copy_text_format;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_uint_counter};
@@ -38,7 +40,7 @@ use ore::str::StrExt;
 use repr::{Datum, RelationDesc, RelationType, Row, RowArena};
 use sql::ast::display::AstDisplay;
 use sql::ast::{FetchDirection, Ident, Raw, Statement};
-use sql::plan::{CopyFormat, ExecuteTimeout, StatementDesc};
+use sql::plan::{CopyFormat, CopyParams, ExecuteTimeout, StatementDesc};
 
 use crate::codec::FramedConn;
 use crate::message::{
@@ -305,6 +307,10 @@ where
             Some(FrontendMessage::Flush) => self.flush().await?,
             Some(FrontendMessage::Sync) => self.sync().await?,
             Some(FrontendMessage::Terminate) => State::Done,
+
+            Some(FrontendMessage::CopyData(_))
+            | Some(FrontendMessage::CopyDone)
+            | Some(FrontendMessage::CopyFail(_)) => State::Drain,
             None => State::Done,
         };
 
@@ -1107,6 +1113,15 @@ where
                 };
                 self.copy_rows(format, row_desc, rows).await
             }
+            ExecuteResponse::CopyFrom {
+                id,
+                columns,
+                params,
+            } => {
+                let row_desc =
+                    row_desc.expect("missing row description for ExecuteResponse::CopyFrom");
+                self.copy_from(id, columns, params, row_desc).await
+            }
             ExecuteResponse::Updated(n) => command_complete!("UPDATE {}", n),
             ExecuteResponse::AlteredObject(o) => command_complete!("ALTER {}", o),
             ExecuteResponse::AlteredIndexLogicalCompaction => command_complete!("ALTER INDEX"),
@@ -1384,6 +1399,112 @@ where
             .send(BackendMessage::CommandComplete { tag })
             .await?;
         Ok(State::Ready)
+    }
+
+    /// Handles the copy-in mode of the postgres protocol from transfering
+    /// data to the server.
+    async fn copy_from(
+        &mut self,
+        id: GlobalId,
+        columns: Vec<usize>,
+        params: CopyParams,
+        row_desc: RelationDesc,
+    ) -> Result<State, io::Error> {
+        let encode_format: pgrepr::Format = match params.format {
+            CopyFormat::Text => pgrepr::Format::Text,
+            // CopyFormat::Binary => pgrepr::Format::Binary,
+            _ => {
+                return self
+                    .error(ErrorResponse::error(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        format!("COPY FROM format {:?} not supported", params.format),
+                    ))
+                    .await
+            }
+        };
+
+        let typ = row_desc.typ();
+        let column_formats = iter::repeat(encode_format)
+            .take(typ.column_types.len())
+            .collect::<Vec<pgrepr::Format>>();
+        self.conn
+            .send(BackendMessage::CopyInResponse {
+                overall_format: encode_format,
+                column_formats,
+            })
+            .await?;
+        self.conn.flush().await?;
+
+        let mut data = Vec::new();
+        let mut next_state = State::Ready;
+        loop {
+            let message = self.conn.recv().await?;
+            match message {
+                Some(FrontendMessage::CopyData(buf)) => data.extend(buf),
+                Some(FrontendMessage::CopyDone) => break,
+                Some(FrontendMessage::CopyFail(err)) => {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::QUERY_CANCELED,
+                            format!("COPY from stdin failed: {}", err),
+                        ))
+                        .await
+                }
+                Some(FrontendMessage::Flush) | Some(FrontendMessage::Sync) => {}
+                Some(_) => {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::PROTOCOL_VIOLATION,
+                            "unexpected message type during COPY from stdin",
+                        ))
+                        .await
+                }
+                _ => {
+                    next_state = State::Done;
+                    break;
+                }
+            }
+        }
+
+        let column_types = typ
+            .column_types
+            .iter()
+            .map(|x| &x.scalar_type)
+            .map(pgrepr::Type::from)
+            .collect::<Vec<pgrepr::Type>>();
+
+        if let State::Ready = next_state {
+            let rows = match decode_copy_text_format(
+                &data,
+                &column_types,
+                &params.delimiter,
+                &params.null,
+            ) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    return self
+                        .error(ErrorResponse::error(
+                            SqlState::BAD_COPY_FILE_FORMAT,
+                            format!("{}", e),
+                        ))
+                        .await
+                }
+            };
+            let count = rows.len();
+
+            if let Err(e) = self.coord_client.insert_rows(id, columns, rows).await {
+                return self
+                    .error(ErrorResponse::from_coord(Severity::Error, e))
+                    .await;
+            }
+
+            let tag = format!("COPY {}", count);
+            self.conn
+                .send(BackendMessage::CommandComplete { tag })
+                .await?;
+        }
+
+        Ok(next_state)
     }
 
     async fn error(&mut self, err: ErrorResponse) -> Result<State, io::Error> {

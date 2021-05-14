@@ -241,6 +241,15 @@ pub fn plan(
     }
 }
 
+pub fn plan_copy_from(
+    catalog: &dyn Catalog,
+    id: GlobalId,
+    columns: Vec<usize>,
+    rows: Vec<repr::Row>,
+) -> Result<super::HirRelationExpr, anyhow::Error> {
+    query::plan_copy_from_rows(catalog, id, columns, rows)
+}
+
 /// Whether a SQL object type can be interpreted as matching the type of the given catalog item.
 /// For example, if `v` is a view, `DROP SOURCE v` should not work, since Source and View
 /// are non-matching types.

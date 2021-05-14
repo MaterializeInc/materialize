@@ -1,0 +1,744 @@
+send
+Query {"query": "DROP TABLE IF EXISTS a"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE a(a INT, b FLOAT, c TEXT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+#
+# Invalid data
+#
+
+# missing last column
+send
+Query {"query": "COPY a FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "1\t2.1"
+CopyDone
+----
+
+until err_field_typs=C
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"}]}
+ReadyForQuery {"status":"I"}
+
+# extra data at the end
+send
+Query {"query": "COPY a FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "1\t2.1\ttext\thel"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"22P04"},{"typ":"M","value":"extra data after last expected column"}]}
+ReadyForQuery {"status":"I"}
+
+# invalid type
+send
+Query {"query": "COPY a FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "text as int\t2.1\ttext\n"
+CopyDone
+----
+
+until no_error_fields
+ReadyForQuery
+----
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+
+# invalid type
+send
+Query {"query": "COPY a FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "1\t2.1a\ttext\n"
+CopyDone
+----
+
+until no_error_fields
+ReadyForQuery
+----
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+
+#
+# Valid data
+#
+
+# send single valid row
+send
+Query {"query": "COPY a FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "1\t2.1\ttext\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+# send multiple valid rows, multiple messages
+send
+Query {"query": "COPY a FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "2\t2.1\tsome other text\n"
+CopyData "3\t2.1\tlong text\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 2"}
+ReadyForQuery {"status":"I"}
+
+# send multiple valid rows, multiple messages, unaligned data
+send
+Query {"query": "COPY a FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "2\t2.1\tsome other text\n4\t3.1\tlong"
+CopyData " text "
+CopyData "and some more\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 2"}
+ReadyForQuery {"status":"I"}
+
+# send multiple valid rows, single message
+send
+Query {"query": "COPY a FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "2\t2.1\tsome other text\n3\t2.1\tlong text\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 2"}
+ReadyForQuery {"status":"I"}
+
+# valid row with no new line at the end
+send
+Query {"query": "COPY a FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "5\t5.5\tno new line at the end"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+# NULLs
+
+send
+Query {"query": "COPY a FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "\\N\t\\N\t\\N\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+# supported options: DELIMITER and NULL
+send
+Query {"query": "COPY a FROM STDIN WITH ( DELIMITER '|', NULL '$' )"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "$|$|row with special delimiter\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+
+# dump table
+# Our NULL ordering differs from postgres, so do some shennanigans to
+# make the results identical between mz and postgres.
+send
+Query {"query": "COPY (SELECT * FROM a WHERE a IS NOT NULL ORDER BY a, b, c) TO STDOUT"}
+Query {"query": "COPY (SELECT * FROM a WHERE a IS NULL AND c IS NOT NULL ORDER BY a, b, c) TO STDOUT"}
+Query {"query": "COPY (SELECT * FROM a WHERE c IS NULL ORDER BY a, b, c) TO STDOUT"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text","text","text"]}
+CopyData "1\t2.1\ttext\n"
+CopyData "2\t2.1\tsome other text\n"
+CopyData "2\t2.1\tsome other text\n"
+CopyData "2\t2.1\tsome other text\n"
+CopyData "3\t2.1\tlong text\n"
+CopyData "3\t2.1\tlong text\n"
+CopyData "4\t3.1\tlong text and some more\n"
+CopyData "5\t5.5\tno new line at the end\n"
+CopyDone
+CommandComplete {"tag":"COPY 8"}
+ReadyForQuery {"status":"I"}
+CopyOut {"format":"text","column_formats":["text","text","text"]}
+CopyData "\\N\t\\N\trow with special delimiter\n"
+CopyDone
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+CopyOut {"format":"text","column_formats":["text","text","text"]}
+CopyData "\\N\t\\N\t\\N\n"
+CopyDone
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+# clean up
+
+send
+Query {"query": "DROP TABLE a"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+# boolean type
+
+send
+Query {"query": "DROP TABLE IF EXISTS b"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE b(f1 BOOLEAN)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY b FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text"]}
+
+send
+CopyData "0\n"
+CopyData "1\n"
+CopyData "true\n"
+CopyData "false\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 4"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY (SELECT * FROM b ORDER BY f1) TO STDOUT"}
+----
+
+until
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text"]}
+CopyData "f\n"
+CopyData "f\n"
+CopyData "t\n"
+CopyData "t\n"
+CopyDone
+CommandComplete {"tag":"COPY 4"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "DROP TABLE b"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+# InF, -InF, NaN
+
+send
+Query {"query": "DROP TABLE IF EXISTS inf"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE inf(f1 FLOAT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY inf FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text"]}
+
+send
+CopyData "InF\n"
+CopyData "-InF\n"
+CopyData "NaN\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY (SELECT * FROM inf ORDER BY f1) TO STDOUT"}
+----
+
+until
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text"]}
+CopyData "-Infinity\n"
+CopyData "Infinity\n"
+CopyData "NaN\n"
+CopyDone
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "DROP TABLE inf"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+# timestamps with subsecond precision
+
+send
+Query {"query": "DROP TABLE IF EXISTS ts"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE ts(f1 TIMESTAMP)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY ts FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text"]}
+
+send
+CopyData "2001-02-03 04:05:06.070809\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY (SELECT * FROM ts) TO STDOUT"}
+----
+
+until
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text"]}
+CopyData "2001-02-03 04:05:06.070809\n"
+CopyDone
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "DROP TABLE ts"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+#
+# NULL check constraint
+#
+send
+Query {"query": "DROP TABLE IF EXISTS not_null_table"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE not_null_table(f1 INT NOT NULL, f2 INT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY not_null_table FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+
+send
+CopyData "1\t2\n"
+CopyData "\\N\t\\N\n"
+CopyData "3\t4\n"
+CopyDone
+----
+
+until no_error_fields
+ReadyForQuery
+----
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY not_null_table(f2) FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text"]}
+
+send
+CopyData "1\n"
+CopyDone
+----
+
+until no_error_fields
+ReadyForQuery
+----
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY not_null_table FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+
+send
+CopyData "1\t\\N\n"
+CopyData "2\t3\n"
+CopyData "4\t\\N\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 3"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "DROP TABLE not_null_table"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+#
+# Default value
+#
+
+send
+Query {"query": "DROP TABLE IF EXISTS default_values"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "CREATE TABLE default_values(f1 INT NOT NULL DEFAULT 10, f2 INT DEFAULT 20, f3 INT DEFAULT 30)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+# missing f2; f1 and f3 swapped
+send
+Query {"query": "COPY default_values(f3, f1) FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+
+send
+CopyData "\\N\t1\n"
+CopyData "3\t11\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 2"}
+ReadyForQuery {"status":"I"}
+
+# missing f1; f2 and f3 swapped
+send
+Query {"query": "COPY default_values(f3, f2) FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text"]}
+
+send
+CopyData "\\N\t2\n"
+CopyData "3\t22\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 2"}
+ReadyForQuery {"status":"I"}
+
+# repeated column
+send
+Query {"query": "COPY default_values(f1, f2, f3, f1) FROM STDIN"}
+----
+
+until no_error_fields
+ReadyForQuery
+----
+ErrorResponse {"fields":[]}
+ReadyForQuery {"status":"I"}
+
+# all columns
+
+send
+Query {"query": "COPY default_values(f3, f1, f2) FROM STDIN"}
+----
+
+until
+CopyIn
+----
+CopyIn {"format":"text","column_formats":["text","text","text"]}
+
+send
+CopyData "333\t111\t222\n"
+CopyDone
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+# dump table
+send
+Query {"query": "COPY (SELECT * FROM default_values ORDER BY f1, f2, f3) TO STDOUT"}
+----
+
+until
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text","text","text"]}
+CopyData "1\t20\t\\N\n"
+CopyData "10\t2\t\\N\n"
+CopyData "10\t22\t3\n"
+CopyData "11\t20\t3\n"
+CopyData "111\t222\t333\n"
+CopyDone
+CommandComplete {"tag":"COPY 5"}
+ReadyForQuery {"status":"I"}
+
+# cleanup
+send
+Query {"query": "DROP TABLE default_values"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}

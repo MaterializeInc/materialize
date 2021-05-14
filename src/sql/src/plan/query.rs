@@ -63,6 +63,7 @@ use crate::plan::scope::{Scope, ScopeItem, ScopeItemName};
 use crate::plan::statement::StatementContext;
 use crate::plan::transform_ast;
 use crate::plan::typeconv::{self, CastContext};
+use crate::plan::PlanContext;
 
 // Aug is the type variable assigned to an AST that has already been
 // name-resolved. An AST in this state has global IDs populated next to table
@@ -548,6 +549,128 @@ pub fn plan_insert_query(
     }
 
     Ok((table.id(), expr.map(map_exprs).project(project_key)))
+}
+
+pub fn plan_copy_from(
+    scx: &StatementContext,
+    table_name: UnresolvedObjectName,
+    columns: Vec<Ident>,
+) -> Result<(GlobalId, RelationDesc, Vec<usize>), anyhow::Error> {
+    let table = scx.resolve_item(table_name)?;
+
+    // Validate the target of the insert.
+    if table.item_type() != CatalogItemType::Table {
+        bail!(
+            "cannot insert into {} '{}'",
+            table.item_type(),
+            table.name()
+        );
+    }
+    let mut desc = table.desc()?.clone();
+    let _ = table
+        .table_details()
+        .expect("attempted to insert into non-table");
+
+    if table.id().is_system() {
+        bail!("cannot insert into system table '{}'", table.name());
+    }
+
+    let mut ordering = Vec::with_capacity(columns.len());
+
+    if columns.is_empty() {
+        ordering.extend(0..desc.arity());
+    } else {
+        let columns: Vec<_> = columns.into_iter().map(normalize::column_name).collect();
+        let column_by_name: HashMap<&ColumnName, (usize, &ColumnType)> = desc
+            .iter()
+            .filter_map(|(name, typ)| name.map(|n| (n, typ)))
+            .enumerate()
+            .map(|(idx, (name, typ))| (name, (idx, typ)))
+            .collect();
+
+        let mut names = Vec::with_capacity(columns.len());
+        let mut source_types = Vec::with_capacity(columns.len());
+
+        for c in &columns {
+            if let Some((idx, typ)) = column_by_name.get(c) {
+                ordering.push(*idx);
+                source_types.push((*typ).clone());
+                names.push(Some(c.clone()));
+            } else {
+                bail!(
+                    "column {} of relation {} does not exist",
+                    c.as_str().quoted(),
+                    table.name().to_string().quoted()
+                );
+            }
+        }
+        if let Some(dup) = columns.iter().duplicates().next() {
+            bail!("column {} specified more than once", dup.as_str().quoted());
+        }
+
+        desc = RelationDesc::new(RelationType::new(source_types), names);
+    };
+
+    Ok((table.id(), desc, ordering))
+}
+
+/// Builds a plan that adds the default values for the missing columns and re-orders
+/// the datums in the given rows to match the order in the target table.
+pub fn plan_copy_from_rows(
+    catalog: &dyn Catalog,
+    id: GlobalId,
+    columns: Vec<usize>,
+    rows: Vec<repr::Row>,
+) -> Result<HirRelationExpr, anyhow::Error> {
+    let table = catalog.get_item_by_id(&id);
+    let desc = table.desc()?;
+
+    let defaults = table
+        .table_details()
+        .expect("attempted to insert into non-table");
+
+    let column_types = columns
+        .iter()
+        .map(|x| desc.typ().column_types[*x].clone())
+        .map(|mut x| {
+            // Null constraint is enforced later, when inserting the row in the table.
+            // Without this, an assert is hit during lowering.
+            x.nullable = true;
+            x
+        })
+        .collect();
+    let typ = RelationType::new(column_types);
+    let expr = HirRelationExpr::Constant {
+        rows,
+        typ: typ.clone(),
+    };
+
+    // Fill in any omitted columns and rearrange into correct order
+    let mut map_exprs = vec![];
+    let mut project_key = Vec::with_capacity(desc.arity());
+
+    // Maps from table column index to position in the source query
+    let col_to_source: HashMap<_, _> = columns.iter().enumerate().map(|(a, b)| (b, a)).collect();
+
+    let scx = StatementContext {
+        pcx: &PlanContext::default(),
+        catalog,
+        ids: HashSet::new(),
+        param_types: std::rc::Rc::new(RefCell::new(BTreeMap::new())),
+    };
+
+    let column_details = desc.iter_types().zip_eq(defaults).enumerate();
+    for (col_idx, (col_typ, default)) in column_details {
+        if let Some(src_idx) = col_to_source.get(&col_idx) {
+            project_key.push(*src_idx);
+        } else {
+            let (hir, _) = plan_default_expr(&scx, default, &col_typ.scalar_type)?;
+            project_key.push(typ.arity() + map_exprs.len());
+            map_exprs.push(hir);
+        }
+    }
+
+    Ok(expr.map(map_exprs).project(project_key))
 }
 
 struct CastRelationError {

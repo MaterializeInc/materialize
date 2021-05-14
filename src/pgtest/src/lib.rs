@@ -58,6 +58,7 @@
 //! ReadyForQuery {"status":"I"}
 //! ```
 
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
@@ -93,7 +94,7 @@ impl PgTest {
             Message::AuthenticationOk => {}
             _ => bail!("expected AuthenticationOk"),
         };
-        pgtest.until(vec!["ReadyForQuery"], vec![])?;
+        pgtest.until(vec!["ReadyForQuery"], vec![], HashSet::new())?;
         Ok(pgtest)
     }
     pub fn send<F: Fn(&mut BytesMut)>(&mut self, f: F) -> anyhow::Result<()> {
@@ -106,6 +107,7 @@ impl PgTest {
         &mut self,
         until: Vec<&str>,
         err_field_typs: Vec<char>,
+        ignore: HashSet<String>,
     ) -> anyhow::Result<Vec<String>> {
         let mut msgs = Vec::with_capacity(until.len());
         for expect in until {
@@ -143,15 +145,21 @@ impl PgTest {
                                 fields: body
                                     .ranges()
                                     .map(|range| {
-                                        let range = range.unwrap();
-                                        // Attempt to convert to a String. If not utf8, print as array of bytes instead.
-                                        Ok(String::from_utf8(buf[range.start..range.end].to_vec())
-                                            .unwrap_or_else(|_| {
-                                                format!(
-                                                    "{:?}",
-                                                    buf[range.start..range.end].to_vec()
+                                        match range {
+                                            Some(range) => {
+                                                // Attempt to convert to a String. If not utf8, print as array of bytes instead.
+                                                Ok(String::from_utf8(
+                                                    buf[range.start..range.end].to_vec(),
                                                 )
-                                            }))
+                                                .unwrap_or_else(|_| {
+                                                    format!(
+                                                        "{:?}",
+                                                        buf[range.start..range.end].to_vec()
+                                                    )
+                                                }))
+                                            }
+                                            None => Ok("NULL".into()),
+                                        }
                                     })
                                     .collect()
                                     .unwrap(),
@@ -218,6 +226,17 @@ impl PgTest {
                                 .unwrap(),
                         })?,
                     ),
+                    Message::CopyInResponse(body) => (
+                        "CopyIn",
+                        serde_json::to_string(&CopyOut {
+                            format: format_name(body.format()),
+                            column_formats: body
+                                .column_formats()
+                                .map(|format| Ok(format_name(format as u8)))
+                                .collect()
+                                .unwrap(),
+                        })?,
+                    ),
                     Message::CopyData(body) => (
                         "CopyData",
                         serde_json::to_string(
@@ -239,6 +258,9 @@ impl PgTest {
                 };
                 if self.verbose {
                     println!("RECV {}: {:?}", ch, typ);
+                }
+                if ignore.contains(typ) {
+                    continue;
                 }
                 let mut s = typ.to_string();
                 if !args.is_empty() {
@@ -411,6 +433,17 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: 
                             )
                             .unwrap();
                         }
+                        "CopyData" => {
+                            let v: String = serde_json::from_str(args).unwrap();
+                            frontend::CopyData::new(v.as_bytes()).unwrap().write(buf);
+                        }
+                        "CopyDone" => {
+                            frontend::copy_done(buf);
+                        }
+                        "CopyFail" => {
+                            let v: String = serde_json::from_str(args).unwrap();
+                            frontend::copy_fail(&v, buf).unwrap();
+                        }
                         _ => panic!("unknown message type {}", typ),
                     })
                     .unwrap();
@@ -418,20 +451,30 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: &str, user: &str, timeout: 
                 "".to_string()
             }
             "until" => {
+                let mut args = tc.args.clone();
                 // Our error field values don't always match postgres. Default to reporting
                 // the error code (C) and message (M), but allow the user to specify which ones
                 // they want.
-                let err_field_typs = if tc.args.contains_key("no_error_fields") {
+                let err_field_typs = if let Some(_) = args.remove("no_error_fields") {
                     vec![]
                 } else {
-                    match tc.args.get("err_field_typs") {
+                    match args.remove("err_field_typs") {
                         Some(typs) => typs.join("").chars().collect(),
                         None => vec!['C', 'M'],
                     }
                 };
+                let mut ignore = HashSet::new();
+                if let Some(values) = args.remove("ignore") {
+                    for v in values {
+                        ignore.insert(v);
+                    }
+                }
+                if !args.is_empty() {
+                    panic!("extra until arguments: {:?}", args);
+                }
                 format!(
                     "{}\n",
-                    pgt.until(lines.collect(), err_field_typs)
+                    pgt.until(lines.collect(), err_field_typs, ignore)
                         .unwrap()
                         .join("\n")
                 )
