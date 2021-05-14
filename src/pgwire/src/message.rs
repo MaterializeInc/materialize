@@ -626,7 +626,16 @@ impl<'a> CopyTextFormatParser<'a> {
     }
 
     fn consume_null_string(&mut self) -> bool {
-        self.consume_bytes(self.null_string.as_bytes())
+        if self.null_string.is_empty() {
+            // An empty NULL marker is supported. Look ahead to ensure that is followed by
+            // a column delimiter, an end of line or it is at the end of the data.
+            self.is_column_delimiter()
+                || self.is_end_of_line()
+                || self.is_end_of_copy_marker()
+                || self.is_eof()
+        } else {
+            self.consume_bytes(self.null_string.as_bytes())
+        }
     }
 
     fn consume_raw_value(&mut self) -> Result<Option<&[u8]>, io::Error> {
@@ -872,6 +881,44 @@ mod tests {
             "$$S".as_bytes()
         );
         assert!(parser.is_eof());
+    }
+
+    #[test]
+    fn test_copy_format_text_empty_null_string() {
+        let text = "\t\n10\t20\n30\t\n40\t".as_bytes();
+        let expect = vec![
+            vec![None, None],
+            vec![Some("10"), Some("20")],
+            vec![Some("30"), None],
+            vec![Some("40"), None],
+        ];
+        let mut parser = CopyTextFormatParser::new(text, "\t", "");
+        for line in expect {
+            for (i, value) in line.iter().enumerate() {
+                if i > 0 {
+                    parser
+                        .expect_column_delimiter()
+                        .expect("expected column delimiter");
+                }
+                match value {
+                    Some(s) => {
+                        assert!(!parser.consume_null_string());
+                        assert_eq!(
+                            parser
+                                .consume_raw_value()
+                                .expect("unexpected error")
+                                .expect("unexpected empty result"),
+                            s.as_bytes()
+                        );
+                    }
+                    None => {
+                        assert!(parser.consume_null_string());
+                    }
+                }
+            }
+            parser.expect_end_of_line().expect("expected eol");
+        }
+        parser.expect_no_junk_data().expect("expected data end");
     }
 
     #[test]
