@@ -21,7 +21,7 @@ use futures::stream::{self, StreamExt};
 use itertools::izip;
 use lazy_static::lazy_static;
 use log::debug;
-use message::decode_row_text;
+use message::decode_copy_text_format;
 use openssl::nid::Nid;
 use postgres::error::SqlState;
 use prometheus::{register_histogram_vec, register_uint_counter};
@@ -1430,7 +1430,7 @@ where
         self.conn
             .send(BackendMessage::CopyInResponse {
                 overall_format: encode_format,
-                column_formats: column_formats.clone(),
+                column_formats,
             })
             .await?;
         self.conn.flush().await?;
@@ -1474,8 +1474,12 @@ where
             .collect::<Vec<pgrepr::Type>>();
 
         if let State::Ready = next_state {
-            let rows = match decode_row_text(&data, &column_types, &params.delimiter, &params.null)
-            {
+            let rows = match decode_copy_text_format(
+                &data,
+                &column_types,
+                &params.delimiter,
+                &params.null,
+            ) {
                 Ok(rows) => rows,
                 Err(e) => {
                     return self

@@ -290,6 +290,11 @@ impl SessionClient {
             .await
     }
 
+    /// Inserts a set of rows into the given table.
+    ///
+    /// The rows only contain the columns positions in `columns`, so they
+    /// must be re-encoded for adding the default values for the remaining
+    /// ones.
     pub async fn insert_rows(
         &mut self,
         id: GlobalId,

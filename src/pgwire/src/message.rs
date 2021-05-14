@@ -513,7 +513,7 @@ pub fn encode_copy_row_text(
     Ok(())
 }
 
-struct RowTextParser<'a> {
+struct CopyTextFormatParser<'a> {
     data: &'a [u8],
     position: usize,
     column_delimiter: &'a str,
@@ -521,7 +521,7 @@ struct RowTextParser<'a> {
     buffer: Vec<u8>,
 }
 
-impl<'a> RowTextParser<'a> {
+impl<'a> CopyTextFormatParser<'a> {
     fn new(data: &'a [u8], column_delimiter: &'a str, null_string: &'a str) -> Self {
         Self {
             data,
@@ -746,7 +746,7 @@ impl<'a> RowTextParser<'a> {
     }
 }
 
-pub fn decode_row_text(
+pub fn decode_copy_text_format(
     data: &[u8],
     column_types: &Vec<pgrepr::Type>,
     delimiter: &Option<String>,
@@ -763,7 +763,7 @@ pub fn decode_row_text(
     } else {
         "\t"
     };
-    let mut parser = RowTextParser::new(data, delimiter, null);
+    let mut parser = CopyTextFormatParser::new(data, delimiter, null);
     while !parser.is_eof() && !parser.is_end_of_copy_marker() {
         let mut row = Vec::new();
         let buf = RowArena::new();
@@ -827,9 +827,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_row_text_parser() {
+    fn test_copy_format_text_parser() {
         let text = "\t\\nt e\t\\N\t\n\\x60\\xA\\x7D\\x4a\n\\44\\044\\123".as_bytes();
-        let mut parser = RowTextParser::new(text, "\t", "\\N");
+        let mut parser = CopyTextFormatParser::new(text, "\t", "\\N");
         assert!(parser.is_column_delimiter());
         parser
             .expect_column_delimiter()
@@ -875,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn test_row_text_parser_escapes() {
+    fn test_copy_format_text_parser_escapes() {
         struct TestCase {
             input: &'static str,
             expect: &'static [u8],
@@ -936,7 +936,7 @@ mod tests {
         ];
 
         for test in tests {
-            let mut parser = RowTextParser::new(test.input.as_bytes(), "\t", "\\N");
+            let mut parser = CopyTextFormatParser::new(test.input.as_bytes(), "\t", "\\N");
             assert_eq!(
                 parser
                     .consume_raw_value()
