@@ -1067,6 +1067,17 @@ fn sub_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() - b.unwrap_decimal())
 }
 
+fn sub_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut cx = apd::cx_datum();
+    let mut a = a.unwrap_apd().0;
+    cx.sub(&mut a, &b.unwrap_apd().0);
+    if cx.status().overflow() {
+        Err(EvalError::FloatOverflow)
+    } else {
+        Ok(Datum::APD(OrderedDecimal(a)))
+    }
+}
+
 fn sub_timestamp<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_timestamp() - b.unwrap_timestamp())
 }
@@ -2319,6 +2330,7 @@ pub enum BinaryFunc {
     SubTime,
     SubTimeInterval,
     SubDecimal,
+    SubAPD,
     MulInt32,
     MulInt64,
     MulFloat32,
@@ -2449,6 +2461,7 @@ impl BinaryFunc {
             BinaryFunc::SubTime => Ok(eager!(sub_time)),
             BinaryFunc::SubTimeInterval => Ok(eager!(sub_time_interval)),
             BinaryFunc::SubDecimal => Ok(eager!(sub_decimal)),
+            BinaryFunc::SubAPD => eager!(sub_apd),
             BinaryFunc::MulInt32 => eager!(mul_int32),
             BinaryFunc::MulInt64 => eager!(mul_int64),
             BinaryFunc::MulFloat32 => Ok(eager!(mul_float32)),
@@ -2609,7 +2622,7 @@ impl BinaryFunc {
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
-            AddAPD | MulAPD => ScalarType::APD { scale: None }.nullable(in_nullable),
+            AddAPD | SubAPD | MulAPD => ScalarType::APD { scale: None }.nullable(in_nullable),
 
             // TODO(benesch): we correctly compute types for decimal scale, but
             // not decimal precision... because nothing actually cares about
@@ -2786,6 +2799,7 @@ impl BinaryFunc {
                 | SubTime
                 | SubTimeInterval
                 | SubDecimal
+                | SubAPD
                 | MulInt32
                 | MulInt64
                 | MulFloat32
@@ -2838,6 +2852,7 @@ impl BinaryFunc {
             | SubTime
             | SubTimeInterval
             | SubDecimal
+            | SubAPD
             | MulInt32
             | MulInt64
             | MulFloat32
@@ -2955,6 +2970,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::SubFloat32 => f.write_str("-"),
             BinaryFunc::SubFloat64 => f.write_str("-"),
             BinaryFunc::SubDecimal => f.write_str("-"),
+            BinaryFunc::SubAPD => f.write_str("-"),
             BinaryFunc::SubInterval => f.write_str("-"),
             BinaryFunc::SubTimestamp => f.write_str("-"),
             BinaryFunc::SubTimestampTz => f.write_str("-"),

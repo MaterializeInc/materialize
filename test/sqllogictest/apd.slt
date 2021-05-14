@@ -124,6 +124,16 @@ SELECT ('1.23'::apd + '2.34'::apd)::text
 3.57
 
 query T
+SELECT ('1.23'::apd + '-2.34'::apd)::text
+----
+-1.11
+
+query T
+SELECT ('1.23'::apd + '-1.23'::apd)::text
+----
+0.00
+
+query T
 SELECT ('3402823669209384634633746074317682'::apd + '3402823669209384634633746074317682'::apd)::text
 ----
 6805647338418769269267492148635364
@@ -160,6 +170,56 @@ query T
 SELECT ('NaN'::apd + '2'::apd)::text
 ----
 NaN
+
+# Subtraction
+query T
+SELECT ('1'::apd - '2'::apd)::text
+----
+-1
+
+query T
+SELECT ('1.23'::apd - '2.34'::apd)::text
+----
+-1.11
+
+query T
+SELECT ('1.23'::apd - '-2.34'::apd)::text
+----
+3.57
+
+query T
+SELECT ('-1.23'::apd - '-2.34'::apd)::text
+----
+1.11
+
+query T
+SELECT ('1.23'::apd - '1.23'::apd)::text
+----
+0.00
+
+query T
+SELECT ('-3402823669209384634633746074317682'::apd - '3402823669209384634633746074317682'::apd)::text
+----
+-6805647338418769269267492148635364
+
+query error value out of range: overflow
+SELECT ('-790123449679012344967901234496790123392'::apd - '790123449679012344967901234496790123392'::apd)::text
+
+query T
+SELECT ('NaN'::apd - '2'::apd)::text
+----
+NaN
+
+# Limited precision means losing commutativity
+query T
+SELECT ('1e38'::apd - '1e-39'::apd - '1e38'::apd)::text
+----
+0
+
+query T
+SELECT ('1e38'::apd - '1e38'::apd - '1e-39'::apd)::text
+----
+-0.000000000000000000000000000000000000001
 
 # Multiplication
 query T
@@ -198,6 +258,7 @@ SELECT ('123456789012345678901234567890123456789'::apd * '10'::apd)::text
 query error value out of range: underflow
 SELECT ('1E-39'::apd * '.1'::apd)::text
 
+# Results are rounded to 39 digits of precision
 query T
 SELECT ('.123456789012345678901234567890123456789'::apd * '.1'::apd)::text
 ----
