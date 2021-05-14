@@ -25,18 +25,25 @@ CopyData "\t\n"
 CopyData "1\t\n"
 CopyData "\ttext\n"
 CopyDone
-# Our NULL ordering differs from postgres, so use some tricks to
-# make the results identical between mz and postgres.
-Query {"query": "SELECT * FROM (select case when i is null then 'NULL' else i::text end as i, case when t is null then 'NULL' else t end as t from t) as t ORDER BY i, t"}
 ----
 
-until ignore=RowDescription
-ReadyForQuery
+until
 ReadyForQuery
 ----
 CopyIn {"format":"text","column_formats":["text","text"]}
 CommandComplete {"tag":"COPY 3"}
 ReadyForQuery {"status":"I"}
+
+
+# Our NULL ordering differs from postgres, so use some tricks to
+# make the results identical between mz and postgres.
+send
+Query {"query": "SELECT * FROM (select case when i is null then 'NULL' else i::text end as i, case when t is null then 'NULL' else t end as t from t) as t ORDER BY i, t"}
+----
+
+until ignore=RowDescription
+ReadyForQuery
+----
 DataRow {"fields":["1","NULL"]}
 DataRow {"fields":["NULL","NULL"]}
 DataRow {"fields":["NULL","text"]}
