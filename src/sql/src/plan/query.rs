@@ -43,6 +43,7 @@ use sql_parser::ast::{
 };
 
 use ::expr::{GlobalId, Id, RowSetFinishing};
+use repr::adt::apd::APD_DATUM_MAX_PRECISION;
 use repr::adt::decimal::{Decimal, MAX_DECIMAL_PRECISION};
 use repr::{
     strconv, ColumnName, ColumnType, Datum, RelationDesc, RelationType, RowArena, ScalarType,
@@ -2968,9 +2969,18 @@ pub fn scalar_type_from_sql(
             };
             match scx.catalog.try_get_lossy_scalar_type_by_id(&item.id()) {
                 Some(t) => match t {
+                    ScalarType::APD { .. } => {
+                        let (_, scale) =
+                            unwrap_numeric_typ_mod(typ_mod, APD_DATUM_MAX_PRECISION as u8, "apd")?;
+                        ScalarType::APD { scale }
+                    }
                     ScalarType::Decimal(..) => {
-                        let (precision, scale) = unwrap_numeric_typ_mod(typ_mod)?;
-                        ScalarType::Decimal(precision, scale)
+                        let (precision, scale) =
+                            unwrap_numeric_typ_mod(typ_mod, MAX_DECIMAL_PRECISION, "numeric")?;
+                        ScalarType::Decimal(
+                            precision.unwrap_or(MAX_DECIMAL_PRECISION),
+                            scale.unwrap_or(0),
+                        )
                     }
                     ScalarType::String => {
                         // TODO(justin): we should look up in the catalog to see
@@ -3004,25 +3014,32 @@ pub fn scalar_type_from_sql(
 ///
 /// Note that this function assumes you have already determined that
 /// `data_type.name` should resolve to `ScalarType::Decimal`.
-pub fn unwrap_numeric_typ_mod(typ_mod: &[u64]) -> Result<(u8, u8), anyhow::Error> {
-    let max_precision = u64::from(MAX_DECIMAL_PRECISION);
+pub fn unwrap_numeric_typ_mod(
+    typ_mod: &[u64],
+    max: u8,
+    name: &str,
+) -> Result<(Option<u8>, Option<u8>), anyhow::Error> {
+    let max_precision = u64::from(max);
     validate_typ_mod(
-        "numeric",
+        name,
         &typ_mod,
         &[("precision", 1, max_precision), ("scale", 0, max_precision)],
     )?;
 
     // Poor man's VecDeque
     let (precision, scale) = match typ_mod.len() {
-        0 => (MAX_DECIMAL_PRECISION, 0),
-        1 => (typ_mod[0] as u8, 0),
-        2 => (typ_mod[0] as u8, typ_mod[1] as u8),
+        0 => (None, None),
+        1 => (Some(typ_mod[0] as u8), None),
+        2 => {
+            let precision = typ_mod[0] as u8;
+            let scale = typ_mod[1] as u8;
+            if scale > precision {
+                bail!("numeric scale {} exceeds precision {}", scale, precision);
+            }
+            (Some(precision), Some(scale))
+        }
         _ => unreachable!(),
     };
-
-    if scale > precision {
-        bail!("numeric scale {} exceeds precision {}", scale, precision);
-    }
 
     Ok((precision, scale))
 }
@@ -3082,7 +3099,7 @@ pub fn scalar_type_from_pg(ty: &pgrepr::Type) -> Result<ScalarType, anyhow::Erro
             custom_oid: None,
         }),
         pgrepr::Type::RDN => Ok(ScalarType::Numeric { scale: None }),
-        pgrepr::Type::APD => Ok(ScalarType::APD),
+        pgrepr::Type::APD => Ok(ScalarType::APD { scale: None }),
     }
 }
 

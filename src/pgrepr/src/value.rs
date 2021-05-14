@@ -21,7 +21,7 @@ use repr::ColumnType;
 use uuid::Uuid;
 
 use ore::fmt::FormatBuffer;
-use repr::adt::apd::Apd;
+use repr::adt::apd::{self, Apd};
 use repr::adt::array::ArrayDimension;
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::adt::jsonb::JsonbRef;
@@ -113,7 +113,12 @@ impl Value {
                 }
                 Some(Value::RDN(RDNValue(n)))
             }
-            (Datum::APD(d), ScalarType::APD) => Some(Value::APD(d)),
+            (Datum::APD(mut d), ScalarType::APD { scale }) => {
+                if let Some(scale) = scale {
+                    apd::rescale(&mut d.0, *scale).unwrap();
+                }
+                Some(Value::APD(d))
+            }
             (Datum::Date(d), ScalarType::Date) => Some(Value::Date(d)),
             (Datum::Time(t), ScalarType::Time) => Some(Value::Time(t)),
             (Datum::Timestamp(ts), ScalarType::Timestamp) => Some(Value::Timestamp(ts)),
@@ -251,7 +256,12 @@ impl Value {
                     scale: Some(u8::try_from(adt_rdn::get_scale(&n.0)).unwrap()),
                 },
             ),
-            Value::APD(n) => (Datum::APD(n), ScalarType::APD),
+            Value::APD(n) => (
+                Datum::APD(n),
+                ScalarType::APD {
+                    scale: Some(apd::get_scale(&n.0)),
+                },
+            ),
         }
     }
 
@@ -519,7 +529,7 @@ pub fn null_datum(ty: &Type) -> (Datum<'static>, ScalarType) {
         }
         Type::Numeric => ScalarType::Decimal(MAX_DECIMAL_PRECISION, 0),
         Type::RDN => ScalarType::Numeric { scale: None },
-        Type::APD => ScalarType::APD,
+        Type::APD => ScalarType::APD { scale: None },
         Type::Oid => ScalarType::Oid,
         Type::Text => ScalarType::String,
         Type::Time => ScalarType::Time,
