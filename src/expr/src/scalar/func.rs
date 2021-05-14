@@ -1132,6 +1132,26 @@ fn mul_decimal<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
     Datum::from(a.unwrap_decimal() * b.unwrap_decimal())
 }
 
+fn mul_apd<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
+    let mut cx = apd::cx_datum();
+    let mut a = a.unwrap_apd().0;
+    cx.mul(&mut a, &b.unwrap_apd().0);
+    let cx_status = cx.status();
+    if cx_status.overflow() {
+        Err(EvalError::FloatOverflow)
+    } else if cx_status.subnormal() {
+        Err(EvalError::FloatUnderflow)
+    } else {
+        // If neither over- nor underflow, rounding is infallible.
+        apd::rescale_within_max_precision(&mut a).unwrap();
+        // Prevent leaking -0
+        if a.is_zero() && a.is_negative() {
+            cx.neg(&mut a);
+        }
+        Ok(Datum::APD(OrderedDecimal(a)))
+    }
+}
+
 fn mul_interval<'a>(a: Datum<'a>, b: Datum<'a>) -> Result<Datum<'a>, EvalError> {
     a.unwrap_interval()
         .checked_mul(b.unwrap_float64())
@@ -2304,6 +2324,7 @@ pub enum BinaryFunc {
     MulFloat32,
     MulFloat64,
     MulDecimal,
+    MulAPD,
     MulInterval,
     DivInt32,
     DivInt64,
@@ -2433,6 +2454,7 @@ impl BinaryFunc {
             BinaryFunc::MulFloat32 => Ok(eager!(mul_float32)),
             BinaryFunc::MulFloat64 => Ok(eager!(mul_float64)),
             BinaryFunc::MulDecimal => Ok(eager!(mul_decimal)),
+            BinaryFunc::MulAPD => eager!(mul_apd),
             BinaryFunc::MulInterval => eager!(mul_interval),
             BinaryFunc::DivInt32 => eager!(div_int32),
             BinaryFunc::DivInt64 => eager!(div_int64),
@@ -2587,7 +2609,7 @@ impl BinaryFunc {
             AddInterval | SubInterval | SubTimestamp | SubTimestampTz | MulInterval
             | DivInterval => ScalarType::Interval.nullable(in_nullable),
 
-            AddAPD => ScalarType::APD { scale: None }.nullable(in_nullable),
+            AddAPD | MulAPD => ScalarType::APD { scale: None }.nullable(in_nullable),
 
             // TODO(benesch): we correctly compute types for decimal scale, but
             // not decimal precision... because nothing actually cares about
@@ -2769,6 +2791,7 @@ impl BinaryFunc {
                 | MulFloat32
                 | MulFloat64
                 | MulDecimal
+                | MulAPD
                 | DivInt32
                 | DivInt64
                 | DivFloat32
@@ -2820,6 +2843,7 @@ impl BinaryFunc {
             | MulFloat32
             | MulFloat64
             | MulDecimal
+            | MulAPD
             | DivInt32
             | DivInt64
             | DivFloat32
@@ -2945,6 +2969,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::MulFloat32 => f.write_str("*"),
             BinaryFunc::MulFloat64 => f.write_str("*"),
             BinaryFunc::MulDecimal => f.write_str("*"),
+            BinaryFunc::MulAPD => f.write_str("*"),
             BinaryFunc::MulInterval => f.write_str("*"),
             BinaryFunc::DivInt32 => f.write_str("/"),
             BinaryFunc::DivInt64 => f.write_str("/"),
