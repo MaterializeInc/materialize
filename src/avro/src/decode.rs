@@ -574,16 +574,6 @@ macro_rules! define_unexpected {
             _scale: usize,
             _r: $crate::ValueOrReader<'avro_macro_lifetime, &'avro_macro_lifetime [u8], R>,
         ) -> Result<Self::Out, $crate::error::Error> {
-            Err($crate::error::Error::Decode($crate::error::DecodeError::UnexpectedNumeric))
-        }
-    };
-    (numeric) => {
-        fn numeric<'avro_macro_lifetime, R: AvroRead>(
-            self,
-            _precision: usize,
-            _scale: usize,
-            _r: $crate::ValueOrReader<'avro_macro_lifetime, &'avro_macro_lifetime [u8], R>,
-        ) -> Result<Self::Out, $crate::error::Error> {
             Err($crate::error::Error::Decode($crate::error::DecodeError::UnexpectedDecimal))
         }
     };
@@ -663,13 +653,6 @@ pub trait AvroDecode: Sized {
         _r: ValueOrReader<'a, &'a [u8], R>,
     ) -> Result<Self::Out, AvroError>;
 
-    fn numeric<'a, R: AvroRead>(
-        self,
-        _precision: usize,
-        _scale: usize,
-        _r: ValueOrReader<'a, &'a [u8], R>,
-    ) -> Result<Self::Out, AvroError>;
-
     fn bytes<'a, R: AvroRead>(
         self,
         _r: ValueOrReader<'a, &'a [u8], R>,
@@ -724,7 +707,7 @@ pub mod public_decoders {
                     Ok(out)
                 }
                 define_unexpected! {
-                    array, record, union_branch, map, enum_variant, decimal, numeric, bytes, string, json, uuid, fixed
+                    array, record, union_branch, map, enum_variant, decimal, bytes, string, json, uuid, fixed
                 }
             }
 
@@ -824,15 +807,6 @@ pub mod public_decoders {
             Ok((self.conv)(self.inner.decimal(precision, scale, r)?)?)
         }
 
-        fn numeric<'a, R: AvroRead>(
-            mut self,
-            precision: usize,
-            scale: usize,
-            r: ValueOrReader<'a, &'a [u8], R>,
-        ) -> Result<Self::Out, AvroError> {
-            Ok((self.conv)(self.inner.numeric(precision, scale, r)?)?)
-        }
-
         fn bytes<'a, R: AvroRead>(
             mut self,
             r: ValueOrReader<'a, &'a [u8], R>,
@@ -895,7 +869,7 @@ pub mod public_decoders {
             Ok(self.buf)
         }
         define_unexpected! {
-            record, union_branch, map, enum_variant, scalar, decimal, numeric, bytes, string, json, uuid, fixed
+            record, union_branch, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
         }
     }
 
@@ -919,7 +893,7 @@ pub mod public_decoders {
             Ok(self.buf)
         }
         define_unexpected! {
-            record, union_branch, map, enum_variant, scalar, decimal, numeric, bytes, string, json, uuid, fixed
+            record, union_branch, map, enum_variant, scalar, decimal, bytes, string, json, uuid, fixed
         }
     }
     impl<T: AvroDecodable> StatefulAvroDecodable for Vec<T> {
@@ -971,14 +945,6 @@ pub mod public_decoders {
             Ok(())
         }
         fn decimal<'a, R: AvroRead>(
-            self,
-            _precision: usize,
-            _scale: usize,
-            r: ValueOrReader<'a, &'a [u8], R>,
-        ) -> Result<(), AvroError> {
-            self.maybe_skip(r)
-        }
-        fn numeric<'a, R: AvroRead>(
             self,
             _precision: usize,
             _scale: usize,
@@ -1104,27 +1070,6 @@ pub mod public_decoders {
                 scale,
             }))
         }
-        fn numeric<'a, R: AvroRead>(
-            self,
-            precision: usize,
-            scale: usize,
-            r: ValueOrReader<'a, &'a [u8], R>,
-        ) -> Result<Value, AvroError> {
-            let unscaled = match r {
-                ValueOrReader::Value(buf) => buf.to_vec(),
-                ValueOrReader::Reader { len, r } => {
-                    let mut buf = vec![];
-                    buf.resize_with(len, Default::default);
-                    r.read_exact(&mut buf)?;
-                    buf
-                }
-            };
-            Ok(Value::RDN(DecimalValue {
-                unscaled,
-                precision,
-                scale,
-            }))
-        }
         fn bytes<'a, R: AvroRead>(
             self,
             r: ValueOrReader<'a, &'a [u8], R>,
@@ -1239,11 +1184,10 @@ pub fn give_value<D: AvroDecode>(d: D, v: &Value) -> Result<D::Out, AvroError> {
         Value::Double(val) => d.scalar(Scalar::Double(*val)),
         Value::Date(val) => d.scalar(Scalar::Date(*val)),
         Value::Timestamp(val) => d.scalar(Scalar::Timestamp(*val)),
-        // The &[u8] parameter here (and elsewhere in this function) is
-        // arbitrary, but we have to put in something in order for the function
+        // The &[u8] parameter here (and elsewhere in this function) is arbitrary, but we have to put in something in order for the function
         // to type-check
         Value::Decimal(val) => d.decimal::<&[u8]>(val.precision, val.scale, V(&val.unscaled)),
-        Value::RDN(val) => d.numeric::<&[u8]>(val.precision, val.scale, V(&val.unscaled)),
+        Value::APD(..) => unreachable!(),
         Value::Bytes(val) => d.bytes::<&[u8]>(V(val)),
         Value::String(val) => d.string::<&[u8]>(V(val)),
         Value::Fixed(_len, val) => d.fixed::<&[u8]>(V(val)),

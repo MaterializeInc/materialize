@@ -23,5 +23,4 @@ pub mod datetime;
 pub mod decimal;
 pub mod interval;
 pub mod jsonb;
-pub mod rdn;
 pub mod regex;

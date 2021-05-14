@@ -37,6 +37,7 @@ any
 anyarray
 anyelement
 anynonarray
+apd
 bool
 bytea
 char
@@ -52,7 +53,6 @@ list
 map
 numeric
 oid
-rdn
 record
 text
 time
@@ -86,6 +86,7 @@ any              system
 anyarray         system
 anyelement       system
 anynonarray      system
+apd              system
 bool             system
 bytea            system
 char             system
@@ -101,7 +102,6 @@ list             system
 map              system
 numeric          system
 oid              system
-rdn              system
 record           system
 text             system
 time             system

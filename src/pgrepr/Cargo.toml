@@ -9,7 +9,7 @@ publish = false
 byteorder = "1.4.3"
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
-dec = { git = "https://github.com/MaterializeInc/rust-dec", rev = "4ed6de0" }
+dec = { git = "https://github.com/MaterializeInc/rust-dec", rev = "4ed6de0", features = ["serde"] }
 lazy_static = "1.4.0"
 ore = { path = "../ore" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4", "with-uuid-0_8"] }

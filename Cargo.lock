@@ -899,6 +899,7 @@ source = "git+https://github.com/MaterializeInc/rust-dec?rev=4ed6de0#4ed6de01318
 dependencies = [
  "decnumber-sys",
  "libc",
+ "serde",
  "static_assertions",
 ]
 

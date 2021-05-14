@@ -235,10 +235,6 @@ lazy_static! {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToDecimal(s)))
             }),
-            (String, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(s)))
-            }),
             (String, APD) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
                 let s = to_type.unwrap_apd_scale();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToAPD(s)))
@@ -318,9 +314,6 @@ lazy_static! {
 
             // UUID
             (Uuid, String) => Assignment: CastUuidToString,
-
-            // NUMERIC
-            (Numeric, String) => Assignment: CastNumericToString,
 
             // APD
             (APD, String) => Assignment: CastAPDToString

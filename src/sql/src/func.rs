@@ -100,7 +100,6 @@ impl TypeCategory {
             | ScalarType::Float64
             | ScalarType::Int32
             | ScalarType::Int64
-            | ScalarType::Numeric { .. }
             | ScalarType::Oid
             | ScalarType::APD { .. } => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
@@ -2214,7 +2213,6 @@ lazy_static! {
                 params!(Interval, Time) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
                 }, 1849;
-                params!(Numeric{scale: None}, Numeric{scale: None}) => AddNumeric, 17580;
                 params!(APD{scale:None}, APD{scale:None}) => AddAPD, 17581;
             },
             "-" => Scalar {
@@ -2284,7 +2282,6 @@ lazy_static! {
                     let expr = lhs.call_binary(rhs, DivDecimal);
                     Ok(rescale_decimal(expr, si - s2, s))
                 }), 1761;
-                params!(Numeric{scale: None}, Numeric{scale: None}) => DivNumeric, 17610;
             },
             "%" => Scalar {
                 params!(Int32, Int32) => ModInt32, 530;
