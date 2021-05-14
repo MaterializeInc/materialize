@@ -3034,7 +3034,12 @@ pub fn unwrap_numeric_typ_mod(
             let precision = typ_mod[0] as u8;
             let scale = typ_mod[1] as u8;
             if scale > precision {
-                bail!("numeric scale {} exceeds precision {}", scale, precision);
+                bail!(
+                    "{} scale {} must be between 0 and precision {}",
+                    name,
+                    scale,
+                    precision
+                );
             }
             (Some(precision), Some(scale))
         }

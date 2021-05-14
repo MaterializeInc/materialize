@@ -2284,6 +2284,7 @@ lazy_static! {
                     let expr = lhs.call_binary(rhs, DivDecimal);
                     Ok(rescale_decimal(expr, si - s2, s))
                 }), 1761;
+                params!(APD{scale:None}, APD{scale:None}) => DivAPD, 17610;
             },
             "%" => Scalar {
                 params!(Int32, Int32) => ModInt32, 530;
