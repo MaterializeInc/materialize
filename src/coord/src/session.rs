@@ -123,6 +123,7 @@ impl Session {
     /// > a named portal object lasts till the end of the current transaction
     /// and
     /// > An unnamed portal is destroyed at the end of the transaction
+    #[must_use]
     pub fn clear_transaction(&mut self) -> (Vec<GlobalId>, TransactionStatus) {
         self.portals.clear();
         self.pcx = None;

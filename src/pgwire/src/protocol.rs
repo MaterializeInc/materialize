@@ -520,6 +520,14 @@ where
             .await;
     }
 
+    /// Rollback and clears the current transaction.
+    async fn rollback_transaction(&mut self) {
+        let _ = self
+            .coord_client
+            .end_transaction(EndTransactionAction::Rollback)
+            .await;
+    }
+
     async fn bind(
         &mut self,
         portal_name: String,
@@ -1517,22 +1525,22 @@ where
         );
         let is_fatal = err.severity.is_fatal();
         self.conn.send(BackendMessage::ErrorResponse(err)).await?;
-        let session = self.coord_client.session();
-        match session.transaction() {
+        let txn = self.coord_client.session().transaction();
+        match txn {
             // Error can be called from describe and parse and so might not be in an active
             // transaction.
             TransactionStatus::Default | TransactionStatus::Failed => {}
             // In Started (i.e., a single statement), cleanup ourselves.
             TransactionStatus::Started(_) => {
-                session.clear_transaction();
+                self.rollback_transaction().await;
             }
             // Implicit transactions also clear themselves.
             TransactionStatus::InTransactionImplicit(_) => {
-                session.clear_transaction();
+                self.rollback_transaction().await;
             }
             // Explicit transactions move to failed.
             TransactionStatus::InTransaction(_) => {
-                session.fail_transaction();
+                self.coord_client.session().fail_transaction();
             }
         };
         if is_fatal {
