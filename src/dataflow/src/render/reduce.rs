@@ -71,7 +71,6 @@ use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::ArrangeBySelf;
 use differential_dataflow::operators::reduce::ReduceCore;
 use differential_dataflow::operators::{Consolidate, Reduce, Threshold};
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::Collection;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::Scope;
@@ -90,6 +89,8 @@ use crate::render::context::Arrangement;
 use crate::render::context::CollectionBundle;
 use crate::render::datum_vec::DatumVec;
 use crate::render::ArrangementFlavor;
+
+use crate::arrangement::manager::RowSpine;
 
 /// This enum represents the three potential types of aggregations.
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -768,7 +769,7 @@ where
 
     use differential_dataflow::collection::concatenate;
     concatenate(scope, to_concat)
-        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceCollation", {
+        .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceCollation", {
             let mut row_packer = Row::default();
             move |key, input, output| {
                 // The inputs are pairs of a reduction type, and a row consisting of densely packed fused
@@ -834,7 +835,7 @@ where
     G: Scope,
     G::Timestamp: Lattice,
 {
-    collection.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("DistinctBy", {
+    collection.reduce_abelian::<_, RowSpine<_, _, _, _>>("DistinctBy", {
         |key, _input, output| {
             output.push((key.clone(), 1));
         }
@@ -900,7 +901,7 @@ where
         to_collect.push(result.as_collection(move |key, val| (key.clone(), (index, val.clone()))));
     }
     differential_dataflow::collection::concatenate(&mut input.scope(), to_collect)
-        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceFuseBasic", {
+        .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceFuseBasic", {
             let mut row_packer = Row::default();
             move |key, input, output| {
                 // First, fill our output row with key information if requested.
@@ -961,7 +962,7 @@ where
         partial = partial.distinct();
     }
 
-    partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceInaccumulable", {
+    partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceInaccumulable", {
         let mut row_packer = Row::default();
         move |key, source, target| {
             // Negative counts would be surprising, but until we are 100% certain we wont
@@ -1042,7 +1043,7 @@ where
 
     // Build a series of stages for the reduction
     // Arrange the final result into (key, Row)
-    partial.reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceMinsMaxes", {
+    partial.reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMinsMaxes", {
         let mut row_packer = Row::default();
         move |key, source, target| {
             // Negative counts would be surprising, but until we are 100% certain we wont
@@ -1174,7 +1175,7 @@ where
         .as_collection();
     partial
         .arrange_by_self()
-        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceMonotonic", {
+        .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceMonotonic", {
             let mut row_packer = Row::default();
             move |key, input, output| {
                 let accum = &input[0].1;
@@ -1617,7 +1618,7 @@ where
 
     collection
         .arrange_by_self()
-        .reduce_abelian::<_, OrdValSpine<_, _, _, _>>("ReduceAccumulable", {
+        .reduce_abelian::<_, RowSpine<_, _, _, _>>("ReduceAccumulable", {
             let mut row_packer = Row::default();
             move |key, input, output| {
                 let accum = &input[0].1;

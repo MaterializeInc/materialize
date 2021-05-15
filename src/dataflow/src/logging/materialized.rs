@@ -19,6 +19,7 @@ use timely::dataflow::operators::generic::operator::Operator;
 use timely::logging::WorkerIdentifier;
 
 use super::{LogVariant, MaterializedLog};
+use crate::arrangement::manager::RowSpine;
 use crate::arrangement::KeysValsHandle;
 use expr::{GlobalId, SourceInstanceId};
 use repr::{Datum, Row, Timestamp};
@@ -549,7 +550,7 @@ pub fn construct<A: Allocate>(
             ),
         ];
 
-        use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
+        use differential_dataflow::operators::arrange::arrangement::Arrange;
         let mut result = std::collections::HashMap::new();
         for (variant, collection) in logs {
             if config.active_logs.contains_key(&variant) {
@@ -564,7 +565,7 @@ pub fn construct<A: Allocate>(
                             (row_packer.finish_and_reuse(), row)
                         }
                     })
-                    .arrange_by_key()
+                    .arrange::<RowSpine<_, _, _, _>>()
                     .trace;
                 result.insert(variant, (key_clone, trace));
             }

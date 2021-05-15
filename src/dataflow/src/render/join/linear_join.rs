@@ -11,7 +11,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arrange;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::operators::join::JoinCore;
-use differential_dataflow::trace::implementations::ord::OrdValSpine;
 use differential_dataflow::trace::BatchReader;
 use differential_dataflow::trace::Cursor;
 use differential_dataflow::trace::TraceReader;
@@ -322,7 +321,8 @@ where
                 }
             });
             errors.push(errs);
-            let arranged = keyed.arrange_named::<OrdValSpine<_, _, _, _>>(&format!("JoinStage"));
+            use crate::arrangement::manager::RowSpine;
+            let arranged = keyed.arrange_named::<RowSpine<_, _, _, _>>(&format!("JoinStage"));
             joined = JoinedFlavor::Local(arranged);
         }
 
