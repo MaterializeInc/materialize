@@ -14,6 +14,7 @@ bincode = "1.3.3"
 byteorder = "1.4.3"
 ccsr = { path = "../ccsr" }
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
+columnation = { git = "https://github.com/frankmcsherry/columnation.git" }
 crossbeam-channel = "0.5.1"
 csv-core = "0.1.10"
 dataflow-types = { path = "../dataflow-types" }

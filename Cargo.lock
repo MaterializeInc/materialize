@@ -575,6 +575,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "columnation"
+version = "0.1.0"
+source = "git+https://github.com/frankmcsherry/columnation.git#9ee6bf4455f03817b964a03cd00d22b643e8ef5f"
+
+[[package]]
 name = "compile-time-run"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -927,6 +932,7 @@ dependencies = [
  "byteorder",
  "ccsr",
  "chrono",
+ "columnation",
  "crossbeam-channel",
  "csv-core",
  "dataflow-types",
@@ -1098,10 +1104,11 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.12.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#c696ec0400d8dd4d0d855d43204737a1190a379d"
+source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=columnation#9d26dc2dd577b12e6c43bf59f59931008afe9866"
 dependencies = [
  "abomonation",
  "abomonation_derive",
+ "columnation",
  "fnv",
  "serde",
  "serde_derive",
@@ -1153,7 +1160,7 @@ checksum = "923dea538cea0aa3025e8685b20d6ee21ef99c4f77e954a30febbaac5ec73a97"
 [[package]]
 name = "dogsdogsdogs"
 version = "0.1.0"
-source = "git+https://github.com/TimelyDataflow/differential-dataflow.git#c696ec0400d8dd4d0d855d43204737a1190a379d"
+source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=columnation#9d26dc2dd577b12e6c43bf59f59931008afe9866"
 dependencies = [
  "abomonation",
  "abomonation_derive",
@@ -3772,6 +3779,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "chrono-tz",
+ "columnation",
  "criterion",
  "dec",
  "enum-kinds",

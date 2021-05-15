@@ -75,3 +75,7 @@ rustc-demangle = { opt-level = 3 }
 # it's unlikely we're going to get interactive access to a debugger in
 # production installations, but we still want useful crash reports.
 debug = 1
+
+[patch."https://github.com/TimelyDataflow/differential-dataflow.git"]
+differential-dataflow = { git = "https://github.com/frankmcsherry/differential-dataflow.git", branch = "columnation" }
+dogsdogsdogs = { git = "https://github.com/frankmcsherry/differential-dataflow.git", branch = "columnation" }
