@@ -612,12 +612,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cpuid-bool"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8aebca1129a03dc6dc2b127edd729435bbc4a37e1d5f4d7513165089ceb02634"
-
-[[package]]
 name = "crc"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4080,13 +4074,13 @@ dependencies = [
 
 [[package]]
 name = "sha-1"
-version = "0.9.4"
+version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfebf75d25bd900fd1e7d11501efab59bc846dbc76196839663e6637bba9f25f"
+checksum = "8c4cfa741c5832d0ef7fab46cabed29c2aae926db0b11bb2069edd8db5e64e16"
 dependencies = [
  "block-buffer",
  "cfg-if 1.0.0",
- "cpuid-bool",
+ "cpufeatures",
  "digest",
  "opaque-debug",
 ]
