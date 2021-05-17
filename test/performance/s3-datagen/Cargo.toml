@@ -16,6 +16,6 @@ rusoto_core = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_credential = { git = "https://github.com/rusoto/rusoto.git" }
 rusoto_s3 = { git = "https://github.com/rusoto/rusoto.git" }
 structopt = "0.3.21"
-tokio = { version = "1.5.0", features = ["macros", "net", "rt", "time"] }
+tokio = { version = "1.6.0", features = ["macros", "net", "rt", "time"] }
 tracing = "0.1.25"
 tracing-subscriber = { version = "0.2.18", default-features = false, features = ["env-filter", "fmt"] }
