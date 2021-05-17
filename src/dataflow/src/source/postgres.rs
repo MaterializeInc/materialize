@@ -306,8 +306,13 @@ impl PostgresSourceReader {
                                 None => err.is::<std::io::Error>(),
                             }
                         }
-                        // Closed connection error
-                        None => err.is_closed(),
+                        // We have no information about what happened, it might be a fatal error or
+                        // it might not. Unexpected errors can happen if the upstream crashes for
+                        // example in which case we should retry.
+                        //
+                        // Therefore, we adopt a "recoverable unless proven otherwise" policy and
+                        // keep retrying in the event of unexpected errors.
+                        None => true,
                     };
 
                     if recoverable {
