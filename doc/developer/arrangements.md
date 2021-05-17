@@ -60,15 +60,130 @@ Some of these input arrangements could be shared, but most likely the intermedia
 
 ---
 
-Our `Reduce` operator builds a non-trivial dataflow subgraph (which may be subject to change).
-Informally, for aggregation we build its own dataflow.
-That dataflow may begin with a `reduce` operator to implement the `distinct` keyword.
-Then there is either
-    * a single `reduce` operator (for sums, counts, any, all), or
-    * a sequence of 16 `reduce` operators (for min and max), or
-    * a single `reduce` operator (for `jsonbagg` and others).
-Finally, last `reduce` collects each of the aggregates into one record for each key.
-There are special cases when there are few (zero or one) reductions.
+Our `Reduce` operator builds a non-trivial dataflow subgraph.
+
+As of v0.7.1, the dataflow subgraph depends on 1) what types of aggregations are
+involved and 2) the type of input for the reduce.
+
+### Distinct (no aggregations)
+
+Creates two arrangements, each with row count `<number of groups>` and row width
+`<width of key>`.
+
+```
+In -> A -> A -> Out
+```
+
+### Only accumulable aggregations (sum/counts/any/all):
+
+Creates two arrangements, each with row count `<number of groups>` and row width
+`<width of key> + <width of aggregation columns>`.
+
+```
+In -> A -> A -> Out
+```
+
+### Only hierarchical aggregations (min/max) on an append-only input:
+
+Same as the "Only accumulable aggregations" case above.
+
+### Only hierarchical aggregations (min/max) on other inputs:
+
+Hierarchical aggregations on inputs that are not append-only have
+`ceil(log_16(expected_group_size))` stages, which are intended to filter the
+number of candidate rows by a factor of 16 per stage. If an
+`expected_group_size` has not been supplied via query hint, the default value
+is 4 billion.
+
+Each stage involves two arrangements.
+The first arrangement of the final stage is supposed to contain the top 16 rows
+for each group.
+The first arrangement of the second to last stage is supposed to contain the top
+16^2 = 256 rows for each group.
+The first arrangement of the third to last stage is supposed to contain the top
+16^3 = 4096 rows for each group.
+... and so on. Note that the first arrangement of the first stage will always
+contain all rows from the input.
+
+The second arrangement of the final stage is supposed to contain the top row
+for each group.
+The second arrangement of the second to last stage is supposed to contain the
+rows contained in the first arrangement of the second to last stage but not
+contained in the first arrangement of the final stage.
+The second arrangement of the third to last stage is supposed to contain the
+rows contained in the first arrangement of the third to last stage but not
+contained in the first arrangement of the second to last stage.
+... and so on.
+
+A two-stage dataflow would look like this:
+```
+In -> PrevStgArr1 -> PrevStgArr2 -> Subtract -> FinStgArr1 -> FinStgArr2 -> Out
+           \                           /
+            -------------------------->
+```
+
+The row width for all arrangements in this case are
+`<width of key> + <width of aggregation columns>`.
+
+A general heuristic for the total row count of all the arrangements, assuming a
+well-chosen `expected_group_size`, is
+`(2 + epsilon) * <number of distinct rows>`.
+The first arrangement of the first stage will always contain all rows from the
+input. `<row count of the first arrangement of the second stage> + `
+`<row count of the second arrangement of the first stage>` is always equal to
+`<row count of the first arrangement of the first stage>`.
+
+Specifying an `expected_group_size` that is magnitudes larger than the actual
+sizes of each group will result in there being unnecessary stages that don't
+reduce the number of candidate rows at all, resulting in the arrangements having
+a total row count of `> 3 * <number of distinct rows>`. We recommend always
+specifying an `expected_group_size` if you have this kind of aggregation.
+
+### Other aggregations (jsonb_agg + others):
+
+For each aggregation of type "other", two arrangements are produced. The first
+one has row count `<number of distinct rows>` and row width
+`<width of key> + <width of column being aggregated>`. The second one has
+row count `<number of groups>` and row width
+`<width of key> + <width of aggregation columns>`
+
+```
+In -> A -> A -> Out
+```
+
+If there are multiple aggregations of type "other", then there will be two arrangements
+collating the results of the type "other" aggregations.
+
+```
+In -> <Other agg 1 branch > -> Concat -> Collation Arr1 -> Collation Arr2 -> Out
+  \                              /
+   < Other agg 2 branch > ------>
+```
+The first collation arrangement has a size equal to the concatenation of the
+second arrangement for each aggregation, except that there is an extra byte on
+every row to mark which aggregation the row came from. The second collation
+arrangement has row count `<number of groups>` and row width
+`<width of key> + <width of aggregation columns>`.
+
+### Combination of different types of aggregations
+
+The dataflow splits into `n` branches, where `n` is the number of different
+types of aggregations present. Two arrangements are created in order to
+collate the results so all the aggregations show up in one row.
+```
+In -> <Accumulable agg branch> ---> Concat -> CollationArr1 -> CollationArr2 -> Out
+ \  \                               /   /
+  \   <Hierarchical agg branch> -->    /
+   \                                  /
+    <Other agg branch> -------------->
+```
+
+The first collation arrangement is the same size as the concatenation of the last
+arrangement of every branch, except that there is an extra byte on every row to
+mark which branch the row came from.
+
+The second collation arrangement has row count `<number of groups>` and row
+width `<width of key> + <width of all aggregations>`.
 
 ---
 
