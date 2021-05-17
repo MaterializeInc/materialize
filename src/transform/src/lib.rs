@@ -154,9 +154,10 @@ impl Default for FuseAndCollapse {
             // TODO: The relative orders of the transforms have not been
             // determined except where there are comments.
             // TODO (#6542): All the transforms here except for
-            // `ProjectionLifting` and `InlineLet` can be implemented as free
-            // functions. Note that (#716) proposes the removal of `InlineLet`
-            // as a transform.
+            // `ProjectionLifting`, `InlineLet`, `UpdateLet`, and
+            // `RedundantJoin` can be implemented as free functions. Note that
+            // (#716) proposes the removal of `InlineLet` and `UpdateLet` as a
+            // transforms.
             transforms: vec![
                 Box::new(crate::projection_extraction::ProjectionExtraction),
                 Box::new(crate::projection_lifting::ProjectionLifting),
@@ -169,6 +170,18 @@ impl Default for FuseAndCollapse {
                 // This goes after union fusion so we can cancel out
                 // more branches at a time.
                 Box::new(crate::union_cancel::UnionBranchCancellation),
+                // This should run before redundant join to ensure that key info
+                // is correct.
+                Box::new(crate::update_let::UpdateLet),
+                // Removes redundant inputs from joins.
+                // Note that this eliminates one redundant input per join,
+                // so it is necessary to run this section in a loop.
+                // TODO: (#6748) Predicate pushdown unlocks the ability to
+                // remove some redundant joins but also prevents other
+                // redundant joins from being removed. When predicate pushdown
+                // no longer works against redundant join, check if it is still
+                // necessary to run RedundantJoin here.
+                Box::new(crate::redundant_join::RedundantJoin),
                 // As a final logical action, convert any constant expression to a constant.
                 // Some optimizations fight against this, and we want to be sure to end as a
                 // `MirRelationExpr::Constant` if that is the case, so that subsequent use can
@@ -267,17 +280,11 @@ impl Default for Optimizer {
             Box::new(crate::Fixpoint {
                 limit: 100,
                 transforms: vec![
-                    // Updates key information for let statements
-                    Box::new(crate::update_let::UpdateLet),
                     // Pushes aggregations down
                     Box::new(crate::reduction_pushdown::ReductionPushdown),
                     // Replaces reduces with maps when the group keys are
                     // unique with maps
                     Box::new(crate::reduce_elision::ReduceElision),
-                    // Removes redundant inputs from joins.
-                    // Note that this eliminates one redundant input per join,
-                    // so it is necessary to run this section in a loop.
-                    Box::new(crate::redundant_join::RedundantJoin),
                     // Converts `Cross Join {Constant(Literal) + Input}` to
                     // `Map {Cross Join (Input, Constant()), Literal}`.
                     // Join fusion will clean this up to `Map{Input, Literal}`
@@ -285,9 +292,10 @@ impl Default for Optimizer {
                     Box::new(crate::FuseAndCollapse::default()),
                 ],
             }),
-            // Physical transforms are above this comment. Logical transforms
-            // are below.
-            // Below this line are logical transforms.
+            // Logical transforms are above this line. Physical transforms are
+            // below this line.
+            // TODO: split these transforms into two sets so that physical
+            // transforms only run once?
             // Implementation transformations
             Box::new(crate::Fixpoint {
                 limit: 100,

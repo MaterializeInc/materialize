@@ -56,6 +56,8 @@ EOF
 
 # Outer joins
 
+# TODO (#6748): the second join should be removed as redundant and replaced with
+# `Get(l1)`.
 query T multiline
 EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1) WHERE t1.f1 = 123;
 ----
@@ -129,21 +131,10 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
 
 %5 =
 | Union %3 %4
+| Map null, null
 
 %6 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123)
-| ArrangeBy (#1)
-
-%7 =
-| Join %5 %6 (= #1 #3)
-| | implementation = Differential %5 %6.(#1)
-| | demand = (#0, #1)
-| Map null, null
-| Project (#0, #1, #4, #5)
-
-%8 =
-| Union %2 %7
+| Union %2 %5
 | Project (#0, #1, #3)
 
 EOF
@@ -262,24 +253,14 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 
 
 %8 =
 | Union %6 %7
+| Map null
 
 %9 =
-| Get %0 (l0)
-| ArrangeBy ()
+| Union %5 %8
 
 %10 =
-| Join %8 %9
-| | implementation = Differential %8 %9.()
-| | demand = ()
-| Map null
-| Project (#0, #3)
-
-%11 =
-| Union %5 %10
-
-%12 =
-| Join %4 %11
-| | implementation = Differential %11 %4.()
+| Join %4 %9
+| | implementation = Differential %9 %4.()
 | | demand = (#3)
 | Project (#3)
 
@@ -519,21 +500,10 @@ EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 1
 
 %5 =
 | Union %3 %4
+| Map null, null
 
 %6 =
-| Get materialize.public.t4 (u7)
-| Filter (#0 = 123), (#1 = 234)
-| ArrangeBy ()
-
-%7 =
-| Join %5 %6
-| | implementation = Differential %5 %6.()
-| | demand = (#0, #1)
-| Map null, null
-| Project (#0, #1, #4, #5)
-
-%8 =
-| Union %2 %7
+| Union %2 %5
 | Project (#0, #1)
 
 EOF
@@ -573,21 +543,10 @@ EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 1
 
 %5 =
 | Union %3 %4
+| Map null, null
 
 %6 =
-| Get materialize.public.t4 (u7)
-| Filter (#0 = 123), (#1 = 234)
-| ArrangeBy ()
-
-%7 =
-| Join %5 %6
-| | implementation = Differential %5 %6.()
-| | demand = (#0, #1)
-| Map null, null
-| Project (#0, #1, #4, #5)
-
-%8 =
-| Union %2 %7
+| Union %2 %5
 | Project (#0, #1)
 
 EOF
@@ -627,21 +586,10 @@ EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 2
 
 %5 =
 | Union %3 %4
+| Map null, null
 
 %6 =
-| Get materialize.public.t1 (u1)
-| Filter (#0 = 123), (#0 = 234)
-| ArrangeBy (#1)
-
-%7 =
-| Join %5 %6 (= #1 #3)
-| | implementation = Differential %5 %6.(#1)
-| | demand = (#0, #1)
-| Map null, null
-| Project (#0, #1, #4, #5)
-
-%8 =
-| Union %2 %7
+| Union %2 %5
 | Project (#0, #1, #3)
 
 EOF
