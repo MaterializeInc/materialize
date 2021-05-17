@@ -20,16 +20,8 @@ ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
 CREATE SCHEMA public;
 
-CREATE TABLE numbers (number int PRIMARY KEY, is_prime bool, name text);
-ALTER TABLE numbers REPLICA IDENTITY FULL;
-
-DROP SCHEMA IF EXISTS other_schema CASCADE;
-CREATE SCHEMA other_schema;
-CREATE TABLE other_schema.numbers (number int PRIMARY KEY, is_prime bool NOT NULL, name text NOT NULL);
-
 DROP PUBLICATION IF EXISTS mz_source;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
-INSERT INTO numbers VALUES (5, true, 'five');
 
 CREATE TABLE pk_table (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO pk_table VALUES (1, 'one');
@@ -167,9 +159,7 @@ db error: FATAL: database "no_such_dbname" does not exist
 
 > CREATE VIEWS FROM SOURCE materialize."public".mz_source ("таблица");
 
-# TODO(petrosagg): support this syntax
-! CREATE VIEWS FROM SOURCE "mz_source" (conflict_schema.conflict_table AS conflict_table);
-Expected right parenthesis, found dot
+> CREATE VIEWS FROM SOURCE "mz_source" (conflict_schema.conflict_table AS public.conflict_table);
 
 #
 # Perform sanity checks of the initial snapshot
@@ -213,9 +203,8 @@ Expected right parenthesis, found dot
 > SELECT * FROM "таблица";
 стойност
 
-# TODO(petrosagg): contigent to fixing fully qualified targets
-# > SELECT * FROM conflict_table;
-# 234
+> SELECT * FROM conflict_table;
+234
 
 #
 # Confirm that the new sources can be used to build upon
@@ -395,8 +384,8 @@ true
 > SELECT COUNT(*) = 0 FROM "таблица";
 true
 
-# > SELECT COUNT(*) = 0 FROM conflict_table;
-# true
+> SELECT COUNT(*) = 0 FROM conflict_table;
+true
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP PUBLICATION mz_source;

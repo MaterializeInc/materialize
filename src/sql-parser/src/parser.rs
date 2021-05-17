@@ -1891,9 +1891,9 @@ impl<'a> Parser<'a> {
             let name = self.parse_object_name()?;
             let targets = if self.consume_token(&Token::LParen) {
                 let targets = self.parse_comma_separated(|parser| {
-                    let name = parser.parse_identifier()?;
+                    let name = parser.parse_object_name()?;
                     let alias = if parser.parse_keyword(AS) {
-                        Some(parser.parse_identifier()?)
+                        Some(parser.parse_object_name()?)
                     } else {
                         None
                     };
