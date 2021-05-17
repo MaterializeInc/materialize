@@ -289,11 +289,17 @@ impl DataDecoder {
     }
     pub fn eof(
         &mut self,
+        bytes: &mut &[u8],
         upstream_coord: Option<i64>,
         push_metadata: bool,
     ) -> Result<Option<Row>, DataflowError> {
         match &mut self.inner {
-            DataDecoderInner::Csv(csv) => csv.next(&mut &[][..], upstream_coord, push_metadata),
+            DataDecoderInner::Csv(csv) => csv.next(bytes, upstream_coord, push_metadata),
+            DataDecoderInner::DelimitedBytes { format, .. } => {
+                let data = *bytes;
+                *bytes = &[][..];
+                format.decode(data, upstream_coord, push_metadata)
+            }
             _ => Ok(None),
         }
     }
@@ -551,7 +557,7 @@ where
                                 ))
                                 .into()));
                             }
-                            key.or_else(|| key_decoder.eof(None, false).transpose())
+                            key.or_else(|| key_decoder.eof(&mut &[][..], None, false).transpose())
                         } else {
                             None
                         };
@@ -583,7 +589,9 @@ where
                                         .into()));
                                     }
                                     value.or_else(|| {
-                                        value_decoder.eof(*position, push_metadata).transpose()
+                                        value_decoder
+                                            .eof(&mut &[][..], *position, push_metadata)
+                                            .transpose()
                                     })
                                 }
                                 MessagePayload::EOF => Some(Err(DecodeError::Text(format!(
@@ -722,22 +730,22 @@ where
                     let value = match value {
                         MessagePayload::Data(data) => data,
                         MessagePayload::EOF => {
-                            if !value_buf.is_empty() {
-                                session.give(DecodeResult {
-                                    key: key.clone(),
-                                    value: Some(Err(DecodeError::Text(format!(
-                                        "Saw unexpected EOF with bytes remaining in buffer: {:?}",
-                                        value_buf
-                                    ))
-                                    .into())),
-                                    position: Some(n_seen),
-                                });
-                                n_seen += 1;
+                            let data = &mut &value_buf[..];
+                            let mut result = value_decoder
+                                .eof(data, Some(n_seen + 1), push_metadata)
+                                .transpose();
+                            if !data.is_empty() && !matches!(&result, Some(Err(_))) {
+                                result = Some(Err(DecodeError::Text(format!(
+                                    "Saw unexpected EOF with bytes remaining in buffer: {:?}",
+                                    data
+                                ))
+                                .into()));
                             }
-                            match value_decoder.eof(Some(n_seen), push_metadata).transpose() {
+                            value_buf.clear();
+
+                            match result {
                                 None => continue,
                                 Some(value) => {
-                                    n_seen += 1;
                                     if matches!(&key, Some(Err(_))) || matches!(&value, Err(_)) {
                                         n_errors += 1;
                                     } else if matches!(&value, Ok(_)) {
@@ -748,6 +756,7 @@ where
                                         value: Some(value),
                                         position: Some(n_seen),
                                     });
+                                    n_seen += 1;
                                 }
                             }
                             continue;

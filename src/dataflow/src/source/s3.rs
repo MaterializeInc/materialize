@@ -593,10 +593,14 @@ async fn download_object(
                     }
                 };
 
-                for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
+                let mut chunk_idx = 0;
+                const CHUNK_SIZE: usize = 4096;
+                while chunk_idx < buf.len() {
+                    let chunk_bound = std::cmp::min(chunk_idx + CHUNK_SIZE, buf.len());
+                    let chunk = (&buf[chunk_idx..chunk_bound]).to_vec();
                     if tx
                         .send(Ok(InternalMessage {
-                            record: MessagePayload::Data(line),
+                            record: MessagePayload::Data(chunk),
                         }))
                         .is_err()
                     {
@@ -605,8 +609,9 @@ async fn download_object(
                     } else {
                         messages += 1;
                     }
+                    chunk_idx = chunk_bound;
                 }
-                log::trace!("sent {} messages to reader", messages);
+                log::trace!("sent {} chunks to reader", messages);
                 if sent != Sent::SenderClosed {
                     if let Err(e) = tx.send(Ok(InternalMessage {
                         record: MessagePayload::EOF,

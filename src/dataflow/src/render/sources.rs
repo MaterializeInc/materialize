@@ -17,7 +17,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{collection, AsCollection, Collection};
 use log::warn;
 use timely::dataflow::operators::unordered_input::UnorderedInput;
-use timely::dataflow::operators::Inspect;
 use timely::dataflow::operators::Map;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::scopes::Child;
