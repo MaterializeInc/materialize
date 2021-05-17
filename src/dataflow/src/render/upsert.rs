@@ -18,14 +18,14 @@ use timely::dataflow::operators::{generic::Operator, Concat, OkErr};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
-use dataflow_types::{DataflowError, DecodeError, LinearOperator};
+use dataflow_types::{DataflowError, LinearOperator};
 use expr::{EvalError, MirScalarExpr};
 use log::error;
 use repr::{Datum, Diff, Row, RowArena, Timestamp};
 
-use crate::decode::DecoderState;
 use crate::operator::StreamExt;
-use crate::source::{SourceData, SourceOutput};
+use crate::source::DecodeResult;
+use crate::source::SourceData;
 
 /// Entrypoint to the upsert-specific transformations involved
 /// in rendering a stream that came from an upsert source.
@@ -34,9 +34,8 @@ use crate::source::{SourceData, SourceOutput};
 /// with two components instead of one, and the second component
 /// can be null or empty.
 pub fn decode_stream<G>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
+    stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
-    mut decoder_state: impl DecoderState + 'static,
     operators: &mut Option<LinearOperator>,
     source_arity: usize,
 ) -> (
@@ -125,7 +124,7 @@ where
     };
 
     let result_stream = stream.unary_frontier(
-        Exchange::new(move |x: &SourceOutput<Vec<u8>, Vec<u8>>| x.key.hashed()),
+        Exchange::new(move |DecodeResult { key, .. }| key.hashed()),
         "Upsert",
         move |_cap, _info| {
             // this is a map of (time) -> (capability, ((key) -> (value with max
@@ -145,16 +144,15 @@ where
                 // Digest each input, reduce by presented timestamp.
                 input.for_each(|cap, data| {
                     data.swap(&mut vector);
-                    for SourceOutput {
+                    for DecodeResult {
                         key,
                         value: new_value,
                         position: new_position,
-                        upstream_time_millis: new_upstream_time_millis,
                     } in vector.drain(..)
                     {
                         let mut time = cap.time().clone();
                         time.advance_by(as_of_frontier.borrow());
-                        if key.is_empty() {
+                        if key.is_none() {
                             error!("Encountered empty key for value {:?}", new_value);
                             continue;
                         }
@@ -170,7 +168,7 @@ where
                             let new_entry = SourceData {
                                 value: new_value,
                                 position: new_position,
-                                upstream_time_millis: new_upstream_time_millis,
+                                upstream_time_millis: None, // upsert sources don't have a column for this, so setting it to `None` is fine.
                             };
 
                             if let Some(offset) = entry.position {
@@ -206,42 +204,24 @@ where
                             // which would allow us to recover from key decoding errors by a
                             // later retraction of the key (it will never decode correctly, but
                             // we could produce and then remove the error from the output).
-                            match decoder_state.decode_key(&key) {
-                                Ok(Some(decoded_key)) => {
-                                    let decoded_value = if data.value.is_empty() {
+                            match key {
+                                Some(Ok(decoded_key)) => {
+                                    let decoded_value = if data.value.is_none() {
                                         Ok(None)
                                     } else {
-                                        decoder_state
-                                            // Start with an attempt to decode the value.
-                                            .decode_upsert_value(
-                                                &data.value,
-                                                data.position,
-                                                data.upstream_time_millis,
+                                        let value = data.value.unwrap();
+                                        value.and_then(|row| {
+                                            let mut datums = Vec::with_capacity(source_arity);
+                                            datums.extend(decoded_key.iter());
+                                            datums.extend(row.iter());
+                                            evaluate(
+                                                &datums,
+                                                &predicates,
+                                                &position_or,
+                                                &mut row_packer,
                                             )
-                                            // Convert decoding errors into `DataflowError`s.
-                                            .map_err(|text| {
-                                                DataflowError::DecodeError(DecodeError::Text(text))
-                                            })
-                                            // Apply the predicates and projections
-                                            .and_then(|value_option| {
-                                                if let Some(value) = value_option {
-                                                    // Unpack rows to apply predicates and projections.
-                                                    // This could be optimized with MapFilterProject.
-                                                    let mut datums =
-                                                        Vec::with_capacity(source_arity);
-                                                    datums.extend(decoded_key.iter());
-                                                    datums.extend(value.iter());
-                                                    evaluate(
-                                                        &datums,
-                                                        &predicates,
-                                                        &position_or,
-                                                        &mut row_packer,
-                                                    )
-                                                    .map_err(DataflowError::from)
-                                                } else {
-                                                    Ok(None)
-                                                }
-                                            })
+                                            .map_err(DataflowError::from)
+                                        })
                                     };
                                     // Turns Ok(None) into None, and others into Some(OK) and Some(Err).
                                     // We store errors as well as non-None values, so that they can be
@@ -261,8 +241,8 @@ where
                                         session.give((new_value, cap.time().clone(), 1));
                                     }
                                 }
-                                Ok(None) => {}
-                                Err(err) => {
+                                None => {}
+                                Some(Err(err)) => {
                                     error!("key decoding error: {}", err);
                                 }
                             }
@@ -279,7 +259,6 @@ where
                 for time in removed_times {
                     to_send.remove(&time);
                 }
-                decoder_state.log_error_count();
             }
         },
     );

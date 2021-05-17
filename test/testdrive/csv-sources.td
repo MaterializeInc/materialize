@@ -11,7 +11,8 @@ $ file-append path=static.csv
 city,state,zip
 Rochester,NY,14618
 New York,NY,10004
-"bad,place""",CA,92679
+"bad,
+place""",CA,92679
 
 # We should refuse to create a source with invalid WITH options
 ! CREATE SOURCE invalid_with_option
@@ -31,7 +32,7 @@ column1        column2  column3  mz_line_no
 city           state     zip     1
 Rochester      NY        14618   2
 "New York"     NY        10004   3
-"bad,place\""  CA        92679   4
+"bad,\nplace\""  CA        92679   4
 
 # The timestamp chosen when reading from a static CSV should be the end of time,
 # since the definition of "static" means "will never change again".
@@ -46,9 +47,9 @@ Rochester      NY        14618   2
 > SELECT * FROM static_csv_header
 city           state     zip     mz_line_no
 --------------------------------------------
-Rochester      NY        14618   2
-"New York"     NY        10004   3
-"bad,place\""  CA        92679   4
+Rochester      NY        14618   1
+"New York"     NY        10004   2
+"bad,\nplace\""  CA        92679   3
 
 # Static CSV with manual headers.
 > CREATE MATERIALIZED SOURCE static_csv_manual_header (city_man, state_man, zip_man)
@@ -58,9 +59,9 @@ Rochester      NY        14618   2
 > SELECT * FROM static_csv_manual_header
 city_man       state_man  zip_man  mz_line_no
 ---------------------------------------------
-Rochester      NY         14618    2
-"New York"     NY         10004    3
-"bad,place\""  CA         92679    4
+Rochester      NY         14618    1
+"New York"     NY         10004    2
+"bad,\nplace\""  CA         92679    3
 
 # Dynamic CSV with automatic headers.
 
@@ -79,7 +80,7 @@ Rochester,NY,14618
 > SELECT * FROM dynamic_csv
 city           state     zip     mz_line_no
 --------------------------------------------
-Rochester      NY        14618   2
+Rochester      NY        14618   1
 
 $ file-append path=dynamic.csv
 New York,NY,10004
@@ -87,8 +88,8 @@ New York,NY,10004
 > SELECT * FROM dynamic_csv
 city           state     zip     mz_line_no
 --------------------------------------------
-Rochester      NY        14618   2
-"New York"     NY        10004   3
+Rochester      NY        14618   1
+"New York"     NY        10004   2
 
 $ file-append path=deleting.csv
 city,state,zip
@@ -121,7 +122,7 @@ badint,
   FORMAT CSV WITH HEADER
 
 ! SELECT * FROM malformed_csv
-Decode error: Text: CSV error at lineno 3: expected 2 columns, got 1.
+Decode error: Text: CSV error at record number 3: expected 2 columns, got 1.
 
 # Static non-utf-8 CSV
 $ file-append path=bad-text.csv
@@ -133,4 +134,4 @@ Dollars,Category
   FORMAT CSV WITH HEADER
 
 ! SELECT * FROM bad_text_csv
-Decode error: Text: CSV error at lineno 2: invalid UTF-8
+Decode error: Text: CSV error at record number 2: invalid UTF-8

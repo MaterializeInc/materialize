@@ -420,6 +420,7 @@ impl fmt::Debug for ConfluentAvroResolver {
     }
 }
 
+#[derive(Debug)]
 struct SchemaCache {
     cache: HashMap<i32, Result<Schema, AvroError>>,
     ccsr_client: ccsr::Client,

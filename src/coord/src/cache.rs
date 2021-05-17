@@ -472,7 +472,7 @@ fn test_extract_prefix() {
             predecessor,
             timestamp: Timestamp::default(),
             key: Vec::new(),
-            value: Vec::new(),
+            value: Default::default(),
         }
     }
 

@@ -21,6 +21,7 @@ use flate2::read::MultiGzDecoder;
 use globset::GlobMatcher;
 use metrics::BucketMetrics;
 use notifications::Event;
+use repr::MessagePayload;
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
 use rusoto_sqs::{
     ChangeMessageVisibilityBatchRequest, ChangeMessageVisibilityBatchRequestEntry,
@@ -46,7 +47,7 @@ use self::notifications::{EventType, TestEvent};
 mod metrics;
 mod notifications;
 
-type Out = Vec<u8>;
+type Out = MessagePayload;
 struct InternalMessage {
     record: Out,
 }
@@ -592,15 +593,32 @@ async fn download_object(
                     }
                 };
 
-                for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
-                    if tx.send(Ok(InternalMessage { record: line })).is_err() {
+                let mut chunk_idx = 0;
+                const CHUNK_SIZE: usize = 4096;
+                while chunk_idx < buf.len() {
+                    let chunk_bound = std::cmp::min(chunk_idx + CHUNK_SIZE, buf.len());
+                    let chunk = (&buf[chunk_idx..chunk_bound]).to_vec();
+                    if tx
+                        .send(Ok(InternalMessage {
+                            record: MessagePayload::Data(chunk),
+                        }))
+                        .is_err()
+                    {
                         sent = Sent::SenderClosed;
                         break;
                     } else {
                         messages += 1;
                     }
+                    chunk_idx = chunk_bound;
                 }
-                log::trace!("sent {} messages to reader", messages);
+                log::trace!("sent {} chunks to reader", messages);
+                if sent != Sent::SenderClosed {
+                    if let Err(e) = tx.send(Ok(InternalMessage {
+                        record: MessagePayload::EOF,
+                    })) {
+                        log::debug!("unable to send EOF on stream: {}", e);
+                    }
+                }
                 if activate {
                     activator.activate().expect("s3 reader activation failed");
                 }
@@ -626,7 +644,7 @@ async fn download_object(
     }
 }
 
-impl SourceReader<Vec<u8>> for S3SourceReader {
+impl SourceReader for S3SourceReader {
     fn new(
         source_name: String,
         source_id: SourceInstanceId,
@@ -694,7 +712,7 @@ impl SourceReader<Vec<u8>> for S3SourceReader {
         ))
     }
 
-    fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(InternalMessage { record })) => {
                 self.offset += 1;

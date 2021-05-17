@@ -9,7 +9,9 @@
 
 //! Types related to the creation of dataflow sources.
 
+use dataflow_types::DataflowError;
 use mz_avro::types::Value;
+use repr::MessagePayload;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -32,7 +34,7 @@ use dataflow_types::{
 };
 use expr::{PartitionId, SourceInstanceId};
 use lazy_static::lazy_static;
-use log::{debug, error, trace};
+use log::{debug, error};
 use prometheus::core::{AtomicI64, AtomicU64};
 use prometheus::{
     register_int_counter, register_int_counter_vec, register_int_gauge_vec,
@@ -134,7 +136,7 @@ where
 #[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
 pub(crate) struct SourceData {
     /// The actual value
-    pub(crate) value: Vec<u8>,
+    pub(crate) value: Option<Result<Row, DataflowError>>,
     /// The source's reported position for this record
     ///
     /// e.g. kafka offset or file location
@@ -144,6 +146,17 @@ pub(crate) struct SourceData {
     ///
     /// Currently only applies to Kafka
     pub(crate) upstream_time_millis: Option<i64>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq, Hash, Clone, Serialize, Deserialize)]
+/// The output of the decoding operator
+pub struct DecodeResult {
+    /// The decoded key
+    pub key: Option<Result<Row, DataflowError>>,
+    /// The decoded value
+    pub value: Option<Result<Row, DataflowError>>,
+    /// The index of the decoded value in the stream
+    pub position: Option<i64>,
 }
 
 impl<K, V> SourceOutput<K, V>
@@ -277,7 +290,7 @@ impl MaybeLength for Value {
 /// TODO: this trait is still a little too Kafka-centric, specifically the concept of
 /// a "partition" is baked into this trait and introduces some cognitive overhead as
 /// we are forced to treat things like file sources as "single-partition"
-pub(crate) trait SourceReader<Out> {
+pub(crate) trait SourceReader {
     /// Create a new source reader.
     ///
     /// This function returns the source reader and optionally, any "partition" it's
@@ -308,113 +321,71 @@ pub(crate) trait SourceReader<Out> {
     ///
     /// Note that implementers are required to present messages in strictly ascending\
     /// offset order within each partition.
-    fn get_next_message(&mut self) -> Result<NextMessage<Out>, anyhow::Error>;
+    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error>;
 }
 
-/// This trait defines the interface to cache incoming messages.
-///
-/// Every output message type must implement this trait.
-pub trait SourceCache {
-    /// Cache a message
-    fn cache_message(
-        message: &SourceMessage<Self>,
-        source_id: SourceInstanceId,
-        caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
-        timestamp: Timestamp,
-        offset: Option<MzOffset>,
-    ) where
-        Self: Sized;
+fn cache_message(
+    message: &SourceMessage,
+    source_id: SourceInstanceId,
+    caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
+    timestamp: Timestamp,
+    predecessor: Option<MzOffset>,
+) {
+    // Send this record to be cached
+    if let Some(caching_tx) = caching_tx {
+        let partition_id = match message.partition {
+            PartitionId::Kafka(p) => p,
+            _ => unreachable!(),
+        };
 
-    /// Read back data from a previously cached file.
-    /// Reads messages back from files in offset order, and returns None when there is
-    /// no more data left to process
-    /// TODO(rkhaitan): clean this up to return a proper type and potentially a iterator.
-    fn read_file(path: PathBuf) -> Vec<SourceMessage<Self>>
-    where
-        Self: Sized;
-}
+        // TODO(rkhaitan): let's experiment with wrapping these in a
+        // Arc so we don't have to clone.
+        let key = message.key.clone().unwrap_or_default();
+        let value = message.payload.clone().unwrap_or_default();
 
-impl SourceCache for Vec<u8> {
-    fn cache_message(
-        message: &SourceMessage<Vec<u8>>,
-        source_id: SourceInstanceId,
-        caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
-        timestamp: Timestamp,
-        predecessor: Option<MzOffset>,
-    ) {
-        // Send this record to be cached
-        if let Some(caching_tx) = caching_tx {
-            let partition_id = match message.partition {
-                PartitionId::Kafka(p) => p,
-                _ => unreachable!(),
-            };
-
-            // TODO(rkhaitan): let's experiment with wrapping these in a
-            // Arc so we don't have to clone.
-            let key = message.key.clone().unwrap_or_default();
-            let value = message.payload.clone().unwrap_or_default();
-
-            let cache_data = CacheMessage::Data(WorkerCacheData {
-                source_id: source_id.source_id,
-                partition_id,
-                record: CachedRecord {
-                    predecessor: predecessor.map(|p| p.offset),
-                    offset: message.offset.offset,
-                    timestamp,
-                    key,
-                    value,
-                },
-            });
-
-            // TODO(benesch): the lack of backpressure here can result in
-            // unbounded memory usage.
-            caching_tx
-                .send(cache_data)
-                .expect("caching receiver should never drop first");
-        }
-    }
-
-    fn read_file(path: PathBuf) -> Vec<SourceMessage<Vec<u8>>> {
-        debug!("reading cached data from {}", path.display());
-        let data = ::std::fs::read(&path).unwrap_or_else(|e| {
-            error!("failed to read source cache file {}: {}", path.display(), e);
-            vec![]
+        let cache_data = CacheMessage::Data(WorkerCacheData {
+            source_id: source_id.source_id,
+            partition_id,
+            record: CachedRecord {
+                predecessor: predecessor.map(|p| p.offset),
+                offset: message.offset.offset,
+                timestamp,
+                key,
+                value,
+            },
         });
 
-        let partition =
-            crate::source::cache::cached_file_partition(&path).expect("partition known to exist");
-        CachedRecordIter::new(data)
-            .map(move |r| SourceMessage {
-                key: Some(r.key),
-                payload: Some(r.value),
-                offset: MzOffset { offset: r.offset },
-                upstream_time_millis: None,
-                partition: partition.clone(),
-            })
-            .collect()
+        // TODO(benesch): the lack of backpressure here can result in
+        // unbounded memory usage.
+        caching_tx
+            .send(cache_data)
+            .expect("caching receiver should never drop first");
     }
 }
 
-impl SourceCache for mz_avro::types::Value {
-    fn cache_message(
-        _message: &SourceMessage<Self>,
-        _source_id: SourceInstanceId,
-        _caching_tx: &mut Option<mpsc::UnboundedSender<CacheMessage>>,
-        _timestamp: Timestamp,
-        _offset: Option<MzOffset>,
-    ) {
-        // Just no-op for OCF sources
-        trace!("source caching is not supported for Avro OCF sources");
-    }
+fn read_file(path: PathBuf) -> Vec<SourceMessage> {
+    debug!("reading cached data from {}", path.display());
+    let data = ::std::fs::read(&path).unwrap_or_else(|e| {
+        error!("failed to read source cache file {}: {}", path.display(), e);
+        vec![]
+    });
 
-    fn read_file(_path: PathBuf) -> Vec<SourceMessage<Self>> {
-        panic!("source caching is not supported for Avro OCF sources");
-    }
+    let partition =
+        crate::source::cache::cached_file_partition(&path).expect("partition known to exist");
+    CachedRecordIter::new(data)
+        .map(move |r| SourceMessage {
+            key: Some(r.key),
+            payload: Some(r.value),
+            offset: MzOffset { offset: r.offset },
+            upstream_time_millis: None,
+            partition: partition.clone(),
+        })
+        .collect()
 }
 
 #[derive(Debug)]
-pub(crate) enum NextMessage<Out> {
-    Ready(SourceMessage<Out>),
+pub(crate) enum NextMessage {
+    Ready(SourceMessage),
     Pending,
     TransientDelay,
     Finished,
@@ -422,7 +393,7 @@ pub(crate) enum NextMessage<Out> {
 
 /// Source-agnostic wrapper for messages. Each source must implement a
 /// conversion to Message.
-pub struct SourceMessage<Out> {
+pub struct SourceMessage {
     /// Partition from which this message originates
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
@@ -434,10 +405,10 @@ pub struct SourceMessage<Out> {
     /// Optional key
     pub key: Option<Vec<u8>>,
     /// Optional payload
-    pub payload: Option<Out>,
+    pub payload: Option<MessagePayload>,
 }
 
-impl<Out> fmt::Debug for SourceMessage<Out> {
+impl fmt::Debug for SourceMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SourceMessage")
             .field("partition", &self.partition)
@@ -648,11 +619,11 @@ impl ConsistencyInfo {
     /// ts (x-1) will ever be inserted. Entries with timestamp x might still be inserted in different
     /// partitions. This is guaranteed by the `coord::timestamp::is_ts_valid` method.
     ///
-    fn downgrade_capability<Out: Send + Clone + 'static>(
+    fn downgrade_capability(
         &mut self,
         id: &SourceInstanceId,
         cap: &mut Capability<Timestamp>,
-        source: &mut dyn SourceReader<Out>,
+        source: &mut dyn SourceReader,
         timestamp_histories: &TimestampDataUpdates,
         timestamp_bindings: &mut TimestampBindingRc,
     ) {
@@ -1229,20 +1200,19 @@ where
 
 /// Creates a source dataflow operator. The type of ExternalSourceConnector determines the
 /// type of source that should be created
-pub(crate) fn create_source<G, S: 'static, Out>(
+pub(crate) fn create_source<G, S: 'static>(
     config: SourceConfig<G>,
     source_connector: &ExternalSourceConnector,
 ) -> (
     (
-        timely::dataflow::Stream<G, SourceOutput<Vec<u8>, Out>>,
+        timely::dataflow::Stream<G, SourceOutput<Vec<u8>, MessagePayload>>,
         timely::dataflow::Stream<G, SourceError>,
     ),
     Option<SourceToken>,
 )
 where
     G: Scope<Timestamp = Timestamp>,
-    S: SourceReader<Out>,
-    Out: Debug + Clone + Send + Default + MaybeLength + SourceCache + 'static,
+    S: SourceReader,
 {
     let SourceConfig {
         name,
@@ -1282,7 +1252,7 @@ where
         let mut source_reader: Option<S> = if !active {
             None
         } else {
-            match SourceReader::<Out>::new(
+            match SourceReader::new(
                 name.clone(),
                 id,
                 worker_id,
@@ -1357,7 +1327,7 @@ where
                 let ts = consistency_info.find_matching_rt_timestamp();
                 let ts_cap = cap.delayed(&ts);
 
-                let messages = SourceCache::read_file(file);
+                let messages = read_file(file);
 
                 for message in messages {
                     let key = message.key.unwrap_or_default();
@@ -1492,8 +1462,8 @@ where
 ///
 /// TODO: This function is a bit of a mess rn but hopefully this function makes the
 /// existing mess more obvious and points towards ways to improve it.
-fn handle_message<Out>(
-    message: SourceMessage<Out>,
+fn handle_message(
+    message: SourceMessage,
     predecessor: &mut Option<MzOffset>,
     consistency_info: &mut ConsistencyInfo,
     id: &SourceInstanceId,
@@ -1502,16 +1472,15 @@ fn handle_message<Out>(
     cap: &Capability<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
-        Result<SourceOutput<Vec<u8>, Out>, String>,
-        Tee<Timestamp, Result<SourceOutput<Vec<u8>, Out>, String>>,
+        Result<SourceOutput<Vec<u8>, MessagePayload>, String>,
+        Tee<Timestamp, Result<SourceOutput<Vec<u8>, MessagePayload>, String>>,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp)>,
     timer: &std::time::Instant,
-    buffer: &mut Option<SourceMessage<Out>>,
+    buffer: &mut Option<SourceMessage>,
     timestamp_bindings: &TimestampBindingRc,
 ) -> (SourceStatus, MessageProcessing)
 where
-    Out: Debug + Clone + Send + Default + MaybeLength + SourceCache + 'static,
 {
     let partition = message.partition.clone();
     let offset = message.offset;
@@ -1539,7 +1508,7 @@ where
             (SourceStatus::Alive, MessageProcessing::Yielded)
         }
         Some(ts) => {
-            SourceCache::cache_message(&message, *id, caching_tx, ts, msg_predecessor);
+            cache_message(&message, *id, caching_tx, ts, msg_predecessor);
             // Note: empty and null payload/keys are currently
             // treated as the same thing.
             let key = message.key.unwrap_or_default();
@@ -1548,7 +1517,10 @@ where
             // are only processed after we have updated the partition_metadata for a
             // partition and created a partition queue for it.
             *bytes_read += key.len();
-            *bytes_read += out.len().unwrap_or(0);
+            *bytes_read += match &out {
+                MessagePayload::Data(bytes) => bytes.len(),
+                MessagePayload::EOF => 0,
+            };
             let ts_cap = cap.delayed(&ts);
 
             output.session(&ts_cap).give(Ok(SourceOutput::new(

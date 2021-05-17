@@ -109,9 +109,8 @@ $ kafka-ingest format=avro topic=avro-types-long2float schema=${long} timestamp=
   FORMAT AVRO USING SCHEMA '${float}'
   ENVELOPE NONE
 
-# Bogus result but at least we do not panic
-> SELECT * FROM avro_types_long2float
--0.0000000000000000000000000000000048554492
+! SELECT * FROM avro_types_long2float
+Unexpected bytes remaining
 
 #
 # long -> int

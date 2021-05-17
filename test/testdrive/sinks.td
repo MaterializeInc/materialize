@@ -98,12 +98,12 @@ snk4   user  unknown
 snk5   user  unknown
 
 $ kafka-verify format=avro sink=materialize.public.snk1
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 2}}}
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 3}}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 1}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 2}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk2
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 2}}}
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 3}}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 1}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 2}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk3
 {"before": null, "after": {"row":{"c": "jackjill"}}}
@@ -138,8 +138,8 @@ $ kafka-verify format=avro sink=materialize.public.snk6
 # Ensure the data is read into the source before creating sinks from it
 # to correctly test WITH/WITHOUT SNAPSHOT.
 > SELECT * FROM dynamic_src
-jack jill 2
-goofus gallant 3
+jack jill 1
+goofus gallant 2
 
 > CREATE SINK snk7 FROM dynamic_src
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'snk7'
@@ -155,12 +155,12 @@ $ file-append path=test.csv
 extra,row
 
 $ kafka-verify format=avro sink=materialize.public.snk7
-{"before": null, "after": {"row":{"a": "extra", "b": "row", "mz_line_no": 4}}}
+{"before": null, "after": {"row":{"a": "extra", "b": "row", "mz_line_no": 3}}}
 
 $ kafka-verify format=avro sink=materialize.public.snk8
-{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 2}}}
-{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 3}}}
-{"before": null, "after": {"row":{"a": "extra", "b": "row", "mz_line_no": 4}}}
+{"before": null, "after": {"row":{"a": "jack", "b": "jill", "mz_line_no": 1}}}
+{"before": null, "after": {"row":{"a": "goofus", "b": "gallant", "mz_line_no": 2}}}
+{"before": null, "after": {"row":{"a": "extra", "b": "row", "mz_line_no": 3}}}
 
 # Test that we are correctly handling WITH/WITHOUT SNAPSHOT on views with
 # empty upper frontier

@@ -109,6 +109,49 @@ pub struct Reader<R> {
     buf_idx: usize,
 }
 
+/// An iterator over the `Block`s of a `Reader`
+pub struct BlockIter<R> {
+    inner: Reader<R>,
+}
+
+/// A block of Avro objects from an OCF file
+#[derive(Debug, Clone)]
+pub struct Block {
+    /// The raw bytes for the block
+    pub bytes: Vec<u8>,
+    /// The number of Avro objects in the block
+    pub len: usize,
+}
+
+impl<R: AvroRead> BlockIter<R> {
+    pub fn with_schema(reader_schema: &Schema, inner: R) -> Result<Self, AvroError> {
+        Ok(Self {
+            inner: Reader::with_schema(reader_schema, inner)?,
+        })
+    }
+}
+
+impl<R: AvroRead> Iterator for BlockIter<R> {
+    type Item = Result<Block, AvroError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        assert!(self.inner.is_empty());
+
+        match self.inner.read_block_next() {
+            Ok(()) => {
+                if self.inner.is_empty() {
+                    None
+                } else {
+                    let bytes = std::mem::take(&mut self.inner.buf);
+                    let len = std::mem::take(&mut self.inner.messages_remaining);
+                    Some(Ok(Block { bytes, len }))
+                }
+            }
+            Err(e) => Some(Err(e)),
+        }
+    }
+}
+
 impl<R: AvroRead> Reader<R> {
     /// Creates a `Reader` given something implementing the `tokio::io::AsyncRead` trait to read from.
     /// No reader `Schema` will be set.

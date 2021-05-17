@@ -72,4 +72,4 @@ this line has invalid UTF-8 and will be cause dataflow errors --> \x80 <--
   FORMAT REGEX '(?P<ip>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) - - \[(?P<ts>[^]]+)\] "(?P<path>(?:GET /search/\?kw=(?P<search_kw>[^ ]*) HTTP/\d\.\d)|(?:GET /detail/(?P<product_detail_id>[a-zA-Z0-9]+) HTTP/\d\.\d)|(?:[^"]+))" (?P<code>\d{3}) -'
 
 ! SELECT * FROM bad_regex_source
-Decode error: Text: Regex error in source materialize.public.bad_regex_source_primary_idx at lineno 3: invalid UTF-8
+UTF-8

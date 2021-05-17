@@ -65,8 +65,5 @@ $ kafka-ingest format=avro topic=decode-2to1 schema=${2columns-nodefault} timest
   FORMAT AVRO USING SCHEMA '${1column}'
   ENVELOPE NONE
 
-> SELECT * FROM decode_2to1
-f1
----
-123
-456
+! SELECT * FROM decode_2to1
+Unexpected bytes remaining

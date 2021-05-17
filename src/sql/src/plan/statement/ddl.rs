@@ -370,6 +370,7 @@ fn plan_source_envelope(
             bare_desc.iter_names().map(|name| name.cloned()).collect(),
         )
     };
+
     let mir_expr = hir_expr.lower();
 
     Ok((mir_expr, column_names))
@@ -778,10 +779,8 @@ pub fn plan_create_source(
                 Some(_) => bail!("consistency must be a string"),
             };
 
-            if consistency != Consistency::RealTime
-                && *envelope != sql_parser::ast::Envelope::Debezium(sql_parser::ast::DbzMode::Plain)
-            {
-                bail!("BYO consistency only supported for Debezium Avro OCF sources");
+            if consistency != Consistency::RealTime {
+                bail!("BYO consistency is not supported for Avro OCF sources");
             }
 
             ts_frequency = extract_timestamp_frequency_option(

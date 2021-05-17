@@ -72,7 +72,7 @@ pub fn bench_protobuf(c: &mut Criterion) {
     let mut bg = c.benchmark_group("protobuf");
     bg.throughput(Throughput::Bytes(len));
     bg.bench_function("decode", move |b| {
-        b.iter(|| black_box(decoder.decode(&buf, None).unwrap()))
+        b.iter(|| black_box(decoder.decode(&buf, None, true).unwrap()))
     });
     bg.finish();
 }

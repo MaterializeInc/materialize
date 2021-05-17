@@ -9,14 +9,16 @@
 
 use std::io::{self, BufRead, Read};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
-use anyhow::{anyhow, Context, Error};
+use anyhow::{Context, Error};
 use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
 use inotify::{Inotify, WatchMask};
 use log::error;
+use repr::MessagePayload;
 use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
@@ -24,19 +26,19 @@ use dataflow_types::{
     SourceDataEncoding,
 };
 use expr::{PartitionId, SourceInstanceId};
-use mz_avro::types::Value;
+use mz_avro::Block;
+use mz_avro::BlockIter;
 use mz_avro::{AvroRead, Schema, Skip};
 
 use crate::logging::materialized::Logger;
 use crate::source::{NextMessage, SourceMessage, SourceReader};
 
-/// Contains all information necessary to ingest data from file sources (either
-/// regular sources, or Avro OCF sources)
-pub struct FileSourceReader<Out> {
+/// Contains all information necessary to ingest data from file sources
+pub struct FileSourceReader {
     /// Unique source ID
     id: SourceInstanceId,
     /// Receiver channel that ingests records
-    receiver_stream: Receiver<Result<Out, Error>>,
+    receiver_stream: Receiver<Result<MessagePayload, Error>>,
     /// Current File Offset. This corresponds to the offset of last processed message
     /// (initially 0 if no records have been processed)
     current_file_offset: FileOffset,
@@ -57,100 +59,35 @@ impl From<FileOffset> for MzOffset {
     }
 }
 
-impl SourceReader<Value> for FileSourceReader<Value> {
-    fn new(
-        _name: String,
-        source_id: SourceInstanceId,
-        _: usize,
-        consumer_activator: SyncActivator,
-        connector: ExternalSourceConnector,
-        encoding: SourceDataEncoding,
-        _: Option<Logger>,
-    ) -> Result<(FileSourceReader<Value>, Option<PartitionId>), anyhow::Error> {
-        let encoding = encoding.single().ok_or_else(|| {
-            anyhow!("File sources require a single encoding, but got a key/value encoding")
-        })?;
-        let receiver = match connector {
-            ExternalSourceConnector::AvroOcf(oc) => {
-                let reader_schema = match &encoding {
-                    DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => reader_schema,
-                    _ => unreachable!(
-                        "Internal error: \
-                                         Avro OCF schema should have already been resolved.\n\
-                                        Encoding is: {:?}",
-                        encoding
-                    ),
-                };
-                let reader_schema: Schema = reader_schema.parse().unwrap();
-                let ctor = { move |file| mz_avro::Reader::with_schema(&reader_schema, file) };
-                let tail = if oc.tail {
-                    FileReadStyle::TailFollowFd
-                } else {
-                    FileReadStyle::ReadOnce
-                };
-                let (tx, rx) = std::sync::mpsc::sync_channel(10000_usize);
-                std::thread::spawn(move || {
-                    read_file_task(
-                        oc.path,
-                        tx,
-                        Some(consumer_activator),
-                        tail,
-                        oc.compression,
-                        ctor,
-                    );
-                });
-                rx
-            }
-            _ => panic!("Only OCF sources are supported with Avro encoding of values."),
-        };
-
-        Ok((
-            FileSourceReader {
-                id: source_id,
-                receiver_stream: receiver,
-                current_file_offset: FileOffset { offset: 0 },
-            },
-            Some(PartitionId::File),
-        ))
-    }
-
-    fn get_next_message(&mut self) -> Result<NextMessage<Value>, anyhow::Error> {
-        match self.receiver_stream.try_recv() {
-            Ok(Ok(record)) => {
-                self.current_file_offset.offset += 1;
-                let message = SourceMessage {
-                    partition: PartitionId::File,
-                    offset: self.current_file_offset.into(),
-                    upstream_time_millis: None,
-                    key: None,
-                    payload: Some(record),
-                };
-                Ok(NextMessage::Ready(message))
-            }
-            Ok(Err(e)) => {
-                error!("Failed to read file for {}. Error: {}.", self.id, e);
-                Err(e)
-            }
-            Err(TryRecvError::Empty) => Ok(NextMessage::Pending),
-            Err(TryRecvError::Disconnected) => Ok(NextMessage::Finished),
-        }
-    }
-}
-
-impl SourceReader<Vec<u8>> for FileSourceReader<Vec<u8>> {
+impl SourceReader for FileSourceReader {
     fn new(
         _name: String,
         source_id: SourceInstanceId,
         worker_id: usize,
         consumer_activator: SyncActivator,
         connector: ExternalSourceConnector,
-        _: SourceDataEncoding,
+        encoding: SourceDataEncoding,
         _: Option<Logger>,
-    ) -> Result<(FileSourceReader<Vec<u8>>, Option<PartitionId>), anyhow::Error> {
+    ) -> Result<(FileSourceReader, Option<PartitionId>), anyhow::Error> {
         let receiver = match connector {
             ExternalSourceConnector::File(fc) => {
                 log::debug!("creating FileSourceReader worker_id={}", worker_id);
-                let ctor = |fi| Ok(std::io::BufReader::new(fi).split(b'\n'));
+                let ctor = |fi| {
+                    let mut br = std::io::BufReader::new(fi);
+                    Ok(std::iter::from_fn(move || {
+                        let chunk = match br.fill_buf() {
+                            Err(e) => return Some(Err(e)),
+                            Ok(b) => b.to_vec(), // TODO - avoid this copy?
+                        };
+                        br.consume(chunk.len());
+                        if chunk.len() > 0 {
+                            Some(Ok(MessagePayload::Data(chunk)))
+                        } else {
+                            None
+                        }
+                    })
+                    .chain(std::iter::once(Ok(MessagePayload::EOF))))
+                };
                 let (tx, rx) = std::sync::mpsc::sync_channel(10000);
                 let tail = if fc.tail {
                     FileReadStyle::TailFollowFd
@@ -169,9 +106,48 @@ impl SourceReader<Vec<u8>> for FileSourceReader<Vec<u8>> {
                 });
                 rx
             }
-            _ => panic!(
-                "Only File sources are supported with File/OCF connectors and Vec<u8> encodings"
-            ),
+            ExternalSourceConnector::AvroOcf(fc) => {
+                log::debug!("creating Avro FileSourceReader worker_id={}", worker_id);
+                let value_encoding = match &encoding {
+                    SourceDataEncoding::Single(enc) => enc,
+                    SourceDataEncoding::KeyValue { .. } => {
+                        unreachable!("A KeyValue encoding for an OCF source should have been rejected in the planner.")
+                    }
+                };
+                let reader_schema = match value_encoding {
+                    DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => &*reader_schema,
+                    // We should be checking for this in the planner.
+                    _ => unreachable!("Wrong encoding for OCF file"),
+                };
+                let reader_schema = Schema::from_str(reader_schema)?;
+                let ctor = move |file| {
+                    BlockIter::with_schema(&reader_schema, file).map(|bi| {
+                        bi.map(|result| {
+                            result.map(|Block { bytes, len: _ }| MessagePayload::Data(bytes))
+                        })
+                        .chain(std::iter::once(Ok(MessagePayload::EOF)))
+                    })
+                };
+
+                let (tx, rx) = std::sync::mpsc::sync_channel(10000);
+                let tail = if fc.tail {
+                    FileReadStyle::TailFollowFd
+                } else {
+                    FileReadStyle::ReadOnce
+                };
+                std::thread::spawn(move || {
+                    read_file_task(
+                        fc.path,
+                        tx,
+                        Some(consumer_activator),
+                        tail,
+                        fc.compression,
+                        ctor,
+                    );
+                });
+                rx
+            }
+            _ => unreachable!(),
         };
 
         Ok((
@@ -184,7 +160,7 @@ impl SourceReader<Vec<u8>> for FileSourceReader<Vec<u8>> {
         ))
     }
 
-    fn get_next_message(&mut self) -> Result<NextMessage<Vec<u8>>, anyhow::Error> {
+    fn get_next_message(&mut self) -> Result<NextMessage, anyhow::Error> {
         match self.receiver_stream.try_recv() {
             Ok(Ok(record)) => {
                 self.current_file_offset.offset += 1;
@@ -208,15 +184,15 @@ impl SourceReader<Vec<u8>> for FileSourceReader<Vec<u8>> {
 }
 
 /// Blocking logic to read from a file, intended for its own thread.
-pub fn read_file_task<Ctor, I, Out, Err>(
+pub fn read_file_task<Ctor, I, Err>(
     path: PathBuf,
-    tx: std::sync::mpsc::SyncSender<Result<Out, anyhow::Error>>,
+    tx: std::sync::mpsc::SyncSender<Result<MessagePayload, anyhow::Error>>,
     activator: Option<SyncActivator>,
     read_style: FileReadStyle,
     compression: Compression,
     iter_ctor: Ctor,
 ) where
-    I: IntoIterator<Item = Result<Out, Err>> + Send + 'static,
+    I: IntoIterator<Item = Result<MessagePayload, Err>> + Send + 'static,
     Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
     Err: Into<anyhow::Error>,
 {
