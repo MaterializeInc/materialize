@@ -56,87 +56,85 @@ EOF
 
 # Outer joins
 
+# TODO (#6748): the second join should be removed as redundant and replaced with
+# `Get(l1)`.
 query T multiline
 EXPLAIN SELECT * FROM t1 LEFT JOIN t2 ON (t1.f1 = t2.f1) WHERE t1.f1 = 123;
 ----
-%0 = Let l0 =
+%0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
-
-%1 =
-| Get %0 (l0)
 | ArrangeBy ()
 
-%2 =
+%1 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
 
-%3 = Let l1 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 | | demand = (#0..#3)
 
+%3 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
+| ArrangeBy ()
+
 %4 =
-| Get %3 (l1)
+| Join %3 %2
+| | implementation = Differential %2 %3.()
+| | demand = (#0, #1)
 | Negate
 | Project (#0, #1)
 
 %5 =
-| Union %4 %0
-| Map null, null
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
 
 %6 =
-| Union %5 %3
+| Union %4 %5
+| Map null, null
+
+%7 =
+| Union %6 %2
 
 EOF
 
 query T multiline
 EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123;
 ----
-%0 = Let l0 =
+%0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123)
-
-%1 =
-| Get %0 (l0)
 | ArrangeBy ()
 
-%2 =
+%1 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123)
 
-%3 = Let l1 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 | | demand = (#0, #1, #3)
 
-%4 =
-| Get %3 (l1)
+%3 =
+| Get %2 (l0)
 | Negate
 | Map 123
 | Project (#4, #1)
 
-%5 =
-| Get %0 (l0)
+%4 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123)
 | Map 123
 | Project (#2, #1)
 
-%6 =
-| Union %4 %5
-
-%7 =
-| Get %0 (l0)
-| ArrangeBy (#1)
-
-%8 =
-| Join %6 %7 (= #1 #3)
-| | implementation = Differential %6 %7.(#1)
-| | demand = (#0, #1)
+%5 =
+| Union %3 %4
 | Map null, null
-| Project (#0, #1, #4, #5)
 
-%9 =
-| Union %3 %8
+%6 =
+| Union %2 %5
 | Project (#0, #1, #3)
 
 EOF
@@ -203,8 +201,9 @@ EXPLAIN SELECT t1.f1 FROM t1, t2 WHERE t1.f1 = t2.f1 GROUP BY t1.f1 HAVING t1.f1
 %2 =
 | Join %0 %1
 | | implementation = Differential %1 %0.()
-| | demand = (#0)
-| Project (#0)
+| | demand = ()
+| Map 123
+| Project (#4)
 
 EOF
 
@@ -254,24 +253,14 @@ EXPLAIN SELECT (SELECT t1.f1 FROM t1 WHERE t1.f1 = t2.f1) FROM t2 WHERE t2.f1 = 
 
 %8 =
 | Union %6 %7
+| Map null
 
 %9 =
-| Get %0 (l0)
-| ArrangeBy ()
+| Union %5 %8
 
 %10 =
-| Join %8 %9
-| | implementation = Differential %8 %9.()
-| | demand = ()
-| Map null
-| Project (#0, #3)
-
-%11 =
-| Union %5 %10
-
-%12 =
-| Join %4 %11
-| | implementation = Differential %11 %4.()
+| Join %4 %9
+| | implementation = Differential %9 %4.()
 | | demand = (#3)
 | Project (#3)
 
@@ -483,50 +472,38 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a1.f2 = 234;
 ----
-%0 = Let l0 =
+%0 =
 | Get materialize.public.t4 (u7)
 | Filter (#0 = 123), (#1 = 234)
-
-%1 =
-| Get %0 (l0)
 | ArrangeBy ()
 
-%2 =
+%1 =
 | Get materialize.public.t4 (u7)
 | Filter (#0 = 123), (#1 = 234)
 
-%3 = Let l1 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 | | demand = (#0, #1)
 
-%4 =
-| Get %3 (l1)
+%3 =
+| Get %2 (l0)
 | Negate
 | Map 123, 234
 | Project (#4, #5)
 
-%5 =
-| Get %0 (l0)
+%4 =
+| Get materialize.public.t4 (u7)
+| Filter (#0 = 123), (#1 = 234)
 | Map 123, 234
 | Project (#2, #3)
 
-%6 =
-| Union %4 %5
-
-%7 =
-| Get %0 (l0)
-| ArrangeBy ()
-
-%8 =
-| Join %6 %7
-| | implementation = Differential %6 %7.()
-| | demand = (#0, #1)
+%5 =
+| Union %3 %4
 | Map null, null
-| Project (#0, #1, #4, #5)
 
-%9 =
-| Union %3 %8
+%6 =
+| Union %2 %5
 | Project (#0, #1)
 
 EOF
@@ -538,50 +515,38 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t4 AS a1 LEFT JOIN t4 AS a2 USING (f1, f2) WHERE a1.f1 = 123 AND a2.f2 = 234;
 ----
-%0 = Let l0 =
+%0 =
 | Get materialize.public.t4 (u7)
 | Filter (#0 = 123), (#1 = 234)
-
-%1 =
-| Get %0 (l0)
 | ArrangeBy ()
 
-%2 =
+%1 =
 | Get materialize.public.t4 (u7)
 | Filter (#0 = 123), (#1 = 234)
 
-%3 = Let l1 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 | | demand = (#0, #1)
 
-%4 =
-| Get %3 (l1)
+%3 =
+| Get %2 (l0)
 | Negate
 | Map 123, 234
 | Project (#4, #5)
 
-%5 =
-| Get %0 (l0)
+%4 =
+| Get materialize.public.t4 (u7)
+| Filter (#0 = 123), (#1 = 234)
 | Map 123, 234
 | Project (#2, #3)
 
-%6 =
-| Union %4 %5
-
-%7 =
-| Get %0 (l0)
-| ArrangeBy ()
-
-%8 =
-| Join %6 %7
-| | implementation = Differential %6 %7.()
-| | demand = (#0, #1)
+%5 =
+| Union %3 %4
 | Map null, null
-| Project (#0, #1, #4, #5)
 
-%9 =
-| Union %3 %8
+%6 =
+| Union %2 %5
 | Project (#0, #1)
 
 EOF
@@ -593,50 +558,38 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM t1 LEFT JOIN t2 USING (f1) WHERE t1.f1 = 123 AND t2.f1 = 234;
 ----
-%0 = Let l0 =
+%0 =
 | Get materialize.public.t1 (u1)
 | Filter (#0 = 123), (#0 = 234)
-
-%1 =
-| Get %0 (l0)
 | ArrangeBy ()
 
-%2 =
+%1 =
 | Get materialize.public.t2 (u3)
 | Filter (#0 = 123), (#0 = 234)
 
-%3 = Let l1 =
-| Join %1 %2
-| | implementation = Differential %2 %1.()
+%2 = Let l0 =
+| Join %0 %1
+| | implementation = Differential %1 %0.()
 | | demand = (#0, #1, #3)
 
-%4 =
-| Get %3 (l1)
+%3 =
+| Get %2 (l0)
 | Negate
 | Map 123
 | Project (#4, #1)
 
-%5 =
-| Get %0 (l0)
+%4 =
+| Get materialize.public.t1 (u1)
+| Filter (#0 = 123), (#0 = 234)
 | Map 123
 | Project (#2, #1)
 
-%6 =
-| Union %4 %5
-
-%7 =
-| Get %0 (l0)
-| ArrangeBy (#1)
-
-%8 =
-| Join %6 %7 (= #1 #3)
-| | implementation = Differential %6 %7.(#1)
-| | demand = (#0, #1)
+%5 =
+| Union %3 %4
 | Map null, null
-| Project (#0, #1, #4, #5)
 
-%9 =
-| Union %3 %8
+%6 =
+| Union %2 %5
 | Project (#0, #1, #3)
 
 EOF
