@@ -230,7 +230,7 @@ impl PostgresSourceReader {
                             let rel_id = update.rel_id();
                             let old_tuple = try_fatal!(update
                                 .old_tuple()
-                                .ok_or_else(|| anyhow!("full row missisng from update")));
+                                .ok_or_else(|| anyhow!("full row missing from update")));
                             let old_row = try_fatal!(self.row_from_tuple(rel_id, old_tuple));
                             deletes.push(old_row);
 
@@ -242,7 +242,7 @@ impl PostgresSourceReader {
                             let rel_id = delete.rel_id();
                             let old_tuple = try_fatal!(delete
                                 .old_tuple()
-                                .ok_or_else(|| anyhow!("full row missisng from delete")));
+                                .ok_or_else(|| anyhow!("full row missing from delete")));
                             let row = try_fatal!(self.row_from_tuple(rel_id, old_tuple));
                             deletes.push(row);
                         }
