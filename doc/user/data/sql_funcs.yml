@@ -376,7 +376,7 @@
     url: extract
 
   - signature: mz_logical_timestamp() -> numeric
-    description: 'The logical time at which a query executes.<br/><br/>**NOTE**: Users
+    description: 'The logical time at which a query executes. Used for temporal filters and internal debugging.<br/><br/>**NOTE**: Users
       cannot define views with queries containing `mz_logical_timestamp()`.'
     url: now_and_mz_logical_timestamp
 

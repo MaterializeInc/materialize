@@ -6,11 +6,24 @@ menu:
     parent: 'sql-functions'
 ---
 
-In Materialize, `now()` doesn't represent the system time; it represents the time with timezone when the query was executed. By contrast, `mz_logical_timestamp()` represents the logical time at which the query executes.
+In Materialize, `now()` doesn't represent the system time, as it does in most systems; it represents the time with timezone when the query was executed. `mz_logical_timestamp()` comes closer to what `now()` typically indicates, since it represents the logical time at which the query executes, based on the system time defined by the system on which `materialized` is installed. Neither `now()` nor `mz_logical_timestamp()` can be used when creating views.
 
-In most Materialize queries, you should use `mz_logical_timestamp()` where you might use `now()` in other systems, for example, when defining [temporal filters](https://materialize.com/temporal-filters/) or when creating materialized views from multiple sources with potentially conflicting system times.
+The typical uses for `mz_logical_timestamp()` are:
+
+* Internal debugging
+* Defining [temporal filters](https://materialize.com/temporal-filters/) (`now` can also be used for this purpose)
+
+## Internal debugging
+
+`mz_logical_timestamp()` can be useful if you need to understand the time up to which data has been ingested by `materialized`. It corresponds to the timestamp column of [TAIL](/sql/tail). Generally a `CREATE SOURCE` command will cause Materialize to ingest data and produce timestamps that correspond to milliseconds since the Unix epoch.
+
+## Temporal filters
+
+You can use `mz_logical_timestamp()` to define temporal filters for materialized view, or computations for fixed windows of time. For more information, see [Temporal Filters: Enabling Windowed Queries in Materialize](https://materialize.com/temporal-filters/).
 
 ## Example
+
+### Temporal filter using mz_logical_timestamp()
 
 For this example, you'll need to create a sample data source and create a materialized view from it for later reference.
 
@@ -32,17 +45,17 @@ WHERE mz_logical_timestamp() >= insert_ts
 Next, you'll populate the table with timestamp data.
 
 ```sql
-insert into events VALUES (
+INSERT INTO events VALUES (
     'hello',
     mz_logical_timestamp(),
     mz_logical_timestamp() + 100000
 );
-insert into events VALUES (
+INSERT INTO events VALUES (
     'welcome',
     mz_logical_timestamp(),
     mz_logical_timestamp() + 150000
 );
-insert into events VALUES (
+INSERT INTO events VALUES (
     'goodbye',
     mz_logical_timestamp(),
     mz_logical_timestamp() + 200000
@@ -54,7 +67,7 @@ Then, before 100,000 ms (or 1.67 minutes) elapse, run the following query to see
 ```sql
 SELECT *, mz_logical_timestamp() FROM valid;
 ```
-```
+```nofmt
 content |   insert_ts   |   delete_ts   | mz_logical_timestamp
 ---------+---------------+---------------+----------------------
  hello   | 1620853325858 | 1620853425858 |        1620853337180
@@ -64,3 +77,16 @@ content |   insert_ts   |   delete_ts   | mz_logical_timestamp
 ```
 
 If you run the query again after 1.67 minutes, you'll see only two results, because the first result has aged out of the view.
+
+### Query using now()
+
+```sql
+SELECT * FROM valid
+  WHERE insert_ts <= (extract(epoch from now()) * 1000);
+```
+```nofmt
+ content |   insert_ts   |   delete_ts
+---------+---------------+---------------
+ goodbye | 1621279636402 | 1621279836402
+ welcome | 1621279636400 | 1621279786400
+```
