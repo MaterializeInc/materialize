@@ -64,6 +64,9 @@ Wrap your release notes at the 80 character mark.
 - Support [equality operators](/sql/functions/#boolean) on
   [array data](/sql/types/array).
 
+- Add the [`COPY FROM`](/sql/copy-from) statement, which allows popullating a
+  table via the special PostgreSQL [`COPY` protocol][pg-copy].
+
 {{% version-header v0.7.2 %}}
 
 - Introduce the concept of [volatility](/overview/volatility) to describe
