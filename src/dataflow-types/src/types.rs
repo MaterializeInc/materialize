@@ -741,11 +741,11 @@ impl ExternalSourceConnector {
 
     pub fn is_delimited(&self) -> bool {
         match self {
+            ExternalSourceConnector::AvroOcf(_) => false,
+            ExternalSourceConnector::File(_) => false,
+            ExternalSourceConnector::S3(_) => false,
             ExternalSourceConnector::Kafka(_) => true,
             ExternalSourceConnector::Kinesis(_) => true,
-            ExternalSourceConnector::File(_) => false,
-            ExternalSourceConnector::AvroOcf(_) => false,
-            ExternalSourceConnector::S3(_) => false,
             ExternalSourceConnector::Postgres(_) => true,
             ExternalSourceConnector::PubNub(_) => true,
         }

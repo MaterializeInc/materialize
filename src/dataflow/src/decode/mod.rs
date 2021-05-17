@@ -277,7 +277,7 @@ impl DataDecoder {
                 format.decode(data, upstream_coord, push_metadata)
             }
             DataDecoderInner::Avro(avro) => {
-                avro.get_value(bytes, upstream_coord, upstream_time_millis, push_metadata)
+                avro.next(bytes, upstream_coord, upstream_time_millis, push_metadata)
             }
             DataDecoderInner::Csv(csv) => csv.next(bytes, upstream_coord, push_metadata),
             DataDecoderInner::PreDelimited(format) => {

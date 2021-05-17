@@ -101,7 +101,7 @@ impl CsvDecoderState {
                         if ends_valid != self.n_cols {
                             self.events_error += 1;
                             Err(DataflowError::DecodeError(DecodeError::Text(format!(
-                                "CSV error at lineno {}: expected {} columns, got {}.",
+                                "CSV error at record number {}: expected {} columns, got {}.",
                                 self.total_events(),
                                 self.n_cols,
                                 ends_valid
@@ -137,11 +137,12 @@ impl CsvDecoderState {
                                     self.ends_cursor = 1;
                                     Ok(Some(self.row_packer.finish_and_reuse()))
                                 }
-                                Err(_) => {
+                                Err(e) => {
                                     self.events_error += 1;
                                     Err(DataflowError::DecodeError(DecodeError::Text(format!(
-                                        "CSV error at lineno {}: invalid UTF-8",
-                                        self.total_events()
+                                        "CSV error at record number {}: invalid UTF-8 ({})",
+                                        self.total_events(),
+                                        e
                                     ))))
                                 }
                             }
