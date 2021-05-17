@@ -552,6 +552,7 @@ dependencies = [
  "ore",
  "pgrepr",
  "postgres-types",
+ "postgres-util",
  "prometheus",
  "rand 0.8.3",
  "rdkafka",
