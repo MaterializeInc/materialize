@@ -14,7 +14,6 @@ use std::ops::Deref;
 use std::panic;
 use std::str;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -32,9 +31,9 @@ use rdkafka::ClientConfig;
 use tokio::sync::mpsc;
 
 use dataflow_types::{
-    AvroOcfEncoding, Consistency, DataEncoding, DebeziumMode, ExternalSourceConnector,
-    FileSourceConnector, KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector,
-    SourceConnector, SourceEnvelope, TimestampSourceUpdate,
+    Consistency, DataEncoding, DebeziumMode, ExternalSourceConnector, FileSourceConnector,
+    KafkaSourceConnector, KinesisSourceConnector, MzOffset, S3SourceConnector, SourceConnector,
+    SourceEnvelope, TimestampSourceUpdate,
 };
 use expr::{GlobalId, PartitionId};
 use ore::collections::CollectionExt;
@@ -115,14 +114,11 @@ enum RtTimestampConnector {
 
 enum ByoTimestampConnector {
     Kafka(ByoKafkaConnector),
-    Ocf(ByoFileConnector<Value, anyhow::Error>),
-    // Kinesis and S3 are not supported
 }
 
 // List of possible encoding types
 enum ValueEncoding {
     Bytes(Vec<u8>),
-    Avro(Value),
 }
 
 /// Timestamp consumer: wrapper around source consumers that stores necessary information
@@ -148,9 +144,6 @@ enum ConsistencyFormatting {
     /// The formatting of this consistency source follows the
     /// Debezium Avro format
     DebeziumAvro,
-    /// The formatting of this consistency source follows the
-    /// Debezium AvroOCF format
-    DebeziumOcf,
 }
 
 /// Data consumer for Kafka source with RT consistency
@@ -168,8 +161,6 @@ struct TimestampingState {
     /// Channel through which messages can be sent to the coordinator
     coordinator_channel: mpsc::UnboundedSender<coord::Message>,
 }
-
-use std::fmt::Display;
 
 /// Data consumer for Kafka source with BYO consistency
 struct ByoKafkaConnector {
@@ -191,11 +182,6 @@ struct RtFileConnector {}
 /// Data consumer stub for S3 source with RT consistency
 struct RtS3Connector {}
 
-/// Data consumer stub for File source with BYO consistency
-struct ByoFileConnector<Out, Err> {
-    stream: Receiver<Result<Out, Err>>,
-}
-
 fn byo_query_source(
     consumer: &mut ByoTimestampConsumer,
 ) -> Result<Vec<ValueEncoding>, anyhow::Error> {
@@ -206,30 +192,8 @@ fn byo_query_source(
                 messages.push(ValueEncoding::Bytes(payload));
             }
         }
-        ByoTimestampConnector::Ocf(file_consumer) => {
-            while let Some(payload) = file_get_next_message(file_consumer)? {
-                messages.push(ValueEncoding::Avro(payload));
-            }
-        }
     }
     Ok(messages)
-}
-
-/// Returns the next message of a stream, or None if no such message exists
-fn file_get_next_message<Out, Err>(
-    file_consumer: &mut ByoFileConnector<Out, Err>,
-) -> Result<Option<Out>, anyhow::Error>
-where
-    Err: Display,
-{
-    match file_consumer.stream.try_recv() {
-        Ok(Ok(record)) => Ok(Some(record)),
-        Ok(Err(e)) => {
-            bail!("Failed to read file for timestamping: {}", e);
-        }
-        Err(TryRecvError::Empty) => Ok(None),
-        Err(TryRecvError::Disconnected) => Ok(None),
-    }
 }
 
 /// Polls a message from a Kafka Source
@@ -312,11 +276,7 @@ fn update_source_timestamps(
     match byo_consumer.envelope {
         ConsistencyFormatting::DebeziumAvro => {
             for msg in messages {
-                let msg = if let ValueEncoding::Bytes(msg) = msg {
-                    msg
-                } else {
-                    bail!("Kafka Debezium consistency should only encode byte messages");
-                };
+                let ValueEncoding::Bytes(msg) = msg;
                 // The first 5 bytes are reserved for the schema id/schema registry information
                 let mut bytes = &msg[5..];
                 let res = mz_avro::from_avro_datum(&DEBEZIUM_TRX_SCHEMA_VALUE, &mut bytes);
@@ -330,16 +290,6 @@ fn update_source_timestamps(
                         generate_ts_updates_from_debezium(&id, tx, byo_consumer, record)?;
                     }
                 }
-            }
-        }
-        ConsistencyFormatting::DebeziumOcf => {
-            for msg in messages {
-                let value = if let ValueEncoding::Avro(value) = msg {
-                    value
-                } else {
-                    bail!("Debezium OCF consistency should only encode Value messages");
-                };
-                generate_ts_updates_from_debezium(&id, tx, byo_consumer, value)?;
             }
         }
     }
@@ -377,7 +327,6 @@ fn generate_ts_updates_from_debezium(
                             id: *id,
                             update: TimestampSourceUpdate::BringYourOwn(
                                 match byo_consumer.connector {
-                                    ByoTimestampConnector::Ocf(_) => PartitionId::File,
                                     ByoTimestampConnector::Kafka(_) => PartitionId::Kafka(0),
                                 },
                                 byo_consumer.last_ts,
@@ -502,13 +451,9 @@ fn parse_debezium(
 /// that follows the TRX_METADATA_SCHEMA Avro spec outlined above
 /// 2) any other file source with a Debezium envelope will expect an Avro consistency source
 /// that follows the TRX_METADATA_SCHEMA Avro spec outlined above
-fn identify_consistency_format(enc: DataEncoding, env: SourceEnvelope) -> ConsistencyFormatting {
+fn identify_consistency_format(_enc: DataEncoding, env: SourceEnvelope) -> ConsistencyFormatting {
     if let SourceEnvelope::Debezium(_, DebeziumMode::Plain) = env {
-        if let DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema: _ }) = enc {
-            ConsistencyFormatting::DebeziumOcf
-        } else {
-            ConsistencyFormatting::DebeziumAvro
-        }
+        ConsistencyFormatting::DebeziumAvro
     } else {
         panic!("BYO timestamping for non-Debezium sources not supported!");
     }
@@ -798,15 +743,6 @@ impl Timestamper {
         Some(RtS3Connector {})
     }
 
-    fn create_byo_ocf_connector(
-        &self,
-        _id: GlobalId,
-        _fc: &FileSourceConnector,
-        _timestamp_topic: String,
-    ) -> Option<ByoFileConnector<mz_avro::types::Value, anyhow::Error>> {
-        todo!("XXX get rid of this in the planner");
-    }
-
     /// Creates a BYO connector
     fn create_byo_connector(
         &self,
@@ -830,18 +766,7 @@ impl Timestamper {
                     None => None,
                 }
             }
-            ExternalSourceConnector::AvroOcf(fc) => {
-                match self.create_byo_ocf_connector(id, &fc, timestamp_topic) {
-                    Some(consumer) => Some(ByoTimestampConsumer {
-                        source_name: fc.path.to_string_lossy().into_owned(),
-                        connector: ByoTimestampConnector::Ocf(consumer),
-                        envelope: identify_consistency_format(enc, env),
-                        last_ts: 0,
-                        last_offset: MzOffset { offset: 0 },
-                    }),
-                    None => None,
-                }
-            }
+            ExternalSourceConnector::AvroOcf(_) => None, // BYO is not supported for OCF sources
             ExternalSourceConnector::File(_) => None, // BYO is not supported for plain file sources
             ExternalSourceConnector::Kinesis(_) => None, // BYO is not supported for Kinesis sources
             ExternalSourceConnector::S3(_) => None,   // BYO is not supported for s3 sources
