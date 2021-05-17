@@ -86,6 +86,9 @@ Is one worker (or a few workers) behind the others?
   - Is there a inner join on vacuous columns? (i.e. the columns
     have very few unique values)?
   - Is the data materialized as an index on vacuous columns?
+  - Is the data skewed because one key represents "Total" or some larger
+    grouping of data already present in the source?
+    - Calculate "Total" separately and union it to the "by_category" view.
 - Is there a `TopK` or a `Reduce` operator on blank keys or vacuous columns?
 - Is there a `TopK` or `Reduce` that is really busy on those workers?
 
