@@ -43,7 +43,7 @@ impl AvroDecoderState {
         })
     }
 
-    pub fn next(
+    pub fn decode(
         &mut self,
         bytes: &mut &[u8],
         coord: Option<i64>,

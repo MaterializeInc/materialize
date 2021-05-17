@@ -277,9 +277,9 @@ impl DataDecoder {
                 format.decode(data, upstream_coord, push_metadata)
             }
             DataDecoderInner::Avro(avro) => {
-                avro.next(bytes, upstream_coord, upstream_time_millis, push_metadata)
+                avro.decode(bytes, upstream_coord, upstream_time_millis, push_metadata)
             }
-            DataDecoderInner::Csv(csv) => csv.next(bytes, upstream_coord, push_metadata),
+            DataDecoderInner::Csv(csv) => csv.decode(bytes, upstream_coord, push_metadata),
             DataDecoderInner::PreDelimited(format) => {
                 let result = format.decode(*bytes, upstream_coord, push_metadata);
                 *bytes = &[];
@@ -287,6 +287,11 @@ impl DataDecoder {
             }
         }
     }
+
+    /// Get the next record if it exists, assuming an EOF has occurred.
+    ///
+    /// This is distinct from `next` because, for example, a CSV record should be returned even if it
+    /// does not end in a newline.
     pub fn eof(
         &mut self,
         bytes: &mut &[u8],
@@ -294,7 +299,7 @@ impl DataDecoder {
         push_metadata: bool,
     ) -> Result<Option<Row>, DataflowError> {
         match &mut self.inner {
-            DataDecoderInner::Csv(csv) => csv.next(bytes, upstream_coord, push_metadata),
+            DataDecoderInner::Csv(csv) => csv.decode(bytes, upstream_coord, push_metadata),
             DataDecoderInner::DelimitedBytes { format, .. } => {
                 let data = *bytes;
                 *bytes = &[][..];
@@ -351,36 +356,24 @@ fn get_decoder(
             schema_registry_config,
             confluent_wire_format,
         }) => {
-            match envelope {
+            let reject_non_inserts = match envelope {
                 SourceEnvelope::Debezium(_, mode) => {
-                    let state = avro::AvroDecoderState::new(
-                        &schema,
-                        schema_registry_config,
-                        envelope.get_avro_envelope_type(),
-                        fast_forwarded && !matches!(mode, DebeziumMode::Upsert), // `start_offset` should work fine for `DEBEZIUM UPSERT`.
-                        debug_name.to_string(),
-                        confluent_wire_format,
-                    )
-                    .expect("Failed to create avro decoder");
-                    DataDecoder {
-                        inner: DataDecoderInner::Avro(state),
-                    }
+                    // `start_offset` should work fine for `DEBEZIUM UPSERT`
+                    fast_forwarded && !matches!(mode, DebeziumMode::Upsert)
                 }
-
-                _ => {
-                    let state = avro::AvroDecoderState::new(
-                        &schema,
-                        schema_registry_config,
-                        envelope.get_avro_envelope_type(),
-                        false,
-                        debug_name.to_string(),
-                        confluent_wire_format,
-                    )
-                    .expect("Failed to create avro decoder");
-                    DataDecoder {
-                        inner: DataDecoderInner::Avro(state),
-                    }
-                }
+                _ => false,
+            };
+            let state = avro::AvroDecoderState::new(
+                &schema,
+                schema_registry_config,
+                envelope.get_avro_envelope_type(),
+                reject_non_inserts,
+                debug_name.to_string(),
+                confluent_wire_format,
+            )
+            .expect("Failed to create avro decoder");
+            DataDecoder {
+                inner: DataDecoderInner::Avro(state),
             }
         }
         DataEncoding::Text
@@ -422,7 +415,7 @@ fn get_decoder(
                     debug_name.to_string(),
                     false,
                 )
-                .expect("Failed to create avro decoder");
+                .expect("Schema was verified to be correct during purification");
                 DataDecoder {
                     inner: DataDecoderInner::Avro(state),
                 }
@@ -437,7 +430,7 @@ fn get_decoder(
                     debug_name.to_string(),
                     false,
                 )
-                .expect("Failed to create avro decoder");
+                .expect("Schema was verified to be correct during purification");
                 DataDecoder {
                     inner: DataDecoderInner::Avro(state),
                 }
@@ -571,20 +564,21 @@ where
                         } else {
                             let value = match &value {
                                 MessagePayload::Data(value) => {
-                                    let value_cursor = &mut value.as_slice();
+                                    let value_bytes_remaining = &mut value.as_slice();
                                     let mut value = value_decoder
                                         .next(
-                                            value_cursor,
+                                            value_bytes_remaining,
                                             *position,
                                             *upstream_time_millis,
                                             push_metadata,
                                         )
                                         .transpose();
-                                    if let (Some(Ok(_)), false) = (&value, value_cursor.is_empty())
+                                    if let (Some(Ok(_)), false) =
+                                        (&value, value_bytes_remaining.is_empty())
                                     {
                                         value = Some(Err(DecodeError::Text(format!(
                                             "Unexpected bytes remaining for decoded value: {:?}",
-                                            value_cursor
+                                            value_bytes_remaining
                                         ))
                                         .into()));
                                     }
@@ -779,23 +773,23 @@ where
                             position: None,
                         });
                     } else {
-                        let value_cursor = &mut value.as_slice();
+                        let value_bytes_remaining = &mut value.as_slice();
                         // The intent is that the below loop runs as long as there are more bytes to decode.
                         //
                         // We'd like to be able to write `while !value_cursor.empty()`
                         // here, but that runs into borrow checker issues, so we use `loop`
                         // and break manually.
                         loop {
-                            let old_value_cursor = *value_cursor;
+                            let old_value_cursor = *value_bytes_remaining;
                             let value = match value_decoder.next(
-                                value_cursor,
+                                value_bytes_remaining,
                                 Some(n_seen + 1), // Match historical practice - files start at 1, not 0.
                                 *upstream_time_millis,
                                 push_metadata,
                             ) {
                                 Err(e) => Err(e),
                                 Ok(None) => {
-                                    let leftover = value_cursor.to_vec();
+                                    let leftover = value_bytes_remaining.to_vec();
                                     value_buf = leftover;
                                     break;
                                 }
@@ -805,7 +799,7 @@ where
 
                             // If the decoders decoded a message, they need to have made progress consuming the bytes.
                             // Otherwise, we risk going into an infinite loop.
-                            assert!(old_value_cursor != *value_cursor || value.is_err());
+                            assert!(old_value_cursor != *value_bytes_remaining || value.is_err());
 
                             let is_err = value.is_err();
                             if matches!(&key, Some(Err(_))) || matches!(&value, Err(_)) {
@@ -813,7 +807,7 @@ where
                             } else if matches!(&value, Ok(_)) {
                                 n_successes += 1;
                             }
-                            if value_cursor.is_empty() {
+                            if value_bytes_remaining.is_empty() {
                                 session.give(DecodeResult {
                                     key,
                                     value: Some(value),

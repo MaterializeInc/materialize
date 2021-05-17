@@ -110,7 +110,9 @@ impl SourceReader for FileSourceReader {
                 log::debug!("creating Avro FileSourceReader worker_id={}", worker_id);
                 let value_encoding = match &encoding {
                     SourceDataEncoding::Single(enc) => enc,
-                    SourceDataEncoding::KeyValue { key: _, value } => value,
+                    SourceDataEncoding::KeyValue { .. } => {
+                        unreachable!("A KeyValue encoding for an OCF source should have been rejected in the planner.")
+                    }
                 };
                 let reader_schema = match value_encoding {
                     DataEncoding::AvroOcf(AvroOcfEncoding { reader_schema }) => &*reader_schema,

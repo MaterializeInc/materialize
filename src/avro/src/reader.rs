@@ -109,13 +109,17 @@ pub struct Reader<R> {
     buf_idx: usize,
 }
 
+/// An iterator over the `Block`s of a `Reader`
 pub struct BlockIter<R> {
     inner: Reader<R>,
 }
 
+/// A block of Avro objects from an OCF file
 #[derive(Debug, Clone)]
 pub struct Block {
+    /// The raw bytes for the block
     pub bytes: Vec<u8>,
+    /// The number of Avro objects in the block
     pub len: usize,
 }
 

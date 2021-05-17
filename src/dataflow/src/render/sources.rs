@@ -262,7 +262,6 @@ where
                                         &envelope,
                                         &mut linear_operators,
                                         fast_forwarded,
-                                        // scope.index(),
                                     )
                                 } else {
                                     render_decode(
@@ -273,7 +272,6 @@ where
                                         &envelope,
                                         &mut linear_operators,
                                         fast_forwarded,
-                                        // scope.index(),
                                     )
                                 };
                                 if let Some(tok) = extra_token {

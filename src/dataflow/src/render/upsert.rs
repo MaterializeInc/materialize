@@ -168,7 +168,7 @@ where
                             let new_entry = SourceData {
                                 value: new_value,
                                 position: new_position,
-                                upstream_time_millis: None, // XXX this doesn't matter
+                                upstream_time_millis: None, // upsert sources don't have a column for this, so setting it to `None` is fine.
                             };
 
                             if let Some(offset) = entry.position {

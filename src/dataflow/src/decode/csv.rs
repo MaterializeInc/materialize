@@ -67,7 +67,7 @@ impl CsvDecoderState {
         }
     }
 
-    pub fn next(
+    pub fn decode(
         &mut self,
         chunk: &mut &[u8],
         coord: Option<i64>,
@@ -83,6 +83,7 @@ impl CsvDecoderState {
             *chunk = &(*chunk)[n_input..];
             self.ends_cursor += n_ends;
             match result {
+                // Error cases
                 csv_core::ReadRecordResult::InputEmpty => break Ok(None),
                 csv_core::ReadRecordResult::OutputFull => {
                     let length = self.output.len();
@@ -92,6 +93,7 @@ impl CsvDecoderState {
                     let length = self.ends.len();
                     self.ends.extend(std::iter::repeat(0).take(length));
                 }
+                // Success cases
                 csv_core::ReadRecordResult::Record | csv_core::ReadRecordResult::End => {
                     let result = {
                         let ends_valid = self.ends_cursor - 1;
