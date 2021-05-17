@@ -122,7 +122,7 @@ badint,
   FORMAT CSV WITH HEADER
 
 ! SELECT * FROM malformed_csv
-Decode error: Text: CSV error at lineno 3: expected 2 columns, got 1.
+Decode error: Text: CSV error at record number 3: expected 2 columns, got 1.
 
 # Static non-utf-8 CSV
 $ file-append path=bad-text.csv
@@ -134,4 +134,4 @@ Dollars,Category
   FORMAT CSV WITH HEADER
 
 ! SELECT * FROM bad_text_csv
-Decode error: Text: CSV error at lineno 2: invalid UTF-8
+Decode error: Text: CSV error at record number 2: invalid UTF-8
