@@ -11,6 +11,7 @@
 
 use dataflow_types::DataflowError;
 use mz_avro::types::Value;
+use repr::MessagePayload;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -404,7 +405,7 @@ pub struct SourceMessage {
     /// Optional key
     pub key: Option<Vec<u8>>,
     /// Optional payload
-    pub payload: Option<Vec<u8>>,
+    pub payload: Option<MessagePayload>,
 }
 
 impl fmt::Debug for SourceMessage {
@@ -1204,7 +1205,7 @@ pub(crate) fn create_source<G, S: 'static>(
     source_connector: &ExternalSourceConnector,
 ) -> (
     (
-        timely::dataflow::Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
+        timely::dataflow::Stream<G, SourceOutput<Vec<u8>, MessagePayload>>,
         timely::dataflow::Stream<G, SourceError>,
     ),
     Option<SourceToken>,
@@ -1471,8 +1472,8 @@ fn handle_message(
     cap: &Capability<Timestamp>,
     output: &mut OutputHandle<
         Timestamp,
-        Result<SourceOutput<Vec<u8>, Vec<u8>>, String>,
-        Tee<Timestamp, Result<SourceOutput<Vec<u8>, Vec<u8>>, String>>,
+        Result<SourceOutput<Vec<u8>, MessagePayload>, String>,
+        Tee<Timestamp, Result<SourceOutput<Vec<u8>, MessagePayload>, String>>,
     >,
     metric_updates: &mut HashMap<PartitionId, (MzOffset, Timestamp)>,
     timer: &std::time::Instant,
@@ -1516,7 +1517,10 @@ where
             // are only processed after we have updated the partition_metadata for a
             // partition and created a partition queue for it.
             *bytes_read += key.len();
-            *bytes_read += out.len();
+            *bytes_read += match &out {
+                MessagePayload::Data(bytes) => bytes.len(),
+                MessagePayload::EOF => 0,
+            };
             let ts_cap = cap.delayed(&ts);
 
             output.session(&ts_cap).give(Ok(SourceOutput::new(

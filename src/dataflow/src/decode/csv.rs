@@ -95,6 +95,9 @@ impl CsvDecoderState {
                 csv_core::ReadRecordResult::Record | csv_core::ReadRecordResult::End => {
                     let result = {
                         let ends_valid = self.ends_cursor - 1;
+                        if ends_valid == 0 {
+                            break Ok(None);
+                        }
                         if ends_valid != self.n_cols {
                             self.events_error += 1;
                             Err(DataflowError::DecodeError(DecodeError::Text(format!(

@@ -17,6 +17,7 @@ use futures::executor::block_on;
 use lazy_static::lazy_static;
 use log::error;
 use prometheus::{register_int_gauge_vec, IntGauge, IntGaugeVec};
+use repr::MessagePayload;
 use rusoto_core::RusotoError;
 use rusoto_kinesis::{GetRecordsError, GetRecordsInput, GetRecordsOutput, Kinesis, KinesisClient};
 use timely::scheduling::SyncActivator;
@@ -204,7 +205,7 @@ impl SourceReader for KinesisSourceReader {
                             },
                             upstream_time_millis: None,
                             key: None,
-                            payload: Some(data),
+                            payload: Some(MessagePayload::Data(data)),
                         };
                         self.buffered_messages.push_back(source_message);
                     }

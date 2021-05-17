@@ -11,6 +11,7 @@ use anyhow::bail;
 use byteorder::{ByteOrder, NetworkEndian, WriteBytesExt};
 use serde::{Deserialize, Serialize};
 
+use crate::MessagePayload;
 use crate::{Datum, Row, Timestamp};
 
 /// A single record from a source and partition that can be written to disk by
@@ -26,7 +27,7 @@ pub struct CachedRecord {
     /// Record key.
     pub key: Vec<u8>,
     /// Record value.
-    pub value: Vec<u8>,
+    pub value: MessagePayload,
 }
 
 impl CachedRecord {
@@ -38,7 +39,10 @@ impl CachedRecord {
             Datum::Int64(self.offset),
             Datum::Int64(self.timestamp as i64),
             Datum::Bytes(&self.key),
-            Datum::Bytes(&self.value),
+            match &self.value {
+                MessagePayload::Data(value) => Datum::Bytes(&*value),
+                MessagePayload::EOF => Datum::Null,
+            },
         ]);
 
         encode_row(&row, buf)
@@ -75,7 +79,11 @@ impl CachedRecord {
         let source_offset = row[0].unwrap_int64();
         let timestamp = row[1].unwrap_int64() as Timestamp;
         let key = row[2].unwrap_bytes();
-        let value = row[3].unwrap_bytes();
+        let value = match row[3] {
+            Datum::Bytes(value) => MessagePayload::Data(value.into()),
+            Datum::Null => MessagePayload::EOF,
+            _ => panic!("Expected nullable bytes for source caching message payload"),
+        };
 
         Some((
             CachedRecord {
@@ -83,7 +91,7 @@ impl CachedRecord {
                 offset: source_offset,
                 timestamp,
                 key: key.into(),
-                value: value.into(),
+                value,
             },
             offset + len + 4,
         ))

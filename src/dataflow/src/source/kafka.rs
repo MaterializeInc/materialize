@@ -19,6 +19,7 @@ use rdkafka::error::KafkaError;
 use rdkafka::message::BorrowedMessage;
 use rdkafka::topic_partition_list::Offset;
 use rdkafka::{ClientConfig, ClientContext, Message, Statistics, TopicPartitionList};
+use repr::MessagePayload;
 use timely::scheduling::activate::SyncActivator;
 
 use dataflow_types::{
@@ -674,7 +675,7 @@ impl<'a> From<&BorrowedMessage<'a>> for SourceMessage {
             offset: msg.offset(),
         };
         Self {
-            payload: msg.payload().map(|p| p.to_vec()),
+            payload: msg.payload().map(|p| MessagePayload::Data(p.to_vec())),
             partition: PartitionId::Kafka(msg.partition()),
             offset: kafka_offset.into(),
             upstream_time_millis: msg.timestamp().to_millis(),

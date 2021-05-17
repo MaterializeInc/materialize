@@ -23,6 +23,7 @@ use futures::executor::block_on;
 use mz_avro::{AvroDeserializer, GeneralDeserializer};
 use prometheus::core::GenericCounter;
 use prometheus::UIntGauge;
+use repr::MessagePayload;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
@@ -111,7 +112,7 @@ pub fn rewrite_for_upsert(
 }
 
 pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
+    stream: &Stream<G, SourceOutput<Vec<u8>, MessagePayload>>,
     schema: &str,
     registry: Option<ccsr::ClientConfig>,
     confluent_wire_format: bool,
@@ -122,7 +123,7 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
     let activator: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
     let mut vector = Vec::new();
     stream.sink(
-        SourceOutput::<Vec<u8>, Vec<u8>>::position_value_contract(),
+        SourceOutput::<Vec<u8>, MessagePayload>::position_value_contract(),
         "CDCv2-Decode",
         {
             let channel = channel.clone();
@@ -131,7 +132,11 @@ pub fn decode_cdcv2<G: Scope<Timestamp = Timestamp>>(
                 input.for_each(|_time, data| {
                     data.swap(&mut vector);
                     for data in vector.drain(..) {
-                        let (mut data, schema) = match block_on(resolver.resolve(&data.value)) {
+                        let value = match &data.value {
+                            MessagePayload::Data(value) => value,
+                            MessagePayload::EOF => continue,
+                        };
+                        let (mut data, schema) = match block_on(resolver.resolve(&*value)) {
                             Ok(ok) => ok,
                             Err(e) => {
                                 error!("Failed to get schema info for CDCv2 record: {}", e);
@@ -457,7 +462,7 @@ fn get_decoder(
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
+    stream: &Stream<G, SourceOutput<Vec<u8>, MessagePayload>>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: &str,
@@ -509,7 +514,7 @@ where
     // fall back to arbitrarily hashing by value if the upstream didn't give us a position.
     let use_key_contract = matches!(envelope, SourceEnvelope::Debezium(..));
     let results = stream.unary_frontier(
-        Exchange::new(move |x: &SourceOutput<Vec<u8>, Vec<u8>>| {
+        Exchange::new(move |x: &SourceOutput<Vec<u8>, MessagePayload>| {
             if use_key_contract {
                 x.key.hashed()
             } else if let Some(position) = x.position {
@@ -551,32 +556,41 @@ where
                             None
                         };
 
-                        if value.is_empty() {
+                        if value == &MessagePayload::Data(vec![]) {
                             session.give(DecodeResult {
                                 key,
                                 value: None,
                                 position: *position,
                             });
                         } else {
-                            let value_cursor = &mut value.as_slice();
-                            let mut value = value_decoder
-                                .next(
-                                    value_cursor,
-                                    *position,
-                                    *upstream_time_millis,
-                                    push_metadata,
-                                )
-                                .transpose();
-                            if let (Some(Ok(_)), false) = (&value, value_cursor.is_empty()) {
-                                value = Some(Err(DecodeError::Text(format!(
-                                    "Unexpected bytes remaining for decoded value: {:?}",
-                                    value_cursor
+                            let value = match &value {
+                                MessagePayload::Data(value) => {
+                                    let value_cursor = &mut value.as_slice();
+                                    let mut value = value_decoder
+                                        .next(
+                                            value_cursor,
+                                            *position,
+                                            *upstream_time_millis,
+                                            push_metadata,
+                                        )
+                                        .transpose();
+                                    if let (Some(Ok(_)), false) = (&value, value_cursor.is_empty())
+                                    {
+                                        value = Some(Err(DecodeError::Text(format!(
+                                            "Unexpected bytes remaining for decoded value: {:?}",
+                                            value_cursor
+                                        ))
+                                        .into()));
+                                    }
+                                    value.or_else(|| {
+                                        value_decoder.eof(*position, push_metadata).transpose()
+                                    })
+                                }
+                                MessagePayload::EOF => Some(Err(DecodeError::Text(format!(
+                                    "Unexpected EOF in delimited stream"
                                 ))
-                                .into()));
-                            }
-                            let value = value.or_else(|| {
-                                value_decoder.eof(*position, push_metadata).transpose()
-                            });
+                                .into())),
+                            };
 
                             if matches!(&key, Some(Err(_))) || matches!(&value, Some(Err(_))) {
                                 n_errors += 1;
@@ -620,7 +634,7 @@ where
 /// If the decoder does find a message, we verify (by asserting) that it consumed some bytes, to avoid
 /// the possibility of infinite loops.
 pub fn render_decode<G>(
-    stream: &Stream<G, SourceOutput<Vec<u8>, Vec<u8>>>,
+    stream: &Stream<G, SourceOutput<Vec<u8>, MessagePayload>>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: &str,
@@ -703,6 +717,41 @@ where
                         key
                     } else {
                         None
+                    };
+
+                    let value = match value {
+                        MessagePayload::Data(data) => data,
+                        MessagePayload::EOF => {
+                            if !value_buf.is_empty() {
+                                session.give(DecodeResult {
+                                    key: key.clone(),
+                                    value: Some(Err(DecodeError::Text(format!(
+                                        "Saw unexpected EOF with bytes remaining in buffer: {:?}",
+                                        value_buf
+                                    ))
+                                    .into())),
+                                    position: Some(n_seen),
+                                });
+                                n_seen += 1;
+                            }
+                            match value_decoder.eof(Some(n_seen), push_metadata).transpose() {
+                                None => continue,
+                                Some(value) => {
+                                    n_seen += 1;
+                                    if matches!(&key, Some(Err(_))) || matches!(&value, Err(_)) {
+                                        n_errors += 1;
+                                    } else if matches!(&value, Ok(_)) {
+                                        n_successes += 1;
+                                    }
+                                    session.give(DecodeResult {
+                                        key,
+                                        value: Some(value),
+                                        position: Some(n_seen),
+                                    });
+                                }
+                            }
+                            continue;
+                        }
                     };
 
                     // Check whether we have a partial message from last time.

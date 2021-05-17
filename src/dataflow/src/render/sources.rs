@@ -218,8 +218,6 @@ where
                             ExternalSourceConnector::PubNub(_) => unreachable!(),
                         };
 
-                        let ok_source = ok_source.inspect(|x| println!("ok: {:?}", x));
-
                         // Include any source errors.
                         error_collections.push(
                             err_source

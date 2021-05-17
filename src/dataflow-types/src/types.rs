@@ -745,7 +745,7 @@ impl ExternalSourceConnector {
             ExternalSourceConnector::Kinesis(_) => true,
             ExternalSourceConnector::File(_) => false,
             ExternalSourceConnector::AvroOcf(_) => false,
-            ExternalSourceConnector::S3(_) => true,
+            ExternalSourceConnector::S3(_) => false,
             ExternalSourceConnector::Postgres(_) => true,
             ExternalSourceConnector::PubNub(_) => true,
         }

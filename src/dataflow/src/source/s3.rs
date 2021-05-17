@@ -21,6 +21,7 @@ use flate2::read::MultiGzDecoder;
 use globset::GlobMatcher;
 use metrics::BucketMetrics;
 use notifications::Event;
+use repr::MessagePayload;
 use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
 use rusoto_sqs::{
     ChangeMessageVisibilityBatchRequest, ChangeMessageVisibilityBatchRequestEntry,
@@ -46,7 +47,7 @@ use self::notifications::{EventType, TestEvent};
 mod metrics;
 mod notifications;
 
-type Out = Vec<u8>;
+type Out = MessagePayload;
 struct InternalMessage {
     record: Out,
 }
@@ -593,7 +594,12 @@ async fn download_object(
                 };
 
                 for line in buf.split(|b| *b == b'\n').map(|s| s.to_vec()) {
-                    if tx.send(Ok(InternalMessage { record: line })).is_err() {
+                    if tx
+                        .send(Ok(InternalMessage {
+                            record: MessagePayload::Data(line),
+                        }))
+                        .is_err()
+                    {
                         sent = Sent::SenderClosed;
                         break;
                     } else {
@@ -601,6 +607,13 @@ async fn download_object(
                     }
                 }
                 log::trace!("sent {} messages to reader", messages);
+                if sent != Sent::SenderClosed {
+                    if let Err(e) = tx.send(Ok(InternalMessage {
+                        record: MessagePayload::EOF,
+                    })) {
+                        log::debug!("unable to send EOF on stream: {}", e);
+                    }
+                }
                 if activate {
                     activator.activate().expect("s3 reader activation failed");
                 }

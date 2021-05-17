@@ -18,6 +18,7 @@ use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
 use inotify::{Inotify, WatchMask};
 use log::error;
+use repr::MessagePayload;
 use timely::scheduling::SyncActivator;
 
 use dataflow_types::{
@@ -37,7 +38,7 @@ pub struct FileSourceReader {
     /// Unique source ID
     id: SourceInstanceId,
     /// Receiver channel that ingests records
-    receiver_stream: Receiver<Result<Vec<u8>, Error>>,
+    receiver_stream: Receiver<Result<MessagePayload, Error>>,
     /// Current File Offset. This corresponds to the offset of last processed message
     /// (initially 0 if no records have been processed)
     current_file_offset: FileOffset,
@@ -80,11 +81,12 @@ impl SourceReader for FileSourceReader {
                         };
                         br.consume(chunk.len());
                         if chunk.len() > 0 {
-                            Some(Ok(chunk))
+                            Some(Ok(MessagePayload::Data(chunk)))
                         } else {
                             None
                         }
-                    }))
+                    })
+                    .chain(std::iter::once(Ok(MessagePayload::EOF))))
                 };
                 let (tx, rx) = std::sync::mpsc::sync_channel(10000);
                 let tail = if fc.tail {
@@ -117,8 +119,12 @@ impl SourceReader for FileSourceReader {
                 };
                 let reader_schema = Schema::from_str(reader_schema)?;
                 let ctor = move |file| {
-                    BlockIter::with_schema(&reader_schema, file)
-                        .map(|bi| bi.map(|result| result.map(|Block { bytes, len: _ }| bytes)))
+                    BlockIter::with_schema(&reader_schema, file).map(|bi| {
+                        bi.map(|result| {
+                            result.map(|Block { bytes, len: _ }| MessagePayload::Data(bytes))
+                        })
+                        .chain(std::iter::once(Ok(MessagePayload::EOF)))
+                    })
                 };
 
                 let (tx, rx) = std::sync::mpsc::sync_channel(10000);
@@ -178,13 +184,13 @@ impl SourceReader for FileSourceReader {
 /// Blocking logic to read from a file, intended for its own thread.
 pub fn read_file_task<Ctor, I, Err>(
     path: PathBuf,
-    tx: std::sync::mpsc::SyncSender<Result<Vec<u8>, anyhow::Error>>,
+    tx: std::sync::mpsc::SyncSender<Result<MessagePayload, anyhow::Error>>,
     activator: Option<SyncActivator>,
     read_style: FileReadStyle,
     compression: Compression,
     iter_ctor: Ctor,
 ) where
-    I: IntoIterator<Item = Result<Vec<u8>, Err>> + Send + 'static,
+    I: IntoIterator<Item = Result<MessagePayload, Err>> + Send + 'static,
     Ctor: FnOnce(Box<dyn AvroRead + Send>) -> Result<I, Err>,
     Err: Into<anyhow::Error>,
 {

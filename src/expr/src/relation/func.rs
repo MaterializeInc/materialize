@@ -18,6 +18,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use regex::Regex;
+use repr::MessagePayload;
 use serde::{Deserialize, Serialize};
 
 use ore::cast::CastFrom;
@@ -815,7 +816,10 @@ impl TableFunc {
                             Datum::String(e.to_str().unwrap()),
                             Datum::Int64(r.offset),
                             Datum::Bytes(&r.key),
-                            Datum::Bytes(&r.value),
+                            match &r.value {
+                                MessagePayload::Data(data) => Datum::Bytes(&*data),
+                                MessagePayload::EOF => Datum::Null,
+                            },
                         ]),
                         1,
                     )
@@ -857,7 +861,7 @@ impl TableFunc {
                 ScalarType::String.nullable(true),
                 ScalarType::Int64.nullable(false),
                 ScalarType::Bytes.nullable(false),
-                ScalarType::Bytes.nullable(false),
+                ScalarType::Bytes.nullable(true),
             ],
             TableFunc::UnnestArray { el_typ } => vec![el_typ.clone().nullable(true)],
             TableFunc::UnnestList { el_typ } => vec![el_typ.clone().nullable(true)],
