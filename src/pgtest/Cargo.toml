@@ -13,6 +13,6 @@ fallible-iterator = "0.2.0"
 ore = { path = "../ore" }
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-serde = { version = "1.0.125", features = ["derive"] }
+serde = { version = "1.0.126", features = ["derive"] }
 serde_json = "1.0.64"
 structopt = "0.3.21"

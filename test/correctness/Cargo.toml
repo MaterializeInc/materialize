@@ -24,7 +24,7 @@ postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 regex = "1.4.6"
-serde = { version = "1.0.125", features = ["derive"] }
+serde = { version = "1.0.126", features = ["derive"] }
 structopt = "0.3.21"
 tokio = "1.6.0"
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
