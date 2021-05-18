@@ -128,12 +128,14 @@ impl DataflowDesc {
 
     pub fn add_source_import(
         &mut self,
+        name: String,
         id: GlobalId,
         connector: SourceConnector,
         bare_desc: RelationDesc,
         orig_id: GlobalId,
     ) {
         let source_description = SourceDesc {
+            name,
             connector,
             operators: None,
             bare_desc,
@@ -554,6 +556,7 @@ pub struct RegexEncoding {
 /// of the collection.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SourceDesc {
+    pub name: String,
     pub connector: SourceConnector,
     /// Optionally, filtering and projection that may optimistically be applied
     /// to the output of the source.

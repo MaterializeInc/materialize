@@ -104,7 +104,7 @@ $ file-delete path=deleting.csv
 > CREATE INDEX i ON deleting_csv(city,state,zip)
 
 ! SELECT * FROM deleting_csv
-Source error: File IO:
+Source error: materialize.public.deleting_csv: file IO: file source: unable to open file at path
 
 ! CREATE SOURCE should_fail FROM FILE '/'
 / is a directory.

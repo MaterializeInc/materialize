@@ -141,6 +141,7 @@ where
 
                 let source_config = SourceConfig {
                     name: format!("{}-{}", connector.name(), uid),
+                    sql_name: src.name.clone(),
                     upstream_name: connector.upstream_name().map(ToOwned::to_owned),
                     id: uid,
                     scope,
@@ -158,7 +159,7 @@ where
 
                 let (collection, capability) =
                     if let ExternalSourceConnector::PubNub(pubnub_connector) = connector {
-                        let source = PubNubSourceReader::new(pubnub_connector);
+                        let source = PubNubSourceReader::new(src.name.clone(), pubnub_connector);
                         let ((ok_stream, err_stream), capability) =
                             source::create_source_simple(source_config, source);
 
@@ -171,7 +172,7 @@ where
 
                         (ok_stream.as_collection(), capability)
                     } else if let ExternalSourceConnector::Postgres(pg_connector) = connector {
-                        let source = PostgresSourceReader::new(pg_connector);
+                        let source = PostgresSourceReader::new(src.name.clone(), pg_connector);
 
                         let ((ok_stream, err_stream), capability) =
                             source::create_source_simple(source_config, source);
