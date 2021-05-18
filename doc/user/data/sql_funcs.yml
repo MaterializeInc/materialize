@@ -376,12 +376,13 @@
     url: extract
 
   - signature: mz_logical_timestamp() -> numeric
-    description: 'The logical time at which a query executes.<br/><br/>**NOTE**: Users
-      cannot define views with queries containing `mz_logical_timestamp()`.'
+    description: 'The logical time at which a query executes. Used for temporal filters and internal debugging.'
+    url: now_and_mz_logical_timestamp
 
   - signature: now() -> timestamptz
     description: 'The `timestamp with time zone` representing when the query was executed.<br/><br/>**NOTE**:
       Users cannot define views with queries containing `now()`.'
+    url: now_and_mz_logical_timestamp
 
   - signature: timestamp AT TIME ZONE zone -> timestamptz
     description: 'Converts `timestamp` to the specified time zone, expressed as an offset from UTC. <br/><br/>**Known limitation:** You must explicitly cast the type for the time zone.'
