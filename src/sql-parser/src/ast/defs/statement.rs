@@ -517,8 +517,8 @@ impl_display_t!(CreateViewStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateViewsSourceTarget {
-    pub name: Ident,
-    pub alias: Option<Ident>,
+    pub name: UnresolvedObjectName,
+    pub alias: Option<UnresolvedObjectName>,
 }
 
 impl AstDisplay for CreateViewsSourceTarget {

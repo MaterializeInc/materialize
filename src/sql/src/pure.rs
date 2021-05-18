@@ -16,6 +16,7 @@ use std::future::Future;
 
 use anyhow::{anyhow, bail, ensure, Context};
 use aws_arn::ARN;
+use itertools::Itertools;
 use tokio::fs::File;
 use tokio::io::AsyncBufReadExt;
 use tokio::task;
@@ -180,32 +181,56 @@ pub fn purify(
                             }),
                         ..
                     } => {
-                        let publication_info: HashMap<_, _> =
-                            postgres_util::publication_info(&conn, &publication)
-                                .await?
-                                .into_iter()
-                                .map(|info| (info.name.clone(), info))
-                                .collect();
+                        let pub_info = postgres_util::publication_info(&conn, &publication).await?;
 
-                        let mut views = Vec::with_capacity(publication_info.len());
-
+                        // If the user didn't specify targets we'll generate views for all of them
                         let targets = targets.clone().unwrap_or_else(|| {
-                            publication_info
-                                .keys()
-                                .map(|name| CreateViewsSourceTarget {
-                                    name: Ident::new(name),
-                                    alias: None,
+                            pub_info
+                                .iter()
+                                .map(|table_info| {
+                                    let name = UnresolvedObjectName::qualified(&[
+                                        &table_info.namespace,
+                                        &table_info.name,
+                                    ]);
+                                    CreateViewsSourceTarget {
+                                        name: name.clone(),
+                                        alias: Some(name),
+                                    }
                                 })
                                 .collect()
                         });
 
+                        let mut views = Vec::with_capacity(pub_info.len());
+
+                        // An index from table_name -> schema_name -> table_info
+                        let mut pub_info_idx: HashMap<_, HashMap<_, _>> = HashMap::new();
+                        for table in pub_info {
+                            pub_info_idx
+                                .entry(table.name.clone())
+                                .or_default()
+                                .entry(table.namespace.clone())
+                                .or_insert(table);
+                        }
+
                         for target in targets {
-                            let table_info = match publication_info.get(target.name.as_str()) {
-                                Some(info) => info,
-                                None => bail!(
-                                    "table {:?} does not exist in upstream database",
-                                    target.name.as_str()
-                                ),
+                            let name = normalize::unresolved_object_name(target.name.clone())
+                                .map_err(anyhow::Error::new)?;
+
+                            let schemas = pub_info_idx.get(&name.item).ok_or_else(|| {
+                                anyhow!("table {} does not exist in upstream database", name)
+                            })?;
+
+                            let table_info = if let Some(schema) = &name.schema {
+                                schemas.get(schema).ok_or_else(|| {
+                                    anyhow!("schema {} does not exist in upstream database", schema)
+                                })?
+                            } else {
+                                schemas.values().exactly_one().or_else(|_| {
+                                    Err(anyhow!(
+                                        "table {} is ambiguous, consider specifying the schema",
+                                        name
+                                    ))
+                                })?
                             };
 
                             let view_name =
@@ -268,7 +293,7 @@ pub fn purify(
                             };
 
                             views.push(ViewDefinition {
-                                name: UnresolvedObjectName::unqualified(view_name.as_str()),
+                                name: view_name,
                                 columns: columns.iter().map(|c| c.name.clone()).collect(),
                                 with_options: vec![],
                                 query: query,

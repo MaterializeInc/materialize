@@ -365,7 +365,7 @@ CREATE MATERIALIZED VIEWS FROM SOURCE "foobar" (t1, "t2" AS t3);
 ----
 CREATE MATERIALIZED VIEWS FROM SOURCE foobar (t1, t2 AS t3)
 =>
-CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: true, definitions: Source { name: UnresolvedObjectName([Ident("foobar")]), targets: Some([CreateViewsSourceTarget { name: Ident("t1"), alias: None }, CreateViewsSourceTarget { name: Ident("t2"), alias: Some(Ident("t3")) }]) } })
+CreateViews(CreateViewsStatement { if_exists: Error, temporary: false, materialized: true, definitions: Source { name: UnresolvedObjectName([Ident("foobar")]), targets: Some([CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t1")]), alias: None }, CreateViewsSourceTarget { name: UnresolvedObjectName([Ident("t2")]), alias: Some(UnresolvedObjectName([Ident("t3")])) }]) } })
 
 parse-statement
 CREATE SOURCE foo FROM FILE 'bar' FORMAT AVRO USING SCHEMA 'baz'
