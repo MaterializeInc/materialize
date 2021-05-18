@@ -150,11 +150,11 @@ impl Action for VerifyAction {
         while let Some(Ok(message)) = message_stream.next().await {
             let message = message.map_err(|e| e.to_string())?;
 
-            let bytes = match message.payload() {
-                None => return Err("empty message payload".into()),
-                Some(bytes) => bytes,
+            let bytes = message.payload();
+            let value_datum = match bytes {
+                None => None,
+                Some(bytes) => Some(avro_from_bytes(value_schema, bytes)?),
             };
-            let value_datum = avro_from_bytes(value_schema, bytes)?;
             let key_datum = key_schema
                 .as_ref()
                 .map(|key_schema| {

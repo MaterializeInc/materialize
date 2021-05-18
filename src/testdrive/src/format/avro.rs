@@ -228,7 +228,7 @@ pub fn validate_sink<I>(
     key_schema: Option<&Schema>,
     value_schema: &Schema,
     expected: I,
-    actual: &[(Option<Value>, Value)],
+    actual: &[(Option<Value>, Option<Value>)],
 ) -> Result<(), String>
 where
     I: IntoIterator,
@@ -247,11 +247,13 @@ where
             } else {
                 None
             };
-            let value: serde_json::Value = match deserializer.next() {
-                None => Err("value missing in input line".to_string()),
-                Some(r) => r.map_err(|e| format!("parsing json: {}", e)),
-            }?;
-            let value = from_json(&value, value_schema.top_node())?;
+            let value = match deserializer.next() {
+                None => None,
+                Some(r) => {
+                    let value = r.map_err(|e| format!("parsing json: {}", e))?;
+                    Some(from_json(&value, value_schema.top_node())?)
+                }
+            };
             Ok((key, value))
         })
         .collect::<Result<Vec<_>, String>>()?;
