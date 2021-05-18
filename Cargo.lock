@@ -3034,7 +3034,7 @@ dependencies = [
 [[package]]
 name = "postgres"
 version = "0.19.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres#fea178cfc3114d0c20622cb4372d78b22282aa72"
+source = "git+https://github.com/uce/rust-postgres?branch=6716-ssl_modes#f791e6dd3552d6ee44dbf90dbac22f997f35a520"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -3047,7 +3047,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres#fea178cfc3114d0c20622cb4372d78b22282aa72"
+source = "git+https://github.com/uce/rust-postgres?branch=6716-ssl_modes#f791e6dd3552d6ee44dbf90dbac22f997f35a520"
 dependencies = [
  "futures",
  "openssl",
@@ -3059,7 +3059,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres#fea178cfc3114d0c20622cb4372d78b22282aa72"
+source = "git+https://github.com/uce/rust-postgres?branch=6716-ssl_modes#f791e6dd3552d6ee44dbf90dbac22f997f35a520"
 dependencies = [
  "base64",
  "byteorder",
@@ -3076,7 +3076,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres#fea178cfc3114d0c20622cb4372d78b22282aa72"
+source = "git+https://github.com/uce/rust-postgres?branch=6716-ssl_modes#f791e6dd3552d6ee44dbf90dbac22f997f35a520"
 dependencies = [
  "bytes",
  "chrono",
@@ -3102,7 +3102,7 @@ dependencies = [
 [[package]]
 name = "postgres_array"
 version = "0.11.0"
-source = "git+https://github.com/MaterializeInc/rust-postgres-array#cbf48cd674ded4b6e7648fab253807c055c8ec10"
+source = "git+https://github.com/uce/rust-postgres-array?branch=6716-ssl_modes#b1afcfcd8483ff8214259a61d6ea0fd8f8220acf"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -4890,7 +4890,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.1"
-source = "git+https://github.com/MaterializeInc/rust-postgres#fea178cfc3114d0c20622cb4372d78b22282aa72"
+source = "git+https://github.com/uce/rust-postgres?branch=6716-ssl_modes#f791e6dd3552d6ee44dbf90dbac22f997f35a520"
 dependencies = [
  "async-trait",
  "byteorder",

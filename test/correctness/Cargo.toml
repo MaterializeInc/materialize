@@ -20,12 +20,12 @@ mz-process-collector = { path = "../../src/mz-process-collector" }
 ore = { path = "../../src/ore" }
 parse_duration = "2.1.1"
 pgrepr = { path = "../../src/pgrepr" }
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres = { git = "https://github.com/uce/rust-postgres", branch = "6716-ssl_modes" }
+postgres-types = { git = "https://github.com/uce/rust-postgres", branch = "6716-ssl_modes" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 regex = "1.4.6"
 serde = { version = "1.0.125", features = ["derive"] }
 structopt = "0.3.21"
 tokio = "1.6.0"
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { git = "https://github.com/uce/rust-postgres", branch = "6716-ssl_modes" }
 toml = "0.5.8"

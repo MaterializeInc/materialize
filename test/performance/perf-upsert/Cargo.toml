@@ -14,10 +14,10 @@ futures = "0.3.14"
 futures-channel = "0.3.15"
 hex = "0.4.3"
 log = "0.4.13"
-postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-types = { git = "https://github.com/uce/rust-postgres", branch = "6716-ssl_modes" }
 rand = "0.8.3"
 rand_distr = "0.4.0"
 structopt = "0.3.21"
 test-util = { path = "../../test-util" }
 tokio = "1.6.0"
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { git = "https://github.com/uce/rust-postgres", branch = "6716-ssl_modes" }

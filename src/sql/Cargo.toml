@@ -25,8 +25,8 @@ mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
 parse_duration = "2.1.1"
 pgrepr = { path = "../pgrepr" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4", "with-uuid-0_8"] }
+postgres-protocol = { git = "https://github.com/uce/rust-postgres", branch = "6716-ssl_modes" }
+postgres-types = { git = "https://github.com/uce/rust-postgres", branch = "6716-ssl_modes", features = ["with-chrono-0_4", "with-uuid-0_8"] }
 postgres-util = { path = "../postgres-util" }
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "ssl-vendored", "gssapi-vendored", "libz-static"] }
 regex = "1.4.6"
@@ -37,7 +37,7 @@ serde = { version = "1.0.125", features = ["derive"] }
 serde_json = "1.0.64"
 sql-parser = { path = "../sql-parser" }
 tokio = { version = "1.6.0", features = ["fs"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { git = "https://github.com/uce/rust-postgres", branch = "6716-ssl_modes" }
 unicase = "2.6.0"
 url = "2.2.2"
 uuid = { version = "0.8.2", features = ["serde", "v4"] }

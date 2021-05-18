@@ -14,4 +14,4 @@ ore = { path = "../../src/ore" }
 rand = "0.8.3"
 rdkafka = { git = "https://github.com/fede1024/rust-rdkafka.git", features = ["cmake-build", "libz-static"] }
 tokio = "1.6.0"
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { git = "https://github.com/uce/rust-postgres", branch = "6716-ssl_modes" }
