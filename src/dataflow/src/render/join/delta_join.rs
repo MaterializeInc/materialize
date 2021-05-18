@@ -219,9 +219,7 @@ where
             let mut local_err_dedup = HashSet::new();
             let mut trace_err_dedup = HashSet::new();
 
-            // We'll need a new scope, to hold `AltNeu` wrappers, and we'll want
-            // to import all traces as alt and neu variants (unless we do a more
-            // careful analysis).
+            // We create a new region to contain the dataflow paths for the delta join.
             let results = scope.clone().region_named("delta query", |inner| {
                 // Our plan is to iterate through each input relation, and attempt
                 // to find a plan that maximally uses existing keys (better: uses
@@ -232,12 +230,6 @@ where
                 // This reduces redundant imports, and simplifies the dataflow structure.
                 // As the arrangements are all shared, it should not dramatically improve
                 // the efficiency, but the dataflow simplification is worth doing.
-                //
-                // The arrangements are keyed by input and arrangement key, and by whether
-                // the arrangement is "alt" or "neu", which corresponds to whether the use
-                // of the arrangement is by a relation before or after it in the order, resp.
-                // Because the alt and neu variants have different types, we will maintain
-                // them in different collections.
                 let mut arrangements = std::collections::BTreeMap::new();
                 for relation in 0..inputs.len() {
                     let order = &orders[relation];
@@ -349,6 +341,10 @@ where
                         }
 
                         // Promote `time` to a datum element.
+                        //
+                        // The `half_join` operator manipulates as "data" a pair `(data, time)`,
+                        // while tracking the initial time `init_time` separately and without
+                        // modification. The initial value for both times is the initial time.
                         let mut update_stream = update_stream
                             .inner
                             .map(|(v, t, d)| ((v, t.clone()), t, d))
@@ -364,20 +360,24 @@ where
                                 closure,
                             } = stage_plan;
 
-                            // We require different logic based on the flavor of arrangement.
-                            // We may need to cache each of these if we want to re-use the same wrapped
-                            // arrangement, rather than re-wrap each time we use a thing.
+                            // We require different logic based on the relative order of the two inputs.
+                            // If the `source` relation precedes the `lookup` relation, we present all
+                            // updates with less or equal `time`, and otherwise we present only updates
+                            // with strictly less `time`.
+                            //
+                            // We need to write the logic twice, as there are two types of arrangement
+                            // we might have: either dataflow-local or an imported trace.
                             let (oks, errs) = match arrangements
                                 .get(&(&lookup_relation, &lookup_key[..]))
                                 .unwrap()
                             {
                                 Ok(local) => {
-                                    if lookup_relation > source_relation {
+                                    if source_relation < lookup_relation {
                                         build_halfjoin(
                                             update_stream,
                                             local.enter_region(region),
                                             stream_key,
-                                            |t1, t2| t1.lt(t2),
+                                            |t1, t2| t1.le(t2),
                                             closure,
                                         )
                                     } else {
@@ -385,18 +385,18 @@ where
                                             update_stream,
                                             local.enter_region(region),
                                             stream_key,
-                                            |t1, t2| t1.le(t2),
+                                            |t1, t2| t1.lt(t2),
                                             closure,
                                         )
                                     }
                                 }
                                 Err(trace) => {
-                                    if lookup_relation > source_relation {
+                                    if source_relation < lookup_relation {
                                         build_halfjoin(
                                             update_stream,
                                             trace.enter_region(region),
                                             stream_key,
-                                            |t1, t2| t1.lt(t2),
+                                            |t1, t2| t1.le(t2),
                                             closure,
                                         )
                                     } else {
@@ -404,7 +404,7 @@ where
                                             update_stream,
                                             trace.enter_region(region),
                                             stream_key,
-                                            |t1, t2| t1.le(t2),
+                                            |t1, t2| t1.lt(t2),
                                             closure,
                                         )
                                     }
@@ -415,6 +415,11 @@ where
                         }
 
                         // Delay updates as appropriate.
+                        //
+                        // The `half_join` operator maintains a time that we now discard (the `_`),
+                        // and replace with the `time` that is maintained with the data. The former
+                        // exists to pin a consistent total order on updates throughout the process,
+                        // while allowing `time` to vary upwards as a result of actions on time.
                         let mut update_stream = update_stream
                             .inner
                             .map(|((row, time), _, diff)| (row, time, diff))
@@ -480,6 +485,11 @@ use differential_dataflow::Collection;
 /// This method exists to factor common logic from four code paths that are generic over the type of trace.
 /// The `comparison` function should either be `le` or `lt` depending on which relation comes first in the
 /// total order on relations (in order to break ties consistently).
+///
+/// The input and output streams are of pairs `(data, time)` where the `time` component can be greater than
+/// the time of the update. This operator may manipulate `time` as part of this pair, but will not manipulate
+/// the time of the update. This is crucial for correctness, as the total order on times of updates is used
+/// to ensure that any two updates are matched at most once.
 fn build_halfjoin<G, Tr, CF>(
     updates: Collection<G, (Row, G::Timestamp)>,
     trace: Arranged<G, Tr>,
@@ -536,12 +546,11 @@ where
         },
     )
     .inner
-    .ok_err(|(x, t, d)| {
+    .ok_err(|(data_time, init_time, diff)| {
         // TODO(mcsherry): consider `ok_err()` for `Collection`.
-        match x {
-            (Ok(x), time) => Ok((x.map(|x| (x, time)), t, d)),
-            // TODO(mcsherry): what time should we use here?
-            (Err(x), _time) => Err((DataflowError::from(x), t, d)),
+        match data_time {
+            (Ok(data), time) => Ok((data.map(|data| (data, time)), init_time, diff)),
+            (Err(err), _time) => Err((DataflowError::from(err), init_time, diff)),
         }
     });
 
