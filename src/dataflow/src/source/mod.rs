@@ -1507,7 +1507,6 @@ where
 {
     let partition = message.partition.clone();
     let offset = message.offset;
-    let transaction_coordinates = message.transaction_id;
     let msg_predecessor = *predecessor;
     *predecessor = Some(offset);
 
@@ -1522,12 +1521,18 @@ where
         .offset_received
         .set(offset.offset);
 
+    // TODO (cirego): Figure out how to extract DebeziumCoordinates from
+    // Attempt to pull out a debezium transaction from the message, assumes avro encoded message
+    let entry = match consistency_info.source_type {
+        Consistency::Debezium(_) => {
+            // decode_debezium_transaction_entry(message.payload.clone().unwrap_or_default())
+            None
+        }
+        _ => None,
+    };
+
     // Determine the timestamp to which we need to assign this message
-    let ts = consistency_info.find_matching_timestamp(
-        &partition,
-        transaction_coordinates,
-        timestamp_bindings,
-    );
+    let ts = consistency_info.find_matching_timestamp(&partition, entry, timestamp_bindings);
     match ts {
         None => {
             // We have not yet decided on a timestamp for this message,
