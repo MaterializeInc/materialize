@@ -15,8 +15,8 @@
 //! in which the views will be executed.
 
 use dataflow_types::{DataflowDesc, LinearOperator};
-use expr::{Id, LocalId, MirRelationExpr};
-use std::collections::{HashMap, HashSet};
+use expr::{GlobalId, Id, LocalId, MirRelationExpr, MirScalarExpr};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Optimizes the implementation of each dataflow.
 ///
@@ -167,6 +167,75 @@ fn inline_views(dataflow: &mut DataflowDesc) {
             .transform(object.relation_expr.as_mut(), &indexes)
             .unwrap();
     }
+
+    prune_unused_imported_indexes(dataflow, &indexes);
+}
+
+/// Finds the imported indexes that are actually used by any arrangement in the
+/// dataflow and remove the rest from the collection of imported ones.
+fn prune_unused_imported_indexes(
+    dataflow: &mut DataflowDesc,
+    indexes_by_collection: &HashMap<GlobalId, Vec<(GlobalId, Vec<MirScalarExpr>)>>,
+) {
+    // Traverse the dataflow to find the imported indexes that are actually used
+    let mut used_indexes = HashSet::new();
+    for object in dataflow.objects_to_build.iter_mut() {
+        object.relation_expr.as_mut().visit_mut_pre(&mut |x| {
+            if let MirRelationExpr::ArrangeBy { input, keys } = x {
+                if let MirRelationExpr::Get { id, .. } = &**input {
+                    if let Id::Global(id) = id {
+                        if let Some(entry) = indexes_by_collection.get(&id) {
+                            for key_set in keys {
+                                used_indexes.extend(
+                                    entry
+                                        .iter()
+                                        .filter(|(_index_id, index_keys)| {
+                                            // Check the key forms a prefix in
+                                            // the index key.
+                                            // TODO(asenac) there could be a better index.
+                                            index_keys.len() >= key_set.len()
+                                                && index_keys
+                                                    .iter()
+                                                    .zip(key_set.iter())
+                                                    .all(|(x, y)| x == y)
+                                        })
+                                        .map(|(index_id, _)| index_id)
+                                        .cloned(),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // Set containing the first index for all collections with no used indexes.
+    // Note: there is a constraint whereby at least one index must be imported
+    // per collection.
+    let first_index_per_collection = indexes_by_collection
+        .iter()
+        .filter_map(|(_, indexes)| {
+            if indexes.iter().any(|(x, _)| used_indexes.contains(x)) {
+                None
+            } else if let Some((index_id, _)) = indexes.first() {
+                Some(index_id.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<HashSet<_>>();
+
+    let mut index_imports: BTreeMap<GlobalId, (dataflow_types::IndexDesc, repr::RelationType)> =
+        BTreeMap::new();
+    dataflow
+        .index_imports
+        .iter()
+        .filter(|(id, _)| used_indexes.contains(&id) || first_index_per_collection.contains(&id))
+        .for_each(|(id, v)| {
+            index_imports.insert(*id, v.clone());
+        });
+    dataflow.index_imports = index_imports;
 }
 
 /// Pushes demand information from published outputs to dataflow inputs.
