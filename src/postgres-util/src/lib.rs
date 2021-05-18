@@ -9,15 +9,17 @@
 
 //! Provides convenience functions for working with upstream Postgres sources from the `sql` package.
 
-use std::fmt;
+use std::{collections::BTreeMap, fmt, path::PathBuf};
 
-use anyhow::anyhow;
-use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
-use postgres_openssl::MakeTlsConnector;
-use tokio_postgres::types::Type as PgType;
+use anyhow::{anyhow, bail};
+use postgres_openssl::{MakeTlsConnector, TlsConfig};
 use tokio_postgres::Config;
+use tokio_postgres::{config::SslMode, types::Type as PgType};
 
-use sql_parser::ast::display::{AstDisplay, AstFormatter};
+use sql_parser::ast::{
+    display::{AstDisplay, AstFormatter},
+    Value,
+};
 use sql_parser::impl_display;
 
 pub enum PgScalarType {
@@ -88,13 +90,67 @@ pub struct TableInfo {
     pub schema: Vec<PgColumn>,
 }
 
-/// Creates a TLS connector that respects the Postgres' connector Config, in particular `sslmode`.
-pub fn make_tls(_config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
-    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
-    // Currently supported sslmodes (disable, prefer, require) don't verify peer certificates.
-    // todo(uce): add additional sslmodes (see #6716)
-    builder.set_verify(SslVerifyMode::NONE);
-    Ok(MakeTlsConnector::new(builder.build()))
+/// Creates a TLS connector for the provided `sslmode` and `config_options`.
+pub fn make_tls(
+    mode: SslMode,
+    config_options: &BTreeMap<String, String>,
+) -> Result<MakeTlsConnector, anyhow::Error> {
+    let client_cert = match (config_options.get("sslcert"), config_options.get("sslkey")) {
+        (Some(sslcert), Some(sslkey)) => Some((PathBuf::from(sslcert), PathBuf::from(sslkey))),
+        _ => None,
+    };
+    let root_cert = config_options.get("sslrootcert").map(|s| PathBuf::from(s));
+    let tls_config = TlsConfig {
+        mode,
+        client_cert,
+        root_cert,
+    };
+    Ok(MakeTlsConnector::from_tls_config(tls_config)?)
+}
+
+/// Parses the `WITH` options from a `CREATE SOURCE`.
+///
+/// # Errors
+///
+/// - Invalid values for known options, such as files that do not exist for expected file paths.
+/// - If any of the values in `with_options` are not `sql_parser::ast::Value::String`.
+pub fn extract_config(
+    with_options: &mut BTreeMap<String, Value>,
+) -> Result<BTreeMap<String, String>, anyhow::Error> {
+    let mut out = BTreeMap::new();
+    match (
+        with_options.remove("sslcert"),
+        with_options.remove("sslkey"),
+    ) {
+        (None, Some(_)) | (Some(_), None) => {
+            bail!("must provide both sslcert and sslkey, but only provided one");
+        }
+        (Some(Value::String(sslcert)), Some(Value::String(sslkey))) => {
+            if std::fs::metadata(&sslcert).is_err() {
+                bail!("sslcert `{}` does not exist", &sslcert)
+            }
+            if std::fs::metadata(&sslkey).is_err() {
+                bail!("sslkey `{}` does not exist", &sslkey)
+            }
+            out.insert("sslcert".to_string(), sslcert);
+            out.insert("sslkey".to_string(), sslkey);
+        }
+        (Some(_), Some(_)) => {
+            bail!("Unexpected value type for sslcert or sslkey")
+        }
+        _ => {}
+    };
+    match with_options.remove("sslrootcert") {
+        Some(Value::String(sslrootcert)) => {
+            if std::fs::metadata(&sslrootcert).is_err() {
+                bail!("sslrootcert `{}` does not exist", &sslrootcert)
+            }
+            out.insert("sslrootcert".to_string(), sslrootcert);
+        }
+        Some(_) => bail!("Unexpected value type for sslrootcert"),
+        _ => {}
+    };
+    Ok(out)
 }
 
 /// Fetches table schema information from an upstream Postgres source for all tables that are part
@@ -107,9 +163,10 @@ pub fn make_tls(_config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
 pub async fn publication_info(
     conn: &str,
     publication: &str,
+    config_options: &BTreeMap<String, String>,
 ) -> Result<Vec<TableInfo>, anyhow::Error> {
-    let config = conn.parse()?;
-    let tls = make_tls(&config)?;
+    let config: Config = conn.parse()?;
+    let tls = make_tls(config.get_ssl_mode(), &config_options)?;
     let (client, connection) = config.connect(tls).await?;
     tokio::spawn(connection);
 

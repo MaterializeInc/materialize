@@ -846,6 +846,7 @@ pub struct PostgresSourceConnector {
     pub conn: String,
     pub publication: String,
     pub slot_name: String,
+    pub config_options: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

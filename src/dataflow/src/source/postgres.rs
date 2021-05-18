@@ -75,7 +75,7 @@ impl PostgresSourceReader {
     /// Starts a replication connection to the upstream database
     async fn connect_replication(&self) -> Result<Client, anyhow::Error> {
         let mut config: Config = self.connector.conn.parse()?;
-        let tls = postgres_util::make_tls(&config)?;
+        let tls = postgres_util::make_tls(config.get_ssl_mode(), &self.connector.config_options)?;
         let (client, conn) = config
             .replication_mode(ReplicationMode::Logical)
             .connect(tls)
@@ -101,9 +101,12 @@ impl PostgresSourceReader {
             .await;
 
         // Get all the relevant tables for this publication
-        let publication_tables =
-            postgres_util::publication_info(&self.connector.conn, &self.connector.publication)
-                .await?;
+        let publication_tables = postgres_util::publication_info(
+            &self.connector.conn,
+            &self.connector.publication,
+            &self.connector.config_options,
+        )
+        .await?;
 
         // Start a transaction and immediatelly create a replication slot with the USE SNAPSHOT
         // directive. This makes the starting point of the slot and the snapshot of the transaction

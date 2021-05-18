@@ -147,10 +147,13 @@ pub fn purify(
                         )
                     });
 
+                    let config_options = postgres_util::extract_config(&mut with_options_map)?;
+
                     // verify that we can connect upstream
                     // TODO(petrosagg): store this info along with the source for better error
                     // detection
-                    let _ = postgres_util::publication_info(&conn, &publication).await?;
+                    let _ = postgres_util::publication_info(&conn, &publication, &config_options)
+                        .await?;
                 }
                 Connector::PubNub { .. } => (),
             }
@@ -177,11 +180,14 @@ pub fn purify(
                             ExternalSourceConnector::Postgres(PostgresSourceConnector {
                                 conn,
                                 publication,
-                                ..
+                                slot_name: _,
+                                config_options,
                             }),
                         ..
                     } => {
-                        let pub_info = postgres_util::publication_info(&conn, &publication).await?;
+                        let pub_info =
+                            postgres_util::publication_info(&conn, &publication, &config_options)
+                                .await?;
 
                         // If the user didn't specify targets we'll generate views for all of them
                         let targets = targets.clone().unwrap_or_else(|| {

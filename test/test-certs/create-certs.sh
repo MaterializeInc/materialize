@@ -28,7 +28,7 @@ openssl req \
 	-passin pass:$SSL_SECRET \
 	-passout pass:$SSL_SECRET
 
-for i in kafka kafka1 kafka2 schema-registry materialized producer postgres
+for i in kafka kafka1 kafka2 schema-registry materialized producer postgres cert_user
 do
 	# Create key & csr
 	openssl req -nodes \

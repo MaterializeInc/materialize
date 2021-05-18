@@ -744,10 +744,12 @@ pub fn plan_create_source(
                 .as_ref()
                 .ok_or_else(|| anyhow!("Postgres sources must provide a slot name"))?;
 
+            let config_options = postgres_util::extract_config(&mut with_options)?;
             let connector = ExternalSourceConnector::Postgres(PostgresSourceConnector {
                 conn: conn.clone(),
                 publication: publication.clone(),
                 slot_name: slot_name.clone(),
+                config_options,
             });
 
             let encoding = SourceDataEncoding::Single(DataEncoding::Postgres);
