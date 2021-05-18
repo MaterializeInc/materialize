@@ -678,8 +678,6 @@ impl<'a> From<&BorrowedMessage<'a>> for SourceMessage {
             payload: msg.payload().map(|p| MessagePayload::Data(p.to_vec())),
             partition: PartitionId::Kafka(msg.partition()),
             offset: kafka_offset.into(),
-            // TODO (cirego): get transaction id information from interchange
-            transaction_id: None,
             upstream_time_millis: msg.timestamp().to_millis(),
             key: msg.key().map(|k| k.to_vec()),
         }

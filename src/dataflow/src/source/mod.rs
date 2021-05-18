@@ -378,7 +378,6 @@ fn read_file(path: PathBuf) -> Vec<SourceMessage> {
             key: Some(r.key),
             payload: Some(r.value),
             offset: MzOffset { offset: r.offset },
-            transaction_id: None,
             upstream_time_millis: None,
             partition: partition.clone(),
         })
@@ -400,8 +399,6 @@ pub struct SourceMessage {
     pub partition: PartitionId,
     /// Materialize offset of the message (1-indexed)
     pub offset: MzOffset,
-    /// Debezium Transaction ID, if applicable
-    pub transaction_id: Option<DebeziumTransactionEntry>,
     /// The time that an external system first observed the message
     ///
     /// Milliseconds since the unix epoch

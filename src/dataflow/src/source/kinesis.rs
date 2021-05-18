@@ -203,7 +203,6 @@ impl SourceReader for KinesisSourceReader {
                                 //TODO: should MzOffset be modified to be a string?
                                 offset: self.processed_message_count,
                             },
-                            transaction_id: None,
                             upstream_time_millis: None,
                             key: None,
                             payload: Some(MessagePayload::Data(data)),
