@@ -63,8 +63,8 @@ use build_info::BuildInfo;
 use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
-    DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, SinkConnector, SourceConnector,
-    TailSinkConnector, TimestampSourceUpdate, Update,
+    DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
+    SinkConnector, SourceConnector, TailSinkConnector, TimestampSourceUpdate, Update,
 };
 use dataflow_types::{SinkAsOf, SinkEnvelope};
 use expr::{
@@ -2737,12 +2737,31 @@ impl Coordinator {
         let mut sources_to_drop = vec![];
         let mut sinks_to_drop = vec![];
         let mut indexes_to_drop = vec![];
+        let mut replication_slots_to_drop: HashMap<String, Vec<String>> = HashMap::new();
 
         for op in &ops {
             if let catalog::Op::DropItem(id) = op {
                 match self.catalog.get_by_id(id).item() {
-                    CatalogItem::Table(_) | CatalogItem::Source(_) => {
+                    CatalogItem::Table(_) => {
                         sources_to_drop.push(*id);
+                    }
+                    CatalogItem::Source(source) => {
+                        sources_to_drop.push(*id);
+                        if let SourceConnector::External {
+                            connector:
+                                ExternalSourceConnector::Postgres(PostgresSourceConnector {
+                                    conn,
+                                    slot_name,
+                                    ..
+                                }),
+                            ..
+                        } = &source.connector
+                        {
+                            replication_slots_to_drop
+                                .entry(conn.clone())
+                                .or_insert_with(Vec::new)
+                                .push(slot_name.clone());
+                        }
                     }
                     CatalogItem::Sink(catalog::Sink {
                         connector: SinkConnectorState::Ready(_),
@@ -2781,6 +2800,9 @@ impl Coordinator {
         }
         if !indexes_to_drop.is_empty() {
             self.drop_indexes(indexes_to_drop).await;
+        }
+        for (conn, slot_names) in replication_slots_to_drop {
+            postgres_util::drop_replication_slots(&conn, &slot_names).await?;
         }
 
         Ok(())
