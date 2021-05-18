@@ -377,7 +377,7 @@ impl Coordinator {
                         self.indexes.insert(entry.id(), frontiers);
                     } else {
                         let df = self.dataflow_builder().build_index_dataflow(entry.id());
-                        self.ship_dataflow(df).await?;
+                        self.ship_dataflow(df).await;
                     }
                 }
                 _ => (), // Handled in next loop.
@@ -1205,7 +1205,7 @@ impl Coordinator {
             sink.envelope,
             as_of,
         );
-        self.ship_dataflow(df).await
+        Ok(self.ship_dataflow(df).await)
     }
 
     async fn sequence_plan(
@@ -1521,7 +1521,7 @@ impl Coordinator {
                     tables.create(table_id);
                 }
                 let df = self.dataflow_builder().build_index_dataflow(index_id);
-                self.ship_dataflow(df).await?;
+                self.ship_dataflow(df).await;
                 Ok(ExecuteResponse::CreatedTable { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedTable { existed: true }),
@@ -1573,7 +1573,7 @@ impl Coordinator {
             self.update_timestamper(source_id, true).await;
             if let Some(index_id) = idx_id {
                 let df = self.dataflow_builder().build_index_dataflow(index_id);
-                self.ship_dataflow(df).await?;
+                self.ship_dataflow(df).await;
             }
             self.maybe_begin_caching(source_id, caching_enabled).await;
         }
@@ -1814,7 +1814,7 @@ impl Coordinator {
             Ok(()) => {
                 if let Some(index_id) = index_id {
                     let df = self.dataflow_builder().build_index_dataflow(index_id);
-                    self.ship_dataflow(df).await?;
+                    self.ship_dataflow(df).await;
                 }
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
@@ -1847,7 +1847,7 @@ impl Coordinator {
                     let df = self.dataflow_builder().build_index_dataflow(index_id);
                     dfs.push(df);
                 }
-                self.ship_dataflows(dfs).await?;
+                self.ship_dataflows(dfs).await;
                 Ok(ExecuteResponse::CreatedView { existed: false })
             }
             // TODO somehow check this or remove if not exists modifiers
@@ -1891,7 +1891,7 @@ impl Coordinator {
         match self.catalog_transact(vec![op]).await {
             Ok(()) => {
                 let df = self.dataflow_builder().build_index_dataflow(id);
-                self.ship_dataflow(df).await?;
+                self.ship_dataflow(df).await;
                 self.set_index_options(id, options);
                 Ok(ExecuteResponse::CreatedIndex { existed: false })
             }
@@ -2250,7 +2250,7 @@ impl Coordinator {
                     .import_view_into_dataflow(&view_id, &source, &mut dataflow);
                 dataflow.add_index_to_build(index_id, view_id, typ.clone(), key.clone());
                 dataflow.add_index_export(index_id, view_id, typ, key);
-                self.ship_dataflow(dataflow).await?;
+                self.ship_dataflow(dataflow).await;
             }
 
             let mfp_plan = map_filter_project
@@ -2371,7 +2371,7 @@ impl Coordinator {
                 strict: !with_snapshot,
             },
         );
-        self.ship_dataflow(df).await?;
+        self.ship_dataflow(df).await;
 
         let resp = ExecuteResponse::Tailing { rx };
 
@@ -2905,7 +2905,7 @@ impl Coordinator {
 
     /// Finalizes a dataflow and then broadcasts it to all workers.
     /// Utility method for the more general [Self::ship_dataflows]
-    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) -> Result<(), CoordError> {
+    async fn ship_dataflow(&mut self, dataflow: DataflowDesc) {
         self.ship_dataflows(vec![dataflow]).await
     }
 
@@ -2918,7 +2918,16 @@ impl Coordinator {
     /// In particular, there are requirement on the `as_of` field for the dataflow
     /// and the `since` frontiers of created arrangements, as a function of the `since`
     /// frontiers of dataflow inputs (sources and imported arrangements).
-    async fn ship_dataflows(&mut self, mut dataflows: Vec<DataflowDesc>) -> Result<(), CoordError> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if as_of is < the `since` frontiers.
+    async fn ship_dataflows(&mut self, mut dataflows: Vec<DataflowDesc>) {
+        // This function must succeed because catalog_transact has generally been run
+        // before calling this function. We don't have plumbing yet to rollback catalog
+        // operations if this function fails, and materialized will be in an unsafe
+        // state if we do not correctly clean up the catalog.
+
         for dataflow in &mut dataflows {
             // The identity for `join` is the minimum element.
             let mut since = Antichain::from_elem(Timestamp::minimum());
@@ -2962,16 +2971,16 @@ impl Coordinator {
 
             // Ensure that the dataflow's `as_of` is at least `since`.
             if let Some(as_of) = &mut dataflow.as_of {
-                // If we have requested a specific time that is invalid .. someone errored.
+                // It should not be possible to request an invalid time. SINK doesn't support
+                // AS OF. TAIL and Peek check that their AS OF is >= since.
                 use timely::order::PartialOrder;
-                if !(<_ as PartialOrder>::less_equal(&since, as_of)) {
-                    coord_bail!(
-                        "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
-                        dataflow.debug_name,
-                        as_of,
-                        since
-                    );
-                }
+                assert!(
+                    <_ as PartialOrder>::less_equal(&since, as_of),
+                    "Dataflow {} requested as_of ({:?}) not >= since ({:?})",
+                    dataflow.debug_name,
+                    as_of,
+                    since
+                );
             } else {
                 // Bind the since frontier to the dataflow description.
                 dataflow.set_as_of(since);
@@ -2983,7 +2992,6 @@ impl Coordinator {
 
         // Finalize the dataflow by broadcasting its construction to all workers.
         self.broadcast(SequencedCommand::CreateDataflows(dataflows));
-        Ok(())
     }
 
     fn broadcast(&self, cmd: SequencedCommand) {
