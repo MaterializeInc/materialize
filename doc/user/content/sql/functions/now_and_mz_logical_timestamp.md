@@ -6,12 +6,12 @@ menu:
     parent: 'sql-functions'
 ---
 
-In Materialize, `now()` doesn't represent the system time, as it does in most systems; it represents the time with timezone when the query was executed. `mz_logical_timestamp()` comes closer to what `now()` typically indicates, since it represents the logical time at which the query executes, based on the system time defined by the system on which `materialized` is installed. Neither `now()` nor `mz_logical_timestamp()` can be used when creating views.
+In Materialize, `now()` doesn't represent the system time, as it does in most systems; it represents the time with timezone when the query was executed. It cannot be used when creating views.
 
-The typical uses for `mz_logical_timestamp()` are:
+`mz_logical_timestamp()` comes closer to what `now()` typically indicates. It represents the logical time at which the query executes, based on the system time defined by the system on which `materialized` is installed. Its typical uses are:
 
 * Internal debugging
-* Defining [temporal filters](https://materialize.com/temporal-filters/) (`now` can also be used for this purpose)
+* Defining [temporal filters](https://materialize.com/temporal-filters/)
 
 ## Internal debugging
 
@@ -42,23 +42,23 @@ WHERE mz_logical_timestamp() >= insert_ts
   AND mz_logical_timestamp()  < delete_ts;
 ```
 
-Next, you'll populate the table with timestamp data.
+Next, you'll populate the table with timestamp data. The epoch extracted from `now()` is measured in seconds, so it's multiplied by 1000 to match the milliseconds in `mz_logical_timestamp()`.
 
 ```sql
 INSERT INTO events VALUES (
     'hello',
-    mz_logical_timestamp(),
-    mz_logical_timestamp() + 100000
+    extract(epoch from now()) * 1000,
+    (extract(epoch from now()) * 1000) + 100000
 );
 INSERT INTO events VALUES (
     'welcome',
-    mz_logical_timestamp(),
-    mz_logical_timestamp() + 150000
+    extract(epoch from now()) * 1000,
+    (extract(epoch from now()) * 1000) + 150000
 );
 INSERT INTO events VALUES (
     'goodbye',
-    mz_logical_timestamp(),
-    mz_logical_timestamp() + 200000
+    (extract(epoch from now()) * 1000),
+    (extract(epoch from now()) * 1000) + 200000
 );
 ```
 
@@ -79,6 +79,8 @@ content |   insert_ts   |   delete_ts   | mz_logical_timestamp
 If you run the query again after 1.67 minutes, you'll see only two results, because the first result has aged out of the view.
 
 ### Query using now()
+
+The epoch extracted from `now()` is measured in seconds, so it's multiplied by 1000 to match the milliseconds in `mz_logical_timestamp()`.
 
 ```sql
 SELECT * FROM valid
