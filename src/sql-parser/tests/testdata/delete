@@ -33,11 +33,11 @@ Delete(DeleteStatement { table_name: UnresolvedObjectName([Ident("table")]), sel
 parse-statement roundtrip
 DELETE FROM foo WHERE name = 5
 ----
-DELETE FROM foo WHERE name = 5
+DELETE FROM foo WHERE name "=" 5
 
 parse-statement
 DELETE FROM foo WHERE name = 5
 ----
-DELETE FROM foo WHERE name = 5
+DELETE FROM foo WHERE name "=" 5
 =>
-Delete(DeleteStatement { table_name: UnresolvedObjectName([Ident("foo")]), selection: Some(Op { op: "=", expr1: Identifier([Ident("name")]), expr2: Some(Value(Number("5"))) }) })
+Delete(DeleteStatement { table_name: UnresolvedObjectName([Ident("foo")]), selection: Some(Op { op: UnresolvedObjectName([Ident("=")]), expr1: Identifier([Ident("name")]), expr2: Some(Value(Number("5"))) }) })

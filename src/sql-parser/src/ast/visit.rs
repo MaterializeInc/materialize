@@ -139,7 +139,7 @@
 //!     }
 //!     assert_eq!(collector.idents, &[
 //!         &Ident::new("a"), &Ident::new("b"), &Ident::new("c"),
-//!         &Ident::new("d"), &Ident::new("e"),
+//!         &Ident::new("+"), &Ident::new("d"), &Ident::new("e"),
 //!     ]);
 //!     Ok(())
 //! }
