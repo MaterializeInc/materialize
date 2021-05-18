@@ -372,13 +372,13 @@ impl<'a> Parser<'a> {
                 }
 
                 Ok(Expr::Op {
-                    op,
+                    op: UnresolvedObjectName::unqualified(&op),
                     expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                     expr2: None,
                 })
             }
             Token::Op(op) if op == "+" => Ok(Expr::Op {
-                op,
+                op: UnresolvedObjectName::unqualified(&op),
                 expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
                 expr2: None,
             }),
@@ -902,13 +902,13 @@ impl<'a> Parser<'a> {
                     if kw == ALL {
                         Expr::AllSubquery {
                             left: Box::new(expr),
-                            op: op.into(),
+                            op: UnresolvedObjectName::unqualified(op),
                             right: Box::new(subquery),
                         }
                     } else {
                         Expr::AnySubquery {
                             left: Box::new(expr),
-                            op: op.into(),
+                            op: UnresolvedObjectName::unqualified(op),
                             right: Box::new(subquery),
                         }
                     }
@@ -918,13 +918,13 @@ impl<'a> Parser<'a> {
                     if kw == ALL {
                         Expr::AllExpr {
                             left: Box::new(expr),
-                            op: op.into(),
+                            op: UnresolvedObjectName::unqualified(op),
                             right: Box::new(right),
                         }
                     } else {
                         Expr::AnyExpr {
                             left: Box::new(expr),
-                            op: op.into(),
+                            op: UnresolvedObjectName::unqualified(op),
                             right: Box::new(right),
                         }
                     }
@@ -934,7 +934,7 @@ impl<'a> Parser<'a> {
                 Ok(expr)
             } else {
                 Ok(Expr::Op {
-                    op: op.into(),
+                    op: UnresolvedObjectName::unqualified(op),
                     expr1: Box::new(expr),
                     expr2: Some(Box::new(self.parse_subexpr(precedence)?)),
                 })

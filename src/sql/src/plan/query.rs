@@ -2809,16 +2809,17 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
 
 fn plan_op(
     ecx: &ExprContext,
-    op: &str,
+    op: &UnresolvedObjectName,
     expr1: &Expr<Aug>,
     expr2: Option<&Expr<Aug>>,
 ) -> Result<HirScalarExpr, anyhow::Error> {
-    let impls = func::resolve_op(op)?;
+    let op = normalize::unresolved_object_name(op.clone())?;
+    let impls = func::resolve_op(&op)?;
     let args = match expr2 {
         None => plan_exprs(ecx, &[expr1])?,
         Some(expr2) => plan_exprs(ecx, &[expr1, expr2])?,
     };
-    func::select_impl(ecx, FuncSpec::Op(op), impls, args)
+    func::select_impl(ecx, FuncSpec::Op(&op), impls, args)
 }
 
 fn plan_function<'a>(

@@ -81,7 +81,7 @@ pub enum Expr<T: AstInfo> {
     },
     /// Unary or binary operator
     Op {
-        op: String,
+        op: UnresolvedObjectName,
         expr1: Box<Expr<T>>,
         expr2: Option<Box<Expr<T>>>,
     },
@@ -136,25 +136,25 @@ pub enum Expr<T: AstInfo> {
     /// `<expr> <op> ANY/SOME (<query>)`
     AnySubquery {
         left: Box<Expr<T>>,
-        op: String,
+        op: UnresolvedObjectName,
         right: Box<Query<T>>,
     },
     /// `<expr> <op> ANY (<array_expr>)`
     AnyExpr {
         left: Box<Expr<T>>,
-        op: String,
+        op: UnresolvedObjectName,
         right: Box<Expr<T>>,
     },
     /// `<expr> <op> ALL (<query>)`
     AllSubquery {
         left: Box<Expr<T>>,
-        op: String,
+        op: UnresolvedObjectName,
         right: Box<Query<T>>,
     },
     /// `<expr> <op> ALL (<array_expr>)`
     AllExpr {
         left: Box<Expr<T>>,
-        op: String,
+        op: UnresolvedObjectName,
         right: Box<Expr<T>>,
     },
     /// `ARRAY[<expr>*]`
@@ -473,48 +473,48 @@ impl<T: AstInfo> Expr<T> {
         }
     }
 
-    pub fn binop(self, op: &str, right: Expr<T>) -> Expr<T> {
+    pub fn binop(self, op: UnresolvedObjectName, right: Expr<T>) -> Expr<T> {
         Expr::Op {
-            op: op.to_string(),
+            op,
             expr1: Box::new(self),
             expr2: Some(Box::new(right)),
         }
     }
 
     pub fn lt(self, right: Expr<T>) -> Expr<T> {
-        self.binop("<", right)
+        self.binop(UnresolvedObjectName::unqualified("<"), right)
     }
 
     pub fn lt_eq(self, right: Expr<T>) -> Expr<T> {
-        self.binop("<=", right)
+        self.binop(UnresolvedObjectName::unqualified("<="), right)
     }
 
     pub fn gt(self, right: Expr<T>) -> Expr<T> {
-        self.binop(">", right)
+        self.binop(UnresolvedObjectName::unqualified(">"), right)
     }
 
     pub fn gt_eq(self, right: Expr<T>) -> Expr<T> {
-        self.binop(">=", right)
+        self.binop(UnresolvedObjectName::unqualified(">="), right)
     }
 
     pub fn equals(self, right: Expr<T>) -> Expr<T> {
-        self.binop("=", right)
+        self.binop(UnresolvedObjectName::unqualified("="), right)
     }
 
     pub fn minus(self, right: Expr<T>) -> Expr<T> {
-        self.binop("-", right)
+        self.binop(UnresolvedObjectName::unqualified("-"), right)
     }
 
     pub fn multiply(self, right: Expr<T>) -> Expr<T> {
-        self.binop("*", right)
+        self.binop(UnresolvedObjectName::unqualified("*"), right)
     }
 
     pub fn modulo(self, right: Expr<T>) -> Expr<T> {
-        self.binop("%", right)
+        self.binop(UnresolvedObjectName::unqualified("%"), right)
     }
 
     pub fn divide(self, right: Expr<T>) -> Expr<T> {
-        self.binop("/", right)
+        self.binop(UnresolvedObjectName::unqualified("/"), right)
     }
 
     pub fn call(name: Vec<&str>, args: Vec<Expr<T>>) -> Expr<T> {

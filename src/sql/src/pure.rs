@@ -277,7 +277,7 @@ pub fn purify(
                                         joins: vec![],
                                     }],
                                     selection: Some(Expr::Op {
-                                        op: "=".to_string(),
+                                        op: UnresolvedObjectName::unqualified("="),
                                         expr1: Box::new(Expr::Identifier(vec![Ident::new("oid")])),
                                         expr2: Some(Box::new(Expr::Value(Value::Number(
                                             table_info.rel_id.to_string(),

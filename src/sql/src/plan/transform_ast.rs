@@ -355,13 +355,13 @@ impl Desugarer {
             if *negated {
                 *expr = Expr::AllSubquery {
                     left: Box::new(e.take()),
-                    op: "<>".into(),
+                    op: UnresolvedObjectName::unqualified("<>"),
                     right: Box::new(subquery.take()),
                 };
             } else {
                 *expr = Expr::AnySubquery {
                     left: Box::new(e.take()),
-                    op: "=".into(),
+                    op: UnresolvedObjectName::unqualified("="),
                     right: Box::new(subquery.take()),
                 };
             }
@@ -452,7 +452,7 @@ impl Desugarer {
                 .project(SelectItem::Expr {
                     expr: left
                         .binop(
-                            &op,
+                            op.clone(),
                             Expr::Row {
                                 exprs: bindings
                                     .into_iter()
@@ -492,10 +492,17 @@ impl Desugarer {
             expr2: Some(right),
         } = expr
         {
+            let op_name = normalize::unresolved_object_name(op.clone())?;
+            let op_str = if op_name.schema.as_deref().unwrap_or("pg_catalog") == "pg_catalog" {
+                op_name.item
+            } else {
+                op_name.to_string()
+            };
+
             if let (Expr::Row { exprs: left }, Expr::Row { exprs: right }) =
                 (&mut **left, &mut **right)
             {
-                if matches!(op.as_str(), "=" | "<>" | "<" | "<=" | ">" | ">=") {
+                if matches!(&*op_str, "=" | "<>" | "<" | "<=" | ">" | ">=") {
                     if left.len() != right.len() {
                         bail!("unequal number of entries in row expressions");
                     }
@@ -504,29 +511,29 @@ impl Desugarer {
                         bail!("cannot compare rows of zero length");
                     }
                 }
-                match op.as_str() {
+                match &*op_str {
                     "=" | "<>" => {
                         let mut new = Expr::Value(Value::Boolean(true));
                         for (l, r) in left.iter_mut().zip(right) {
                             new = l.take().equals(r.take()).and(new);
                         }
-                        if op == "<>" {
+                        if &*op_str == "<>" {
                             new = new.negate();
                         }
                         *expr = new;
                     }
                     "<" | "<=" | ">" | ">=" => {
-                        let strict_op = match op.as_str() {
-                            "<" | "<=" => "<",
-                            ">" | ">=" => ">",
+                        let strict_op = match &*op_str {
+                            "<" | "<=" => UnresolvedObjectName::unqualified("<"),
+                            ">" | ">=" => UnresolvedObjectName::unqualified(">"),
                             _ => unreachable!(),
                         };
                         let (l, r) = (left.last_mut().unwrap(), right.last_mut().unwrap());
-                        let mut new = l.take().binop(&op, r.take());
+                        let mut new = l.take().binop(op.clone(), r.take());
                         for (l, r) in left.iter_mut().zip(right).rev().skip(1) {
                             new = l
                                 .clone()
-                                .binop(strict_op, r.clone())
+                                .binop(strict_op.clone(), r.clone())
                                 .or(l.take().equals(r.take()).and(new));
                         }
                         *expr = new;

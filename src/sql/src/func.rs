@@ -42,7 +42,7 @@ pub enum FuncSpec<'a> {
     /// A function name.
     Func(&'a PartialName),
     /// An operator name.
-    Op(&'a str),
+    Op(&'a PartialName),
 }
 
 impl<'a> fmt::Display for FuncSpec<'a> {
@@ -2598,8 +2598,13 @@ fn rescale_decimals_to_same(
 }
 
 /// Resolves the operator to a set of function implementations.
-pub fn resolve_op(op: &str) -> Result<&'static [FuncImpl<HirScalarExpr>], anyhow::Error> {
-    match OP_IMPLS.get(op) {
+pub fn resolve_op(op: &PartialName) -> Result<&'static [FuncImpl<HirScalarExpr>], anyhow::Error> {
+    let schema = op.schema.as_deref().unwrap_or("pg_catalog");
+    if schema != "pg_catalog" {
+        unsupported!(op);
+    }
+
+    match OP_IMPLS.get(&*op.item) {
         Some(Func::Scalar(impls)) => Ok(&impls),
         Some(_) => unreachable!("all operators must be scalar functions"),
         // TODO: these require sql arrays
