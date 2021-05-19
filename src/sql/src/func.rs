@@ -2149,7 +2149,7 @@ fn array_to_string(
 
 lazy_static! {
     /// Correlates an operator with all of its implementations.
-    static ref OP_IMPLS: HashMap<&'static str, Func> = {
+    pub static ref OP_IMPLS: HashMap<&'static str, Func> = {
         use ScalarType::*;
         use BinaryFunc::*;
         use ParamType::*;

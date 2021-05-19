@@ -41,6 +41,7 @@ pub enum Builtin {
     Table(&'static BuiltinTable),
     View(&'static BuiltinView),
     Type(&'static BuiltinType),
+    Operator(BuiltinOperator),
     Func(BuiltinFunc),
 }
 
@@ -52,6 +53,7 @@ impl Builtin {
             Builtin::View(view) => view.name,
             Builtin::Type(typ) => typ.name(),
             Builtin::Func(func) => func.name,
+            Builtin::Operator(op) => op.name,
         }
     }
 
@@ -62,6 +64,7 @@ impl Builtin {
             Builtin::View(view) => view.schema,
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
+            Builtin::Operator(op) => op.schema,
         }
     }
 
@@ -72,6 +75,7 @@ impl Builtin {
             Builtin::View(view) => view.id,
             Builtin::Type(typ) => typ.id,
             Builtin::Func(func) => func.id,
+            Builtin::Operator(op) => op.id,
         }
     }
 }
@@ -128,6 +132,13 @@ pub struct BuiltinFunc {
     pub inner: &'static sql::func::Func,
 }
 
+pub struct BuiltinOperator {
+    pub name: &'static str,
+    pub schema: &'static str,
+    pub id: GlobalId,
+    pub inner: &'static [sql::func::FuncImpl<sql::plan::HirScalarExpr>],
+}
+
 pub struct BuiltinRole {
     pub name: &'static str,
     pub id: i64,
@@ -148,6 +159,7 @@ pub struct BuiltinRole {
 //
 // | Item type | ID range  |
 // | ----------|-----------|
+// | Operators | 0000-0999 |
 // | Types     | 1000-1999 |
 // | Funcs     | 2000-2999 |
 // | Logs      | 3000-3999 |
@@ -1272,7 +1284,28 @@ pub const MZ_SYSTEM: BuiltinRole = BuiltinRole {
 
 lazy_static! {
     pub static ref BUILTINS: BTreeMap<GlobalId, Builtin> = {
-        let mut builtins = vec![
+        let mut builtins = vec![];
+
+        let mut operator_global_id_counter = 0;
+        for (name, func) in &*sql::func::OP_IMPLS {
+            let impls = match func {
+                sql::func::Func::Scalar(ref impls) => impls,
+                _ => unreachable!("all operators must be scalar functions"),
+            };
+
+            builtins.push(Builtin::Operator(BuiltinOperator {
+                name: name,
+                schema: PG_CATALOG_SCHEMA,
+                id: GlobalId::System(operator_global_id_counter),
+                inner: impls,
+            }));
+
+            operator_global_id_counter += 1;
+        }
+
+        assert!(operator_global_id_counter < 1000, "exhausted operator global IDs");
+
+        builtins.append(&mut vec![
             Builtin::Type(&TYPE_ANY),
             Builtin::Type(&TYPE_ANYARRAY),
             Builtin::Type(&TYPE_ANYELEMENT),
@@ -1385,7 +1418,7 @@ lazy_static! {
             Builtin::View(&PG_PROC),
             Builtin::View(&PG_RANGE),
             Builtin::View(&PG_ENUM),
-        ];
+        ]);
 
         // TODO(sploiselle): assign static global IDs to functions
         let mut func_global_id_counter = 2000;
@@ -1441,6 +1474,9 @@ lazy_static! {
                 }
                 Func(BuiltinFunc { id, name, .. }) => {
                     encounter("function", "id", name, id);
+                }
+                Operator(BuiltinOperator { id, name, .. }) => {
+                    encounter("operator", "id", name, id);
                 }
             }
         }

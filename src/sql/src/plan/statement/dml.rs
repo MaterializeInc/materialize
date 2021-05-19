@@ -310,6 +310,7 @@ pub fn plan_tail(
         CatalogItemType::Func
         | CatalogItemType::Index
         | CatalogItemType::Sink
+        | CatalogItemType::Operator
         | CatalogItemType::Type => bail!(
             "'{}' cannot be tailed because it is a {}",
             entry.name(),

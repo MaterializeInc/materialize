@@ -1977,7 +1977,7 @@ pub fn plan_drop_item(
                             dep.name()
                         );
                     }
-                    CatalogItemType::Index => (),
+                    CatalogItemType::Index | CatalogItemType::Operator => (),
                 },
             }
         }

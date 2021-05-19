@@ -76,7 +76,10 @@ pub(super) fn item_created(id: GlobalId, item: &CatalogItem) {
             },
         },
         CatalogItem::View(_) => VIEW_COUNT.inc(),
-        CatalogItem::Index(_) | CatalogItem::Type(_) | CatalogItem::Func(_) => {}
+        CatalogItem::Index(_)
+        | CatalogItem::Type(_)
+        | CatalogItem::Func(_)
+        | CatalogItem::Operator(_) => {}
     }
 }
 
@@ -107,6 +110,9 @@ pub(super) fn item_dropped(id: GlobalId, item: &CatalogItem) {
             },
         },
         CatalogItem::View(_) => VIEW_COUNT.dec(),
-        CatalogItem::Index(_) | CatalogItem::Type(_) | CatalogItem::Func(_) => {}
+        CatalogItem::Index(_)
+        | CatalogItem::Type(_)
+        | CatalogItem::Func(_)
+        | CatalogItem::Operator(_) => {}
     }
 }

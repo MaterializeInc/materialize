@@ -35,12 +35,13 @@ use sql::catalog::{
     Catalog as SqlCatalog, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
     CatalogItemType as SqlCatalogItemType,
 };
+use sql::func::FuncImpl;
 use sql::names::{DatabaseSpecifier, FullName, PartialName, SchemaName};
-use sql::plan::HirRelationExpr;
 use sql::plan::{
     CreateIndexPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
     CreateViewPlan, Params, Plan, PlanContext,
 };
+use sql::plan::{HirRelationExpr, HirScalarExpr};
 use transform::Optimizer;
 use uuid::Uuid;
 
@@ -168,6 +169,7 @@ pub enum CatalogItem {
     Index(Index),
     Type(Type),
     Func(Func),
+    Operator(Operator),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -269,6 +271,13 @@ pub struct Func {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct Operator {
+    pub plan_cx: PlanContext,
+    #[serde(skip)]
+    pub inner: &'static [FuncImpl<HirScalarExpr>],
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub enum Volatility {
     Volatile,
     Nonvolatile,
@@ -296,6 +305,7 @@ impl CatalogItem {
             CatalogItem::Index(_) => sql::catalog::CatalogItemType::Index,
             CatalogItem::Type(_) => sql::catalog::CatalogItemType::Type,
             CatalogItem::Func(_) => sql::catalog::CatalogItemType::Func,
+            CatalogItem::Operator(_) => sql::catalog::CatalogItemType::Operator,
         }
     }
 
@@ -307,7 +317,8 @@ impl CatalogItem {
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::Type(_) => Err(SqlCatalogError::InvalidDependency {
+            | CatalogItem::Type(_)
+            | CatalogItem::Operator(_) => Err(SqlCatalogError::InvalidDependency {
                 name: name.to_string(),
                 typ: self.typ(),
             }),
@@ -333,6 +344,7 @@ impl CatalogItem {
     pub fn uses(&self) -> &[GlobalId] {
         match self {
             CatalogItem::Func(_) => &[],
+            CatalogItem::Operator(_) => &[],
             CatalogItem::Index(idx) => &idx.depends_on,
             CatalogItem::Sink(sink) => &sink.depends_on,
             CatalogItem::Source(_) => &[],
@@ -351,6 +363,7 @@ impl CatalogItem {
             | CatalogItem::Source(_)
             | CatalogItem::Table(_)
             | CatalogItem::Type(_)
+            | CatalogItem::Operator(_)
             | CatalogItem::View(_) => false,
             CatalogItem::Sink(s) => match s.connector {
                 SinkConnectorState::Pending(_) => true,
@@ -420,7 +433,7 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Index(i))
             }
-            CatalogItem::Func(_) | CatalogItem::Type(_) => {
+            CatalogItem::Func(_) | CatalogItem::Type(_) | CatalogItem::Operator(_) => {
                 unreachable!("{}s cannot be renamed", self.typ())
             }
         }
@@ -731,6 +744,23 @@ impl Catalog {
                     );
                 }
 
+                Builtin::Operator(op) => {
+                    let oid = catalog.allocate_oid()?;
+                    catalog.insert_item(
+                        op.id,
+                        oid,
+                        FullName {
+                            database: DatabaseSpecifier::Ambient,
+                            schema: PG_CATALOG_SCHEMA.into(),
+                            item: op.name.to_owned(),
+                        },
+                        CatalogItem::Operator(Operator {
+                            plan_cx: PlanContext::default(),
+                            inner: op.inner,
+                        }),
+                    );
+                }
+
                 _ => (),
             }
         }
@@ -846,7 +876,7 @@ impl Catalog {
             catalog: self,
             conn_id: SYSTEM_CONN_ID,
             database: "materialize".into(),
-            search_path: &[],
+            search_path: &[PG_CATALOG_SCHEMA],
             user,
         }
     }
@@ -1132,7 +1162,10 @@ impl Catalog {
                     .unwrap()
                     .push((id, index.keys.clone()));
             }
-            CatalogItem::Func(_) | CatalogItem::Sink(_) | CatalogItem::Type(_) => (),
+            CatalogItem::Func(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Operator(_) => (),
         }
 
         let conn_id = entry.item().conn_id().unwrap_or(SYSTEM_CONN_ID);
@@ -1700,6 +1733,7 @@ impl Catalog {
                 eval_env: Some(typ.plan_cx.clone().into()),
             },
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
+            CatalogItem::Operator(_) => unreachable!("cannot serialize operators yet"),
         };
         serde_json::to_vec(&item).expect("catalog serialization cannot fail")
     }
@@ -1883,7 +1917,8 @@ impl Catalog {
             | CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::Type(_) => false,
+            | CatalogItem::Type(_)
+            | CatalogItem::Operator(_) => false,
         }
     }
 
@@ -1921,6 +1956,7 @@ impl Catalog {
             CatalogItem::Table(_) => Volatile,
             CatalogItem::Type(_) => Unknown,
             CatalogItem::Func(_) => Unknown,
+            CatalogItem::Operator(_) => Unknown,
         }
     }
 
@@ -2366,6 +2402,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Index(Index { create_sql, .. }) => create_sql,
             CatalogItem::Type(Type { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "TODO",
+            CatalogItem::Operator(_) => "TODO",
         }
     }
 
@@ -2378,6 +2415,7 @@ impl sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Index(Index { plan_cx, .. }) => plan_cx,
             CatalogItem::Type(Type { plan_cx, .. }) => plan_cx,
             CatalogItem::Func(Func { plan_cx, .. }) => plan_cx,
+            CatalogItem::Operator(Operator { plan_cx, .. }) => plan_cx,
         }
     }
 

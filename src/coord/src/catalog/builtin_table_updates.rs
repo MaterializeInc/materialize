@@ -109,6 +109,7 @@ impl Catalog {
             CatalogItem::Sink(sink) => self.pack_sink_update(id, oid, schema_id, name, sink, diff),
             CatalogItem::Type(ty) => self.pack_type_update(id, oid, schema_id, name, ty, diff),
             CatalogItem::Func(func) => self.pack_func_update(id, schema_id, name, func, diff),
+            CatalogItem::Operator(_) => vec![],
         };
 
         if let Ok(desc) = entry.desc() {

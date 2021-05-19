@@ -285,6 +285,8 @@ pub enum CatalogItemType {
     Type,
     /// A func.
     Func,
+    /// An operator.
+    Operator,
 }
 
 impl fmt::Display for CatalogItemType {
@@ -297,6 +299,7 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Index => f.write_str("index"),
             CatalogItemType::Type => f.write_str("type"),
             CatalogItemType::Func => f.write_str("func"),
+            CatalogItemType::Operator => f.write_str("operator"),
         }
     }
 }
@@ -338,7 +341,7 @@ impl fmt::Display for CatalogError {
                 f,
                 "catalog item '{}' is {} {} and so cannot be depended upon",
                 name,
-                if matches!(typ, CatalogItemType::Index) {
+                if matches!(typ, CatalogItemType::Index | CatalogItemType::Operator) {
                     "an"
                 } else {
                     "a"
