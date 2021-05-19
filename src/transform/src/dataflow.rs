@@ -190,10 +190,7 @@ fn prune_unused_imported_indexes(
                                     entry
                                         .iter()
                                         .filter(|(_index_id, index_keys)| {
-                                            // Check the key forms a prefix in
-                                            // the index key.
-                                            // TODO(asenac) there could be a better index.
-                                            index_keys.len() >= key_set.len()
+                                            index_keys.len() == key_set.len()
                                                 && index_keys
                                                     .iter()
                                                     .zip(key_set.iter())
