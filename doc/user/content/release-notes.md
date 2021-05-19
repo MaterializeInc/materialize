@@ -54,6 +54,11 @@ Wrap your release notes at the 80 character mark.
 - **Breaking change.** Sort `NULL`s last, to match the default sort order in
   PostgreSQL.
 
+- **Breaking change.** Rename `consistency` parameter to `consistency_topic`
+  for both Kafka sources and sinks. Additionally, change `consistency_topic` on
+  sinks to be a string that specifies a topic name instead of a boolean. This
+  harmonizes the parameter behavior between sources and sinks.
+
 {{% version-header v0.7.3 %}}
 
 - Add the [`pow`](/sql/functions/#numbers-func) function as an alias for the
