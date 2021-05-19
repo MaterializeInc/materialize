@@ -476,6 +476,15 @@ impl TimestampBindingRc {
     pub fn update_timestamp(&self) {
         self.wrapper.borrow_mut().update_timestamp()
     }
+
+    /// Return all timestamp bindings at or in advance of lower and not at or in advance of upper
+    pub fn get_bindings_in_range(
+        &self,
+        lower: AntichainRef<Timestamp>,
+        upper: AntichainRef<Timestamp>,
+    ) -> Vec<(PartitionId, Timestamp, MzOffset)> {
+        unimplemented!()
+    }
 }
 
 impl Clone for TimestampBindingRc {

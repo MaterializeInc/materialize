@@ -158,11 +158,21 @@ pub enum CacheMessage {
     DropSource(GlobalId),
 }
 
+/// Data about upper frontiers and timestamp bindings that dataflow workers
+/// send to the coordinator.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FrontierFeedback {
+    /// Id for the object whose frontiers changed.
+    pub id: GlobalId,
+    /// Upper frontier changes
+    pub changes: ChangeBatch<Timestamp>,
+}
+
 /// Responses the worker can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WorkerFeedback {
     /// A list of identifiers of traces, with prior and new upper frontiers.
-    FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
+    FrontierUppers(Vec<FrontierFeedback>),
 }
 
 /// Configures a dataflow server.
@@ -439,7 +449,7 @@ where
             id: GlobalId,
             upper: &Antichain<Timestamp>,
             lower: &Antichain<Timestamp>,
-            progress: &mut Vec<(GlobalId, ChangeBatch<Timestamp>)>,
+            progress: &mut Vec<FrontierFeedback>,
         ) {
             let mut changes = ChangeBatch::new();
             for time in lower.elements().iter() {
@@ -450,7 +460,7 @@ where
             }
             changes.compact();
             if !changes.is_empty() {
-                progress.push((id, changes));
+                progress.push(FrontierFeedback { id, changes });
             }
         }
 
@@ -484,9 +494,9 @@ where
                 }
             }
             if let Some(logger) = self.materialized_logger.as_mut() {
-                for (id, changes) in &mut progress {
-                    for (time, diff) in changes.iter() {
-                        logger.log(MaterializedEvent::Frontier(*id, *time, *diff));
+                for feedback in &mut progress {
+                    for (time, diff) in feedback.changes.iter() {
+                        logger.log(MaterializedEvent::Frontier(feedback.id, *time, *diff));
                     }
                 }
             }

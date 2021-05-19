@@ -598,8 +598,8 @@ impl Coordinator {
     ) {
         match message {
             WorkerFeedback::FrontierUppers(updates) => {
-                for (name, changes) in updates {
-                    self.update_upper(&name, changes);
+                for feedback in updates {
+                    self.update_upper(&feedback.id, feedback.changes);
                 }
                 self.maintenance().await;
             }
