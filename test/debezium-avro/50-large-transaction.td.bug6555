@@ -25,13 +25,13 @@ COMMIT;
 
 > CREATE MATERIALIZED SOURCE large_distinct_rows
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.large_distinct_rows'
-  WITH (consistency = 'postgres.transaction')
+  WITH (consistency_topic = 'postgres.transaction')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
 
 > CREATE MATERIALIZED SOURCE large_same_rows
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'postgres.public.large_same_rows'
-  WITH (consistency = 'postgres.transaction')
+  WITH (consistency_topic = 'postgres.transaction')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
   ENVELOPE DEBEZIUM;
 

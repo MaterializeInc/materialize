@@ -70,7 +70,7 @@ $ kafka-create-topic topic=input
 
 > CREATE MATERIALIZED SOURCE input_byo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
-    WITH (consistency = 'testdrive-input-consistency-${testdrive.seed}')
+    WITH (consistency_topic = 'testdrive-input-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
 > CREATE SINK output FROM input_byo

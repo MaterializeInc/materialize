@@ -563,10 +563,10 @@ pub fn plan_create_source(
         Connector::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
-            consistency = match with_options.remove("consistency") {
+            consistency = match with_options.remove("consistency_topic") {
                 None => Consistency::RealTime,
                 Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
-                Some(_) => bail!("consistency must be a string"),
+                Some(_) => bail!("consistency_topic must be a string"),
             };
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
@@ -671,7 +671,7 @@ pub fn plan_create_source(
                 Some(Value::Boolean(b)) => b,
                 Some(_) => bail!("tail must be a boolean"),
             };
-            consistency = match with_options.remove("consistency") {
+            consistency = match with_options.remove("consistency_topic") {
                 None => Consistency::RealTime,
                 Some(_) => bail!("BYO consistency not supported for file sources"),
             };
@@ -773,10 +773,10 @@ pub fn plan_create_source(
                 Some(Value::Boolean(b)) => b,
                 Some(_) => bail!("tail must be a boolean"),
             };
-            consistency = match with_options.remove("consistency") {
+            consistency = match with_options.remove("consistency_topic") {
                 None => Consistency::RealTime,
                 Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
-                Some(_) => bail!("consistency must be a string"),
+                Some(_) => bail!("consistency_topic must be a string"),
             };
 
             if consistency != Consistency::RealTime {
