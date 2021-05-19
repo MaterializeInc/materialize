@@ -212,12 +212,20 @@ impl Catalog {
         } = sink
         {
             match connector {
-                SinkConnector::Kafka(KafkaSinkConnector { topic, .. }) => {
+                SinkConnector::Kafka(KafkaSinkConnector {
+                    topic, consistency, ..
+                }) => {
+                    let consistency_topic = if let Some(consistency) = consistency {
+                        Datum::String(consistency.topic.as_str())
+                    } else {
+                        Datum::Null
+                    };
                     updates.push(BuiltinTableUpdate {
                         id: MZ_KAFKA_SINKS.id,
                         row: Row::pack_slice(&[
                             Datum::String(&id.to_string()),
                             Datum::String(topic.as_str()),
+                            consistency_topic,
                         ]),
                         diff,
                     });
