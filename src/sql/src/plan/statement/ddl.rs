@@ -829,6 +829,14 @@ pub fn plan_create_source(
     let envelope = match &envelope {
         sql_parser::ast::Envelope::None => SourceEnvelope::None,
         sql_parser::ast::Envelope::Debezium(mode) => {
+            let is_avro = match encoding.value_ref() {
+                DataEncoding::Avro(_) => true,
+                DataEncoding::AvroOcf(_) => true,
+                _ => false,
+            };
+            if !is_avro {
+                bail!("non-Avro Debezium sources are not supported");
+            }
             let dedup_strat = match with_options.remove("deduplication") {
                 None => match mode {
                     sql_parser::ast::DbzMode::Plain => DebeziumDeduplicationStrategy::Ordered,
