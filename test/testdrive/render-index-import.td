@@ -24,7 +24,27 @@
 
 # All tables are joined on column 1
 > create materialized view v1 as select *  from t1, t2, t3 where t1.f2=t2.f2 AND t1.f2 = t3.f2;
-> SELECT DISTINCT (SELECT name FROM mz_catalog.mz_tables WHERE id = parts[1]) AS tablename, parts[2] AS columns FROM (SELECT regexp_match(name, 'Index\((u\d+), (.*)\)') AS parts FROM mz_catalog.mz_dataflow_operators WHERE id IN (SELECT id FROM mz_catalog.mz_dataflow_operator_addresses WHERE address[1] = (SELECT DISTINCT address[1] FROM mz_catalog.mz_dataflow_operator_addresses WHERE id = (SELECT DISTINCT id from mz_catalog.mz_dataflow_names WHERE name LIKE '%.v1%'))) AND name LIKE 'Index%') ORDER BY tablename, columns;
+> SELECT DISTINCT
+    (SELECT name
+     FROM mz_catalog.mz_tables
+     WHERE id = parts[1]) AS tablename,
+                  parts[2] AS columns
+  FROM
+    (SELECT regexp_match(name, 'Index\((u\d+), (.*)\)') AS parts
+     FROM mz_catalog.mz_dataflow_operators
+     WHERE id IN
+         (SELECT id
+          FROM mz_catalog.mz_dataflow_operator_addresses
+          WHERE address[1] =
+              (SELECT DISTINCT address[1]
+               FROM mz_catalog.mz_dataflow_operator_addresses
+               WHERE id =
+                   (SELECT DISTINCT id
+                    FROM mz_catalog.mz_dataflow_names
+                    WHERE name LIKE '%.v1%')))
+       AND name LIKE 'Index%')
+  ORDER BY tablename,
+           columns;
 t1 "[Column(1)]"
 t2 "[Column(1)]"
 t3 "[Column(1)]"
@@ -33,7 +53,27 @@ t3 "[Column(1)]"
 
 # t2 tables is joined on column 0
 > create materialized view v1 as select *  from t1, t2, t3 where t1.f2=t2.f1 AND t1.f2 = t3.f2;
-> SELECT DISTINCT (SELECT name FROM mz_catalog.mz_tables WHERE id = parts[1]) AS tablename, parts[2] AS columns FROM (SELECT regexp_match(name, 'Index\((u\d+), (.*)\)') AS parts FROM mz_catalog.mz_dataflow_operators WHERE id IN (SELECT id FROM mz_catalog.mz_dataflow_operator_addresses WHERE address[1] = (SELECT DISTINCT address[1] FROM mz_catalog.mz_dataflow_operator_addresses WHERE id = (SELECT DISTINCT id from mz_catalog.mz_dataflow_names WHERE name LIKE '%.v1%'))) AND name LIKE 'Index%') ORDER BY tablename, columns;
+> SELECT DISTINCT
+    (SELECT name
+     FROM mz_catalog.mz_tables
+     WHERE id = parts[1]) AS tablename,
+                  parts[2] AS columns
+  FROM
+    (SELECT regexp_match(name, 'Index\((u\d+), (.*)\)') AS parts
+     FROM mz_catalog.mz_dataflow_operators
+     WHERE id IN
+         (SELECT id
+          FROM mz_catalog.mz_dataflow_operator_addresses
+          WHERE address[1] =
+              (SELECT DISTINCT address[1]
+               FROM mz_catalog.mz_dataflow_operator_addresses
+               WHERE id =
+                   (SELECT DISTINCT id
+                    FROM mz_catalog.mz_dataflow_names
+                    WHERE name LIKE '%.v1%')))
+       AND name LIKE 'Index%')
+  ORDER BY tablename,
+           columns;
 t1 "[Column(1)]"
 t2 "[Column(0)]"
 t3 "[Column(1)]"
@@ -42,7 +82,27 @@ t3 "[Column(1)]"
 
 # t1-t2 join using i12 and i23
 > create materialized view v1 as select *  from t1, t2 where t1.f1=t2.f3 AND t1.f2 = t2.f2;
-> SELECT DISTINCT (SELECT name FROM mz_catalog.mz_tables WHERE id = parts[1]) AS tablename, parts[2] AS columns FROM (SELECT regexp_match(name, 'Index\((u\d+), (.*)\)') AS parts FROM mz_catalog.mz_dataflow_operators WHERE id IN (SELECT id FROM mz_catalog.mz_dataflow_operator_addresses WHERE address[1] = (SELECT DISTINCT address[1] FROM mz_catalog.mz_dataflow_operator_addresses WHERE id = (SELECT DISTINCT id from mz_catalog.mz_dataflow_names WHERE name LIKE '%.v1%'))) AND name LIKE 'Index%') ORDER BY tablename, columns;
+> SELECT DISTINCT
+    (SELECT name
+     FROM mz_catalog.mz_tables
+     WHERE id = parts[1]) AS tablename,
+                  parts[2] AS columns
+  FROM
+    (SELECT regexp_match(name, 'Index\((u\d+), (.*)\)') AS parts
+     FROM mz_catalog.mz_dataflow_operators
+     WHERE id IN
+         (SELECT id
+          FROM mz_catalog.mz_dataflow_operator_addresses
+          WHERE address[1] =
+              (SELECT DISTINCT address[1]
+               FROM mz_catalog.mz_dataflow_operator_addresses
+               WHERE id =
+                   (SELECT DISTINCT id
+                    FROM mz_catalog.mz_dataflow_names
+                    WHERE name LIKE '%.v1%')))
+       AND name LIKE 'Index%')
+  ORDER BY tablename,
+           columns;
 t1 "[Column(0), Column(1)]"
 t2 "[Column(2), Column(1)]"
 
@@ -50,7 +110,27 @@ t2 "[Column(2), Column(1)]"
 
 # t1-t2 join using i12 and i23, t2-t3 join using i21 and i32
 > create materialized view v1 as select *  from t1, t2, t3 where t1.f1=t2.f3 AND t1.f2 = t2.f2 AND t2.f1 = t3.f2;
-> SELECT DISTINCT (SELECT name FROM mz_catalog.mz_tables WHERE id = parts[1]) AS tablename, parts[2] AS columns FROM (SELECT regexp_match(name, 'Index\((u\d+), (.*)\)') AS parts FROM mz_catalog.mz_dataflow_operators WHERE id IN (SELECT id FROM mz_catalog.mz_dataflow_operator_addresses WHERE address[1] = (SELECT DISTINCT address[1] FROM mz_catalog.mz_dataflow_operator_addresses WHERE id = (SELECT DISTINCT id from mz_catalog.mz_dataflow_names WHERE name LIKE '%.v1%'))) AND name LIKE 'Index%') ORDER BY tablename, columns;
+> SELECT DISTINCT
+    (SELECT name
+     FROM mz_catalog.mz_tables
+     WHERE id = parts[1]) AS tablename,
+                  parts[2] AS columns
+  FROM
+    (SELECT regexp_match(name, 'Index\((u\d+), (.*)\)') AS parts
+     FROM mz_catalog.mz_dataflow_operators
+     WHERE id IN
+         (SELECT id
+          FROM mz_catalog.mz_dataflow_operator_addresses
+          WHERE address[1] =
+              (SELECT DISTINCT address[1]
+               FROM mz_catalog.mz_dataflow_operator_addresses
+               WHERE id =
+                   (SELECT DISTINCT id
+                    FROM mz_catalog.mz_dataflow_names
+                    WHERE name LIKE '%.v1%')))
+       AND name LIKE 'Index%')
+  ORDER BY tablename,
+           columns;
 t1 "[Column(0), Column(1)]"
 t2 "[Column(0)]"
 t2 "[Column(2), Column(1)]"
