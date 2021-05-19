@@ -347,6 +347,16 @@ impl<'a> Parser<'a> {
             Token::Keyword(POSITION) if self.peek_token() == Some(Token::LParen) => {
                 self.parse_position_expr()
             }
+            Token::Keyword(OPERATOR) if self.peek_token() == Some(Token::LParen) => {
+                self.expect_token(&Token::LParen)?;
+                let op = self.parse_operator_name()?;
+                self.expect_token(&Token::RParen)?;
+                Ok(Expr::Op {
+                    op,
+                    expr1: Box::new(self.parse_subexpr(Precedence::PrefixPlusMinus)?),
+                    expr2: None,
+                })
+            }
             Token::Keyword(kw) if kw.is_reserved() => {
                 return Err(self.error(
                     self.peek_prev_pos(),
@@ -874,19 +884,25 @@ impl<'a> Parser<'a> {
         let tok = self.next_token().unwrap(); // safe as EOF's precedence is the lowest
 
         let regular_binary_operator = match &tok {
-            Token::Op(s) => Some(s.as_str()),
-            Token::Eq => Some("="),
-            Token::Star => Some("*"),
-            Token::Keyword(ILIKE) => Some("~~*"),
-            Token::Keyword(LIKE) => Some("~~"),
+            Token::Op(s) => Some(UnresolvedObjectName::unqualified(s.as_str())),
+            Token::Eq => Some(UnresolvedObjectName::unqualified("=")),
+            Token::Star => Some(UnresolvedObjectName::unqualified("*")),
+            Token::Keyword(ILIKE) => Some(UnresolvedObjectName::unqualified("~~*")),
+            Token::Keyword(LIKE) => Some(UnresolvedObjectName::unqualified("~~")),
             Token::Keyword(NOT) => {
                 if self.parse_keyword(LIKE) {
-                    Some("!~~")
+                    Some(UnresolvedObjectName::unqualified("!~~"))
                 } else if self.parse_keyword(ILIKE) {
-                    Some("!~~*")
+                    Some(UnresolvedObjectName::unqualified("!~~*"))
                 } else {
                     None
                 }
+            }
+            Token::Keyword(OPERATOR) if self.peek_token() == Some(Token::LParen) => {
+                self.expect_token(&Token::LParen)?;
+                let op = self.parse_operator_name()?;
+                self.expect_token(&Token::RParen)?;
+                Some(op)
             }
             _ => None,
         };
@@ -902,13 +918,13 @@ impl<'a> Parser<'a> {
                     if kw == ALL {
                         Expr::AllSubquery {
                             left: Box::new(expr),
-                            op: UnresolvedObjectName::unqualified(op),
+                            op,
                             right: Box::new(subquery),
                         }
                     } else {
                         Expr::AnySubquery {
                             left: Box::new(expr),
-                            op: UnresolvedObjectName::unqualified(op),
+                            op,
                             right: Box::new(subquery),
                         }
                     }
@@ -918,13 +934,13 @@ impl<'a> Parser<'a> {
                     if kw == ALL {
                         Expr::AllExpr {
                             left: Box::new(expr),
-                            op: UnresolvedObjectName::unqualified(op),
+                            op,
                             right: Box::new(right),
                         }
                     } else {
                         Expr::AnyExpr {
                             left: Box::new(expr),
-                            op: UnresolvedObjectName::unqualified(op),
+                            op,
                             right: Box::new(right),
                         }
                     }
@@ -934,7 +950,7 @@ impl<'a> Parser<'a> {
                 Ok(expr)
             } else {
                 Ok(Expr::Op {
-                    op: UnresolvedObjectName::unqualified(op),
+                    op,
                     expr1: Box::new(expr),
                     expr2: Some(Box::new(self.parse_subexpr(precedence)?)),
                 })
@@ -1151,6 +1167,9 @@ impl<'a> Parser<'a> {
                 Token::Keyword(BETWEEN) => Precedence::Like,
                 Token::Keyword(ILIKE) => Precedence::Like,
                 Token::Keyword(LIKE) => Precedence::Like,
+                Token::Keyword(OPERATOR) if self.peek_nth_token(1) == Some(Token::LParen) => {
+                    Precedence::Other
+                }
                 Token::Op(s) => match s.as_str() {
                     "<" | "<=" | "<>" | "!=" | ">" | ">=" => Precedence::Cmp,
                     "+" | "-" => Precedence::PlusMinus,
@@ -2779,6 +2798,23 @@ impl<'a> Parser<'a> {
                 }))
             }
             None => Ok(None),
+        }
+    }
+
+    /// Parse a possibly qualified, possibly quoted operator, e.g.
+    /// `+`, `pg_catalog.+`, or `"pg_catalog".+`
+    fn parse_operator_name(&mut self) -> Result<UnresolvedObjectName, ParserError> {
+        let mut idents = vec![];
+        while !matches!(self.peek_token(), Some(Token::Op(_))) {
+            idents.push(self.parse_identifier()?);
+            self.expect_token(&Token::Dot)?;
+        }
+        match self.next_token() {
+            Some(Token::Op(op)) => {
+                idents.push(Ident::new(op));
+                Ok(UnresolvedObjectName(idents))
+            }
+            _ => self.expected(self.peek_pos(), "operator", self.peek_token()),
         }
     }
 

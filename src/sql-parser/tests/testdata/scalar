@@ -31,6 +31,21 @@ $91 + $42
 Op { op: UnresolvedObjectName([Ident("+")]), expr1: Parameter(91), expr2: Some(Parameter(42)) }
 
 parse-scalar
+$91 OPERATOR(+) $42
+----
+Op { op: UnresolvedObjectName([Ident("+")]), expr1: Parameter(91), expr2: Some(Parameter(42)) }
+
+parse-scalar
+$91 operator(pg_catalog.+) $42
+----
+Op { op: UnresolvedObjectName([Ident("pg_catalog"), Ident("+")]), expr1: Parameter(91), expr2: Some(Parameter(42)) }
+
+parse-scalar
+a OPERATOR("materialize".pg_catalog.!~) 'foo'
+----
+Op { op: UnresolvedObjectName([Ident("materialize"), Ident("pg_catalog"), Ident("!~")]), expr1: Identifier([Ident("a")]), expr2: Some(Value(String("foo"))) }
+
+parse-scalar
 NOT salary = ''
 ----
 Not { expr: Op { op: UnresolvedObjectName([Ident("=")]), expr1: Identifier([Ident("salary")]), expr2: Some(Value(String(""))) } }

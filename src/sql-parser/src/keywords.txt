@@ -171,6 +171,7 @@ Of
 Offset
 On
 Only
+Operator
 Optimized
 Option
 Or
