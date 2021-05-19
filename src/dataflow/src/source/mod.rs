@@ -742,7 +742,7 @@ impl ConsistencyInfo {
             // Simply assign to this message the next timestamp that is not closed
             Some(self.find_matching_rt_timestamp())
         } else {
-            // TODO(cirego): propagate the error upwards somehow?
+            // TODO(cirego): propagate the error upwards
             let entry = entry.expect("transaction ID known for DBZ");
 
             // The source is a BYO source. We either can take a fast path, where we simply re-use the currently
@@ -764,7 +764,7 @@ impl ConsistencyInfo {
             if behind {
                 // This is the fast path - we can reuse a timestamp binding
                 // we already know about.
-                // TODO (cirego): remove call to update_entry
+                // TODO (cirego): remove call to close_transaction
                 cons_info.close_transaction(entry.transaction_id);
                 Some(cons_info.timestamp)
             } else {
@@ -1518,8 +1518,8 @@ where
         .offset_received
         .set(offset.offset);
 
-    // TODO (cirego): Figure out how to extract DebeziumCoordinates from
-    // Attempt to pull out a debezium transaction from the message, assumes avro encoded message
+    // TODO (cirego): Extract DebeziumCoordinates by decoding `message` using a ConfluentAvroResolver
+    // schema stored in ConsistencyInfo
     let entry = match consistency_info.source_type {
         Consistency::Debezium(_) => {
             // decode_debezium_transaction_entry(message.payload.clone().unwrap_or_default())

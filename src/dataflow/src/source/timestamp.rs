@@ -36,7 +36,6 @@ impl PartitionTimestamps {
         }
     }
 
-    // TODO (cirego): Compact entries that have
     fn compact(&mut self, frontier: AntichainRef<Timestamp>) {
         if self.bindings.is_empty() {
             return;
@@ -52,6 +51,9 @@ impl PartitionTimestamps {
         }
 
         // TODO (cirego): Actually remove entries that have been completed
+        // Entries are considered completed when every `<_, bool>` entry in the completions struct is set to True
+        // Starting from the earliest entry, remove entries until we encounter the first entry that still has
+        // some completions with a value of `false`.
     }
 
     fn add_binding(&mut self, binding: DebeziumTimestampBinding) {
