@@ -976,6 +976,7 @@ pub struct KafkaSinkConnectorBuilder {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub value_desc: RelationDesc,
     pub topic_prefix: String,
+    pub consistency_topic_prefix: Option<String>,
     pub topic_suffix_nonce: String,
     pub partition_count: i32,
     pub replication_factor: i32,

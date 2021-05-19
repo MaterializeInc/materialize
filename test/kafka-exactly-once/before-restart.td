@@ -75,7 +75,7 @@ $ kafka-create-topic topic=input
 
 > CREATE SINK output FROM input_byo
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-sink-${testdrive.seed}'
-  WITH (exactly_once=true, consistency=true)
+  WITH (exactly_once=true, consistency_topic='output-sink-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-ingest format=avro topic=input-consistency timestamp=1 schema=${trxschemakey}

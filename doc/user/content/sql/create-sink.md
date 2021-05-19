@@ -54,9 +54,9 @@ Field                | Value type | Description
 ---------------------|------------|------------
 `partition_count`    | `int`      | Set the sink Kafka topic's partition count. This defaults to -1 (use the broker default).
 `replication_factor` | `int`      | Set the sink Kafka topic's replication factor. This defaults to -1 (use the broker default).
-`consistency`        | `boolean`  | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. This defaults to false.
-`security_protocol` | `text` | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberos-with-options), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
-`acks` | `text`| Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
+`consistency_topic`  | `text`     | Makes the sink emit additional [consistency metadata](#consistency-metadata). Only valid for Kafka sinks. This defaults to empty, meaning no consistency information is emitted by default.
+`security_protocol`  | `text`     | Use [`ssl`](#ssl-with-options) or, for [Kerberos](#kerberos-with-options), `sasl_plaintext`, `sasl-scram-sha-256`, or `sasl-sha-512` to connect to the Kafka cluster.
+`acks`               | `text`     | Sets the number of Kafka replicas that must acknowledge Materialize writes. Accepts values [-1,1000]. `-1` (the default) specifies all replicas.
 
 #### SSL `WITH` options
 
@@ -193,7 +193,7 @@ Each message sent to Kafka has a `transaction` field, along with a `transaction_
 
 In addition to the inline information, Materialize creates a new "consistency topic" that stores counts of how many changes were generated per `transaction_id`. This consistency topic is named using the format below.
 ```nofmt
-{topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}-consistency
+{consistency_topic_prefix}-{sink_global_id}-{materialize-startup-time}-{nonce}
 ```
 
 Each message in the consistency topic has the schema below.

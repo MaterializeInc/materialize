@@ -128,14 +128,14 @@ $ kafka-create-topic topic=input
 
 > CREATE SINK input_sink FROM input_keyed
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
-  WITH (consistency = true) FORMAT AVRO
+  WITH (consistency_topic = 'input-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
 # requesting to key by (a, b) is fine when (a) is a unique key
 
 > CREATE SINK input_sink_multiple_keys FROM input_keyed
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b, a)
-  WITH (consistency = true) FORMAT AVRO
+  WITH (consistency_topic = 'input-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
@@ -263,13 +263,13 @@ $ kafka-verify format=avro sink=materialize.public.input_with_deletions_sink sor
 
 ! CREATE SINK invalid_key FROM input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
-  WITH (consistency = true) FORMAT AVRO
+  WITH (consistency_topic = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 Invalid upsert key: (a), there are no valid keys
 
 ! CREATE SINK another_invalid_key FROM input_keyed
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b)
-  WITH (consistency = true) FORMAT AVRO
+  WITH (consistency_topic = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 Invalid upsert key: (b), valid keys are: (a)
 
@@ -277,13 +277,13 @@ Invalid upsert key: (b), valid keys are: (a)
 
 ! CREATE SINK invalid_sub_key FROM input_keyed_ab
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
-  WITH (consistency = true) FORMAT AVRO
+  WITH (consistency_topic = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 Invalid upsert key: (a), valid keys are: (a, b)
 
 ! CREATE SINK another_invalid_sub_key FROM input_keyed_ab
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b)
-  WITH (consistency = true) FORMAT AVRO
+  WITH (consistency_topic = true) FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}' ENVELOPE UPSERT
 Invalid upsert key: (b), valid keys are: (a, b)
 

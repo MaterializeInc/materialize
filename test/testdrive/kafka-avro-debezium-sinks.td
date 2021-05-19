@@ -92,12 +92,12 @@ $ kafka-create-topic topic=input
 
 > CREATE SINK input_sink FROM input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
-  WITH (consistency = true) FORMAT AVRO
+  WITH (consistency_topic = 'input-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK input_sink_multiple_keys FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b, a)
-  WITH (consistency = true) FORMAT AVRO
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink-multi-key' KEY (b, a)
+  WITH (consistency_topic = 'input-sink-multi-key-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=1
