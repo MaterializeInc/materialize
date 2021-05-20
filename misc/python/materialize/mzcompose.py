@@ -1250,7 +1250,7 @@ class RunStep(WorkflowStep):
         self,
         *,
         service: str,
-        command: Optional[str] = None,
+        command: Optional[Union[str, list]] = None,
         daemon: bool = False,
         entrypoint: Optional[str] = None,
         service_ports: bool = True,
@@ -1261,8 +1261,10 @@ class RunStep(WorkflowStep):
         if entrypoint:
             cmd.append(f"--entrypoint={entrypoint}")
         cmd.append(service)
-        if command is not None:
+        if isinstance(command, str):
             cmd.extend(shlex.split(command))
+        elif isinstance(command, list):
+            cmd.extend(command)
         self._service_ports = service_ports
         self._command = cmd
 
