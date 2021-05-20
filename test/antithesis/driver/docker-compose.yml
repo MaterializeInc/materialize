@@ -66,7 +66,7 @@ services:
         --schema-registry-url=http://cp-combined:8081
         --materialized-url=postgres://materialize@materialized:6875
         --validate-catalog=/share/mzdata/catalog
-        --default-timeout 300
+        --default-timeout 60
         --shuffle-tests
         --seed ${ANTITHESIS_RANDOM_SEED:-1}
         !(*s3|kinesis*).td ;
