@@ -26,7 +26,7 @@ use tokio_postgres::types::PgLsn;
 use tokio_postgres::{Client, SimpleQueryMessage};
 
 use crate::source::{SimpleSource, SourceError, Timestamper};
-use dataflow_types::PostgresSourceConnector;
+use dataflow_types::{PostgresSourceConnector, SourceErrorDetails};
 use repr::{Datum, Row};
 
 lazy_static! {
@@ -36,6 +36,8 @@ lazy_static! {
 
 /// Information required to sync data from Postgres
 pub struct PostgresSourceReader {
+    /// Used to produce useful error messages
+    source_name: String,
     connector: PostgresSourceConnector,
     /// Our cursor into the WAL
     lsn: PgLsn,
@@ -65,8 +67,9 @@ macro_rules! try_recoverable {
 
 impl PostgresSourceReader {
     /// Constructs a new instance
-    pub fn new(connector: PostgresSourceConnector) -> Self {
+    pub fn new(source_name: String, connector: PostgresSourceConnector) -> Self {
         Self {
+            source_name,
             connector,
             lsn: 0.into(),
         }
@@ -336,7 +339,10 @@ impl SimpleSource for PostgresSourceReader {
         // The initial snapshot has no easy way of retrying it in case of connection failures
         self.produce_snapshot(timestamper)
             .await
-            .map_err(|e| SourceError::FileIO(e.to_string()))?;
+            .map_err(|e| SourceError {
+                source_name: self.source_name.clone(),
+                error: SourceErrorDetails::Initialization(e.to_string()),
+            })?;
 
         loop {
             match self.produce_replication(timestamper).await {
@@ -344,7 +350,12 @@ impl SimpleSource for PostgresSourceReader {
                 Err(ReplicationError::Recoverable(e)) => {
                     log::info!("replication interrupted: {}", e)
                 }
-                Err(ReplicationError::Fatal(e)) => return Err(SourceError::FileIO(e.to_string())),
+                Err(ReplicationError::Fatal(e)) => {
+                    return Err(SourceError {
+                        source_name: self.source_name,
+                        error: SourceErrorDetails::FileIO(e.to_string()),
+                    })
+                }
             }
 
             // TODO(petrosagg): implement exponential back-off

@@ -15,18 +15,23 @@ use pubnub_hyper::core::data::{channel, message::Type};
 use pubnub_hyper::{Builder, DefaultRuntime, DefaultTransport};
 
 use crate::source::{SimpleSource, SourceError, Timestamper};
-use dataflow_types::PubNubSourceConnector;
+use dataflow_types::{PubNubSourceConnector, SourceErrorDetails};
 use repr::{Datum, Row};
 
 /// Information required to sync data from PubNub
 pub struct PubNubSourceReader {
+    /// Used to produce useful error messages
+    source_name: String,
     connector: PubNubSourceConnector,
 }
 
 impl PubNubSourceReader {
     /// Constructs a new instance
-    pub fn new(connector: PubNubSourceConnector) -> Self {
-        Self { connector }
+    pub fn new(source_name: String, connector: PubNubSourceConnector) -> Self {
+        Self {
+            source_name,
+            connector,
+        }
     }
 }
 
@@ -38,7 +43,10 @@ impl SimpleSource for PubNubSourceReader {
             .publish_key("")
             .subscribe_key(&self.connector.subscribe_key)
             .build()
-            .map_err(SourceError::FileIO)?;
+            .map_err(|e| SourceError {
+                source_name: self.source_name.clone(),
+                error: SourceErrorDetails::FileIO(e),
+            })?;
 
         let mut pubnub = Builder::new()
             .transport(transport)
@@ -46,13 +54,15 @@ impl SimpleSource for PubNubSourceReader {
             .build();
 
         let channel = self.connector.channel;
+        let source_name = self.source_name.clone();
         let channel: channel::Name = channel.parse().or_else(|_| {
-            Err(SourceError::FileIO(format!(
-                "invalid pubnub channel: {}",
-                channel
-            )))
+            Err(SourceError {
+                source_name,
+                error: SourceErrorDetails::FileIO(format!("invalid pubnub channel: {}", channel)),
+            })
         })?;
 
+        let source_name = self.source_name.clone();
         loop {
             let stream = pubnub.subscribe(channel.clone()).await;
             tokio::pin!(stream);
@@ -63,10 +73,10 @@ impl SimpleSource for PubNubSourceReader {
 
                     let row = Row::pack_slice(&[Datum::String(&s)]);
 
-                    timestamper
-                        .insert(row)
-                        .await
-                        .map_err(|e| SourceError::FileIO(e.to_string()))?;
+                    timestamper.insert(row).await.map_err(|e| SourceError {
+                        source_name: source_name.clone(),
+                        error: SourceErrorDetails::FileIO(e.to_string()),
+                    })?;
                 }
             }
 

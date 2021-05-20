@@ -9,7 +9,7 @@
 
 //! Types related to the creation of dataflow sources.
 
-use dataflow_types::DataflowError;
+use dataflow_types::{DataflowError, SourceErrorDetails};
 use mz_avro::types::Value;
 use repr::MessagePayload;
 use serde::{Deserialize, Serialize};
@@ -85,6 +85,8 @@ static YIELD_INTERVAL_MS: u128 = 10;
 pub struct SourceConfig<'a, G> {
     /// The name to attach to the underlying timely operator.
     pub name: String,
+    /// The name of the SQL object this source corresponds to
+    pub sql_name: String,
     /// The name of the upstream resource this source corresponds to
     /// (For example, a Kafka topic)
     pub upstream_name: Option<String>,
@@ -1216,6 +1218,7 @@ where
 {
     let SourceConfig {
         name,
+        sql_name,
         upstream_name,
         id,
         scope,
@@ -1447,7 +1450,9 @@ where
         }
     });
 
-    let (ok_stream, err_stream) = stream.map_fallible(|r| r.map_err(SourceError::FileIO));
+    let (ok_stream, err_stream) = stream.map_fallible(move |r| {
+        r.map_err(|e| SourceError::new(sql_name.clone(), SourceErrorDetails::FileIO(e)))
+    });
 
     if active {
         ((ok_stream, err_stream), Some(capability))

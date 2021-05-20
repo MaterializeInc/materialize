@@ -68,9 +68,11 @@ impl<'a> DataflowBuilder<'a> {
             *self.transient_id_counter = transient_id
                 .checked_add(1)
                 .expect("id counter overflows i64");
-            match self.catalog.get_by_id(id).item() {
+            let entry = self.catalog.get_by_id(id);
+            match entry.item() {
                 CatalogItem::Table(table) => {
                     dataflow.add_source_import(
+                        entry.name().to_string(),
                         *id,
                         SourceConnector::Local,
                         table.desc.clone(),
@@ -109,12 +111,19 @@ impl<'a> DataflowBuilder<'a> {
                     let connector = connector.unwrap_or_else(|| source.connector.clone());
 
                     if source.optimized_expr.0.is_trivial_source() {
-                        dataflow.add_source_import(*id, connector, source.bare_desc.clone(), *id);
+                        dataflow.add_source_import(
+                            entry.name().to_string(),
+                            *id,
+                            connector,
+                            source.bare_desc.clone(),
+                            *id,
+                        );
                     } else {
                         // From the dataflow layer's perspective, the source transformation is just a view (across which it should be able to do whole-dataflow optimizations).
                         // Install it as such (giving the source a global transient ID by which the view/transformation can refer to it)
                         let bare_source_id = GlobalId::Transient(transient_id);
                         dataflow.add_source_import(
+                            entry.name().to_string(),
                             bare_source_id,
                             connector,
                             source.bare_desc.clone(),

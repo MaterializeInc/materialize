@@ -27,14 +27,41 @@ impl Display for DecodeError {
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub enum SourceError {
-    FileIO(String),
+pub struct SourceError {
+    pub source_name: String,
+    pub error: SourceErrorDetails,
+}
+
+impl SourceError {
+    pub fn new(source_name: String, error: SourceErrorDetails) -> SourceError {
+        SourceError { source_name, error }
+    }
 }
 
 impl Display for SourceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: ", self.source_name)?;
+        self.error.fmt(f)
+    }
+}
+
+#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub enum SourceErrorDetails {
+    Initialization(String),
+    FileIO(String),
+}
+
+impl Display for SourceErrorDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SourceError::FileIO(e) => write!(f, "File IO: {}", e),
+            SourceErrorDetails::Initialization(e) => {
+                write!(
+                    f,
+                    "failed during initialization, must be dropped and recreated: {}",
+                    e
+                )
+            }
+            SourceErrorDetails::FileIO(e) => write!(f, "file IO: {}", e),
         }
     }
 }

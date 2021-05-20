@@ -409,4 +409,6 @@ DROP PUBLICATION mz_source;
 INSERT INTO pk_table VALUES (99999);
 
 ! SELECT COUNT(*) = 0 FROM pk_table;
-Source error: File IO: db error: ERROR: publication "mz_source" does not exist
+# todo: we're purifying Postgres view names incorrectly, fix that and this error!
+# should be "materialize.public.pk_table"
+Source error: materialize.public.mz_source: file IO: db error: ERROR: publication "mz_source" does not exist
