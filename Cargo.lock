@@ -894,19 +894,20 @@ dependencies = [
 
 [[package]]
 name = "dec"
-version = "0.3.3"
-source = "git+https://github.com/MaterializeInc/rust-dec?rev=4ed6de0#4ed6de013182bb7c577c11dfe6c8975c5b4ef3a0"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "915134aa3f3670c6dfd8b7bfda62cfc3025fb319dd08245e9d58df33183830c2"
 dependencies = [
  "decnumber-sys",
  "libc",
- "serde",
  "static_assertions",
 ]
 
 [[package]]
 name = "decnumber-sys"
 version = "0.1.5"
-source = "git+https://github.com/MaterializeInc/rust-dec?rev=4ed6de0#4ed6de013182bb7c577c11dfe6c8975c5b4ef3a0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76a99b958f19724bc0a2202086d135c2e7ed098e95cdae778546e965648fa47b"
 dependencies = [
  "cc",
  "libc",
