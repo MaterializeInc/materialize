@@ -320,7 +320,7 @@ where
                                             errors.pass_through("decode-errors").as_collection();
                                         (stream, Some(errors))
                                     }
-                                    SourceEnvelope::Upsert => super::upsert::decode_stream(
+                                    SourceEnvelope::Upsert => super::upsert::upsert(
                                         &results,
                                         self.as_of_frontier.clone(),
                                         &mut linear_operators,

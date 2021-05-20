@@ -33,7 +33,7 @@ use crate::source::SourceData;
 /// the rendering pipeline in that their input is a stream
 /// with two components instead of one, and the second component
 /// can be null or empty.
-pub fn decode_stream<G>(
+pub fn upsert<G>(
     stream: &Stream<G, DecodeResult>,
     as_of_frontier: Antichain<Timestamp>,
     operators: &mut Option<LinearOperator>,
