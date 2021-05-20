@@ -243,7 +243,9 @@ where
                                 }
                                 None => {}
                                 Some(Err(err)) => {
-                                    error!("key decoding error: {}", err);
+                                    // This can never be retracted! But at least it's better to put the source in a
+                                    // permanently errored state than to keep on trucking with wrong results.
+                                    session.give((Err(err), cap.time().clone(), 1));
                                 }
                             }
                         }
