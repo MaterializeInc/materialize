@@ -301,19 +301,23 @@ parameter.
 
 ### Telemetry
 
-Unless disabled with `--disable-telemetry`, upon startup and once an hour
-`materialized` reports some anonymous telemetry data to a central server operated
-by materialize.com. If a newer version is available at startup a warning will be
-logged.
+Materialize periodically communicates with `telemetry.materialize.com` to report
+usage data and check for new versions. You can opt out of this communication
+with the `--disable-telemetry` flag.
 
-Information reported to Materialize:
+We record the following data:
 
-* Cluster ID, a unique ID which is persistent across materialized restarts
-* Session ID, a unique ID which is reset on each materialized restart
-* Current Version
+* Public IP of the host running Materialize
+* Cluster ID, a unique ID which is persistent across Materialize restarts
+* Session ID, a unique ID which is reset on each Materialize restart
+* Materialize version
 * Number of worker threads
 * Uptime
 * Count of sinks, sources, and views by type
+
+We use this data to guide our product roadmap. Unless you are using [Materialize
+Cloud](/cloud/what-is-materialize-cloud/), we do not and cannot correlate this
+data to your identity.
 
 ### Dataflow tuning
 
