@@ -469,9 +469,7 @@ where
                         self.render_join(input, mfp, scope)
                     }
                     expr::JoinImplementation::DeltaQuery(_orders) => {
-                        self.render_delta_join(input, mfp, scope, worker_index, |t| {
-                            t.saturating_sub(1)
-                        })
+                        self.render_delta_join(input, mfp, scope)
                     }
                     expr::JoinImplementation::Unimplemented => {
                         panic!("Attempt to render unimplemented join");
@@ -652,13 +650,7 @@ where
                             self.collections.insert(relation_expr.clone(), collection);
                         }
                         expr::JoinImplementation::DeltaQuery(_orders) => {
-                            let collection = self.render_delta_join(
-                                relation_expr,
-                                mfp,
-                                scope,
-                                worker_index,
-                                |t| t.saturating_sub(1),
-                            );
+                            let collection = self.render_delta_join(relation_expr, mfp, scope);
                             self.collections.insert(relation_expr.clone(), collection);
                         }
                         expr::JoinImplementation::Unimplemented => {
