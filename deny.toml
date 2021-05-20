@@ -65,7 +65,6 @@ allow = [
     "ICU",
     "ISC",
     "MIT",
-    "Zlib",
 ]
 private = { ignore = true }
 
