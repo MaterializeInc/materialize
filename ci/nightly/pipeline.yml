@@ -36,9 +36,9 @@
         composition: kafka-multi-broker
         run: kafka-multi-broker
 
-  - id: testdrive-redpanda
-    label: ":racing_car: testdrive :panda_face:"
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: testdrive
-          run: testdrive-redpanda
+- id: testdrive-redpanda
+  label: ":racing_car: testdrive :panda_face:"
+  plugins:
+    - ./ci/plugins/mzcompose:
+        composition: testdrive
+        run: testdrive-redpanda
