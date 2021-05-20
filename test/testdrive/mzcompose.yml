@@ -116,13 +116,15 @@ services:
     - mzdata:/share/mzdata
     - tmp:/share/tmp
   kafka:
-    image: vectorized/redpanda:v21.4.2
+    image: vectorized/redpanda:v21.5.3
     command: >-
       start
       --smp 1
       --memory 1G
       --reserve-memory 0M
       --overprovisioned
+      --set "redpanda.enable_transactions=true"
+      --set "redpanda.enable_idempotence=true"
       --node-id 0
       --kafka-addr PLAINTEXT://0.0.0.0:9092
       --advertise-kafka-addr PLAINTEXT://kafka:9092
