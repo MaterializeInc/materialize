@@ -147,7 +147,23 @@ impl fmt::Display for PartitionId {
             PartitionId::Kafka(id) => write!(f, "{}", id.to_string()),
             PartitionId::S3 => write!(f, "s3"),
             PartitionId::Kinesis => write!(f, "kinesis"),
-            PartitionId::File => write!(f, "0"),
+            PartitionId::File => write!(f, "file"),
+        }
+    }
+}
+
+impl FromStr for PartitionId {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "s3" => Ok(PartitionId::S3),
+            "kinesis" => Ok(PartitionId::Kinesis),
+            "file" => Ok(PartitionId::File),
+            s => {
+                let val: i32 = s.parse()?;
+                Ok(PartitionId::Kafka(val))
+            }
         }
     }
 }

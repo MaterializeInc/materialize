@@ -108,6 +108,8 @@ pub enum SequencedCommand {
         id: GlobalId,
         /// The connector for the timestamped source.
         connector: SourceConnector,
+        /// Previously stored timestamp bindings.
+        bindings: Vec<(PartitionId, Timestamp, MzOffset)>,
     },
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
@@ -691,7 +693,11 @@ where
                 self.render_state.traces.del_all_traces();
                 self.shutdown_logging();
             }
-            SequencedCommand::AddSourceTimestamping { id, connector } => {
+            SequencedCommand::AddSourceTimestamping {
+                id,
+                connector,
+                bindings,
+            } => {
                 let source_timestamp_data = if let SourceConnector::External {
                     connector,
                     consistency,
@@ -765,9 +771,16 @@ where
                 };
 
                 if let Some(data) = source_timestamp_data {
+                    for (pid, timestamp, offset) in bindings {
+                        data.add_partition(pid.clone());
+                        data.add_binding(pid, timestamp, offset, false);
+                    }
+                    let mut upper = Antichain::new();
+                    data.read_upper(&mut upper);
                     let prev = self.render_state.ts_histories.insert(id, data);
                     assert!(prev.is_none());
-                    self.reported_frontiers.insert(id, Antichain::from_elem(0));
+
+                    self.reported_frontiers.insert(id, upper);
                 }
             }
             SequencedCommand::AdvanceSourceTimestamp { id, update } => {

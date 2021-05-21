@@ -3058,6 +3058,8 @@ impl Coordinator {
     // Notify the timestamper thread that a source has been created or dropped.
     async fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
         if create {
+            // FIXME
+            let bindings = self.catalog.load_timestamps(source_id).expect("FIXME");
             if let Some(entry) = self.catalog.try_get_by_id(source_id) {
                 if let CatalogItem::Source(s) = entry.item() {
                     self.ts_tx
@@ -3066,6 +3068,7 @@ impl Coordinator {
                     self.broadcast(SequencedCommand::AddSourceTimestamping {
                         id: source_id,
                         connector: s.connector.clone(),
+                        bindings,
                     });
                 }
             }

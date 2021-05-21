@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
-use dataflow_types::{ExternalSourceConnector, SinkEnvelope};
-use expr::Id;
+use dataflow_types::{ExternalSourceConnector, MzOffset, SinkEnvelope};
+use expr::{Id, PartitionId};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
@@ -1265,6 +1265,19 @@ impl Catalog {
         tx.commit()?;
 
         Ok(())
+    }
+
+    pub fn load_timestamps(
+        &mut self,
+        source_id: GlobalId,
+    ) -> Result<Vec<(PartitionId, Timestamp, MzOffset)>, Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        let ret = tx.load_timestamps(source_id)?;
+        tx.commit()?;
+
+        Ok(ret)
     }
 
     pub fn delete_timestamps(&mut self, source_id: GlobalId) -> Result<(), Error> {

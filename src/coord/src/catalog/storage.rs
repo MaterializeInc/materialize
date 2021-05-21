@@ -14,7 +14,8 @@ use rusqlite::types::{FromSql, FromSqlError, ToSql, ToSqlOutput, Value, ValueRef
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
-use expr::GlobalId;
+use dataflow_types::MzOffset;
+use expr::{GlobalId, PartitionId};
 use ore::cast::CastFrom;
 use repr::Timestamp;
 use sql::catalog::CatalogError as SqlCatalogError;
@@ -431,6 +432,26 @@ impl Transaction<'_> {
             }
             Err(err) => Err(err.into()),
         }
+    }
+
+    pub fn load_timestamps(
+        &self,
+        source_id: GlobalId,
+    ) -> Result<Vec<(PartitionId, Timestamp, MzOffset)>, Error> {
+        self.inner
+            .prepare_cached(
+                "SELECT pid, timestamp, offset from timestamps where sid = ? order by pid, timestamp")?
+            .query_and_then(params![SqlVal(&source_id)], |row| -> Result<_, Error> {
+                // FIXME
+                let partition: PartitionId = row.get::<_, String>(0)?.parse().expect("FIXME");
+                let timestamp: Timestamp = row.get(1)?;
+                let offset = MzOffset {
+                    offset: row.get(2)?,
+                };
+
+                Ok((partition, timestamp, offset))
+            })?
+            .collect()
     }
 
     pub fn insert_database(&mut self, database_name: &str) -> Result<i64, Error> {
