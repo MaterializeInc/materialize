@@ -1,7 +1,7 @@
 {
     "com.acme.avro.aggregationtest::Key1Unused": [
         0,
-        999
+        9999
     ],
     "com.acme.avro.OuterRecord::DecValue00": [
         10000,

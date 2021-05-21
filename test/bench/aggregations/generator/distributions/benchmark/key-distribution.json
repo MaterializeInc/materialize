@@ -1,6 +1,6 @@
 {
     "com.acme.avro.aggregationtestkey::Key1": [
         0,
-        999
+        9999
     ]
 }
