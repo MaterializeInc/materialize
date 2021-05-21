@@ -23,6 +23,7 @@ use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
 use regex::Regex;
+use repr::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
@@ -1248,6 +1249,22 @@ impl Catalog {
             }
         }
         Ok(temporary_ids)
+    }
+
+    pub fn insert_timestamp(
+        &mut self,
+        source_id: GlobalId,
+        partition_id: &str,
+        timestamp: Timestamp,
+        offset: i64,
+    ) -> Result<(), Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        tx.insert_timestamp(source_id, partition_id, timestamp, offset)?;
+        tx.commit()?;
+
+        Ok(())
     }
 
     pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<BuiltinTableUpdate>, Error> {

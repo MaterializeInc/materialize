@@ -126,12 +126,14 @@ impl TimestampProposer {
 /// to time1.
 #[derive(Debug)]
 pub struct PartitionTimestamps {
+    id: PartitionId,
     bindings: Vec<(Timestamp, MzOffset)>,
 }
 
 impl PartitionTimestamps {
-    fn new() -> Self {
+    fn new(id: PartitionId) -> Self {
         Self {
+            id,
             bindings: Vec::new(),
         }
     }
@@ -221,6 +223,19 @@ impl PartitionTimestamps {
     fn upper(&self) -> Option<Timestamp> {
         self.bindings.last().map(|(time, _)| *time + 1)
     }
+
+    fn get_bindings_in_range(
+        &self,
+        lower: AntichainRef<Timestamp>,
+        upper: AntichainRef<Timestamp>,
+        bindings: &mut Vec<(PartitionId, Timestamp, MzOffset)>,
+    ) {
+        for (time, offset) in self.bindings.iter() {
+            if lower.less_equal(time) && !upper.less_equal(time) {
+                bindings.push((self.id.clone(), *time, *offset));
+            }
+        }
+    }
 }
 
 /// This struct holds per-source timestamp state in a way that can be shared across
@@ -286,7 +301,7 @@ impl TimestampBindingBox {
         }
 
         self.partitions
-            .insert(partition, PartitionTimestamps::new());
+            .insert(partition.clone(), PartitionTimestamps::new(partition));
     }
 
     fn add_binding(
@@ -331,6 +346,20 @@ impl TimestampBindingBox {
         } else {
             None
         }
+    }
+
+    fn get_bindings_in_range(
+        &self,
+        lower: AntichainRef<Timestamp>,
+        upper: AntichainRef<Timestamp>,
+    ) -> Vec<(PartitionId, Timestamp, MzOffset)> {
+        let mut ret = Vec::new();
+
+        for (_, partition) in self.partitions.iter() {
+            partition.get_bindings_in_range(lower, upper, &mut ret);
+        }
+
+        ret
     }
 
     fn read_upper(&self, target: &mut Antichain<Timestamp>) {
@@ -483,7 +512,7 @@ impl TimestampBindingRc {
         lower: AntichainRef<Timestamp>,
         upper: AntichainRef<Timestamp>,
     ) -> Vec<(PartitionId, Timestamp, MzOffset)> {
-        unimplemented!()
+        self.wrapper.borrow().get_bindings_in_range(lower, upper)
     }
 }
 

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use expr::GlobalId;
 use ore::cast::CastFrom;
+use repr::Timestamp;
 use sql::catalog::CatalogError as SqlCatalogError;
 use sql::names::{DatabaseSpecifier, FullName};
 use uuid::Uuid;
@@ -105,6 +106,21 @@ const MIGRATIONS: &[&str] = &[
     // Introduced in v0.7.0.
     "INSERT INTO schemas (database_id, name) VALUES
         (NULL, 'mz_internal');",
+    // Adjusts timestamp table to support replayable source timestamp bindings.
+    //
+    // Introduced for v0.7.4
+    //
+    // ATTENTION: this migration blows away data and must not be used as a model
+    // for future migrations! It is only acceptable now because we have not yet
+    // made any consistency promises to users.
+    "DROP TABLE timestamps;
+     CREATE TABLE timestamps (
+        sid blob NOT NULL,
+        pid blob NOT NULL,
+        timestamp integer NOT NULL,
+        offset blob NOT NULL,
+        PRIMARY KEY (sid, pid, timestamp, offset)
+    );",
     // Add new migrations here.
     //
     // Migrations should be preceded with a comment of the following form:
@@ -477,6 +493,25 @@ impl Transaction<'_> {
             Err(err) if is_constraint_violation(&err) => Err(Error::new(
                 ErrorKind::ItemAlreadyExists(item_name.to_owned()),
             )),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn insert_timestamp(
+        &self,
+        source_id: GlobalId,
+        partition_id: &str,
+        timestamp: Timestamp,
+        offset: i64,
+    ) -> Result<(), Error> {
+        match self
+            .inner
+            .prepare_cached(
+                "INSERT INTO timestamps (sid, pid, timestamp, offset) VALUES (?, ?, ?, ?)",
+            )?
+            .execute(params![SqlVal(&source_id), partition_id, timestamp, offset])
+        {
+            Ok(_) => Ok(()),
             Err(err) => Err(err.into()),
         }
     }

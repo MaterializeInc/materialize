@@ -60,7 +60,9 @@ use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use build_info::BuildInfo;
-use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
+use dataflow::{
+    CacheMessage, FrontierFeedback, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta,
+};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
@@ -599,7 +601,7 @@ impl Coordinator {
         match message {
             WorkerFeedback::FrontierUppers(updates) => {
                 for feedback in updates {
-                    self.update_upper(&feedback.id, feedback.changes);
+                    self.update_upper(feedback);
                 }
                 self.maintenance().await;
             }
@@ -951,9 +953,13 @@ impl Coordinator {
     }
 
     /// Updates the upper frontier of a named view.
-    fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
-        if let Some(index_state) = self.indexes.get_mut(name) {
-            let changes: Vec<_> = index_state.upper.update_iter(changes.drain()).collect();
+    fn update_upper(&mut self, mut feedback: FrontierFeedback) {
+        if let Some(index_state) = self.indexes.get_mut(&feedback.id) {
+            assert!(feedback.bindings.is_none());
+            let changes: Vec<_> = index_state
+                .upper
+                .update_iter(feedback.changes.drain())
+                .collect();
             if !changes.is_empty() {
                 // Advance the compaction frontier to trail the new frontier.
                 // If the compaction latency is `None` compaction messages are
@@ -973,7 +979,7 @@ impl Coordinator {
                         // an AntichainToken. Advance it. Changes to the AntichainToken's frontier
                         // will propagate to the Frontiers' since, and changes to that will propate to
                         // self.since_updates.
-                        self.since_handles.get_mut(name).unwrap().maybe_advance(
+                        self.since_handles.get_mut(&feedback.id).unwrap().maybe_advance(
                             index_state.upper.frontier().iter().map(|time| {
                                 compaction_window_ms
                                     * (time.saturating_sub(compaction_window_ms)
@@ -983,12 +989,28 @@ impl Coordinator {
                     }
                 }
             }
-        } else if let Some(source_state) = self.sources.get_mut(name) {
-            let changes: Vec<_> = source_state.upper.update_iter(changes.drain()).collect();
+        } else if let Some(source_state) = self.sources.get_mut(&feedback.id) {
+            let changes: Vec<_> = source_state
+                .upper
+                .update_iter(feedback.changes.drain())
+                .collect();
+
+            if let Some(bindings) = &mut feedback.bindings {
+                for (partition, timestamp, offset) in bindings {
+                    self.catalog
+                        .insert_timestamp(
+                            feedback.id,
+                            &partition.to_string(),
+                            *timestamp,
+                            offset.offset,
+                        )
+                        .expect("FIXME");
+                }
+            }
             if !changes.is_empty() {
                 if let Some(compaction_window_ms) = source_state.compaction_window_ms {
                     if !source_state.upper.frontier().is_empty() {
-                        self.since_handles.get_mut(name).unwrap().maybe_advance(
+                        self.since_handles.get_mut(&feedback.id).unwrap().maybe_advance(
                             source_state.upper.frontier().iter().map(|time| {
                                 compaction_window_ms
                                     * (time.saturating_sub(compaction_window_ms)

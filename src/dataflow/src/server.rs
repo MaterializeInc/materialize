@@ -33,7 +33,7 @@ use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, PeekResponse,
+    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, MzOffset, PeekResponse,
     SourceConnector, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
@@ -166,6 +166,9 @@ pub struct FrontierFeedback {
     pub id: GlobalId,
     /// Upper frontier changes
     pub changes: ChangeBatch<Timestamp>,
+    /// New timestamp bindings for sources within this frontier
+    /// change.
+    pub bindings: Option<Vec<(PartitionId, Timestamp, MzOffset)>>,
 }
 
 /// Responses the worker can provide back to the coordinator.
@@ -449,6 +452,7 @@ where
             id: GlobalId,
             upper: &Antichain<Timestamp>,
             lower: &Antichain<Timestamp>,
+            bindings: Option<Vec<(PartitionId, Timestamp, MzOffset)>>,
             progress: &mut Vec<FrontierFeedback>,
         ) {
             let mut changes = ChangeBatch::new();
@@ -460,7 +464,11 @@ where
             }
             changes.compact();
             if !changes.is_empty() {
-                progress.push(FrontierFeedback { id, changes });
+                progress.push(FrontierFeedback {
+                    id,
+                    changes,
+                    bindings,
+                });
             }
         }
 
@@ -475,7 +483,7 @@ where
                     .get_mut(&id)
                     .expect("Frontier missing!");
                 if lower != &upper {
-                    add_progress(*id, &upper, &lower, &mut progress);
+                    add_progress(*id, &upper, &lower, None, &mut progress);
                     lower.clone_from(&upper);
                 }
             }
@@ -489,7 +497,8 @@ where
                     .expect("Frontier missing!");
                 assert!(<_ as PartialOrder>::less_equal(lower, &upper));
                 if lower != &upper {
-                    add_progress(*id, &upper, &lower, &mut progress);
+                    let bindings = history.get_bindings_in_range(lower.borrow(), upper.borrow());
+                    add_progress(*id, &upper, &lower, Some(bindings), &mut progress);
                     lower.clone_from(&upper);
                 }
             }
