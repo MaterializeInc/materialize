@@ -10,10 +10,9 @@
 use std::result::Result as StdResult;
 use std::time::Duration;
 
+use anyhow::bail;
 use serde::{Deserialize, Deserializer};
 use structopt::StructOpt;
-
-use crate::Error;
 
 static DEFAULT_CONFIG: &str = include_str!("chbench-config.toml");
 
@@ -27,7 +26,7 @@ pub struct Args {
     )]
     pub materialized_url: String,
     /// If set, initialize sources.
-    #[structopt(long = "mz-sources")]
+    #[structopt(long = "initialize-sources")]
     pub initialize_sources: bool,
     /// Config file to use.
     ///
@@ -43,21 +42,25 @@ pub struct Args {
     /// Duration for which to run checker.
     #[structopt(long, parse(try_from_str = parse_duration::parse), default_value = "10m")]
     pub duration: Duration,
+    /// Maximum number of errors to allow before exiting the checker thread
+    #[structopt(long, default_value = "50")]
+    pub max_errors: u64,
 }
 
-pub fn load_config(config_path: Option<&str>, cli_checks: Option<&str>) -> Result<Config, Error> {
+pub fn load_config(config_path: Option<&str>, cli_checks: Option<&str>) -> anyhow::Result<Config> {
     // load and parse the toml file
     let config_file = config_path
         .map(std::fs::read_to_string)
         .unwrap_or_else(|| Ok(DEFAULT_CONFIG.to_string()));
     let mut config = match &config_file {
-        Ok(contents) => toml::from_str::<Config>(&contents).map_err(|e| {
-            format!(
-                "Unable to parse config file {}: {}",
+        Ok(contents) => match toml::from_str::<Config>(&contents) {
+            Err(e) => bail!(
+                "Failed to parse config file {}: {}",
                 config_path.as_deref().unwrap_or("DEFAULT"),
                 e
-            )
-        })?,
+            ),
+            Ok(c) => c,
+        },
         Err(e) => {
             eprintln!(
                 "unable to read config file {:?}: {}",

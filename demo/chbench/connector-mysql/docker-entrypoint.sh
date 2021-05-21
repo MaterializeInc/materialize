@@ -15,18 +15,18 @@ wait-for-it --timeout=60 zookeeper:2181
 wait-for-it --timeout=60 kafka:9092
 
 topics=(
-    debezium.tpcch.warehouse
-    debezium.tpcch.district
     debezium.tpcch.customer
+    debezium.tpcch.district
     debezium.tpcch.history
+    debezium.tpcch.item
+    debezium.tpcch.nation
     debezium.tpcch.neworder
     debezium.tpcch.order
     debezium.tpcch.orderline
-    debezium.tpcch.item
-    debezium.tpcch.stock
-    debezium.tpcch.nation
-    debezium.tpcch.supplier
     debezium.tpcch.region
+    debezium.tpcch.stock
+    debezium.tpcch.supplier
+    debezium.tpcch.warehouse
 )
 
 wait-for-it --timeout=60 connect:8083
@@ -38,6 +38,7 @@ curl -H 'Content-Type: application/json' connect:8083/connectors --data '{
   "name": "mysql-connector",
   "config": {
     "connector.class": "io.debezium.connector.mysql.MySqlConnector",
+    "tasks.max": "1",
     "database.hostname": "mysql",
     "database.port": "3306",
     "database.user": "debezium",
@@ -46,6 +47,7 @@ curl -H 'Content-Type: application/json' connect:8083/connectors --data '{
     "database.server.id": "1234",
     "database.history.kafka.bootstrap.servers": "kafka:9092",
     "database.history.kafka.topic": "mysql-history",
+    "provide.transaction.metadata": "true",
     "time.precision.mode": "connect"
  }
 }'

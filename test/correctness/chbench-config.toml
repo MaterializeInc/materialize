@@ -16,17 +16,15 @@ is_byo = true
 consistency_topic = "debezium.transaction"
 names = [
     "customer",
+    "district",
     "item",
+    "history",
     "nation",
     "neworder",
     "order",
     "orderline",
-    "stock",
-    "history",
-    "supplier",
-    "district",
-    "nation",
     "region",
+    "stock",
     "supplier",
     "warehouse",
 ]

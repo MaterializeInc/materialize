@@ -71,13 +71,13 @@ services:
       - type: tmpfs
         target: /var/lib/mysql
   mysqlcli:
-    image: debezium/example-mysql:1.4
+    image: debezium/example-mysql:1.5
     command: ["mysql", "--host=mysql", "--port=3306", "--user=root", "--password=rootpw", "--database=tpcch"]
     init: true
     depends_on:
       - mysql
   postgres:
-    image: debezium/example-postgres:1.4
+    image: debezium/example-postgres:1.5
     ports:
      - *postgres
     environment:
@@ -89,7 +89,7 @@ services:
         target: /var/lib/postgres-files
         read_only: true
   postgrescli:
-    image: debezium/example-postgres:1.4
+    image: debezium/example-postgres:1.5
     command: ["psql", "--host=postgres",  "--user=postgres"]
     init: true
     depends_on:
@@ -124,7 +124,7 @@ services:
     volumes:
       - ${MZ_CHBENCH_SNAPSHOT_KAFKA_DATA:-kafka-data}:/var/lib/kafka/data
   connect:
-    image: debezium/connect:1.4
+    image: debezium/connect:1.5
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: 1
@@ -268,7 +268,10 @@ services:
     # and see /src/correctness/checks.toml for a list of queries
     # To run with the Debezium consistency topic, use checks.toml. This is only available
     # with a Postgres instance. Otherwise use checks-noconsistency.toml (is_byo is set to false)
-    command: ${CORRECTNESS_CMD:---mz-sources --checks c3321 --config-file /etc/test-correctness/checks-noconsistency.toml}
+    command: >-
+      --duration=${CORRECTNESS_CHECKS_DURATION:-5m}
+      --initialize-sources
+      --checks c3321,c3322,c3323,c3324,c3325,c3326,c3327,c3328,c3329
     volumes:
       - ./test-correctness-config:/etc/test-correctness
   validate-debezium-topics:
@@ -492,7 +495,10 @@ mzworkflows:
       seconds: 1
 
 
-  consistency-test:
+  consistency-test-mysql:
+    env:
+      CHBENCH_RUN_SECONDS: ${CHBENCH_RUN_SECONDS:-300}
+      CORRECTNESS_CHECKS_DURATION: ${CHBENCH_RUN_SECONDS:-5m}
     steps:
     - step: workflow
       workflow: bring-up-source-data-mysql
@@ -511,8 +517,17 @@ mzworkflows:
     - step: ensure-stays-up
       container: dashboard
       seconds: 1
+    - step: wait
+      service: chbench
+      expected_return_code: 0
+    - step: wait
+      service: test-correctness
+      expected_return_code: 0
 
   consistency-test-postgres:
+    env:
+      CHBENCH_RUN_SECONDS: ${CHBENCH_RUN_SECONDS:-300}
+      CORRECTNESS_CHECKS_DURATION: ${CHBENCH_RUN_SECONDS:-5m}
     steps:
     - step: workflow
       workflow: bring-up-source-data-postgres
@@ -531,6 +546,12 @@ mzworkflows:
     - step: ensure-stays-up
       container: dashboard
       seconds: 1
+    - step: wait
+      service: chbench
+      expected_return_code: 0
+    - step: wait
+      service: test-correctness
+      expected_return_code: 0
 
   cloud-load-test:
     env:

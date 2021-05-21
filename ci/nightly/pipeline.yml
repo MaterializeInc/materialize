@@ -22,6 +22,22 @@
         composition: pubnub
         run: pubnub
 
+- id: debezium-mysql-correctness
+  label: ":mysql: debezium correctness"
+  plugins:
+    - ./ci/plugins/mzcompose:
+        composition: chbench
+        run: consistency-test-mysql
+  soft_fail: true
+
+- id: debezium-postgres-correctness
+  label: ":postgres: debezium correctness"
+  plugins:
+    - ./ci/plugins/mzcompose:
+        composition: chbench
+        run: consistency-test-postgres
+  soft_fail: true
+
 - id: kafka-matrix
   label: Kafka smoke test against previous Kafka versions
   plugins:

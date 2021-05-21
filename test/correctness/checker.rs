@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::str;
 use std::time::{Duration, Instant};
 
+use anyhow::bail;
 use chrono::Utc;
 use env_logger::{Builder as LogBuilder, Env, Target};
 use log::{debug, error, info, warn};
@@ -32,7 +33,7 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 
 static MAX_BACKOFF: Duration = Duration::from_secs(2);
 
-fn main() -> Result<(), Error> {
+fn main() -> anyhow::Result<()> {
     LogBuilder::from_env(Env::new().filter_or("MZ_LOG", "info"))
         .target(Target::Stdout)
         .init();
@@ -48,28 +49,24 @@ fn main() -> Result<(), Error> {
     info!("startup {}", Utc::now());
 
     match initialize(&args, &config) {
-        Ok(()) => {
-            run_checks(&args, &config);
-            info!("Finished running checker. Exiting ...");
-            Ok(())
-        }
+        Ok(()) => run_checks(&args, &config),
         Err(e) => {
-            error!(
+            bail!(
                 "Could not initialize correctness checker. Exiting with error: {}",
                 e
             );
-            Err(e)
         }
     }
 }
 
-fn run_checks(args: &Args, config: &Config) {
+fn run_checks(args: &Args, config: &Config) -> anyhow::Result<()> {
     let mut peek_threads = vec![];
     for c in &config.checks {
         peek_threads.extend(spawn_query_thread(
             args.materialized_url.clone(),
             c.clone(),
             args.duration,
+            args.max_errors,
         ))
     }
     info!(
@@ -77,8 +74,19 @@ fn run_checks(args: &Args, config: &Config) {
         peek_threads.len(),
         &config.checks.len()
     );
+    let mut passed = false;
     for pthread in peek_threads {
-        pthread.join().unwrap();
+        match pthread.join() {
+            Err(e) => {
+                error!("Consistency checked failed: {:?}", e);
+                passed = false;
+            }
+            Ok(_) => (),
+        }
+    }
+    match passed {
+        true => Ok(()),
+        false => bail!("At least one consistency check failed!"),
     }
 }
 
@@ -166,49 +174,57 @@ fn decode(row: &Row) -> Result<HashMap<String, String>, String> {
     Ok(out)
 }
 
-fn spawn_query_thread(mz_url: String, check: Check, run_duration: Duration) -> Vec<JoinHandle<()>> {
+fn spawn_query_thread(
+    mz_url: String,
+    check: Check,
+    run_duration: Duration,
+    max_errors: u64,
+) -> Vec<JoinHandle<anyhow::Result<()>>> {
     let mut cs = vec![];
     for _ in 0..check.thread_count.unwrap_or(1) {
         let check = check.clone();
         let mut backoff = get_baseline_backoff();
         let mz_url = mz_url.clone();
-        cs.push(thread::spawn(  move ||  {
-            let mut postgres_client =
-            create_postgres_client(&mz_url);
+        cs.push(thread::spawn(move || {
+            let mut postgres_client = create_postgres_client(&mz_url);
             let mut last_was_failure = false;
             let mut total_count = 0u64;
             let mut err_count = 0u64;
-            let mut mismatch_count = 0u64;
             let mut correct_count = 0u64;
             let mut last_log = Instant::now();
             let start_thread_time = Instant::now();
             loop {
-                let query = postgres_client.prepare(&format!("SELECT * FROM {}", check.name)).expect("should be able to prepare a query");
+                let query = postgres_client
+                    .prepare(&format!("SELECT * FROM {}", check.name))
+                    .expect("should be able to prepare a query");
                 let query_result = postgres_client.query(&query, &[]);
 
                 total_count += 1;
                 match query_result {
                     Ok(rows) => {
                         if !validate_result(&check, &rows) {
-                            mismatch_count += 1;
-                            info!("Failed to validate check: {}", check.name);
+                            error!("Failed to validate check: {}", check.name);
                             let decoded_rows: Vec<Result<HashMap<String, String>, String>> =
                                 rows.iter().map(decode).collect();
-                            info!("Output");
+                            error!("Output");
                             for row in decoded_rows {
                                 let res = row.unwrap();
-                                for (key,value) in res {
-                                    info!("{}:{}", key, value);
+                                for (key, value) in res {
+                                    error!("{}:{}", key, value);
                                 }
-                                info!("----");
+                                error!("----");
                             }
+                            bail!("Failed consistency check: {}", check.name);
                         } else {
-                            correct_count +=1 ;
+                            correct_count += 1;
                         }
                     }
                     Err(err) => {
                         err_count += 1;
                         last_was_failure = true;
+                        if err_count > max_errors {
+                            bail!("Too many errors when running check: {}", check.name);
+                        }
                         print_error_and_backoff(&mut backoff, &check.name, err.to_string());
                         try_initialize(&mut postgres_client, &check);
                     }
@@ -216,25 +232,24 @@ fn spawn_query_thread(mz_url: String, check: Check, run_duration: Duration) -> V
                 if !last_was_failure {
                     backoff = get_baseline_backoff();
                 }
-                    let now = Instant::now();
-                    // log at most once per minute per thread
-                    if now.duration_since(last_log) > Duration::from_secs(1) {
-                        info!(
-                            "peeked {} {} times with {} errors, {} correctness violations, {} successes",
-                            check.name, total_count, err_count, mismatch_count, correct_count
-                        );
-                        last_log = now;
-                    }
-
-                    if now.duration_since(start_thread_time) > run_duration {
+                let now = Instant::now();
+                // log at most once per minute per thread
+                if now.duration_since(last_log) > Duration::from_secs(60) {
                     info!(
-                        "peeked {} {} times with {} errors, {} correctness violations, {} successes",
-                        check.name, total_count, err_count, mismatch_count, correct_count
+                        "peeked {} {} times with {} errors, {} successes",
+                        check.name, total_count, err_count, correct_count
                     );
-                        break;
-                    }
-
+                    last_log = now;
                 }
+
+                if now.duration_since(start_thread_time) > run_duration {
+                    info!(
+                        "peeked {} {} times with {} errors, {} successes",
+                        check.name, total_count, err_count, correct_count
+                    );
+                    break Ok(());
+                }
+            }
         }))
     }
     cs
