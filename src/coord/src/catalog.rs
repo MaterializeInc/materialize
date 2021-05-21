@@ -1267,6 +1267,16 @@ impl Catalog {
         Ok(())
     }
 
+    pub fn delete_timestamps(&mut self, source_id: GlobalId) -> Result<(), Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        tx.delete_timestamps(source_id)?;
+        tx.commit()?;
+
+        Ok(())
+    }
+
     pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<BuiltinTableUpdate>, Error> {
         trace!("transact: {:?}", ops);
 

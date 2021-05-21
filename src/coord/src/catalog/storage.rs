@@ -516,6 +516,17 @@ impl Transaction<'_> {
         }
     }
 
+    pub fn delete_timestamps(&self, source_id: GlobalId) -> Result<(), Error> {
+        match self
+            .inner
+            .prepare_cached("DELETE FROM timestamps WHERE sid = ?")?
+            .execute(params![SqlVal(&source_id)])
+        {
+            Ok(_) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
     pub fn remove_database(&self, name: &str) -> Result<(), Error> {
         let n = self
             .inner

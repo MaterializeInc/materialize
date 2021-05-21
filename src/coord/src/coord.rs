@@ -54,7 +54,7 @@ use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use rand::Rng;
 use timely::communication::WorkerGuards;
-use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
+use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -2815,6 +2815,7 @@ impl Coordinator {
                     tables.destroy(id);
                 }
                 self.update_timestamper(id, false).await;
+                self.catalog.delete_timestamps(id)?;
                 if let Some(cache_tx) = &mut self.cache_tx {
                     cache_tx
                         .send(CacheMessage::DropSource(id))
