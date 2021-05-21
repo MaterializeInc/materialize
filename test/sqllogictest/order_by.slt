@@ -244,14 +244,14 @@ SELECT b, (SELECT val1 FROM baz WHERE val2 = a ORDER BY val1 limit 1 offset 1 ro
 FROM fizz ORDER BY b, c DESC
 ----
 five      NULL
-four      2079
 four      NULL
+four      2079
 one       NULL
 thirteen  1735
 three     NULL
+two       NULL
+two       NULL
 two       12345
-two       NULL
-two       NULL
 
 # limit + offset return correct results when there are identical rows
 query I
@@ -486,3 +486,10 @@ SELECT * FROM fizzlimitoffsetview2
 12345 one
 21758 fourteen
 12345 three
+
+# NULL should sort last. See #5982.
+query T
+SELECT * FROM (VALUES (NULL), (1)) ORDER BY column1
+----
+1
+NULL

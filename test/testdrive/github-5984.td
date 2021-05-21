@@ -27,10 +27,8 @@
 > INSERT INTO t3 VALUES (NULL);
 > INSERT INTO t3 VALUES (1);
 
-# No rows expected. When #5982 is fixed, add ORDER BY DESC to make sure that the NULL row raises to the top of the query
-
-> SELECT COUNT(*) FROM t1 WHERE f1 = ( SELECT t2 . f1 FROM t3 LEFT JOIN t2 ON ( t3 . f1 = t1.f1 ) ORDER BY 1 LIMIT 1);
+> SELECT COUNT(*) FROM t1 WHERE f1 = ( SELECT t2 . f1 FROM t3 LEFT JOIN t2 ON ( t3 . f1 = t1.f1 ) ORDER BY 1 DESC LIMIT 1);
 0
 
-> SELECT f1 = ( SELECT t2 . f1 FROM t3 LEFT JOIN t2 ON ( t3 . f1 = t1.f1 ) ORDER BY 1 LIMIT 1) IS NULL FROM t1;
+> SELECT f1 = ( SELECT t2 . f1 FROM t3 LEFT JOIN t2 ON ( t3 . f1 = t1.f1 ) ORDER BY 1 DESC LIMIT 1) IS NULL FROM t1;
 true

@@ -372,12 +372,15 @@ statement error supported
 SELECT c_id, generate_series(1, (SELECT count(*) FROM o WHERE o.c_id=c.c_id)) FROM c
 
 # Customers that have no orders with a NULL ship state.
+# Note: Result differs from Cockroach but matches Postgres.
 query IT rowsort
 SELECT *
 FROM c
 WHERE (SELECT ship FROM o WHERE o.c_id=c.c_id ORDER BY ship LIMIT 1) IS NOT NULL
 ----
 1  CA
+2  TX
+4  TX
 6  FL
 
 # Customers that have first order shipping to 'CA' or 'WY' (no NULL ship).
@@ -768,6 +771,7 @@ ORDER BY c_id;
 6  1
 
 # Count bill/ship addresses in each state.
+# Note: Result differs from Cockroach but matches Postgres.
 query TI
 SELECT
     s.st,
@@ -775,13 +779,13 @@ SELECT
 FROM (SELECT c.bill AS st FROM c UNION SELECT o.ship AS st FROM o) s
 ORDER BY s.st;
 ----
-NULL  0
 CA    5
 FL    1
 MA    1
 TX    3
 WA    1
 WY    1
+NULL  0
 
 # Customer orders grouped by ship state, compared with count of all orders
 # shipped to that state by all other customers combined.
@@ -831,6 +835,7 @@ ORDER BY c.c_id, o.o_id
 
 # Customers, with boolean indicating whether they have at least one order with a
 # NULL ship state.
+# Note: Result differs from Cockroach but matches Postgres.
 query IB
 SELECT
     c.c_id,
@@ -839,9 +844,9 @@ FROM c
 ORDER BY c.c_id
 ----
 1  true
-2  false
+2  true
 3  false
-4  false
+4  true
 5  false
 6  true
 
