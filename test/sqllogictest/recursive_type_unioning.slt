@@ -1,0 +1,30 @@
+statement ok
+CREATE TABLE t1 (a int not null, b int not null)
+
+statement ok
+CREATE TABLE t2 (a int, b int)
+
+statement ok
+INSERT INTO t1 values (1, 2)
+
+statement ok
+INSERT INTO t2 values (null, null)
+
+query T multiline
+EXPLAIN SELECT row(a,b) as record from t1 union select row(a,b) as record from t2
+----
+%0 =
+| Get materialize.public.t1 (u1)
+| Map record_create(#0, #1)
+| Project (#2)
+
+%1 =
+| Get materialize.public.t2 (u3)
+| Map record_create(#0, #1)
+| Project (#2)
+
+%2 =
+| Union %0 %1
+| Distinct group=(#0)
+
+EOF
