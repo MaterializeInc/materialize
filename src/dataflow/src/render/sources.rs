@@ -37,7 +37,7 @@ use crate::logging::materialized::Logger;
 use crate::metrics;
 use crate::operator::{CollectionExt, StreamExt};
 use crate::render::context::Context;
-use crate::render::{ActiveTokens, RenderState};
+use crate::render::{RelevantTokens, RenderState};
 use crate::server::LocalInput;
 use crate::source::DecodeResult;
 use crate::source::SourceConfig;
@@ -54,7 +54,7 @@ where
     pub(crate) fn import_source(
         &mut self,
         render_state: &mut RenderState,
-        tokens: &mut ActiveTokens,
+        tokens: &mut RelevantTokens,
         scope: &mut Child<'g, G, G::Timestamp>,
         materialized_logging: Option<Logger>,
         src_id: GlobalId,

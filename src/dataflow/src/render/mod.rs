@@ -139,7 +139,7 @@ mod threshold;
 mod top_k;
 mod upsert;
 
-/// Worker-local state used during rendering.
+/// Worker-local state that is maintained across dataflows.
 pub struct RenderState {
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
@@ -162,7 +162,7 @@ pub struct RenderState {
 /// Once all tokens referencing a source are dropped, the source can shut down,
 /// which will wind down (eventually) the dataflow containing it.
 #[derive(Default)]
-pub struct ActiveTokens {
+pub struct RelevantTokens {
     /// The source tokens for all sources that have been built in this context.
     pub source_tokens: HashMap<GlobalId, Rc<Option<SourceToken>>>,
     /// Any other tokens that need to be dropped when an object is dropped.
@@ -188,7 +188,7 @@ pub fn build_dataflow<A: Allocate>(
         // alternate type signatures.
         scope.clone().region(|region| {
             let mut context = Context::for_dataflow(&dataflow, scope.addr().into_element());
-            let mut tokens = ActiveTokens::default();
+            let mut tokens = RelevantTokens::default();
 
             assert!(
                 !dataflow
@@ -244,7 +244,7 @@ where
     fn import_index(
         &mut self,
         render_state: &mut RenderState,
-        tokens: &mut ActiveTokens,
+        tokens: &mut RelevantTokens,
         scope: &mut G,
         region: &mut Child<'g, G, G::Timestamp>,
         idx_id: GlobalId,
@@ -327,7 +327,7 @@ where
     fn export_index(
         &mut self,
         render_state: &mut RenderState,
-        tokens: &mut ActiveTokens,
+        tokens: &mut RelevantTokens,
         import_ids: HashSet<GlobalId>,
         idx_id: GlobalId,
         idx: &IndexDesc,

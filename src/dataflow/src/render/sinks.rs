@@ -28,7 +28,7 @@ use repr::adt::decimal::Significand;
 use repr::{Datum, Row, Timestamp};
 
 use crate::render::context::Context;
-use crate::render::{ActiveTokens, RenderState};
+use crate::render::{RelevantTokens, RenderState};
 use crate::sink;
 
 impl<'g, G> Context<Child<'g, G, G::Timestamp>, MirRelationExpr, Row, Timestamp>
@@ -39,7 +39,7 @@ where
     pub(crate) fn export_sink(
         &mut self,
         render_state: &mut RenderState,
-        tokens: &mut ActiveTokens,
+        tokens: &mut RelevantTokens,
         import_ids: HashSet<GlobalId>,
         sink_id: GlobalId,
         sink: &SinkDesc,
