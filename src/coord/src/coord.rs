@@ -54,13 +54,15 @@ use futures::stream::{self, StreamExt};
 use itertools::Itertools;
 use rand::Rng;
 use timely::communication::WorkerGuards;
-use timely::progress::{Antichain, ChangeBatch, Timestamp as _};
+use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use build_info::BuildInfo;
-use dataflow::{CacheMessage, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta};
+use dataflow::{
+    CacheMessage, FrontierFeedback, SequencedCommand, WorkerFeedback, WorkerFeedbackWithMeta,
+};
 use dataflow_types::logging::LoggingConfig as DataflowLoggingConfig;
 use dataflow_types::{
     DataflowDesc, ExternalSourceConnector, IndexDesc, PeekResponse, PostgresSourceConnector,
@@ -598,8 +600,8 @@ impl Coordinator {
     ) {
         match message {
             WorkerFeedback::FrontierUppers(updates) => {
-                for (name, changes) in updates {
-                    self.update_upper(&name, changes);
+                for feedback in updates {
+                    self.update_upper(feedback);
                 }
                 self.maintenance().await;
             }
@@ -951,9 +953,14 @@ impl Coordinator {
     }
 
     /// Updates the upper frontier of a named view.
-    fn update_upper(&mut self, name: &GlobalId, mut changes: ChangeBatch<Timestamp>) {
-        if let Some(index_state) = self.indexes.get_mut(name) {
-            let changes: Vec<_> = index_state.upper.update_iter(changes.drain()).collect();
+    fn update_upper(&mut self, mut feedback: FrontierFeedback) {
+        if let Some(index_state) = self.indexes.get_mut(&feedback.id) {
+            // We should never get timestamp bindings with index frontier updates.
+            assert!(feedback.bindings.is_none());
+            let changes: Vec<_> = index_state
+                .upper
+                .update_iter(feedback.changes.drain())
+                .collect();
             if !changes.is_empty() {
                 // Advance the compaction frontier to trail the new frontier.
                 // If the compaction latency is `None` compaction messages are
@@ -973,28 +980,50 @@ impl Coordinator {
                         // an AntichainToken. Advance it. Changes to the AntichainToken's frontier
                         // will propagate to the Frontiers' since, and changes to that will propate to
                         // self.since_updates.
-                        self.since_handles.get_mut(name).unwrap().maybe_advance(
-                            index_state.upper.frontier().iter().map(|time| {
+                        self.since_handles
+                            .get_mut(&feedback.id)
+                            .unwrap()
+                            .maybe_advance(index_state.upper.frontier().iter().map(|time| {
                                 compaction_window_ms
                                     * (time.saturating_sub(compaction_window_ms)
                                         / compaction_window_ms)
-                            }),
-                        );
+                            }));
                     }
                 }
             }
-        } else if let Some(source_state) = self.sources.get_mut(name) {
-            let changes: Vec<_> = source_state.upper.update_iter(changes.drain()).collect();
+        } else if let Some(source_state) = self.sources.get_mut(&feedback.id) {
+            // Apply the updates the dataflow worker sent over, and check if there
+            // were any changes to the source's upper frontier.
+            let changes: Vec<_> = source_state
+                .upper
+                .update_iter(feedback.changes.drain())
+                .collect();
+
+            // Persist any timestamp bindings the dataflow worker sent us.
+            if let Some(bindings) = &feedback.bindings {
+                let bindings: Vec<_> = bindings
+                    .iter()
+                    .map(|(pid, ts, offset)| (feedback.id, pid.to_string(), *ts, offset.offset))
+                    .collect();
+                self.catalog
+                    .insert_timestamps(&bindings)
+                    .expect("inserting timestamps to sqlite cannot fail");
+            }
             if !changes.is_empty() {
+                // The source's upper frontier changed as a result of the updates sent over
+                // by the dataflow workers. Advance the source's compaction frontier to trail
+                // its upper by the compaction window.
                 if let Some(compaction_window_ms) = source_state.compaction_window_ms {
+                    // Similar to what we do for indexes, decline to compact up to a complete source.
                     if !source_state.upper.frontier().is_empty() {
-                        self.since_handles.get_mut(name).unwrap().maybe_advance(
-                            source_state.upper.frontier().iter().map(|time| {
+                        self.since_handles
+                            .get_mut(&feedback.id)
+                            .unwrap()
+                            .maybe_advance(source_state.upper.frontier().iter().map(|time| {
                                 compaction_window_ms
                                     * (time.saturating_sub(compaction_window_ms)
                                         / compaction_window_ms)
-                            }),
-                        );
+                            }));
                     }
                 }
             }
@@ -2793,6 +2822,7 @@ impl Coordinator {
                     tables.destroy(id);
                 }
                 self.update_timestamper(id, false).await;
+                self.catalog.delete_timestamps(id)?;
                 if let Some(cache_tx) = &mut self.cache_tx {
                     cache_tx
                         .send(CacheMessage::DropSource(id))
@@ -3035,6 +3065,10 @@ impl Coordinator {
     // Notify the timestamper thread that a source has been created or dropped.
     async fn update_timestamper(&mut self, source_id: GlobalId, create: bool) {
         if create {
+            let bindings = self
+                .catalog
+                .load_timestamps(source_id)
+                .expect("loading timestamps from coordinator cannot fail");
             if let Some(entry) = self.catalog.try_get_by_id(source_id) {
                 if let CatalogItem::Source(s) = entry.item() {
                     self.ts_tx
@@ -3043,6 +3077,7 @@ impl Coordinator {
                     self.broadcast(SequencedCommand::AddSourceTimestamping {
                         id: source_id,
                         connector: s.connector.clone(),
+                        bindings,
                     });
                 }
             }

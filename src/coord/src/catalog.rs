@@ -16,13 +16,14 @@ use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use chrono::{DateTime, TimeZone, Utc};
-use dataflow_types::{ExternalSourceConnector, SinkEnvelope};
-use expr::Id;
+use dataflow_types::{ExternalSourceConnector, MzOffset, SinkEnvelope};
+use expr::{Id, PartitionId};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use ore::collections::CollectionExt;
 use regex::Regex;
+use repr::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
@@ -1248,6 +1249,51 @@ impl Catalog {
             }
         }
         Ok(temporary_ids)
+    }
+
+    /// Insert timestamp bindings into SQLite, and ignores duplicate timestamp bindings.
+    /// TODO: we intentionally ignore duplicates because BYO sources can send multiple
+    /// copies of the same timestamp.
+    pub fn insert_timestamps(
+        &mut self,
+        timestamps: &[(GlobalId, String, Timestamp, i64)],
+    ) -> Result<(), Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        for (sid, pid, ts, offset) in timestamps.iter() {
+            tx.insert_timestamp(sid, pid, *ts, *offset)?;
+        }
+        tx.commit()?;
+
+        Ok(())
+    }
+
+    /// Read all available timestamp bindings for a source
+    ///
+    /// Returns its output sorted by (partition, timestamp)
+    pub fn load_timestamps(
+        &mut self,
+        source_id: GlobalId,
+    ) -> Result<Vec<(PartitionId, Timestamp, MzOffset)>, Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        let ret = tx.load_timestamps(source_id)?;
+        tx.commit()?;
+
+        Ok(ret)
+    }
+
+    /// Delete all timestamp bindings for a source
+    pub fn delete_timestamps(&mut self, source_id: GlobalId) -> Result<(), Error> {
+        let mut storage = self.storage();
+        let tx = storage.transaction()?;
+
+        tx.delete_timestamps(source_id)?;
+        tx.commit()?;
+
+        Ok(())
     }
 
     pub fn transact(&mut self, ops: Vec<Op>) -> Result<Vec<BuiltinTableUpdate>, Error> {

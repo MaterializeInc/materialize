@@ -33,7 +33,7 @@ use uuid::Uuid;
 
 use dataflow_types::logging::LoggingConfig;
 use dataflow_types::{
-    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, PeekResponse,
+    Consistency, DataflowDesc, DataflowError, ExternalSourceConnector, MzOffset, PeekResponse,
     SourceConnector, TimestampSourceUpdate, Update,
 };
 use expr::{GlobalId, PartitionId, RowSetFinishing};
@@ -108,6 +108,8 @@ pub enum SequencedCommand {
         id: GlobalId,
         /// The connector for the timestamped source.
         connector: SourceConnector,
+        /// Previously stored timestamp bindings.
+        bindings: Vec<(PartitionId, Timestamp, MzOffset)>,
     },
     /// Advance worker timestamp
     AdvanceSourceTimestamp {
@@ -158,11 +160,24 @@ pub enum CacheMessage {
     DropSource(GlobalId),
 }
 
+/// Data about upper frontiers and timestamp bindings that dataflow workers
+/// send to the coordinator.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FrontierFeedback {
+    /// Id for the object whose frontiers changed.
+    pub id: GlobalId,
+    /// Upper frontier changes
+    pub changes: ChangeBatch<Timestamp>,
+    /// New timestamp bindings for sources within this frontier
+    /// change.
+    pub bindings: Option<Vec<(PartitionId, Timestamp, MzOffset)>>,
+}
+
 /// Responses the worker can provide back to the coordinator.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WorkerFeedback {
     /// A list of identifiers of traces, with prior and new upper frontiers.
-    FrontierUppers(Vec<(GlobalId, ChangeBatch<Timestamp>)>),
+    FrontierUppers(Vec<FrontierFeedback>),
 }
 
 /// Configures a dataflow server.
@@ -439,7 +454,8 @@ where
             id: GlobalId,
             new_frontier: &Antichain<Timestamp>,
             prev_frontier: &Antichain<Timestamp>,
-            progress: &mut Vec<(GlobalId, ChangeBatch<Timestamp>)>,
+            bindings: Option<Vec<(PartitionId, Timestamp, MzOffset)>>,
+            progress: &mut Vec<FrontierFeedback>,
         ) {
             let mut changes = ChangeBatch::new();
             for time in prev_frontier.elements().iter() {
@@ -450,7 +466,11 @@ where
             }
             changes.compact();
             if !changes.is_empty() {
-                progress.push((id, changes));
+                progress.push(FrontierFeedback {
+                    id,
+                    changes,
+                    bindings,
+                });
             }
         }
 
@@ -465,7 +485,7 @@ where
                     .get_mut(&id)
                     .expect("Frontier missing!");
                 if prev_frontier != &new_frontier {
-                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                    add_progress(*id, &new_frontier, &prev_frontier, None, &mut progress);
                     prev_frontier.clone_from(&new_frontier);
                 }
             }
@@ -482,14 +502,23 @@ where
                     &new_frontier
                 ));
                 if prev_frontier != &new_frontier {
-                    add_progress(*id, &new_frontier, &prev_frontier, &mut progress);
+                    // Add all timestamp bindings we know about between the old and new frontier.
+                    let bindings = history
+                        .get_bindings_in_range(prev_frontier.borrow(), new_frontier.borrow());
+                    add_progress(
+                        *id,
+                        &new_frontier,
+                        &prev_frontier,
+                        Some(bindings),
+                        &mut progress,
+                    );
                     prev_frontier.clone_from(&new_frontier);
                 }
             }
             if let Some(logger) = self.materialized_logger.as_mut() {
-                for (id, changes) in &mut progress {
-                    for (time, diff) in changes.iter() {
-                        logger.log(MaterializedEvent::Frontier(*id, *time, *diff));
+                for feedback in &mut progress {
+                    for (time, diff) in feedback.changes.iter() {
+                        logger.log(MaterializedEvent::Frontier(feedback.id, *time, *diff));
                     }
                 }
             }
@@ -681,7 +710,11 @@ where
                 self.render_state.traces.del_all_traces();
                 self.shutdown_logging();
             }
-            SequencedCommand::AddSourceTimestamping { id, connector } => {
+            SequencedCommand::AddSourceTimestamping {
+                id,
+                connector,
+                bindings,
+            } => {
                 let source_timestamp_data = if let SourceConnector::External {
                     connector,
                     consistency,
@@ -754,10 +787,18 @@ where
                     None
                 };
 
+                // Add any timestamp bindings that we were already aware of on restart.
                 if let Some(data) = source_timestamp_data {
+                    for (pid, timestamp, offset) in bindings {
+                        data.add_partition(pid.clone());
+                        data.add_binding(pid, timestamp, offset, false);
+                    }
                     let prev = self.render_state.ts_histories.insert(id, data);
                     assert!(prev.is_none());
-                    self.reported_frontiers.insert(id, Antichain::from_elem(0));
+                    let prev = self.reported_frontiers.insert(id, Antichain::from_elem(0));
+                    assert!(prev.is_none());
+                } else {
+                    assert!(bindings.is_empty());
                 }
             }
             SequencedCommand::AdvanceSourceTimestamp { id, update } => {
@@ -765,8 +806,16 @@ where
                     match update {
                         TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) => {
                             // TODO: change the interface between the dataflow server and the
-                            // timestamper.
-                            history.add_binding(pid, timestamp, offset + 1, false);
+                            // timestamper. Specifically, we probably want to inform the timestamper
+                            // of the timestamps we already know about so that it doesn't send us
+                            // duplicate copies again.
+
+                            let mut upper = Antichain::new();
+                            history.read_upper(&mut upper);
+
+                            if upper.less_equal(&timestamp) {
+                                history.add_binding(pid, timestamp, offset + 1, false);
+                            }
                         }
                         TimestampSourceUpdate::RealTime(new_partition) => {
                             history.add_partition(new_partition);
