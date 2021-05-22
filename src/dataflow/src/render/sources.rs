@@ -83,15 +83,23 @@ where
         //
         // This has a lot of potential for improvement in the near future.
         match src.connector.clone() {
+            // Create a new local input (exposed as TABLEs to users). Data is inserted
+            // via SequencedCommand::Insert commands.
             SourceConnector::Local => {
                 let ((handle, capability), stream) = scope.new_unordered_input();
                 render_state
                     .local_inputs
                     .insert(src_id, LocalInput { handle, capability });
+                let as_of_frontier = self.as_of_frontier.clone();
+                let ok_collection = stream
+                    .map_in_place(move |(_, mut time, _)| {
+                        time.advance_by(as_of_frontier.borrow());
+                    })
+                    .as_collection();
                 let err_collection = Collection::empty(scope);
                 self.collections.insert(
                     MirRelationExpr::global_get(src_id, src.bare_desc.typ().clone()),
-                    (stream.as_collection(), err_collection),
+                    (ok_collection, err_collection),
                 );
             }
 
