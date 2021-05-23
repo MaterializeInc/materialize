@@ -104,6 +104,10 @@ pub struct Frontiers<T: Timestamp> {
     /// The most recent frontier for new data.
     /// All further changes will be in advance of this bound.
     pub upper: MutableAntichain<T>,
+    /// The most recent frontier for durable data.
+    /// All data at times in advance of this frontier have not yet been
+    /// durably persisted and may not be replayable across restarts.
+    pub durability: Antichain<T>,
     /// The compaction frontier.
     /// All peeks in advance of this frontier will be correct,
     /// but peeks not in advance of this frontier may not be.
@@ -137,6 +141,7 @@ impl<T: Timestamp + Copy> Frontiers<T> {
         upper.update_iter(Some((T::minimum(), workers as i64)));
         let frontier = Self {
             upper,
+            durability: Antichain::from_elem(T::minimum()),
             since: Rc::new(RefCell::new(MutableAntichain::new())),
             compaction_window_ms,
             since_action: Rc::new(RefCell::new(since_action)),

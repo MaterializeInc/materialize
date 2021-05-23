@@ -640,13 +640,18 @@ impl SourceConnector {
     /// exactly-once Sinks that need to ensure that the same data is written,
     /// even when failures/restarts happen.
     pub fn yields_stable_input(&self) -> bool {
-        if let SourceConnector::External {
-            connector: ExternalSourceConnector::Kafka(_),
-            consistency: Consistency::BringYourOwn(_),
-            ..
-        } = self
-        {
-            true
+        if let SourceConnector::External { connector, .. } = self {
+            // Conservatively, set all Kafka (BYO or RT), File, or AvroOcf sources as having stable inputs because
+            // we know they will be read in a known, repeatable offset order (modulo compaction for some Kafka sources).
+            match connector {
+                ExternalSourceConnector::Kafka(_)
+                | ExternalSourceConnector::File(_)
+                | ExternalSourceConnector::AvroOcf(_) => true,
+                // Currently, the Kinesis connector assigns "offsets" by counting the message in the order it was received
+                // and this order is not replayable across different reads of the same Kinesis stream.
+                ExternalSourceConnector::Kinesis(_) => false,
+                _ => false,
+            }
         } else {
             false
         }
@@ -915,7 +920,8 @@ pub struct KafkaSinkConnector {
     pub key_schema_id: Option<i32>,
     pub value_schema_id: i32,
     pub consistency: Option<KafkaSinkConsistencyConnector>,
-    pub exactly_once: bool,
+    // Source dependencies for exactly-once sinks.
+    pub exactly_once: Option<Vec<GlobalId>>,
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,
@@ -1007,7 +1013,7 @@ pub struct KafkaSinkConnectorBuilder {
     pub consistency_value_schema: Option<String>,
     pub config_options: BTreeMap<String, String>,
     pub ccsr_config: ccsr::ClientConfig,
-    pub exactly_once: bool,
+    pub exactly_once: Option<Vec<GlobalId>>,
 }
 
 /// An index storing processed updates so they can be queried

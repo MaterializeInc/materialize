@@ -81,11 +81,10 @@ New York,NY,10004
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-! CREATE SINK output2 FROM input_kafka_no_byo
+> CREATE SINK output2 FROM input_kafka_no_byo
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-all input sources of an exactly-once Kafka sink must be replayable, materialize.public.input_kafka_no_byo is not
 
 ! CREATE SINK output3 FROM input_table
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
@@ -103,17 +102,15 @@ all inputs of an exactly-once Kafka sink must be sources, materialize.public.inp
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
-! CREATE SINK output5 FROM input_kafka_no_byo_mview
+> CREATE SINK output5 FROM input_kafka_no_byo_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-all input sources of an exactly-once Kafka sink must be replayable, materialize.public.input_kafka_no_byo is not
 
-! CREATE SINK output5_view FROM input_kafka_no_byo_mview_view
+> CREATE SINK output5_view FROM input_kafka_no_byo_mview_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-all input sources of an exactly-once Kafka sink must be replayable, materialize.public.input_kafka_no_byo is not
 
 ! CREATE SINK output6 FROM input_table_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
@@ -133,31 +130,27 @@ all inputs of an exactly-once Kafka sink must be sources, materialize.public.inp
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 all inputs of an exactly-once Kafka sink must be sources, materialize.public.input_values_mview is not
 
-! CREATE SINK output9 FROM input_kafka_no_byo_join_view
+> CREATE SINK output9 FROM input_kafka_no_byo_join_view
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-all input sources of an exactly-once Kafka sink must be replayable, materialize.public.input_kafka_no_byo is not
 
-! CREATE SINK output9 FROM input_kafka_no_byo_join_mview
+> CREATE SINK output10 FROM input_kafka_no_byo_join_mview
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-all input sources of an exactly-once Kafka sink must be replayable, materialize.public.input_kafka_no_byo is not
 
-! CREATE SINK output9 FROM input_kafka_no_byo_scalar_subquery
+> CREATE SINK output11 FROM input_kafka_no_byo_scalar_subquery
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-all input sources of an exactly-once Kafka sink must be replayable, materialize.public.input_kafka_no_byo is not
 
-! CREATE SINK output9 FROM input_kafka_no_byo_derived_table
+> CREATE SINK output12 FROM input_kafka_no_byo_derived_table
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-all input sources of an exactly-once Kafka sink must be replayable, materialize.public.input_kafka_no_byo is not
 
-! CREATE SINK output9 FROM input_csv
+! CREATE SINK output13 FROM input_csv
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'

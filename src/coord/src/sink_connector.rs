@@ -356,8 +356,8 @@ async fn build_kafka(
     builder: KafkaSinkConnectorBuilder,
     id: GlobalId,
 ) -> Result<SinkConnector, CoordError> {
+    let exactly_once = builder.exactly_once.is_some();
     let maybe_append_nonce = {
-        let exactly_once = builder.exactly_once;
         let topic_suffix_nonce = builder.topic_suffix_nonce;
         move |topic: &str| {
             if exactly_once {
@@ -393,7 +393,7 @@ async fn build_kafka(
         &ccsr,
         &builder.value_schema,
         builder.key_schema.as_deref(),
-        builder.exactly_once,
+        exactly_once,
     )
     .await
     .context("error registering kafka topic for sink")?;
@@ -415,13 +415,13 @@ async fn build_kafka(
             &ccsr,
             &consistency_value_schema,
             None,
-            builder.exactly_once,
+            builder.exactly_once.is_some(),
         )
         .await
         .context("error registering kafka consistency topic for sink")?;
 
         // get latest committed timestamp from consistencty topic
-        let gate_ts = if builder.exactly_once {
+        let gate_ts = if builder.exactly_once.is_some() {
             let mut consumer_config = config.clone();
             consumer_config
                 .set("group.id", format!("materialize-bootstrap-{}", topic))

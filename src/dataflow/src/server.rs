@@ -102,6 +102,12 @@ pub enum SequencedCommand {
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
     AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
+    /// Update durability information for sources.
+    ///
+    /// Each entry names a source and provides a frontier before which the source can
+    /// be exactly replayed across restarts (i.e. we can assign the same timestamps to
+    /// all the same data)
+    DurabilityFrontierUpdates(Vec<(GlobalId, Antichain<Timestamp>)>),
     /// Add a new source to be aware of for timestamping.
     AddSourceTimestamping {
         /// The ID of the timestamped source
@@ -692,6 +698,13 @@ where
                         .allow_compaction(id, frontier.borrow());
                     if let Some(ts_history) = self.render_state.ts_histories.get_mut(&id) {
                         ts_history.set_compaction_frontier(frontier.borrow());
+                    }
+                }
+            }
+            SequencedCommand::DurabilityFrontierUpdates(list) => {
+                for (id, frontier) in list {
+                    if let Some(ts_history) = self.render_state.ts_histories.get_mut(&id) {
+                        ts_history.set_durability_frontier(frontier.borrow());
                     }
                 }
             }
