@@ -256,6 +256,7 @@ steps:
   - id: pg-cdc
     label: "Postgres CDC test"
     depends_on: build
+    inputs: [test/pg-cdc]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: pg-cdc
