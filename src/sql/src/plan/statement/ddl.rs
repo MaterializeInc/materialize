@@ -1179,7 +1179,7 @@ fn kafka_sink_builder(
         bail!("exactly-once requires a consistency topic");
     }
 
-    if exactly_once {
+    let transitive_source_dependencies: Vec<_> = if exactly_once {
         for item in root_dependencies.iter() {
             if item.item_type() == CatalogItemType::Source
                 && !item.source_connector()?.yields_stable_input()
@@ -1195,7 +1195,11 @@ fn kafka_sink_builder(
                 );
             };
         }
-    }
+
+        root_dependencies.iter().map(|i| i.id()).collect()
+    } else {
+        Vec::new()
+    };
 
     let encoder = Encoder::new(
         key_desc_and_indices
@@ -1264,6 +1268,7 @@ fn kafka_sink_builder(
         key_desc_and_indices,
         value_desc,
         exactly_once,
+        transitive_source_dependencies,
     }))
 }
 

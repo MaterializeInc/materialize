@@ -459,6 +459,7 @@ async fn build_kafka(
         value_desc: builder.value_desc,
         consistency,
         exactly_once: builder.exactly_once,
+        transitive_source_dependencies: builder.transitive_source_dependencies,
         fuel: builder.fuel,
         config_options: builder.config_options,
     }))
