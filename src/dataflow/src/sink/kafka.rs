@@ -326,7 +326,7 @@ where
         }
     }
 
-    let transactional = if connector.exactly_once {
+    let transactional = if connector.exactly_once.is_some() {
         // TODO(aljoscha): this only works for now, once there's an actual
         // Kafka producer on each worker they would step on each others toes
         let transactional_id = format!("mz-producer-{}", connector.topic);

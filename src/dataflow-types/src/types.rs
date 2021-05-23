@@ -914,7 +914,8 @@ pub struct KafkaSinkConnector {
     pub key_schema_id: Option<i32>,
     pub value_schema_id: i32,
     pub consistency: Option<KafkaSinkConsistencyConnector>,
-    pub exactly_once: bool,
+    // Source dependencies for exactly-once sinks.
+    pub exactly_once: Option<Vec<GlobalId>>,
     // Maximum number of records the sink will attempt to send each time it is
     // invoked
     pub fuel: usize,
@@ -995,7 +996,7 @@ pub struct KafkaSinkConnectorBuilder {
     pub consistency_value_schema: Option<String>,
     pub config_options: BTreeMap<String, String>,
     pub ccsr_config: ccsr::ClientConfig,
-    pub exactly_once: bool,
+    pub exactly_once: Option<Vec<GlobalId>>,
 }
 
 /// An index storing processed updates so they can be queried

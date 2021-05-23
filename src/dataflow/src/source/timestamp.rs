@@ -29,6 +29,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use log::debug;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
+use timely::progress::Timestamp as TimelyTimestamp;
 
 use dataflow_types::MzOffset;
 use expr::PartitionId;
@@ -255,6 +256,9 @@ pub struct TimestampBindingBox {
     /// This frontier can be held back by other entities holding the shared
     /// `TimestampBindingRc`.
     compaction_frontier: MutableAntichain<Timestamp>,
+    /// Indicates the lowest timestamp across all partititions and across all workers that has
+    /// been durably persisted.
+    durability_frontier: MutableAntichain<Timestamp>,
     /// Generates new timestamps for RT sources
     proposer: Option<TimestampProposer>,
 }
@@ -264,6 +268,7 @@ impl TimestampBindingBox {
         Self {
             partitions: HashMap::new(),
             compaction_frontier: MutableAntichain::new(),
+            durability_frontier: MutableAntichain::new_bottom(TimelyTimestamp::minimum()),
             proposer: timestamp_update_interval.map(|i| TimestampProposer::new(i)),
         }
     }

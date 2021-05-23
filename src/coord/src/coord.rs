@@ -979,13 +979,14 @@ impl Coordinator {
                         // an AntichainToken. Advance it. Changes to the AntichainToken's frontier
                         // will propagate to the Frontiers' since, and changes to that will propate to
                         // self.since_updates.
-                        self.since_handles.get_mut(&feedback.id).unwrap().maybe_advance(
-                            index_state.upper.frontier().iter().map(|time| {
+                        self.since_handles
+                            .get_mut(&feedback.id)
+                            .unwrap()
+                            .maybe_advance(index_state.upper.frontier().iter().map(|time| {
                                 compaction_window_ms
                                     * (time.saturating_sub(compaction_window_ms)
                                         / compaction_window_ms)
-                            }),
-                        );
+                            }));
                     }
                 }
             }
@@ -1010,13 +1011,14 @@ impl Coordinator {
             if !changes.is_empty() {
                 if let Some(compaction_window_ms) = source_state.compaction_window_ms {
                     if !source_state.upper.frontier().is_empty() {
-                        self.since_handles.get_mut(&feedback.id).unwrap().maybe_advance(
-                            source_state.upper.frontier().iter().map(|time| {
+                        self.since_handles
+                            .get_mut(&feedback.id)
+                            .unwrap()
+                            .maybe_advance(source_state.upper.frontier().iter().map(|time| {
                                 compaction_window_ms
                                     * (time.saturating_sub(compaction_window_ms)
                                         / compaction_window_ms)
-                            }),
-                        );
+                            }));
                     }
                 }
             }
