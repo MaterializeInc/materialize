@@ -606,7 +606,7 @@ impl Coordinator {
                 }
                 self.maintenance().await;
             }
-            WorkerFeedback::TimestampBindings(TimestampBindingFeedback { bindings, .. }) => {
+            WorkerFeedback::TimestampBindings(TimestampBindingFeedback { bindings, changes }) => {
                 self.catalog
                     .insert_timestamp_bindings(
                         bindings
@@ -614,6 +614,33 @@ impl Coordinator {
                             .map(|(id, pid, ts, offset)| (id, pid.to_string(), ts, offset.offset)),
                     )
                     .expect("inserting timestamp bindings cannot fail");
+
+                let mut durability_updates = Vec::new();
+                for (source_id, mut changes) in changes {
+                    if let Some(source_state) = self.sources.get_mut(&source_id) {
+                        // Apply the updates the dataflow worker sent over, and check if there
+                        // were any changes to the source's upper frontier.
+                        let changes: Vec<_> = source_state
+                            .durability
+                            .update_iter(changes.drain())
+                            .collect();
+
+                        if !changes.is_empty() {
+                            // The source's durability frontier changed as a result of the updates sent over
+                            // by the dataflow workers. Advance the durability frontier known to the dataflow worker
+                            // to indicate that these bindings have been persisted.
+                            durability_updates
+                                .push((source_id, source_state.durability.frontier().to_owned()));
+                        }
+                    }
+                }
+
+                // Announce the new frontiers that have been durably persisted.
+                if !durability_updates.is_empty() {
+                    self.broadcast(SequencedCommand::DurabilityFrontierUpdates(
+                        durability_updates,
+                    ));
+                }
             }
         }
     }
