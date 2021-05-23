@@ -19,6 +19,7 @@ use differential_dataflow::AsCollection;
 use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
+use timely::progress::Antichain;
 
 use dataflow_types::*;
 use expr::{GlobalId, MirRelationExpr};
@@ -55,6 +56,7 @@ where
                 needed_source_tokens.push(source_token.clone());
             }
         }
+
         let (collection, _err_collection) = self
             .collection(&MirRelationExpr::global_get(
                 sink.from,
@@ -155,6 +157,22 @@ where
 
         match sink.connector.clone() {
             SinkConnector::Kafka(c) => {
+                // FIXME: not sure I need to do this with these fields (as opposed to
+                // import_ids above
+                let mut source_ts_histories = Vec::new();
+
+                if let Some(source_ids) = &c.exactly_once {
+                    for id in source_ids.iter() {
+                        if let Some(history) = render_state.ts_histories.get(id) {
+                            let mut history_bindings = history.clone();
+                            // We don't want these to block compaction
+                            // ever.
+                            history_bindings.set_compaction_frontier(Antichain::new().borrow());
+                            source_ts_histories.push(history_bindings);
+                        }
+                    }
+                }
+
                 let token = sink::kafka(
                     collection,
                     sink_id,
@@ -162,6 +180,7 @@ where
                     sink.key_desc.clone(),
                     sink.value_desc.clone(),
                     sink.as_of.clone(),
+                    source_ts_histories,
                 );
                 needed_sink_tokens.push(token);
             }

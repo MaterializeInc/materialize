@@ -519,6 +519,15 @@ impl TimestampBindingRc {
     ) -> Vec<(PartitionId, Timestamp, MzOffset)> {
         self.wrapper.borrow().get_bindings_in_range(lower, upper)
     }
+
+    /// Returns the current durability frontier
+    pub fn durability_frontier(&self) -> Antichain<Timestamp> {
+        self.wrapper
+            .borrow()
+            .durability_frontier
+            .frontier()
+            .to_owned()
+    }
 }
 
 impl Clone for TimestampBindingRc {
