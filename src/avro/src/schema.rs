@@ -1202,7 +1202,7 @@ impl SchemaParser {
             }
         }
         if let Some(name) = complex.get("logicalType") {
-            if name == "uuid" {
+            if name == "UUID" {
                 return SchemaPiece::Uuid;
             }
         }
