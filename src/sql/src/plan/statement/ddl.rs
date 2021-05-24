@@ -14,9 +14,9 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
-use std::iter;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{fmt, iter};
 
 use anyhow::{anyhow, bail};
 use aws_arn::ARN;
@@ -1364,7 +1364,7 @@ pub fn plan_create_sink(
                         key_columns.iter().all(|column| indices.contains(column))
                     });
                 if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                    return Err(invalid_upsert_key_err(&desc, &key));
+                    warn!("{}", invalid_upsert_key_err(from.name(), &desc, &key));
                 }
                 Some(indices)
             } else {
@@ -1449,14 +1449,18 @@ pub fn plan_create_sink(
     }))
 }
 
-fn invalid_upsert_key_err(desc: &RelationDesc, requested_user_key: &[ColumnName]) -> anyhow::Error {
+fn invalid_upsert_key_err(
+    relation_name: impl fmt::Display,
+    desc: &RelationDesc,
+    requested_user_key: &[ColumnName],
+) -> String {
     let requested_user_key = requested_user_key
         .iter()
         .map(|column| column.as_str())
         .join(", ");
     let requested_user_key = format!("({})", requested_user_key);
     let valid_keys = if desc.typ().keys.is_empty() {
-        "there are no valid keys".to_owned()
+        format!("there are no known valid keys for {}", relation_name)
     } else {
         let valid_keys = desc
             .typ()
@@ -1470,9 +1474,15 @@ fn invalid_upsert_key_err(desc: &RelationDesc, requested_user_key: &[ColumnName]
                 format!("({})", columns_string)
             })
             .join(", ");
-        format!("valid keys are: {}", valid_keys)
+        format!("valid keys for {} are: {}", relation_name, valid_keys)
     };
-    anyhow!("Invalid upsert key: {}, {}", requested_user_key, valid_keys)
+    format!(
+        "Invalid upsert key: {}, {}. \
+          This can happen because there are truly no valid keys or because we \
+          do not know about them. Using an invalid key here can lead to failures \
+          at runtime.",
+        requested_user_key, valid_keys
+    )
 }
 
 /// Returns only those `CatalogItem`s that don't have any other user
