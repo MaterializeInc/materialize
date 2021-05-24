@@ -9,7 +9,7 @@
 
 use std::convert::TryInto;
 use std::error::Error;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
@@ -209,11 +209,38 @@ impl PostgresSourceReader {
         let stream = LogicalReplicationStream::new(copy_stream);
         tokio::pin!(stream);
 
+        let mut last_keepalive = Instant::now();
         let mut inserts = vec![];
         let mut deletes = vec![];
         while let Some(item) = stream.next().await {
+            use ReplicationMessage::*;
+            // The upstream will periodically request keepalive responses by setting the reply field
+            // to 1. However, we cannot rely on these messages arriving on time. For example, when
+            // the upstream is sending a big transaction its keepalive messages are queued and can
+            // be delayed arbitrarily.  Therefore, we also make sure to send a proactive keepalive
+            // every 30 seconds.
+            //
+            // See: https://www.postgresql.org/message-id/CAMsr+YE2dSfHVr7iEv1GSPZihitWX-PMkD9QALEGcTYa+sdsgg@mail.gmail.com
+            if matches!(item, Ok(PrimaryKeepAlive(ref k)) if k.reply() == 1)
+                || last_keepalive.elapsed() > Duration::from_secs(30)
+            {
+                let ts: i64 = PG_EPOCH
+                    .elapsed()
+                    .expect("system clock set earlier than year 2000!")
+                    .as_micros()
+                    .try_into()
+                    .expect("software more than 200k years old, consider updating");
+
+                try_recoverable!(
+                    stream
+                        .as_mut()
+                        .standby_status_update(self.lsn, self.lsn, self.lsn, ts, 0)
+                        .await
+                );
+                last_keepalive = Instant::now();
+            }
             match item {
-                Ok(ReplicationMessage::XLogData(xlog_data)) => {
+                Ok(XLogData(xlog_data)) => {
                     use LogicalReplicationMessage::*;
 
                     match xlog_data.data() {
@@ -268,28 +295,8 @@ impl PostgresSourceReader {
                         _ => return Err(Fatal(anyhow!("unexpected logical replication message"))),
                     }
                 }
-                // The upstream will periodically send keepalive messages to:
-                //    a) keep the TCP connection alive
-                //    b) get feedback about the state of replication in the replica
-                // The upstream database can dictate if a reply MUST be given by setting the reply
-                // field to 1
-                Ok(ReplicationMessage::PrimaryKeepAlive(keepalive)) => {
-                    if keepalive.reply() == 1 {
-                        let ts: i64 = PG_EPOCH
-                            .elapsed()
-                            .expect("system clock set earlier than year 2000!")
-                            .as_micros()
-                            .try_into()
-                            .expect("software more than 200k years old, consider updating");
-
-                        try_recoverable!(
-                            stream
-                                .as_mut()
-                                .standby_status_update(self.lsn, self.lsn, self.lsn, ts, 0)
-                                .await
-                        );
-                    }
-                }
+                // Handled above
+                Ok(PrimaryKeepAlive(_)) => {}
                 Err(err) => {
                     let recoverable = match err.source() {
                         Some(err) => {
