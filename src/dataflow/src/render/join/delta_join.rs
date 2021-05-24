@@ -24,6 +24,7 @@ use timely::dataflow::Scope;
 use dataflow_types::DataflowError;
 use expr::{JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr};
 use repr::{Row, RowArena};
+use timely::progress::Antichain;
 
 use super::super::context::{ArrangementFlavor, Context};
 use crate::operator::CollectionExt;
@@ -307,13 +308,12 @@ where
                             .iter()
                             .find(|(key, _val)| key.0 == &source_relation)
                         {
+                            let as_of = self.as_of_frontier.clone();
                             match val {
-                                Ok(local) => {
-                                    local.as_collection(|_k, v| v.clone()).enter_region(region)
-                                }
-                                Err(trace) => {
-                                    trace.as_collection(|_k, v| v.clone()).enter_region(region)
-                                }
+                                Ok(local) => build_update_stream(local, as_of, source_relation)
+                                    .enter_region(region),
+                                Err(trace) => build_update_stream(trace, as_of, source_relation)
+                                    .enter_region(region),
                             }
                         } else {
                             self.collection(&inputs[source_relation])
@@ -558,4 +558,46 @@ where
         oks.as_collection().flat_map(|x| x),
         errs.concat(&errs2.as_collection()),
     )
+}
+
+/// Builds the beginning of the update stream of a delta path.
+fn build_update_stream<G, Tr>(
+    trace: &Arranged<G, Tr>,
+    as_of: Antichain<G::Timestamp>,
+    source_relation: usize,
+) -> Collection<G, Row>
+where
+    G: Scope<Timestamp = repr::Timestamp>,
+    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = isize> + Clone + 'static,
+    Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+    Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+{
+    use differential_dataflow::AsCollection;
+    use timely::dataflow::channels::pact::Pipeline;
+    use timely::dataflow::operators::Operator;
+    trace
+        .stream
+        .unary(Pipeline, "AsCollection", move |_, _| {
+            move |input, output| {
+                input.for_each(|time, data| {
+                    let mut session = output.session(&time);
+                    for wrapper in data.iter() {
+                        let batch = &wrapper;
+                        let mut cursor = batch.cursor();
+                        while let Some(_key) = cursor.get_key(batch) {
+                            while let Some(val) = cursor.get_val(batch) {
+                                cursor.map_times(batch, |time, diff| {
+                                    if source_relation == 0 || !as_of.elements().contains(&time) {
+                                        session.give((val.clone(), time.clone(), diff.clone()));
+                                    }
+                                });
+                                cursor.step_val(batch);
+                            }
+                            cursor.step_key(batch);
+                        }
+                    }
+                });
+            }
+        })
+        .as_collection()
 }
