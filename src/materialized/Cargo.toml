@@ -56,7 +56,7 @@ mz-process-collector = { path = "../mz-process-collector" }
 nix = "0.20.0"
 num_cpus = "1.0.0"
 openssl = { version = "0.10.34", features = ["vendored"] }
-openssl-sys = { version = "0.9.62", features = ["vendored"] }
+openssl-sys = { version = "0.9.63", features = ["vendored"] }
 ore = { path = "../ore" }
 os_info = "3.0.4"
 parse_duration = "2.1.1"
@@ -74,7 +74,7 @@ shell-words = "1.0.0"
 sql = { path = "../sql" }
 structopt = "0.3.21"
 sysctl = "0.4.1"
-sysinfo = "0.17.2"
+sysinfo = "0.17.5"
 tempfile = "3.2.0"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.6.0", features = ["sync"] }
@@ -96,7 +96,7 @@ uuid = "0.8.2"
 jemallocator = { version = "0.3.0", features = ["profiling", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
-assert_cmd = "1.0.3"
+assert_cmd = "1.0.4"
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 datadriven = "0.5.0"
