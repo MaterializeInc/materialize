@@ -661,6 +661,10 @@ pub fn plan_cast<D>(
 where
     D: fmt::Display,
 {
+    if let ScalarType::APD { .. } = cast_to {
+        ecx.require_experimental_mode("APD")?;
+    }
+
     let from_typ = ecx.scalar_type(&expr);
     match get_cast(ecx, ccx, &from_typ, cast_to) {
         Some(cast) => Ok(cast(expr)),
