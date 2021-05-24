@@ -34,12 +34,24 @@ pub struct ColumnType {
 impl ColumnType {
     pub fn union(&self, other: &Self) -> Result<Self, anyhow::Error> {
         match (self.scalar_type.clone(), other.scalar_type.clone()) {
-            (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => Ok(ColumnType {
-                scalar_type: scalar_type,
-                nullable: self.nullable || other.nullable,
-            }),
-            (ScalarType::Record { fields, custom_oid, custom_name },
-             ScalarType::Record { fields: other_fields, custom_oid: other_custom_oid, custom_name: other_custom_name }) => {
+            (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
+                Ok(ColumnType {
+                    scalar_type: scalar_type,
+                    nullable: self.nullable || other.nullable,
+                })
+            }
+            (
+                ScalarType::Record {
+                    fields,
+                    custom_oid,
+                    custom_name,
+                },
+                ScalarType::Record {
+                    fields: other_fields,
+                    custom_oid: other_custom_oid,
+                    custom_name: other_custom_name,
+                },
+            ) => {
                 if custom_oid != other_custom_oid || custom_name != other_custom_name {
                     bail!(
                         "Can't union types: {:?} and {:?}",
@@ -60,14 +72,22 @@ impl ColumnType {
                         let union_column_type = field.1.union(&other_field.1)?;
                         union_fields.push((field.0.clone(), union_column_type));
                     };
-                };
+                }
 
                 Ok(ColumnType {
-                    scalar_type: ScalarType::Record { fields: union_fields, custom_oid, custom_name },
+                    scalar_type: ScalarType::Record {
+                        fields: union_fields,
+                        custom_oid,
+                        custom_name,
+                    },
                     nullable: self.nullable || other.nullable,
                 })
-            },
-            _ => bail!("Can't union types: {:?} and {:?}", self.scalar_type, other.scalar_type)
+            }
+            _ => bail!(
+                "Can't union types: {:?} and {:?}",
+                self.scalar_type,
+                other.scalar_type
+            ),
         }
     }
 
