@@ -474,16 +474,11 @@ impl SchemaCache {
                 // However, we can't just cache it directly, since resolving schemas takes significant CPU work,
                 // which  we don't want to repeat for every record. So, parse and resolve it, and cache the
                 // result (whether schema or error).
-                let rf = &self.reader_fingerprint.bytes;
                 let result = Schema::from_str(&response.raw).and_then(|schema| {
-                    if &schema.fingerprint::<Sha256>().bytes == rf {
-                        Ok(schema)
-                    } else {
-                        // the writer schema differs from the reader schema,
-                        // so we need to perform schema resolution.
-                        let resolved = resolve_schemas(&schema, reader_schema)?;
-                        Ok(resolved)
-                    }
+                    // Schema fingerprints don't actually capture whether two schemas are meaningfully
+                    // different, because they strip out logical types. Thus, resolve in all cases.
+                    let resolved = resolve_schemas(&schema, reader_schema)?;
+                    Ok(resolved)
                 });
                 v.insert(result)
             }
