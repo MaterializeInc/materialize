@@ -168,10 +168,11 @@ Field           | Type       | Meaning
 
 The `mz_kafka_sinks` table contains a row for each Kafka sink in the system.
 
-Field     | Type     | Meaning
-----------|----------|--------
-`sink_id` | [`text`] | The ID of the sink.
-`topic`   | [`text`] | The name of the Kafka topic into which the sink is writing.
+Field                | Type     | Meaning
+---------------------|----------|--------
+`sink_id`            | [`text`] | The ID of the sink.
+`topic`              | [`text`] | The name of the Kafka topic into which the sink is writing.
+`consistency_topic`  | [`text`] | The name of the Kafka topic into which the sink is writing consistency information. This is `NULL` when the sink does not write consistency information.
 
 ### `mz_map_types`
 

@@ -606,6 +606,7 @@ lazy_static! {
         desc: RelationDesc::empty()
             .with_named_column("sink_id", ScalarType::String.nullable(false))
             .with_named_column("topic", ScalarType::String.nullable(false))
+            .with_named_column("consistency_topic", ScalarType::String.nullable(true))
             .with_key(vec![0]),
         id: GlobalId::System(4005),
         index_id: GlobalId::System(4006),

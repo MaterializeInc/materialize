@@ -563,10 +563,10 @@ pub fn plan_create_source(
         Connector::Kafka { broker, topic, .. } => {
             let config_options = kafka_util::extract_config(&mut with_options)?;
 
-            consistency = match with_options.remove("consistency") {
+            consistency = match with_options.remove("consistency_topic") {
                 None => Consistency::RealTime,
                 Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
-                Some(_) => bail!("consistency must be a string"),
+                Some(_) => bail!("consistency_topic must be a string"),
             };
 
             let group_id_prefix = match with_options.remove("group_id_prefix") {
@@ -671,7 +671,7 @@ pub fn plan_create_source(
                 Some(Value::Boolean(b)) => b,
                 Some(_) => bail!("tail must be a boolean"),
             };
-            consistency = match with_options.remove("consistency") {
+            consistency = match with_options.remove("consistency_topic") {
                 None => Consistency::RealTime,
                 Some(_) => bail!("BYO consistency not supported for file sources"),
             };
@@ -773,10 +773,10 @@ pub fn plan_create_source(
                 Some(Value::Boolean(b)) => b,
                 Some(_) => bail!("tail must be a boolean"),
             };
-            consistency = match with_options.remove("consistency") {
+            consistency = match with_options.remove("consistency_topic") {
                 None => Consistency::RealTime,
                 Some(Value::String(topic)) => Consistency::BringYourOwn(topic),
-                Some(_) => bail!("consistency must be a string"),
+                Some(_) => bail!("consistency_topic must be a string"),
             };
 
             if consistency != Consistency::RealTime {
@@ -1162,10 +1162,10 @@ fn kafka_sink_builder(
 
     let broker_addrs = broker.parse()?;
 
-    let include_consistency = match with_options.remove("consistency") {
-        Some(Value::Boolean(b)) => b,
-        None => false,
-        Some(_) => bail!("consistency must be a boolean"),
+    let consistency_topic = match with_options.remove("consistency_topic") {
+        None => None,
+        Some(Value::String(topic)) => Some(topic),
+        Some(_) => bail!("consistency_topic must be a string"),
     };
 
     let exactly_once = match with_options.remove("exactly_once") {
@@ -1174,7 +1174,7 @@ fn kafka_sink_builder(
         Some(_) => bail!("exactly-once must be a boolean"),
     };
 
-    if exactly_once && !include_consistency {
+    if exactly_once && consistency_topic.is_none() {
         bail!("exactly-once requires a consistency topic");
     }
 
@@ -1201,7 +1201,7 @@ fn kafka_sink_builder(
             .as_ref()
             .map(|(desc, _indices)| desc.clone()),
         value_desc.clone(),
-        include_consistency,
+        consistency_topic.is_some(),
     );
     let value_schema = encoder.value_writer_schema().to_string();
     let key_schema = encoder
@@ -1234,11 +1234,9 @@ fn kafka_sink_builder(
         );
     }
 
-    let consistency_value_schema = if include_consistency {
-        Some(avro::get_debezium_transaction_schema().canonical_form())
-    } else {
-        None
-    };
+    let consistency_value_schema = consistency_topic
+        .as_ref()
+        .map(|_topic| avro::get_debezium_transaction_schema().canonical_form());
 
     let config_options = kafka_util::extract_config(with_options)?;
     let ccsr_config = kafka_util::generate_ccsr_client_config(
@@ -1246,11 +1244,13 @@ fn kafka_sink_builder(
         &config_options,
         ccsr_with_options,
     )?;
+
     Ok(SinkConnectorBuilder::Kafka(KafkaSinkConnectorBuilder {
         broker_addrs,
         schema_registry_url,
         value_schema,
         topic_prefix,
+        consistency_topic_prefix: consistency_topic,
         topic_suffix_nonce,
         partition_count,
         replication_factor,

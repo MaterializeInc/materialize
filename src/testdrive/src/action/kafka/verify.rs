@@ -85,19 +85,25 @@ impl Action for VerifyAction {
     }
 
     async fn redo(&self, state: &mut State) -> Result<(), String> {
-        let topic_prefix: String = state
-            .pgclient
-            .query_one(
-                "SELECT topic FROM mz_catalog_names JOIN mz_kafka_sinks ON global_id = sink_id WHERE name = $1",
-                &[&self.sink],
-            )
-            .await
-            .map_err(|e| format!("retrieving topic name: {}", e))?
-            .get("topic");
-
-        let topic = match self.consistency {
-            Some(SinkConsistencyFormat::Debezium) => format!("{}-consistency", topic_prefix),
-            None => topic_prefix,
+        async fn get_topic(
+            sink: &str,
+            topic_field: &str,
+            state: &mut State,
+        ) -> Result<String, String> {
+            let query = format!("SELECT {} FROM mz_catalog_names JOIN mz_kafka_sinks ON global_id = sink_id WHERE name = $1", topic_field);
+            let result = state
+                .pgclient
+                .query_one(query.as_str(), &[&sink])
+                .await
+                .map_err(|e| format!("retrieving topic name: {}", e))?
+                .get(topic_field);
+            Ok(result)
+        }
+        let topic: String = match self.consistency {
+            None => get_topic(&self.sink, "topic", state).await?,
+            Some(SinkConsistencyFormat::Debezium) => {
+                get_topic(&self.sink, "consistency_topic", state).await?
+            }
         };
 
         println!("Verifying results in Kafka topic {}", topic);

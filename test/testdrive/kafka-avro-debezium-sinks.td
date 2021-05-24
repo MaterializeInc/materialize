@@ -87,17 +87,17 @@ $ kafka-create-topic topic=input
 
 > CREATE MATERIALIZED SOURCE input
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-input-${testdrive.seed}'
-    WITH (consistency = 'testdrive-consistency-${testdrive.seed}')
+    WITH (consistency_topic = 'testdrive-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
 > CREATE SINK input_sink FROM input
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (a)
-  WITH (consistency = true) FORMAT AVRO
+  WITH (consistency_topic = 'input-sink-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK input_sink_multiple_keys FROM input
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink' KEY (b, a)
-  WITH (consistency = true) FORMAT AVRO
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'input-sink-multi-key' KEY (b, a)
+  WITH (consistency_topic = 'input-sink-multi-key-consistency') FORMAT AVRO
   USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 $ kafka-ingest format=avro topic=input schema=${schema} timestamp=1

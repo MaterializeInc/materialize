@@ -78,7 +78,7 @@ $ kafka-create-topic topic=tx
 
 > CREATE MATERIALIZED SOURCE nums
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-nums-${testdrive.seed}'
-  WITH (consistency = 'testdrive-tx-${testdrive.seed}')
+  WITH (consistency_topic = 'testdrive-tx-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${nums-schema}'
   ENVELOPE DEBEZIUM
 

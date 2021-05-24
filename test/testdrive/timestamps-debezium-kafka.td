@@ -79,12 +79,12 @@ $ kafka-ingest format=avro topic=bar schema=${schema} timestamp=1
 
 > CREATE MATERIALIZED SOURCE data_foo
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-foo-${testdrive.seed}'
-    WITH (consistency = 'testdrive-consistency-${testdrive.seed}')
+    WITH (consistency_topic = 'testdrive-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
 > CREATE MATERIALIZED SOURCE data_bar
   FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'testdrive-bar-${testdrive.seed}'
-    WITH (consistency = 'testdrive-consistency-${testdrive.seed}')
+    WITH (consistency_topic = 'testdrive-consistency-${testdrive.seed}')
   FORMAT AVRO USING SCHEMA '${schema}' ENVELOPE DEBEZIUM
 
 

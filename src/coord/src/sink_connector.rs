@@ -356,14 +356,19 @@ async fn build_kafka(
     builder: KafkaSinkConnectorBuilder,
     id: GlobalId,
 ) -> Result<SinkConnector, CoordError> {
-    let topic = if builder.exactly_once {
-        format!("{}-{}", builder.topic_prefix, id)
-    } else {
-        format!(
-            "{}-{}-{}",
-            builder.topic_prefix, id, builder.topic_suffix_nonce
-        )
+    let maybe_append_nonce = {
+        let exactly_once = builder.exactly_once;
+        let topic_suffix_nonce = builder.topic_suffix_nonce;
+        move |topic: &str| {
+            if exactly_once {
+                format!("{}-{}", topic, id)
+            } else {
+                format!("{}-{}-{}", topic, id, topic_suffix_nonce)
+            }
+        }
     };
+
+    let topic = maybe_append_nonce(&builder.topic_prefix);
 
     // Create Kafka topic with single partition.
     let mut config = ClientConfig::new();
@@ -390,7 +395,12 @@ async fn build_kafka(
     .context("error registering kafka topic for sink")?;
 
     let consistency = if let Some(consistency_value_schema) = builder.consistency_value_schema {
-        let consistency_topic = format!("{}-consistency", topic);
+        let consistency_topic = maybe_append_nonce(
+            builder
+                .consistency_topic_prefix
+                .as_ref()
+                .expect("known to exist"),
+        );
 
         // create consistency topic/schema and retrieve schema id
         let (_, consistency_schema_id) = register_kafka_topic(

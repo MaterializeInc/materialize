@@ -68,9 +68,9 @@ replication factor for sink topics must be a positive integer or -1 for broker d
 ! CREATE SINK invalid_consistency FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}'
   TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}'
-  WITH (consistency = -2)
+  WITH (consistency_topic = -2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-consistency must be a boolean
+consistency_topic must be a string
 
 ! CREATE SINK invalid_acks FROM v1
   INTO KAFKA BROKER '${testdrive.kafka-addr}'
