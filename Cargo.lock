@@ -800,6 +800,7 @@ dependencies = [
  "crossbeam-channel",
  "csv-core",
  "dataflow-types",
+ "dec",
  "differential-dataflow",
  "dogsdogsdogs",
  "expr",
@@ -896,12 +897,13 @@ dependencies = [
 
 [[package]]
 name = "dec"
-version = "0.3.3"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14b04f728b6cb1c27eb83ef6368360870abf7095d8910dd3e02dc819f5a0d336"
+checksum = "915134aa3f3670c6dfd8b7bfda62cfc3025fb319dd08245e9d58df33183830c2"
 dependencies = [
  "decnumber-sys",
  "libc",
+ "static_assertions",
 ]
 
 [[package]]

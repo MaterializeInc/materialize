@@ -26,10 +26,9 @@ mod value;
 pub mod oid;
 
 pub use format::Format;
-pub use types::{Type, LIST, MAP, RDN as RDNType};
+pub use types::{Type, APD as APDType, LIST, MAP};
 pub use value::interval::Interval;
 pub use value::jsonb::Jsonb;
 pub use value::numeric::Numeric;
-pub use value::rdn::RDN as RDNValue;
 pub use value::record::Record;
 pub use value::{null_datum, values_from_row, Value};

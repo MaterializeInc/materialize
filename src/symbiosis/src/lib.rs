@@ -37,7 +37,7 @@ use tokio_postgres::types::FromSql;
 use uuid::Uuid;
 
 use pgrepr::Jsonb;
-use repr::adt::decimal::Significand;
+use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
 use repr::{Datum, RelationDesc, RelationType, Row};
 use sql::ast::{
     ColumnOption, CreateSchemaStatement, CreateTableStatement, DataType, DeleteStatement,
@@ -452,7 +452,11 @@ fn push_column(
                     }
                 }
                 "pg_catalog.numeric" => {
-                    let (_, desired_scale) = sql::plan::unwrap_numeric_typ_mod(typ_mod)?;
+                    let (_, desired_scale) = sql::plan::unwrap_numeric_typ_mod(
+                        typ_mod,
+                        MAX_DECIMAL_PRECISION,
+                        "numeric",
+                    )?;
                     match get_column_inner::<pgrepr::Numeric>(postgres_row, i, nullable)? {
                         None => row.push(Datum::Null),
                         Some(d) => {
@@ -462,7 +466,7 @@ fn push_column(
                             // want to get to `significand2 * 10^desired_scale`
                             // so `significand2 = significand * 10^(current_scale - desired_scale)`
                             let scale_correction =
-                                (d.0.scale() as isize) - (desired_scale as isize);
+                                (d.0.scale() as isize) - (desired_scale.unwrap_or(0) as isize);
                             if scale_correction > 0 {
                                 significand /= 10i128.pow(scale_correction.try_into()?);
                             } else {

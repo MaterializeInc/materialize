@@ -31,7 +31,7 @@ use std::num::FpCategory;
 
 use chrono::offset::{Offset, TimeZone};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
-use dec::{Context, Decimal128, OrderedDecimal};
+use dec::OrderedDecimal;
 use fast_float::FastFloat;
 use lazy_static::lazy_static;
 use num_traits::Float as NumFloat;
@@ -44,12 +44,12 @@ use ore::fmt::FormatBuffer;
 use ore::lex::LexBuf;
 use ore::str::StrExt;
 
+use crate::adt::apd::{self, Apd, APD_DATUM_MAX_PRECISION};
 use crate::adt::array::ArrayDimension;
 use crate::adt::datetime::{self, DateTimeField, ParsedDateTime};
 use crate::adt::decimal::Decimal;
 use crate::adt::interval::Interval;
 use crate::adt::jsonb::{Jsonb, JsonbRef};
-use crate::adt::rdn;
 
 macro_rules! bail {
     ($($arg:tt)*) => { return Err(format!($($arg)*)) };
@@ -439,29 +439,30 @@ where
     Nestable::Yes
 }
 
-pub fn parse_numeric(s: &str) -> Result<OrderedDecimal<Decimal128>, ParseError> {
-    let mut cx = Context::<Decimal128>::default();
-    let n = match cx.parse(s) {
-        Ok(n) => OrderedDecimal(n),
-        Err(e) => {
-            return Err(ParseError::invalid_input_syntax("rdn", s).with_details(e));
+pub fn parse_apd(s: &str) -> Result<OrderedDecimal<Apd>, ParseError> {
+    let mut cx = apd::cx_datum();
+    let mut n = match cx.parse(s.trim()) {
+        Ok(n) => n,
+        Err(..) => {
+            return Err(ParseError::invalid_input_syntax("apd", s));
         }
     };
 
-    if rdn::check_max_precision_strict(&cx, &n).is_err() {
-        return Err(ParseError::out_of_range("rdn", s).with_details(format!(
+    let rounding_failed = apd::rescale_within_max_precision(&mut n).is_err();
+    let cx_status = cx.status();
+    if cx_status.overflow() || cx_status.subnormal() || rounding_failed {
+        Err(ParseError::out_of_range("apd", s).with_details(format!(
             "exceeds maximum precision {}",
-            rdn::RDN_MAX_PRECISION
-        )));
+            APD_DATUM_MAX_PRECISION
+        )))
+    } else if n.is_infinite() || (n.is_nan() && n.is_negative()) {
+        Err(ParseError::invalid_input_syntax("apd", s))
+    } else {
+        Ok(OrderedDecimal(n))
     }
-
-    // Inexact status is caught above
-    assert!(!cx.status().any());
-
-    Ok(n)
 }
 
-pub fn format_numeric<F>(buf: &mut F, n: &OrderedDecimal<Decimal128>) -> Nestable
+pub fn format_apd<F>(buf: &mut F, n: &OrderedDecimal<Apd>) -> Nestable
 where
     F: FormatBuffer,
 {

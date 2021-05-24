@@ -235,9 +235,9 @@ lazy_static! {
                 let (_, s) = to_type.unwrap_decimal_parts();
                 Some(move |e: HirScalarExpr| e.call_unary(CastStringToDecimal(s)))
             }),
-            (String, Numeric) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
-                let s = to_type.unwrap_numeric_scale();
-                Some(move |e: HirScalarExpr| e.call_unary(CastStringToNumeric(s)))
+            (String, APD) => Explicit: CastTemplate::new(|_ecx, _ccx, _from_type, to_type| {
+                let s = to_type.unwrap_apd_scale();
+                Some(move |e: HirScalarExpr| e.call_unary(CastStringToAPD(s)))
             }),
             (String, Date) => Explicit: CastStringToDate,
             (String, Time) => Explicit: CastStringToTime,
@@ -315,8 +315,8 @@ lazy_static! {
             // UUID
             (Uuid, String) => Assignment: CastUuidToString,
 
-            // NUMERIC
-            (Numeric, String) => Assignment: CastNumericToString
+            // APD
+            (APD, String) => Assignment: CastAPDToString
         }
     };
 }
@@ -350,7 +350,20 @@ fn get_cast(
     }
 
     if from == to {
-        return Some(Box::new(|expr| expr));
+        return if let ScalarType::APD {
+            scale: Some(ref scale),
+        } = to
+        {
+            // All APD variations should be treated as equal to one another
+            // except in the case where we want to cast an APD to another APD with a
+            // specified scale (e.g. during an insert).
+            let scale = *scale;
+            Some(Box::new(move |e: HirScalarExpr| {
+                e.call_unary(UnaryFunc::RescaleAPD(scale))
+            }))
+        } else {
+            Some(Box::new(|expr| expr))
+        };
     }
 
     // If types structurally equivalent, we only need to change `from`'s OID.
@@ -648,6 +661,10 @@ pub fn plan_cast<D>(
 where
     D: fmt::Display,
 {
+    if let ScalarType::APD { .. } = cast_to {
+        ecx.require_experimental_mode("APD")?;
+    }
+
     let from_typ = ecx.scalar_type(&expr);
     match get_cast(ecx, ccx, &from_typ, cast_to) {
         Some(cast) => Ok(cast(expr)),

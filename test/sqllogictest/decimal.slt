@@ -397,7 +397,7 @@ true
 
 # Invalid type mods
 
-query error numeric scale 2 exceeds precision 1
+query error numeric scale 2 must be between 0 and precision 1
 SELECT '0.2'::decimal(1, 2);
 
 query error precision for type numeric must be within \[1-38\], have 50

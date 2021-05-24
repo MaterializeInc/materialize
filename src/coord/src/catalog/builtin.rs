@@ -423,10 +423,10 @@ pub const TYPE_BPCHAR: BuiltinType = BuiltinType {
 };
 
 lazy_static! {
-    pub static ref TYPE_RDN: BuiltinType = BuiltinType {
+    pub static ref TYPE_APD: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
         id: GlobalId::System(1997),
-        pgtype: &pgrepr::RDNType,
+        pgtype: &pgrepr::APDType,
     };
     pub static ref TYPE_LIST: BuiltinType = BuiltinType {
         schema: PG_CATALOG_SCHEMA,
@@ -1297,7 +1297,7 @@ lazy_static! {
             Builtin::Type(&TYPE_INTERVAL_ARRAY),
             Builtin::Type(&TYPE_JSONB),
             Builtin::Type(&TYPE_JSONB_ARRAY),
-            Builtin::Type(&TYPE_RDN),
+            Builtin::Type(&TYPE_APD),
             Builtin::Type(&TYPE_LIST),
             Builtin::Type(&TYPE_MAP),
             Builtin::Type(&TYPE_NUMERIC),

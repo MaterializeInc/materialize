@@ -100,8 +100,8 @@ impl TypeCategory {
             | ScalarType::Float64
             | ScalarType::Int32
             | ScalarType::Int64
-            | ScalarType::Numeric { .. }
-            | ScalarType::Oid => Self::Numeric,
+            | ScalarType::Oid
+            | ScalarType::APD { .. } => Self::Numeric,
             ScalarType::Interval => Self::Timespan,
             ScalarType::List { .. } => Self::List,
             ScalarType::String => Self::String,
@@ -2213,7 +2213,7 @@ lazy_static! {
                 params!(Interval, Time) => {
                     Operation::binary(|_ecx, lhs, rhs| Ok(rhs.call_binary(lhs, AddTimeInterval)))
                 }, 1849;
-                params!(Numeric{scale: None}, Numeric{scale: None}) => AddNumeric, 17580;
+                params!(APD{scale:None}, APD{scale:None}) => AddAPD, 17581;
             },
             "-" => Scalar {
                 params!(Int32) => UnaryFunc::NegInt32, 558;
@@ -2230,6 +2230,7 @@ lazy_static! {
                     let (lexpr, rexpr) = rescale_decimals_to_same(ecx, lhs, rhs);
                     Ok(lexpr.call_binary(rexpr, SubDecimal))
                 }), 1759;
+                params!(APD{scale: None}, APD{scale: None}) => SubAPD, 17590;
                 params!(Interval, Interval) => SubInterval, 1338;
                 params!(Timestamp, Timestamp) => SubTimestamp, 2067;
                 params!(TimestampTz, TimestampTz) => SubTimestampTz, 1328;
@@ -2262,6 +2263,7 @@ lazy_static! {
                     let expr = lhs.call_binary(rhs, MulDecimal);
                     Ok(rescale_decimal(expr, si, so))
                 }), 1760;
+                params!(APD { scale: None }, APD { scale: None }) => MulAPD, 17600;
             },
             "/" => Scalar {
                 params!(Int32, Int32) => DivInt32, 528;
@@ -2282,7 +2284,7 @@ lazy_static! {
                     let expr = lhs.call_binary(rhs, DivDecimal);
                     Ok(rescale_decimal(expr, si - s2, s))
                 }), 1761;
-                params!(Numeric{scale: None}, Numeric{scale: None}) => DivNumeric, 17610;
+                params!(APD{scale:None}, APD{scale:None}) => DivAPD, 17610;
             },
             "%" => Scalar {
                 params!(Int32, Int32) => ModInt32, 530;

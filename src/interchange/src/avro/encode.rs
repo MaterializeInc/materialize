@@ -15,7 +15,6 @@ use chrono::Timelike;
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use repr::adt::jsonb::JsonbRef;
-use repr::adt::rdn;
 use repr::{ColumnName, ColumnType, Datum, RelationDesc, Row, ScalarType};
 use serde_json::json;
 
@@ -313,19 +312,7 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                         .collect();
                     Value::Record(fields)
                 }
-                ScalarType::Numeric { scale } => {
-                    // Ensure datum has appropriate scale.
-                    let mut s = datum.unwrap_numeric();
-                    if let Some(scale) = scale {
-                        rdn::rescale(&mut s, *scale).unwrap();
-                    }
-
-                    Value::Decimal(DecimalValue {
-                        unscaled: s.0.to_be_bytes().to_vec(),
-                        precision: rdn::RDN_MAX_PRECISION,
-                        scale: rdn::get_scale(&s),
-                    })
-                }
+                ScalarType::APD { .. } => unreachable!(),
             };
             if typ.nullable {
                 val = Value::Union {
@@ -450,12 +437,9 @@ pub(super) fn build_row_schema_fields<F: FnMut() -> String>(
                     })
                 }
             }
-            ScalarType::Numeric { scale } => json!({
-                "type": "bytes",
-                "logicalType": "decimal",
-                "precision": rdn::RDN_MAX_PRECISION,
-                "scale": scale.unwrap_or(8),
-            }),
+            ScalarType::APD { .. } => {
+                unreachable!("TBD: how to determine the scale of these values")
+            }
         };
         if typ.nullable {
             field_type = json!(["null", field_type]);
