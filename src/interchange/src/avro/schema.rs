@@ -18,13 +18,10 @@ use log::warn;
 
 use byteorder::{BigEndian, ByteOrder};
 use mz_avro::error::Error as AvroError;
-use mz_avro::schema::{
-    resolve_schemas, Schema, SchemaFingerprint, SchemaNode, SchemaPiece, SchemaPieceOrNamed,
-};
+use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use ore::retry::Retry;
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
-use sha2::Sha256;
 
 use super::{cdc_v2, is_null, EnvelopeType};
 
@@ -336,9 +333,7 @@ impl ConfluentAvroResolver {
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
-        let writer_schemas = config
-            .map(|sr| SchemaCache::new(sr, reader_schema.fingerprint::<Sha256>()))
-            .transpose()?;
+        let writer_schemas = config.map(|sr| SchemaCache::new(sr)).transpose()?;
         Ok(Self {
             reader_schema,
             writer_schemas,
@@ -424,19 +419,13 @@ impl fmt::Debug for ConfluentAvroResolver {
 struct SchemaCache {
     cache: HashMap<i32, Result<Schema, AvroError>>,
     ccsr_client: ccsr::Client,
-
-    reader_fingerprint: SchemaFingerprint,
 }
 
 impl SchemaCache {
-    fn new(
-        schema_registry: ccsr::ClientConfig,
-        reader_fingerprint: SchemaFingerprint,
-    ) -> Result<SchemaCache, anyhow::Error> {
+    fn new(schema_registry: ccsr::ClientConfig) -> Result<SchemaCache, anyhow::Error> {
         Ok(SchemaCache {
             cache: HashMap::new(),
             ccsr_client: schema_registry.build()?,
-            reader_fingerprint,
         })
     }
 
