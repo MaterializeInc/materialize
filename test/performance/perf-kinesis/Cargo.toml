@@ -22,4 +22,4 @@ rusoto_kinesis = { git = "https://github.com/rusoto/rusoto.git" }
 structopt = "0.3.21"
 test-util = { path = "../../test-util" }
 tokio = "1.6.0"
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }

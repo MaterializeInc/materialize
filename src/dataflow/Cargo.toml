@@ -32,7 +32,7 @@ log = "0.4.13"
 mz-avro = { path = "../avro", features = ["snappy"] }
 ore = { path = "../ore" }
 pdqselect = "0.1.0"
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 postgres-util = { path = "../postgres-util" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 prometheus-static-metric = { git = "https://github.com/MaterializeInc/rust-prometheus.git" }
@@ -50,7 +50,7 @@ serde = { version = "1.0.126", features = ["derive"] }
 serde_json = "1.0.64"
 timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-features = false, features = ["bincode"] }
 tokio = { version = "1.6.0", features = ["fs", "rt", "sync"] }
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 tokio-util = { version = "0.6.7", features = ["codec"] }
 url = { version = "2.2.2", features = ["serde"] }
 uuid = { version = "0.8.2", features = ["serde", "v4"] }

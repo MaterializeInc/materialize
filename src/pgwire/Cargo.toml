@@ -22,7 +22,7 @@ openssl = { version = "0.10.34", features = ["vendored"] }
 ordered-float = { version = "2.2.0", features = ["serde"] }
 ore = { path = "../ore" }
 pgrepr = { path = "../pgrepr" }
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 repr = { path = "../repr" }
 sql = { path = "../sql" }

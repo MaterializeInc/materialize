@@ -105,16 +105,16 @@ itertools = "0.9.0"
 kafka-util = { path = "../kafka-util" }
 pgrepr = { path = "../pgrepr" }
 pgtest = { path = "../pgtest" }
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4"] }
-postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }
+postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
+postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
+postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array", branch = "mz-0.7.2" }
 predicates = "1.0.8"
 rand = "0.8.3"
 repr = { path = "../repr" }
 reqwest = { version = "0.11.3", features = ["blocking"] }
 serde_json = "1.0.64"
-tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["with-chrono-0_4"] }
+tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
 anyhow = "1.0.40"
