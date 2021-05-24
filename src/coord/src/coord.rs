@@ -1557,7 +1557,7 @@ impl Coordinator {
         let (metadata, ops) = self.generate_create_source_ops(session, pcx, vec![plan])?;
         match self.catalog_transact(ops).await {
             Ok(()) => {
-                self.ship_sources(metadata).await?;
+                self.ship_sources(metadata).await;
                 Ok(ExecuteResponse::CreatedSource { existed: false })
             }
             Err(_) if if_not_exists => Ok(ExecuteResponse::CreatedSource { existed: true }),
@@ -1565,10 +1565,7 @@ impl Coordinator {
         }
     }
 
-    async fn ship_sources(
-        &mut self,
-        metadata: Vec<(GlobalId, Option<GlobalId>, bool)>,
-    ) -> Result<(), CoordError> {
+    async fn ship_sources(&mut self, metadata: Vec<(GlobalId, Option<GlobalId>, bool)>) {
         for (source_id, idx_id, caching_enabled) in metadata {
             self.update_timestamper(source_id, true).await;
             if let Some(index_id) = idx_id {
@@ -1577,7 +1574,6 @@ impl Coordinator {
             }
             self.maybe_begin_caching(source_id, caching_enabled).await;
         }
-        Ok(())
     }
 
     fn generate_create_source_ops(
