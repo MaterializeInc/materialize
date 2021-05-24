@@ -18,6 +18,7 @@ use tokio_postgres::{config::SslMode, types::Type as PgType};
 use tokio_postgres::{Client, Config};
 
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
+use sql_parser::ast::Ident;
 use sql_parser::impl_display;
 
 pub enum PgScalarType {
@@ -53,7 +54,7 @@ impl_display!(PgScalarType);
 
 /// The schema of a single column
 pub struct PgColumn {
-    pub name: String,
+    pub name: Ident,
     pub scalar_type: PgScalarType,
     pub nullable: bool,
     pub primary_key: bool,
@@ -223,7 +224,7 @@ pub async fn publication_info(
                 let not_null: bool = row.get("not_null");
                 let primary_key = row.get("primary_key");
                 Ok(PgColumn {
-                    name,
+                    name: Ident::new(name),
                     scalar_type,
                     nullable: !not_null,
                     primary_key,
