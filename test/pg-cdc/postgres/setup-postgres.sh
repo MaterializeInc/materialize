@@ -14,4 +14,5 @@ set -e
 cat >> "$PGDATA/postgresql.conf" <<-EOCONF
 ssl_cert_file = '/share/secrets/postgres.crt'
 ssl_key_file = '/share/secrets/postgres.key'
+ssl_ca_file = '/share/secrets/ca.crt'
 EOCONF

@@ -11,10 +11,10 @@
 
 use std::fmt;
 
-use anyhow::anyhow;
-use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+use anyhow::{anyhow, bail};
+use openssl::ssl::{SslConnector, SslFiletype, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
-use tokio_postgres::types::Type as PgType;
+use tokio_postgres::{config::SslMode, types::Type as PgType};
 use tokio_postgres::{Client, Config};
 
 use sql_parser::ast::display::{AstDisplay, AstFormatter};
@@ -88,13 +88,59 @@ pub struct TableInfo {
     pub schema: Vec<PgColumn>,
 }
 
-/// Creates a TLS connector that respects the Postgres' connector Config, in particular `sslmode`.
-pub fn make_tls(_config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
+/// Creates a TLS connector for the given [`Config`].
+pub fn make_tls(config: &Config) -> Result<MakeTlsConnector, anyhow::Error> {
     let mut builder = SslConnector::builder(SslMethod::tls_client())?;
-    // Currently supported sslmodes (disable, prefer, require) don't verify peer certificates.
-    // todo(uce): add additional sslmodes (see #6716)
-    builder.set_verify(SslVerifyMode::NONE);
-    Ok(MakeTlsConnector::new(builder.build()))
+    // The mode dictates whether we verify peer certs and hostnames. By default, Postgres is
+    // pretty relaxed and recommends SslMode::VerifyCa or SslMode::VerifyFull for security.
+    //
+    // For more details, check out Table 33.1. SSL Mode Descriptions in
+    // https://postgresql.org/docs/current/libpq-ssl.html#LIBPQ-SSL-PROTECTION.
+    let (verify_mode, verify_hostname) = match config.get_ssl_mode() {
+        SslMode::Disable | SslMode::Prefer => (SslVerifyMode::NONE, false),
+        SslMode::Require => match config.get_ssl_root_cert() {
+            // If a root CA file exists, the behavior of sslmode=require will be the same as
+            // that of verify-ca, meaning the server certificate is validated against the CA.
+            //
+            // For more details, check out the note about backwards compatibility in
+            // https://postgresql.org/docs/current/libpq-ssl.html#LIBQ-SSL-CERTIFICATES.
+            Some(_) => (SslVerifyMode::PEER, false),
+            None => (SslVerifyMode::NONE, false),
+        },
+        SslMode::VerifyCa => (SslVerifyMode::PEER, false),
+        SslMode::VerifyFull => (SslVerifyMode::PEER, true),
+        _ => panic!("unexpected sslmode {:?}", config.get_ssl_mode()),
+    };
+
+    // Configure peer verification
+    builder.set_verify(verify_mode);
+
+    // Configure certificates
+    match (config.get_ssl_cert(), config.get_ssl_key()) {
+        (Some(ssl_cert), Some(ssl_key)) => {
+            builder.set_certificate_file(ssl_cert, SslFiletype::PEM)?;
+            builder.set_private_key_file(ssl_key, SslFiletype::PEM)?;
+        }
+        (None, Some(_)) => bail!("must provide both sslcert and sslkey, but only provided sslkey"),
+        (Some(_), None) => bail!("must provide both sslcert and sslkey, but only provided sslcert"),
+        _ => {}
+    }
+    if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
+        builder.set_ca_file(ssl_root_cert)?
+    }
+
+    let mut tls_connector = MakeTlsConnector::new(builder.build());
+
+    // Configure hostname verification
+    match (verify_mode, verify_hostname) {
+        (SslVerifyMode::PEER, false) => tls_connector.set_callback(|connect, _| {
+            connect.set_verify_hostname(false);
+            Ok(())
+        }),
+        _ => {}
+    }
+
+    Ok(tls_connector)
 }
 
 /// Fetches table schema information from an upstream Postgres source for all tables that are part

@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-version: '3.7'
+version: "3.7"
 
 mzworkflows:
   pg-cdc:
@@ -22,6 +22,10 @@ mzworkflows:
         command: ${TD_TEST:-*.td}
 
 services:
+  test-certs:
+    mzbuild: test-certs
+    volumes:
+      - secrets:/secrets
   testdrive-svc:
     mzbuild: testdrive
     entrypoint:
@@ -41,9 +45,12 @@ services:
     command: --experimental --disable-telemetry
     ports:
       - 6875
+    volumes:
+      - secrets:/share/secrets
     environment:
-    - MZ_DEV=1
-    - MZ_LOG
+      - MZ_DEV=1
+      - MZ_LOG
+    depends_on: [test-certs]
 
   postgres:
     mzbuild: postgres
@@ -58,3 +65,5 @@ services:
         -c max_replication_slots=20
         -c ssl=on
         -c hba_file=/share/conf/pg_hba.conf
+volumes:
+  secrets:
