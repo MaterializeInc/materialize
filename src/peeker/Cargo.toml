@@ -14,7 +14,7 @@ log = "0.4.13"
 mz-process-collector = { path = "../mz-process-collector" }
 ore = { path = "../ore" }
 parse_duration = "2.1.1"
-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
+postgres = { git = "https://github.com/MaterializeInc/rust-postgres", branch = "mz-0.7.2" }
 prometheus = { git = "https://github.com/MaterializeInc/rust-prometheus.git", default-features = false }
 regex = "1.4.6"
 serde = { version = "1.0.126", features = ["derive"] }
