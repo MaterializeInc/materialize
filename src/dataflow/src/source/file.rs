@@ -16,7 +16,7 @@ use std::thread;
 use anyhow::{Context, Error};
 use flate2::read::MultiGzDecoder;
 #[cfg(target_os = "linux")]
-use inotify::{Inotify, WatchMask};
+use inotify::{EventMask, Inotify, WatchMask};
 use log::error;
 use repr::MessagePayload;
 use timely::scheduling::SyncActivator;
@@ -287,28 +287,39 @@ fn open_file_stream(
                     // what we do too.
                     let mut buf = [0; 1024];
                     loop {
-                        if let Err(err) = inotify.read_events_blocking(&mut buf) {
-                            if notice_tx
-                                .send(Err(format!(
+                        match inotify.read_events_blocking(&mut buf) {
+                            Err(err) => {
+                                if notice_tx
+                                    .send(Err(format!(
                                     "file source: failed to get events for file: {:#} (path: {})",
                                     err,
                                     _path.display()
                                 )))
-                                .is_err()
-                            {
-                                // If the notice_tx returns an error, it's because
-                                // the source has been dropped. Just exit the
-                                // thread.
+                                    .is_err()
+                                {
+                                    // If the notice_tx returns an error, it's because
+                                    // the source has been dropped. Just exit the
+                                    // thread.
+                                    return;
+                                }
+                                // We have no method for recovering from this error
+                                // Close this thread and log an error message (which duplicates the err above)
+                                error!(
+                                    "file source: closing stream due to read errors (path: {})",
+                                    _path.display()
+                                );
                                 return;
                             }
-                            // We have no method for recovering from this error
-                            // Close this thread and log an error message (which duplicates the err above)
-                            error!(
-                                "file source: closing stream due to read errors (path: {})",
-                                _path.display()
-                            );
-                            return;
-                        };
+                            Ok(mut events) => {
+                                if events.any(|x| x.mask == EventMask::ATTRIB) && !_path.exists() {
+                                    error!(
+                                        "file source: closing stream due to deleted file (path: {})",
+                                        _path.display()
+                                    );
+                                    return;
+                                }
+                            }
+                        }
                         if notice_tx.send(Ok(())).is_err() {
                             // If the notice_tx returns an error, it's because
                             // the source has been dropped. Just exit the
