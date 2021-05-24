@@ -56,7 +56,7 @@ mz-process-collector = { path = "../mz-process-collector" }
 nix = "0.20.0"
 num_cpus = "1.0.0"
 openssl = { version = "0.10.34", features = ["vendored"] }
-openssl-sys = { version = "0.9.62", features = ["vendored"] }
+openssl-sys = { version = "0.9.63", features = ["vendored"] }
 ore = { path = "../ore" }
 os_info = "3.0.4"
 parse_duration = "2.1.1"
@@ -80,7 +80,7 @@ timely = { git = "https://github.com/TimelyDataflow/timely-dataflow", default-fe
 tokio = { version = "1.6.0", features = ["sync"] }
 tokio-openssl = "0.6.1"
 tokio-stream = { version = "0.1.6", features = ["net"] }
-tracing = "0.1.25"
+tracing = "0.1.26"
 # TODO(benesch): we can use the default features here once tracing-subscriber
 # does not enable chrono's "oldtime" feature.
 tracing-subscriber = { version = "0.2.18", default-features = false, features = ["ansi", "env-filter", "fmt", "tracing-log"] }
@@ -96,7 +96,7 @@ uuid = "0.8.2"
 jemallocator = { version = "0.3.0", features = ["profiling", "unprefixed_malloc_on_supported_platforms", "background_threads"] }
 
 [dev-dependencies]
-assert_cmd = "1.0.3"
+assert_cmd = "1.0.4"
 bytes = "1.0.1"
 chrono = { version = "0.4.0", default-features = false, features = ["std"] }
 datadriven = "0.5.0"
