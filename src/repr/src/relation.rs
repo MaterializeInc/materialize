@@ -33,17 +33,62 @@ pub struct ColumnType {
 
 impl ColumnType {
     pub fn union(&self, other: &Self) -> Result<Self, anyhow::Error> {
-        if self.scalar_type != other.scalar_type {
-            bail!(
+        match (self.scalar_type.clone(), other.scalar_type.clone()) {
+            (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
+                Ok(ColumnType {
+                    scalar_type: scalar_type,
+                    nullable: self.nullable || other.nullable,
+                })
+            }
+            (
+                ScalarType::Record {
+                    fields,
+                    custom_oid,
+                    custom_name,
+                },
+                ScalarType::Record {
+                    fields: other_fields,
+                    custom_oid: other_custom_oid,
+                    custom_name: other_custom_name,
+                },
+            ) => {
+                if custom_oid != other_custom_oid || custom_name != other_custom_name {
+                    bail!(
+                        "Can't union types: {:?} and {:?}",
+                        self.scalar_type,
+                        other.scalar_type
+                    );
+                };
+
+                let mut union_fields: Vec<(ColumnName, ColumnType)> = vec![];
+                for (field, other_field) in fields.iter().zip(other_fields.iter()) {
+                    if field.0 != other_field.0 {
+                        bail!(
+                            "Can't union types: {:?} and {:?}",
+                            self.scalar_type,
+                            other.scalar_type
+                        );
+                    } else {
+                        let union_column_type = field.1.union(&other_field.1)?;
+                        union_fields.push((field.0.clone(), union_column_type));
+                    };
+                }
+
+                Ok(ColumnType {
+                    scalar_type: ScalarType::Record {
+                        fields: union_fields,
+                        custom_oid,
+                        custom_name,
+                    },
+                    nullable: self.nullable || other.nullable,
+                })
+            }
+            _ => bail!(
                 "Can't union types: {:?} and {:?}",
                 self.scalar_type,
                 other.scalar_type
-            );
+            ),
         }
-        Ok(ColumnType {
-            scalar_type: self.scalar_type.clone(),
-            nullable: self.nullable || other.nullable,
-        })
     }
 
     /// Consumes this `ColumnType` and returns a new `ColumnType` with its
