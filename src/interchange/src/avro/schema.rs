@@ -18,13 +18,10 @@ use log::warn;
 
 use byteorder::{BigEndian, ByteOrder};
 use mz_avro::error::Error as AvroError;
-use mz_avro::schema::{
-    resolve_schemas, Schema, SchemaFingerprint, SchemaNode, SchemaPiece, SchemaPieceOrNamed,
-};
+use mz_avro::schema::{resolve_schemas, Schema, SchemaNode, SchemaPiece, SchemaPieceOrNamed};
 use ore::retry::Retry;
 use repr::adt::decimal::MAX_DECIMAL_PRECISION;
 use repr::{ColumnName, ColumnType, RelationDesc, ScalarType};
-use sha2::Sha256;
 
 use super::{cdc_v2, is_null, EnvelopeType};
 
@@ -336,9 +333,7 @@ impl ConfluentAvroResolver {
         confluent_wire_format: bool,
     ) -> anyhow::Result<Self> {
         let reader_schema = parse_schema(reader_schema)?;
-        let writer_schemas = config
-            .map(|sr| SchemaCache::new(sr, reader_schema.fingerprint::<Sha256>()))
-            .transpose()?;
+        let writer_schemas = config.map(|sr| SchemaCache::new(sr)).transpose()?;
         Ok(Self {
             reader_schema,
             writer_schemas,
@@ -424,19 +419,13 @@ impl fmt::Debug for ConfluentAvroResolver {
 struct SchemaCache {
     cache: HashMap<i32, Result<Schema, AvroError>>,
     ccsr_client: ccsr::Client,
-
-    reader_fingerprint: SchemaFingerprint,
 }
 
 impl SchemaCache {
-    fn new(
-        schema_registry: ccsr::ClientConfig,
-        reader_fingerprint: SchemaFingerprint,
-    ) -> Result<SchemaCache, anyhow::Error> {
+    fn new(schema_registry: ccsr::ClientConfig) -> Result<SchemaCache, anyhow::Error> {
         Ok(SchemaCache {
             cache: HashMap::new(),
             ccsr_client: schema_registry.build()?,
-            reader_fingerprint,
         })
     }
 
@@ -474,16 +463,11 @@ impl SchemaCache {
                 // However, we can't just cache it directly, since resolving schemas takes significant CPU work,
                 // which  we don't want to repeat for every record. So, parse and resolve it, and cache the
                 // result (whether schema or error).
-                let rf = &self.reader_fingerprint.bytes;
                 let result = Schema::from_str(&response.raw).and_then(|schema| {
-                    if &schema.fingerprint::<Sha256>().bytes == rf {
-                        Ok(schema)
-                    } else {
-                        // the writer schema differs from the reader schema,
-                        // so we need to perform schema resolution.
-                        let resolved = resolve_schemas(&schema, reader_schema)?;
-                        Ok(resolved)
-                    }
+                    // Schema fingerprints don't actually capture whether two schemas are meaningfully
+                    // different, because they strip out logical types. Thus, resolve in all cases.
+                    let resolved = resolve_schemas(&schema, reader_schema)?;
+                    Ok(resolved)
                 });
                 v.insert(result)
             }
