@@ -68,7 +68,7 @@ where
                 // Asking about the topic will create it automatically...
                 // with the wrong number of partitions. Yes, this is
                 // unbelievably horrible.
-                .fetch_metadata(None, Some(Duration::from_secs(1)))?;
+                .fetch_metadata(None, Some(Duration::from_secs(10)))?;
             let topic = metadata
                 .topics()
                 .iter()

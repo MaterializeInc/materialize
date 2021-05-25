@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -87,7 +88,10 @@ impl Action for AddPartitionsAction {
                 let metadata = state
                     .kafka_producer
                     .client()
-                    .fetch_metadata(Some(&topic_name), Some(Duration::from_secs(1)))
+                    .fetch_metadata(
+                        Some(&topic_name),
+                        Some(cmp::max(state.default_timeout, Duration::from_secs(1))),
+                    )
                     .map_err(|e| e.to_string())?;
                 if metadata.topics().len() != 1 {
                     return Err("metadata fetch returned no topics".to_string());
