@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use log::{debug, error};
+use log::debug;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
 
 use dataflow_types::MzOffset;
@@ -75,11 +75,10 @@ impl TimestampProposer {
         }
 
         if time == 0 && self.bindings.contains_key(&partition) {
-            error!(
+            panic!(
                 "Incorrectly trying to propose a new binding for partition: {:?}",
                 partition
             );
-            return;
         }
 
         let current_max = self.bindings.entry(partition).or_insert(offset);
@@ -297,15 +296,14 @@ impl TimestampBindingBox {
         proposed: bool,
     ) {
         if !self.partitions.contains_key(&partition) {
-            error!("missing partition {:?} when adding binding", partition);
-            return;
+            panic!("missing partition {:?} when adding binding", partition);
         }
 
         if proposed {
             if let Some(proposer) = &mut self.proposer {
                 proposer.propose_binding(partition, timestamp, offset);
             } else {
-                error!(
+                panic!(
                     "attempting to propose a timestamp binding on a source that isn't real-time."
                 );
             }
