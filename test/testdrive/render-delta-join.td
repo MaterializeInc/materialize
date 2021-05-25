@@ -77,7 +77,6 @@ sent
 1
 1
 1
-1
 
 > insert into t2 select s, s from generate_series(2001, 4000) as s;
 > select count(*) as count from t2;
@@ -106,7 +105,6 @@ count
   ORDER BY sent;
 sent
 ----
-1
 1
 1
 1

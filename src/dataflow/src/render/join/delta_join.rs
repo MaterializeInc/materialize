@@ -304,41 +304,58 @@ where
                         use timely::dataflow::operators::Map;
 
                         // Ensure this input is rendered, and extract its update stream.
-                        let mut update_stream = if let Some((_key, val)) = arrangements
+                        let update_stream = if let Some((_key, val)) = arrangements
                             .iter()
                             .find(|(key, _val)| key.0 == &source_relation)
                         {
                             let as_of = self.as_of_frontier.clone();
                             match val {
-                                Ok(local) => build_update_stream(local, as_of, source_relation)
-                                    .enter_region(region),
-                                Err(trace) => build_update_stream(trace, as_of, source_relation)
-                                    .enter_region(region),
+                                Ok(local) => {
+                                    let (update_stream, err_stream) = build_update_stream(
+                                        local,
+                                        as_of,
+                                        source_relation,
+                                        initial_closure,
+                                    );
+                                    inner_errs.push(err_stream);
+                                    update_stream.enter_region(region)
+                                }
+                                Err(trace) => {
+                                    let (update_stream, err_stream) = build_update_stream(
+                                        trace,
+                                        as_of,
+                                        source_relation,
+                                        initial_closure,
+                                    );
+                                    inner_errs.push(err_stream);
+                                    update_stream.enter_region(region)
+                                }
                             }
                         } else {
-                            self.collection(&inputs[source_relation])
+                            let mut update_stream = self
+                                .collection(&inputs[source_relation])
                                 .expect("Failed to render update stream")
                                 .0
                                 .enter(inner)
-                                .enter_region(region)
+                                .enter_region(region);
+                            // Apply what `closure` we are able to, and record any errors.
+                            if let Some(initial_closure) = initial_closure {
+                                let (stream, errs) = update_stream.flat_map_fallible({
+                                    let mut datums = DatumVec::new();
+                                    move |row| {
+                                        let temp_storage = RowArena::new();
+                                        let mut datums_local = datums.borrow_with(&row);
+                                        // TODO(mcsherry): re-use `row` allocation.
+                                        initial_closure
+                                            .apply(&mut datums_local, &temp_storage)
+                                            .transpose()
+                                    }
+                                });
+                                update_stream = stream;
+                                region_errs.push(errs.map(DataflowError::from));
+                            }
+                            update_stream
                         };
-
-                        // Apply what `closure` we are able to, and record any errors.
-                        if let Some(initial_closure) = initial_closure {
-                            let (stream, errs) = update_stream.flat_map_fallible({
-                                let mut datums = DatumVec::new();
-                                move |row| {
-                                    let temp_storage = RowArena::new();
-                                    let mut datums_local = datums.borrow_with(&row);
-                                    // TODO(mcsherry): re-use `row` allocation.
-                                    initial_closure
-                                        .apply(&mut datums_local, &temp_storage)
-                                        .transpose()
-                                }
-                            });
-                            update_stream = stream;
-                            region_errs.push(errs.map(DataflowError::from));
-                        }
 
                         // Promote `time` to a datum element.
                         //
@@ -565,39 +582,74 @@ fn build_update_stream<G, Tr>(
     trace: &Arranged<G, Tr>,
     as_of: Antichain<G::Timestamp>,
     source_relation: usize,
-) -> Collection<G, Row>
+    initial_closure: Option<JoinClosure>,
+) -> (Collection<G, Row>, Collection<G, DataflowError>)
 where
     G: Scope<Timestamp = repr::Timestamp>,
     Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = isize> + Clone + 'static,
     Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
     Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
 {
+    use crate::operator::StreamExt;
     use differential_dataflow::AsCollection;
     use timely::dataflow::channels::pact::Pipeline;
-    use timely::dataflow::operators::Operator;
-    trace
-        .stream
-        .unary(Pipeline, "AsCollection", move |_, _| {
-            move |input, output| {
-                input.for_each(|time, data| {
-                    let mut session = output.session(&time);
-                    for wrapper in data.iter() {
-                        let batch = &wrapper;
-                        let mut cursor = batch.cursor();
-                        while let Some(_key) = cursor.get_key(batch) {
-                            while let Some(val) = cursor.get_val(batch) {
-                                cursor.map_times(batch, |time, diff| {
-                                    if source_relation == 0 || !as_of.elements().contains(&time) {
-                                        session.give((val.clone(), time.clone(), diff.clone()));
-                                    }
-                                });
-                                cursor.step_val(batch);
+    let (ok_stream, err_stream) =
+        trace
+            .stream
+            .unary_fallible(Pipeline, "AsCollection", move |_, _| {
+                let mut datums = DatumVec::new();
+                Box::new(move |input, ok_output, err_output| {
+                    input.for_each(|time, data| {
+                        let mut ok_session = ok_output.session(&time);
+                        let mut err_session = err_output.session(&time);
+                        for wrapper in data.iter() {
+                            let batch = &wrapper;
+                            let mut cursor = batch.cursor();
+                            while let Some(_key) = cursor.get_key(batch) {
+                                while let Some(val) = cursor.get_val(batch) {
+                                    cursor.map_times(batch, |time, diff| {
+                                        if source_relation == 0 || !as_of.elements().contains(&time)
+                                        {
+                                            if let Some(initial_closure) = &initial_closure {
+                                                let temp_storage = RowArena::new();
+                                                let mut datums_local = datums.borrow_with(&val);
+                                                // TODO(mcsherry): re-use `row` allocation.
+                                                match initial_closure
+                                                    .apply(&mut datums_local, &temp_storage)
+                                                    .transpose()
+                                                {
+                                                    Some(Ok(row)) => ok_session.give((
+                                                        row,
+                                                        time.clone(),
+                                                        diff.clone(),
+                                                    )),
+                                                    Some(Err(err)) => err_session.give((
+                                                        err,
+                                                        time.clone(),
+                                                        diff.clone(),
+                                                    )),
+                                                    None => {}
+                                                }
+                                            } else {
+                                                ok_session.give((
+                                                    val.clone(),
+                                                    time.clone(),
+                                                    diff.clone(),
+                                                ));
+                                            }
+                                        }
+                                    });
+                                    cursor.step_val(batch);
+                                }
+                                cursor.step_key(batch);
                             }
-                            cursor.step_key(batch);
                         }
-                    }
-                });
-            }
-        })
-        .as_collection()
+                    });
+                })
+            });
+
+    (
+        ok_stream.as_collection(),
+        err_stream.as_collection().map(DataflowError::from),
+    )
 }
