@@ -117,12 +117,13 @@ pub fn rescale_within_max_precision(n: &mut Apd) -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-/// Rescale `n` as an `OrderedDecimal` with the described scale and return the
-/// scale used.
+/// Rescale `n` as an `OrderedDecimal` with the described scale, or error if:
+/// - Rescaling exceeds max precision
+/// - `n` requires > [`APD_DATUM_MAX_PRECISION`] - `scale` digits of precision left of the decimal point
 pub fn rescale(n: &mut Apd, scale: u8) -> Result<(), anyhow::Error> {
-    let mut cx = Context::<Apd>::default();
+    let mut cx = cx_datum();
     cx.rescale(n, &Apd::from(-i32::from(scale)));
-    if get_precision(n) > APD_DATUM_MAX_PRECISION as u32 {
+    if cx.status().invalid_operation() || get_precision(n) > APD_DATUM_MAX_PRECISION as u32 {
         bail!(
             "APD value {} exceed maximum precision {}",
             n,

@@ -448,3 +448,38 @@ SELECT ('0.2'::apd(39,40))::text;
 
 query error apd scale 39 must be between 0 and precision 1
 SELECT ('0.2'::apd(1,39))::text;
+
+query error numeric field overflow
+SELECT ('12345678901234567890'::apd(39,3) * '12345678901234567890'::apd(39,3))::apd(39,3)::text;
+
+# Adding a scale "prevents" rounding
+## This value is within range, but requires 37 digits of precision left of the decimal
+query T
+SELECT '98765432109876543210987654321098765432.109'::apd::text
+----
+98765432109876543210987654321098765432.1
+
+## When expressly requesting scale of 3, only have 36 digits of precision left of the decimal
+query error numeric field overflow
+SELECT '98765432109876543210987654321098765432.109'::apd(39,3)::text
+
+query error numeric field overflow
+SELECT '1'::apd(39,39)::text
+
+## Multiplication w/ numeric field overflow
+query T
+SELECT ('1234567890123456789.012345'::apd * '1234567890123456789.012345'::apd)::text;
+----
+1524157875323883675049533479957338669.12
+
+query error numeric field overflow
+SELECT ('1234567890123456789.012345'::apd * '1234567890123456789.012345'::apd)::apd(39,3)::text;
+
+## Addition w/ numeric field overflow
+query T
+SELECT ('999999999999999999999999999999999999.123'::apd + '1'::apd)::text
+----
+1000000000000000000000000000000000000.12
+
+query error numeric field overflow
+SELECT ('999999999999999999999999999999999999.123'::apd + '1'::apd)::apd(39,3)::text
