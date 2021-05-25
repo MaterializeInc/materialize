@@ -73,6 +73,11 @@ SELECT ('1.   2'::apd)::text
 query error invalid input syntax for type apd: "-123abc456"
 SELECT ('-123abc456'::apd)::text;
 
+query T
+SELECT ('-0.0'::apd)::text
+----
+0.0
+
 # Max precision is 39
 query T
 SELECT ('-123456789012345678.901234567890123456789'::apd)::text
@@ -483,3 +488,11 @@ SELECT ('999999999999999999999999999999999999.123'::apd + '1'::apd)::text
 
 query error numeric field overflow
 SELECT ('999999999999999999999999999999999999.123'::apd + '1'::apd)::apd(39,3)::text
+
+# Successive operations
+
+## regression test for #6858
+query T
+SELECT ('-0.0'::apd - '1'::apd  * '-0.0 '::apd)::text;
+----
+0.0

@@ -458,6 +458,9 @@ pub fn parse_apd(s: &str) -> Result<OrderedDecimal<Apd>, ParseError> {
     } else if n.is_infinite() || (n.is_nan() && n.is_negative()) {
         Err(ParseError::invalid_input_syntax("apd", s))
     } else {
+        if n.is_zero() && n.is_negative() {
+            cx.neg(&mut n);
+        }
         Ok(OrderedDecimal(n))
     }
 }
