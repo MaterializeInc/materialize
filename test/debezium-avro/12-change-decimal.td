@@ -8,7 +8,8 @@
 # by the Apache License, Version 2.0.
 
 #
-# Change the definition of a DECIMAL column
+# Changing the definition of a DECIMAL column results in a source error
+# see discussion in https://github.com/MaterializeInc/materialize/issues/6536
 #
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -31,8 +32,5 @@ ALTER TABLE alter_change_decimal ALTER COLUMN f1 TYPE DECIMAL(6,4);
 INSERT INTO alter_change_decimal VALUES (23.456);
 UPDATE alter_change_decimal SET f1 = 34.567 WHERE f1 = 0;
 
-> SELECT * FROM alter_change_decimal;
-12.345
-234.560
-345.670
-<null>
+! SELECT * FROM alter_change_decimal;
+Decimal types must match in precision, scale, and fixed size

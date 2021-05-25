@@ -248,6 +248,7 @@ steps:
   - id: debezium-avro
     label: "Debezium Avro test"
     depends_on: build
+    inputs: [test/debezium-avro]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: debezium-avro
