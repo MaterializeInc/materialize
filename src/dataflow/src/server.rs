@@ -477,11 +477,7 @@ where
                     .reported_frontiers
                     .get_mut(&id)
                     .expect("Frontier missing!");
-                assert!(
-                    upper.elements().is_empty()
-                        || lower.elements().is_empty()
-                        || <_ as PartialOrder>::less_equal(lower, &upper)
-                );
+                assert!(<_ as PartialOrder>::less_equal(lower, &upper));
                 if lower != &upper {
                     add_progress(*id, &upper, &lower, &mut progress);
                     lower.clone_from(&upper);
