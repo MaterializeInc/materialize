@@ -14,6 +14,7 @@
 use timely::order::PartialOrder;
 use timely::progress::change_batch::ChangeBatch;
 use timely::progress::frontier::MutableAntichain;
+use timely::progress::Antichain;
 
 /// A token that holds a mutable antichain and invokes an action should it change.
 pub struct AntichainToken<T: PartialOrder + Ord + Clone> {
@@ -23,20 +24,26 @@ pub struct AntichainToken<T: PartialOrder + Ord + Clone> {
     action: std::rc::Rc<std::cell::RefCell<dyn FnMut(std::vec::Drain<(T, i64)>)>>,
 }
 
-impl<T: PartialOrder + Ord + Clone> AntichainToken<T> {
+impl<T: PartialOrder + Ord + Clone + std::fmt::Debug> AntichainToken<T> {
     /// Creates a new token.
     pub fn new<I, F>(values: I, action: F) -> Self
     where
         I: IntoIterator<Item = T>,
         F: FnMut(std::vec::Drain<(T, i64)>) + 'static,
     {
-        let mut token = Self {
-            antichain: MutableAntichain::new(),
-            changes: std::rc::Rc::new(std::cell::RefCell::new(ChangeBatch::new())),
-            action: std::rc::Rc::new(std::cell::RefCell::new(action)),
-        };
-        token.advance(values);
-        token
+        let mut antichain = MutableAntichain::new();
+        let changes = std::rc::Rc::new(std::cell::RefCell::new(ChangeBatch::new()));
+        let action = std::rc::Rc::new(std::cell::RefCell::new(action));
+        changes
+            .borrow_mut()
+            .extend(values.into_iter().map(|time| (time, 1)));
+        (action.borrow_mut())(antichain.update_iter(changes.borrow_mut().drain()));
+
+        Self {
+            antichain,
+            changes,
+            action,
+        }
     }
 
     /// Apply direct updates to the maintained antichain.
@@ -51,13 +58,34 @@ impl<T: PartialOrder + Ord + Clone> AntichainToken<T> {
         );
     }
 
-    /// Advance the frontier of the mutable antichain to `frontier`.
-    pub fn advance<F>(&mut self, frontier: F)
+    /// Advance the frontier of the mutable antichain to `frontier`, if `frontier` is
+    /// ahead of the current frontier.
+    ///
+    /// This function intentionally does not assert that `frontier` will necessarily
+    /// be in advance of the current frontier because some uses in the Coordinator don't
+    /// work well with that. Specifically, in the Coordinator its possible for a `since`
+    /// frontier to be ahead of the `upper` frontier for an index, and changes to the
+    /// `upper` frontier cause the Coordinator to want to "advance" the `since` to
+    /// `new_upper - logical_compaction_window` which might not be in advance of the
+    /// existing `since` frontier.
+    /// TODO: can we remove `maybe_advance` and replace with a stricter `advace` that
+    /// requires callers to present incresing frontiers?
+    pub fn maybe_advance<F>(&mut self, frontier: F)
     where
         F: IntoIterator<Item = T>,
     {
-        // TODO(mjibson): Add self.antichain.less_equal(frontier) check here. Need to
-        // correctly handle the initial case where self.antichain is empty.
+        // TODO(rkhaitan): do this without the extra allocations.
+        let mut new_frontier = Antichain::new();
+        new_frontier.extend(frontier.into_iter());
+
+        if !<_ as PartialOrder>::less_equal(&self.antichain.frontier(), &new_frontier.borrow()) {
+            log::trace!(
+                "Ignoring request to 'advance' to {:?} current antichain {:?}",
+                new_frontier,
+                self.antichain
+            );
+            return;
+        }
         self.changes.borrow_mut().extend(
             self.antichain
                 .frontier()
@@ -65,9 +93,13 @@ impl<T: PartialOrder + Ord + Clone> AntichainToken<T> {
                 .cloned()
                 .map(|time| (time, -1)),
         );
-        self.changes
-            .borrow_mut()
-            .extend(frontier.into_iter().map(|time| (time, 1)));
+        self.changes.borrow_mut().extend(
+            new_frontier
+                .elements()
+                .into_iter()
+                .cloned()
+                .map(|time| (time, 1)),
+        );
         (self.action.borrow_mut())(
             self.antichain
                 .update_iter(self.changes.borrow_mut().drain()),
