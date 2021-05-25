@@ -318,7 +318,12 @@ where
     config.set("queue.buffering.max.ms", &format!("{}", 10));
 
     for (k, v) in connector.config_options.iter() {
-        config.set(k, v);
+        // We explicitly reject `statistics.interval.ms` here so that we don't
+        // flood the INFO log with statistics messages.
+        // TODO: properly support statistics on Kafka sinks
+        if k != "statistics.interval.ms" {
+            config.set(k, v);
+        }
     }
 
     let transactional = if connector.exactly_once {
