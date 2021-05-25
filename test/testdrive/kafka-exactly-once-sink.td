@@ -58,12 +58,6 @@ $ kafka-create-topic topic=input
 
 > CREATE MATERIALIZED VIEW input_values_mview AS VALUES (1), (2), (3);
 
-> CREATE VIEW input_kafka_no_byo_join_view AS SELECT * FROM input_kafka_byo, input_kafka_no_byo;
-
-> CREATE MATERIALIZED VIEW input_kafka_no_byo_join_mview AS SELECT * FROM input_kafka_no_byo, input_kafka_byo;
-
-> CREATE MATERIALIZED VIEW input_kafka_no_byo_scalar_subquery AS SELECT (SELECT a FROM input_kafka_no_byo LIMIT 1) FROM input_kafka_byo;
-
 > CREATE MATERIALIZED VIEW input_kafka_no_byo_derived_table AS SELECT * FROM ( SELECT * FROM input_kafka_no_byo ) AS a1;
 
 $ file-append path=static.csv
@@ -129,21 +123,6 @@ all inputs of an exactly-once Kafka sink must be sources, materialize.public.inp
   WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 all inputs of an exactly-once Kafka sink must be sources, materialize.public.input_values_mview is not
-
-> CREATE SINK output9 FROM input_kafka_no_byo_join_view
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
-  WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-> CREATE SINK output10 FROM input_kafka_no_byo_join_mview
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
-  WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
-
-> CREATE SINK output11 FROM input_kafka_no_byo_scalar_subquery
-  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'
-  WITH (exactly_once=true, consistency_topic='output-view-consistency-${testdrive.seed}')
-  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
 
 > CREATE SINK output12 FROM input_kafka_no_byo_derived_table
   INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'output-view-${testdrive.seed}'

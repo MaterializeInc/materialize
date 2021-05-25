@@ -46,6 +46,13 @@ Use relative links (/path/to/doc), not absolute links
 Wrap your release notes at the 80 character mark.
 {{< /comment >}}
 
+{{% version-header v0.8.1 %}}
+
+- Add [timelines](/sql/timelines) to all sources to prevent
+  joining data whose time is not comparable. This only affects new
+  [CDC](/connect/materialize-cdc) and Debezium consistency topic sources
+  by default.
+
 {{% version-header v0.8.0 %}}
 
 - Add the [`COPY FROM`](/sql/copy-from) statement, which allows populating a

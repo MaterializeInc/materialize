@@ -27,7 +27,7 @@ use repr::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use build_info::DUMMY_BUILD_INFO;
-use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector};
+use dataflow_types::{SinkConnector, SinkConnectorBuilder, SourceConnector, Timeline};
 use expr::{ExprHumanizer, GlobalId, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use repr::{ColumnType, RelationDesc, ScalarType};
 use sql::ast::display::AstDisplay;
@@ -180,6 +180,14 @@ pub struct Table {
     pub defaults: Vec<Expr<Raw>>,
     pub conn_id: Option<u32>,
     pub depends_on: Vec<GlobalId>,
+}
+
+impl Table {
+    // The Coordinator controls insertions for tables (including system tables),
+    // so they are realtime.
+    pub fn timeline(&self) -> Timeline {
+        Timeline::EpochMilliseconds
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -595,7 +603,9 @@ impl Catalog {
                             create_sql: "TODO".to_string(),
                             plan_cx: PlanContext::default(),
                             optimized_expr,
-                            connector: dataflow_types::SourceConnector::Local,
+                            connector: dataflow_types::SourceConnector::Local(
+                                Timeline::EpochMilliseconds,
+                            ),
                             bare_desc: log.variant.desc(),
                             desc: log.variant.desc(),
                         }),
@@ -1972,7 +1982,7 @@ impl Catalog {
                     ExternalSourceConnector::Kinesis(_) => Volatile,
                     _ => Unknown,
                 },
-                SourceConnector::Local => Volatile,
+                SourceConnector::Local(_) => Volatile,
             },
             CatalogItem::Index(_) | CatalogItem::View(_) | CatalogItem::Sink(_) => {
                 // Volatility follows trinary logic like SQL. If even one
