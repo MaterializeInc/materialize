@@ -217,8 +217,9 @@ impl PartitionTimestamps {
         }
     }
 
+    // Returns the frontier at which all future updates will occur.
     fn upper(&self) -> Option<Timestamp> {
-        self.bindings.last().map(|(time, _)| *time)
+        self.bindings.last().map(|(time, _)| *time + 1)
     }
 }
 
@@ -336,7 +337,7 @@ impl TimestampBindingBox {
         target.clear();
 
         if let Some(proposer) = &self.proposer {
-            target.insert(proposer.upper().saturating_sub(1));
+            target.insert(proposer.upper());
         } else {
             for (_, partition) in self.partitions.iter() {
                 if let Some(timestamp) = partition.upper() {
@@ -452,7 +453,9 @@ impl TimestampBindingRc {
         self.wrapper.borrow().get_binding(partition, offset)
     }
 
-    /// Returns the lower bound across every partition's most recent timestamp.
+    /// Returns the frontier of timestamps that have not been bound to any
+    /// incoming data, or in other words, all data has been assigned timestamps
+    /// less than some element in the returned frontier.
     ///
     /// All subsequent updates will either be at or in advance of this frontier.
     pub fn read_upper(&self, target: &mut Antichain<Timestamp>) {

@@ -691,7 +691,7 @@ impl ConsistencyInfo {
         timestamp_bindings.read_upper(&mut upper);
 
         let mut min: Option<Timestamp> = if let Some(time) = upper.elements().get(0) {
-            Some(*time)
+            Some(time.saturating_sub(1))
         } else {
             None
         };
