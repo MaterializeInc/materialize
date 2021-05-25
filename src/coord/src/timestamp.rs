@@ -40,6 +40,8 @@ use ore::collections::CollectionExt;
 
 use crate::coord;
 
+const CONF_DENYLIST: &'static [&'static str] = &["statistics.interval.ms"];
+
 lazy_static! {
     /// Key schema for Debezium consistency sources.
     static ref DEBEZIUM_TRX_SCHEMA_KEY: Schema = {
@@ -668,7 +670,6 @@ impl Timestamper {
     ) -> Option<RtKafkaConnector> {
         // These keys do not make sense for the timestamping connector, and will
         // be filtered out (fixes #6313)
-        const CONF_DENYLIST: &'static [&'static str] = &["statistics.interval.ms"];
         let mut config = ClientConfig::new();
         config.set("bootstrap.servers", &kc.addrs.to_string());
 
@@ -804,7 +805,9 @@ impl Timestamper {
         );
 
         for (k, v) in &kc.config_options {
-            config.set(k, v);
+            if !CONF_DENYLIST.contains(&k.as_str()) {
+                config.set(k, v);
+            }
         }
 
         match config.create() {

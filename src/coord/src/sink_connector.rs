@@ -374,7 +374,11 @@ async fn build_kafka(
     let mut config = ClientConfig::new();
     config.set("bootstrap.servers", &builder.broker_addrs.to_string());
     for (k, v) in builder.config_options.iter() {
-        config.set(k, v);
+        // Explicitly reject the statistics interval option here because its not
+        // properly supported for this client.
+        if k != "statistics.interval.ms" {
+            config.set(k, v);
+        }
     }
     let client = config
         .create::<AdminClient<_>>()
