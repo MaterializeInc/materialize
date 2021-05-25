@@ -77,6 +77,8 @@ sent
 1
 1
 1
+1
+1
 
 > insert into t2 select s, s from generate_series(2001, 4000) as s;
 > select count(*) as count from t2;
@@ -84,6 +86,8 @@ count
 ----
 4001
 
+# the update stream in delta path 1 now projects the new 2000 t2 records
+# inserted after the view was created
 > SELECT
     sum(sent) as sent
   FROM
@@ -122,6 +126,8 @@ sent
 1
 1
 1
+1
+2
 2
 2
 2

@@ -311,24 +311,26 @@ where
                             let as_of = self.as_of_frontier.clone();
                             match val {
                                 Ok(local) => {
+                                    let arranged = local.enter(region);
                                     let (update_stream, err_stream) = build_update_stream(
-                                        local,
+                                        arranged,
                                         as_of,
                                         source_relation,
                                         initial_closure,
                                     );
-                                    inner_errs.push(err_stream);
-                                    update_stream.enter_region(region)
+                                    region_errs.push(err_stream);
+                                    update_stream
                                 }
                                 Err(trace) => {
+                                    let arranged = trace.enter(region);
                                     let (update_stream, err_stream) = build_update_stream(
-                                        trace,
+                                        arranged,
                                         as_of,
                                         source_relation,
                                         initial_closure,
                                     );
-                                    inner_errs.push(err_stream);
-                                    update_stream.enter_region(region)
+                                    region_errs.push(err_stream);
+                                    update_stream
                                 }
                             }
                         } else {
@@ -338,6 +340,7 @@ where
                                 .0
                                 .enter(inner)
                                 .enter_region(region);
+
                             // Apply what `closure` we are able to, and record any errors.
                             if let Some(initial_closure) = initial_closure {
                                 let (stream, errs) = update_stream.flat_map_fallible({
@@ -354,6 +357,7 @@ where
                                 update_stream = stream;
                                 region_errs.push(errs.map(DataflowError::from));
                             }
+
                             update_stream
                         };
 
@@ -578,8 +582,12 @@ where
 }
 
 /// Builds the beginning of the update stream of a delta path.
+///
+/// At start-up time only the delta path for the first relation sees updates, since any updates fed to the
+/// other delta paths would be discarded anyway due to the tie-breaking logic that avoids double-counting
+/// updates happening at the same time on different relations.
 fn build_update_stream<G, Tr>(
-    trace: &Arranged<G, Tr>,
+    trace: Arranged<G, Tr>,
     as_of: Antichain<G::Timestamp>,
     source_relation: usize,
     initial_closure: Option<JoinClosure>,
@@ -593,10 +601,11 @@ where
     use crate::operator::StreamExt;
     use differential_dataflow::AsCollection;
     use timely::dataflow::channels::pact::Pipeline;
+
     let (ok_stream, err_stream) =
         trace
             .stream
-            .unary_fallible(Pipeline, "AsCollection", move |_, _| {
+            .unary_fallible(Pipeline, "UpdateStream", move |_, _| {
                 let mut datums = DatumVec::new();
                 Box::new(move |input, ok_output, err_output| {
                     input.for_each(|time, data| {
@@ -608,12 +617,13 @@ where
                             while let Some(_key) = cursor.get_key(batch) {
                                 while let Some(val) = cursor.get_val(batch) {
                                     cursor.map_times(batch, |time, diff| {
+                                        // note: only the delta path for the first relation will see
+                                        // updates at start-up time
                                         if source_relation == 0 || !as_of.elements().contains(&time)
                                         {
                                             if let Some(initial_closure) = &initial_closure {
                                                 let temp_storage = RowArena::new();
                                                 let mut datums_local = datums.borrow_with(&val);
-                                                // TODO(mcsherry): re-use `row` allocation.
                                                 match initial_closure
                                                     .apply(&mut datums_local, &temp_storage)
                                                     .transpose()
