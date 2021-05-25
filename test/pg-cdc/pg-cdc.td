@@ -12,10 +12,6 @@
 # pg_hba.conf if you modify the existing user names or add new ones.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-DROP USER IF EXISTS no_replication;
-CREATE USER no_replication WITH PASSWORD 'no_replication';
-ALTER USER no_replication WITH LOGIN;
-
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
 CREATE SCHEMA public;
@@ -103,11 +99,6 @@ db error: FATAL: role "no_such_user" does not exist
 
 > CREATE MATERIALIZED SOURCE "no_such_password"
   FROM POSTGRES HOST 'host=postgres port=5432 user=postgres password=no_such_password dbname=postgres'
-  PUBLICATION 'mz_source';
-# TODO: This should produce an error
-
-> CREATE MATERIALIZED SOURCE "no_replication"
-  FROM POSTGRES HOST 'host=postgres port=5432 user=no_replication password=no_replication dbname=postgres'
   PUBLICATION 'mz_source';
 # TODO: This should produce an error
 
@@ -416,3 +407,6 @@ INSERT INTO pk_table VALUES (99999);
 # todo: we're purifying Postgres view names incorrectly, fix that and this error!
 # should be "materialize.public.pk_table"
 Source error: materialize.public.mz_source: file IO: db error: ERROR: publication "mz_source" does not exist
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+DROP SCHEMA conflict_schema CASCADE;
