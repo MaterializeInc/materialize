@@ -641,8 +641,8 @@ impl SourceConnector {
     /// even when failures/restarts happen.
     pub fn yields_stable_input(&self) -> bool {
         if let SourceConnector::External {
+            // FIXME: other sources can yield stable inputs too
             connector: ExternalSourceConnector::Kafka(_),
-            consistency: Consistency::BringYourOwn(_),
             ..
         } = self
         {

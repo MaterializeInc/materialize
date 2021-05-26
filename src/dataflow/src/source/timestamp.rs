@@ -258,7 +258,7 @@ pub struct TimestampBindingBox {
     compaction_frontier: MutableAntichain<Timestamp>,
     /// Indicates the lowest timestamp across all partititions and across all workers that has
     /// been durably persisted.
-    durability_frontier: MutableAntichain<Timestamp>,
+    durability_frontier: Antichain<Timestamp>,
     /// Generates new timestamps for RT sources
     proposer: Option<TimestampProposer>,
 }
@@ -268,7 +268,7 @@ impl TimestampBindingBox {
         Self {
             partitions: HashMap::new(),
             compaction_frontier: MutableAntichain::new(),
-            durability_frontier: MutableAntichain::new_bottom(TimelyTimestamp::minimum()),
+            durability_frontier: Antichain::from_elem(TimelyTimestamp::minimum()),
             proposer: timestamp_update_interval.map(|i| TimestampProposer::new(i)),
         }
     }
@@ -282,6 +282,11 @@ impl TimestampBindingBox {
             .update_iter(remove.iter().map(|t| (*t, -1)));
         self.compaction_frontier
             .update_iter(add.iter().map(|t| (*t, 1)));
+    }
+
+    fn set_durability_frontier(&mut self, new_frontier: AntichainRef<Timestamp>) {
+        // FIXME assert progress
+        self.durability_frontier = new_frontier.to_owned();
     }
 
     fn compact(&mut self) {
@@ -451,6 +456,14 @@ impl TimestampBindingRc {
         self.wrapper.borrow_mut().compact();
     }
 
+    /// Sets the durability frontier, aka, the frontier before which all updates can be
+    /// replayed across restarts.
+    pub fn set_durability_frontier(&self, new_frontier: AntichainRef<Timestamp>) {
+        self.wrapper
+            .borrow_mut()
+            .set_durability_frontier(new_frontier);
+    }
+
     /// Add a new mapping from `(partition, offset) -> timestamp`.
     ///
     /// Note that the `timestamp` has to be greater than the largest previously bound
@@ -522,11 +535,7 @@ impl TimestampBindingRc {
 
     /// Returns the current durability frontier
     pub fn durability_frontier(&self) -> Antichain<Timestamp> {
-        self.wrapper
-            .borrow()
-            .durability_frontier
-            .frontier()
-            .to_owned()
+        self.wrapper.borrow().durability_frontier.clone()
     }
 }
 

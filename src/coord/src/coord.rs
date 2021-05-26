@@ -600,10 +600,16 @@ impl Coordinator {
     ) {
         match message {
             WorkerFeedback::FrontierUppers(updates) => {
+                let mut durability_updates = Vec::new();
                 for feedback in updates {
-                    self.update_upper(feedback);
+                    self.update_upper(feedback, &mut durability_updates);
                 }
                 self.maintenance().await;
+                if !durability_updates.is_empty() {
+                    self.broadcast(SequencedCommand::DurabilityFrontierUpdates(
+                        durability_updates,
+                    ));
+                }
             }
         }
     }
@@ -953,7 +959,11 @@ impl Coordinator {
     }
 
     /// Updates the upper frontier of a named view.
-    fn update_upper(&mut self, mut feedback: FrontierFeedback) {
+    fn update_upper(
+        &mut self,
+        mut feedback: FrontierFeedback,
+        durability_updates: &mut Vec<(GlobalId, Antichain<Timestamp>)>,
+    ) {
         if let Some(index_state) = self.indexes.get_mut(&feedback.id) {
             assert!(feedback.bindings.is_none());
             let changes: Vec<_> = index_state
@@ -1006,6 +1016,15 @@ impl Coordinator {
                             offset.offset,
                         )
                         .expect("FIXME");
+                }
+            }
+
+            // The dataflow layer is responsible for sending all the updates we need.
+            if source_state.durability.borrow() != source_state.upper.frontier() {
+                source_state.durability = source_state.upper.frontier().to_owned();
+
+                if source_state.durability != Antichain::new() {
+                    durability_updates.push((feedback.id, source_state.durability.clone()));
                 }
             }
             if !changes.is_empty() {

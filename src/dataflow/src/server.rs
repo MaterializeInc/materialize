@@ -102,6 +102,12 @@ pub enum SequencedCommand {
     /// accumulations must be correct. The workers gain the liberty of compacting
     /// the corresponding maintained traces up through that frontier.
     AllowCompaction(Vec<(GlobalId, Antichain<Timestamp>)>),
+    /// Update durability information for sources.
+    ///
+    /// Each entry names a source and provides a frontier before which the source can
+    /// be exactly replayed across restarts (i.e. we can assign the same timestamps to
+    /// all the same data)
+    DurabilityFrontierUpdates(Vec<(GlobalId, Antichain<Timestamp>)>),
     /// Add a new source to be aware of for timestamping.
     AddSourceTimestamping {
         /// The ID of the timestamped source
@@ -678,6 +684,13 @@ where
                     }
                 }
             }
+            SequencedCommand::DurabilityFrontierUpdates(list) => {
+                for (id, frontier) in list {
+                    if let Some(ts_history) = self.render_state.ts_histories.get_mut(&id) {
+                        ts_history.set_durability_frontier(frontier.borrow());
+                    }
+                }
+            }
 
             SequencedCommand::EnableFeedback(tx) => {
                 self.feedback_tx = Some(tx);
@@ -775,12 +788,11 @@ where
                         data.add_partition(pid.clone());
                         data.add_binding(pid, timestamp, offset, false);
                     }
-                    let mut upper = Antichain::new();
-                    data.read_upper(&mut upper);
                     let prev = self.render_state.ts_histories.insert(id, data);
                     assert!(prev.is_none());
 
-                    self.reported_frontiers.insert(id, upper);
+                    let prev = self.reported_frontiers.insert(id, Antichain::from_elem(0));
+                    assert!(prev.is_none());
                 }
             }
             SequencedCommand::AdvanceSourceTimestamp { id, update } => {
@@ -789,7 +801,15 @@ where
                         TimestampSourceUpdate::BringYourOwn(pid, timestamp, offset) => {
                             // TODO: change the interface between the dataflow server and the
                             // timestamper.
-                            history.add_binding(pid, timestamp, offset + 1, false);
+
+                            let mut upper = Antichain::new();
+                            history.read_upper(&mut upper);
+
+                            // FIXME we probably want a clearer interface to remove the subset of
+                            // timestamps we already know about here.
+                            if upper.less_equal(&timestamp) {
+                                history.add_binding(pid, timestamp, offset + 1, false);
+                            }
                         }
                         TimestampSourceUpdate::RealTime(new_partition) => {
                             history.add_partition(new_partition);

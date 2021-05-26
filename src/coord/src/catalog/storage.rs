@@ -528,7 +528,7 @@ impl Transaction<'_> {
         match self
             .inner
             .prepare_cached(
-                "INSERT INTO timestamps (sid, pid, timestamp, offset) VALUES (?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO timestamps (sid, pid, timestamp, offset) VALUES (?, ?, ?, ?)",
             )?
             .execute(params![SqlVal(&source_id), partition_id, timestamp, offset])
         {
