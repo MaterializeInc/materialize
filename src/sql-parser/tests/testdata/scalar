@@ -344,6 +344,11 @@ LIST[[1],[2],[3]][1:1, 1:1, 1:1]
 ----
 SubscriptSlice { expr: List([List([Value(Number("1"))]), List([Value(Number("2"))]), List([Value(Number("3"))])]), positions: [SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }, SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }, SubscriptPosition { start: Some(Value(Number("1"))), end: Some(Value(Number("1"))) }] }
 
+parse-scalar roundtrip
+address[1:list_length(address) - 1]
+----
+address[1:list_length(address) - 1]
+
 parse-scalar
 ARRAY[]::int[]
 ----
