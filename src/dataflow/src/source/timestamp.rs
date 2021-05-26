@@ -29,6 +29,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use log::debug;
 use timely::progress::frontier::{Antichain, AntichainRef, MutableAntichain};
+use timely::progress::Timestamp as TimelyTimestamp;
 
 use dataflow_types::MzOffset;
 use expr::PartitionId;
@@ -248,7 +249,7 @@ impl TimestampBindingBox {
     fn new(timestamp_update_interval: Option<u64>) -> Self {
         Self {
             partitions: HashMap::new(),
-            compaction_frontier: MutableAntichain::new(),
+            compaction_frontier: MutableAntichain::new_bottom(TimelyTimestamp::minimum()),
             proposer: timestamp_update_interval.map(|i| TimestampProposer::new(i)),
         }
     }
