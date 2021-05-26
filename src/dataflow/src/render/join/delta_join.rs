@@ -334,6 +334,9 @@ where
                                 }
                             }
                         } else {
+                            // If this branch is reached, it means that the optimizer, specifically the
+                            // transform `JoinImplementation`, has made a mistake and the plan may be
+                            // suboptimal, but it is still possible to render the plan.
                             let mut update_stream = self
                                 .collection(&inputs[source_relation])
                                 .expect("Failed to render update stream")
