@@ -24,6 +24,7 @@ use timely::dataflow::Scope;
 use dataflow_types::DataflowError;
 use expr::{JoinInputMapper, MapFilterProject, MirRelationExpr, MirScalarExpr};
 use repr::{Row, RowArena};
+use timely::progress::Antichain;
 
 use super::super::context::{ArrangementFlavor, Context};
 use crate::operator::CollectionExt;
@@ -303,42 +304,65 @@ where
                         use timely::dataflow::operators::Map;
 
                         // Ensure this input is rendered, and extract its update stream.
-                        let mut update_stream = if let Some((_key, val)) = arrangements
+                        let update_stream = if let Some((_key, val)) = arrangements
                             .iter()
                             .find(|(key, _val)| key.0 == &source_relation)
                         {
+                            let as_of = self.as_of_frontier.clone();
                             match val {
                                 Ok(local) => {
-                                    local.as_collection(|_k, v| v.clone()).enter_region(region)
+                                    let arranged = local.enter(region);
+                                    let (update_stream, err_stream) = build_update_stream(
+                                        arranged,
+                                        as_of,
+                                        source_relation,
+                                        initial_closure,
+                                    );
+                                    region_errs.push(err_stream);
+                                    update_stream
                                 }
                                 Err(trace) => {
-                                    trace.as_collection(|_k, v| v.clone()).enter_region(region)
+                                    let arranged = trace.enter(region);
+                                    let (update_stream, err_stream) = build_update_stream(
+                                        arranged,
+                                        as_of,
+                                        source_relation,
+                                        initial_closure,
+                                    );
+                                    region_errs.push(err_stream);
+                                    update_stream
                                 }
                             }
                         } else {
-                            self.collection(&inputs[source_relation])
+                            // If this branch is reached, it means that the optimizer, specifically the
+                            // transform `JoinImplementation`, has made a mistake and the plan may be
+                            // suboptimal, but it is still possible to render the plan.
+                            let mut update_stream = self
+                                .collection(&inputs[source_relation])
                                 .expect("Failed to render update stream")
                                 .0
                                 .enter(inner)
-                                .enter_region(region)
-                        };
+                                .enter_region(region);
 
-                        // Apply what `closure` we are able to, and record any errors.
-                        if let Some(initial_closure) = initial_closure {
-                            let (stream, errs) = update_stream.flat_map_fallible({
-                                let mut datums = DatumVec::new();
-                                move |row| {
-                                    let temp_storage = RowArena::new();
-                                    let mut datums_local = datums.borrow_with(&row);
-                                    // TODO(mcsherry): re-use `row` allocation.
-                                    initial_closure
-                                        .apply(&mut datums_local, &temp_storage)
-                                        .transpose()
-                                }
-                            });
-                            update_stream = stream;
-                            region_errs.push(errs.map(DataflowError::from));
-                        }
+                            // Apply what `closure` we are able to, and record any errors.
+                            if let Some(initial_closure) = initial_closure {
+                                let (stream, errs) = update_stream.flat_map_fallible({
+                                    let mut datums = DatumVec::new();
+                                    move |row| {
+                                        let temp_storage = RowArena::new();
+                                        let mut datums_local = datums.borrow_with(&row);
+                                        // TODO(mcsherry): re-use `row` allocation.
+                                        initial_closure
+                                            .apply(&mut datums_local, &temp_storage)
+                                            .transpose()
+                                    }
+                                });
+                                update_stream = stream;
+                                region_errs.push(errs.map(DataflowError::from));
+                            }
+
+                            update_stream
+                        };
 
                         // Promote `time` to a datum element.
                         //
@@ -557,5 +581,88 @@ where
     (
         oks.as_collection().flat_map(|x| x),
         errs.concat(&errs2.as_collection()),
+    )
+}
+
+/// Builds the beginning of the update stream of a delta path.
+///
+/// At start-up time only the delta path for the first relation sees updates, since any updates fed to the
+/// other delta paths would be discarded anyway due to the tie-breaking logic that avoids double-counting
+/// updates happening at the same time on different relations.
+fn build_update_stream<G, Tr>(
+    trace: Arranged<G, Tr>,
+    as_of: Antichain<G::Timestamp>,
+    source_relation: usize,
+    initial_closure: Option<JoinClosure>,
+) -> (Collection<G, Row>, Collection<G, DataflowError>)
+where
+    G: Scope<Timestamp = repr::Timestamp>,
+    Tr: TraceReader<Time = G::Timestamp, Key = Row, Val = Row, R = isize> + Clone + 'static,
+    Tr::Batch: BatchReader<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+    Tr::Cursor: Cursor<Tr::Key, Tr::Val, Tr::Time, Tr::R>,
+{
+    use crate::operator::StreamExt;
+    use differential_dataflow::AsCollection;
+    use timely::dataflow::channels::pact::Pipeline;
+
+    let (ok_stream, err_stream) =
+        trace
+            .stream
+            .unary_fallible(Pipeline, "UpdateStream", move |_, _| {
+                let mut datums = DatumVec::new();
+                Box::new(move |input, ok_output, err_output| {
+                    input.for_each(|time, data| {
+                        let mut ok_session = ok_output.session(&time);
+                        let mut err_session = err_output.session(&time);
+                        for wrapper in data.iter() {
+                            let batch = &wrapper;
+                            let mut cursor = batch.cursor();
+                            while let Some(_key) = cursor.get_key(batch) {
+                                while let Some(val) = cursor.get_val(batch) {
+                                    cursor.map_times(batch, |time, diff| {
+                                        // note: only the delta path for the first relation will see
+                                        // updates at start-up time
+                                        if source_relation == 0 || !as_of.elements().contains(&time)
+                                        {
+                                            if let Some(initial_closure) = &initial_closure {
+                                                let temp_storage = RowArena::new();
+                                                let mut datums_local = datums.borrow_with(&val);
+                                                match initial_closure
+                                                    .apply(&mut datums_local, &temp_storage)
+                                                    .transpose()
+                                                {
+                                                    Some(Ok(row)) => ok_session.give((
+                                                        row,
+                                                        time.clone(),
+                                                        diff.clone(),
+                                                    )),
+                                                    Some(Err(err)) => err_session.give((
+                                                        err,
+                                                        time.clone(),
+                                                        diff.clone(),
+                                                    )),
+                                                    None => {}
+                                                }
+                                            } else {
+                                                ok_session.give((
+                                                    val.clone(),
+                                                    time.clone(),
+                                                    diff.clone(),
+                                                ));
+                                            }
+                                        }
+                                    });
+                                    cursor.step_val(batch);
+                                }
+                                cursor.step_key(batch);
+                            }
+                        }
+                    });
+                })
+            });
+
+    (
+        ok_stream.as_collection(),
+        err_stream.as_collection().map(DataflowError::from),
     )
 }
