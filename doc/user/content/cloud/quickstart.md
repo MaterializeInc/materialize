@@ -32,7 +32,7 @@ By default, you can create up to two deployments. If you're interested in more, 
 
 {{% cloud-connection-details %}}
 
-## Connect to a real-time stream and a create materialized view
+## Connect to a real-time stream and create a materialized view
 
 For this example, we'll walk you through connecting to a [PubNub stream](https://www.pubnub.com/developers/realtime-data-streams/) as a data source. Note that PubNub demo streams should only be used for testing, since they are [volatile sources](/overview/volatility) that do not meet the consistency and durability requirements necessary for Materialize to guarantee correctness over time.
 
