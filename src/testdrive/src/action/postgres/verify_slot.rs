@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use async_trait::async_trait;
+use std::cmp;
 use std::time::Duration;
 use tokio_postgres::NoTls;
 
@@ -40,7 +41,7 @@ impl Action for VerifySlotAction {
         Ok(())
     }
 
-    async fn redo(&self, _: &mut State) -> Result<(), String> {
+    async fn redo(&self, state: &mut State) -> Result<(), String> {
         let (client, conn) = tokio_postgres::connect(&self.connection, NoTls)
             .await
             .map_err(|e| format!("connecting to postgres: {}", e))?;
@@ -52,7 +53,7 @@ impl Action for VerifySlotAction {
 
         Retry::default()
             .initial_backoff(Duration::from_millis(50))
-            .max_duration(Duration::from_secs(3))
+            .max_duration(cmp::max(state.default_timeout, Duration::from_secs(3)))
             .retry(|_| async {
                 println!(">> checking for postgres replication slot {}", &self.slot);
                 let rows = client

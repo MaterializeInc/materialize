@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::io::{BufRead, Read};
 use std::time::Duration;
 
@@ -294,6 +295,7 @@ impl Action for IngestAction {
             };
             let value = value_transcoder.transcode(&mut row, self.corrupt_values)?;
             let producer = &state.kafka_producer;
+            let timeout = cmp::max(state.default_timeout, Duration::from_secs(1));
             futs.push(async move {
                 let mut record: FutureRecord<_, _> =
                     FutureRecord::to(topic_name).partition(self.partition);
@@ -306,7 +308,7 @@ impl Action for IngestAction {
                 if let Some(timestamp) = self.timestamp {
                     record = record.timestamp(timestamp);
                 }
-                producer.send(record, Duration::from_secs(1)).await
+                producer.send(record, timeout).await
             });
         }
         while let Some(res) = futs.next().await {
