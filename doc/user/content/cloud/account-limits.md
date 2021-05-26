@@ -23,7 +23,7 @@ Feature | Materialize local install | Materialize Cloud
 File sources  |  Yes | No
 File sinks  | Yes  |  No
 Number of deployments  |  Unlimited | 2
-Default specs  | Depends on your setup |  `R5d.2xlarge (8vCPU, 64GB ram)`
+Default specs  | Depends on your setup |  `t3.medium` (2 vCPU, 4GB memory)
 
 ## Related topics
 
