@@ -496,3 +496,885 @@ query T
 SELECT ('-0.0'::apd - '1'::apd  * '-0.0 '::apd)::text;
 ----
 0.0
+
+# Equality
+# Tests binary combination of values from set {0, 0.00, 1, 1.00, 1.2, -1.00, NaN}
+# including self-combinations using each equality operator
+
+query T
+SELECT '0'::apd = '0'::apd;
+----
+true
+
+query T
+SELECT '0'::apd < '0'::apd;
+----
+false
+
+query T
+SELECT '0'::apd <= '0'::apd;
+----
+true
+
+query T
+SELECT '0'::apd > '0'::apd;
+----
+false
+
+query T
+SELECT '0'::apd >= '0'::apd;
+----
+true
+
+query T
+SELECT '0'::apd <> '0'::apd;
+----
+false
+
+query T
+SELECT '0'::apd = '0.00'::apd;
+----
+true
+
+query T
+SELECT '0'::apd < '0.00'::apd;
+----
+false
+
+query T
+SELECT '0'::apd <= '0.00'::apd;
+----
+true
+
+query T
+SELECT '0'::apd > '0.00'::apd;
+----
+false
+
+query T
+SELECT '0'::apd >= '0.00'::apd;
+----
+true
+
+query T
+SELECT '0'::apd <> '0.00'::apd;
+----
+false
+
+query T
+SELECT '0'::apd = '1'::apd;
+----
+false
+
+query T
+SELECT '0'::apd < '1'::apd;
+----
+true
+
+query T
+SELECT '0'::apd <= '1'::apd;
+----
+true
+
+query T
+SELECT '0'::apd > '1'::apd;
+----
+false
+
+query T
+SELECT '0'::apd >= '1'::apd;
+----
+false
+
+query T
+SELECT '0'::apd <> '1'::apd;
+----
+true
+
+query T
+SELECT '0'::apd = '1.00'::apd;
+----
+false
+
+query T
+SELECT '0'::apd < '1.00'::apd;
+----
+true
+
+query T
+SELECT '0'::apd <= '1.00'::apd;
+----
+true
+
+query T
+SELECT '0'::apd > '1.00'::apd;
+----
+false
+
+query T
+SELECT '0'::apd >= '1.00'::apd;
+----
+false
+
+query T
+SELECT '0'::apd <> '1.00'::apd;
+----
+true
+
+query T
+SELECT '0'::apd = '1.2'::apd;
+----
+false
+
+query T
+SELECT '0'::apd < '1.2'::apd;
+----
+true
+
+query T
+SELECT '0'::apd <= '1.2'::apd;
+----
+true
+
+query T
+SELECT '0'::apd > '1.2'::apd;
+----
+false
+
+query T
+SELECT '0'::apd >= '1.2'::apd;
+----
+false
+
+query T
+SELECT '0'::apd <> '1.2'::apd;
+----
+true
+
+query T
+SELECT '0'::apd = '-1.00'::apd;
+----
+false
+
+query T
+SELECT '0'::apd < '-1.00'::apd;
+----
+false
+
+query T
+SELECT '0'::apd <= '-1.00'::apd;
+----
+false
+
+query T
+SELECT '0'::apd > '-1.00'::apd;
+----
+true
+
+query T
+SELECT '0'::apd >= '-1.00'::apd;
+----
+true
+
+query T
+SELECT '0'::apd <> '-1.00'::apd;
+----
+true
+
+query T
+SELECT '0'::apd = 'NaN'::apd;
+----
+false
+
+query T
+SELECT '0'::apd < 'NaN'::apd;
+----
+true
+
+query T
+SELECT '0'::apd <= 'NaN'::apd;
+----
+true
+
+query T
+SELECT '0'::apd > 'NaN'::apd;
+----
+false
+
+query T
+SELECT '0'::apd >= 'NaN'::apd;
+----
+false
+
+query T
+SELECT '0'::apd <> 'NaN'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd = '0.00'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd < '0.00'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd <= '0.00'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd > '0.00'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd >= '0.00'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd <> '0.00'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd = '1'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd < '1'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd <= '1'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd > '1'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd >= '1'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd <> '1'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd = '1.00'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd < '1.00'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd <= '1.00'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd > '1.00'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd >= '1.00'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd <> '1.00'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd = '1.2'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd < '1.2'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd <= '1.2'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd > '1.2'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd >= '1.2'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd <> '1.2'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd = '-1.00'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd < '-1.00'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd <= '-1.00'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd > '-1.00'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd >= '-1.00'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd <> '-1.00'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd = 'NaN'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd < 'NaN'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd <= 'NaN'::apd;
+----
+true
+
+query T
+SELECT '0.00'::apd > 'NaN'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd >= 'NaN'::apd;
+----
+false
+
+query T
+SELECT '0.00'::apd <> 'NaN'::apd;
+----
+true
+
+query T
+SELECT '1'::apd = '1'::apd;
+----
+true
+
+query T
+SELECT '1'::apd < '1'::apd;
+----
+false
+
+query T
+SELECT '1'::apd <= '1'::apd;
+----
+true
+
+query T
+SELECT '1'::apd > '1'::apd;
+----
+false
+
+query T
+SELECT '1'::apd >= '1'::apd;
+----
+true
+
+query T
+SELECT '1'::apd <> '1'::apd;
+----
+false
+
+query T
+SELECT '1'::apd = '1.00'::apd;
+----
+true
+
+query T
+SELECT '1'::apd < '1.00'::apd;
+----
+false
+
+query T
+SELECT '1'::apd <= '1.00'::apd;
+----
+true
+
+query T
+SELECT '1'::apd > '1.00'::apd;
+----
+false
+
+query T
+SELECT '1'::apd >= '1.00'::apd;
+----
+true
+
+query T
+SELECT '1'::apd <> '1.00'::apd;
+----
+false
+
+query T
+SELECT '1'::apd = '1.2'::apd;
+----
+false
+
+query T
+SELECT '1'::apd < '1.2'::apd;
+----
+true
+
+query T
+SELECT '1'::apd <= '1.2'::apd;
+----
+true
+
+query T
+SELECT '1'::apd > '1.2'::apd;
+----
+false
+
+query T
+SELECT '1'::apd >= '1.2'::apd;
+----
+false
+
+query T
+SELECT '1'::apd <> '1.2'::apd;
+----
+true
+
+query T
+SELECT '1'::apd = '-1.00'::apd;
+----
+false
+
+query T
+SELECT '1'::apd < '-1.00'::apd;
+----
+false
+
+query T
+SELECT '1'::apd <= '-1.00'::apd;
+----
+false
+
+query T
+SELECT '1'::apd > '-1.00'::apd;
+----
+true
+
+query T
+SELECT '1'::apd >= '-1.00'::apd;
+----
+true
+
+query T
+SELECT '1'::apd <> '-1.00'::apd;
+----
+true
+
+query T
+SELECT '1'::apd = 'NaN'::apd;
+----
+false
+
+query T
+SELECT '1'::apd < 'NaN'::apd;
+----
+true
+
+query T
+SELECT '1'::apd <= 'NaN'::apd;
+----
+true
+
+query T
+SELECT '1'::apd > 'NaN'::apd;
+----
+false
+
+query T
+SELECT '1'::apd >= 'NaN'::apd;
+----
+false
+
+query T
+SELECT '1'::apd <> 'NaN'::apd;
+----
+true
+
+query T
+SELECT '1.00'::apd = '1.00'::apd;
+----
+true
+
+query T
+SELECT '1.00'::apd < '1.00'::apd;
+----
+false
+
+query T
+SELECT '1.00'::apd <= '1.00'::apd;
+----
+true
+
+query T
+SELECT '1.00'::apd > '1.00'::apd;
+----
+false
+
+query T
+SELECT '1.00'::apd >= '1.00'::apd;
+----
+true
+
+query T
+SELECT '1.00'::apd <> '1.00'::apd;
+----
+false
+
+query T
+SELECT '1.00'::apd = '1.2'::apd;
+----
+false
+
+query T
+SELECT '1.00'::apd < '1.2'::apd;
+----
+true
+
+query T
+SELECT '1.00'::apd <= '1.2'::apd;
+----
+true
+
+query T
+SELECT '1.00'::apd > '1.2'::apd;
+----
+false
+
+query T
+SELECT '1.00'::apd >= '1.2'::apd;
+----
+false
+
+query T
+SELECT '1.00'::apd <> '1.2'::apd;
+----
+true
+
+query T
+SELECT '1.00'::apd = '-1.00'::apd;
+----
+false
+
+query T
+SELECT '1.00'::apd < '-1.00'::apd;
+----
+false
+
+query T
+SELECT '1.00'::apd <= '-1.00'::apd;
+----
+false
+
+query T
+SELECT '1.00'::apd > '-1.00'::apd;
+----
+true
+
+query T
+SELECT '1.00'::apd >= '-1.00'::apd;
+----
+true
+
+query T
+SELECT '1.00'::apd <> '-1.00'::apd;
+----
+true
+
+query T
+SELECT '1.00'::apd = 'NaN'::apd;
+----
+false
+
+query T
+SELECT '1.00'::apd < 'NaN'::apd;
+----
+true
+
+query T
+SELECT '1.00'::apd <= 'NaN'::apd;
+----
+true
+
+query T
+SELECT '1.00'::apd > 'NaN'::apd;
+----
+false
+
+query T
+SELECT '1.00'::apd >= 'NaN'::apd;
+----
+false
+
+query T
+SELECT '1.00'::apd <> 'NaN'::apd;
+----
+true
+
+query T
+SELECT '1.2'::apd = '1.2'::apd;
+----
+true
+
+query T
+SELECT '1.2'::apd < '1.2'::apd;
+----
+false
+
+query T
+SELECT '1.2'::apd <= '1.2'::apd;
+----
+true
+
+query T
+SELECT '1.2'::apd > '1.2'::apd;
+----
+false
+
+query T
+SELECT '1.2'::apd >= '1.2'::apd;
+----
+true
+
+query T
+SELECT '1.2'::apd <> '1.2'::apd;
+----
+false
+
+query T
+SELECT '1.2'::apd = '-1.00'::apd;
+----
+false
+
+query T
+SELECT '1.2'::apd < '-1.00'::apd;
+----
+false
+
+query T
+SELECT '1.2'::apd <= '-1.00'::apd;
+----
+false
+
+query T
+SELECT '1.2'::apd > '-1.00'::apd;
+----
+true
+
+query T
+SELECT '1.2'::apd >= '-1.00'::apd;
+----
+true
+
+query T
+SELECT '1.2'::apd <> '-1.00'::apd;
+----
+true
+
+query T
+SELECT '1.2'::apd = 'NaN'::apd;
+----
+false
+
+query T
+SELECT '1.2'::apd < 'NaN'::apd;
+----
+true
+
+query T
+SELECT '1.2'::apd <= 'NaN'::apd;
+----
+true
+
+query T
+SELECT '1.2'::apd > 'NaN'::apd;
+----
+false
+
+query T
+SELECT '1.2'::apd >= 'NaN'::apd;
+----
+false
+
+query T
+SELECT '1.2'::apd <> 'NaN'::apd;
+----
+true
+
+query T
+SELECT '-1.00'::apd = '-1.00'::apd;
+----
+true
+
+query T
+SELECT '-1.00'::apd < '-1.00'::apd;
+----
+false
+
+query T
+SELECT '-1.00'::apd <= '-1.00'::apd;
+----
+true
+
+query T
+SELECT '-1.00'::apd > '-1.00'::apd;
+----
+false
+
+query T
+SELECT '-1.00'::apd >= '-1.00'::apd;
+----
+true
+
+query T
+SELECT '-1.00'::apd <> '-1.00'::apd;
+----
+false
+
+query T
+SELECT '-1.00'::apd = 'NaN'::apd;
+----
+false
+
+query T
+SELECT '-1.00'::apd < 'NaN'::apd;
+----
+true
+
+query T
+SELECT '-1.00'::apd <= 'NaN'::apd;
+----
+true
+
+query T
+SELECT '-1.00'::apd > 'NaN'::apd;
+----
+false
+
+query T
+SELECT '-1.00'::apd >= 'NaN'::apd;
+----
+false
+
+query T
+SELECT '-1.00'::apd <> 'NaN'::apd;
+----
+true
+
+query T
+SELECT 'NaN'::apd = 'NaN'::apd;
+----
+true
+
+query T
+SELECT 'NaN'::apd < 'NaN'::apd;
+----
+false
+
+query T
+SELECT 'NaN'::apd <= 'NaN'::apd;
+----
+true
+
+query T
+SELECT 'NaN'::apd > 'NaN'::apd;
+----
+false
+
+query T
+SELECT 'NaN'::apd >= 'NaN'::apd;
+----
+true
+
+query T
+SELECT 'NaN'::apd <> 'NaN'::apd;
+----
+false
+
+# NaN is larger than large numbers
+query T
+SELECT 'NaN'::apd > '9e38'::apd;
+----
+true
+
+# Scale doesn't affect equality
+query T
+SELECT '9'::apd(39,5) = '9'::apd;
+----
+true
+
+query T
+SELECT '9'::apd(39,5) = '9'::apd(39,10);
+----
+true
+
+# Values are rounded before comparison
+query T
+SELECT '123456789012345678901234567890123456789.0'::apd = '123456789012345678901234567890123456789.4999'::apd;
+----
+true
+
+query T
+SELECT '1.00123'::apd(39,2) = '1'::apd;
+----
+true
+
+query T
+SELECT '1.23456789'::apd(39,2) < '1.23456789'::apd(39,3);
+----
+true
+
+query T
+SELECT '1.23456789'::apd(39,5) < '1.23456789'::apd(39,4);
+----
+true
