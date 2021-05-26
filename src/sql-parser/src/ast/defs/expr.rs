@@ -429,7 +429,7 @@ impl<T: AstInfo> AstDisplay for Expr<T> {
             Expr::SubscriptSlice { expr, positions } => {
                 f.write_node(&expr);
                 f.write_str("[");
-                display::comma_separated(positions);
+                f.write_node(&display::comma_separated(positions));
                 f.write_str("]");
             }
         }
