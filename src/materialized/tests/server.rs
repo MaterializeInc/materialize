@@ -252,13 +252,13 @@ fn test_http_sql() -> Result<(), Box<dyn Error>> {
         TestCase {
             query: "select 1+2 as col",
             status: StatusCode::OK,
-            body: r#"{"rows":[[3]],"col_names":["col"]}"#,
+            body: r#"{"results":[{"rows":[[3]],"col_names":["col"]}]}"#,
         },
-        // Only one query at a time.
+        // Multiple queries are ok.
         TestCase {
             query: "select 1; select 2",
-            status: StatusCode::BAD_REQUEST,
-            body: r#"expected exactly 1 statement"#,
+            status: StatusCode::OK,
+            body: r#"{"results":[{"rows":[[1]],"col_names":[null]},{"rows":[[2]],"col_names":[null]}]}"#,
         },
         // CREATEs should not work.
         TestCase {
