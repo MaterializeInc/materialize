@@ -267,7 +267,7 @@ impl TimestampBindingBox {
     fn new(timestamp_update_interval: Option<u64>) -> Self {
         Self {
             partitions: HashMap::new(),
-            compaction_frontier: MutableAntichain::new(),
+            compaction_frontier: MutableAntichain::new_bottom(TimelyTimestamp::minimum()),
             durability_frontier: Antichain::from_elem(TimelyTimestamp::minimum()),
             proposer: timestamp_update_interval.map(|i| TimestampProposer::new(i)),
         }
