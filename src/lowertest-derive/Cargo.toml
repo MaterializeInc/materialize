@@ -1,0 +1,14 @@
+[package]
+name = "lowertest-derive"
+description = "Macros to support unit testing of lower parts of the stack"
+version = "0.0.0"
+edition = "2018"
+publish = false
+
+[lib]
+proc-macro = true
+
+[dependencies]
+quote = "1.0.9"
+syn = {version="1.0.73", features=["extra-traits", "printing"]}
+proc-macro2 = "1.0.27"

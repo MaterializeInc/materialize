@@ -1,0 +1,85 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Everything that we haven't overridden should build the same.
+
+build override=true
+----
+None
+
+build override=true
+unit
+----
+Some(Unit)
+
+build override=true
+(single_unnamed_field -1.1)
+----
+Some(SingleUnnamedField(TestStruct1(-1.1)))
+
+build override=true
+(unit)
+----
+Some(Unit)
+
+build
+(single_unnamed_field (-1.1))
+----
+Some(SingleUnnamedField(TestStruct1(-1.1)))
+
+build
+(multi_named_fields null false)
+----
+Some(MultiNamedFields { bar: None, baz: false })
+
+build override=true
+multi_named_fields
+----
+Some(MultiNamedFields { bar: None, baz: false })
+
+build override=true
+(multi_named_fields "realm")
+----
+Some(MultiNamedFields { bar: Some("realm"), baz: false })
+
+# Override tests.
+
+# Note that this is also a test that we are correctly
+# transmitting type information during the creation of each subfield.
+
+build override=true
+(multi_unnamed_fields
+    (
+        [
+            [3 [["world" 5] ["this" 2]] 4]
+            [2 [] 0]
+        ]
+        "hello"
+    )
+    ([true false null] [[[100 true] [200 false]][]])
+    (single_named_field [0 10 42]))
+----
+Some(MultiUnnamedFields(TestStruct2([(4, [("world", 6), ("this", 3)], 5), (3, [], 1)], "hello"), TestStruct3 { fizz: [Some(true), Some(false), None], bizz: [[(TestStruct1(100.0), true), (TestStruct1(200.0), false)], []] }, SingleNamedField { foo: [1, 11, 43] }))
+
+build override=true
+(single_unnamed_field +1.1)
+----
+Some(SingleUnnamedField(TestStruct1(1.1)))
+
+# Test our alternate syntax for passing in enum/struct information
+# for overriding
+build override=true
+(multi_unnamed_fields
+    (2 "goodbye")
+    ([true false null] [[[100 true] [200 false]][]])
+    (multi_unnamed_fields 3 ([] [[[-1 true]]])
+         (multi_unnamed_fields "again" ([false false false] []) unit)
+        ))
+----
+Some(MultiUnnamedFields(TestStruct2([(2, [("\"goodbye\"", 2)], 2)], "\"goodbye\""), TestStruct3 { fizz: [Some(true), Some(false), None], bizz: [[(TestStruct1(100.0), true), (TestStruct1(200.0), false)], []] }, MultiUnnamedFields(TestStruct2([(3, [("", 3)], 3)], ""), TestStruct3 { fizz: [], bizz: [[(TestStruct1(-1.0), true)]] }, MultiUnnamedFields(TestStruct2([], "again"), TestStruct3 { fizz: [Some(false), Some(false), Some(false)], bizz: [] }, Unit))))
