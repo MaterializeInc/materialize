@@ -531,7 +531,9 @@ impl ConsistencyInfo {
     /// Returns true if this worker is responsible for handling this partition
     fn responsible_for(&self, pid: &PartitionId) -> bool {
         match pid {
-            PartitionId::File | PartitionId::S3 | PartitionId::Kinesis => self.active,
+            PartitionId::File | PartitionId::S3 | PartitionId::Kinesis | PartitionId::None => {
+                self.active
+            }
             PartitionId::Kafka(p) => {
                 // We want to distribute partitions across workers evenly, such that
                 // - different partitions for the same source are uniformly distributed across workers
@@ -1134,10 +1136,14 @@ where
     C: SimpleSource + Send + 'static,
 {
     let SourceConfig {
+        id,
         name,
+        upstream_name,
         scope,
         active,
+        worker_id,
         timestamp_frequency,
+        logger,
         ..
     } = config;
 
@@ -1167,8 +1173,15 @@ where
         });
     }
 
-    let (stream, capability) = source(scope, name, move |info| {
+    let (stream, capability) = source(scope, name.clone(), move |info| {
         let activator = Arc::new(scope.sync_activator_for(&info.address[..]));
+
+        let metrics_name = upstream_name.unwrap_or(name);
+        let mut metrics = SourceMetrics::new(&metrics_name, id, &worker_id.to_string(), logger);
+
+        if active {
+            metrics.add_partition(&PartitionId::None);
+        }
 
         move |cap, output| {
             if !active {
@@ -1182,6 +1195,17 @@ where
                 match item {
                     Some(Event::Progress(None)) => unreachable!(),
                     Some(Event::Progress(Some(time))) => {
+                        let mut metric_updates = HashMap::new();
+                        metric_updates.insert(
+                            PartitionId::None,
+                            (
+                                MzOffset {
+                                    offset: time as i64,
+                                },
+                                time,
+                            ),
+                        );
+                        metrics.record_partition_offsets(metric_updates);
                         cap.downgrade(&time);
                     }
                     Some(Event::Message(time, data)) => {

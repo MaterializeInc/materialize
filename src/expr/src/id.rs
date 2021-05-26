@@ -139,6 +139,7 @@ pub enum PartitionId {
     Kinesis,
     File,
     S3,
+    None,
 }
 
 impl fmt::Display for PartitionId {
@@ -148,6 +149,7 @@ impl fmt::Display for PartitionId {
             PartitionId::S3 => write!(f, "s3"),
             PartitionId::Kinesis => write!(f, "kinesis"),
             PartitionId::File => write!(f, "0"),
+            PartitionId::None => write!(f, "none"),
         }
     }
 }
