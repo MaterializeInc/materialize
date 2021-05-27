@@ -28,12 +28,22 @@ SELECT ('-0.2'::apd)::text
 -0.2
 
 query T
+SELECT (-'0.2'::apd)::text
+----
+-0.2
+
+query T
 SELECT ('2'::apd)::text
 ----
 2
 
 query T
 SELECT ('-2'::apd)::text
+----
+-2
+
+query T
+SELECT (-'2'::apd)::text
 ----
 -2
 
@@ -139,6 +149,11 @@ SELECT ('1.23'::apd + '-2.34'::apd)::text
 -1.11
 
 query T
+SELECT ('1.23'::apd + -'2.34'::apd)::text
+----
+-1.11
+
+query T
 SELECT ('1.23'::apd + '-1.23'::apd)::text
 ----
 0.00
@@ -203,6 +218,11 @@ SELECT ('-1.23'::apd - '-2.34'::apd)::text
 1.11
 
 query T
+SELECT (-('1.23'::apd - '2.34'::apd))::text
+----
+1.11
+
+query T
 SELECT ('1.23'::apd - '1.23'::apd)::text
 ----
 0.00
@@ -259,6 +279,11 @@ SELECT ('-1.1'::apd * '.2'::apd)::text
 
 query T
 SELECT ('.1'::apd * '-2.2'::apd)::text
+----
+-0.22
+
+query T
+SELECT (-('.1'::apd * '2.2'::apd))::text
 ----
 -0.22
 
@@ -496,6 +521,27 @@ query T
 SELECT ('-0.0'::apd - '1'::apd  * '-0.0 '::apd)::text;
 ----
 0.0
+
+# Negate is nop on NaN and 0
+query T
+SELECT (-'NaN'::apd)::text;
+----
+NaN
+
+query T
+SELECT (-'0'::apd)::text;
+----
+0
+
+query T
+SELECT (-'0.00'::apd)::text;
+----
+0.00
+
+query T
+SELECT (-('1.01'::apd - '1.010'::apd))::text;
+----
+0.000
 
 # Equality
 # Tests binary combination of values from set {0, 0.00, 1, 1.00, 1.2, -1.00, NaN}

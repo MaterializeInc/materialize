@@ -2221,6 +2221,7 @@ lazy_static! {
                 params!(Float32) => UnaryFunc::NegFloat32, 584;
                 params!(Float64) => UnaryFunc::NegFloat64, 585;
                 params!(DecimalAny) => UnaryFunc::NegDecimal, 1751;
+                params!(APD{scale: None}) => UnaryFunc::NegAPD, 17510;
                 params!(Interval) => UnaryFunc::NegInterval, 1336;
                 params!(Int32, Int32) => SubInt32, 555;
                 params!(Int64, Int64) => SubInt64, 685;
