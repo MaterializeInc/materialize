@@ -7,22 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-build
-(let x (constant
-      [[1 2 3]
-       [4 5 6]]
-      [int64 int64 int64])
-   (get x))
-----
-----
-%0 = Let l0 =
-| Constant (1, 2, 3) (4, 5, 6)
-
-%1 =
-| Get %0 (l0)
-----
-----
-
 # test that predicates in the body of a let get pushed down to values
 build apply=PredicatePushdown
 (let x (constant

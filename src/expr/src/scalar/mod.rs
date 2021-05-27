@@ -13,6 +13,7 @@ use std::mem;
 
 use serde::{Deserialize, Serialize};
 
+use lowertest::MzEnumReflect;
 use ore::collections::CollectionExt;
 use ore::str::separated;
 use repr::adt::array::InvalidArrayError;
@@ -27,7 +28,9 @@ use crate::scalar::func::parse_timezone;
 pub mod func;
 pub mod like_pattern;
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect,
+)]
 pub enum MirScalarExpr {
     /// A column of the input row
     Column(usize),
