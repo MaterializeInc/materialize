@@ -33,6 +33,7 @@ pub struct IngestAction {
     corrupt_keys: bool,
     corrupt_values: bool,
     rows: Vec<String>,
+    repeat: isize,
 }
 
 #[derive(Clone)]
@@ -174,6 +175,7 @@ impl Transcoder {
 pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
     let topic_prefix = format!("testdrive-{}", cmd.args.string("topic")?);
     let partition = cmd.args.opt_parse::<i32>("partition")?.unwrap_or(0);
+    let repeat = cmd.args.opt_parse::<isize>("repeat")?.unwrap_or(1);
     let format = match cmd.args.string("format")?.as_str() {
         "avro" => Format::Avro {
             schema: cmd.args.string("schema")?,
@@ -219,6 +221,7 @@ pub fn build_ingest(mut cmd: BuiltinCommand) -> Result<IngestAction, String> {
         corrupt_keys,
         corrupt_values,
         rows: cmd.input,
+        repeat,
     })
 }
 
@@ -280,6 +283,7 @@ impl Action for IngestAction {
                 Format::Bytes { terminator } => Ok(Transcoder::Bytes { terminator }),
             }
         };
+
         let value_transcoder = make_transcoder(self.format.clone(), "value").await?;
         let key_transcoder = match self.key_format.clone() {
             None => None,
@@ -287,29 +291,32 @@ impl Action for IngestAction {
         };
 
         let mut futs = FuturesUnordered::new();
-        for row in &self.rows {
-            let mut row = row.as_bytes();
-            let key = match &key_transcoder {
-                None => None,
-                Some(kt) => kt.transcode(&mut row, self.corrupt_keys)?,
-            };
-            let value = value_transcoder.transcode(&mut row, self.corrupt_values)?;
-            let producer = &state.kafka_producer;
-            let timeout = cmp::max(state.default_timeout, Duration::from_secs(1));
-            futs.push(async move {
-                let mut record: FutureRecord<_, _> =
-                    FutureRecord::to(topic_name).partition(self.partition);
-                if let Some(key) = &key {
-                    record = record.key(key);
-                }
-                if let Some(value) = &value {
-                    record = record.payload(value);
-                }
-                if let Some(timestamp) = self.timestamp {
-                    record = record.timestamp(timestamp);
-                }
-                producer.send(record, timeout).await
-            });
+
+        for _n in 0..self.repeat {
+            for row in &self.rows {
+                let mut row = row.as_bytes();
+                let key = match &key_transcoder {
+                    None => None,
+                    Some(kt) => kt.transcode(&mut row, self.corrupt_keys)?,
+                };
+                let value = value_transcoder.transcode(&mut row, self.corrupt_values)?;
+                let producer = &state.kafka_producer;
+                let timeout = cmp::max(state.default_timeout, Duration::from_secs(1));
+                futs.push(async move {
+                    let mut record: FutureRecord<_, _> =
+                        FutureRecord::to(topic_name).partition(self.partition);
+                    if let Some(key) = &key {
+                        record = record.key(key);
+                    }
+                    if let Some(value) = &value {
+                        record = record.payload(value);
+                    }
+                    if let Some(timestamp) = self.timestamp {
+                        record = record.timestamp(timestamp);
+                    }
+                    producer.send(record, timeout).await
+                });
+            }
         }
         while let Some(res) = futs.next().await {
             res.map_err(|(e, _message)| e.to_string())?;
