@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp;
 use std::path::PathBuf;
 use std::process;
 use std::time::Duration;
@@ -82,6 +83,10 @@ struct Args {
     /// Maximum number of errors before aborting
     #[structopt(long, default_value = "10")]
     max_errors: usize,
+
+    /// Max number of tests to run before terminating
+    #[structopt(long, default_value = "18446744073709551615")]
+    max_tests: usize,
 
     /// Shuffle tests (using the value from --seed, if any)
     #[structopt(long)]
@@ -178,13 +183,13 @@ async fn main() {
         files.shuffle(&mut rng);
     }
 
-    for file in files {
+    for file in &files[..cmp::min(args.max_tests, files.len())] {
         if let Err(error) = match file.as_str() {
             "-" => testdrive::run_stdin(&config).await,
             _ => testdrive::run_file(&config, &file).await,
         } {
             let _ = error.print_stderr(args.ci_output);
-            error_files.push(file);
+            error_files.push(file.clone());
 
             errors.push(error);
             if errors.len() >= args.max_errors {
