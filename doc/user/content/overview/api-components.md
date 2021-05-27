@@ -145,11 +145,11 @@ materialized view, and starts incrementally updating the results of its embedded
 
 ### Interaction with materialized views
 
-As we mentioned before, each materialized view has at least one index that
+As mentioned before, each materialized view has at least one index that
 maintains the embedded query's result in memory; the continually updated indexes are known as
 "arrangements" within Materialize's dataflows.  In the simplest case, the arrangement is the
 last operator and simply stores the query's output in memory. In more complex
-cases, arrangements let Materialize perform more sophisticated aggregations like `JOINS` more
+cases, arrangements let Materialize perform more sophisticated aggregations like `JOIN`s more
 quickly.
 
 Creating additional indexes on materialized views lets you store some subset of a query's data in memory using a different structure, which can be useful if you want to perform a join over a view's data using non-primary keys (e.g. foreign keys).
