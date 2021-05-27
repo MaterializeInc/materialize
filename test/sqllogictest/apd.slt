@@ -543,6 +543,37 @@ SELECT (-('0.1'::apd - '0.10'::apd))::text;
 ----
 0
 
+# Abs
+query T
+SELECT abs('-1'::apd)::text;
+----
+1
+
+query T
+SELECT abs(-'1'::apd)::text;
+----
+1
+
+query T
+SELECT abs('-7e-38'::apd)::text;
+----
+0.00000000000000000000000000000000000007
+
+query T
+SELECT abs('1'::apd - '1e38'::apd)::text;
+----
+99999999999999999999999999999999999999
+
+query T
+SELECT abs('-0.00'::apd)::text;
+----
+0
+
+query T
+SELECT abs('NaN'::apd)::text;
+----
+NaN
+
 # Equality
 # Tests binary combination of values from set {0, 0.00, 1, 1.00, 1.2, -1.00, NaN}
 # including self-combinations using each equality operator
