@@ -22,6 +22,7 @@ use regex::Regex;
 use repr::MessagePayload;
 use serde::{Deserialize, Serialize};
 
+use lowertest::MzEnumReflect;
 use ore::cast::CastFrom;
 use repr::adt::apd;
 use repr::adt::decimal::{Significand, MAX_DECIMAL_PRECISION};
@@ -457,7 +458,7 @@ where
     })
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
 pub enum AggregateFunc {
     MaxApd,
     MaxInt32,
@@ -806,7 +807,7 @@ pub fn files_for_source(id: GlobalId, persistence_directory: &PathBuf) -> Vec<Pa
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzEnumReflect)]
 pub enum TableFunc {
     JsonbEach {
         stringify: bool,

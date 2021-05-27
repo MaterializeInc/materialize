@@ -21,4 +21,4 @@ build
   [[#0]]
   [int64])
 ----
-error: exprs in constant must be literals
+error: Punct { char: '#', spacing: Alone } cannot be interpreted as a literal.

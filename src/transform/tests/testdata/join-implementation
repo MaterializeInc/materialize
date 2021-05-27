@@ -12,6 +12,31 @@ cat
 ----
 ok
 
+build
+(join
+    [(get x) (get x)]
+    [[#0 #3]]
+    [0 1 5]
+    (delta_query [[[0 [#0]] [1 [#0]]]
+                  [[1 [#0]] [0 [#0]]]]))
+----
+----
+%0 =
+| Get x (u0)
+
+%1 =
+| Get x (u0)
+
+%2 =
+| Join %0 %1 (= #0 #3)
+| | implementation = DeltaQuery
+| |   delta %0 %0.(#0) %1.(#0)
+| |   delta %1 %1.(#0) %0.(#0)
+| | demand = (#0, #1, #5)
+----
+----
+
+
 opt
 (join [(get x) (get x)] [[#0 #3]])
 ----

@@ -7,10 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
-use anyhow::{anyhow, Error};
-
 /// This module defines a small language for directly constructing RelationExprs and running
 /// various optimizations on them. It uses datadriven, so the output of each test can be rewritten
 /// by setting the REWRITE environment variable.
@@ -19,129 +15,29 @@ use anyhow::{anyhow, Error};
 /// * There is some duplication between this and the SQL planner
 /// * Not all operators supported (Reduce)
 
-#[derive(Debug, Clone)]
-enum Sexp {
-    List(Vec<Sexp>),
-    Atom(String),
-}
-
-impl fmt::Display for Sexp {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Sexp::Atom(s) => write!(f, "{}", s),
-            Sexp::List(es) => {
-                write!(f, "(")?;
-                let mut split = "";
-                for e in es {
-                    write!(f, "{}{}", split, e)?;
-                    split = " ";
-                }
-                write!(f, ")")
-            }
-        }
-    }
-}
-
-struct SexpParser {
-    s: Vec<char>,
-    i: usize,
-}
-
-impl SexpParser {
-    fn peek(&self) -> Option<char> {
-        if self.i < self.s.len() {
-            Some(self.s[self.i])
-        } else {
-            None
-        }
-    }
-
-    fn munch(&mut self) {
-        loop {
-            match self.peek() {
-                Some(ch) if ch.is_whitespace() => self.i += 1,
-                _ => break,
-            }
-        }
-    }
-
-    fn closer(ch: char) -> Option<char> {
-        match ch {
-            '(' => Some(')'),
-            '[' => Some(']'),
-            '{' => Some('}'),
-            _ => None,
-        }
-    }
-
-    fn is_atom_char(ch: char) -> bool {
-        ('a'..='z').contains(&ch)
-            || ('A'..='Z').contains(&ch)
-            || ('0'..='9').contains(&ch)
-            || ch == '-'
-            || ch == '_'
-            || ch == '#'
-    }
-
-    fn parse(&mut self) -> Result<Sexp, Error> {
-        self.munch();
-        match self.peek() {
-            None => Err(anyhow!(String::from("unexpected end of sexp"))),
-            Some(e @ '(') | Some(e @ '[') | Some(e @ '{') => {
-                self.i += 1;
-                let mut result = Vec::new();
-
-                while self.peek() != SexpParser::closer(e) {
-                    result.push(self.parse()?);
-                    self.munch();
-                }
-                self.i += 1;
-
-                Ok(Sexp::List(result))
-            }
-            Some(ch) if SexpParser::is_atom_char(ch) => {
-                let start = self.i;
-                while let Some(ch) = self.peek() {
-                    if !SexpParser::is_atom_char(ch) {
-                        break;
-                    }
-                    self.i += 1;
-                }
-                let end = self.i;
-                self.munch();
-                let word: String = self.s[start..end].iter().collect();
-                Ok(Sexp::Atom(word))
-            }
-            Some(ch) => Err(anyhow!("unexpected: {}", ch)),
-        }
-    }
-
-    fn parse_sexp(s: String) -> Result<Sexp, Error> {
-        let mut p = SexpParser {
-            s: s.chars().collect(),
-            i: 0,
-        };
-
-        p.parse()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::fmt::Write;
 
-    use anyhow::{anyhow, bail, Error};
-
+    use anyhow::{anyhow, Error};
     use expr::explain::ViewExplanation;
-    use expr::{
-        DummyHumanizer, ExprHumanizer, GlobalId, Id, JoinImplementation, LocalId, MirRelationExpr,
-        MirScalarExpr,
-    };
+    use expr::*;
+    use lazy_static::lazy_static;
+    use lowertest::*;
+    use proc_macro2::{TokenStream, TokenTree};
     use repr::{ColumnType, Datum, RelationType, Row, ScalarType};
     use transform::{Optimizer, Transform, TransformArgs};
 
-    use super::{Sexp, SexpParser};
+    gen_reflect_info_func!(
+        produce_rti,
+        [BinaryFunc, NullaryFunc, UnaryFunc, VariadicFunc, MirScalarExpr, ScalarType
+        TableFunc, AggregateFunc, MirRelationExpr, JoinImplementation]
+    );
+
+    lazy_static! {
+        static ref RTI: ReflectedTypeInfo = produce_rti();
+    }
 
     #[derive(Debug, Copy, Clone, PartialEq, Eq)]
     enum TestType {
@@ -215,284 +111,450 @@ mod tests {
         }
     }
 
-    fn nth(s: &Sexp, n: usize) -> Result<Sexp, Error> {
-        match s {
-            Sexp::List(l) => {
-                if n >= l.len() {
-                    Err(anyhow!("can't take {}[{}]", s, n))
-                } else {
-                    Ok(l[n].clone())
+    /// Extends the test case syntax to support `MirScalarExpr`s
+    ///
+    /// The following variants of `MirScalarExpr` have non-standard syntax:
+    /// Literal -> the syntax is `(<literal> <scalar type>)` or `<literal>`.
+    /// If `<scalar type>` is not specified, then literals will be assigned
+    /// default types:
+    /// * true/false become Bool
+    /// * numbers become Int64
+    /// * strings become String
+    /// Column -> the syntax is `#n`, where n is the column number.
+    #[derive(Default)]
+    struct MirScalarExprDeserializeContext;
+
+    impl MirScalarExprDeserializeContext {
+        fn build_column(&mut self, token: Option<TokenTree>) -> Result<MirScalarExpr, String> {
+            if let Some(TokenTree::Literal(literal)) = token {
+                return Ok(MirScalarExpr::Column(
+                    literal
+                        .to_string()
+                        .parse::<usize>()
+                        .map_err(|s| s.to_string())?,
+                ));
+            }
+            Err(format!("Invalid column specification {:?}", token))
+        }
+
+        fn build_literal_inner(
+            &mut self,
+            litval: &str,
+            littyp: ScalarType,
+        ) -> Result<MirScalarExpr, String> {
+            Ok(MirScalarExpr::literal_ok(
+                get_datum_from_str(&litval.to_string()[..], &littyp)?,
+                littyp,
+            ))
+        }
+
+        fn build_literal<I>(
+            &mut self,
+            litval: &str,
+            stream_iter: &mut I,
+        ) -> Result<MirScalarExpr, String>
+        where
+            I: Iterator<Item = TokenTree>,
+        {
+            let littyp: Option<ScalarType> =
+                deserialize_optional(stream_iter, "ScalarType", &RTI, self)?;
+            match littyp {
+                Some(littyp) => self.build_literal_inner(litval, littyp),
+                None => {
+                    let littyp = if ["true", "false", "null"].contains(&litval) {
+                        ScalarType::Bool
+                    } else if litval.starts_with('\"') {
+                        ScalarType::String
+                    } else {
+                        ScalarType::Int64
+                    };
+                    self.build_literal_inner(litval, littyp)
                 }
             }
-            _ => Err(anyhow!("can't take {}[{}]", s, n)),
         }
-    }
 
-    fn try_list(s: Sexp) -> Result<Vec<Sexp>, Error> {
-        match s {
-            Sexp::List(s) => Ok(s),
-            _ => Err(anyhow!("expected {} to be a list", s)),
-        }
-    }
-
-    fn try_atom(s: &Sexp) -> Result<String, Error> {
-        match s {
-            Sexp::Atom(s) => Ok(s.clone()),
-            _ => Err(anyhow!("expected {} to be an atom", s)),
-        }
-    }
-
-    fn try_list_of_atoms(s: &Sexp) -> Result<Vec<String>, Error> {
-        match s {
-            Sexp::List(s) => s.iter().map(|s| try_atom(s)).collect(),
-            _ => Err(anyhow!("expected {} to be a list", s)),
-        }
-    }
-
-    /// Extracts a column reference expression from a Sexp.
-    fn extract_idx(s: Sexp) -> Result<usize, Error> {
-        match s {
-            Sexp::Atom(a) if a.starts_with('#') => {
-                Ok(a.chars().skip(1).collect::<String>().parse()?)
+        fn build_literal_if_able<I>(
+            &mut self,
+            stream_iter: &mut I,
+            symbol: TokenTree,
+        ) -> Result<Option<MirScalarExpr>, String>
+        where
+            I: Iterator<Item = TokenTree>,
+        {
+            match extract_literal_string(stream_iter, &symbol)? {
+                Some(litval) => Ok(Some(self.build_literal(&litval[..], stream_iter)?)),
+                None => Ok(None),
             }
-            s => Err(anyhow!("expected {} to be a column reference", s)),
         }
     }
 
-    fn build_rel(
-        s: Sexp,
-        catalog: &TestCatalog,
-        scope: &mut Scope,
-    ) -> Result<MirRelationExpr, Error> {
-        // TODO(justin): cleaner destructuring of a sexp here: this is too lenient at the moment,
-        // since extra arguments to an operator are ignored.
-        match try_atom(&nth(&s, 0)?)?.as_str() {
-            // (get <name>)
-            "get" => {
-                let name = try_atom(&nth(&s, 1)?)?;
-                match scope.get(&name) {
-                    Some((id, typ)) => Ok(MirRelationExpr::Get { id, typ }),
-                    None => match catalog.get(&name) {
-                        None => Err(anyhow!("no catalog object named {}", name)),
-                        Some((id, typ)) => Ok(MirRelationExpr::Get {
-                            id: Id::Global(*id),
-                            typ: typ.clone(),
-                        }),
-                    },
+    impl TestDeserializeContext for MirScalarExprDeserializeContext {
+        fn override_syntax<I>(
+            &mut self,
+            first_arg: TokenTree,
+            rest_of_stream: &mut I,
+            type_name: &str,
+            _rti: &ReflectedTypeInfo,
+        ) -> Result<Option<String>, String>
+        where
+            I: Iterator<Item = TokenTree>,
+        {
+            let result = if type_name == "MirScalarExpr" {
+                match first_arg {
+                    TokenTree::Punct(punct) if punct.as_char() == '#' => {
+                        Some(self.build_column(rest_of_stream.next())?)
+                    }
+                    TokenTree::Group(_) => None,
+                    symbol => self.build_literal_if_able(rest_of_stream, symbol)?,
                 }
+            } else {
+                None
+            };
+            match result {
+                Some(result) => Ok(Some(
+                    serde_json::to_string(&result).map_err(|e| e.to_string())?,
+                )),
+                None => Ok(None),
             }
-            // (let <name> <value> <body>)
-            "let" => {
-                let name = try_atom(&nth(&s, 1)?)?;
-                let value = build_rel(nth(&s, 2)?, catalog, scope)?;
+        }
+    }
 
-                let (id, prev) = scope.insert(&name, value.typ());
+    /// Extends the test case syntax to support `MirRelationExpr`s
+    ///
+    /// Includes all the test case syntax extensions to support
+    /// `MirScalarExpr`s.
+    ///
+    /// The following variants of `MirRelationExpr` have non-standard syntax:
+    /// Let -> the syntax is `(let x <value> <body>)` where x is an ident that
+    ///        should not match any existing ident in any Let statement in
+    ///        `<value>`.
+    /// Get -> the syntax is `(get x)`, where x is an ident that refers to a
+    ///        pre-defined source or an ident defined in a let.
+    /// Union -> the syntax is `(union <input1> .. <inputn>)`.
+    /// Constant -> the syntax is
+    /// ```
+    /// (constant
+    ///    [[<row1literal1>..<row1literaln>]..[<rowiliteral1>..<rowiliteraln>]]
+    ///    [<scalartype1> .. <scalartypen>]
+    /// )
+    /// ```
+    ///
+    /// For convenience, a usize can be alternately specified as `#n`.
+    /// We recommend specifying a usize as `#n` instead of `n` when the usize
+    /// is a column reference.
+    struct MirRelationExprDeserializeContext<'a> {
+        inner_ctx: MirScalarExprDeserializeContext,
+        catalog: &'a TestCatalog,
+        scope: &'a mut Scope,
+    }
 
-                let body = build_rel(nth(&s, 3)?, catalog, scope)?;
-
-                if let Some((old_id, old_val)) = prev {
-                    scope.set(&name, old_id, old_val);
-                } else {
-                    scope.remove(&name)
-                }
-
-                Ok(MirRelationExpr::Let {
-                    id,
-                    value: Box::new(value),
-                    body: Box::new(body),
-                })
+    impl<'a> MirRelationExprDeserializeContext<'a> {
+        fn new(catalog: &'a TestCatalog, scope: &'a mut Scope) -> Self {
+            Self {
+                inner_ctx: MirScalarExprDeserializeContext::default(),
+                catalog,
+                scope,
             }
-            // (map <input> [expressions])
-            "map" => Ok(MirRelationExpr::Map {
-                input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
-                scalars: build_scalar_list(nth(&s, 2)?)?,
-            }),
-            // (project <input> [<col refs>])
-            "project" => Ok(MirRelationExpr::Project {
-                input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
-                outputs: try_list(nth(&s, 2)?)?
-                    .into_iter()
-                    .map(extract_idx)
-                    .collect::<Result<Vec<usize>, Error>>()?,
-            }),
-            // (constant [<rows>] [<types>])
-            "constant" => {
-                // TODO(justin): ...fix this.
-                let rows: Vec<(Row, isize)> = try_list(nth(&s, 1)?)?
-                    .into_iter()
-                    .map(try_list)
-                    .collect::<Result<Vec<Vec<Sexp>>, Error>>()?
-                    .into_iter()
-                    .map(|e| {
-                        e.into_iter()
-                            .map(build_scalar)
-                            .collect::<Result<Vec<MirScalarExpr>, Error>>()
-                    })
-                    .collect::<Result<Vec<Vec<MirScalarExpr>>, Error>>()?
-                    .iter()
-                    .map(move |exprs| {
-                        Ok(Row::pack_slice(
-                            &exprs
-                                .iter()
-                                .map(|e| match e {
-                                    MirScalarExpr::Literal(r, _) => {
-                                        Ok(r.as_ref().unwrap().iter().next().unwrap().clone())
+        }
+
+        fn build_constant<I>(&mut self, stream_iter: &mut I) -> Result<MirRelationExpr, String>
+        where
+            I: Iterator<Item = TokenTree>,
+        {
+            let raw_rows = stream_iter
+                .next()
+                .ok_or_else(|| format!("Constant is empty"))?;
+            // Deserialize the types of each column first
+            // in order to refer to column types when constructing the `Datum`
+            // objects in each row.
+            let scalar_types: Vec<ScalarType> =
+                deserialize(stream_iter, "Vec<ScalarType>", &RTI, self)?;
+            let mut rows = Vec::new();
+            match raw_rows {
+                TokenTree::Group(group) => {
+                    let mut row_iter = group.stream().into_iter().peekable();
+                    while row_iter.peek().is_some() {
+                        match row_iter.next() {
+                            Some(TokenTree::Group(group)) => {
+                                let mut inner_iter = group.stream().into_iter();
+                                let mut parsed_data = Vec::new();
+                                while let Some(symbol) = inner_iter.next() {
+                                    match extract_literal_string(&mut inner_iter, &symbol)? {
+                                        Some(dat) => parsed_data.push(dat),
+                                        None => {
+                                            return Err(format!(
+                                                "{:?} cannot be interpreted as a literal.",
+                                                symbol
+                                            ));
+                                        }
                                     }
-                                    _ => bail!("exprs in constant must be literals"),
-                                })
-                                .collect::<Result<Vec<Datum>, Error>>()?,
-                        ))
-                    })
-                    .collect::<Result<Vec<Row>, Error>>()?
-                    .iter()
-                    .map(|r| (r.clone(), 1))
-                    .collect::<Vec<(Row, isize)>>();
-
-                Ok(MirRelationExpr::Constant {
-                    rows: Ok(rows),
-                    typ: parse_type_list(nth(&s, 2)?)?,
-                })
-            }
-            // (join [<inputs>] [<equivalences>]])
-            "join" => {
-                let inputs = try_list(nth(&s, 1)?)?
-                    .into_iter()
-                    .map(|r| build_rel(r, catalog, scope))
-                    .collect::<Result<Vec<MirRelationExpr>, Error>>()?;
-
-                // TODO(justin): is there a way to make this more comprehensible?
-                let equivalences: Vec<Vec<MirScalarExpr>> = try_list(nth(&s, 2)?)?
-                    .into_iter()
-                    .map(try_list)
-                    .collect::<Result<Vec<Vec<Sexp>>, Error>>()?
-                    .into_iter()
-                    .map(|e| e.into_iter().map(build_scalar).collect())
-                    .collect::<Result<Vec<Vec<MirScalarExpr>>, Error>>()?;
-
-                Ok(MirRelationExpr::Join {
-                    inputs,
-                    equivalences,
-                    demand: None,
-                    implementation: JoinImplementation::Unimplemented,
-                })
-            }
-            // (union [<inputs>])
-            "union" => {
-                let inputs = try_list(nth(&s, 1)?)?
-                    .into_iter()
-                    .map(|r| build_rel(r, catalog, scope))
-                    .collect::<Result<Vec<MirRelationExpr>, Error>>()?;
-
-                Ok(MirRelationExpr::Union {
-                    base: Box::new(inputs[0].clone()),
-                    inputs: inputs[1..].to_vec(),
-                })
-            }
-            // (negate <input>)
-            "negate" => Ok(MirRelationExpr::Negate {
-                input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
-            }),
-            // (filter <input> <predicate>)
-            "filter" => Ok(MirRelationExpr::Filter {
-                input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
-                predicates: build_scalar_list(nth(&s, 2)?)?,
-            }),
-            // (arrange-by <input> [<keys>])
-            "arrange-by" => Ok(MirRelationExpr::ArrangeBy {
-                input: Box::new(build_rel(nth(&s, 1)?, catalog, scope)?),
-                keys: try_list(nth(&s, 2)?)?
-                    .into_iter()
-                    .map(build_scalar_list)
-                    .collect::<Result<Vec<Vec<MirScalarExpr>>, Error>>()?,
-            }),
-            // TODO(justin): add the rest of the operators.
-            name => Err(anyhow!("expected {} to be a relational operator", name)),
-        }
-    }
-
-    fn build_scalar_list(s: Sexp) -> Result<Vec<MirScalarExpr>, Error> {
-        try_list(s)?
-            .into_iter()
-            .map(build_scalar)
-            .collect::<Result<Vec<MirScalarExpr>, Error>>()
-    }
-
-    // TODO(justin): is there some way to re-use the sql parser/builder for this?
-    fn build_scalar(s: Sexp) -> Result<MirScalarExpr, Error> {
-        match s {
-            // TODO(justin): support more scalar exprs.
-            Sexp::Atom(s) => match s.as_str() {
-                "true" => Ok(MirScalarExpr::literal(Ok(Datum::True), ScalarType::Bool)),
-                "false" => Ok(MirScalarExpr::literal(Ok(Datum::False), ScalarType::Bool)),
-                s => {
-                    match s.chars().next() {
-                        None => {
-                            // It shouldn't have parsed as an atom originally.
-                            unreachable!();
+                                }
+                                let row = parsed_data
+                                    .iter()
+                                    .zip(scalar_types.iter())
+                                    .map(|(dat, typ)| get_datum_from_str(&dat[..], typ))
+                                    .collect::<Result<Vec<Datum>, String>>()?;
+                                rows.push((Row::pack_slice(&row), 1));
+                            }
+                            invalid => {
+                                return Err(format!("invalid row spec for constant {:?}", invalid))
+                            }
                         }
-                        Some('#') => Ok(MirScalarExpr::Column(extract_idx(Sexp::Atom(
-                            s.to_string(),
-                        ))?)),
-                        Some('0') | Some('1') | Some('2') | Some('3') | Some('4') | Some('5')
-                        | Some('6') | Some('7') | Some('8') | Some('9') => {
-                            Ok(MirScalarExpr::literal(
-                                Ok(Datum::Int64(s.parse::<i64>()?)),
-                                ScalarType::Int64,
-                            ))
-                        }
-                        _ => Err(anyhow!("couldn't parse scalar: {}", s)),
                     }
                 }
-            },
-            s => Err(anyhow!("expected {} to be a scalar", s)),
+                invalid => return Err(format!("invalid rows spec for constant {:?}", invalid)),
+            };
+            Ok(MirRelationExpr::Constant {
+                rows: Ok(rows),
+                typ: RelationType::new(
+                    scalar_types
+                        .into_iter()
+                        .map(|t| t.nullable(true))
+                        .collect::<Vec<_>>(),
+                ),
+            })
+        }
+
+        fn build_get(&mut self, token: Option<TokenTree>) -> Result<MirRelationExpr, String> {
+            match token {
+                Some(TokenTree::Ident(ident)) => {
+                    let name = ident.to_string();
+                    match self.scope.get(&name) {
+                        Some((id, typ)) => Ok(MirRelationExpr::Get { id, typ }),
+                        None => match self.catalog.get(&name) {
+                            None => Err(format!("no catalog object named {}", name)),
+                            Some((id, typ)) => Ok(MirRelationExpr::Get {
+                                id: Id::Global(*id),
+                                typ: typ.clone(),
+                            }),
+                        },
+                    }
+                }
+                invalid_token => Err(format!("Invalid get specification {:?}", invalid_token)),
+            }
+        }
+
+        fn build_let<I>(&mut self, stream_iter: &mut I) -> Result<MirRelationExpr, String>
+        where
+            I: Iterator<Item = TokenTree>,
+        {
+            let name = match stream_iter.next() {
+                Some(TokenTree::Ident(ident)) => Ok(ident.to_string()),
+                invalid_token => Err(format!("Invalid let specification {:?}", invalid_token)),
+            }?;
+
+            let value: MirRelationExpr = deserialize(stream_iter, "MirRelationExpr", &RTI, self)?;
+
+            let (id, prev) = self.scope.insert(&name, value.typ());
+
+            let body: MirRelationExpr = deserialize(stream_iter, "MirRelationExpr", &RTI, self)?;
+
+            if let Some((old_id, old_val)) = prev {
+                self.scope.set(&name, old_id, old_val);
+            } else {
+                self.scope.remove(&name)
+            }
+
+            Ok(MirRelationExpr::Let {
+                id,
+                value: Box::new(value),
+                body: Box::new(body),
+            })
+        }
+
+        fn build_union<I>(&mut self, stream_iter: &mut I) -> Result<MirRelationExpr, String>
+        where
+            I: Iterator<Item = TokenTree>,
+        {
+            let mut inputs: Vec<MirRelationExpr> =
+                deserialize(stream_iter, "Vec<MirRelationExpr>", &RTI, self)?;
+            Ok(MirRelationExpr::Union {
+                base: Box::new(inputs.remove(0)),
+                inputs,
+            })
+        }
+
+        fn build_special_mir_if_able<I>(
+            &mut self,
+            first_arg: TokenTree,
+            rest_of_stream: &mut I,
+        ) -> Result<Option<MirRelationExpr>, String>
+        where
+            I: Iterator<Item = TokenTree>,
+        {
+            if let TokenTree::Ident(ident) = first_arg {
+                return Ok(match &ident.to_string()[..] {
+                    "constant" => Some(self.build_constant(rest_of_stream)?),
+                    "get" => Some(self.build_get(rest_of_stream.next())?),
+                    "let" => Some(self.build_let(rest_of_stream)?),
+                    "union" => Some(self.build_union(rest_of_stream)?),
+                    _ => None,
+                });
+            }
+            Ok(None)
         }
     }
 
-    fn parse_type_list(s: Sexp) -> Result<RelationType, Error> {
-        let types = try_list_of_atoms(&s)?;
-
-        let col_types = types
-            .iter()
-            .map(|e| match e.as_str() {
-                "int32" => Ok(ScalarType::Int32.nullable(true)),
-                "int64" => Ok(ScalarType::Int64.nullable(true)),
-                "bool" => Ok(ScalarType::Bool.nullable(true)),
-                _ => Err(anyhow!("unknown type {}", e)),
-            })
-            .collect::<Result<Vec<ColumnType>, Error>>()?;
-
-        Ok(RelationType::new(col_types))
-    }
-
-    fn parse_key_list(s: Sexp) -> Result<Vec<Vec<usize>>, Error> {
-        let keys = try_list(s)?
-            .into_iter()
-            .map(|s2| {
-                let result = try_list_of_atoms(&s2)?
-                    .into_iter()
-                    .map(|e| Ok(e.parse::<usize>()?))
-                    .collect::<Result<Vec<usize>, Error>>();
-                result
-            })
-            .collect::<Result<Vec<Vec<usize>>, Error>>()?;
-
-        Ok(keys)
-    }
-
-    fn handle_cat(s: Sexp, cat: &mut TestCatalog) -> Result<(), Error> {
-        match try_atom(&nth(&s, 0)?)?.as_str() {
-            "defsource" => {
-                let name = try_atom(&nth(&s, 1)?)?;
-
-                let mut typ = parse_type_list(nth(&s, 2)?)?;
-
-                if let Ok(sexp) = nth(&s, 3) {
-                    typ.keys = parse_key_list(sexp)?;
+    impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
+        fn override_syntax<I>(
+            &mut self,
+            first_arg: TokenTree,
+            rest_of_stream: &mut I,
+            type_name: &str,
+            rti: &ReflectedTypeInfo,
+        ) -> Result<Option<String>, String>
+        where
+            I: Iterator<Item = TokenTree>,
+        {
+            match self.inner_ctx.override_syntax(
+                first_arg.clone(),
+                rest_of_stream,
+                type_name,
+                rti,
+            )? {
+                Some(result) => Ok(Some(result)),
+                None => {
+                    if type_name == "MirRelationExpr" {
+                        if let Some(result) =
+                            self.build_special_mir_if_able(first_arg, rest_of_stream)?
+                        {
+                            return Ok(Some(
+                                serde_json::to_string(&result).map_err(|e| e.to_string())?,
+                            ));
+                        }
+                    } else if type_name == "usize" {
+                        if let TokenTree::Punct(punct) = first_arg {
+                            if punct.as_char() == '#' {
+                                match rest_of_stream.next() {
+                                    Some(TokenTree::Literal(literal)) => {
+                                        return Ok(Some(literal.to_string()))
+                                    }
+                                    invalid => {
+                                        return Err(format!("invalid column value {:?}", invalid))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(None)
                 }
-                cat.insert(&name, typ);
-                Ok(())
             }
-            s => Err(anyhow!("not a valid catalog command: {}", s)),
+        }
+    }
+
+    /* #region helper methods common to creating a MirScalarExpr::Literal and a
+    MirRelationExpr::Constant */
+
+    fn parse_litval<'a, F>(litval: &'a str, littyp: &str) -> Result<F, String>
+    where
+        F: std::str::FromStr,
+    {
+        litval
+            .parse::<F>()
+            .map_err(|_| format!("{} cannot be parsed into {}", litval, littyp))
+    }
+
+    fn get_datum_from_str<'a>(litval: &'a str, littyp: &ScalarType) -> Result<Datum<'a>, String> {
+        if litval == "null" {
+            return Ok(Datum::Null);
+        }
+        match littyp {
+            ScalarType::Bool => Ok(Datum::from(parse_litval::<bool>(litval, "bool")?)),
+            ScalarType::Decimal(_, _) => Ok(Datum::from(parse_litval::<i128>(litval, "i128")?)),
+            ScalarType::Int32 => Ok(Datum::from(parse_litval::<i32>(litval, "i32")?)),
+            ScalarType::Int64 => Ok(Datum::from(parse_litval::<i64>(litval, "i64")?)),
+            ScalarType::String => Ok(Datum::from(litval.trim_matches('"'))),
+            _ => Err(format!("Unsupported literal type {:?}", littyp)),
+        }
+    }
+
+    fn extract_literal_string<I>(
+        stream_iter: &mut I,
+        symbol: &TokenTree,
+    ) -> Result<Option<String>, String>
+    where
+        I: Iterator<Item = TokenTree>,
+    {
+        match symbol {
+            TokenTree::Ident(ident) => {
+                if ["true", "false", "null"].contains(&&ident.to_string()[..]) {
+                    Ok(Some(ident.to_string()))
+                } else {
+                    Ok(None)
+                }
+            }
+            TokenTree::Literal(literal) => Ok(Some(literal.to_string())),
+            TokenTree::Punct(punct) if punct.as_char() == '-' => {
+                match stream_iter.next() {
+                    Some(TokenTree::Literal(literal)) => {
+                        Ok(Some(format!("{}{}", punct.as_char(), literal.to_string())))
+                    }
+                    None => Ok(None),
+                    // Must error instead of handling the tokens using default
+                    // behavior since `stream_iter` has advanced.
+                    Some(other) => Err(format!(
+                        "{}{:?} is not a valid literal",
+                        punct.as_char(),
+                        other
+                    )),
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /* #endregion */
+    /* #region */
+
+    fn handle_cat(spec: String, cat: &mut TestCatalog) -> Result<(), Error> {
+        let input_stream: TokenStream = spec
+            .parse()
+            .map_err(|e: proc_macro2::LexError| anyhow!(e.to_string()))?;
+        let mut stream_iter = input_stream.into_iter();
+        match stream_iter.next() {
+            Some(TokenTree::Group(group)) => {
+                let mut inner_iter = group.stream().into_iter().peekable();
+                match inner_iter.next() {
+                    // syntax for defining a source is
+                    // `(defsource [types_of_cols] [[optional_sets_of_key_cols]])`
+                    Some(TokenTree::Ident(ident)) if &ident.to_string()[..] == "defsource" => {
+                        let name = match inner_iter.next() {
+                            Some(TokenTree::Ident(ident)) => Ok(ident.to_string()),
+                            invalid_token => {
+                                Err(anyhow!("invalid source name: {:?}", invalid_token))
+                            }
+                        }?;
+
+                        let mut ctx = GenericTestDeserializeContext::default();
+                        let scalar_types: Vec<ScalarType> =
+                            deserialize(&mut inner_iter, "Vec<ScalarType>", &RTI, &mut ctx)
+                                .map_err(|s| anyhow!(s))?;
+
+                        let mut typ = RelationType::new(
+                            scalar_types
+                                .into_iter()
+                                .map(|t| t.nullable(true))
+                                .collect::<Vec<_>>(),
+                        );
+
+                        let keys: Option<Vec<Vec<usize>>> = deserialize_optional(
+                            &mut inner_iter,
+                            "Vec<Vec<usize>>",
+                            &RTI,
+                            &mut ctx,
+                        )
+                        .map_err(|s| anyhow!(s))?;
+                        if let Some(keys) = keys {
+                            typ = typ.with_keys(keys)
+                        }
+
+                        cat.insert(&name, typ);
+                        Ok(())
+                    }
+                    s => Err(anyhow!("not a valid catalog command: {:?}", s)),
+                }
+            }
+            s => Err(anyhow!("not a valid catalog command spec: {:?}", s)),
         }
     }
 
@@ -510,6 +572,38 @@ mod tests {
         explanation.to_string()
     }
 
+    fn build_scalar(s: &str) -> Result<MirScalarExpr, Error> {
+        deserialize(
+            &mut s
+                .parse::<TokenStream>()
+                .map_err(|e| anyhow!(e.to_string()))?
+                .into_iter(),
+            "MirScalarExpr",
+            &RTI,
+            &mut MirScalarExprDeserializeContext::default(),
+        )
+        .map_err(|s| anyhow!(s))
+    }
+
+    fn build_rel(
+        s: &str,
+        catalog: &TestCatalog,
+        scope: &mut Scope,
+    ) -> Result<MirRelationExpr, Error> {
+        deserialize(
+            &mut s
+                .parse::<TokenStream>()
+                .map_err(|e| anyhow!(e.to_string()))?
+                .into_iter(),
+            "MirRelationExpr",
+            &RTI,
+            &mut MirRelationExprDeserializeContext::new(catalog, scope),
+        )
+        .map_err(|s| anyhow!(s))
+    }
+
+    /* #endregion */
+
     fn run_testcase(
         s: &str,
         cat: &TestCatalog,
@@ -520,7 +614,8 @@ mod tests {
             objects: HashMap::new(),
             names: HashMap::new(),
         };
-        let mut rel = build_rel(SexpParser::parse_sexp(s.to_string())?, &cat, &mut scope)?;
+
+        let mut rel = build_rel(s, cat, &mut scope)?;
 
         let mut id_gen = Default::default();
         let indexes = HashMap::new();
@@ -622,6 +717,9 @@ mod tests {
             "Demand" => Ok(Box::new(transform::demand::Demand)),
             "JoinFusion" => Ok(Box::new(transform::fusion::join::Join)),
             "LiteralLifting" => Ok(Box::new(transform::map_lifting::LiteralLifting)),
+            "NonNullRequirements" => Ok(Box::new(
+                transform::nonnull_requirements::NonNullRequirements,
+            )),
             "PredicatePushdown" => Ok(Box::new(transform::predicate_pushdown::PredicatePushdown)),
             "ProjectionExtraction" => Ok(Box::new(
                 transform::projection_extraction::ProjectionExtraction,
@@ -644,15 +742,15 @@ mod tests {
             };
             f.run(move |s| -> String {
                 match s.directive.as_str() {
-                    "cat" => {
-                        match handle_cat(
-                            SexpParser::parse_sexp(s.input.clone()).unwrap(),
-                            &mut catalog,
-                        ) {
-                            Ok(()) => String::from("ok\n"),
-                            Err(err) => format!("error: {}\n", err),
-                        }
-                    }
+                    "cat" => match handle_cat(s.input.clone(), &mut catalog) {
+                        Ok(()) => String::from("ok\n"),
+                        Err(err) => format!("error: {}\n", err),
+                    },
+                    // tests that we can build `MirScalarExpr`s
+                    "buildscalar" => match build_scalar(&s.input) {
+                        Ok(msg) => format!("{}\n", msg.to_string().trim_end()),
+                        Err(err) => format!("error: {}\n", err),
+                    },
                     "build" => match run_testcase(&s.input, &catalog, &s.args, TestType::Build) {
                         // Generally, explanations for fully optimized queries
                         // are not allowed to have whitespace at the end;

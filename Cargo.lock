@@ -1189,6 +1189,7 @@ dependencies = [
  "hex",
  "hmac",
  "itertools",
+ "lowertest",
  "md-5",
  "num_enum",
  "ordered-float",
@@ -3614,6 +3615,7 @@ dependencies = [
  "hex",
  "itertools",
  "lazy_static",
+ "lowertest",
  "num-traits",
  "ordered-float",
  "ore",
@@ -4995,7 +4997,11 @@ dependencies = [
  "dataflow-types",
  "expr",
  "itertools",
+ "lazy_static",
+ "lowertest",
+ "proc-macro2",
  "repr",
+ "serde_json",
 ]
 
 [[package]]

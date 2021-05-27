@@ -7,6 +7,46 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+buildscalar
+#0
+----
+#0
+
+buildscalar
+#10
+----
+#10
+
+buildscalar
+(call_unary not #200)
+----
+!(#200)
+
+buildscalar
+(call_binary add_int32 (call_unary neg_int32 #21) (1 int32))
+----
+(-(#21) + 1)
+
+buildscalar
+(
+    if
+    (call_binary gt #0 (-2 (decimal 10 2)))
+    (call_variadic substr [#1 (1 int64) (4 int64)])
+    "hello"
+)
+----
+if (#0 > -2dec) then {substr(#1, 1, 4)} else {"hello"}
+
+buildscalar
+(call_binary (jsonb_get_string true) #2 ("field1" string))
+----
+(#2 ->> "field1")
+
+buildscalar
+(call_unary is_null null)
+----
+isnull(null)
+
 cat
 (defsource x [int32 int64])
 ----
