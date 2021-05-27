@@ -2441,6 +2441,7 @@ lazy_static! {
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Lt))
                     })
                 }, 1754;
+                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::Lt, 17540;
                 params!(Bool, Bool) => BinaryFunc::Lt, 58;
                 params!(Int32, Int32) => BinaryFunc::Lt, 97;
                 params!(Int64, Int64) => BinaryFunc::Lt, 412;
@@ -2465,6 +2466,7 @@ lazy_static! {
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Lte))
                     })
                 }, 1755;
+                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::Lte, 17550;
                 params!(Bool, Bool) => BinaryFunc::Lte, 1694;
                 params!(Int32, Int32) => BinaryFunc::Lte, 523;
                 params!(Int64, Int64) => BinaryFunc::Lte, 414;
@@ -2489,6 +2491,7 @@ lazy_static! {
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Gt))
                     })
                 }, 1756;
+                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::Gt, 17560;
                 params!(Bool, Bool) => BinaryFunc::Gt, 59;
                 params!(Int32, Int32) => BinaryFunc::Gt, 521;
                 params!(Int64, Int64) => BinaryFunc::Gt, 413;
@@ -2513,6 +2516,7 @@ lazy_static! {
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Gte))
                     })
                 }, 1757;
+                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::Gte, 17570;
                 params!(Bool, Bool) => BinaryFunc::Gte, 1695;
                 params!(Int32, Int32) => BinaryFunc::Gte, 525;
                 params!(Int64, Int64) => BinaryFunc::Gte, 415;
@@ -2537,6 +2541,7 @@ lazy_static! {
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::Eq))
                     })
                 }, 1752;
+                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::Eq, 17520;
                 params!(Bool, Bool) => BinaryFunc::Eq, 91;
                 params!(Int32, Int32) => BinaryFunc::Eq, 96;
                 params!(Int64, Int64) => BinaryFunc::Eq, 410;
@@ -2562,6 +2567,7 @@ lazy_static! {
                         Ok(lexpr.call_binary(rexpr, BinaryFunc::NotEq))
                     })
                 }, 1753;
+                params!(APD{scale:None}, APD{scale:None}) => BinaryFunc::NotEq, 17530;
                 params!(Bool, Bool) => BinaryFunc::NotEq, 85;
                 params!(Int32, Int32) => BinaryFunc::NotEq, 518;
                 params!(Int64, Int64) => BinaryFunc::NotEq, 411;
