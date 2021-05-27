@@ -99,3 +99,32 @@ INSERT INTO postgres_execute VALUES (123);
 # http-request
 
 $ http-request method=GET url=${testdrive.schema-registry-url}schemas/types
+
+# kafka-ingest repeat
+
+$ set kafka-ingest-repeat={
+        "type" : "record",
+        "name" : "test",
+        "fields" : [
+            {"name":"f1", "type":"string"}
+        ]
+    }
+
+$ kafka-create-topic topic=kafka-ingest-repeat
+
+$ kafka-ingest format=avro topic=kafka-ingest-repeat schema=${kafka-ingest-repeat} publish=true repeat=2
+{"f1": "fish"}
+
+> CREATE MATERIALIZED SOURCE kafka_ingest_repeat_input
+  FROM KAFKA BROKER '${testdrive.kafka-addr}' TOPIC
+  'testdrive-kafka-ingest-repeat-${testdrive.seed}'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+  ENVELOPE NONE
+
+> CREATE SINK kafka_ingest_repeat_sink FROM kafka_ingest_repeat_input
+  INTO KAFKA BROKER '${testdrive.kafka-addr}' TOPIC 'kafka-ingest-repeat'
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY '${testdrive.schema-registry-url}'
+
+$ kafka-verify format=avro sink=materialize.public.kafka_ingest_repeat_sink sort-messages=true
+{"before":null,"after":{"row":{"f1":"fish"}}}
+{"before":null,"after":{"row":{"f1":"fish"}}}
