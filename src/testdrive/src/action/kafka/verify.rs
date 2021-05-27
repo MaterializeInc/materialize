@@ -126,7 +126,8 @@ impl Action for VerifyAction {
             })
             .transpose()?;
 
-        let config = state.kafka_config.clone();
+        let mut config = state.kafka_config.clone();
+        config.set("enable.auto.offset.store", "false");
 
         let value_schema =
             avro::parse_schema(&value_schema).map_err(|e| format!("parsing avro schema: {}", e))?;
@@ -155,6 +156,10 @@ impl Action for VerifyAction {
         // were missing.
         while let Some(Ok(message)) = message_stream.next().await {
             let message = message.map_err(|e| e.to_string())?;
+
+            consumer
+                .store_offset(&message)
+                .map_err(|e| format!("storing message offset: {}", e.to_string()))?;
 
             let bytes = message.payload();
             let value_datum = match bytes {

@@ -1141,6 +1141,7 @@ fn kafka_sink_builder(
     with_options: &mut BTreeMap<String, Value>,
     broker: String,
     topic_prefix: String,
+    relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     value_desc: RelationDesc,
     topic_suffix_nonce: String,
@@ -1259,6 +1260,7 @@ fn kafka_sink_builder(
         config_options,
         ccsr_config,
         key_schema,
+        relation_key_indices,
         key_desc_and_indices,
         value_desc,
         exactly_once,
@@ -1378,6 +1380,9 @@ pub fn plan_create_sink(
         Connector::PubNub { .. } => None,
     };
 
+    // pick the first valid natural relation key, if any
+    let relation_key_indices = desc.typ().keys.get(0).cloned();
+
     let key_desc_and_indices = key_indices.map(|key_indices| {
         let cols = desc.clone().into_iter().collect::<Vec<_>>();
         let (names, types): (Vec<_>, Vec<_>) =
@@ -1414,6 +1419,7 @@ pub fn plan_create_sink(
             &mut with_options,
             broker,
             topic,
+            relation_key_indices,
             key_desc_and_indices,
             value_desc,
             suffix_nonce,

@@ -15,7 +15,7 @@ use std::rc::Rc;
 
 use differential_dataflow::operators::arrange::arrangement::ArrangeByKey;
 use differential_dataflow::operators::Consolidate;
-use differential_dataflow::AsCollection;
+use differential_dataflow::{AsCollection, Hashable};
 use timely::dataflow::operators::Map;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::Scope;
@@ -63,19 +63,58 @@ where
             .expect("Sink source collection not loaded");
 
         // Some connectors support keys - extract them.
-        let key_indices = sink
-            .connector
-            .get_key_indices()
-            .map(|key_indices| key_indices.to_vec());
-        let keyed = collection.map(move |row| {
-            let key = key_indices.as_ref().map(|key_indices| {
-                // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
-                // Does it matter?
-                let datums = row.unpack();
-                Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()))
-            });
-            (key, row)
-        });
+        let keyed = match sink.connector.clone() {
+            SinkConnector::Kafka(_) => {
+                let user_key_indices = sink
+                    .connector
+                    .get_key_indices()
+                    .map(|key_indices| key_indices.to_vec());
+
+                let relation_key_indices = sink
+                    .connector
+                    .get_relation_key_indices()
+                    .map(|key_indices| key_indices.to_vec());
+
+                // We have three cases here, in descending priority:
+                //
+                // 1. if there is a user-specified key, use that to consolidate and
+                //  distribute work
+                // 2. if the sinked relation has a known primary key, use that to
+                //  consolidate and distribute work but don't write to the sink
+                // 3. if none of the above, use the whole row as key to
+                //  consolidate and distribute work but don't write to the sink
+
+                let keyed = if user_key_indices.is_some() {
+                    let key_indices = user_key_indices.expect("known to exist");
+                    collection.map(move |row| {
+                        // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
+                        // Does it matter?
+                        let datums = row.unpack();
+                        let key = Row::pack(key_indices.iter().map(|&idx| datums[idx].clone()));
+                        (Some(key), row)
+                    })
+                } else if relation_key_indices.is_some() {
+                    let relation_key_indices = relation_key_indices.expect("known to exist");
+                    collection.map(move |row| {
+                        // TODO[perf] (btv) - is there a way to avoid unpacking and repacking every row and cloning the datums?
+                        // Does it matter?
+                        let datums = row.unpack();
+                        let key =
+                            Row::pack(relation_key_indices.iter().map(|&idx| datums[idx].clone()));
+                        (Some(key), row)
+                    })
+                } else {
+                    collection.map(|row| {
+                        (
+                            Some(Row::pack(Some(Datum::Int64(row.hashed() as i64)))),
+                            row,
+                        )
+                    })
+                };
+                keyed
+            }
+            SinkConnector::Tail(_) | SinkConnector::AvroOcf(_) => collection.map(|row| (None, row)),
+        };
 
         // Apply the envelope.
         // * "Debezium" consolidates the stream, sorts it by time, and produces DiffPairs from it.
@@ -86,6 +125,16 @@ where
         let collection = match sink.envelope {
             SinkEnvelope::Debezium => {
                 let combined = combine_at_timestamp(keyed.arrange_by_key().stream);
+
+                // if there is no user-specified key, remove the synthetic
+                // distribution key again
+                let user_key_indices = sink.connector.get_key_indices();
+                let combined = if user_key_indices.is_some() {
+                    combined
+                } else {
+                    combined.map(|(_key, value)| (None, value))
+                };
+
                 // This has to be an `Rc<RefCell<...>>` because the inner closure (passed to `Iterator::map`) references it, and it might outlive the outer closure.
                 let rp = Rc::new(RefCell::new(Row::default()));
                 let collection = combined.flat_map(move |(mut k, v)| {
